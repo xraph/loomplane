@@ -1147,3 +1147,49 @@ func TestCompute_aServiceMovedIntoAHeldRepositoryStaysWhereItWasDeployed(t *test
 		t.Fatalf("warnings %+v", r.Warnings)
 	}
 }
+
+// edgeYAML is federatedYAML with a gateway in front of api, in mono, and
+// site, in site.
+const edgeYAML = federatedYAML + `gateways:
+  edge:
+    routes:
+      - {path: /api, to: api}
+      - {path: /, to: site}
+`
+
+func TestCompute_aGatewayIsNeverHeld(t *testing.T) {
+	// site doesn't need api here, so only edge could keep api running.
+	base := strings.Replace(edgeYAML, "    needs: [api]\n", "", 1)
+	first := computeFed(t, base, nil)
+	if len(first.Problems) != 0 {
+		t.Fatalf("problems %v", codes(first.Problems))
+	}
+	live := deployed(t, first)
+
+	// A gateway comes from no repository, so a scoped plan deletes one the
+	// manifest dropped, the way a full plan does.
+	noEdge := base[:strings.Index(base, "gateways:")]
+	r := computeFed(t, noEdge, []string{"site"}, live...)
+	if edge := action(t, r, "service:edge"); edge.Op != Delete {
+		t.Fatalf("edge %+v", edge)
+	}
+	if warning(r, "held", "edge") != nil {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+
+	// Nor is it a held service that keeps what it routes to: api, in mono,
+	// which the plan moves, goes with its route.
+	noAPI := strings.Replace(base, "      - {path: /api, to: api}\n", "", 1)
+	noAPI = strings.Replace(noAPI, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
+	r = computeFed(t, noAPI, []string{"site"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	if api := action(t, r, "service:api"); api.Op != Delete {
+		t.Fatalf("api %+v", api)
+	}
+	edge := action(t, r, "service:edge")
+	if edge.Op != Update || len(edge.Service.Gateway) != 1 || edge.Service.Gateway[0].To != "site" {
+		t.Fatalf("edge %+v", edge)
+	}
+}

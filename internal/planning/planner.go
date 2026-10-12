@@ -535,7 +535,10 @@ func (p *planner) retain() {
 			continue
 		}
 		var cfg ServiceConfig
-		if json.Unmarshal(b.Config, &cfg) != nil {
+		if json.Unmarshal(b.Config, &cfg) != nil || cfg.Gateway != nil {
+			// A gateway is built from Loomplane's own code, not from any
+			// repository, so no plan holds it. planGateways plans it from
+			// the manifest, and planDeletes removes one the manifest dropped.
 			continue
 		}
 		if alias, held := p.heldRepo(cfg); held {
@@ -1330,13 +1333,14 @@ func movedIntoHeld(name, from, to string) string {
 
 // heldBinding reports whether what a binding deployed is held, by the
 // repository it was deployed from, as heldRepo decides. A binding that's
-// missing or doesn't parse can't say, and leaves it to the manifest.
+// missing or doesn't parse can't say, and leaves it to the manifest. A
+// gateway is never held: it comes from no repository.
 func (p *planner) heldBinding(b *Binding) (string, bool) {
 	if b == nil {
 		return "", false
 	}
 	var cfg ServiceConfig
-	if json.Unmarshal(b.Config, &cfg) != nil {
+	if json.Unmarshal(b.Config, &cfg) != nil || cfg.Gateway != nil {
 		return "", false
 	}
 	return p.heldRepo(cfg)
