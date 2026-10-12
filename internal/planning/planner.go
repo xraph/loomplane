@@ -33,6 +33,9 @@ type Input struct {
 	// connection for every cloud it deploys to.
 	Connections []ConnectionOption
 	Chosen      map[string]string
+	// Held are the aliases of repositories this plan doesn't move: their
+	// services stay as deployed.
+	Held map[string]bool
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
@@ -294,7 +297,7 @@ func (p *planner) planServices() {
 	for _, name := range m.ServiceNames() {
 		s := m.Services[name]
 		base := "services." + name
-		gs := p.match(name, base, s.Source)
+		gs := p.match(name, base, s)
 		if gs == nil {
 			continue
 		}
@@ -348,19 +351,26 @@ func (p *planner) planServices() {
 	p.order()
 }
 
-// match finds the graph service a manifest source names.
-func (p *planner) match(name, base, source string) *graph.Service {
+// match finds the graph service a manifest service names: in the
+// repository its repo names, at its source.
+func (p *planner) match(name, base string, s manifest.Service) *graph.Service {
+	repo, ok := p.repoOf(name, base, s)
+	if !ok {
+		return nil
+	}
+	source := s.Source
+	in := func(gs *graph.Service) bool { return repo == "" || gs.Source == repo }
 	var found []*graph.Service
 	for i := range p.in.Graph.Services {
 		gs := &p.in.Graph.Services[i]
-		if strings.TrimPrefix(gs.ID, "svc:") == source || gs.Entrypoint == source {
+		if in(gs) && (gs.Local() == source || gs.Entrypoint == source) {
 			found = append(found, gs)
 		}
 	}
 	if len(found) == 0 {
 		// A unit's directory names its one service too.
 		for i := range p.in.Graph.Services {
-			if gs := &p.in.Graph.Services[i]; gs.Path == source {
+			if gs := &p.in.Graph.Services[i]; in(gs) && gs.Path == source {
 				found = append(found, gs)
 			}
 		}
@@ -369,7 +379,7 @@ func (p *planner) match(name, base, source string) *graph.Service {
 	case 0:
 		p.problem(Finding{
 			Code: "service-not-found", Subject: ServiceSubject, Name: name, Path: base + ".source",
-			Message: fmt.Sprintf("Analysis found no service at %s in this commit.", source),
+			Message: fmt.Sprintf("Analysis found no service at %s in %s.", source, p.where(repo)),
 		})
 		return nil
 	case 1:
@@ -377,7 +387,7 @@ func (p *planner) match(name, base, source string) *graph.Service {
 	}
 	ids := make([]string, 0, len(found))
 	for _, gs := range found {
-		ids = append(ids, strings.TrimPrefix(gs.ID, "svc:"))
+		ids = append(ids, gs.Local())
 	}
 	p.problem(Finding{
 		Code: "ambiguous-source", Subject: ServiceSubject, Name: name, Path: base + ".source",
@@ -386,11 +396,64 @@ func (p *planner) match(name, base, source string) *graph.Service {
 	return nil
 }
 
+// repoOf settles which repository a manifest service is in. A graph from
+// before sources has none, and matches anywhere.
+func (p *planner) repoOf(name, base string, s manifest.Service) (string, bool) {
+	sources := p.in.Graph.Sources
+	if s.Repo != "" {
+		if slices.ContainsFunc(sources, func(r graph.SourceRef) bool { return r.Alias == s.Repo }) {
+			return s.Repo, true
+		}
+		p.problem(Finding{
+			Code: "unknown-repo", Subject: ServiceSubject, Name: name, Path: base + ".repo",
+			Message: fmt.Sprintf("%s.repo is %s, which isn't one of this project's repositories: %s.", base, s.Repo, aliases(sources)),
+		})
+		return "", false
+	}
+	switch len(sources) {
+	case 0:
+		return "", true
+	case 1:
+		return sources[0].Alias, true
+	}
+	p.problem(Finding{
+		Code: "ambiguous-repo", Subject: ServiceSubject, Name: name, Path: base + ".repo",
+		Message: fmt.Sprintf("This project builds from %d repositories (%s), so say which one %s is in with %s.repo.", len(sources), aliases(sources), name, base),
+	})
+	return "", false
+}
+
+func aliases(sources []graph.SourceRef) string {
+	names := make([]string, 0, len(sources))
+	for _, s := range sources {
+		names = append(names, s.Alias)
+	}
+	return strings.Join(names, ", ")
+}
+
+// where names a repository at the commit it was read at, for messages.
+func (p *planner) where(repo string) string {
+	if c := p.commit(repo); repo != "" && c != "" {
+		return repo + "@" + c[:min(7, len(c))]
+	}
+	return "this commit"
+}
+
+func (p *planner) commit(alias string) string {
+	for _, s := range p.in.Graph.Sources {
+		if s.Alias == alias {
+			return s.CommitSHA
+		}
+	}
+	return ""
+}
+
 func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *provider.Provider, runs provider.Runs, set manifest.Settings) *ServiceConfig {
 	cfg := &ServiceConfig{
 		Provider: prov.Name, Region: p.place(ServiceSubject, name, base+".region", prov, set.Region),
 		Workload: runs.Workload, Execution: runs.Execution,
-		Service: gs.ID, Source: gs.Entrypoint, Ecosystem: gs.Ecosystem, Framework: gs.Framework, Image: gs.Image,
+		Service: gs.ID, Source: gs.Entrypoint, Repo: gs.Source, CommitSHA: p.commit(gs.Source),
+		Ecosystem: gs.Ecosystem, Framework: gs.Framework, Image: gs.Image,
 		Build: gs.Commands.Build, Start: gs.Commands.Start,
 		Public: runs.Workload != provider.Worker,
 	}

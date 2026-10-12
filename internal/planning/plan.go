@@ -106,8 +106,13 @@ type ServiceConfig struct {
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`
-	// Source is the service's entrypoint in the repository.
-	Source    string              `json:"source"`
+	// Source is the service's entrypoint in its repository.
+	Source string `json:"source"`
+	// Repo is the alias of the repository the service is built from, and
+	// CommitSHA the commit: what a deployment fetches. A new commit is a
+	// changed configuration, which is what deploying new code means.
+	Repo      string              `json:"repo,omitempty"`
+	CommitSHA string              `json:"commit_sha,omitempty"`
 	Ecosystem discovery.Ecosystem `json:"ecosystem"`
 	Framework string              `json:"framework,omitempty"`
 	// Image is the Dockerfile that builds it, if there is one.

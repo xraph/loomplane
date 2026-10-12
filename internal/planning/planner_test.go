@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/providers"
+	pd "github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -372,6 +373,89 @@ func TestCompute_deterministic(t *testing.T) {
 		}
 		if a != b {
 			t.Fatal("the same input planned twice gave different plans")
+		}
+	}
+}
+
+// federated is polyglot as "mono", beside a Next.js site in a repository
+// of its own that uses @acme/ui, which a third repository, "kit",
+// publishes.
+func federated(t *testing.T) *graph.Graph {
+	t.Helper()
+	site := graph.Build(&pd.Report{Units: []pd.Unit{{
+		ID: "node:.", Ecosystem: pd.Node, Name: "site", Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "site", Path: ".", Frameworks: []pd.Framework{{Name: "next", Kind: pd.Web, Confidence: pd.Likely}}}},
+		Requires:    []pd.Requirement{{Name: "@acme/ui", Version: "^1.0.0", Evidence: pd.Evidence{Path: "package.json", Line: 9}}},
+	}}})
+	kit := graph.Build(&pd.Report{Units: []pd.Unit{{ID: "node:.", Ecosystem: pd.Node, Name: "@acme/ui", Path: "."}}})
+	return graph.Compose([]graph.Part{
+		{Source: graph.SourceRef{Alias: "mono", Repository: "acme/mono", CommitSHA: strings.Repeat("a", 40)}, Graph: polyglot(t)},
+		{Source: graph.SourceRef{Alias: "site", Repository: "acme/site", CommitSHA: strings.Repeat("b", 40)}, Graph: site},
+		{Source: graph.SourceRef{Alias: "kit", Repository: "acme/kit", CommitSHA: strings.Repeat("c", 40)}, Graph: kit},
+	})
+}
+
+const federatedYAML = `version: 1
+defaults:
+  provider: cloud-run
+services:
+  api:
+    repo: mono
+    source: services/api
+    needs: [db]
+  site:
+    repo: site
+    source: .
+    provider: vercel
+    needs: [api]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+`
+
+func computeFed(t *testing.T, yaml string, held []string, bindings ...*Binding) *Result {
+	t.Helper()
+	h := map[string]bool{}
+	for _, a := range held {
+		h[a] = true
+	}
+	return Compute(Input{
+		Environment: "production", Graph: federated(t), Manifest: parse(t, yaml),
+		Providers: providers.Registry(), Bindings: bindings, Held: h,
+	})
+}
+
+func TestCompute_matchesWithinARepository(t *testing.T) {
+	r := computeFed(t, federatedYAML, nil)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	site := action(t, r, "service:site")
+	if site.Service.Repo != "site" || site.Service.CommitSHA != strings.Repeat("b", 40) {
+		t.Fatalf("site %+v", site.Service)
+	}
+	if api := action(t, r, "service:api"); api.Service.Repo != "mono" {
+		t.Fatalf("api %+v", api.Service)
+	}
+
+	tests := []struct{ name, yaml, want string }{
+		{"no repo with three", strings.Replace(federatedYAML, "    repo: site\n", "", 1), "ambiguous-repo:site"},
+		{"unknown repo", strings.Replace(federatedYAML, "repo: site", "repo: nope", 1), "unknown-repo:site"},
+		{"wrong repo", strings.Replace(federatedYAML, "repo: mono", "repo: site", 1), "service-not-found:api"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := computeFed(t, tt.yaml, nil)
+			if !slices.Contains(codes(got.Problems), tt.want) {
+				t.Fatalf("problems %v, want %s", codes(got.Problems), tt.want)
+			}
+		})
+	}
+	r = computeFed(t, strings.Replace(federatedYAML, "repo: mono", "repo: site", 1), nil)
+	for _, p := range r.Problems {
+		if p.Code == "service-not-found" && !strings.Contains(p.Message, "site@bbbbbbb") {
+			t.Fatalf("the message should name the commit: %s", p.Message)
 		}
 	}
 }
