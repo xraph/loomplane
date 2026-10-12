@@ -183,7 +183,7 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 		p.Sources = []PlanSource{}
 	}
 	rows, err := s.db.Query(ctx, `SELECT plan_id, source_id, alias, repository, root, analysis_id, commit_sha, in_scope
-		FROM loomplane_plan_sources WHERE plan_id = ANY($1) ORDER BY plan_id, alias`, ids)
+		FROM loomplane_plan_sources WHERE plan_id = ANY($1) ORDER BY plan_id, alias COLLATE "C"`, ids)
 	if err != nil {
 		return fmt.Errorf("load plan sources: %w", err)
 	}

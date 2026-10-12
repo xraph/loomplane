@@ -8,9 +8,10 @@ import (
 )
 
 func TestLockset(t *testing.T) {
+	// Out of order, so the lockset's sort by alias shows.
 	sources := []*discovery.Source{
-		{ID: "src_api", Alias: "api", Repository: "acme/api"},
 		{ID: "src_web", Alias: "web", Repository: "acme/web", Root: "apps/web"},
+		{ID: "src_api", Alias: "api", Repository: "acme/api"},
 	}
 	latest := map[string]*discovery.Analysis{
 		"src_api": {ID: "anl_api2", CommitSHA: "api2"},
@@ -19,11 +20,14 @@ func TestLockset(t *testing.T) {
 	deployed := map[string]*DeployedSource{"src_api": {SourceID: "src_api", AnalysisID: "anl_api1", CommitSHA: "api1"}}
 
 	all, err := lockset(sources, latest, deployed, nil, "production")
-	if err != nil || len(all) != 2 || !all[0].InScope || all[0].CommitSHA != "api2" || all[1].Root != "apps/web" {
+	if err != nil || len(all) != 2 || all[0].Alias != "api" || !all[0].InScope || all[0].CommitSHA != "api2" ||
+		all[1].Alias != "web" || all[1].Root != "apps/web" {
 		t.Fatalf("everything: %v, %+v", err, all)
 	}
-	web, err := lockset(sources, latest, deployed, []string{"web"}, "production")
-	if err != nil || web[0].InScope || web[0].CommitSHA != "api1" || web[0].AnalysisID != "anl_api1" || !web[1].InScope {
+	// A scope alias is trimmed, as a hand-written request may pad it.
+	web, err := lockset(sources, latest, deployed, []string{" web "}, "production")
+	if err != nil || web[0].Alias != "api" || web[0].InScope || web[0].CommitSHA != "api1" || web[0].AnalysisID != "anl_api1" ||
+		web[1].Alias != "web" || !web[1].InScope || web[1].CommitSHA != "web2" {
 		t.Fatalf("web only: %v, %+v", err, web)
 	}
 

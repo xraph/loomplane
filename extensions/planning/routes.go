@@ -119,7 +119,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		}},
 		{http.MethodPost, "/projects/:id/plans", e.createPlan, []forge.RouteOption{
 			forge.WithName("plans.create"),
-			forge.WithSummary("Plan an environment from the current manifest and the latest analysis, replacing its open plan"),
+			forge.WithSummary("Plan an environment from the current manifest and one commit of each repository, replacing its open plan; a scope moves only some of them"),
 			forge.WithRequestSchema(planning.CreatePlanInput{}),
 			forge.WithResponseSchema(http.StatusCreated, "The plan", planning.Plan{}),
 		}},

@@ -420,6 +420,11 @@ type deployedRef struct {
 // compute plans a plan from its pinned commits and manifest, against what's
 // deployed now, and returns the result with its revision.
 func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, error) {
+	// An older plan the backfill couldn't pin would plan from an empty
+	// graph, so it fails instead of proposing to tear down what's deployed.
+	if len(plan.Sources) == 0 {
+		return nil, "", fmt.Errorf("%w: this plan pins no repositories; plan again", ErrInvalid)
+	}
 	parts := make([]graph.Part, 0, len(plan.Sources))
 	held := map[string]bool{}
 	for _, ps := range plan.Sources {
