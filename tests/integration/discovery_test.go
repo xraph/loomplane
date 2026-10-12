@@ -143,11 +143,17 @@ func TestDiscovery_theWorkerAnalyzesAProjectsRepository(t *testing.T) {
 	if err = worker.Start(ctx); err != nil {
 		t.Fatalf("start worker: %v", err)
 	}
-	defer func() {
+	workerRunning := true
+	stopWorker := func() {
+		if !workerRunning {
+			return
+		}
+		workerRunning = false
 		if serr := worker.Stop(context.Background()); serr != nil {
 			t.Errorf("stop worker: %v", serr)
 		}
-	}()
+	}
+	defer stopWorker()
 	deadline := time.Now().Add(readyTimeout)
 	for a.Status != "succeeded" && a.Status != "failed" {
 		if time.Now().After(deadline) {
@@ -189,7 +195,11 @@ func TestDiscovery_theWorkerAnalyzesAProjectsRepository(t *testing.T) {
 	if len(list.Analyses) != 1 || list.Analyses[0].ID != a.ID {
 		t.Fatalf("list %+v", list)
 	}
-	// Finished, it no longer blocks another.
+	// Finished, it no longer blocks another. With the worker stopped the
+	// new one stays queued, and a queued analysis blocks a third; with it
+	// running, the fake repository is analyzed so fast the second could
+	// finish before the third arrives.
+	stopWorker()
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+mono.ID+"/analyses", map[string]string{"ref": "main"}, nil)
 	c.must(http.StatusConflict, http.MethodPost, "/api/v1/projects/"+mono.ID+"/analyses", nil, nil)
 }
