@@ -95,11 +95,28 @@ func (m *memStore) ListAnalyses(_ context.Context, orgID, projectID string, limi
 	return out, nil
 }
 
-func (m *memStore) ActiveAnalysis(_ context.Context, orgID, projectID string, since time.Time) (*Analysis, error) {
+func (m *memStore) ListSourceAnalyses(_ context.Context, orgID, sourceID string, limit int) ([]*Analysis, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Analysis{}
+	for _, a := range m.analyses {
+		if a.OrgID == orgID && a.SourceID == sourceID {
+			c := *a
+			out = append(out, &c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *memStore) ActiveAnalysis(_ context.Context, orgID, sourceID string, since time.Time) (*Analysis, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, a := range m.analyses {
-		if a.OrgID == orgID && a.ProjectID == projectID && !a.Finished() && a.CreatedAt.After(since) {
+		if a.OrgID == orgID && a.SourceID == sourceID && !a.Finished() && a.CreatedAt.After(since) {
 			c := *a
 			return &c, nil
 		}
@@ -338,12 +355,12 @@ func newFixture(t *testing.T, maxAttempts int) *fixture {
 	authz := security.NewAuthorizer(eng, ws, nil)
 	f := &fixture{store: newMemStore(), queue: &queue{}, audit: &audits{}, fetch: &dirFetcher{src: "../../examples/polyglot"}, authz: authz, access: &fakeAccess{}}
 	prj := fakeProjects{
-		project:     {ID: project, OrgID: org, RepositoryURL: "https://github.com/acme/mono"},
+		project:     {ID: project, OrgID: org},
 		"proj_bare": {ID: "proj_bare", OrgID: org},
-		"proj_lab":  {ID: "proj_lab", OrgID: org, RepositoryURL: "https://gitlab.com/acme/mono"},
 	}
 	f.svc = NewService(f.store, prj, authz, f.queue, f.audit)
 	f.svc.SetAccess(f.access)
+	f.source(t, project, "mono", "acme/mono", "")
 	f.runner = NewRunner(f.store, f.fetch, nil, t.TempDir(), maxAttempts)
 	return f
 }
@@ -375,12 +392,16 @@ func TestService_startQueuesAnAnalysis(t *testing.T) {
 	f := newFixture(t, 2)
 	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
 
-	a, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{Ref: " release/1.2 "})
+	as, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{Ref: " release/1.2 "})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	a := as[0]
 	if a.Status != StatusQueued || a.Repository != "acme/mono" || a.Ref != "release/1.2" || !strings.HasPrefix(a.ID, "anl_") {
 		t.Fatalf("analysis %+v", a)
+	}
+	if a.Source != "mono" || a.SourceID != "src_proj_mono_mono" {
+		t.Fatalf("analysis source %q (%s)", a.Source, a.SourceID)
 	}
 	if len(f.queue.ids) != 1 || f.queue.ids[0] != a.ID {
 		t.Fatalf("queued %v", f.queue.ids)
@@ -406,18 +427,19 @@ func TestService_startRefusals(t *testing.T) {
 		name    string
 		p       security.Principal
 		project string
+		sources []string
 		ref     string
 		want    error
 	}{
-		{"viewer", viewer, project, "", security.ErrForbidden},
-		{"another org's project", dev, "proj_elsewhere", "", projects.ErrNotFound},
-		{"no repository", dev, "proj_bare", "", ErrNoRepository},
-		{"not GitHub", dev, "proj_lab", "", ErrInvalid},
-		{"bad ref", dev, project, "../../etc/passwd", ErrInvalid},
+		{"viewer", viewer, project, nil, "", security.ErrForbidden},
+		{"another org's project", dev, "proj_elsewhere", nil, "", projects.ErrNotFound},
+		{"no repository", dev, "proj_bare", nil, "", ErrNoSources},
+		{"unknown source", dev, project, []string{"nope"}, "", ErrSourceNotFound},
+		{"bad ref", dev, project, nil, "../../etc/passwd", ErrInvalid},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := f.svc.Start(ctx, tt.p, tt.project, StartAnalysisInput{Ref: tt.ref}); !errors.Is(err, tt.want) {
+			if _, err := f.svc.Start(ctx, tt.p, tt.project, StartAnalysisInput{Sources: tt.sources, Ref: tt.ref}); !errors.Is(err, tt.want) {
 				t.Fatalf("Start: %v, want %v", err, tt.want)
 			}
 		})
@@ -431,14 +453,56 @@ func TestService_startRefusals(t *testing.T) {
 	}
 }
 
+func TestService_startAnalyzesEachSource(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	web := f.source(t, project, "web", "acme/site", "")
+	web.Ref = "develop"
+	if err := f.store.UpdateSource(ctx, web); err != nil {
+		t.Fatal(err)
+	}
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+
+	if _, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{Ref: "main"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a ref with two sources: %v", err)
+	}
+	all, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].Source != "mono" || all[1].Source != "web" || all[1].Ref != "develop" || len(f.queue.ids) != 2 {
+		t.Fatalf("analyses %+v, queued %v", all, f.queue.ids)
+	}
+}
+
+func TestService_oneRunningSourceRefusesTheWholeRequest(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	f.source(t, project, "web", "acme/site", "")
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+
+	if _, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{Sources: []string{"mono"}}); err != nil {
+		t.Fatal(err)
+	}
+	// mono is still running, so analyzing everything is refused, and web
+	// isn't queued on its own either.
+	if _, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{}); !errors.Is(err, ErrAlreadyActive) {
+		t.Fatalf("Start while mono runs: %v", err)
+	}
+	if len(f.queue.ids) != 1 {
+		t.Fatalf("queued %v", f.queue.ids)
+	}
+}
+
 func TestRunner_analyzesAndStoresTheGraph(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, 2)
 	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
-	a, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
+	as, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	a := as[0]
 	if err = f.runner.Run(ctx, org, a.ID); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -479,10 +543,11 @@ func TestRunner_failures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFixture(t, tt.maxAttempt)
 			dev := f.as(t, "ausr_dev", security.RoleDeveloper)
-			a, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
+			as, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
 			if err != nil {
 				t.Fatal(err)
 			}
+			a := as[0]
 			f.fetch.fetchErr = tt.err
 			err = f.runner.Run(ctx, org, a.ID)
 			if tt.retried {

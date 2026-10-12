@@ -20,9 +20,8 @@ const (
 // Errors the service and stores return.
 var (
 	ErrNotFound      = errors.New("analysis not found")
-	ErrNoRepository  = errors.New("this project has no repository URL; add one first")
 	ErrInvalid       = errors.New("invalid analysis")
-	ErrAlreadyActive = errors.New("an analysis of this project is already running")
+	ErrAlreadyActive = errors.New("an analysis of that repository is already running")
 	ErrNoGraph       = errors.New("this analysis has no graph: it hasn't succeeded")
 )
 
@@ -33,7 +32,10 @@ type Analysis struct {
 	ID        string `json:"id" forge:"id"`
 	OrgID     string `json:"org_id"`
 	ProjectID string `json:"project_id"`
-	Status    string `json:"status"`
+	// SourceID is the source the analysis read, and Source its alias.
+	SourceID string `json:"source_id"`
+	Source   string `json:"source"`
+	Status   string `json:"status"`
 	// Repository is "owner/name" on GitHub, as it was when the analysis
 	// started.
 	Repository string `json:"repository"`
@@ -76,9 +78,11 @@ type Store interface {
 	GetAnalysis(ctx context.Context, orgID, id string) (*Analysis, error)
 	// ListAnalyses returns a project's latest analyses, newest first.
 	ListAnalyses(ctx context.Context, orgID, projectID string, limit int) ([]*Analysis, error)
-	// ActiveAnalysis returns the project's analysis that's still running
+	// ListSourceAnalyses returns a source's latest analyses, newest first.
+	ListSourceAnalyses(ctx context.Context, orgID, sourceID string, limit int) ([]*Analysis, error)
+	// ActiveAnalysis returns the source's analysis that's still running
 	// and started after since, or ErrNotFound.
-	ActiveAnalysis(ctx context.Context, orgID, projectID string, since time.Time) (*Analysis, error)
+	ActiveAnalysis(ctx context.Context, orgID, sourceID string, since time.Time) (*Analysis, error)
 
 	// CreateSource attaches a source. An alias the project has used before,
 	// even on a removed source, is ErrAliasTaken.

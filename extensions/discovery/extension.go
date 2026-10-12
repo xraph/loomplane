@@ -156,7 +156,7 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, discovery.ErrAlreadyActive), errors.Is(err, discovery.ErrNoGraph):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
-	case errors.Is(err, discovery.ErrNoRepository), errors.Is(err, discovery.ErrInvalid):
+	case errors.Is(err, discovery.ErrNoSources), errors.Is(err, discovery.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, readable(err))
 	case errors.Is(err, repositories.ErrInstallationNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())

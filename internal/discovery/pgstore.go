@@ -24,7 +24,12 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
 var _ Store = (*PgStore)(nil)
 
-const analysisColumns = `id, org_id, project_id, status, repository, ref, commit_sha, error, summary,
+// source_id is nullable: an analysis of a project whose URL wasn't on
+// GitHub has none.
+const analysisColumns = `id, org_id, project_id, COALESCE(source_id, ''), alias, status, repository, ref, commit_sha, error, summary,
+	created_by, created_at, started_at, finished_at`
+
+const analysisInsertColumns = `id, org_id, project_id, source_id, alias, status, repository, ref, commit_sha, error, summary,
 	created_by, created_at, started_at, finished_at`
 
 // unfinished lists the statuses of an analysis still running.
@@ -33,7 +38,7 @@ const unfinished = `('queued', 'fetching', 'analyzing')`
 func scanAnalysis(row pgx.Row) (*Analysis, error) {
 	var a Analysis
 	var summary []byte
-	if err := row.Scan(&a.ID, &a.OrgID, &a.ProjectID, &a.Status, &a.Repository, &a.Ref, &a.CommitSHA, &a.Error, &summary,
+	if err := row.Scan(&a.ID, &a.OrgID, &a.ProjectID, &a.SourceID, &a.Source, &a.Status, &a.Repository, &a.Ref, &a.CommitSHA, &a.Error, &summary,
 		&a.CreatedBy, &a.CreatedAt, &a.StartedAt, &a.FinishedAt); err != nil {
 		return nil, err
 	}
@@ -50,9 +55,9 @@ func (s *PgStore) CreateAnalysis(ctx context.Context, a *Analysis) error {
 	if err != nil {
 		return fmt.Errorf("encode analysis summary: %w", err)
 	}
-	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_analyses (`+analysisColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-		a.ID, a.OrgID, a.ProjectID, a.Status, a.Repository, a.Ref, a.CommitSHA, a.Error, summary,
+	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_analyses (`+analysisInsertColumns+`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		a.ID, a.OrgID, a.ProjectID, a.SourceID, a.Source, a.Status, a.Repository, a.Ref, a.CommitSHA, a.Error, summary,
 		a.CreatedBy, a.CreatedAt, a.StartedAt, a.FinishedAt)
 	if err != nil {
 		return fmt.Errorf("insert analysis: %w", err)
@@ -103,12 +108,34 @@ func (s *PgStore) ListAnalyses(ctx context.Context, orgID, projectID string, lim
 	return out, nil
 }
 
-// ActiveAnalysis returns the project's newest running analysis created
+// ListSourceAnalyses returns a source's latest analyses, newest first.
+func (s *PgStore) ListSourceAnalyses(ctx context.Context, orgID, sourceID string, limit int) ([]*Analysis, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+analysisColumns+` FROM loomplane_analyses
+		WHERE org_id = $1 AND source_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3`, orgID, sourceID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list source analyses: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := []*Analysis{}
+	for rows.Next() {
+		a, err := scanAnalysis(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan analysis: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list source analyses: %w", err)
+	}
+	return out, nil
+}
+
+// ActiveAnalysis returns the source's newest running analysis created
 // after since, or ErrNotFound.
-func (s *PgStore) ActiveAnalysis(ctx context.Context, orgID, projectID string, since time.Time) (*Analysis, error) {
+func (s *PgStore) ActiveAnalysis(ctx context.Context, orgID, sourceID string, since time.Time) (*Analysis, error) {
 	a, err := scanAnalysis(s.db.QueryRow(ctx, `SELECT `+analysisColumns+` FROM loomplane_analyses
-		WHERE org_id = $1 AND project_id = $2 AND status IN `+unfinished+` AND created_at > $3
-		ORDER BY created_at DESC LIMIT 1`, orgID, projectID, since))
+		WHERE org_id = $1 AND source_id = $2 AND status IN `+unfinished+` AND created_at > $3
+		ORDER BY created_at DESC LIMIT 1`, orgID, sourceID, since))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

@@ -35,7 +35,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("analyses.create"),
 		forge.WithSummary("Analyze the project's repository: find its services, packages and the resources they need"),
 		forge.WithRequestSchema(discovery.StartAnalysisInput{}),
-		forge.WithResponseSchema(http.StatusCreated, "The queued analysis", discovery.Analysis{}),
+		forge.WithResponseSchema(http.StatusCreated, "The queued analyses, one per source", AnalysisList{}),
 	); err != nil {
 		return err
 	}
@@ -80,11 +80,15 @@ func (e *Extension) start(c forge.Context) error {
 			return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON: {\"ref\": \"main\"}")
 		}
 	}
-	a, err := e.svc.Start(c.Request().Context(), p, c.Param("id"), in)
+	queued, err := e.svc.Start(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
 		return fail(err)
 	}
-	return c.JSON(http.StatusCreated, a)
+	out := AnalysisList{Analyses: make([]discovery.Analysis, 0, len(queued))}
+	for _, a := range queued {
+		out.Analyses = append(out.Analyses, *a)
+	}
+	return c.JSON(http.StatusCreated, out)
 }
 
 func (e *Extension) list(c forge.Context) error {

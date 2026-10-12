@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,48 +67,106 @@ func (s *Service) record(ctx context.Context, p security.Principal, projectID, a
 }
 
 // StartAnalysisInput is what a caller sends to analyze a project's
-// repository.
+// repositories.
 type StartAnalysisInput struct {
-	// Ref is a branch, tag or commit. Empty means the default branch.
+	// Sources are the aliases to analyze. Empty means every source.
+	Sources []string `json:"sources,omitempty"`
+	// Ref is a branch, tag or commit, for one source only. Empty means the
+	// source's tracked branch.
 	Ref string `json:"ref,omitempty"`
 }
 
-// Start queues an analysis of the project's repository.
-func (s *Service) Start(ctx context.Context, p security.Principal, projectID string, in StartAnalysisInput) (*Analysis, error) {
+// Start queues one analysis per source asked for. If any of them is still
+// being analyzed, nothing is queued: half a request is harder to reason
+// about than none.
+func (s *Service) Start(ctx context.Context, p security.Principal, projectID string, in StartAnalysisInput) ([]*Analysis, error) {
 	if err := s.authz.Require(ctx, p, security.AnalysisRun, projectID); err != nil {
 		return nil, err
 	}
-	proj, err := s.projects.GetProject(ctx, p.OrgID, projectID)
+	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+		return nil, err
+	}
+	live, err := s.store.ListSources(ctx, p.OrgID, projectID, false)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(proj.RepositoryURL) == "" {
-		return nil, ErrNoRepository
+	if len(live) == 0 {
+		return nil, ErrNoSources
 	}
-	repo, err := repositories.ParseGitHubURL(proj.RepositoryURL)
+	picked, err := pick(live, in.Sources)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return nil, err
 	}
 	ref := strings.TrimSpace(in.Ref)
-	if ref != "" && !repositories.ValidRef(ref) {
-		return nil, fmt.Errorf("%w: %q isn't a branch, tag or commit name", ErrInvalid, ref)
+	if ref != "" {
+		if len(picked) != 1 {
+			return nil, fmt.Errorf("%w: a ref is a branch of one repository, so name one source with it", ErrInvalid)
+		}
+		if !repositories.ValidRef(ref) {
+			return nil, fmt.Errorf("%w: %q isn't a branch, tag or commit name", ErrInvalid, ref)
+		}
 	}
 	now := s.now().UTC()
-	_, err = s.store.ActiveAnalysis(ctx, p.OrgID, projectID, now.Add(-activeWindow))
-	switch {
-	case err == nil:
-		return nil, ErrAlreadyActive
-	case !errors.Is(err, ErrNotFound):
-		return nil, err
+	for _, src := range picked {
+		_, err := s.store.ActiveAnalysis(ctx, p.OrgID, src.ID, now.Add(-activeWindow))
+		switch {
+		case err == nil:
+			return nil, fmt.Errorf("%w: %s", ErrAlreadyActive, src.Alias)
+		case !errors.Is(err, ErrNotFound):
+			return nil, err
+		}
 	}
+	out := make([]*Analysis, 0, len(picked))
+	for _, src := range picked {
+		target := ref
+		if target == "" {
+			target = src.Ref
+		}
+		a, err := s.queue(ctx, p, src, target, now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
 
+// pick finds the sources aliases name, in alias order. No aliases means all
+// of them.
+func pick(live []*Source, aliases []string) ([]*Source, error) {
+	if len(aliases) == 0 {
+		return live, nil
+	}
+	by := map[string]*Source{}
+	for _, src := range live {
+		by[src.Alias] = src
+	}
+	seen := map[string]bool{}
+	var out []*Source
+	for _, a := range aliases {
+		a = strings.TrimSpace(a)
+		src := by[a]
+		if src == nil {
+			return nil, fmt.Errorf("%w: this project has no repository called %q", ErrSourceNotFound, a)
+		}
+		if !seen[a] {
+			seen[a] = true
+			out = append(out, src)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Alias < out[j].Alias })
+	return out, nil
+}
+
+// queue creates one analysis and its job.
+func (s *Service) queue(ctx context.Context, p security.Principal, src *Source, ref string, now time.Time) (*Analysis, error) {
 	id, err := typeid.Generate("anl")
 	if err != nil {
 		return nil, fmt.Errorf("generate analysis id: %w", err)
 	}
 	a := &Analysis{
-		ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, Status: StatusQueued,
-		Repository: repo.FullName(), Ref: ref, CreatedBy: p.UserID, CreatedAt: now,
+		ID: id.String(), OrgID: p.OrgID, ProjectID: src.ProjectID, SourceID: src.ID, Source: src.Alias,
+		Status: StatusQueued, Repository: src.Repository, Ref: ref, CreatedBy: p.UserID, CreatedAt: now,
 	}
 	err = s.store.CreateAnalysis(ctx, a)
 	if err != nil {
@@ -120,12 +179,8 @@ func (s *Service) Start(ctx context.Context, p security.Principal, projectID str
 		}
 		return nil, fmt.Errorf("start analysis: %w", err)
 	}
-	if s.audit != nil {
-		s.audit.Record(ctx, projects.AuditEvent{
-			Action: "analysis.start", Severity: "info", ProjectID: projectID, Principal: p,
-			Attributes: map[string]any{"analysis_id": a.ID, "repository": a.Repository, "ref": a.Ref},
-		})
-	}
+	s.record(ctx, p, src.ProjectID, "analysis.start", "info",
+		map[string]any{"analysis_id": a.ID, "source": src.Alias, "repository": a.Repository, "ref": a.Ref})
 	return a, nil
 }
 
