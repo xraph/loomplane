@@ -278,13 +278,19 @@ type queue struct {
 	mu   sync.Mutex
 	ids  []string
 	fail error
+	// failOn makes the nth call (counting from 1) fail, and only that one.
+	failOn, calls int
 }
 
 func (q *queue) AnalyzeRepository(_ context.Context, _, id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.calls++
 	if q.fail != nil {
 		return q.fail
+	}
+	if q.failOn != 0 && q.calls == q.failOn {
+		return errors.New("queue down")
 	}
 	q.ids = append(q.ids, id)
 	return nil
@@ -491,6 +497,27 @@ func TestService_oneRunningSourceRefusesTheWholeRequest(t *testing.T) {
 	}
 	if len(f.queue.ids) != 1 {
 		t.Fatalf("queued %v", f.queue.ids)
+	}
+}
+
+func TestService_aFailedStartTakesBackWhatItQueued(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	f.source(t, project, "web", "acme/site", "")
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+
+	f.queue.failOn = 2
+	if _, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{}); err == nil {
+		t.Fatal("Start succeeded though the second job couldn't be queued")
+	}
+	if len(f.store.analyses) != 0 {
+		t.Fatalf("analyses left behind: %+v", f.store.analyses)
+	}
+	// Nothing is stuck as "already running", so the retry starts both.
+	f.queue.failOn = 0
+	all, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
+	if err != nil || len(all) != 2 || len(f.store.analyses) != 2 {
+		t.Fatalf("retry: %v, %d analyses, %d stored", err, len(all), len(f.store.analyses))
 	}
 }
 

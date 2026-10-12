@@ -124,6 +124,13 @@ func (s *Service) Start(ctx context.Context, p security.Principal, projectID str
 		}
 		a, err := s.queue(ctx, p, src, target, now)
 		if err != nil {
+			// The earlier sources are already queued; take them back, or a
+			// retry would find them "already running".
+			for _, done := range out {
+				if derr := s.store.DeleteAnalysis(context.WithoutCancel(ctx), done.OrgID, done.ID); derr != nil {
+					err = errors.Join(err, fmt.Errorf("remove the %s analysis again: %w", done.Source, derr))
+				}
+			}
 			return nil, err
 		}
 		out = append(out, a)

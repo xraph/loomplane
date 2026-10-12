@@ -56,7 +56,7 @@ func (s *PgStore) CreateAnalysis(ctx context.Context, a *Analysis) error {
 		return fmt.Errorf("encode analysis summary: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_analyses (`+analysisInsertColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		a.ID, a.OrgID, a.ProjectID, a.SourceID, a.Source, a.Status, a.Repository, a.Ref, a.CommitSHA, a.Error, summary,
 		a.CreatedBy, a.CreatedAt, a.StartedAt, a.FinishedAt)
 	if err != nil {
