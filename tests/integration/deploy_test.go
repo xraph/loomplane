@@ -43,6 +43,11 @@ type fakeCloud struct {
 	// each.
 	secrets map[string][][]byte
 	readers map[string][]string
+	// sql are Cloud SQL instances by name, with their databases and the
+	// app user's password.
+	sql       map[string]map[string]any
+	databases map[string][]string
+	passwords map[string]string
 }
 
 func newFakeCloud(base string) *fakeCloud {
@@ -50,6 +55,7 @@ func newFakeCloud(base string) *fakeCloud {
 		base: base, uploads: map[string][]byte{}, repos: map[string]bool{}, polls: map[string]int{},
 		services: map[string]map[string]any{}, public: map[string]bool{}, failed: map[string]bool{},
 		secrets: map[string][][]byte{}, readers: map[string][]string{},
+		sql: map[string]map[string]any{}, databases: map[string][]string{}, passwords: map[string]string{},
 	}
 }
 
@@ -102,6 +108,8 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(map[string]any{"name": strings.TrimPrefix(p, "/v2/"), "done": true})
 	case strings.HasPrefix(p, runPrefix):
 		f.run(r, p, body, reply, notFound)
+	case strings.HasPrefix(p, "/v1/projects/acme-prod/instances") || strings.HasPrefix(p, "/v1/projects/acme-prod/operations/"):
+		f.cloudSQL(r, p, body, reply, notFound)
 	case r.Method == http.MethodGet && p == "/v3/projects/acme-prod":
 		reply(map[string]any{"name": "projects/123456", "projectId": "acme-prod"})
 	case r.Method == http.MethodPost && p == "/v1/projects/acme-prod/secrets":
@@ -139,6 +147,48 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(p, "/run/"):
 		// The deployed service itself, answering its health check.
 		_, _ = w.Write([]byte("hello from " + strings.TrimPrefix(p, "/run/")))
+	default:
+		notFound()
+	}
+}
+
+// cloudSQL is Cloud SQL Admin. Operations are done when first checked.
+func (f *fakeCloud) cloudSQL(r *http.Request, p string, body []byte, reply func(any), notFound func()) {
+	done := map[string]any{"name": "op-sql", "status": "DONE"}
+	rest := strings.TrimPrefix(p, "/v1/projects/acme-prod/instances")
+	switch {
+	case strings.HasPrefix(p, "/v1/projects/acme-prod/operations/"):
+		reply(done)
+	case r.Method == http.MethodPost && rest == "":
+		var in map[string]any
+		_ = json.Unmarshal(body, &in)
+		name := in["name"].(string)
+		f.sql[name] = map[string]any{
+			"name": name, "connectionName": "acme-prod:us-central1:" + name,
+			"databaseVersion": in["databaseVersion"], "state": "RUNNABLE",
+		}
+		reply(map[string]any{"name": "op-sql", "status": "PENDING"})
+	case strings.HasSuffix(rest, "/databases") && r.Method == http.MethodPost:
+		var in map[string]string
+		_ = json.Unmarshal(body, &in)
+		name := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/databases")
+		f.databases[name] = append(f.databases[name], in["name"])
+		reply(done)
+	case strings.HasSuffix(rest, "/users"):
+		var in map[string]string
+		_ = json.Unmarshal(body, &in)
+		f.passwords[strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/users")] = in["password"]
+		reply(done)
+	case r.Method == http.MethodGet:
+		in, ok := f.sql[strings.TrimPrefix(rest, "/")]
+		if !ok {
+			notFound()
+			return
+		}
+		reply(in)
+	case r.Method == http.MethodDelete:
+		delete(f.sql, strings.TrimPrefix(rest, "/"))
+		reply(done)
 	default:
 		notFound()
 	}
@@ -793,4 +843,117 @@ func TestDeploy_driftIsFoundAndPlannedBack(t *testing.T) {
 		t.Fatalf("%d services after redeploying", services)
 	}
 	waitDrift(t, c, base, "")
+}
+
+const apiWithPostgres = `version: 1
+services:
+  api:
+    source: go:services/api
+    provider: cloud-run
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+ignore:
+  resources: [redis]
+`
+
+func TestDeploy_aGoServiceGetsItsCloudSQLDatabase(t *testing.T) {
+	google := newFakeGoogle(t)
+	cloud := newFakeCloud(google.srv.URL)
+	google.deploy = cloud
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.GoogleEndpoint = google.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": apiWithPostgres}, nil)
+
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	if plan.Status != "ready" || !plan.Executable || len(plan.Actions) != 2 || plan.Actions[0].ID != "resource:db" {
+		t.Fatalf("plan %+v", plan)
+	}
+	d := approveAndWait(t, c, plan)
+	if d.Status != "succeeded" || d.Steps[0].ActionID != "resource:db" || d.Steps[0].Status != "succeeded" {
+		t.Fatalf("deployment %+v", d)
+	}
+
+	cloud.mu.Lock()
+	if len(cloud.sql) != 1 {
+		t.Fatalf("%d cloud sql instances", len(cloud.sql))
+	}
+	var instance string
+	for name := range cloud.sql {
+		instance = name
+	}
+	conn := "acme-prod:us-central1:" + instance
+	password := cloud.passwords[instance]
+	if password == "" || !slices.Equal(cloud.databases[instance], []string{"db"}) || cloud.sql[instance]["databaseVersion"] != "POSTGRES_17" {
+		t.Fatalf("instance %s: databases %v, version %v", instance, cloud.databases[instance], cloud.sql[instance]["databaseVersion"])
+	}
+	var svc map[string]any
+	for _, s := range cloud.services {
+		svc = s
+	}
+	tmpl := svc["template"].(map[string]any)
+	vol := tmpl["volumes"].([]any)[0].(map[string]any)
+	if vol["cloudSqlInstance"].(map[string]any)["instances"].([]any)[0] != conn {
+		t.Fatalf("volumes %+v", tmpl["volumes"])
+	}
+	ctr := tmpl["containers"].([]any)[0].(map[string]any)
+	if ctr["volumeMounts"].([]any)[0].(map[string]any)["mountPath"] != "/cloudsql" {
+		t.Fatalf("mounts %+v", ctr["volumeMounts"])
+	}
+	var secretID string
+	for _, e := range ctr["env"].([]any) {
+		if m := e.(map[string]any); m["name"] == "DATABASE_URL" {
+			if _, plain := m["value"]; plain {
+				t.Fatalf("DATABASE_URL set as a value: %+v", m)
+			}
+			secretID = m["valueSource"].(map[string]any)["secretKeyRef"].(map[string]any)["secret"].(string)
+		}
+	}
+	got := string(cloud.secrets[secretID][0])
+	cloud.mu.Unlock()
+	want := "postgresql://app:" + password + "@/db?host=%2Fcloudsql%2F" + strings.ReplaceAll(conn, ":", "%3A")
+	if got != want {
+		t.Fatalf("DATABASE_URL is %q, want %q", got, want)
+	}
+
+	// Planning again finds both as deployed.
+	var again planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &again)
+	waitPlanned(t, c, &again)
+	for _, a := range again.Actions {
+		if a.Op != "keep" {
+			t.Fatalf("second plan %+v", again)
+		}
+	}
 }

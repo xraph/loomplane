@@ -65,6 +65,12 @@ func Draft(g *graph.Graph, reg *provider.Registry) *manifest.Manifest {
 	for _, e := range g.Edges {
 		uses[e.From] = append(uses[e.From], e.To)
 	}
+	cloudOf := func(providerName string) string {
+		if p, err := reg.Get(providerName); err == nil {
+			return p.Cloud
+		}
+		return ""
+	}
 	for _, gs := range g.Services {
 		name, ok := names[gs.ID]
 		if !ok {
@@ -72,9 +78,16 @@ func Draft(g *graph.Graph, reg *provider.Registry) *manifest.Manifest {
 		}
 		var needs []string
 		for _, to := range reach(gs.ID, uses) {
-			if need, ok := names[to]; ok && need != name && !slices.Contains(needs, need) {
-				needs = append(needs, need)
+			need, ok := names[to]
+			if !ok || need == name || slices.Contains(needs, need) {
+				continue
 			}
+			// A resource on another cloud is out of reach: leave the
+			// need out, and the plan says the service seems to use it.
+			if r, isResource := m.Resources[need]; isResource && cloudOf(r.Provider) != cloudOf(m.Services[name].Provider) {
+				continue
+			}
+			needs = append(needs, need)
 		}
 		slices.Sort(needs)
 		s := m.Services[name]

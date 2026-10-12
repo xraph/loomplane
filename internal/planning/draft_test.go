@@ -41,9 +41,10 @@ func TestDraft_ofThePolyglotExamplePlansWithNoProblems(t *testing.T) {
 	if m.Resources["postgres"].Provider != "cloud-sql" || m.Resources["redis"].Provider != "memorystore" {
 		t.Errorf("resources %+v", m.Resources)
 	}
-	// web reaches Postgres through Prisma; the worker reaches Redis.
-	if !slices.Contains(m.Services["web"].Needs, "postgres") || !slices.Contains(m.Services["worker"].Needs, "redis") {
-		t.Errorf("needs: web %v, worker %v", m.Services["web"].Needs, m.Services["worker"].Needs)
+	// api reaches Postgres on Google Cloud like itself. web on Vercel
+	// can't, so the draft leaves that need for the plan to point out.
+	if !slices.Contains(m.Services["api"].Needs, "postgres") || slices.Contains(m.Services["web"].Needs, "postgres") {
+		t.Errorf("needs: api %v, web %v", m.Services["api"].Needs, m.Services["web"].Needs)
 	}
 
 	res := Compute(Input{Environment: "production", Graph: g, Manifest: m, Providers: providers.Registry(), Connections: connected})
@@ -51,7 +52,7 @@ func TestDraft_ofThePolyglotExamplePlansWithNoProblems(t *testing.T) {
 		t.Fatalf("the draft's plan has problems: %+v", res.Problems)
 	}
 	for _, w := range res.Warnings {
-		if w.Code == "service-left-out" || w.Code == "unprovided-resource" || w.Code == "unlinked-resource" {
+		if w.Code == "service-left-out" || w.Code == "unprovided-resource" {
 			t.Errorf("the draft left something out: %+v", w)
 		}
 	}

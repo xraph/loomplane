@@ -113,3 +113,26 @@ func TestCompute_unavailableTargetsNeedNoConnection(t *testing.T) {
 		t.Fatalf("problems %+v, connections %v, executable %v", res.Problems, res.Connections, res.Executable)
 	}
 }
+
+func TestCompute_aResourceOnAnotherCloudIsUnreachable(t *testing.T) {
+	const manifest = `version: 1
+services:
+  web:
+    source: apps/web
+    provider: vercel
+    needs: [db]
+  api:
+    source: services/api
+    provider: cloud-run
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+`
+	res := Compute(Input{Environment: "production", Graph: polyglot(t), Manifest: parse(t, manifest), Providers: deployable(t),
+		Connections: []ConnectionOption{{ID: "g", Cloud: "gcp", Ready: true}, {ID: "v", Cloud: "vercel", Ready: true}}})
+	if got := findingCodes(res.Problems); !slices.Equal(got, []string{"unreachable-resource"}) || res.Problems[0].Name != "web" {
+		t.Fatalf("problems %+v", res.Problems)
+	}
+}

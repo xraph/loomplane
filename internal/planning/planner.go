@@ -47,7 +47,7 @@ type ConnectionOption struct {
 }
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {
@@ -462,6 +462,13 @@ func (p *planner) link(name string, a *Action) {
 						Message: fmt.Sprintf("%s needs %s, which is off in %s.", name, need, p.in.Environment),
 					})
 				}
+				continue
+			}
+			if rc, sc := p.cloud(dep.Provider), p.cloud(a.Provider); rc != sc {
+				p.problem(Finding{
+					Code: "unreachable-resource", Subject: ServiceSubject, Name: name, Path: base,
+					Message: fmt.Sprintf("%s runs on %s, but %s is on %s, and a managed resource is only reachable from its own cloud. Put them on the same one.", name, cloudTitle(sc), need, cloudTitle(rc)),
+				})
 				continue
 			}
 			a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})

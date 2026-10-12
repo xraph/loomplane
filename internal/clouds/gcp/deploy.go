@@ -209,6 +209,22 @@ type RunTemplate struct {
 	Labels     map[string]string `json:"labels,omitempty"`
 	Scaling    *RunScaling       `json:"scaling,omitempty"`
 	Containers []RunContainer    `json:"containers"`
+	Volumes    []RunVolume       `json:"volumes,omitempty"`
+}
+
+// RunVolume is a volume a revision mounts: here, the Cloud SQL
+// connector's socket directory.
+type RunVolume struct {
+	Name             string `json:"name"`
+	CloudSQLInstance *struct {
+		Instances []string `json:"instances"`
+	} `json:"cloudSqlInstance,omitempty"`
+}
+
+// RunVolumeMount mounts a volume into a container.
+type RunVolumeMount struct {
+	Name      string `json:"name"`
+	MountPath string `json:"mountPath"`
 }
 
 // RunScaling bounds a service's instances.
@@ -219,10 +235,11 @@ type RunScaling struct {
 
 // RunContainer is a service's container.
 type RunContainer struct {
-	Image     string        `json:"image"`
-	Env       []RunEnv      `json:"env,omitempty"`
-	Ports     []RunPort     `json:"ports,omitempty"`
-	Resources *RunResources `json:"resources,omitempty"`
+	Image     string           `json:"image"`
+	Env       []RunEnv         `json:"env,omitempty"`
+	Ports     []RunPort        `json:"ports,omitempty"`
+	Resources *RunResources    `json:"resources,omitempty"`
+	Mounts    []RunVolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // RunEnv is one variable: a value, or a reference to a secret.

@@ -71,7 +71,21 @@ type Job struct {
 	Checkpoint func(data []byte) error
 	// Progress shows what the step is doing.
 	Progress func(status, message string)
+	// Keep and Recall store and read a resource's credentials, such as a
+	// database password, in Vault, scoped to this resource in this
+	// environment. A retried step recalls what it kept.
+	Keep   func(ctx context.Context, field string, value []byte) error
+	Recall func(ctx context.Context, field string) ([]byte, error)
+	// Forget deletes everything kept for the resource, once it's gone.
+	Forget func(ctx context.Context) error
+	// Attach are the resources a service needs, which some providers have
+	// to wire to it: a Cloud SQL instance Cloud Run mounts.
+	Attach []*planning.Binding
 }
+
+// ResourceURL is the field a resource executor keeps its address under,
+// which the services that need it get.
+const ResourceURL = "url"
 
 // Outcome is what an executor did.
 type Outcome struct {
@@ -127,6 +141,7 @@ type Runner struct {
 	sources     Sources
 	providers   *provider.Registry
 	executors   map[string]Executor
+	resources   ResourceSecrets
 	http        *http.Client
 	now         func() time.Time
 	// verifyWait is how long a deployed service has to answer.
@@ -144,13 +159,16 @@ type RunnerDeps struct {
 	Providers   *provider.Registry
 	// Executors carry out each provider's actions, by provider name.
 	Executors map[string]Executor
+	// Resources keeps provisioned resources' credentials. It may be nil
+	// when nothing is provisioned.
+	Resources ResourceSecrets
 }
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
 		store: d.Store, plans: d.Plans, projects: d.Projects, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -302,17 +320,44 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	var current *planning.Binding
 	byName := map[string]*planning.Binding{}
+	resources := map[string]*planning.Binding{}
 	for _, b := range bindings {
 		if string(b.Subject)+":"+b.Name == a.ID {
 			current = b
 		}
-		if b.Subject == planning.ServiceSubject {
+		switch b.Subject {
+		case planning.ServiceSubject:
 			byName[b.Name] = b
+		case planning.ResourceSubject:
+			resources[b.Name] = b
 		}
 	}
 	job := &Job{
 		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
 		Resume: resume, Checkpoint: heartbeat, Progress: progress,
+		Keep: func(ctx context.Context, field string, value []byte) error {
+			if r.resources == nil {
+				return errors.New("no resource credential store")
+			}
+			return r.resources.Put(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field), value)
+		},
+		Recall: func(ctx context.Context, field string) ([]byte, error) {
+			if r.resources == nil {
+				return nil, ErrNoCredential
+			}
+			return r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field))
+		},
+		Forget: func(ctx context.Context) error {
+			if r.resources == nil {
+				return nil
+			}
+			for _, field := range []string{ResourceURL, passwordField} {
+				if derr := r.resources.Delete(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field)); derr != nil {
+					return derr
+				}
+			}
+			return nil
+		},
 		Source: func(ctx context.Context) (io.ReadCloser, int64, error) {
 			if d.Source == "" {
 				return nil, 0, errors.New("the deployment's source hasn't been stored")
@@ -331,8 +376,13 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return r.plans.DeleteBinding(ctx, d.OrgID, current.ID)
 	}
 	if a.Service != nil {
-		if job.Env, job.Secrets, err = r.env(ctx, d, a, byName); err != nil {
+		if job.Env, job.Secrets, err = r.env(ctx, d, a, byName, resources); err != nil {
 			return err
+		}
+		for _, link := range a.Service.Env {
+			if b := resources[link.From]; link.Subject == planning.ResourceSubject && b != nil {
+				job.Attach = append(job.Attach, b)
+			}
 		}
 	}
 	out, err := exec.Apply(ctx, job)
@@ -352,7 +402,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 // env is what a service gets: its resolved variables, then the address of
 // each thing it needs. A variable someone set wins over an address
 // Loomplane would set, so you can point a service elsewhere.
-func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services map[string]*planning.Binding) (env map[string]string, secret map[string]bool, err error) {
+func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services, resources map[string]*planning.Binding) (env map[string]string, secret map[string]bool, err error) {
 	env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve variables: %w", err)
@@ -361,8 +411,17 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 		if _, set := env[link.Key]; set {
 			continue
 		}
-		if link.Subject != planning.ServiceSubject {
-			return nil, nil, fmt.Errorf("%s needs %s, which Loomplane can't provision yet", a.Name, link.From)
+		if link.Subject == planning.ResourceSubject {
+			// A resource's address holds its credentials, so it's secret.
+			if resources[link.From] == nil || r.resources == nil {
+				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
+			}
+			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s needs %s: %w", a.Name, link.From, err)
+			}
+			env[link.Key], secret[link.Key] = string(addr), true
+			continue
 		}
 		dep := services[link.From]
 		if dep == nil || dep.URL == "" {

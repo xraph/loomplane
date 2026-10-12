@@ -26,6 +26,9 @@ import (
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
+	"github.com/xraph/vault/crypto"
+	"github.com/xraph/vault/secret"
+	vaultpg "github.com/xraph/vault/store/postgres"
 
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
@@ -155,8 +158,21 @@ func (e *Extension) Register(fapp forge.App) error {
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
-		"vercel": &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		"vercel":    &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		"cloud-sql": &deployments.CloudSQL{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
 	}
+	// Resource credentials, such as a database's password, get a Vault
+	// key of their own, derived from secret_key.
+	resourceKey, err := security.DeriveKey(e.cfg.SecretKey, deployments.ResourceVaultKeyLabel)
+	if err != nil {
+		return err
+	}
+	resourceEnc, err := crypto.NewEncryptor(resourceKey)
+	if err != nil {
+		return fmt.Errorf("vault encryptor: %w", err)
+	}
+	resourceSecrets := deployments.NewVaultResourceSecrets(
+		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		Store: deployStore, Plans: planStore, Projects: prj, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{
@@ -164,6 +180,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		},
 		Providers: catalog,
 		Executors: executors,
+		Resources: resourceSecrets,
 	})
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.

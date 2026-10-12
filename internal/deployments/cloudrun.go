@@ -274,6 +274,16 @@ func spec(job *Job, image string, secrets map[string]string) (s cpprovider.Servi
 		labels[cloudrun.LabelCPU] = strconv.FormatFloat(cfg.Size.CPU, 'f', -1, 64)
 	}
 	maps.Copy(labels, secrets)
+	var instances []string
+	for _, b := range job.Attach {
+		if b.Provider == "cloud-sql" && b.ExternalID != "" {
+			instances = append(instances, b.ExternalID)
+		}
+	}
+	if len(instances) > 0 {
+		slices.Sort(instances)
+		labels[cloudrun.LabelCloudSQL] = strings.Join(instances, ",")
+	}
 	return s, labels
 }
 

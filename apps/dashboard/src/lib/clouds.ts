@@ -32,6 +32,7 @@ const rolesByService: Record<string, { role: string; title: string }> = {
     role: "roles/cloudbuild.builds.editor",
     title: "Cloud Build Editor",
   },
+  cloudsql: { role: "roles/cloudsql.admin", title: "Cloud SQL Admin" },
   iam: { role: "roles/iam.serviceAccountUser", title: "Service Account User" },
   resourcemanager: { role: "roles/browser", title: "Browser" },
   run: { role: "roles/run.admin", title: "Cloud Run Admin" },

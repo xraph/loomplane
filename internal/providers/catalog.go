@@ -97,7 +97,9 @@ func Catalog() []provider.Provider {
 				{Kind: "mysql", Creates: "Cloud SQL for MySQL instance", Versions: []string{"8.4", "8.0"}},
 			},
 			Regions: gcpRegions,
-			Note:    milestone5,
+			// Provisioned by Loomplane, reached through the Cloud SQL
+			// connector (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "memorystore", Title: "Google Memorystore", Cloud: "gcp",

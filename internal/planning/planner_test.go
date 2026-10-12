@@ -57,7 +57,6 @@ services:
   worker:
     source: services/worker/cmd/worker
     provider: ecs-fargate
-    needs: [cache]
     environments:
       preview:
         enabled: false
@@ -180,14 +179,17 @@ func TestCompute_fresh(t *testing.T) {
 		"port-assumed:gateway",
 		// Analysis found these, and the manifest leaves them out.
 		"service-left-out:docs", "service-left-out:ingest", "service-left-out:backfill",
-		// Cloud Run and Vercel have adapters; the rest don't yet.
-		"provider-unavailable:cloud-sql", "provider-unavailable:ecs-fargate",
+		// Cloud Run, Vercel and Cloud SQL have adapters; the rest don't yet.
+		"provider-unavailable:memorystore", "provider-unavailable:ecs-fargate",
+		// The worker uses Redis per analysis, but the cache is on another
+		// cloud, so it needs nothing.
+		"unlinked-resource:worker",
 	} {
 		if !slices.Contains(got, w) {
 			t.Errorf("no warning %s in %v", w, got)
 		}
 	}
-	for _, ok := range []string{"provider-unavailable:cloud-run", "provider-unavailable:vercel"} {
+	for _, ok := range []string{"provider-unavailable:cloud-run", "provider-unavailable:vercel", "provider-unavailable:cloud-sql"} {
 		if slices.Contains(got, ok) {
 			t.Errorf("%s has an adapter, but was warned about: %v", ok, got)
 		}

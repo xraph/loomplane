@@ -40,6 +40,10 @@ const (
 	// Secret values never pass through Ctrl Plane, which stores what it's
 	// given; only these references do.
 	LabelSecret = "loomplane-secret."
+	// LabelCloudSQL lists the Cloud SQL instances a service connects to,
+	// by connection name, comma separated. Cloud Run mounts their sockets
+	// at /cloudsql.
+	LabelCloudSQL = "loomplane-cloudsql"
 )
 
 // KeyPrefix starts every Cloud Run provider's registry key.
@@ -173,10 +177,19 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 	if len(limits) > 0 {
 		container.Resources = &gcp.RunResources{Limits: limits}
 	}
+	var volumes []gcp.RunVolume
+	if instances := labels[LabelCloudSQL]; instances != "" {
+		v := gcp.RunVolume{Name: "cloudsql"}
+		v.CloudSQLInstance = &struct {
+			Instances []string `json:"instances"`
+		}{Instances: strings.Split(instances, ",")}
+		volumes = append(volumes, v)
+		container.Mounts = []gcp.RunVolumeMount{{Name: "cloudsql", MountPath: "/cloudsql"}}
+	}
 	run := gcp.RunService{
 		Labels:   map[string]string{"managed-by": "loomplane"},
 		Ingress:  "INGRESS_TRAFFIC_ALL",
-		Template: gcp.RunTemplate{Containers: []gcp.RunContainer{container}},
+		Template: gcp.RunTemplate{Containers: []gcp.RunContainer{container}, Volumes: volumes},
 	}
 	minScale, _ := strconv.Atoi(labels[LabelMinScale]) //nolint:errcheck // absent or malformed means Cloud Run's default
 	maxScale, _ := strconv.Atoi(labels[LabelMaxScale]) //nolint:errcheck // likewise
