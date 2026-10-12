@@ -690,6 +690,41 @@ func TestSources_refusals(t *testing.T) {
 	}
 }
 
+func TestSources_attachingANewProjectsRepositorySaysWhatsWrongWithIt(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	proj := &projects.Project{ID: "proj_bare", OrgID: org}
+	f.source(t, "proj_bare", "platform", "acme/mono", "")
+	tests := []struct {
+		name, url string
+		want      error
+	}{
+		{"not GitHub", "https://gitlab.com/acme/site", ErrInvalidSource},
+		{"alias taken", "acme/platform", ErrAliasTaken},
+		{"overlapping root", "acme/mono", ErrRootsOverlap},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := f.svc.AttachRepository(ctx, dev, proj, tt.url)
+			if !errors.Is(err, tt.want) || !errors.Is(err, projects.ErrRepository) {
+				t.Fatalf("AttachRepository: %v, want %v as a repository error", err, tt.want)
+			}
+		})
+	}
+	f.access.err = repositories.ErrNotFound
+	_, err := f.svc.AttachRepository(ctx, dev, proj, "acme/private")
+	if !errors.Is(err, ErrSourceInaccessible) || !errors.Is(err, projects.ErrRepository) {
+		t.Fatalf("a repository Loomplane can't read: %v", err)
+	}
+	// Anything else isn't the repository's fault, so it isn't one.
+	f.access.err = errors.New("github is down")
+	_, err = f.svc.AttachRepository(ctx, dev, proj, "acme/other")
+	if err == nil || errors.Is(err, projects.ErrRepository) {
+		t.Fatalf("an outage: %v", err)
+	}
+}
+
 // refFetcher records the refs it's asked to resolve.
 type refFetcher struct {
 	refs []string

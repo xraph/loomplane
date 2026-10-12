@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -627,15 +628,27 @@ func TestService_createRemovesTheProjectWhenItsRepositoryCantBeAttached(t *testi
 	ctx := context.Background()
 	f := newFixture(t)
 	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
-	f.attach.err = errors.New("Loomplane can't read that repository")
-
-	_, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine", RepositoryURL: "https://github.com/ada/private"})
-	if !errors.Is(err, ErrRepository) {
-		t.Fatalf("Create: %v", err)
+	// The attacher says which of its errors are about the repository.
+	tests := []struct {
+		name       string
+		err        error
+		repository bool
+	}{
+		{"the repository", fmt.Errorf("%w: Loomplane can't read that repository", ErrRepository), true},
+		{"anything else", errors.New("db down"), false},
 	}
-	list, err := f.svc.List(ctx, dev)
-	if err != nil || len(list) != 0 {
-		t.Fatalf("a half-made project was left behind: %v, %+v", err, list)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f.attach.err = tt.err
+			_, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine", RepositoryURL: "https://github.com/ada/private"})
+			if !errors.Is(err, tt.err) || errors.Is(err, ErrRepository) != tt.repository {
+				t.Fatalf("Create: %v", err)
+			}
+			list, err := f.svc.List(ctx, dev)
+			if err != nil || len(list) != 0 {
+				t.Fatalf("a half-made project was left behind: %v, %+v", err, list)
+			}
+		})
 	}
 }
 

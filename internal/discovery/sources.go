@@ -85,10 +85,17 @@ func (s *Service) AddSource(ctx context.Context, p security.Principal, projectID
 
 // AttachRepository attaches the repository a new project was created with,
 // as its first source. It implements projects.Attacher; the project's
-// creation already checked the caller.
+// creation already checked the caller. What's wrong with the repository
+// itself comes back as projects.ErrRepository, so the person creating the
+// project is told; anything else, such as a database error, stays as it is.
 func (s *Service) AttachRepository(ctx context.Context, p security.Principal, proj *projects.Project, url string) (string, error) {
 	src, err := s.addSource(ctx, p, proj.ID, AddSourceInput{Repository: url})
 	if err != nil {
+		for _, target := range []error{ErrInvalidSource, ErrAliasTaken, ErrAliasReserved, ErrRootsOverlap, ErrSourceInaccessible} {
+			if errors.Is(err, target) {
+				return "", fmt.Errorf("%w: %w", projects.ErrRepository, err)
+			}
+		}
 		return "", err
 	}
 	return src.Repository, nil

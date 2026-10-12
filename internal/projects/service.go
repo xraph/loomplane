@@ -71,7 +71,9 @@ type Service struct {
 
 // Attacher attaches the repository a new project was created with, as its
 // first source, and returns its "owner/name". discovery's Service is the
-// real one; projects can't import it, since it imports projects.
+// real one; projects can't import it, since it imports projects. An error
+// that's about the repository itself wraps ErrRepository; Create passes
+// every error on as it is.
 type Attacher interface {
 	AttachRepository(ctx context.Context, p security.Principal, proj *Project, repositoryURL string) (string, error)
 }
@@ -147,7 +149,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 			if derr := s.store.DeleteProject(context.WithoutCancel(ctx), proj.OrgID, proj.ID); derr != nil {
 				err = errors.Join(err, fmt.Errorf("remove the project again: %w", derr))
 			}
-			return nil, fmt.Errorf("%w: %w", ErrRepository, err)
+			return nil, err
 		}
 		proj.Repositories = []string{full}
 	}
