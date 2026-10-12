@@ -133,4 +133,28 @@ func TestPlugin_aProviderPluginDeploysLikeABuiltInTarget(t *testing.T) {
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("the removed site answers %d", res.StatusCode)
 	}
+
+	// Loomplane's own metrics count what happened, by outcome and provider.
+	metrics := get(t, r.srv.URL+"/_/metrics")
+	for _, want := range []string{
+		`forge_loomplane_connection_checks_total{cloud="static-host",result="rejected"} 1`,
+		`forge_loomplane_connection_checks_total{cloud="static-host",result="ready"} 1`,
+		`forge_loomplane_plans_total{status="ready"} 3`,
+		`forge_loomplane_plan_decisions_total{decision="approved"} 2`,
+		`forge_loomplane_deployments_total{status="succeeded"} 2`,
+		`forge_loomplane_deployment_steps_total{op="create",provider="static-host",status="succeeded"} 1`,
+		`forge_loomplane_deployment_steps_total{op="delete",provider="static-host",status="succeeded"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("metrics lack %s", want)
+		}
+	}
+	if t.Failed() {
+		for _, l := range strings.Split(metrics, "\n") {
+			if strings.HasPrefix(l, "forge_loomplane_") && !strings.Contains(l, "_bucket") {
+				t.Log(l)
+			}
+		}
+	}
+
 }

@@ -1,6 +1,6 @@
 # Running Loomplane
 
-What it takes to keep a Loomplane running: backups, restores and upgrades. Everything here is a `loomplane` command, run with the same configuration the server runs with.
+What it takes to keep a Loomplane running: backups, restores, upgrades, and knowing when something goes wrong. The commands here are `loomplane` commands, run with the same configuration the server runs with.
 
 ## Backups
 
@@ -55,3 +55,23 @@ shows how many migrations the database has and which are pending, before you sta
 Loomplane won't start against a database a newer Loomplane migrated. It would read and write a schema it doesn't know, so going back a version means restoring the backup you made before upgrading. In development it only warns: branches share a local database, and one branch's migrations are often unknown to another's checkout.
 
 Migrations only move forward. Each one is written to be safe to run again, and none is ever edited once released; a fix is a new migration.
+
+## Watching it
+
+`/_/metrics` serves Prometheus metrics: the Go runtime's, Dispatch's jobs and workflows, and Loomplane's own, all prefixed `forge_loomplane_`:
+
+| Metric | Labels | What it counts |
+|---|---|---|
+| `deployments_total`, `deployment_duration_seconds` | `status` | Deployments that finished, and how long they took |
+| `deployment_steps_total` | `provider`, `op`, `status` | Each action of a deployment |
+| `deployment_step_duration_seconds` | `provider`, `status` | How long each provider takes |
+| `plans_total` | `status` | Plans worked out: ready, blocked or failed |
+| `plan_decisions_total` | `decision` | Approved, rejected, stale or expired |
+| `drift_findings_total` | `provider`, `state` | Bindings found missing or changed |
+| `analyses_total`, `analysis_duration_seconds` | `status` | Repository analyses, from loomplane-worker |
+| `api_key_authentications_total` | `result` | Requests with an API key, accepted or rejected |
+| `connection_checks_total` | `cloud`, `result` | Credential checks: ready, incomplete, rejected or unavailable |
+
+Worth an alert: `deployment_steps_total{status="failed"}` rising for one provider, which usually means its connection lost a permission; `api_key_authentications_total{result="rejected"}` climbing, which is a revoked key still in a pipeline or someone guessing; and `drift_findings_total`, which means something changed in a cloud outside Loomplane.
+
+`/_/health` reports each part, provider plugins included: a plugin that stops answering makes it unhealthy within one check interval. `/_/health/live` and `/_/health/ready` are for your orchestrator's probes.

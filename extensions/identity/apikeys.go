@@ -31,6 +31,7 @@ func (e *Extension) guard() forge.Middleware {
 			}
 			ctx := c.Request().Context()
 			p, err := e.keys.Authenticate(ctx, strings.TrimSpace(raw))
+			e.telemetry.KeyAuthenticated(err == nil)
 			if err != nil {
 				return forge.NewHTTPError(http.StatusUnauthorized, err.Error())
 			}
