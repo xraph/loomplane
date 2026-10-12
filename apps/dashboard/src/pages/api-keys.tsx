@@ -302,7 +302,7 @@ function CreateKeyDialog({
             <p className="text-sm text-muted-foreground">
               Use it with the CLI:{" "}
               <code className="font-mono text-xs">
-                loomplane login --key &lt;key&gt;
+                loomctl login --url {window.location.origin} --key -
               </code>
               , or send it as{" "}
               <code className="font-mono text-xs">
