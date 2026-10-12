@@ -439,21 +439,84 @@ func (p *planner) kept(b *Binding, reason string) *Action {
 	return a
 }
 
+// holder is a service that runs on through this plan, whatever the
+// manifest says, so what it was deployed against has to stay too. root
+// names the held service that's the reason, and via the service kept for
+// it that does the using, when that isn't the root itself.
+type holder struct {
+	root, via string
+	env       []EnvLink
+}
+
+func (h holder) String() string {
+	if h.via == "" {
+		return h.root
+	}
+	return fmt.Sprintf("%s (through %s)", h.root, h.via)
+}
+
+// heldLabel names a held service with the repository that holds it, for
+// messages. An empty alias is a binding that doesn't say.
+func heldLabel(name, alias string) string {
+	if alias == "" {
+		return name
+	}
+	return fmt.Sprintf("%s in %s", name, alias)
+}
+
 // retain keeps what a held service was deployed against when the plan
 // would otherwise remove it, so a held service never loses something it
 // uses. Each gets a keep action, so the held service's order points at
 // something in the plan, and a held warning saying why it stays.
+//
+// The held services are the ones the manifest still has, and the deployed
+// ones planDeletes will leave running because their repository is held.
+// A service kept for one of them runs on too, so what it uses is kept in
+// turn, as far down as the links go.
 func (p *planner) retain() {
-	users := map[string][]string{}
+	var queue []holder
 	for _, name := range p.in.Manifest.ServiceNames() {
-		alias := p.held[name]
-		if alias == "" {
+		if alias, held := p.held[name]; held {
+			queue = append(queue, holder{root: heldLabel(name, alias), env: p.services[name].Service.Env})
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(p.bindings)) {
+		b := p.bindings[id]
+		if b.Subject != ServiceSubject || p.services[b.Name] != nil {
 			continue
 		}
-		for _, e := range p.services[name].Service.Env {
+		var cfg ServiceConfig
+		if json.Unmarshal(b.Config, &cfg) != nil {
+			continue
+		}
+		if alias, held := p.heldRepo(cfg); held {
+			queue = append(queue, holder{root: heldLabel(b.Name, alias), env: cfg.Env})
+		}
+	}
+	// Every user of what's kept is collected before anything is planned,
+	// so each warning names them all. A service is followed once, since
+	// links between services kept this way can go round.
+	users := map[string][]string{}
+	followed := map[string]bool{}
+	for len(queue) > 0 {
+		h := queue[0]
+		queue = queue[1:]
+		for _, e := range h.env {
 			id := actionID(e.Subject, e.From)
-			if p.planned(e.Subject, e.From) == nil && p.bindings[id] != nil {
-				users[id] = append(users[id], fmt.Sprintf("%s in %s", name, alias))
+			b := p.bindings[id]
+			if p.planned(e.Subject, e.From) != nil || b == nil {
+				continue
+			}
+			if who := h.String(); !slices.Contains(users[id], who) {
+				users[id] = append(users[id], who)
+			}
+			if b.Subject != ServiceSubject || followed[id] {
+				continue
+			}
+			followed[id] = true
+			var cfg ServiceConfig
+			if json.Unmarshal(b.Config, &cfg) == nil {
+				queue = append(queue, holder{root: h.root, via: b.Name, env: cfg.Env})
 			}
 		}
 	}

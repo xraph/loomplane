@@ -813,3 +813,76 @@ func TestCompute_whatAHeldServiceUsesIsntDeleted(t *testing.T) {
 		t.Fatalf("api runs at step %d after %v, db at %d", api.Step, api.DependsOn, db.Step)
 	}
 }
+
+func TestCompute_whatARemovedHeldServiceUsesIsntDeleted(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	// api and db are both gone, and site no longer needs api.
+	yaml := "version: 1\nservices:\n  site:\n    repo: site\n    source: .\n    provider: vercel\n"
+	if r := computeFed(t, yaml, nil, live...); action(t, r, "resource:db").Op != Delete {
+		t.Fatal("the test needs db deleted when nothing is held")
+	}
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	for _, a := range r.Actions {
+		if (a.ID == "service:api" || a.ID == "resource:db") && a.Op == Delete {
+			t.Fatalf("deleted %s, which a held service still runs on: %+v", a.ID, a)
+		}
+	}
+	if db := action(t, r, "resource:db"); db.Op != Keep {
+		t.Fatalf("db %+v", db)
+	}
+	if warning(r, "held", "api") == nil {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+	if held := warning(r, "held", "db"); held == nil || !strings.Contains(held.Message, "api in mono") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}
+
+func TestCompute_whatAHeldServiceUsesIsRetainedThroughWhatsKeptForIt(t *testing.T) {
+	// api, in mono, needs site, in site, which needs db.
+	first := `version: 1
+defaults:
+  provider: cloud-run
+services:
+  api:
+    repo: mono
+    source: services/api
+    needs: [site]
+  site:
+    repo: site
+    source: .
+    provider: vercel
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+`
+	live := deployed(t, computeFed(t, first, nil))
+	// site and db go, and api's manifest entry no longer needs site, but
+	// api is held, so it runs on with what it was deployed against.
+	yaml := "version: 1\ndefaults:\n  provider: cloud-run\nservices:\n  api:\n    repo: mono\n    source: services/api\n"
+	if r := computeFed(t, yaml, nil, live...); action(t, r, "resource:db").Op != Delete {
+		t.Fatal("the test needs db deleted when nothing is held")
+	}
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	for _, id := range []string{"service:site", "resource:db"} {
+		if a := action(t, r, id); a.Op != Keep {
+			t.Fatalf("%s %+v", id, a)
+		}
+	}
+	if warning(r, "held", "site") == nil {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+	if held := warning(r, "held", "db"); held == nil || !strings.Contains(held.Message, "api in mono (through site)") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}
