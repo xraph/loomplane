@@ -3,6 +3,7 @@ package graph
 import (
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -101,7 +102,8 @@ func packageID(unitID string) string { return "pkg:" + unitID }
 func (b *builder) addPackage(u discovery.Unit) {
 	id := packageID(u.ID)
 	b.g.Packages = append(b.g.Packages, Package{
-		ID: id, Name: u.Name, Ecosystem: u.Ecosystem, Path: u.Path, Runtime: u.Runtime, Evidence: u.Evidence,
+		ID: id, Name: u.Name, Ecosystem: u.Ecosystem, Path: u.Path, Runtime: u.Runtime,
+		Requires: slices.Clone(u.Requires), Evidence: u.Evidence,
 	})
 	for _, d := range u.DependsOn {
 		b.edge(id, packageID(d.Unit), Uses, discovery.Certain, d.Evidence)
@@ -130,6 +132,8 @@ func service(u discovery.Unit, ep discovery.Entrypoint) Service {
 		Deployable: kind.Deployable(),
 		Ecosystem:  u.Ecosystem,
 		Unit:       u.ID,
+		UnitName:   u.Name,
+		Requires:   slices.Clone(u.Requires),
 		Path:       u.Path,
 		Entrypoint: ep.Path,
 		Framework:  framework,
@@ -245,7 +249,7 @@ func (b *builder) resource(ru discovery.ResourceUse) string {
 	return id
 }
 
-func (b *builder) edge(from, to string, kind EdgeKind, conf discovery.Confidence, ev discovery.Evidence) {
+func (b *builder) edge(from, to string, kind EdgeKind, conf discovery.Confidence, evs ...discovery.Evidence) {
 	key := from + "|" + to + "|" + string(kind)
 	e := b.edges[key]
 	if e == nil {
@@ -255,7 +259,9 @@ func (b *builder) edge(from, to string, kind EdgeKind, conf discovery.Confidence
 	if conf.Rank() > e.Confidence.Rank() {
 		e.Confidence = conf
 	}
-	e.Evidence = addEvidence(e.Evidence, ev)
+	for _, ev := range evs {
+		e.Evidence = addEvidence(e.Evidence, ev)
+	}
 }
 
 func addEvidence(list []discovery.Evidence, ev discovery.Evidence) []discovery.Evidence {

@@ -123,3 +123,37 @@ func TestBuild_rootDockerfileMatchesTheBinaryItBuilds(t *testing.T) {
 		t.Fatalf("api evidence %+v", api.Evidence)
 	}
 }
+
+func TestBuild_nodesCarryWhatTheirUnitRequires(t *testing.T) {
+	req := pd.Requirement{Name: "github.com/acme/kit", Version: "v1.2.0", Evidence: pd.Evidence{Path: "go.mod", Line: 5}}
+	g := Build(&pd.Report{Units: []pd.Unit{
+		{ID: "go:.", Ecosystem: pd.Go, Name: "github.com/acme/api", Path: ".",
+			Entrypoints: []pd.Entrypoint{{Name: "api", Path: "cmd/api"}}, Requires: []pd.Requirement{req}},
+		{ID: "go:lib", Ecosystem: pd.Go, Name: "github.com/acme/api/lib", Path: "lib", Requires: []pd.Requirement{req}},
+	}})
+	if g.Version != 2 {
+		t.Fatalf("version %d", g.Version)
+	}
+	svc := g.Services[0]
+	if svc.UnitName != "github.com/acme/api" || len(svc.Requires) != 1 || svc.Requires[0] != req {
+		t.Fatalf("service %+v", svc)
+	}
+	if pkg := g.Packages[0]; len(pkg.Requires) != 1 {
+		t.Fatalf("package %+v", pkg)
+	}
+}
+
+func TestService_Local(t *testing.T) {
+	for _, tt := range []struct {
+		s    Service
+		want string
+	}{
+		{Service{ID: "svc:go:cmd/api"}, "go:cmd/api"},
+		{Service{ID: "svc:api:go:cmd/api", Source: "api"}, "go:cmd/api"},
+		{Service{ID: "svc:web:container:Dockerfile", Source: "web"}, "container:Dockerfile"},
+	} {
+		if got := tt.s.Local(); got != tt.want {
+			t.Errorf("%s.Local() = %q, want %q", tt.s.ID, got, tt.want)
+		}
+	}
+}

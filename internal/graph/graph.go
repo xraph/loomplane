@@ -5,12 +5,15 @@
 package graph
 
 import (
+	"strings"
+
 	"github.com/xraph/loomplane/pkg/discovery"
 )
 
 // SchemaVersion is the version of the graph's JSON shape. Stored graphs
-// carry it, so a later Loomplane can read an older one.
-const SchemaVersion = 1
+// carry it, so a later Loomplane can read an older one. Version 2 added
+// sources and requirements; a version 1 graph still reads, without them.
+const SchemaVersion = 2
 
 // ServiceKind is what a service is, as far as deploying it goes.
 type ServiceKind string
@@ -43,7 +46,10 @@ func (k ServiceKind) Deployable() bool {
 
 // Graph is one version of an application's architecture.
 type Graph struct {
-	Version      int                     `json:"version"`
+	Version int `json:"version"`
+	// Sources are where a composed graph was read from, by alias. A graph
+	// one analysis built has none.
+	Sources      []SourceRef             `json:"sources,omitempty"`
 	Services     []Service               `json:"services"`
 	Packages     []Package               `json:"packages"`
 	Resources    []Resource              `json:"resources"`
@@ -55,7 +61,10 @@ type Graph struct {
 
 // Service is something that runs: a server, a web app, a worker.
 type Service struct {
-	ID         string              `json:"id"`
+	ID string `json:"id"`
+	// Source is the alias of the repository it's in, once graphs are
+	// composed.
+	Source     string              `json:"source,omitempty"`
 	Name       string              `json:"name"`
 	Kind       ServiceKind         `json:"kind"`
 	Deployable bool                `json:"deployable"`
@@ -63,6 +72,11 @@ type Service struct {
 	// Unit is the module, crate or package it's built from. Empty for a
 	// service known only from its Dockerfile.
 	Unit string `json:"unit,omitempty"`
+	// UnitName is the unit's published name, such as its module path,
+	// which another repository's requirement can name.
+	UnitName string `json:"unit_name,omitempty"`
+	// Requires are what its unit declares that its repository doesn't hold.
+	Requires []discovery.Requirement `json:"requires,omitempty"`
 	// Path is the source directory.
 	Path string `json:"path"`
 	// Entrypoint is the main package, binary source or package directory.
@@ -77,14 +91,29 @@ type Service struct {
 	Evidence   []discovery.Evidence `json:"evidence"`
 }
 
+// Local is the service's ID inside its own repository, such as
+// "go:cmd/api": what a manifest's source names.
+func (s Service) Local() string {
+	id := strings.TrimPrefix(s.ID, "svc:")
+	if s.Source != "" {
+		id = strings.TrimPrefix(id, s.Source+":")
+	}
+	return id
+}
+
 // Package is shared code: a library module, crate or package.
 type Package struct {
-	ID        string               `json:"id"`
-	Name      string               `json:"name"`
-	Ecosystem discovery.Ecosystem  `json:"ecosystem"`
-	Path      string               `json:"path"`
-	Runtime   string               `json:"runtime,omitempty"`
-	Evidence  []discovery.Evidence `json:"evidence"`
+	ID string `json:"id"`
+	// Source is the alias of the repository it's in, once graphs are
+	// composed.
+	Source    string              `json:"source,omitempty"`
+	Name      string              `json:"name"`
+	Ecosystem discovery.Ecosystem `json:"ecosystem"`
+	Path      string              `json:"path"`
+	Runtime   string              `json:"runtime,omitempty"`
+	// Requires are what its unit declares that its repository doesn't hold.
+	Requires []discovery.Requirement `json:"requires,omitempty"`
+	Evidence []discovery.Evidence    `json:"evidence"`
 }
 
 // Resource is a backing service the application appears to need, such as
