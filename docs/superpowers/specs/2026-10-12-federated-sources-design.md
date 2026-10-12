@@ -82,11 +82,11 @@ An alias matches `^[a-z][a-z0-9-]{0,31}$` and can't be an ecosystem name (`go`, 
 
 Removing a source sets `removed_at`. Its analyses stay, because applied plans reference them.
 
-`loomplane_projects.repository_url` is dropped.
+`loomplane_projects.repository_url` stays in the table, unread and unwritten, so a rollback to the previous release still finds it. A later migration drops it. The project's JSON loses `repository_url` and gains a read-only `repositories`, the `owner/name` of each live source sorted by alias, which the projects store reads from the sources table. Creating a project still accepts `repository_url` and turns it into the first source.
 
 ### Analyses
 
-`loomplane_analyses` gains `source_id TEXT NOT NULL REFERENCES loomplane_project_sources(id)`. The existing `repository`, `ref` and `commit_sha` columns stay as a snapshot. "One active analysis" becomes one per source.
+`loomplane_analyses` gains `source_id TEXT REFERENCES loomplane_project_sources(id)` and `alias TEXT`, a snapshot of the source's alias that's safe to keep because aliases never change. The existing `repository`, `ref` and `commit_sha` columns stay as a snapshot. `source_id` stays nullable: an analysis of a project whose URL wasn't on GitHub has no source to belong to, and nothing reads it. "One active analysis" becomes one per source.
 
 ### Plans and what's deployed
 
@@ -94,6 +94,9 @@ Removing a source sets `removed_at`. Its analyses stay, because applied plans re
 CREATE TABLE loomplane_plan_sources (
   plan_id      TEXT NOT NULL REFERENCES loomplane_plans(id) ON DELETE CASCADE,
   source_id    TEXT NOT NULL REFERENCES loomplane_project_sources(id),
+  alias        TEXT NOT NULL,
+  repository   TEXT NOT NULL,
+  root         TEXT NOT NULL,
   analysis_id  TEXT NOT NULL REFERENCES loomplane_analyses(id),
   commit_sha   TEXT NOT NULL,
   in_scope     BOOLEAN NOT NULL,
@@ -111,7 +114,7 @@ CREATE TABLE loomplane_environment_sources (
 );
 ```
 
-`loomplane_plans.analysis_id` and `commit_sha` are dropped in favour of the plan's rows in `loomplane_plan_sources`.
+A plan's rows in `loomplane_plan_sources` replace `loomplane_plans.analysis_id` and `commit_sha`. Those columns become nullable and unread, and the later cleanup migration drops them with `repository_url`. Each row snapshots the source's alias, repository and root, so a plan recomposes exactly even after someone edits a source's root.
 
 `loomplane_environment_sources` is what's actually deployed, kept apart from what a plan decided. Only a successful deployment writes it, and only for that plan's in-scope sources. That's milestone 4's executor. Until it exists the table stays empty, and every plan has to cover every source. Nothing records what is running yet, so planning makes no guesses about it.
 
@@ -119,7 +122,7 @@ CREATE TABLE loomplane_environment_sources (
 
 For each project with a non-empty `repository_url`, the migration creates one source. The alias is the repository name, slugified and cut to 32 characters, with `-src` appended when it clashes with an ecosystem name. Every `loomplane_variables.service` value is rewritten from `svc:<eco>:<path>` to `svc:<alias>:<eco>:<path>`, and every existing analysis gets that source's ID. Projects with no repository get no source.
 
-Each existing plan's `analysis_id` and `commit_sha` move into one `loomplane_plan_sources` row with `in_scope` set, before those columns are dropped. Manifest revisions need nothing: every migrated project has exactly one source, so a service without `repo:` resolves to it, and `source` paths were already relative to the repository.
+Each existing plan's `analysis_id` and `commit_sha` are copied into one `loomplane_plan_sources` row with `in_scope` set. Manifest revisions need nothing: every migrated project has exactly one source, so a service without `repo:` resolves to it, and `source` paths were already relative to the repository.
 
 ## Identity
 
@@ -204,7 +207,7 @@ Nothing stores the composed graph. The project's current graph is `Compose` over
 POST /api/v1/projects/:id/analyses  {"sources": ["api"], "ref": "release-2.4"}
 ```
 
-Leaving out `sources` analyzes every live source, one analysis and one job each, so they run in parallel on the existing `loomplane-analysis` queue. `ref` overrides the tracked branch and is only allowed with exactly one source. The job payload is unchanged.
+The response is the list of analyses it queued. Leaving out `sources` analyzes every live source, one analysis and one job each, so they run in parallel on the existing `loomplane-analysis` queue. `ref` overrides the tracked branch and is only allowed with exactly one source. The job payload is unchanged.
 
 The runner still fetches the whole repository and runs every detector over all of it. The tarball endpoint GitHub gives us cannot fetch a subtree anyway, and workspace files (`go.work`, `pnpm-workspace.yaml`, the Cargo workspace) live at the top. If we narrowed the checkout to `apps/web`, the pnpm detector would never see `pnpm-workspace.yaml` at the top, would treat every `workspace:*` dependency in `apps/web/package.json` as something outside the checkout, and the edge from the web app to `packages/ui` that you'd expect to see in the dashboard would quietly disappear. So `root` is applied in `Compose`, and evidence paths stay relative to the repository, which keeps GitHub links working.
 
@@ -239,13 +242,13 @@ Creating a plan builds its lockset from the scope. An empty scope means every li
 
 Matching changes first. `match` narrows the graph's services to those whose `Source` equals the manifest service's `repo`, then applies today's rules. When `repo` is empty and the project has one source, that source is used. When `repo` is empty and there are more, it's an `ambiguous-repo` finding. The not-found message names the source and commit: "Analysis found no service at cmd/server in api@3f2c1a9."
 
-A service whose repository is out of scope is held, which means it gets no action, even if the manifest changed it since it was deployed. If the manifest would change it, the planner adds a `held` warning saying the scope holds those changes back. Resources belong to no repository and are always planned, and the existing `needs` links already stop a resource being removed while a held service still needs it.
+A service whose repository is out of scope is held. If it runs in the environment, it gets a keep action carrying the configuration that's deployed, so the services that need it still get its address and `planDeletes` doesn't remove it. If the manifest would change it, the planner adds a `held` warning saying the scope holds those changes back. A held service that runs nowhere yet isn't created: it gets a `held` warning, and an in-scope service that needs it gets a `need-held` problem asking you to add its source to the scope. A deployed service whose manifest entry is gone and whose source is held isn't deleted either. Resources belong to no repository and are always planned, and the existing `needs` links already stop a resource being removed while a held service still needs it.
 
-The last change is about impact. When an in-scope package has `uses` edges from services in out-of-scope sources, the planner adds a `cross-repo-impact` info finding naming them. It never widens the scope by itself. Builds resolve those dependencies through registries at whatever version each repository declares, so the edge tells you something might be affected and is not a build input.
+The last change is about impact. When an in-scope package has `uses` edges from services in out-of-scope sources, the planner adds a `cross-repo-impact` warning naming them. A result only has problems and warnings, and this one blocks nothing. It never widens the scope by itself. Builds resolve those dependencies through registries at whatever version each repository declares, so the edge tells you something might be affected and is not a build input.
 
 ### What the executor gets
 
-`ServiceConfig` gains `Repo` and `CommitSHA`, so milestone 4's executor knows which tarball to build each service from. After a successful deployment it writes one `loomplane_environment_sources` row per in-scope source. Nothing else on the deployment path needs to know about federation.
+`ServiceConfig` gains `Repo` and `CommitSHA`, so milestone 4's executor knows which tarball to build each service from. Because the commit is part of the configuration, a service whose source moved to a new commit gets an update action, which is what deploying new code means. After a successful deployment it writes one `loomplane_environment_sources` row per in-scope source. Nothing else on the deployment path needs to know about federation.
 
 Bindings stay keyed by manifest name per environment, which is already unique across the project. Variables keep keying by service ID, now alias-qualified, and are validated against the composed catalog.
 
@@ -271,7 +274,9 @@ The plan screens from `d36ca4a` get two additions. Creating a plan offers a scop
 | `never-deployed` | An out-of-scope source has nothing deployed to the environment |
 | `ambiguous-repo` | A manifest service has no `repo:` and the project has more than one source |
 | `held` | Warning: the scope holds back manifest changes to a service |
-| `cross-repo-impact` | Info: a package this plan moves is used by services in held sources |
+| `cross-repo-impact` | Warning: a package this plan moves is used by services in held sources |
+| `need-held` | A service in scope needs a held service that runs nowhere yet |
+| `unknown-repo` | A manifest service's `repo:` names no source of the project |
 
 ## Testing
 
@@ -284,12 +289,11 @@ The plan screens from `d36ca4a` get two additions. Creating a plan offers a scop
 
 ## Rollout
 
-Four phases, each shippable on its own.
+Three phases, each shippable on its own. Every API change ships with the regenerated dashboard client and the screens that use it, because the dashboard stops compiling the moment a field it reads goes away.
 
-1. Sources: the table, the migration, the source endpoints, and analyses per source. A project with one source behaves as it does today except that its IDs carry an alias.
-2. Federation: `Requires` in the detectors, `graph.Compose`, root filtering, and `GET /projects/:id/graph`.
-3. Planning: locksets, scopes, held services, the impact finding, and `loomplane_environment_sources`.
-4. Dashboard: the sources panel, the add-source dialog, the clustered graph, links per source, and scope and lockset on the plan screens.
+1. Sources: the table, the migration, the source endpoints, analyses per source, `repositories` on the project, and in the dashboard the sources panel and add-source dialog. A project with one source behaves as it does today except that its IDs carry an alias.
+2. Federation: `Requires` in the detectors, `graph.Compose`, root filtering, `GET /projects/:id/graph`, and in the dashboard the clustered graph and links per source.
+3. Planning: locksets, scopes, held services, the impact finding, `loomplane_environment_sources`, and in the dashboard scope and lockset on the plan screens.
 
 Phase 1 changes the data model without changing behaviour. If the migration is wrong, you find out while every project still has exactly one source, which is the easiest state to check.
 
