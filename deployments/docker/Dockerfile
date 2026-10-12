@@ -22,11 +22,14 @@ FROM node:${NODE_VERSION}-alpine AS dashboard
 # The version package.json's packageManager names.
 RUN npm install --global pnpm@11.5.0
 WORKDIR /src/apps/dashboard
-COPY apps/dashboard/package.json apps/dashboard/pnpm-lock.yaml apps/dashboard/pnpm-workspace.yaml ./
-COPY apps/dashboard/patches ./patches
+# Sources first, then install: pnpm checks before every script that no
+# manifest is newer than the last install, and reinstalls (here, failing
+# with no terminal) when one is. Copying the sources over an installed
+# layer can make package.json look newer, as a fresh checkout does. The
+# store's cache mount keeps the install quick.
+COPY apps/dashboard ./
 RUN --mount=type=cache,id=loomplane-pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store
-COPY apps/dashboard ./
 RUN pnpm build
 
 FROM golang:${GO_VERSION}-alpine AS api
