@@ -214,7 +214,22 @@ function ConnectionRow({
           </div>
         )}
       </div>
-      {c.status === "incomplete" && (
+      {c.status === "incomplete" && c.cloud === "aws" && (
+        <Alert className="border-weld/50">
+          <AlertTitle>
+            It works, but can&apos;t do everything a deployment needs
+          </AlertTitle>
+          <AlertDescription className="grid gap-2">
+            <p>Allow these actions for its IAM user, then check again:</p>
+            <ul className="grid gap-1 font-mono text-xs">
+              {c.missing.map((a) => (
+                <li key={a}>{a}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
+      {c.status === "incomplete" && c.cloud !== "aws" && (
         <Alert className="border-weld/50">
           <AlertTitle>
             It works, but can&apos;t do everything a deployment needs
@@ -329,6 +344,10 @@ function ConnectDialog({
   const [team, setTeam] = useState(
     (replacing?.details.team_id as string | undefined) ?? ""
   )
+  const [keyID, setKeyID] = useState("")
+  const [region, setRegion] = useState(
+    (replacing?.details.region as string | undefined) ?? "us-east-1"
+  )
   const [error, setError] = useState("")
   const busy = create.isPending || replace.isPending
 
@@ -336,6 +355,7 @@ function ConnectDialog({
     if (!next) {
       setName("")
       setCredential("")
+      setKeyID("")
       setError("")
     }
     onOpenChange(next)
@@ -356,15 +376,27 @@ function ConnectDialog({
     e.preventDefault()
     setError("")
     const settings =
-      cloud === "vercel" && team.trim() ? { team_id: team.trim() } : undefined
+      cloud === "vercel" && team.trim()
+        ? { team_id: team.trim() }
+        : cloud === "aws"
+          ? { region: region.trim() }
+          : undefined
+    // An AWS key is two values; Loomplane stores them together.
+    const secret =
+      cloud === "aws"
+        ? JSON.stringify({
+            access_key_id: keyID.trim(),
+            secret_access_key: credential.trim(),
+          })
+        : credential
     try {
       const c = replacing
         ? await replace.mutateAsync({
             path: { id: replacing.id },
-            body: { credential, settings },
+            body: { credential: secret, settings },
           })
         : await create.mutateAsync({
-            body: { cloud, name: name.trim(), credential, settings },
+            body: { cloud, name: name.trim(), credential: secret, settings },
           })
       invalidate(useConnectionsList)
       toast.success(
@@ -410,6 +442,7 @@ function ConnectDialog({
                   >
                     <ToggleGroupItem value="gcp">Google Cloud</ToggleGroupItem>
                     <ToggleGroupItem value="vercel">Vercel</ToggleGroupItem>
+                    <ToggleGroupItem value="aws">AWS</ToggleGroupItem>
                   </ToggleGroup>
                 </Field>
                 <Field>
@@ -419,7 +452,11 @@ function ConnectDialog({
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder={
-                      cloud === "gcp" ? "Production project" : "Web team"
+                      cloud === "gcp"
+                        ? "Production project"
+                        : cloud === "aws"
+                          ? "Production account"
+                          : "Web team"
                     }
                     required
                   />
@@ -467,6 +504,56 @@ function ConnectDialog({
                   missing.
                 </FieldDescription>
               </Field>
+            ) : cloud === "aws" ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="connection-key-id">
+                    Access key ID
+                  </FieldLabel>
+                  <Input
+                    id="connection-key-id"
+                    autoComplete="off"
+                    value={keyID}
+                    onChange={(e) => setKeyID(e.target.value)}
+                    placeholder="AKIA..."
+                    spellCheck={false}
+                    className="font-mono"
+                    required
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="connection-secret">
+                    Secret access key
+                  </FieldLabel>
+                  <Input
+                    id="connection-secret"
+                    type="password"
+                    autoComplete="off"
+                    value={credential}
+                    onChange={(e) => setCredential(e.target.value)}
+                    required
+                  />
+                  <FieldDescription>
+                    An access key for an IAM user Loomplane deploys as. It needs
+                    ECS, ECR, CodeBuild, load balancing, IAM roles, RDS and
+                    Secrets Manager; Loomplane lists any action it lacks.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="connection-region">Region</FieldLabel>
+                  <Input
+                    id="connection-region"
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    placeholder="us-east-1"
+                    spellCheck={false}
+                    required
+                  />
+                  <FieldDescription>
+                    Everything Loomplane creates in this account goes here.
+                  </FieldDescription>
+                </Field>
+              </>
             ) : (
               <>
                 <Field>

@@ -196,6 +196,8 @@ type CloudsConfig struct {
 	GoogleEndpoint string
 	// VercelEndpoint replaces Vercel's API.
 	VercelEndpoint string
+	// AWSEndpoint replaces every AWS endpoint.
+	AWSEndpoint string
 }
 
 // Bounds on the approval window: long enough to reach a person, short
@@ -306,6 +308,7 @@ func FromSource(src Getter) (Config, error) {
 	r.duration(&c.Drift.Interval, "drift.interval")
 	r.str(&c.Clouds.GoogleEndpoint, "clouds.google_endpoint")
 	r.str(&c.Clouds.VercelEndpoint, "clouds.vercel_endpoint")
+	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err

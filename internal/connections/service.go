@@ -71,7 +71,7 @@ type ReplaceInput struct {
 func (s *Service) checker(cloud string) (Checker, error) {
 	c, ok := s.checkers[cloud]
 	if !ok {
-		return nil, fmt.Errorf("%w: Loomplane connects gcp and vercel, not %q", ErrInvalid, cloud)
+		return nil, fmt.Errorf("%w: Loomplane connects gcp, vercel and aws, not %q", ErrInvalid, cloud)
 	}
 	return c, nil
 }

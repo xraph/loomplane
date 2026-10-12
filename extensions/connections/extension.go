@@ -18,6 +18,7 @@ import (
 	vaultpg "github.com/xraph/vault/store/postgres"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
@@ -90,6 +91,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		map[string]connections.Checker{
 			connections.GCP:    connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
 			connections.Vercel: connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+			connections.AWS:    connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
 		},
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },

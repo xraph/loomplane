@@ -85,6 +85,7 @@ storage:
 clouds:
   google_endpoint: "${LOOMPLANE_GOOGLE_ENDPOINT:-}"
   vercel_endpoint: "${LOOMPLANE_VERCEL_ENDPOINT:-}"
+  aws_endpoint: "${LOOMPLANE_AWS_ENDPOINT:-}"
 
 worker:
   # Where loomplane-worker serves its health checks, and nothing else.

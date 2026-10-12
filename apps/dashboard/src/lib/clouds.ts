@@ -12,6 +12,11 @@ export const clouds = {
     credential: "Access token",
     account: "Account",
   },
+  aws: {
+    label: "AWS",
+    credential: "Access key",
+    account: "Account",
+  },
 } as const
 
 export type Cloud = keyof typeof clouds
