@@ -92,6 +92,7 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 	cfg.Analysis.WorkDir = t.TempDir()
 	google := newFakeGoogle(t)
 	cfg.Clouds.GoogleEndpoint = google.srv.URL
+	cfg.Clouds.VercelEndpoint = fakeVercel(t, "vcl_0123456789abcdef").URL
 	cfg.Storage.URL = "mem://"
 	r := start(t, cfg)
 
@@ -162,15 +163,17 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 	// connection first.
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 	waitPlanned(t, c, &plan)
-	if plan.Status != "blocked" || len(plan.Problems) != 1 || plan.Problems[0].Code != "no-connection" {
-		t.Fatalf("plan without a connection %+v", plan)
+	if plan.Status != "blocked" || len(plan.Problems) != 2 || plan.Problems[0].Code != "no-connection" || plan.Problems[1].Code != "no-connection" {
+		t.Fatalf("plan without connections %+v", plan)
 	}
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
 		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "vercel", "name": "Web", "credential": "vcl_0123456789abcdef"}, nil)
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 	waitPlanned(t, c, &plan)
-	// Ready for review, but not executable: Vercel, ECS and the managed
-	// databases have no adapter yet.
+	// Ready for review, but not executable: ECS and the managed databases
+	// have no adapter yet.
 	if plan.Status != "ready" || plan.Revision == "" || len(plan.Actions) == 0 || plan.Executable {
 		t.Fatalf("plan %+v", plan)
 	}

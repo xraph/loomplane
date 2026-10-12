@@ -27,7 +27,6 @@ var (
 )
 
 const (
-	milestone4 = "Loomplane's adapter for it arrives in milestone 4."
 	milestone5 = "Loomplane's adapter for it arrives in milestone 5."
 )
 
@@ -43,7 +42,9 @@ func Catalog() []provider.Provider {
 				{Workload: provider.WebApp, Execution: provider.Serverless, Creates: "Vercel project"},
 				{Workload: provider.StaticSite, Execution: provider.Static, Creates: "Vercel project"},
 			},
-			Note: milestone4,
+			// Uploaded and built by Vercel, through a Loomplane adapter
+			// (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "cloud-run", Title: "Google Cloud Run", Cloud: "gcp",

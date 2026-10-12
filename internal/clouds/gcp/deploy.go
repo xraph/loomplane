@@ -9,21 +9,11 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	cloudprogress "github.com/xraph/loomplane/internal/clouds/progress"
 )
 
-type progressKey struct{}
-
-// WithProgress returns a context whose waits report to fn as they poll,
-// so a durable activity can heartbeat while a build or rollout runs.
-func WithProgress(ctx context.Context, fn func(message string)) context.Context {
-	return context.WithValue(ctx, progressKey{}, fn)
-}
-
-func progress(ctx context.Context, message string) {
-	if fn, ok := ctx.Value(progressKey{}).(func(string)); ok {
-		fn(message)
-	}
-}
+func progress(ctx context.Context, message string) { cloudprogress.Report(ctx, message) }
 
 func (s *Session) wait(ctx context.Context) error {
 	select {

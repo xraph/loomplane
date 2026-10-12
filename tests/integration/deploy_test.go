@@ -3,9 +3,12 @@
 package integration
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -300,5 +303,201 @@ func TestDeploy_aGoServiceRunsOnCloudRun(t *testing.T) {
 	cloud.mu.Unlock()
 	if patches != 1 || services != 1 || scaling["maxInstanceCount"] != float64(4) {
 		t.Fatalf("patches %d, services %d, scaling %v", patches, services, scaling)
+	}
+}
+
+// fakeVercelDeploys is the part of Vercel a deployment uses. It checks
+// each file against its SHA-1, refuses a deployment naming a file it
+// hasn't got, builds once, then is ready, aliased to a path on itself so
+// the health check reaches it.
+type fakeVercelDeploys struct {
+	mu       sync.Mutex
+	srv      *httptest.Server
+	token    string
+	files    map[string]int
+	projects map[string]map[string]any
+	env      map[string]any
+	deployed []map[string]any
+	polls    int
+}
+
+func newFakeVercelDeploys(t *testing.T, token string) *fakeVercelDeploys {
+	t.Helper()
+	f := &fakeVercelDeploys{token: token, files: map[string]int{}, projects: map[string]map[string]any{}, env: map[string]any{}}
+	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/site/") {
+		_, _ = w.Write([]byte("<html>web</html>"))
+		return
+	}
+	if r.Header.Get("Authorization") != "Bearer "+f.token {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"forbidden","message":"Not authorized"}}`))
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	body, _ := io.ReadAll(r.Body)
+	reply := func(status int, v any) {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(v)
+	}
+	p := r.URL.Path
+	switch {
+	case p == "/v2/user":
+		reply(200, map[string]any{"user": map[string]any{"username": "ada"}})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v9/projects/"):
+		prj, ok := f.projects[strings.TrimPrefix(p, "/v9/projects/")]
+		if !ok {
+			reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Project not found"}})
+			return
+		}
+		reply(200, prj)
+	case r.Method == http.MethodPost && p == "/v10/projects":
+		var prj map[string]any
+		_ = json.Unmarshal(body, &prj)
+		prj["id"] = "prj_web"
+		f.projects[prj["name"].(string)], f.projects["prj_web"] = prj, prj
+		reply(200, prj)
+	case r.Method == http.MethodPost && p == "/v10/projects/prj_web/env":
+		var vars []map[string]any
+		_ = json.Unmarshal(body, &vars)
+		for _, v := range vars {
+			f.env[v["key"].(string)] = v["value"]
+		}
+		reply(200, map[string]any{})
+	case r.Method == http.MethodPost && p == "/v2/files":
+		sum := sha1.Sum(body)
+		if hex.EncodeToString(sum[:]) != r.Header.Get("x-vercel-digest") {
+			reply(400, map[string]any{"error": map[string]any{"code": "bad_digest", "message": "digest mismatch"}})
+			return
+		}
+		f.files[r.Header.Get("x-vercel-digest")] = len(body)
+		reply(200, map[string]any{})
+	case r.Method == http.MethodPost && p == "/v13/deployments":
+		var d map[string]any
+		_ = json.Unmarshal(body, &d)
+		var missing []string
+		for _, file := range d["files"].([]any) {
+			if _, ok := f.files[file.(map[string]any)["sha"].(string)]; !ok {
+				missing = append(missing, file.(map[string]any)["sha"].(string))
+			}
+		}
+		if len(missing) > 0 {
+			reply(400, map[string]any{"error": map[string]any{"code": "missing_files", "message": "Missing files", "missing": missing}})
+			return
+		}
+		f.deployed = append(f.deployed, d)
+		reply(200, map[string]any{"id": "dpl_1", "url": "web-abc.vercel.app", "readyState": "QUEUED"})
+	case r.Method == http.MethodGet && p == "/v13/deployments/dpl_1":
+		f.polls++
+		if f.polls < 2 {
+			reply(200, map[string]any{"id": "dpl_1", "readyState": "BUILDING"})
+			return
+		}
+		reply(200, map[string]any{"id": "dpl_1", "readyState": "READY", "aliasAssigned": true,
+			"alias": []string{f.srv.URL + "/site/web"}, "url": "web-abc.vercel.app"})
+	default:
+		reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Not found"}})
+	}
+}
+
+const webAndAPIManifest = `version: 1
+services:
+  api:
+    source: go:services/api
+    provider: cloud-run
+  web:
+    source: node:apps/web
+    provider: vercel
+    needs: [api]
+ignore:
+  resources: [postgres, redis]
+`
+
+func TestDeploy_aNextAppOnVercelFindsItsGoAPIOnCloudRun(t *testing.T) {
+	google := newFakeGoogle(t)
+	cloud := newFakeCloud(google.srv.URL)
+	google.deploy = cloud
+	const vercelToken = "vcl_0123456789abcdef"
+	vc := newFakeVercelDeploys(t, vercelToken)
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.GoogleEndpoint = google.srv.URL
+	cfg.Clouds.VercelEndpoint = vc.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "vercel", "name": "Web", "credential": vercelToken}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": webAndAPIManifest}, nil)
+
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	if plan.Status != "ready" || !plan.Executable || len(plan.Actions) != 2 {
+		t.Fatalf("plan %+v", plan)
+	}
+
+	d := approveAndWait(t, c, plan)
+	if d.Status != "succeeded" || len(d.Steps) != 2 {
+		t.Fatalf("deployment %+v", d)
+	}
+	api, web := d.Steps[0], d.Steps[1]
+	if api.ActionID != "service:api" || web.ActionID != "service:web" || web.URL != vc.srv.URL+"/site/web" {
+		t.Fatalf("steps %+v", d.Steps)
+	}
+
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	// web knows where api answers, before Vercel builds it.
+	if vc.env["API_URL"] != api.URL {
+		t.Fatalf("web's API_URL is %v, want %s", vc.env["API_URL"], api.URL)
+	}
+	prj := vc.projects["prj_web"]
+	if prj["framework"] != "nextjs" || prj["rootDirectory"] != "apps/web" {
+		t.Fatalf("vercel project %+v", prj)
+	}
+	// The whole repository went up, paths relative to its root, so the
+	// workspace's shared packages are there when Vercel builds.
+	files := vc.deployed[0]["files"].([]any)
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		names = append(names, f.(map[string]any)["file"].(string))
+	}
+	for _, want := range []string{"apps/web/package.json", "packages/ui/package.json", "pnpm-workspace.yaml"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("%s wasn't deployed: %v", want, names)
+		}
+	}
+	if vc.deployed[0]["target"] != "production" {
+		t.Fatalf("deployed to %v", vc.deployed[0]["target"])
 	}
 }

@@ -33,6 +33,7 @@ import (
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/internal/artifacts"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
@@ -159,6 +160,7 @@ func (e *Extension) Register(fapp forge.App) error {
 				Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 				Credentials: clouds,
 			},
+			"vercel": &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
 		},
 	})
 	e.deployments.Bind(e.plans, runner, e.engineOf)

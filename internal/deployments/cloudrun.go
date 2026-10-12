@@ -19,6 +19,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/cloudrun"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
@@ -86,7 +87,7 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		_ = job.Checkpoint(data)       //nolint:errcheck // a missed heartbeat is retried by the next one
 	}
 	status := StepBuilding
-	ctx = gcp.WithProgress(ctx, func(m string) {
+	ctx = progress.With(ctx, func(m string) {
 		job.Progress(status, m)
 		save()
 	})

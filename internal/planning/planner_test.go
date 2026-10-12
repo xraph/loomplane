@@ -180,15 +180,17 @@ func TestCompute_fresh(t *testing.T) {
 		"port-assumed:gateway",
 		// Analysis found these, and the manifest leaves them out.
 		"service-left-out:docs", "service-left-out:ingest", "service-left-out:backfill",
-		// Cloud Run has an adapter; the rest don't yet.
-		"provider-unavailable:vercel", "provider-unavailable:cloud-sql",
+		// Cloud Run and Vercel have adapters; the rest don't yet.
+		"provider-unavailable:cloud-sql", "provider-unavailable:ecs-fargate",
 	} {
 		if !slices.Contains(got, w) {
 			t.Errorf("no warning %s in %v", w, got)
 		}
 	}
-	if slices.Contains(got, "provider-unavailable:cloud-run") {
-		t.Errorf("cloud run is available, but warned about: %v", got)
+	for _, ok := range []string{"provider-unavailable:cloud-run", "provider-unavailable:vercel"} {
+		if slices.Contains(got, ok) {
+			t.Errorf("%s has an adapter, but was warned about: %v", ok, got)
+		}
 	}
 	// web uses Postgres per analysis but only needs api: worth saying.
 	if !slices.Contains(got, "unlinked-resource:web") {
