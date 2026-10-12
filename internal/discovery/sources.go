@@ -37,6 +37,12 @@ func (a GitHubAccess) Check(ctx context.Context, orgID string, repo repositories
 		}
 		token = t
 	}
+	// Resolving a commit SHA never reaches GitHub, so it would prove
+	// nothing. Reading the default branch does: it fails the same way for
+	// a repository Loomplane can't see.
+	if repositories.IsCommitSHA(ref) {
+		ref = ""
+	}
 	_, err := a.Fetcher.Resolve(ctx, repo, ref, token)
 	return err
 }

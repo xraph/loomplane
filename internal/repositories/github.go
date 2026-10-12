@@ -105,6 +105,10 @@ func ValidRef(ref string) bool {
 	return refPattern.MatchString(ref) && !strings.Contains(ref, "..") && !strings.HasPrefix(ref, "/")
 }
 
+// IsCommitSHA reports whether ref is a full commit SHA, which Resolve
+// returns as it is without asking GitHub.
+func IsCommitSHA(ref string) bool { return shaPattern.MatchString(ref) }
+
 // GitHub reads repositories through GitHub's REST API.
 type GitHub struct {
 	// APIURL is the REST API's base URL, DefaultAPIURL for github.com.

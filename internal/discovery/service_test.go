@@ -690,6 +690,51 @@ func TestSources_refusals(t *testing.T) {
 	}
 }
 
+// refFetcher records the refs it's asked to resolve.
+type refFetcher struct {
+	refs []string
+	err  error
+}
+
+func (r *refFetcher) Resolve(_ context.Context, _ repositories.Repository, ref, _ string) (string, error) {
+	r.refs = append(r.refs, ref)
+	return commit, r.err
+}
+
+func (r *refFetcher) Fetch(context.Context, repositories.Repository, string, string, string) (repositories.Stats, error) {
+	return repositories.Stats{}, errors.New("not fetched")
+}
+
+func TestGitHubAccess_aCommitRefStillReadsTheRepository(t *testing.T) {
+	ctx := context.Background()
+	repo := repositories.Repository{Owner: "acme", Name: "private"}
+	tests := []struct {
+		name, ref string
+		want      []string
+	}{
+		// GitHub resolves a commit without asking, so reading the
+		// repository's default branch is what proves it can be read.
+		{"commit", commit, []string{""}},
+		{"branch", "main", []string{"main"}},
+		{"default branch", "", []string{""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &refFetcher{}
+			if err := (GitHubAccess{Fetcher: f}).Check(ctx, org, repo, tt.ref); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(f.refs, tt.want) {
+				t.Fatalf("resolved %q, want %q", f.refs, tt.want)
+			}
+		})
+	}
+	f := &refFetcher{err: repositories.ErrNotFound}
+	if err := (GitHubAccess{Fetcher: f}).Check(ctx, org, repo, commit); !errors.Is(err, repositories.ErrNotFound) {
+		t.Fatalf("a commit of a repository Loomplane can't read: %v", err)
+	}
+}
+
 func TestService_projectGraphComposesEverySource(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, 2)
