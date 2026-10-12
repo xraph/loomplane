@@ -226,6 +226,19 @@ export function latestBySource(analyses: Analysis[]): Map<string, Analysis> {
 }
 
 /**
+ * lastRead says what a source's newest analysis did: still running, failed,
+ * or which commit it read. It takes the project graph's state for the
+ * source, which knows its newest analysis however long ago that was.
+ */
+export function lastRead(state?: { latest?: Analysis }): string {
+  const a = state?.latest
+  if (!a) return "Not analyzed"
+  if (isActive(a.status)) return stepLabel(a.status)
+  if (a.status === "failed") return "Failed"
+  return `@${shortSHA(a.commitSha)}`
+}
+
+/**
  * spansSources says whether a list names more than one source, so a table
  * only spends a column on the repository when it tells rows apart.
  */

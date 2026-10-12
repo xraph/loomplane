@@ -17,6 +17,7 @@ import {
   useGithubRepositories,
   useGithubStatus,
   useProjectsGet,
+  useProjectsGraph,
   useProjectsList,
   useSourcesCreate,
   useSourcesDelete,
@@ -63,12 +64,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import {
-  isActive,
-  latestBySource,
-  shortSHA,
-  stepLabel,
-} from "@/lib/architecture"
+import { isActive, lastRead } from "@/lib/architecture"
 import { githubRepo } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 
@@ -103,7 +99,14 @@ export function SourcesCard({ project }: { project: Project }) {
   const start = useMutation(useAnalysesCreate)
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<Source | null>(null)
-  const latest = latestBySource(analyses.list)
+  // The graph view knows each source's newest analysis however old it is;
+  // the analyses list is only the project's most recent few, so a quiet
+  // repository would drop off it and look unanalyzed. The project page
+  // refetches the view while an analysis runs.
+  const view = useQuery(useProjectsGraph, { path: { id: project.id } })
+  const states = new Map(
+    (view.data?.sources ?? []).map((st) => [st.source.alias, st])
+  )
   const list = sources.data?.sources ?? []
   const mayEdit = can("project:update")
   const mayRun = can("analysis:run")
@@ -161,8 +164,8 @@ export function SourcesCard({ project }: { project: Project }) {
         </TableHeader>
         <TableBody>
           {list.map((s) => {
-            const a = latest.get(s.alias)
-            const running = !!a && isActive(a.status)
+            const state = states.get(s.alias)
+            const running = !!state?.latest && isActive(state.latest.status)
             return (
               <TableRow key={s.id}>
                 <TableCell className="pl-6 font-mono text-xs">
@@ -186,13 +189,7 @@ export function SourcesCard({ project }: { project: Project }) {
                   )}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  {!a
-                    ? "Not analyzed"
-                    : running
-                      ? stepLabel(a.status)
-                      : a.status === "failed"
-                        ? "Failed"
-                        : `@${shortSHA(a.commitSha)}`}
+                  {lastRead(state)}
                 </TableCell>
                 <TableCell className="pr-6 text-right">
                   {mayRun && (

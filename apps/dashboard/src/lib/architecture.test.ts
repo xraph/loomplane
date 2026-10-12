@@ -8,6 +8,7 @@ import {
   evidenceURL,
   isActive,
   kindLabel,
+  lastRead,
   latestBySource,
   latestSucceeded,
   linkTo,
@@ -219,6 +220,20 @@ describe("latestBySource", () => {
       "web:3",
       "api:2",
     ])
+  })
+})
+
+describe("lastRead", () => {
+  const latest = (status: string, commitSha = "") =>
+    ({ status, commitSha }) as Analysis
+  it("says what the source's newest analysis did", () => {
+    expect(lastRead(undefined)).toBe("Not analyzed")
+    expect(lastRead({})).toBe("Not analyzed")
+    expect(lastRead({ latest: latest("fetching") })).toBe(
+      "Downloading the commit"
+    )
+    expect(lastRead({ latest: latest("failed") })).toBe("Failed")
+    expect(lastRead({ latest: latest("succeeded", sha) })).toBe("@0123456")
   })
 })
 
