@@ -204,7 +204,7 @@ func affected(r driver.Result) (bool, error) {
 }
 
 const bindingColumns = `id, org_id, project_id, environment_id, subject, name, provider, region, engine,
-	external_id, config, plan_id, created_at, updated_at`
+	external_id, config, url, plan_id, created_at, updated_at`
 
 // ListBindings implements Store.
 func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error) {
@@ -219,7 +219,7 @@ func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string)
 		var b Binding
 		var cfg []byte
 		if err := rows.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region,
-			&b.Engine, &b.ExternalID, &cfg, &b.PlanID, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			&b.Engine, &b.ExternalID, &cfg, &b.URL, &b.PlanID, &b.CreatedAt, &b.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan binding: %w", err)
 		}
 		b.Config = cfg
@@ -240,14 +240,14 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 		cfg = []byte("{}")
 	}
 	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (environment_id, subject, name) DO UPDATE SET
 			provider = EXCLUDED.provider, region = EXCLUDED.region, engine = EXCLUDED.engine,
-			external_id = EXCLUDED.external_id, config = EXCLUDED.config, plan_id = EXCLUDED.plan_id,
-			updated_at = EXCLUDED.updated_at
+			external_id = EXCLUDED.external_id, config = EXCLUDED.config, url = EXCLUDED.url,
+			plan_id = EXCLUDED.plan_id, updated_at = EXCLUDED.updated_at
 		WHERE loomplane_bindings.org_id = EXCLUDED.org_id`,
 		b.ID, b.OrgID, b.ProjectID, b.EnvironmentID, b.Subject, b.Name, b.Provider, b.Region, b.Engine,
-		b.ExternalID, cfg, b.PlanID, b.CreatedAt, b.UpdatedAt)
+		b.ExternalID, cfg, b.URL, b.PlanID, b.CreatedAt, b.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("put binding: %w", err)
 	}

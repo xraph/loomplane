@@ -99,6 +99,10 @@ func (e *Extension) Register(fapp forge.App) error {
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
 	projectSvc.AddCleaner(e.svc)
+	// Deployments read resolved variables, secrets included, through it.
+	if err := forge.ProvideValue(c, e.svc); err != nil {
+		return fmt.Errorf("provide the variable service: %w", err)
+	}
 	return e.routes(fapp.Router(), guard)
 }
 

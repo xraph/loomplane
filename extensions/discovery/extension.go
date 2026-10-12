@@ -95,6 +95,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}); err != nil {
 		return err
 	}
+	// Deployments mint repository tokens with the same connections.
+	if err := forge.ProvideValue(c, e.github); err != nil {
+		return fmt.Errorf("provide the GitHub connections: %w", err)
+	}
 	if err := e.routes(fapp.Router(), guard); err != nil {
 		return err
 	}

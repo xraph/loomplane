@@ -25,13 +25,20 @@ const (
 	// it when the workflow's steps change, and keep the old code until the
 	// old build's runs have finished. An upgrade that doesn't touch the
 	// workflow keeps it, and plans waiting for approval carry on.
-	DeploymentBuild = "deployment-v1"
+	DeploymentBuild = "deployment-v2"
 
 	WorkflowDeployment = "loomplane.deployment"
 	ActivityPlan       = "loomplane.plan"
 	ActivityDecide     = "loomplane.plan.decide"
 	ActivityExpire     = "loomplane.plan.expire"
 	ActivityFail       = "loomplane.plan.fail"
+
+	// Activities after approval: record the deployment, store the source,
+	// carry out each action, settle it.
+	ActivityDeployStart  = "loomplane.deploy.start"
+	ActivityDeploySource = "loomplane.deploy.source"
+	ActivityDeployAction = "loomplane.deploy.action"
+	ActivityDeployFinish = "loomplane.deploy.finish"
 
 	// SignalDecision carries an approval or a rejection.
 	SignalDecision = "decision"
@@ -41,6 +48,8 @@ const (
 	PlanReady = "ready"
 	// PlanFailed is the status of a plan whose planning failed.
 	PlanFailed = "failed"
+	// PlanApproved is the status of an approved plan.
+	PlanApproved = "approved"
 
 	// runID is the only run of each plan's workflow.
 	runID = "1"
@@ -50,6 +59,14 @@ const (
 	// activityAttempts covers a database restart or a deploy of Loomplane.
 	activityAttempts = 8
 	activityTimeout  = time.Minute
+
+	// An action builds and deploys, which can take a while; its executor
+	// heartbeats as it polls the cloud, and a retry resumes the cloud's
+	// operation from the last heartbeat.
+	actionTimeout   = 45 * time.Minute
+	actionHeartbeat = 3 * time.Minute
+	actionAttempts  = 3
+	sourceTimeout   = 15 * time.Minute
 )
 
 // DeploymentInput starts a plan's workflow.
@@ -84,6 +101,33 @@ type failInput struct {
 // Outcome is where a plan's workflow left it.
 type Outcome struct {
 	Status string `json:"status"`
+	// Deployment is the deployment an approved plan started, if any.
+	Deployment string `json:"deployment,omitempty"`
+}
+
+// Deployer carries out approved plans. *deployments.Runner is the real
+// one. Each method is idempotent, like the Planner's.
+type Deployer interface {
+	// Start records the plan's deployment and lists its actions by plan
+	// step. No deployment means nothing to carry out.
+	Start(ctx context.Context, orgID, planID string) (deploymentID string, steps [][]string, err error)
+	FetchSource(ctx context.Context, orgID, deploymentID string) error
+	// Run carries out one action; resume is the last heartbeat's details.
+	Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) error
+	// Finish settles the deployment: failed with reason, or succeeded.
+	Finish(ctx context.Context, orgID, deploymentID, reason string) error
+}
+
+type deployStarted struct {
+	DeploymentID string     `json:"deployment_id"`
+	Steps        [][]string `json:"steps"`
+}
+
+type deployInput struct {
+	OrgID        string `json:"org_id"`
+	DeploymentID string `json:"deployment_id"`
+	ActionID     string `json:"action_id,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 // Planner does the deployment workflow's work. *planning.Service is the
@@ -116,17 +160,28 @@ var ErrNotRunning = errors.New("the plan's workflow has finished")
 type Deployments struct {
 	mu       sync.RWMutex
 	planner  Planner
+	deployer Deployer
 	engineOf func() *engine.Engine
 }
 
 // NewDeployments returns the workflow, unbound.
 func NewDeployments() *Deployments { return &Deployments{} }
 
-// Bind gives the workflow its planner, and the engine to start runs on.
-func (d *Deployments) Bind(p Planner, engineOf func() *engine.Engine) {
+// Bind gives the workflow its planner and deployer, and the engine to
+// start runs on.
+func (d *Deployments) Bind(p Planner, dep Deployer, engineOf func() *engine.Engine) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.planner, d.engineOf = p, engineOf
+	d.planner, d.deployer, d.engineOf = p, dep, engineOf
+}
+
+func (d *Deployments) boundDeployer() (Deployer, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.deployer == nil {
+		return nil, errors.New("the deployment workflow has no deployer yet")
+	}
+	return d.deployer, nil
 }
 
 func (d *Deployments) bound() (Planner, func() *engine.Engine, error) {
@@ -150,13 +205,18 @@ func (d *Deployments) Options(owner string, concurrency int) drt.Options {
 			ActivityDecide: d.decide,
 			ActivityExpire: d.expire,
 			ActivityFail:   d.fail,
+
+			ActivityDeployStart:  d.deployStart,
+			ActivityDeploySource: d.deploySource,
+			ActivityDeployAction: d.deployAction,
+			ActivityDeployFinish: d.deployFinish,
 		},
 	}
 }
 
 // workflow is the deployment workflow. It must stay deterministic: every
 // read and write goes through an activity, and command IDs depend only on
-// what came before. Milestone 4 adds the steps after approval.
+// what came before.
 func (d *Deployments) workflow(w *drt.Workflow, input []byte) ([]byte, error) {
 	var in DeploymentInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -194,8 +254,10 @@ func (d *Deployments) workflow(w *drt.Workflow, input []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		if status == PlanApproved {
+			return deploy(w, in)
+		}
 		if status != PlanReady {
-			// Approved: milestone 4 provisions, builds and deploys here.
 			return finished(status)
 		}
 	}
@@ -208,6 +270,66 @@ func (d *Deployments) workflow(w *drt.Workflow, input []byte) ([]byte, error) {
 
 func finished(status string) ([]byte, error) {
 	return json.Marshal(Outcome{Status: status})
+}
+
+// deploy carries out an approved plan: its actions one at a time, in the
+// plan's order. A failed action stops the deployment and settles it as
+// failed; the workflow itself still finishes, approved.
+func deploy(w *drt.Workflow, in DeploymentInput) ([]byte, error) {
+	var started deployStarted
+	if err := callInto(w, "deploy-start", ActivityDeployStart, in, activityTimeout, 0, activityAttempts, &started); err != nil {
+		return nil, err
+	}
+	if started.DeploymentID == "" {
+		return finished(PlanApproved)
+	}
+	dep := deployInput{OrgID: in.OrgID, DeploymentID: started.DeploymentID}
+	reason := ""
+	if err := callInto(w, "deploy-source", ActivityDeploySource, dep, sourceTimeout, 0, activityAttempts, nil); err != nil {
+		reason = "The source couldn't be stored: " + err.Error()
+	}
+	for _, group := range started.Steps {
+		if reason != "" {
+			break
+		}
+		for _, id := range group {
+			step := dep
+			step.ActionID = id
+			if err := callInto(w, "deploy-"+id, ActivityDeployAction, step, actionTimeout, actionHeartbeat, actionAttempts, nil); err != nil {
+				reason = err.Error()
+				break
+			}
+		}
+	}
+	done := dep
+	done.Reason = reason
+	if err := callInto(w, "deploy-finish", ActivityDeployFinish, done, activityTimeout, 0, activityAttempts, nil); err != nil {
+		return nil, err
+	}
+	return json.Marshal(Outcome{Status: PlanApproved, Deployment: started.DeploymentID})
+}
+
+// callInto runs an activity and decodes its output into out, if out isn't
+// nil.
+func callInto(w *drt.Workflow, id, name string, in any, timeout, heartbeat time.Duration, attempts int64, out any) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("encode %s input: %w", name, err)
+	}
+	res, err := w.ActivityWithOptions(id, name, "", data, drt.ActivityOptions{
+		StartToCloseTimeout: timeout, HeartbeatTimeout: heartbeat,
+		RetryPolicy: &drt.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: attempts},
+	}).Get()
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(res, out); err != nil {
+		return fmt.Errorf("decode %s output: %w", name, err)
+	}
+	return nil
 }
 
 // call runs an activity and decodes its outcome.
@@ -368,4 +490,57 @@ func (d *Deployments) Cancel(ctx context.Context, planID, reason string) error {
 		return fmt.Errorf("cancel deployment workflow: %w", err)
 	}
 	return nil
+}
+
+func (d *Deployments) deployStart(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
+	var in DeploymentInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	dep, err := d.boundDeployer()
+	if err != nil {
+		return nil, err
+	}
+	id, steps, err := dep.Start(ctx, in.OrgID, in.PlanID)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(deployStarted{DeploymentID: id, Steps: steps})
+}
+
+func (d *Deployments) deploySource(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
+	var in deployInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	dep, err := d.boundDeployer()
+	if err != nil {
+		return nil, err
+	}
+	return []byte("{}"), dep.FetchSource(ctx, in.OrgID, in.DeploymentID)
+}
+
+func (d *Deployments) deployAction(ctx context.Context, info drt.ActivityInfo, input []byte) ([]byte, error) {
+	var in deployInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	dep, err := d.boundDeployer()
+	if err != nil {
+		return nil, err
+	}
+	heartbeat := func(details []byte) error { return info.Heartbeat(ctx, details) }
+	return []byte("{}"), dep.Run(ctx, in.OrgID, in.DeploymentID, in.ActionID, info.HeartbeatDetails(), heartbeat)
+}
+
+func (d *Deployments) deployFinish(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
+	var in deployInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	dep, err := d.boundDeployer()
+	if err != nil {
+		return nil, err
+	}
+	return []byte("{}"), dep.Finish(ctx, in.OrgID, in.DeploymentID, in.Reason)
 }

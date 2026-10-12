@@ -44,3 +44,6 @@ config.local.yml
 
 # Playwright CLI scratch output
 .playwright-cli/
+
+# Local artifact storage in development
+.loomplane/

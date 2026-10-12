@@ -201,6 +201,57 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly deployments = {
+    /**
+     * The deployment an approved plan started
+     */
+    forPlan: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+      let __path = `/api/v1/plans/${encodeURIComponent(String(id))}/deployment`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Deployment"],
+      };
+
+      return this.request<types.Deployment>(config);
+    },
+
+    /**
+     * One deployment, with each step's progress
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Deployment"],
+      };
+
+      return this.request<types.Deployment>(config);
+    },
+
+    /**
+     * The project's latest deployments, newest first, with each step's progress
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/deployments`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeploymentList"],
+      };
+
+      return this.request<types.DeploymentList>(config);
+    },
+
+  };
+
   public readonly environmentConnections = {
     /**
      * Choose the connection the environment deploys to a cloud with, or clear the choice

@@ -6,6 +6,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
@@ -61,6 +62,16 @@ func (BindingList) ForgeEnvelope() forge.EnvelopeDef {
 type EnvironmentConnections struct {
 	Environment string            `json:"environment"`
 	Connections map[string]string `json:"connections"`
+}
+
+// DeploymentList is the body of GET /api/v1/projects/:id/deployments.
+type DeploymentList struct {
+	Deployments []deployments.Deployment `json:"deployments"`
+}
+
+// ForgeEnvelope tells the generated client the list wraps Deployments.
+func (DeploymentList) ForgeEnvelope() forge.EnvelopeDef {
+	return forge.EnvelopeDef{ItemsField: "deployments"}
 }
 
 // ProviderList is the body of GET /api/v1/providers. It declares no
@@ -145,6 +156,21 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("Choose the connection the environment deploys to a cloud with, or clear the choice"),
 			forge.WithRequestSchema(planning.ChooseConnectionInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The choices", EnvironmentConnections{}),
+		}},
+		{http.MethodGet, "/projects/:id/deployments", e.listDeployments, []forge.RouteOption{
+			forge.WithName("deployments.list"),
+			forge.WithSummary("The project's latest deployments, newest first, with each step's progress"),
+			forge.WithResponseSchema(http.StatusOK, "Deployments", DeploymentList{}),
+		}},
+		{http.MethodGet, "/deployments/:id", e.getDeployment, []forge.RouteOption{
+			forge.WithName("deployments.get"),
+			forge.WithSummary("One deployment, with each step's progress"),
+			forge.WithResponseSchema(http.StatusOK, "The deployment", deployments.Deployment{}),
+		}},
+		{http.MethodGet, "/plans/:id/deployment", e.planDeployment, []forge.RouteOption{
+			forge.WithName("deployments.forPlan"),
+			forge.WithSummary("The deployment an approved plan started"),
+			forge.WithResponseSchema(http.StatusOK, "The deployment", deployments.Deployment{}),
 		}},
 		{http.MethodGet, "/projects/:id/bindings", e.listBindings, []forge.RouteOption{
 			forge.WithName("bindings.list"),
@@ -378,4 +404,44 @@ func (e *Extension) chooseConnection(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, EnvironmentConnections{Environment: env, Connections: chosen})
+}
+
+func (e *Extension) listDeployments(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	list, err := e.deploys.List(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	out := DeploymentList{Deployments: make([]deployments.Deployment, 0, len(list))}
+	for _, d := range list {
+		out.Deployments = append(out.Deployments, *d)
+	}
+	return c.JSON(http.StatusOK, out)
+}
+
+func (e *Extension) getDeployment(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	d, err := e.deploys.Get(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, d)
+}
+
+func (e *Extension) planDeployment(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	d, err := e.deploys.ForPlan(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, d)
 }

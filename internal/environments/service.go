@@ -394,3 +394,33 @@ func (s *Service) record(ctx context.Context, action string, p security.Principa
 		s.audit.Record(ctx, action, p, v)
 	}
 }
+
+// Values returns what one service gets in an environment as plain values,
+// secrets revealed, for a deployment to set on it. It's the only path that
+// reveals a secret, and it checks no role: only Loomplane's deployment
+// workflow calls it, for a plan someone was allowed to approve. Nothing it
+// returns is logged or stored.
+func (s *Service) Values(ctx context.Context, orgID, projectID, environment, service string) (map[string]string, error) {
+	env, err := s.environment(ctx, orgID, projectID, environment)
+	if err != nil {
+		return nil, err
+	}
+	candidates, err := s.store.ForEnvironment(ctx, orgID, projectID, env.ID, env.Name)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, r := range resolve(candidates, service) {
+		v := r.Variable
+		if !v.Secret {
+			out[r.Key] = v.Value
+			continue
+		}
+		value, err := s.secrets.Reveal(ctx, orgID, v.ID)
+		if err != nil {
+			return nil, fmt.Errorf("reveal %s: %w", r.Key, err)
+		}
+		out[r.Key] = string(value)
+	}
+	return out, nil
+}

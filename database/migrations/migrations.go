@@ -35,6 +35,8 @@ func Group() *migrate.Group {
 		statements("20261012000005", "create_planning", planningUp, planningDown),
 		statements("20261012000006", "create_cloud_connections", cloudConnectionsUp, cloudConnectionsDown),
 		statements("20261012000007", "create_environment_connections", environmentConnectionsUp, environmentConnectionsDown),
+		statements("20261012000008", "create_deployments", deploymentsUp, deploymentsDown),
+		statements("20261012000009", "add_binding_url", bindingURLUp, bindingURLDown),
 	)
 	return g
 }
@@ -347,4 +349,43 @@ var environmentConnectionsUp = []string{
 
 var environmentConnectionsDown = []string{
 	`DROP TABLE IF EXISTS loomplane_environment_connections`,
+}
+
+// A deployment is one run of an approved plan, at most one per plan, with
+// a step per action of the plan. source is the key of the commit's
+// tarball in artifact storage.
+var deploymentsUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_deployments (
+		id             TEXT        PRIMARY KEY,
+		org_id         TEXT        NOT NULL,
+		project_id     TEXT        NOT NULL REFERENCES loomplane_projects (id) ON DELETE CASCADE,
+		environment_id TEXT        NOT NULL REFERENCES loomplane_environments (id) ON DELETE CASCADE,
+		environment    TEXT        NOT NULL,
+		plan_id        TEXT        NOT NULL REFERENCES loomplane_plans (id) ON DELETE CASCADE,
+		commit_sha     TEXT        NOT NULL,
+		status         TEXT        NOT NULL,
+		source         TEXT        NOT NULL DEFAULT '',
+		error          TEXT        NOT NULL DEFAULT '',
+		steps          JSONB       NOT NULL DEFAULT '[]',
+		started_by     TEXT        NOT NULL,
+		started_at     TIMESTAMPTZ NOT NULL,
+		finished_at    TIMESTAMPTZ,
+		CONSTRAINT loomplane_deployments_plan UNIQUE (plan_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS loomplane_deployments_project_started
+		ON loomplane_deployments (org_id, project_id, started_at DESC)`,
+}
+
+var deploymentsDown = []string{
+	`DROP TABLE IF EXISTS loomplane_deployments`,
+}
+
+// Where a deployed service answers, so the services that need it can be
+// given its address.
+var bindingURLUp = []string{
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT ''`,
+}
+
+var bindingURLDown = []string{
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS url`,
 }

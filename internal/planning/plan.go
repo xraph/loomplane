@@ -103,6 +103,9 @@ type ServiceConfig struct {
 	Region    string             `json:"region,omitempty"`
 	Workload  provider.Workload  `json:"workload"`
 	Execution provider.Execution `json:"execution"`
+	// Service is the service's ID in the analysis's graph, which its
+	// variables are set against.
+	Service string `json:"service"`
 	// Source is the service's entrypoint in the repository.
 	Source    string              `json:"source"`
 	Ecosystem discovery.Ecosystem `json:"ecosystem"`
@@ -266,6 +269,9 @@ type Binding struct {
 	ExternalID string `json:"external_id"`
 	// Config is the ServiceConfig or ResourceConfig last applied.
 	Config json.RawMessage `json:"config"`
+	// URL is where a deployed service answers, which the services that
+	// need it are given.
+	URL string `json:"url"`
 	// PlanID is the plan whose deployment last wrote the binding.
 	PlanID    string    `json:"plan_id"`
 	CreatedAt time.Time `json:"created_at"`

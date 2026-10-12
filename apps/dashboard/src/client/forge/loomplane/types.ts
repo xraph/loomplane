@@ -66,6 +66,7 @@ export interface Binding {
   region: string;
   subject: string;
   updatedAt: string;
+  url: string;
 }
 
 export interface BindingList {
@@ -183,6 +184,27 @@ export interface DecideInputBody {
 export interface Defaults {
   provider?: string;
   region?: string;
+}
+
+export interface Deployment {
+  commitSha: string;
+  environment: string;
+  environmentId: string;
+  error: string;
+  finishedAt?: string;
+  id: string;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  source: string;
+  startedAt: string;
+  startedBy: string;
+  status: string;
+  steps: Step[];
+}
+
+export interface DeploymentList {
+  deployments: Deployment[];
 }
 
 export interface Edge {
@@ -529,6 +551,7 @@ export interface ServiceConfig {
   public: boolean;
   region?: string;
   scale?: Scale;
+  service: string;
   size?: Size;
   source: string;
   start?: string;
@@ -548,6 +571,21 @@ export interface Size {
 
 export interface StartAnalysisInputBody {
   ref?: string;
+}
+
+export interface Step {
+  actionId: string;
+  finishedAt?: string;
+  image: string;
+  message: string;
+  name: string;
+  op: string;
+  order: number;
+  provider: string;
+  startedAt?: string;
+  status: string;
+  subject: string;
+  url: string;
 }
 
 export interface UpdateProjectInputBody {

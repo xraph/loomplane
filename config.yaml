@@ -69,6 +69,11 @@ planning:
   # expires. Between 1m and 2160h (90 days).
   approval_window: "${LOOMPLANE_PLANNING_APPROVAL_WINDOW:-168h}"
 
+# Where artifacts go, such as each deployment's source. file:///path for a
+# directory; empty means .loomplane/storage under the working directory.
+storage:
+  url: "${LOOMPLANE_STORAGE_URL:-}"
+
 # Where Loomplane's cloud clients send requests. Leave these empty: they
 # exist so tests can stand a fake Google Cloud or Vercel in for the real
 # ones.

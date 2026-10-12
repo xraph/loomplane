@@ -390,7 +390,7 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 	cfg := &ServiceConfig{
 		Provider: prov.Name, Region: p.place(ServiceSubject, name, base+".region", prov, set.Region),
 		Workload: runs.Workload, Execution: runs.Execution,
-		Source: gs.Entrypoint, Ecosystem: gs.Ecosystem, Framework: gs.Framework, Image: gs.Image,
+		Service: gs.ID, Source: gs.Entrypoint, Ecosystem: gs.Ecosystem, Framework: gs.Framework, Image: gs.Image,
 		Build: gs.Commands.Build, Start: gs.Commands.Start,
 		Public: runs.Workload != provider.Worker,
 	}

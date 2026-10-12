@@ -256,6 +256,38 @@
         }
       }
     },
+    "/api/v1/deployments/{id}": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "One deployment, with each step's progress",
+        "operationId": "deployments.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/github": {
       "get": {
         "tags": [
@@ -527,6 +559,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plans/{id}/deployment": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "The deployment an approved plan started",
+        "operationId": "deployments.forPlan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
                 }
               }
             }
@@ -834,6 +898,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BindingList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/deployments": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "The project's latest deployments, newest first, with each step's progress",
+        "operationId": "deployments.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deployments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentList"
                 }
               }
             }
@@ -1756,6 +1852,7 @@
           "engine",
           "external_id",
           "config",
+          "url",
           "plan_id",
           "created_at",
           "updated_at"
@@ -1805,6 +1902,9 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "url": {
+            "type": "string"
           }
         }
       },
@@ -2174,6 +2274,88 @@
             "type": "string"
           }
         }
+      },
+      "Deployment": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "plan_id",
+          "commit_sha",
+          "status",
+          "source",
+          "error",
+          "steps",
+          "started_by",
+          "started_at"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_by": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Step"
+            }
+          }
+        }
+      },
+      "DeploymentList": {
+        "properties": {
+          "deployments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Deployment"
+            }
+          }
+        },
+        "required": [
+          "deployments"
+        ],
+        "type": "object",
+        "x-forge-envelope": "deployments"
       },
       "Edge": {
         "type": "object",
@@ -3393,6 +3575,7 @@
           "provider",
           "workload",
           "execution",
+          "service",
           "source",
           "ecosystem",
           "public"
@@ -3433,6 +3616,9 @@
           },
           "scale": {
             "$ref": "#/components/schemas/Scale"
+          },
+          "service": {
+            "type": "string"
           },
           "size": {
             "$ref": "#/components/schemas/Size"
@@ -3489,6 +3675,59 @@
         "type": "object",
         "properties": {
           "ref": {
+            "type": "string"
+          }
+        }
+      },
+      "Step": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "name",
+          "subject",
+          "op",
+          "provider",
+          "order",
+          "status",
+          "message",
+          "url",
+          "image"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "url": {
             "type": "string"
           }
         }

@@ -203,6 +203,25 @@ func (g *GitHub) Fetch(ctx context.Context, repo Repository, sha, token, dest st
 
 // limitedReader fails, instead of returning EOF, past its limit, so an
 // oversized archive can't pass for a short one.
+// Download writes the repository's tarball at commit sha to w, as GitHub
+// serves it (gzip, with one top-level directory), and returns its size.
+// It reads nothing inside: a deployment hands the bytes to a builder.
+func (g *GitHub) Download(ctx context.Context, repo Repository, sha, token string, w io.Writer) (int64, error) {
+	if !shaPattern.MatchString(sha) {
+		return 0, fmt.Errorf("download needs a full commit SHA, got %q", sha)
+	}
+	resp, err := g.get(ctx, "/repos/"+repo.FullName()+"/tarball/"+sha, token, "", downloadTimeout)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close() // read-only body
+	n, err := io.Copy(w, &limitedReader{r: resp.Body, left: g.MaxArchiveBytes})
+	if err != nil {
+		return n, fmt.Errorf("download tarball: %w", err)
+	}
+	return n, nil
+}
+
 type limitedReader struct {
 	r    io.Reader
 	left int64

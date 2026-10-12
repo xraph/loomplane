@@ -8,6 +8,8 @@ export const entities = {
   'BindingList': { fields: { 'bindings': 'Binding' } },
   'Connection': { idField: 'id' },
   'ConnectionList': { fields: { 'connections': 'Connection' } },
+  'Deployment': { idField: 'id' },
+  'DeploymentList': { fields: { 'deployments': 'Deployment' } },
   'Environment': { idField: 'id' },
   'EnvironmentList': { fields: { 'environments': 'Environment' } },
   'GitHubInstallation': { idField: 'id' },

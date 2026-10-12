@@ -62,6 +62,7 @@ type Config struct {
 	Analysis      AnalysisConfig
 	Planning      PlanningConfig
 	Clouds        CloudsConfig
+	Storage       StorageConfig
 	Worker        WorkerConfig
 }
 
@@ -168,6 +169,15 @@ type PlanningConfig struct {
 	// ApprovalWindow is how long a plan waits for someone to approve or
 	// reject it. After that it expires, and you plan again.
 	ApprovalWindow time.Duration
+}
+
+// StorageConfig is where artifacts go, such as the source of each
+// deployment.
+type StorageConfig struct {
+	// URL names the storage: file:///absolute/path for a directory. Empty
+	// means .loomplane/storage under the working directory, for
+	// development.
+	URL string
 }
 
 // CloudsConfig points Loomplane's cloud clients somewhere other than the
@@ -283,6 +293,7 @@ func FromSource(src Getter) (Config, error) {
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
+	r.str(&c.Storage.URL, "storage.url")
 	r.str(&c.Clouds.GoogleEndpoint, "clouds.google_endpoint")
 	r.str(&c.Clouds.VercelEndpoint, "clouds.vercel_endpoint")
 
