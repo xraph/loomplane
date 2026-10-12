@@ -48,12 +48,21 @@ type Service struct {
 	authz    Authorizer
 	enqueue  Enqueuer
 	audit    projects.Auditor
+	access   Access
 	now      func() time.Time
 }
 
 // NewService returns a Service. audit may be nil.
 func NewService(store Store, prj Projects, authz Authorizer, enqueue Enqueuer, audit projects.Auditor) *Service {
 	return &Service{store: store, projects: prj, authz: authz, enqueue: enqueue, audit: audit, now: time.Now}
+}
+
+func (s *Service) record(ctx context.Context, p security.Principal, projectID, action, severity string, attrs map[string]any) {
+	if s.audit != nil {
+		s.audit.Record(ctx, projects.AuditEvent{
+			Action: action, Severity: severity, ProjectID: projectID, Principal: p, Attributes: attrs,
+		})
+	}
 }
 
 // StartAnalysisInput is what a caller sends to analyze a project's

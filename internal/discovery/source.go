@@ -34,6 +34,17 @@ type Source struct {
 	RemovedAt *time.Time `json:"removed_at,omitempty"`
 }
 
+// normalize puts the times a store returns into UTC, so a source compares
+// the same whichever session read it.
+func (s *Source) normalize() {
+	s.CreatedAt = s.CreatedAt.UTC()
+	s.UpdatedAt = s.UpdatedAt.UTC()
+	if s.RemovedAt != nil {
+		t := s.RemovedAt.UTC()
+		s.RemovedAt = &t
+	}
+}
+
 // Errors about sources.
 var (
 	ErrSourceNotFound     = errors.New("source not found")

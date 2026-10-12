@@ -80,6 +80,21 @@ type Store interface {
 	// and started after since, or ErrNotFound.
 	ActiveAnalysis(ctx context.Context, orgID, projectID string, since time.Time) (*Analysis, error)
 
+	// CreateSource attaches a source. An alias the project has used before,
+	// even on a removed source, is ErrAliasTaken.
+	CreateSource(ctx context.Context, s *Source) error
+	// GetSource returns a project's source by alias, removed or not, or
+	// ErrSourceNotFound.
+	GetSource(ctx context.Context, orgID, projectID, alias string) (*Source, error)
+	// ListSources returns a project's sources by alias: the live ones, or
+	// every one ever attached.
+	ListSources(ctx context.Context, orgID, projectID string, withRemoved bool) ([]*Source, error)
+	// UpdateSource writes a live source's root, ref and updated_at.
+	UpdateSource(ctx context.Context, s *Source) error
+	// RemoveSource marks a live source removed. Its row stays, so its
+	// alias stays taken.
+	RemoveSource(ctx context.Context, orgID, projectID, alias string, now time.Time) error
+
 	// BeginAttempt moves an unfinished analysis to fetching and counts the
 	// attempt. It returns false, with no error, when the analysis has
 	// already finished, and ErrNotFound when it's gone.

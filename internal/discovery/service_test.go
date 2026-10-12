@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -34,10 +35,11 @@ type memStore struct {
 	analyses map[string]*Analysis
 	attempts map[string]int
 	graphs   map[string]*graph.Graph
+	sources  map[string]*Source
 }
 
 func newMemStore() *memStore {
-	return &memStore{analyses: map[string]*Analysis{}, attempts: map[string]int{}, graphs: map[string]*graph.Graph{}}
+	return &memStore{analyses: map[string]*Analysis{}, attempts: map[string]int{}, graphs: map[string]*graph.Graph{}, sources: map[string]*Source{}}
 }
 
 func (m *memStore) get(orgID, id string) (*Analysis, error) {
@@ -164,6 +166,87 @@ func (m *memStore) Graph(_ context.Context, orgID, id string) (*graph.Graph, err
 	return g, nil
 }
 
+func (m *memStore) CreateSource(_ context.Context, s *Source) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, x := range m.sources {
+		if x.ProjectID == s.ProjectID && x.Alias == s.Alias {
+			return ErrAliasTaken
+		}
+	}
+	c := *s
+	m.sources[s.ID] = &c
+	return nil
+}
+
+func (m *memStore) findSource(orgID, projectID, alias string, live bool) *Source {
+	for _, x := range m.sources {
+		if x.OrgID == orgID && x.ProjectID == projectID && x.Alias == alias && (!live || x.RemovedAt == nil) {
+			return x
+		}
+	}
+	return nil
+}
+
+func (m *memStore) GetSource(_ context.Context, orgID, projectID, alias string) (*Source, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	x := m.findSource(orgID, projectID, alias, false)
+	if x == nil {
+		return nil, ErrSourceNotFound
+	}
+	c := *x
+	return &c, nil
+}
+
+func (m *memStore) ListSources(_ context.Context, orgID, projectID string, withRemoved bool) ([]*Source, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Source{}
+	for _, x := range m.sources {
+		if x.OrgID == orgID && x.ProjectID == projectID && (withRemoved || x.RemovedAt == nil) {
+			c := *x
+			out = append(out, &c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Alias < out[j].Alias })
+	return out, nil
+}
+
+func (m *memStore) UpdateSource(_ context.Context, s *Source) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	x := m.findSource(s.OrgID, s.ProjectID, s.Alias, true)
+	if x == nil {
+		return ErrSourceNotFound
+	}
+	x.Root, x.Ref, x.UpdatedAt = s.Root, s.Ref, s.UpdatedAt
+	return nil
+}
+
+func (m *memStore) RemoveSource(_ context.Context, orgID, projectID, alias string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	x := m.findSource(orgID, projectID, alias, true)
+	if x == nil {
+		return ErrSourceNotFound
+	}
+	x.RemovedAt, x.UpdatedAt = &now, now
+	return nil
+}
+
+// fakeAccess stands in for GitHub: it records what was checked and
+// answers err.
+type fakeAccess struct {
+	err     error
+	checked []string
+}
+
+func (a *fakeAccess) Check(_ context.Context, _ string, repo repositories.Repository, ref string) error {
+	a.checked = append(a.checked, repo.FullName()+"@"+ref)
+	return a.err
+}
+
 type fakeProjects map[string]*projects.Project
 
 func (f fakeProjects) GetProject(_ context.Context, orgID, id string) (*projects.Project, error) {
@@ -242,6 +325,7 @@ type fixture struct {
 	audit  *audits
 	fetch  *dirFetcher
 	authz  *security.Authorizer
+	access *fakeAccess
 }
 
 func newFixture(t *testing.T, maxAttempts int) *fixture {
@@ -252,13 +336,14 @@ func newFixture(t *testing.T, maxAttempts int) *fixture {
 		t.Fatal(err)
 	}
 	authz := security.NewAuthorizer(eng, ws, nil)
-	f := &fixture{store: newMemStore(), queue: &queue{}, audit: &audits{}, fetch: &dirFetcher{src: "../../examples/polyglot"}, authz: authz}
+	f := &fixture{store: newMemStore(), queue: &queue{}, audit: &audits{}, fetch: &dirFetcher{src: "../../examples/polyglot"}, authz: authz, access: &fakeAccess{}}
 	prj := fakeProjects{
 		project:     {ID: project, OrgID: org, RepositoryURL: "https://github.com/acme/mono"},
 		"proj_bare": {ID: "proj_bare", OrgID: org},
 		"proj_lab":  {ID: "proj_lab", OrgID: org, RepositoryURL: "https://gitlab.com/acme/mono"},
 	}
 	f.svc = NewService(f.store, prj, authz, f.queue, f.audit)
+	f.svc.SetAccess(f.access)
 	f.runner = NewRunner(f.store, f.fetch, nil, t.TempDir(), maxAttempts)
 	return f
 }
@@ -269,6 +354,20 @@ func (f *fixture) as(t *testing.T, user, role string) security.Principal {
 		t.Fatal(err)
 	}
 	return security.Principal{UserID: user, OrgID: org}
+}
+
+// source attaches a source straight through the store.
+func (f *fixture) source(t *testing.T, projectID, alias, repo, root string) *Source {
+	t.Helper()
+	now := time.Now().UTC()
+	s := &Source{
+		ID: "src_" + projectID + "_" + alias, OrgID: org, ProjectID: projectID, Alias: alias,
+		Repository: repo, Root: root, CreatedBy: "ausr_seed", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := f.store.CreateSource(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 func TestService_startQueuesAnAnalysis(t *testing.T) {
@@ -406,5 +505,95 @@ func TestRunner_failures(t *testing.T) {
 				t.Fatalf("graph of a failed analysis: %v", err)
 			}
 		})
+	}
+}
+
+func TestSources_lifecycle(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	viewer := f.as(t, "ausr_viewer", security.RoleViewer)
+
+	mono, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://github.com/acme/mono.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mono.Alias != "mono" || mono.Repository != "acme/mono" || mono.Root != "" || !strings.HasPrefix(mono.ID, "src_") {
+		t.Fatalf("source %+v", mono)
+	}
+	web, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "web", Root: "/apps/web/", Ref: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if web.Root != "apps/web" || web.Ref != "main" {
+		t.Fatalf("source %+v", web)
+	}
+	list, err := f.svc.Sources(ctx, viewer, "proj_bare")
+	if err != nil || len(list) != 2 || list[0].Alias != "mono" || list[1].Alias != "web" {
+		t.Fatalf("Sources: %v, %+v", err, list)
+	}
+
+	ref := "release"
+	web, err = f.svc.UpdateSource(ctx, dev, "proj_bare", "web", UpdateSourceInput{Ref: &ref})
+	if err != nil || web.Ref != "release" || f.access.checked[len(f.access.checked)-1] != "acme/site@release" {
+		t.Fatalf("UpdateSource: %v, %+v, checked %v", err, web, f.access.checked)
+	}
+
+	if err = f.svc.RemoveSource(ctx, dev, "proj_bare", "mono"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = f.svc.Sources(ctx, viewer, "proj_bare")
+	if len(list) != 1 || list[0].Alias != "web" {
+		t.Fatalf("after removing mono: %+v", list)
+	}
+	// An alias is never reused, so an old plan's "mono" still means acme/mono.
+	if _, err = f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/other", Alias: "mono"}); !errors.Is(err, ErrAliasTaken) {
+		t.Fatalf("re-adding a removed alias: %v", err)
+	}
+	actions := make([]string, 0, len(f.audit.events))
+	for _, e := range f.audit.events {
+		actions = append(actions, e.Action)
+	}
+	if !slices.Equal(actions, []string{"source.add", "source.add", "source.update", "source.remove"}) {
+		t.Fatalf("audit %v", actions)
+	}
+}
+
+func TestSources_refusals(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	viewer := f.as(t, "ausr_viewer", security.RoleViewer)
+	f.source(t, "proj_bare", "platform", "acme/mono", "services")
+	tests := []struct {
+		name    string
+		p       security.Principal
+		project string
+		in      AddSourceInput
+		want    error
+	}{
+		{"viewer", viewer, "proj_bare", AddSourceInput{Repository: "acme/site"}, security.ErrForbidden},
+		{"another org's project", dev, "proj_elsewhere", AddSourceInput{Repository: "acme/site"}, projects.ErrNotFound},
+		{"not GitHub", dev, "proj_bare", AddSourceInput{Repository: "https://gitlab.com/acme/site"}, ErrInvalidSource},
+		{"reserved alias", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "go"}, ErrAliasReserved},
+		{"bad alias", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "Web"}, ErrInvalidSource},
+		{"root climbs out", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Root: "../x"}, ErrInvalidSource},
+		{"bad ref", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Ref: "../../etc"}, ErrInvalidSource},
+		{"nested root", dev, "proj_bare", AddSourceInput{Repository: "acme/mono", Alias: "api", Root: "services/api"}, ErrRootsOverlap},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := f.svc.AddSource(ctx, tt.p, tt.project, tt.in); !errors.Is(err, tt.want) {
+				t.Fatalf("AddSource: %v, want %v", err, tt.want)
+			}
+		})
+	}
+	// Another directory of the same repository is fine.
+	if _, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/mono", Alias: "apps", Root: "apps"}); err != nil {
+		t.Fatalf("a separate directory: %v", err)
+	}
+	f.access.err = repositories.ErrNotFound
+	if _, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/private"}); !errors.Is(err, ErrSourceInaccessible) {
+		t.Fatalf("a repository Loomplane can't read: %v", err)
 	}
 }
