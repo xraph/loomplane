@@ -35,6 +35,12 @@ type fakeECS struct {
 	secrets   map[string]string
 	buckets   map[string]bool
 	uploads   map[string]int
+	// ingress is each group's rules, as "from-group:port".
+	ingress map[string][]string
+	// dbs are RDS instances' create requests, by identifier, and
+	// dbPolls how often each was read.
+	dbs     map[string]url.Values
+	dbPolls map[string]int
 }
 
 const ecsAPI = "AmazonEC2ContainerServiceV20141113."
@@ -45,6 +51,7 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		base: f.srv.URL, repos: map[string]string{}, polls: map[string]int{}, roles: map[string]bool{},
 		groups: map[string]string{}, lbs: map[string]bool{}, tgs: map[string]string{},
 		services: map[string]map[string]any{}, secrets: map[string]string{}, buckets: map[string]bool{}, uploads: map[string]int{},
+		ingress: map[string][]string{}, dbs: map[string]url.Values{}, dbPolls: map[string]int{},
 	}
 	j := func(target string, h func(in map[string]any) (int, any)) {
 		f.json[target] = func(body []byte) (int, string) {
@@ -178,7 +185,13 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		e.groups[form.Get("GroupName")] = id
 		return 200, ec2("CreateSecurityGroup", `<return>true</return><groupId>`+id+`</groupId>`)
 	})
-	q("AuthorizeSecurityGroupIngress", func(url.Values) (int, string) {
+	q("AuthorizeSecurityGroupIngress", func(form url.Values) (int, string) {
+		from := form.Get("IpPermissions.1.Groups.1.GroupId")
+		if from == "" {
+			from = form.Get("IpPermissions.1.IpRanges.1.CidrIp")
+		}
+		g := form.Get("GroupId")
+		e.ingress[g] = append(e.ingress[g], from+":"+form.Get("IpPermissions.1.FromPort"))
 		return 200, ec2("AuthorizeSecurityGroupIngress", `<return>true</return>`)
 	})
 
@@ -252,6 +265,41 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		arn := fmt.Sprintf("arn:aws:elasticloadbalancing:us-east-1:%s:listener/app/lb/1/%d", awsAccount, len(e.listeners)+1)
 		e.listeners = append(e.listeners, map[string]any{"arn": arn, "port": form.Get("Port"), "tg": form.Get("DefaultActions.member.1.TargetGroupArn")})
 		return 200, resp("CreateListener", elbNS, `<Listeners><member><ListenerArn>`+arn+`</ListenerArn><Port>`+form.Get("Port")+`</Port></member></Listeners>`)
+	})
+
+	// RDS, in the common query dialect too. An instance is creating the
+	// first time it's read, then available.
+	const rdsNS = "http://rds.amazonaws.com/doc/2014-10-31/"
+	dbInstance := func(id string) string {
+		in := e.dbs[id]
+		status := "creating"
+		if e.dbPolls[id] > 1 {
+			status = "available"
+		}
+		port := "5432"
+		if in.Get("Engine") == "mysql" {
+			port = "3306"
+		}
+		return `<DBInstance><DBInstanceIdentifier>` + id + `</DBInstanceIdentifier><Engine>` + in.Get("Engine") +
+			`</Engine><EngineVersion>` + in.Get("EngineVersion") + `.2</EngineVersion><DBInstanceStatus>` + status +
+			`</DBInstanceStatus><Endpoint><Address>` + id + `.abc.us-east-1.rds.amazonaws.com</Address><Port>` + port +
+			`</Port></Endpoint></DBInstance>`
+	}
+	q("DescribeDBInstances", func(form url.Values) (int, string) {
+		id := form.Get("DBInstanceIdentifier")
+		if _, ok := e.dbs[id]; !ok {
+			return fail("DBInstanceNotFound")
+		}
+		e.dbPolls[id]++
+		return 200, resp("DescribeDBInstances", rdsNS, `<DBInstances>`+dbInstance(id)+`</DBInstances>`)
+	})
+	q("CreateDBInstance", func(form url.Values) (int, string) {
+		id := form.Get("DBInstanceIdentifier")
+		e.dbs[id] = form
+		return 200, resp("CreateDBInstance", rdsNS, dbInstance(id))
+	})
+	q("CreateDBSubnetGroup", func(form url.Values) (int, string) {
+		return 200, resp("CreateDBSubnetGroup", rdsNS, `<DBSubnetGroup><DBSubnetGroupName>`+form.Get("DBSubnetGroupName")+`</DBSubnetGroupName></DBSubnetGroup>`)
 	})
 
 	// S3, path style.
@@ -417,5 +465,122 @@ func TestDeploy_servicesRunOnECSFargate(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("secrets manager holds %v", cloud.secrets)
+	}
+}
+
+const apiOnECSWithRDS = `version: 1
+services:
+  api:
+    source: go:services/api
+    provider: ecs-fargate
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: rds
+ignore:
+  resources: [redis]
+`
+
+func TestDeploy_anECSServiceGetsItsRDSDatabase(t *testing.T) {
+	fake := newFakeAWS(t)
+	cloud := installFakeECS(t, fake)
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.AWSEndpoint = fake.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]any{"cloud": "aws", "name": "AWS", "credential": awsKey(awsKeyID), "settings": map[string]string{"region": "us-east-1"}}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": apiOnECSWithRDS}, nil)
+
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	if plan.Status != "ready" || !plan.Executable || len(plan.Actions) != 2 || plan.Actions[0].ID != "resource:db" {
+		t.Fatalf("plan %+v", plan)
+	}
+	d := approveAndWait(t, c, plan)
+	if d.Status != "succeeded" || d.Steps[0].ActionID != "resource:db" || d.Steps[0].Status != "succeeded" {
+		t.Fatalf("deployment %+v", d)
+	}
+
+	cloud.mu.Lock()
+	if len(cloud.dbs) != 1 {
+		t.Fatalf("%d rds instances", len(cloud.dbs))
+	}
+	var id string
+	var in url.Values
+	for k, v := range cloud.dbs {
+		id, in = k, v
+	}
+	password := in.Get("MasterUserPassword")
+	if password == "" || in.Get("Engine") != "postgres" || in.Get("EngineVersion") != "17" || in.Get("DBName") != "db" ||
+		in.Get("PubliclyAccessible") != "false" || in.Get("MasterUsername") != "app" {
+		t.Fatalf("instance %s: %v", id, in)
+	}
+	// The database's group lets in the environment's tasks, on its port,
+	// and nobody else.
+	dbGroup := in.Get("VpcSecurityGroupIds.VpcSecurityGroupId.1")
+	tasks := ""
+	for name, g := range cloud.groups {
+		if strings.HasSuffix(name, "-tasks") {
+			tasks = g
+		}
+	}
+	if tasks == "" || !slices.Equal(cloud.ingress[dbGroup], []string{tasks + ":5432"}) {
+		t.Fatalf("db group %s takes %v; tasks are %s", dbGroup, cloud.ingress[dbGroup], tasks)
+	}
+	// api reads DATABASE_URL from Secrets Manager, by ARN.
+	ctr := cloud.tasks[len(cloud.tasks)-1]["containerDefinitions"].([]any)[0].(map[string]any)
+	var arn string
+	for _, sec := range ctr["secrets"].([]any) {
+		if m := sec.(map[string]any); m["name"] == "DATABASE_URL" {
+			arn = m["valueFrom"].(string)
+		}
+	}
+	got := ""
+	for name, v := range cloud.secrets {
+		if arn != "" && strings.Contains(arn, ":secret:"+name+"-") {
+			got = v
+		}
+	}
+	cloud.mu.Unlock()
+	want := "postgresql://app:" + password + "@" + id + ".abc.us-east-1.rds.amazonaws.com:5432/db?sslmode=require"
+	if got != want {
+		t.Fatalf("DATABASE_URL (%s) is %q, want %q", arn, got, want)
+	}
+
+	// Planning again finds both as deployed: RDS's minor version isn't
+	// drift.
+	var again planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &again)
+	waitPlanned(t, c, &again)
+	for _, a := range again.Actions {
+		if a.Op != "keep" {
+			t.Fatalf("second plan %+v", again)
+		}
 	}
 }

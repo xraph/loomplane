@@ -161,6 +161,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		},
 		"vercel":    &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
 		"cloud-sql": &deployments.CloudSQL{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
+		"rds":       &deployments.RDS{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
 		"ecs-fargate": &deployments.ECS{
 			AWS:         aws.New(e.cfg.Clouds.AWSEndpoint),
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},

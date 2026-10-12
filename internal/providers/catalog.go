@@ -129,7 +129,9 @@ func Catalog() []provider.Provider {
 				{Kind: "mysql", Creates: "RDS for MySQL instance", Versions: []string{"8.4", "8.0"}},
 			},
 			Regions: awsRegions,
-			Note:    milestone5,
+			// Provisioned by Loomplane, reachable from the environment's
+			// ECS tasks only (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "elasticache", Title: "Amazon ElastiCache", Cloud: "aws",

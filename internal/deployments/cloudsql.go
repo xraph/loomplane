@@ -96,7 +96,7 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if derr := s.EnsureDatabase(ctx, in.Name, db); derr != nil {
 		return nil, fmt.Errorf("create the database: %w", derr)
 	}
-	password, err := c.password(ctx, job)
+	password, _, err := keptPassword(ctx, job, rand.Text()+rand.Text())
 	if err != nil {
 		return nil, err
 	}
@@ -109,21 +109,21 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	return &Outcome{ExternalID: in.ConnectionName, Revision: in.DatabaseVersion}, nil
 }
 
-// password is the user's password: the one kept for this database, or a
-// new one, kept before it's used, so a retry sets the same one.
-func (c *CloudSQL) password(ctx context.Context, job *Job) (string, error) {
+// keptPassword is a database user's password: the one kept for this
+// database, or fresh, kept before it's used so a retry sets the same one.
+// isNew reports which.
+func keptPassword(ctx context.Context, job *Job, fresh string) (password string, isNew bool, err error) {
 	kept, err := job.Recall(ctx, passwordField)
 	if err == nil && len(kept) > 0 {
-		return string(kept), nil
+		return string(kept), false, nil
 	}
 	if err != nil && !errors.Is(err, ErrNoCredential) {
-		return "", err
+		return "", false, err
 	}
-	password := rand.Text() + rand.Text()
-	if err := job.Keep(ctx, passwordField, []byte(password)); err != nil {
-		return "", err
+	if err := job.Keep(ctx, passwordField, []byte(fresh)); err != nil {
+		return "", false, err
 	}
-	return password, nil
+	return fresh, true, nil
 }
 
 // databaseName is the resource's name as a database name.

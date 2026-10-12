@@ -138,10 +138,9 @@ Done so far:
 4. A managed database. Postgres and MySQL on Cloud SQL, with a generated password kept in Vault, reached from Cloud Run through the Cloud SQL connector. A database is only reachable from services on its own cloud, so anything else needing it is a problem on the plan.
 5. AWS connections: an access key, a region, and an optional ACM certificate, checked with STS and IAM's policy simulator.
 6. ECS on Fargate. Images build on CodeBuild into ECR, from the commit's tarball repacked as the zip CodeBuild reads from S3; services with a Dockerfile build from it, the rest with buildpacks. Loomplane creates the CodeBuild role and the task execution role. Services run in the account's default VPC as ECS services that Ctrl Plane drives through a provider per connection, the way Cloud Run's works. Each environment gets one Application Load Balancer, and each public service a listener port of its own, since without a domain there's no host to route on and paths break apps that expect the root: the first gets 80, or 443 with the connection's certificate, then 8000 and up. A plan for an account without a certificate warns that its public services serve plain HTTP. Secrets go to Secrets Manager and reach the task by ARN.
+7. RDS for Postgres and MySQL, in the default VPC and not publicly reachable. Each environment's databases share a security group that takes the database port from its ECS tasks' group and nothing else. As on Cloud SQL, the password is generated, kept in Vault before it's used, and reaches services in the address, through Secrets Manager. A binding records the engine and major version, so RDS's own minor upgrades aren't drift.
 
-Next, RDS for Postgres and MySQL, reachable from the environment's tasks only.
-
-Still to do after that: a gateway where it fits (Bastion is a library and Forge extension with no image of its own, path routing only, and an unauthenticated admin API, so it would be a Loomplane-built gateway with its routes baked in at deploy time), and private endpoints between services on different clouds.
+Still to do: a gateway where it fits (Bastion is a library and Forge extension with no image of its own, path routing only, and an unauthenticated admin API, so it would be a Loomplane-built gateway with its routes baked in at deploy time), and private endpoints between services on different clouds.
 
 ## Milestone 6
 

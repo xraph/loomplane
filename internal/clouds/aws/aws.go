@@ -36,6 +36,7 @@ var Actions = []string{
 	"iam:AttachRolePolicy", "iam:CreateRole", "iam:GetRole", "iam:PassRole", "iam:PutRolePolicy",
 	"logs:CreateLogGroup",
 	"rds:CreateDBInstance", "rds:CreateDBSubnetGroup", "rds:DeleteDBInstance", "rds:DescribeDBInstances",
+	"rds:ModifyDBInstance",
 	"s3:CreateBucket", "s3:PutObject",
 	"secretsmanager:CreateSecret", "secretsmanager:PutSecretValue",
 }
@@ -46,6 +47,8 @@ var (
 	ErrInvalidKey = errors.New("that isn't an AWS access key")
 	// ErrRejected is a key AWS refused.
 	ErrRejected = errors.New("aws refused the access key")
+
+	errNotFound = errors.New("not found")
 )
 
 var (
@@ -162,6 +165,9 @@ func refused(err error) bool {
 
 // IsNotFound reports whether err is AWS saying something doesn't exist.
 func IsNotFound(err error) bool {
+	if errors.Is(err, errNotFound) {
+		return true
+	}
 	var ae smithy.APIError
 	if !errors.As(err, &ae) {
 		return false

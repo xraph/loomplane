@@ -285,6 +285,18 @@ func shortName(name string) string {
 	return prefix + "-" + readable + "-" + h
 }
 
+// awsEnvironment names what an environment's services share in an AWS
+// account: its load balancer and security groups.
+func awsEnvironment(job *Job) string {
+	return job.Deployment.Environment + "-" + idSuffix(job.Deployment.ProjectID)
+}
+
+// tasksGroup is the security group an environment's tasks run in, the
+// one its databases let in.
+func tasksGroup(ctx context.Context, s *aws.Session, vpc, env string) (string, error) {
+	return s.EnsureSecurityGroup(ctx, vpc, "loomplane-"+env+"-tasks", "Loomplane tasks for "+env)
+}
+
 // expose puts a public service behind the environment's load balancer:
 // its own target group, and a listener that forwards to it.
 func expose(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, lbGroup, envName string) (tg, listener, url string, err error) {
@@ -325,12 +337,12 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 	if lerr := s.EnsureLogGroup(ctx, logGroup); lerr != nil {
 		return "", "", lerr
 	}
-	envName := job.Deployment.Environment + "-" + idSuffix(job.Deployment.ProjectID)
+	envName := awsEnvironment(job)
 	lbGroup, err := s.EnsureSecurityGroup(ctx, net.VPC, "loomplane-"+envName+"-lb", "Loomplane load balancer for "+envName)
 	if err != nil {
 		return "", "", err
 	}
-	taskGroup, err := s.EnsureSecurityGroup(ctx, net.VPC, "loomplane-"+envName+"-tasks", "Loomplane tasks for "+envName)
+	taskGroup, err := tasksGroup(ctx, s, net.VPC, envName)
 	if err != nil {
 		return "", "", err
 	}
