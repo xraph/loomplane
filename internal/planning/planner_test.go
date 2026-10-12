@@ -886,3 +886,50 @@ resources:
 		t.Fatalf("warnings %+v", r.Warnings)
 	}
 }
+
+func TestCompute_aServiceDeployedFromAHeldRepositoryStaysHeldWhenItsRepoMoves(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	moved := strings.Replace(federatedYAML, "repo: mono", "repo: site", 1)
+	r := computeFed(t, moved, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	api := action(t, r, "service:api")
+	if api.Op != Keep || !strings.Contains(api.Reason, "Held") || api.Service.Repo != "mono" {
+		t.Fatalf("api %+v", api)
+	}
+	held := warning(r, "held", "api")
+	if held == nil || !strings.Contains(held.Message, "manifest changes wait") || !strings.Contains(held.Message, "move to site") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	for _, a := range r.Actions {
+		if a.Op == Create || a.Op == Replace {
+			t.Fatalf("a plan that holds api planned %s %s", a.Op, a.ID)
+		}
+	}
+
+	// site's binding was written before services knew their repository,
+	// so while anything is held it can't be told apart from a held one.
+	for _, b := range live {
+		if b.Subject != ServiceSubject || b.Name != "site" {
+			continue
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(b.Config, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		delete(cfg, "repo")
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Config = data
+	}
+	r = computeFed(t, federatedYAML, []string{"mono"}, live...)
+	if site := action(t, r, "service:site"); site.Op != Keep || !strings.Contains(site.Reason, "Held") {
+		t.Fatalf("site %+v", site)
+	}
+	if held := warning(r, "held", "site"); held == nil || !strings.Contains(held.Message, "every repository") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}

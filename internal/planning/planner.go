@@ -311,16 +311,25 @@ func (p *planner) planServices() {
 	for _, name := range m.ServiceNames() {
 		s := m.Services[name]
 		base := "services." + name
+		set := s.For(p.in.Environment, m.Defaults)
+		// A held service ignores manifest edits as well as code changes,
+		// so it's settled before anything else the manifest says about it
+		// is read: whether it's on, where its source is, how it runs. What
+		// runs came from the repository its binding names, so a service
+		// deployed from a held repository stays held even when the
+		// manifest's repo now names one this plan moves.
+		b := p.bindings[actionID(ServiceSubject, name)]
+		if alias, ok := p.heldBinding(b); ok {
+			p.keep(name, alias, b)
+			held = append(held, name)
+			continue
+		}
 		repo, ok := p.repoOf(name, base, s)
 		if !ok {
 			continue
 		}
-		set := s.For(p.in.Environment, m.Defaults)
-		// A held service ignores manifest edits as well as code changes,
-		// so it's settled before anything else the manifest says about it
-		// is read: whether it's on, where its source is, how it runs.
 		if p.in.Held[repo] {
-			if b := p.bindings[actionID(ServiceSubject, name)]; b != nil {
+			if b != nil {
 				p.keep(name, repo, b)
 				held = append(held, name)
 			} else if manifest.On(set.Enabled) {
@@ -354,9 +363,10 @@ func (p *planner) planServices() {
 	// deployed with.
 	for _, name := range m.ServiceNames() {
 		a := p.services[name]
+		_, isHeld := p.held[name]
 		switch {
 		case a == nil:
-		case p.held[name] != "":
+		case isHeld:
 			p.linkHeld(a)
 		default:
 			p.link(name, a)
@@ -409,7 +419,11 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 // nothing deletes it. The manifest isn't consulted, so nothing it says
 // about the service can block the plan.
 func (p *planner) keep(name, alias string, b *Binding) {
-	a := p.kept(b, fmt.Sprintf("Held: this plan doesn't move %s.", alias))
+	reason := fmt.Sprintf("Held: this plan doesn't move %s.", alias)
+	if alias == "" {
+		reason = "Held: nothing records which repository it's from, and this plan holds some back."
+	}
+	a := p.kept(b, reason)
 	p.held[name] = alias
 	p.services[name] = a
 	p.actions = append(p.actions, a)
@@ -571,19 +585,32 @@ func (p *planner) linkHeld(a *Action) {
 // waits says when the manifest would change a held service, which the
 // plan holds back. It works out what the manifest asks for with every
 // finding, cloud and provider it touches thrown away, so asking can't
-// change the plan.
+// change the plan. Only what the manifest names is marked matched, since
+// that's the manifest's to deploy. A repo that names another repository
+// than the one it was deployed from is a change that waits too.
 func (p *planner) waits(name string) {
 	m := p.in.Manifest
 	s, alias := m.Services[name], p.held[name]
 	base := "services." + name
 	set := s.For(p.in.Environment, m.Defaults)
-	// Turning a service off is a change too.
-	changed := !manifest.On(set.Enabled)
 	problems, warnings, unready, clouds := p.problems, p.warnings, p.unready, p.clouds
 	p.problems, p.warnings, p.unready, p.clouds = nil, nil, map[string]string{}, map[string]bool{}
+	// Moving it to another repository, or turning it off, is a change too.
+	repo, ok := p.repoOf(name, base, s)
+	moved := ok && repo != alias
+	changed := !ok || moved || !manifest.On(set.Enabled)
+	var gs *graph.Service
+	if ok {
+		gs = p.match(name, base, repo, s)
+	}
+	// The graph service the manifest names is the manifest's, so it isn't
+	// reported as left out.
+	if gs != nil {
+		p.matched[gs.ID] = true
+	}
 	if !changed {
 		var a *Action
-		if gs := p.match(name, base, alias, s); gs != nil {
+		if gs != nil {
 			a = p.desired(name, base, s, gs, set)
 		}
 		if a != nil {
@@ -597,6 +624,12 @@ func (p *planner) waits(name string) {
 		return
 	}
 	msg := fmt.Sprintf("%s is in %s, which this plan holds back, so its manifest changes wait for a plan that moves %s.", name, alias, alias)
+	if alias == "" {
+		msg = fmt.Sprintf("Nothing records which repository %s was deployed from, and this plan holds some back, so its manifest changes wait for a plan that moves every repository.", name)
+	}
+	if moved && alias != "" {
+		msg += fmt.Sprintf(" That includes its move to %s.", repo)
+	}
 	if len(found) > 0 {
 		msg += " Its manifest also has a problem to fix first: " + found[0].Message
 	}
@@ -868,7 +901,7 @@ func (p *planner) order() {
 // needs, or for a held service, what it was deployed against. Those can
 // form a cycle validation never saw, which order cuts at step 2.
 func (p *planner) needs(name string, a *Action) []string {
-	if p.held[name] == "" {
+	if _, held := p.held[name]; !held {
 		return p.in.Manifest.Services[name].Needs
 	}
 	var out []string
@@ -980,7 +1013,7 @@ func (p *planner) checkFindings() {
 	for _, name := range m.ServiceNames() {
 		// A held service's manifest entry waits, so what it says about
 		// its needs isn't worth a warning in this plan.
-		if p.services[name] == nil || p.held[name] != "" {
+		if _, held := p.held[name]; p.services[name] == nil || held {
 			continue
 		}
 		gs := p.graphServices[name]
@@ -1098,12 +1131,9 @@ func (p *planner) planDeletes() {
 			continue
 		}
 		if b.Subject == ServiceSubject {
-			var cfg ServiceConfig
-			if json.Unmarshal(b.Config, &cfg) == nil {
-				if repo, held := p.heldRepo(cfg); held {
-					p.keepHeld(b, repo)
-					continue
-				}
+			if repo, held := p.heldBinding(b); held {
+				p.keepHeld(b, repo)
+				continue
 			}
 		}
 		reason := fmt.Sprintf("The manifest no longer has %s.", b.Name)
@@ -1151,6 +1181,20 @@ func (p *planner) heldRepo(cfg ServiceConfig) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// heldBinding reports whether what a binding deployed is held, by the
+// repository it was deployed from, as heldRepo decides. A binding that's
+// missing or doesn't parse can't say, and leaves it to the manifest.
+func (p *planner) heldBinding(b *Binding) (string, bool) {
+	if b == nil {
+		return "", false
+	}
+	var cfg ServiceConfig
+	if json.Unmarshal(b.Config, &cfg) != nil {
+		return "", false
+	}
+	return p.heldRepo(cfg)
 }
 
 // keepHeld leaves a deployed service of a held repository running when
