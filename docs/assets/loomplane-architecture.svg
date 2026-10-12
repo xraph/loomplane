@@ -1,0 +1,142 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1120"
+  height="656"
+  viewBox="0 0 1120 656"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">Inside Loomplane</title>
+  <desc id="description">
+    The React dashboard connects to one Forge application. Authsome and Warden
+    handle identity and access. Project services enqueue Dispatch jobs and
+    record Chronicle events. Ctrl Plane is connected through an identity bridge.
+    Grove connects the application to PostgreSQL, with central migrations before
+    workers start.
+  </desc>
+  <defs>
+    <marker
+      id="arrow"
+      viewBox="0 0 10 10"
+      refX="9"
+      refY="5"
+      markerWidth="7"
+      markerHeight="7"
+      orient="auto-start-reverse"
+    >
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#86867a" />
+    </marker>
+  </defs>
+  <rect width="1120" height="656" rx="20" fill="#f6f5ef" />
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text
+      x="40"
+      y="49"
+      fill="#727367"
+      font-size="12"
+      font-weight="700"
+      letter-spacing="2"
+    >
+      LOOMPLANE / ARCHITECTURE
+    </text>
+    <text x="40" y="88" fill="#20201e" font-size="29" font-weight="700">
+      One application. Clear responsibilities.
+    </text>
+    <rect x="40" y="120" width="1040" height="76" rx="12" fill="#20201e" />
+    <text x="64" y="153" fill="#fffdf5" font-size="19" font-weight="700">
+      React dashboard
+    </text>
+    <text x="64" y="178" fill="#d1d0c5" font-size="14">
+      shadcn/ui · authsome components · generated Forge clients
+    </text>
+    <rect x="853" y="140" width="202" height="35" rx="17" fill="#35352f" />
+    <text x="954" y="163" text-anchor="middle" fill="#e8cd7d" font-size="13">
+      one browser origin
+    </text>
+    <path
+      d="M560 196 V240"
+      fill="none"
+      stroke="#86867a"
+      stroke-width="2"
+      marker-end="url(#arrow)"
+    />
+    <rect
+      x="40"
+      y="240"
+      width="1040"
+      height="288"
+      rx="14"
+      fill="#fffef9"
+      stroke="#d9d9cf"
+    />
+    <text x="64" y="272" fill="#20201e" font-size="19" font-weight="700">
+      Forge application
+    </text>
+    <text x="64" y="296" fill="#65665c" font-size="14">
+      Routes, dependency injection, extension lifecycle, health, metrics, and
+      OpenAPI
+    </text>
+    <g fill="#f5f4ed" stroke="#dfdfd3">
+      <rect x="64" y="320" width="228" height="100" rx="10" />
+      <rect x="318" y="320" width="228" height="100" rx="10" />
+      <rect x="572" y="320" width="228" height="100" rx="10" />
+      <rect x="826" y="320" width="230" height="100" rx="10" />
+    </g>
+    <rect x="64" y="320" width="5" height="100" rx="2" fill="#d6ad43" />
+    <rect x="318" y="320" width="5" height="100" rx="2" fill="#4c8961" />
+    <rect x="572" y="320" width="5" height="100" rx="2" fill="#d6ad43" />
+    <rect x="826" y="320" width="5" height="100" rx="2" fill="#4c8961" />
+    <g fill="#20201e" font-size="17" font-weight="700">
+      <text x="82" y="351">Identity and access</text>
+      <text x="336" y="351">Projects</text>
+      <text x="590" y="351">Dispatch</text>
+      <text x="844" y="351">Ctrl Plane</text>
+    </g>
+    <g fill="#65665c" font-size="14">
+      <text x="82" y="378">authsome sessions</text>
+      <text x="82" y="400">Warden organization roles</text>
+      <text x="336" y="378">Project and environment state</text>
+      <text x="336" y="400">Service-layer permission checks</text>
+      <text x="590" y="378">Persistent background jobs</text>
+      <text x="590" y="400">Environment initialization</text>
+      <text x="844" y="378">Infrastructure lifecycle engine</text>
+      <text x="844" y="400">Loomplane identity bridge</text>
+    </g>
+    <path
+      d="M546 366 H569"
+      fill="none"
+      stroke="#86867a"
+      stroke-width="2"
+      marker-end="url(#arrow)"
+    />
+    <rect x="64" y="444" width="482" height="58" rx="10" fill="#edf2e9" />
+    <text x="82" y="469" fill="#274a32" font-size="16" font-weight="700">
+      Chronicle
+    </text>
+    <text x="82" y="489" fill="#52634e" font-size="13">
+      Identity activity and project audit events
+    </text>
+    <rect x="572" y="444" width="484" height="58" rx="10" fill="#f2eddc" />
+    <text x="590" y="469" fill="#66521b" font-size="16" font-weight="700">
+      Grove + central migrations
+    </text>
+    <text x="590" y="489" fill="#786b44" font-size="13">
+      Shared database pool; schemas applied before services start
+    </text>
+    <path
+      d="M560 528 V560"
+      fill="none"
+      stroke="#86867a"
+      stroke-width="2"
+      marker-end="url(#arrow)"
+    />
+    <rect x="40" y="560" width="1040" height="64" rx="12" fill="#e9e9df" />
+    <text x="64" y="588" fill="#20201e" font-size="19" font-weight="700">
+      PostgreSQL
+    </text>
+    <text x="64" y="610" fill="#65665c" font-size="14">
+      One database. Separate state owners for identity, roles, projects, jobs,
+      audit, and infrastructure.
+    </text>
+  </g>
+</svg>
