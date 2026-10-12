@@ -55,7 +55,7 @@ Left over:
 2. A repository picker when creating a project. The add-source dialog already suggests repositories from the GitHub connection, but the new-project dialog still takes a URL, which becomes the project's first source.
 3. Detection limits: Python, Java and the rest are found through their Dockerfiles only. A Go command that imports the server's packages reads as a server, because classification follows imports. A Rust crate with both clap and axum is ambiguous.
 4. The GitHub App flow has only been run against a fake GitHub that checks the App's JWT signature. Try it against a real App before relying on it.
-5. A cleanup migration. It drops `loomplane_projects.repository_url`, `loomplane_plans.analysis_id` and `commit_sha`, and `loomplane_deployments.source`. Sources and plan locksets replaced all four, nothing reads them now, and they stay only so a rollback to the previous release still finds them.
+5. A cleanup migration. It drops `loomplane_projects.repository_url`, `loomplane_plans.analysis_id` and `commit_sha`, and `loomplane_deployments.source`. Sources and plan locksets replaced all four, and nothing reads them now. They stay so a rollback to the previous release can still read what was there before the upgrade. That's all it can read, though: projects, plans and deployments made after the upgrade leave those columns empty.
 
 ## Environments and variables
 
