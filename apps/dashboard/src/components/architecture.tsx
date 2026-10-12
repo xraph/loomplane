@@ -421,7 +421,9 @@ export function NotAnalyzed({
         </EmptyTitle>
         <EmptyDescription>
           {running
-            ? `Loomplane is reading ${repo}. The services and resources it finds show up here.`
+            ? many
+              ? "Loomplane is reading the repositories. The services and resources it finds show up here."
+              : `Loomplane is reading ${repo}. The services and resources it finds show up here.`
             : mayRun
               ? many
                 ? "Analyze the repositories and Loomplane maps the services and resources it finds here. Nothing in them is run."

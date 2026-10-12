@@ -385,7 +385,7 @@ function PlansCard({
         <CardTitle>Plans</CardTitle>
         <CardDescription>
           What deploying an environment would do, worked out from the manifest
-          and the latest analysis. Planning never touches a cloud.
+          and one commit of each repository. Planning never touches a cloud.
         </CardDescription>
         {can("deployment:create") && environments.length > 0 && (
           <PlanControls
