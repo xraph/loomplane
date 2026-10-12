@@ -81,12 +81,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  lockLabel,
-  resourceLabel,
-  shortSHA,
-  type SourceLink,
-} from "@/lib/architecture"
+import { lockLabel, resourceLabel, type SourceLink } from "@/lib/architecture"
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
@@ -484,7 +479,7 @@ function PlansCard({
                     {summaryLine(p)}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">
-                    {shortSHA(p.commitSha)} · r{p.manifestRevision}
+                    {lockLabel(p.sources)} · r{p.manifestRevision}
                   </TableCell>
                   <TableCell className="pr-4 text-muted-foreground">
                     <time dateTime={p.createdAt}>
@@ -591,7 +586,7 @@ function PlanBody({
   const planned = !isPlanning(plan.status) && plan.status !== "failed"
   // Evidence links need the commit the plan was made from.
   const evidenceFrom: SourceLink[] | undefined =
-    analysis && analysis.id === plan.analysisId
+    analysis && plan.sources.some((s) => s.analysisId === analysis.id)
       ? [
           {
             alias: analysis.source,
@@ -624,8 +619,7 @@ function PlanBody({
           </Badge>
         </SheetTitle>
         <SheetDescription>
-          From commit{" "}
-          <code className="font-mono">{shortSHA(plan.commitSha)}</code> and
+          From <code className="font-mono">{lockLabel(plan.sources)}</code> and
           manifest revision {plan.manifestRevision}.{" "}
           {plan.status === "ready" && plan.expiresAt && (
             <>

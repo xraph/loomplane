@@ -1371,7 +1371,7 @@
         "tags": [
           "Plans"
         ],
-        "summary": "Plan an environment from the current manifest and the latest analysis, replacing its open plan",
+        "summary": "Plan an environment from the current manifest and one commit of each repository, replacing its open plan; a scope moves only some of them",
         "operationId": "plans.create",
         "parameters": [
           {
@@ -2409,6 +2409,12 @@
         "properties": {
           "environment": {
             "type": "string"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -2510,7 +2516,7 @@
           "plan_id",
           "commit_sha",
           "status",
-          "source",
+          "sources",
           "error",
           "steps",
           "started_by",
@@ -2545,8 +2551,11 @@
           "project_id": {
             "type": "string"
           },
-          "source": {
-            "type": "string"
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceArtifact"
+            }
           },
           "started_at": {
             "type": "string",
@@ -3146,8 +3155,7 @@
           "environment",
           "status",
           "revision",
-          "analysis_id",
-          "commit_sha",
+          "sources",
           "manifest_id",
           "manifest_revision",
           "actions",
@@ -3168,12 +3176,6 @@
             "items": {
               "$ref": "#/components/schemas/Action"
             }
-          },
-          "analysis_id": {
-            "type": "string"
-          },
-          "commit_sha": {
-            "type": "string"
           },
           "connections": {
             "type": "object",
@@ -3238,6 +3240,12 @@
           "revision": {
             "type": "string"
           },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanSource"
+            }
+          },
           "status": {
             "type": "string"
           },
@@ -3266,6 +3274,41 @@
         ],
         "type": "object",
         "x-forge-envelope": "plans"
+      },
+      "PlanSource": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "alias",
+          "repository",
+          "root",
+          "analysis_id",
+          "commit_sha",
+          "in_scope"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "analysis_id": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "in_scope": {
+            "type": "boolean"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          }
+        }
       },
       "PlanningSummary": {
         "properties": {
@@ -3886,6 +3929,9 @@
           "build": {
             "type": "string"
           },
+          "commit_sha": {
+            "type": "string"
+          },
           "ecosystem": {
             "type": "string"
           },
@@ -3914,6 +3960,9 @@
             "type": "boolean"
           },
           "region": {
+            "type": "string"
+          },
+          "repo": {
             "type": "string"
           },
           "scale": {
@@ -4023,6 +4072,29 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SourceArtifact": {
+        "type": "object",
+        "required": [
+          "alias",
+          "repository",
+          "commit_sha",
+          "key"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
           }
         }
       },

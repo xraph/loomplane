@@ -138,7 +138,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz)
 	runner := deployments.NewRunner(deployments.RunnerDeps{
-		Store: deployStore, Plans: planStore, Projects: prj, Credentials: clouds, Variables: variables,
+		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
 		},

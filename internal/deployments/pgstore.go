@@ -23,15 +23,18 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
 var _ Store = (*PgStore)(nil)
 
-const columns = `id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status, source,
+const columns = `id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status, sources,
 	error, steps, started_by, started_at, finished_at`
 
 func scan(row pgx.Row) (*Deployment, error) {
 	var d Deployment
-	var steps []byte
+	var sources, steps []byte
 	if err := row.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.EnvironmentID, &d.Environment, &d.PlanID, &d.CommitSHA,
-		&d.Status, &d.Source, &d.Error, &steps, &d.StartedBy, &d.StartedAt, &d.FinishedAt); err != nil {
+		&d.Status, &sources, &d.Error, &steps, &d.StartedBy, &d.StartedAt, &d.FinishedAt); err != nil {
 		return nil, err
+	}
+	if err := json.Unmarshal(sources, &d.Sources); err != nil {
+		return nil, fmt.Errorf("decode sources: %w", err)
 	}
 	if err := json.Unmarshal(steps, &d.Steps); err != nil {
 		return nil, fmt.Errorf("decode steps: %w", err)
@@ -48,10 +51,14 @@ func (s *PgStore) CreateDeployment(ctx context.Context, d *Deployment) (*Deploym
 	if err != nil {
 		return nil, fmt.Errorf("encode steps: %w", err)
 	}
+	sources, err := json.Marshal(d.Sources)
+	if err != nil {
+		return nil, fmt.Errorf("encode sources: %w", err)
+	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_deployments (`+columns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (plan_id) DO NOTHING`,
-		d.ID, d.OrgID, d.ProjectID, d.EnvironmentID, d.Environment, d.PlanID, d.CommitSHA, d.Status, d.Source,
+		d.ID, d.OrgID, d.ProjectID, d.EnvironmentID, d.Environment, d.PlanID, d.CommitSHA, d.Status, sources,
 		d.Error, steps, d.StartedBy, d.StartedAt, d.FinishedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert deployment: %w", err)
@@ -105,10 +112,14 @@ func (s *PgStore) ListDeployments(ctx context.Context, orgID, projectID string, 
 	return out, nil
 }
 
-// SetSource implements Store.
-func (s *PgStore) SetSource(ctx context.Context, orgID, id, source string) error {
-	if _, err := s.db.Exec(ctx, `UPDATE loomplane_deployments SET source = $3 WHERE org_id = $1 AND id = $2`, orgID, id, source); err != nil {
-		return fmt.Errorf("set source: %w", err)
+// SetSources implements Store.
+func (s *PgStore) SetSources(ctx context.Context, orgID, id string, sources []SourceArtifact) error {
+	raw, err := json.Marshal(sources)
+	if err != nil {
+		return fmt.Errorf("encode sources: %w", err)
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE loomplane_deployments SET sources = $3 WHERE org_id = $1 AND id = $2`, orgID, id, raw); err != nil {
+		return fmt.Errorf("set sources: %w", err)
 	}
 	return nil
 }

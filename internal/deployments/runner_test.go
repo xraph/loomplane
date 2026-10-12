@@ -14,7 +14,6 @@ import (
 
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
-	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -35,6 +34,7 @@ func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployme
 	}
 	c := *d
 	c.Steps = slices.Clone(d.Steps)
+	c.Sources = slices.Clone(d.Sources)
 	m.d[d.ID] = &c
 	out := c
 	return &out, nil
@@ -49,6 +49,7 @@ func (m *memStore) GetDeployment(_ context.Context, _, id string) (*Deployment, 
 	}
 	c := *d
 	c.Steps = slices.Clone(d.Steps)
+	c.Sources = slices.Clone(d.Sources)
 	return &c, nil
 }
 
@@ -68,10 +69,10 @@ func (m *memStore) ListDeployments(context.Context, string, string, int) ([]*Dep
 	return nil, nil
 }
 
-func (m *memStore) SetSource(_ context.Context, _, id, source string) error {
+func (m *memStore) SetSources(_ context.Context, _, id string, sources []SourceArtifact) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.d[id].Source = source
+	m.d[id].Sources = slices.Clone(sources)
 	return nil
 }
 
@@ -99,6 +100,14 @@ type fakePlans struct {
 	mu       sync.Mutex
 	plan     *planning.Plan
 	bindings map[string]*planning.Binding
+	deployed []planning.DeployedSource
+}
+
+func (f *fakePlans) RecordDeployed(_ context.Context, _ string, d *planning.DeployedSource) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deployed = append(f.deployed, *d)
+	return nil
 }
 
 func (f *fakePlans) GetPlan(context.Context, string, string) (*planning.Plan, error) {
@@ -134,12 +143,6 @@ func (f *fakePlans) DeleteBinding(_ context.Context, _, id string) error {
 	return nil
 }
 
-type fakeProjects struct{}
-
-func (fakeProjects) GetProject(context.Context, string, string) (*projects.Project, error) {
-	return &projects.Project{ID: "proj_1", Repositories: []string{"acme/mono"}}, nil
-}
-
 type fakeCredentials struct{}
 
 func (fakeCredentials) Credential(_ context.Context, _, id string) (*connections.Connection, []byte, error) {
@@ -156,32 +159,71 @@ func (f fakeVariables) Values(_ context.Context, _, _, _, service string) (map[s
 	return out, nil
 }
 
-type fakeSources struct{ stored []string }
+// fakeSources stores a tarball whose content is the repository and commit
+// it came from, so a test can tell which one a job opened.
+type fakeSources struct {
+	mu     sync.Mutex
+	stored []string
+	repos  []string
+	files  map[string]string
+}
 
-func (f *fakeSources) Store(_ context.Context, _ string, _ *projects.Project, _, key string) error {
+func (f *fakeSources) Store(_ context.Context, _, repository, sha, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.stored = append(f.stored, key)
+	f.repos = append(f.repos, repository)
+	if f.files == nil {
+		f.files = map[string]string{}
+	}
+	f.files[key] = repository + "@" + sha
 	return nil
 }
 
-func (f *fakeSources) Open(context.Context, string) (io.ReadCloser, int64, error) {
-	return io.NopCloser(strings.NewReader("tarball")), 7, nil
+func (f *fakeSources) Open(_ context.Context, key string) (io.ReadCloser, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	content, ok := f.files[key]
+	if !ok {
+		return nil, 0, errors.New("no artifact at " + key)
+	}
+	return io.NopCloser(strings.NewReader(content)), int64(len(content)), nil
 }
 
-// recorder is an executor that answers at url and remembers each job.
+// recorder is an executor that answers at url and remembers each job, and
+// what each service's source held.
 type recorder struct {
 	mu   sync.Mutex
 	url  string
 	fail map[string]error
 	jobs []*Job
+	read map[string]string
 }
 
-func (r *recorder) Apply(_ context.Context, job *Job) (*Outcome, error) {
+func (r *recorder) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	r.mu.Lock()
 	r.jobs = append(r.jobs, job)
 	err := r.fail[job.Action.Name]
 	r.mu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	if job.Action.Service != nil {
+		src, _, err := job.Source(ctx)
+		if err != nil {
+			return nil, err
+		}
+		content, err := io.ReadAll(src)
+		_ = src.Close()
+		if err != nil {
+			return nil, err
+		}
+		r.mu.Lock()
+		if r.read == nil {
+			r.read = map[string]string{}
+		}
+		r.read[job.Action.Name] = string(content)
+		r.mu.Unlock()
 	}
 	if err := job.Checkpoint([]byte("op-" + job.Action.Name)); err != nil {
 		return nil, err
@@ -232,7 +274,7 @@ func newRunner(t *testing.T, plan *planning.Plan, exec Executor, vars fakeVariab
 	store := &memStore{d: map[string]*Deployment{}}
 	plans := &fakePlans{plan: plan, bindings: map[string]*planning.Binding{}}
 	r := NewRunner(RunnerDeps{
-		Store: store, Plans: plans, Projects: fakeProjects{}, Credentials: fakeCredentials{}, Variables: vars,
+		Store: store, Plans: plans, Credentials: fakeCredentials{}, Variables: vars,
 		Sources: &fakeSources{}, Providers: available(t),
 		Executors: map[string]Executor{"cloud-run": exec, "vercel": exec},
 	})
@@ -287,7 +329,8 @@ func TestRunner_deploysInOrderAndLinksServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, _ := store.GetDeployment(t.Context(), "org_1", id)
-	if d.Status != StatusSucceeded || d.Source != SourceKey("org_1", "proj_1", strings.Repeat("a", 40)) {
+	if d.Status != StatusSucceeded || len(d.Sources) != 1 || d.Sources[0].Key != SourceKey("org_1", "proj_1", "mono", strings.Repeat("a", 40)) ||
+		d.CommitSHA != strings.Repeat("a", 40) {
 		t.Fatalf("deployment %+v", d)
 	}
 	if len(exec.jobs) != 2 || exec.jobs[0].Action.Name != "api" || exec.jobs[1].Action.Name != "web" {
@@ -377,6 +420,9 @@ func TestRunner_retryResumesFromTheLastCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := r.FetchSource(t.Context(), "org_1", id); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.Run(t.Context(), "org_1", id, "service:api", []byte("op-earlier"), func([]byte) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -386,5 +432,128 @@ func TestRunner_retryResumesFromTheLastCheckpoint(t *testing.T) {
 	// A step that already succeeded isn't run again.
 	if err := r.Run(t.Context(), "org_1", id, "service:api", nil, func([]byte) error { return nil }); err != nil || len(exec.jobs) != 1 {
 		t.Fatalf("ran again: %d jobs, %v", len(exec.jobs), err)
+	}
+}
+
+var (
+	shaAPI = strings.Repeat("a", 40)
+	shaKit = strings.Repeat("c", 40)
+	shaWeb = strings.Repeat("b", 40)
+)
+
+// threeRepos is webAndAPI built from three repositories: it moves web and
+// api, each from its own, and holds kit.
+func threeRepos() *planning.Plan {
+	plan := webAndAPI()
+	plan.Sources = []planning.PlanSource{
+		{SourceID: "src_web", Alias: "web", Repository: "acme/web", AnalysisID: "anl_web", CommitSHA: shaWeb, InScope: true},
+		{SourceID: "src_kit", Alias: "kit", Repository: "acme/kit", AnalysisID: "anl_kit", CommitSHA: shaKit},
+		{SourceID: "src_api", Alias: "api", Repository: "acme/api", AnalysisID: "anl_api", CommitSHA: shaAPI, InScope: true},
+	}
+	plan.Actions[0].Service.Repo, plan.Actions[0].Service.CommitSHA = "api", shaAPI
+	plan.Actions[0].Service.Service = "svc:api:go:services/api"
+	plan.Actions[1].Service.Repo, plan.Actions[1].Service.CommitSHA = "web", shaWeb
+	plan.Actions[1].Service.Service = "svc:web:node:apps/web"
+	return plan
+}
+
+func TestRunner_fetchesEachRepositoryItMoves(t *testing.T) {
+	r, store, _ := newRunner(t, threeRepos(), &recorder{}, fakeVariables{})
+	sources := r.sources.(*fakeSources)
+	ctx := t.Context()
+
+	id, _, err := r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(ctx, "org_1", id)
+	if d.CommitSHA != "api@aaaaaaa web@bbbbbbb" {
+		t.Fatalf("commit label %q", d.CommitSHA)
+	}
+	if len(d.Sources) != 2 || d.Sources[0].Alias != "api" || d.Sources[1].Alias != "web" || d.Sources[0].Key != "" {
+		t.Fatalf("sources at start %+v", d.Sources)
+	}
+
+	if err := r.FetchSource(ctx, "org_1", id); err != nil {
+		t.Fatal(err)
+	}
+	apiKey, webKey := SourceKey("org_1", "proj_1", "api", shaAPI), SourceKey("org_1", "proj_1", "web", shaWeb)
+	if !slices.Equal(sources.stored, []string{apiKey, webKey}) || !slices.Equal(sources.repos, []string{"acme/api", "acme/web"}) {
+		t.Fatalf("stored %q from %q", sources.stored, sources.repos)
+	}
+	d, _ = store.GetDeployment(ctx, "org_1", id)
+	want := []SourceArtifact{
+		{Alias: "api", Repository: "acme/api", CommitSHA: shaAPI, Key: apiKey},
+		{Alias: "web", Repository: "acme/web", CommitSHA: shaWeb, Key: webKey},
+	}
+	if !slices.Equal(d.Sources, want) {
+		t.Fatalf("sources %+v, want %+v", d.Sources, want)
+	}
+
+	// A retried activity stores nothing more.
+	if err := r.FetchSource(ctx, "org_1", id); err != nil {
+		t.Fatal(err)
+	}
+	if len(sources.stored) != 2 {
+		t.Fatalf("stored again: %q", sources.stored)
+	}
+}
+
+func TestRunner_buildsEachServiceFromItsRepository(t *testing.T) {
+	exec := &recorder{url: answering(t, http.StatusOK)}
+	r, _, _ := newRunner(t, threeRepos(), exec, fakeVariables{})
+	if _, err := deploy(t, r, threeRepos()); err != nil {
+		t.Fatal(err)
+	}
+	if exec.read["api"] != "acme/api@"+shaAPI || exec.read["web"] != "acme/web@"+shaWeb {
+		t.Fatalf("read %q", exec.read)
+	}
+
+	// web built from kit, which the plan holds, has nothing to build from.
+	plan := threeRepos()
+	plan.Actions[1].Service.Repo = "kit"
+	exec = &recorder{url: answering(t, http.StatusOK)}
+	r, store, _ := newRunner(t, plan, exec, fakeVariables{})
+	id, err := deploy(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	web := d.Step("service:web")
+	if d.Status != StatusFailed || web.Status != StepFailed || web.Message != "the deployment has no source stored for kit" {
+		t.Fatalf("deployment %+v, web %+v", d, web)
+	}
+}
+
+func TestRunner_recordsWhatsDeployedOnlyOnSuccess(t *testing.T) {
+	ctx := t.Context()
+	at := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	r, _, plans := newRunner(t, threeRepos(), &recorder{}, fakeVariables{})
+	r.now = func() time.Time { return at }
+	id, _, err := r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	want := []planning.DeployedSource{
+		{EnvironmentID: "env_1", SourceID: "src_web", AnalysisID: "anl_web", CommitSHA: shaWeb, PlanID: "plan_1", DeployedAt: at},
+		{EnvironmentID: "env_1", SourceID: "src_api", AnalysisID: "anl_api", CommitSHA: shaAPI, PlanID: "plan_1", DeployedAt: at},
+	}
+	if !slices.Equal(plans.deployed, want) {
+		t.Fatalf("recorded %+v, want %+v", plans.deployed, want)
+	}
+
+	r, _, plans = newRunner(t, threeRepos(), &recorder{}, fakeVariables{})
+	id, _, err = r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, "cloud build failed"); err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.deployed) != 0 {
+		t.Fatalf("a failed deployment recorded %+v", plans.deployed)
 	}
 }

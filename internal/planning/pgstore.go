@@ -219,6 +219,20 @@ func (s *PgStore) DeployedSources(ctx context.Context, orgID, environmentID stri
 	return out, rows.Err()
 }
 
+// RecordDeployed implements Store.
+func (s *PgStore) RecordDeployed(ctx context.Context, orgID string, d *DeployedSource) error {
+	if _, err := s.db.Exec(ctx, `INSERT INTO loomplane_environment_sources
+			(environment_id, source_id, org_id, analysis_id, commit_sha, plan_id, deployed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (environment_id, source_id) DO UPDATE SET
+			analysis_id = EXCLUDED.analysis_id, commit_sha = EXCLUDED.commit_sha,
+			plan_id = EXCLUDED.plan_id, deployed_at = EXCLUDED.deployed_at`,
+		d.EnvironmentID, d.SourceID, orgID, d.AnalysisID, d.CommitSHA, d.PlanID, d.DeployedAt.UTC()); err != nil {
+		return fmt.Errorf("record deployed source: %w", err)
+	}
+	return nil
+}
+
 // FinishPlanning implements Store.
 func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
 	result, err := json.Marshal(Result{

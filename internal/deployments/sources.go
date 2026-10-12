@@ -2,12 +2,10 @@ package deployments
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 
 	"github.com/xraph/loomplane/internal/artifacts"
-	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/repositories"
 )
 
@@ -34,15 +32,11 @@ var _ Sources = (*GitHubSources)(nil)
 
 // Store implements Sources. It streams the tarball from GitHub straight
 // into storage, without reading what's inside.
-func (g *GitHubSources) Store(ctx context.Context, orgID string, project *projects.Project, sha, key string) error {
+func (g *GitHubSources) Store(ctx context.Context, orgID, repository, sha, key string) error {
 	if ok, err := g.Artifacts.Exists(ctx, key); err != nil || ok {
 		return err
 	}
-	// A project with several repositories deploys from its first until deployments learn to fetch each one.
-	if len(project.Repositories) == 0 {
-		return errors.New("this project has no repository to deploy from; add one first")
-	}
-	repo, err := repositories.ParseGitHubURL("github.com/" + project.Repositories[0])
+	repo, err := repositories.ParseGitHubURL("github.com/" + repository)
 	if err != nil {
 		return err
 	}

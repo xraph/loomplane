@@ -39,6 +39,7 @@ func Group() *migrate.Group {
 		statements("20261012000009", "add_binding_url", bindingURLUp, bindingURLDown),
 		statements("20261013000001", "create_project_sources", sourcesUp, sourcesDown),
 		statements("20261013000002", "create_plan_sources", planSourcesUp, planSourcesDown),
+		statements("20261013000003", "add_deployment_sources", deploymentSourcesUp, deploymentSourcesDown),
 	)
 	return g
 }
@@ -512,4 +513,19 @@ var planSourcesUp = []string{
 var planSourcesDown = []string{
 	`DROP TABLE IF EXISTS loomplane_environment_sources`,
 	`DROP TABLE IF EXISTS loomplane_plan_sources`,
+}
+
+// A deployment fetches one tarball per repository it moves. sources holds
+// each one's alias, repository, commit and artifact key. source, the single
+// key deployments used before, stays unread; the cleanup migration drops it
+// with the other old columns.
+var deploymentSourcesUp = []string{
+	`ALTER TABLE loomplane_deployments ADD COLUMN IF NOT EXISTS sources JSONB NOT NULL DEFAULT '[]'`,
+	`UPDATE loomplane_deployments SET sources = jsonb_build_array(jsonb_build_object(
+		'alias', '', 'repository', '', 'commit_sha', commit_sha, 'key', source))
+		WHERE sources = '[]'::jsonb AND source <> ''`,
+}
+
+var deploymentSourcesDown = []string{
+	`ALTER TABLE loomplane_deployments DROP COLUMN IF EXISTS sources`,
 }

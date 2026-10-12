@@ -206,7 +206,8 @@ type PlanSource struct {
 }
 
 // DeployedSource is the commit of one repository deployed in one
-// environment. A successful deployment writes it (milestone 4).
+// environment. Only a successful deployment writes it, and only for the
+// repositories its plan moved.
 type DeployedSource struct {
 	EnvironmentID string    `json:"environment_id"`
 	SourceID      string    `json:"source_id"`
@@ -345,6 +346,9 @@ type Store interface {
 	// DeployedSources returns the commit of each repository deployed in an
 	// environment.
 	DeployedSources(ctx context.Context, orgID, environmentID string) ([]*DeployedSource, error)
+	// RecordDeployed records d as what's deployed of its repository in
+	// its environment, replacing what was.
+	RecordDeployed(ctx context.Context, orgID string, d *DeployedSource) error
 }
 
 // Digest returns a hex SHA-256 of v's JSON. Go's JSON is deterministic for

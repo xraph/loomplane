@@ -147,3 +147,41 @@ func TestPlanSources_eachPlanKeepsItsCommit(t *testing.T) {
 		t.Fatalf("plan sources %q", got)
 	}
 }
+
+func TestDeploymentSources_aStoredSourceBecomesTheOnlyOne(t *testing.T) {
+	conn := scratch(t)
+	exec(t, conn, projectsUp...)
+	exec(t, conn, analysesUp...)
+	exec(t, conn, variablesUp...)
+	exec(t, conn, projectStyleUp...)
+	exec(t, conn, planningUp...)
+	exec(t, conn, deploymentsUp...)
+	exec(t, conn,
+		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
+			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/mono', 'ready', 'usr', now(), now())`,
+		`INSERT INTO loomplane_environments (id, org_id, project_id, name, kind, created_at, updated_at) VALUES
+			('env_a', 'org', 'proj_a', 'production', 'production', now(), now())`,
+		`INSERT INTO loomplane_analyses (id, org_id, project_id, status, repository, commit_sha, created_by, created_at) VALUES
+			('anl_a', 'org', 'proj_a', 'succeeded', 'acme/mono', 'abc', 'usr', now())`,
+		`INSERT INTO loomplane_manifests (id, org_id, project_id, revision, body, digest, created_by, created_at) VALUES
+			('man_a', 'org', 'proj_a', 1, 'version: 1', 'd', 'usr', now())`,
+		`INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status, analysis_id, commit_sha,
+			manifest_id, manifest_revision, created_by, created_at) VALUES
+			('plan_a', 'org', 'proj_a', 'env_a', 'production', 'approved', 'anl_a', 'abc', 'man_a', 1, 'usr', now()),
+			('plan_b', 'org', 'proj_a', 'env_a', 'production', 'approved', 'anl_a', 'abc', 'man_a', 1, 'usr', now())`,
+		`INSERT INTO loomplane_deployments (id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status,
+			source, started_by, started_at) VALUES
+			('dep_a', 'org', 'proj_a', 'env_a', 'production', 'plan_a', 'abc', 'running', 'k', 'usr', now()),
+			('dep_b', 'org', 'proj_a', 'env_a', 'production', 'plan_b', 'abc', 'running', '', 'usr', now())`,
+	)
+	exec(t, conn, deploymentSourcesUp...)
+	exec(t, conn, deploymentSourcesUp...)
+	got := strs(t, conn, `SELECT id || ' ' || sources::text FROM loomplane_deployments ORDER BY id`)
+	want := []string{
+		`dep_a [{"key": "k", "alias": "", "commit_sha": "abc", "repository": ""}]`,
+		`dep_b []`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("deployment sources %q, want %q", got, want)
+	}
+}

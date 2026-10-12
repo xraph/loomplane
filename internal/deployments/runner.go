@@ -15,7 +15,6 @@ import (
 
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
-	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -44,8 +43,9 @@ type Job struct {
 	// Env are the variables the service gets: its resolved variables and
 	// the addresses of what it needs.
 	Env map[string]string
-	// Source opens the commit's tarball, as GitHub serves it: gzip, with
-	// one top-level directory.
+	// Source opens the tarball of the repository the service is built
+	// from, at the plan's commit, as GitHub serves it: gzip, with one
+	// top-level directory.
 	Source func(ctx context.Context) (io.ReadCloser, int64, error)
 	// Binding is what runs the action now, or nil.
 	Binding *planning.Binding
@@ -75,6 +75,9 @@ type Plans interface {
 	ListBindings(ctx context.Context, orgID, environmentID string) ([]*planning.Binding, error)
 	PutBinding(ctx context.Context, b *planning.Binding) error
 	DeleteBinding(ctx context.Context, orgID, id string) error
+	// RecordDeployed records the commit of one repository now deployed in
+	// an environment, which the next plan holds the repository at.
+	RecordDeployed(ctx context.Context, orgID string, d *planning.DeployedSource) error
 }
 
 // Credentials reveals a connection's credential.
@@ -89,14 +92,10 @@ type Variables interface {
 
 // Sources downloads a commit and stores it as an artifact.
 type Sources interface {
-	// Store puts the commit's tarball at key unless it's there already.
-	Store(ctx context.Context, orgID string, project *projects.Project, sha, key string) error
+	// Store puts the tarball of repository ("owner/name") at sha at key,
+	// unless it's there already.
+	Store(ctx context.Context, orgID, repository, sha, key string) error
 	Open(ctx context.Context, key string) (io.ReadCloser, int64, error)
-}
-
-// Projects looks projects up.
-type Projects interface {
-	GetProject(ctx context.Context, orgID, id string) (*projects.Project, error)
 }
 
 // Runner carries out approved plans, one activity at a time. Its methods
@@ -104,7 +103,6 @@ type Projects interface {
 type Runner struct {
 	store       Store
 	plans       Plans
-	projects    Projects
 	credentials Credentials
 	variables   Variables
 	sources     Sources
@@ -120,7 +118,6 @@ type Runner struct {
 type RunnerDeps struct {
 	Store       Store
 	Plans       Plans
-	Projects    Projects
 	Credentials Credentials
 	Variables   Variables
 	Sources     Sources
@@ -132,7 +129,7 @@ type RunnerDeps struct {
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
-		store: d.Store, plans: d.Plans, projects: d.Projects, credentials: d.Credentials, variables: d.Variables,
+		store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
 		sources: d.Sources, providers: d.Providers, executors: d.Executors,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
@@ -154,14 +151,14 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	if err != nil {
 		return "", nil, fmt.Errorf("generate deployment id: %w", err)
 	}
+	moves := inScope(plan)
 	d := &Deployment{
 		ID: id.String(), OrgID: orgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID,
-		Environment: plan.Environment, PlanID: plan.ID, Status: StatusRunning,
-		StartedBy: plan.DecidedBy, StartedAt: r.now().UTC(),
+		Environment: plan.Environment, PlanID: plan.ID, CommitSHA: commitLabel(moves), Status: StatusRunning,
+		Sources: sourceArtifacts(moves), StartedBy: plan.DecidedBy, StartedAt: r.now().UTC(),
 	}
-	// A later change fetches each repository; for now this is the first one the plan moves.
-	if i := slices.IndexFunc(plan.Sources, func(ps planning.PlanSource) bool { return ps.InScope }); i >= 0 {
-		d.CommitSHA = plan.Sources[i].CommitSHA
+	if len(moves) == 1 {
+		d.CommitSHA = moves[0].CommitSHA
 	}
 	var order [][]string
 	for _, a := range plan.Actions {
@@ -183,29 +180,98 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	return d.ID, order, nil
 }
 
-// SourceKey is where a commit's tarball is stored.
-func SourceKey(orgID, projectID, sha string) string {
-	return "sources/" + orgID + "/" + projectID + "/" + sha + ".tar.gz"
+// inScope returns the repositories a plan moves, in alias order.
+func inScope(plan *planning.Plan) []planning.PlanSource {
+	out := slices.DeleteFunc(slices.Clone(plan.Sources), func(ps planning.PlanSource) bool { return !ps.InScope })
+	slices.SortFunc(out, func(a, b planning.PlanSource) int { return strings.Compare(a.Alias, b.Alias) })
+	return out
 }
 
-// FetchSource stores the deployment's commit as an artifact, once.
+func sourceArtifacts(ps []planning.PlanSource) []SourceArtifact {
+	out := make([]SourceArtifact, 0, len(ps))
+	for _, s := range ps {
+		out = append(out, SourceArtifact{Alias: s.Alias, Repository: s.Repository, CommitSHA: s.CommitSHA})
+	}
+	return out
+}
+
+// commitLabel names each repository a plan moves at its short commit, as
+// "web@3f2c1a9 api@9a1b02e", for a list that has room for one line.
+func commitLabel(ps []planning.PlanSource) string {
+	var parts []string
+	for _, s := range ps {
+		if s.InScope {
+			parts = append(parts, s.Alias+"@"+s.CommitSHA[:min(7, len(s.CommitSHA))])
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// SourceKey is where the tarball of one repository's commit is stored.
+func SourceKey(orgID, projectID, alias, sha string) string {
+	return "sources/" + orgID + "/" + projectID + "/" + alias + "/" + sha + ".tar.gz"
+}
+
+// FetchSource stores the commit of each repository the deployment moves as
+// an artifact, once. A retry skips what an earlier attempt stored.
 func (r *Runner) FetchSource(ctx context.Context, orgID, deploymentID string) error {
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
 	}
-	if d.Source != "" {
-		return nil
+	sources := d.Sources
+	if len(sources) == 0 {
+		// A deployment started before deployments fetched each repository,
+		// and not fetched yet, takes its repositories from its plan.
+		plan, err := r.plans.GetPlan(ctx, orgID, d.PlanID)
+		if err != nil {
+			return err
+		}
+		sources = sourceArtifacts(inScope(plan))
 	}
-	proj, err := r.projects.GetProject(ctx, orgID, d.ProjectID)
-	if err != nil {
-		return err
+	for i := range sources {
+		s := &sources[i]
+		if s.Key != "" {
+			continue
+		}
+		key := SourceKey(orgID, d.ProjectID, s.Alias, s.CommitSHA)
+		if err := r.sources.Store(ctx, orgID, s.Repository, s.CommitSHA, key); err != nil {
+			return fmt.Errorf("store %s@%s: %w", s.Alias, s.CommitSHA, err)
+		}
+		s.Key = key
+		// Each key is saved as it's stored, so a retry after a failure
+		// doesn't ask GitHub again for what's already here.
+		if err := r.store.SetSources(ctx, orgID, d.ID, sources); err != nil {
+			return err
+		}
 	}
-	key := SourceKey(orgID, d.ProjectID, d.CommitSHA)
-	if err := r.sources.Store(ctx, orgID, proj, d.CommitSHA, key); err != nil {
-		return fmt.Errorf("store the source: %w", err)
+	return nil
+}
+
+// sourceFor returns the artifact key of the repository a service is built
+// from. A plan made from a graph with no sources names no repository, and
+// a deployment from before deployments fetched each repository has one
+// source with no alias; either way, a deployment of one repository builds
+// from it.
+func sourceFor(d *Deployment, repo string) (string, error) {
+	var found *SourceArtifact
+	for i := range d.Sources {
+		if d.Sources[i].Alias == repo {
+			found = &d.Sources[i]
+		}
 	}
-	return r.store.SetSource(ctx, orgID, d.ID, key)
+	if found == nil && len(d.Sources) == 1 && (repo == "" || d.Sources[0].Alias == "") {
+		found = &d.Sources[0]
+	}
+	switch {
+	case found == nil && repo == "":
+		return "", errors.New("the service names no repository, so the deployment can't tell which to build it from")
+	case found == nil:
+		return "", errors.New("the deployment has no source stored for " + repo)
+	case found.Key == "":
+		return "", errors.New("the deployment's source hasn't been stored")
+	}
+	return found.Key, nil
 }
 
 // Run carries out one action of a deployment. resume is the last
@@ -300,11 +366,8 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	job := &Job{
 		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
 		Resume: resume, Checkpoint: heartbeat, Progress: progress,
-		Source: func(ctx context.Context) (io.ReadCloser, int64, error) {
-			if d.Source == "" {
-				return nil, 0, errors.New("the deployment's source hasn't been stored")
-			}
-			return r.sources.Open(ctx, d.Source)
+		Source: func(context.Context) (io.ReadCloser, int64, error) {
+			return nil, 0, errors.New("only a service is built from a repository")
 		},
 	}
 	if a.Op == planning.Delete {
@@ -318,6 +381,14 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return r.plans.DeleteBinding(ctx, d.OrgID, current.ID)
 	}
 	if a.Service != nil {
+		repo := a.Service.Repo
+		job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
+			key, serr := sourceFor(d, repo)
+			if serr != nil {
+				return nil, 0, serr
+			}
+			return r.sources.Open(ctx, key)
+		}
 		if job.Env, err = r.env(ctx, d, a, byName); err != nil {
 			return err
 		}
@@ -419,7 +490,9 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 }
 
 // Finish settles a deployment: failed with reason, or succeeded. Steps
-// still pending after a failure are marked skipped.
+// still pending after a failure are marked skipped. A success records the
+// commit of each repository it moved as what the environment runs; a
+// repository the plan held keeps what it had.
 func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string) error {
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
@@ -437,5 +510,35 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 			}
 		}
 	}
-	return r.store.Finish(ctx, orgID, d.ID, status, reason, r.now().UTC())
+	now := r.now().UTC()
+	if err := r.store.Finish(ctx, orgID, d.ID, status, reason, now); err != nil {
+		return err
+	}
+	// A deployment that already failed stays failed, so a late success
+	// for it records nothing.
+	if reason != "" || d.Status == StatusFailed {
+		return nil
+	}
+	return r.recordDeployed(ctx, d, now)
+}
+
+// recordDeployed records the commit of each repository a deployment's plan
+// moved as what its environment runs.
+func (r *Runner) recordDeployed(ctx context.Context, d *Deployment, at time.Time) error {
+	plan, err := r.plans.GetPlan(ctx, d.OrgID, d.PlanID)
+	if err != nil {
+		return err
+	}
+	for _, ps := range plan.Sources {
+		if !ps.InScope {
+			continue
+		}
+		if err := r.plans.RecordDeployed(ctx, d.OrgID, &planning.DeployedSource{
+			EnvironmentID: d.EnvironmentID, SourceID: ps.SourceID, AnalysisID: ps.AnalysisID, CommitSHA: ps.CommitSHA,
+			PlanID: d.PlanID, DeployedAt: at,
+		}); err != nil {
+			return fmt.Errorf("record what's deployed: %w", err)
+		}
+	}
+	return nil
 }

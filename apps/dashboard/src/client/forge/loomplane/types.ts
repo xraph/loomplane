@@ -162,6 +162,7 @@ export interface CreateInvitationInputBody {
 
 export interface CreatePlanInputBody {
   environment: string;
+  scope?: string[];
 }
 
 export interface CreateProjectInputBody {
@@ -206,7 +207,7 @@ export interface Deployment {
   orgId: string;
   planId: string;
   projectId: string;
-  source: string;
+  sources: SourceArtifact[];
   startedAt: string;
   startedBy: string;
   status: string;
@@ -370,8 +371,6 @@ export interface Package {
 
 export interface Plan {
   actions: Action[];
-  analysisId: string;
-  commitSha: string;
   connections: Record<string, any>;
   createdAt: string;
   createdBy: string;
@@ -391,6 +390,7 @@ export interface Plan {
   problems: Finding[];
   projectId: string;
   revision: string;
+  sources: PlanSource[];
   status: string;
   summary: PlanningSummary;
   warnings: Finding[];
@@ -398,6 +398,16 @@ export interface Plan {
 
 export interface PlanList {
   plans: Plan[];
+}
+
+export interface PlanSource {
+  alias: string;
+  analysisId: string;
+  commitSha: string;
+  inScope: boolean;
+  repository: string;
+  root: string;
+  sourceId: string;
 }
 
 export interface PlanningSummary {
@@ -571,6 +581,7 @@ export interface Service {
 
 export interface ServiceConfig {
   build?: string;
+  commitSha?: string;
   ecosystem: string;
   env?: EnvLink[];
   execution: string;
@@ -580,6 +591,7 @@ export interface ServiceConfig {
   provider: string;
   public: boolean;
   region?: string;
+  repo?: string;
   scale?: Scale;
   service: string;
   size?: Size;
@@ -611,6 +623,13 @@ export interface Source {
   repository: string;
   root: string;
   updatedAt: string;
+}
+
+export interface SourceArtifact {
+  alias: string;
+  commitSha: string;
+  key: string;
+  repository: string;
 }
 
 export interface SourceList {

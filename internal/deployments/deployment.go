@@ -1,6 +1,7 @@
 // Package deployments carries out approved plans. A deployment is one run
-// of a plan: its source stored as an artifact, then each action built and
-// deployed by its provider's executor, in the plan's order, then checked.
+// of a plan: the commit of each repository it moves stored as an
+// artifact, then each action built from its repository's and deployed by
+// its provider's executor, in the plan's order, then checked.
 // The deployment workflow (internal/orchestration) drives it one durable
 // activity at a time, so a restart resumes where it was.
 package deployments
@@ -46,16 +47,29 @@ type Deployment struct {
 	EnvironmentID string `json:"environment_id"`
 	Environment   string `json:"environment"`
 	PlanID        string `json:"plan_id"`
-	CommitSHA     string `json:"commit_sha"`
-	Status        string `json:"status"`
-	// Source is the artifact key of the commit's tarball, once stored.
-	Source string `json:"source"`
+	// CommitSHA is what the list shows: the commit of the one repository
+	// the deployment moves, or "web@3f2c1a9 api@9a1b02e" when it moves
+	// several.
+	CommitSHA string `json:"commit_sha"`
+	Status    string `json:"status"`
+	// Sources are the repositories the deployment moves, in alias order,
+	// each with its tarball once stored.
+	Sources []SourceArtifact `json:"sources"`
 	// Error says why the deployment failed.
 	Error      string     `json:"error"`
 	Steps      []Step     `json:"steps"`
 	StartedBy  string     `json:"started_by"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at"`
+}
+
+// SourceArtifact is one repository a deployment moves, at the commit its
+// plan pinned. Key is where its tarball is stored, empty until it is.
+type SourceArtifact struct {
+	Alias      string `json:"alias"`
+	Repository string `json:"repository"`
+	CommitSHA  string `json:"commit_sha"`
+	Key        string `json:"key"`
 }
 
 // Step is one action of the plan, as it's carried out.
@@ -88,6 +102,9 @@ func (d *Deployment) normalize() {
 	if d.Steps == nil {
 		d.Steps = []Step{}
 	}
+	if d.Sources == nil {
+		d.Sources = []SourceArtifact{}
+	}
 }
 
 // Step returns the step for an action, or nil.
@@ -109,8 +126,8 @@ type Store interface {
 	// ForPlan returns the plan's deployment, or ErrNotFound.
 	ForPlan(ctx context.Context, orgID, planID string) (*Deployment, error)
 	ListDeployments(ctx context.Context, orgID, projectID string, limit int) ([]*Deployment, error)
-	// SetSource records the stored source.
-	SetSource(ctx context.Context, orgID, id, source string) error
+	// SetSources records the repositories' tarballs as they're stored.
+	SetSources(ctx context.Context, orgID, id string, sources []SourceArtifact) error
 	// UpdateStep writes one step.
 	UpdateStep(ctx context.Context, orgID, id string, s Step) error
 	// Finish settles a running deployment.

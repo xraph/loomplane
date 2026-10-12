@@ -575,7 +575,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Plan an environment from the current manifest and the latest analysis, replacing its open plan
+     * Plan an environment from the current manifest and one commit of each repository, replacing its open plan; a scope moves only some of them
      */
     create: async (id: string, body: types.CreatePlanInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/plans`;
