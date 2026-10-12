@@ -485,7 +485,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * A first manifest proposed from the project's latest analysis, to review before saving
+     * A first manifest drafted from the newest successful analysis of each repository, to review before saving
      */
     draft: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ManifestDraft> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/manifest/draft`;

@@ -35,8 +35,8 @@ type Projects interface {
 	ListEnvironments(ctx context.Context, orgID, projectID string) ([]*projects.Environment, error)
 }
 
-// Services lists the services a project's latest analysis found, by ID,
-// with their names. A project never analyzed has none.
+// Services lists the services in a project's graph, the newest successful
+// analysis of each of its repositories, by ID, with their names. A project never analyzed has none.
 type Services interface {
 	Services(ctx context.Context, orgID, projectID string) (map[string]string, error)
 }
@@ -78,7 +78,7 @@ type CreateVariableInput struct {
 	// every environment.
 	Environment string `json:"environment,omitempty"`
 	// Service sets it for one service of the project, by its ID in the
-	// latest analysis. Only for a project's variables.
+	// project's graph. Only for a project's variables.
 	Service string `json:"service,omitempty"`
 }
 
@@ -147,7 +147,7 @@ func (s *Service) CreateProject(ctx context.Context, p security.Principal, proje
 			return nil, err
 		}
 		if _, ok := known[in.Service]; !ok {
-			return nil, fmt.Errorf("%w: %q isn't a service in the project's latest analysis", ErrInvalid, in.Service)
+			return nil, fmt.Errorf("%w: %q isn't a service in the project's graph; service IDs look like svc:<alias>:<ecosystem>:<path>", ErrInvalid, in.Service)
 		}
 	}
 	v, err := s.build(p, scope, projectID, in)

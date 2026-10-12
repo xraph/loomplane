@@ -14,7 +14,7 @@ import (
 type ResolveQuery struct {
 	// Environment is the environment's name.
 	Environment string `query:"environment"`
-	// Service is a service ID from the project's latest analysis. Without
+	// Service is a service ID from the project's graph. Without
 	// it, the project as a whole: no service variables.
 	Service string `query:"service,omitempty"`
 }

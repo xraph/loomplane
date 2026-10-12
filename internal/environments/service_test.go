@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -280,6 +281,13 @@ func TestService_whoMaySetWhat(t *testing.T) {
 				t.Fatalf("CreateProject: %v, want %v", cerr, tt.want)
 			}
 		})
+	}
+	// An unknown service is named against the whole graph, with a hint at
+	// what an ID looks like now that it carries the repository's alias.
+	_, err = f.svc.CreateProject(ctx, dev, project, CreateVariableInput{Key: "B", Value: "x", Service: "svc:go:gone"})
+	if err == nil || !strings.Contains(err.Error(), "isn't a service in the project's graph") ||
+		!strings.Contains(err.Error(), "svc:<alias>:<ecosystem>:<path>") {
+		t.Fatalf("unknown service: %v", err)
 	}
 	// The same key on another layer, or for one environment, isn't taken.
 	if _, err = f.svc.CreateProject(ctx, dev, project, CreateVariableInput{Key: "A", Value: "3", Environment: "production"}); err != nil {

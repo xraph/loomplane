@@ -1270,7 +1270,7 @@
         "tags": [
           "Manifests"
         ],
-        "summary": "A first manifest proposed from the project's latest analysis, to review before saving",
+        "summary": "A first manifest drafted from the newest successful analysis of each repository, to review before saving",
         "operationId": "manifests.draft",
         "parameters": [
           {

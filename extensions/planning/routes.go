@@ -107,7 +107,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		}},
 		{http.MethodGet, "/projects/:id/manifest/draft", e.draftManifest, []forge.RouteOption{
 			forge.WithName("manifests.draft"),
-			forge.WithSummary("A first manifest proposed from the project's latest analysis, to review before saving"),
+			forge.WithSummary("A first manifest drafted from the newest successful analysis of each repository, to review before saving"),
 			forge.WithResponseSchema(http.StatusOK, "The draft", planning.ManifestDraft{}),
 		}},
 	}
