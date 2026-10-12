@@ -1,0 +1,59 @@
+# Loomplane Client
+
+Loomplane's API: organizations' projects, environments and infrastructure.
+
+Generated client for Loomplane 0.1.0-dev
+
+## Installation
+
+```bash
+npm install @loomplane/authsome-client
+# or
+yarn add @loomplane/authsome-client
+```
+
+## Usage
+
+```typescript
+import { Client } from '@loomplane/authsome-client';
+
+const client = new Client({
+  auth: {
+    bearerToken: 'your-token-here',
+  },
+});
+
+// Use the client
+// const result = await client.someMethod(...);
+```
+
+## Authentication
+
+This API supports the following authentication methods:
+
+### session
+
+- **Type**: http
+- **Scheme**: bearer
+- **Usage**: Pass the token in the `Authorization` header as `Bearer <token>`
+
+### bearerAuth
+
+- **Type**: http
+- **Scheme**: bearer
+- **Bearer Format**: JWT
+- **Usage**: Pass the token in the `Authorization` header as `Bearer <token>`
+
+### session-cookie
+
+- **Type**: apiKey
+- **Location**: cookie
+- **Cookie Name**: auth_token
+
+
+## API Overview
+
+- **Total Endpoints**: 15
+- **REST Endpoints**: 15
+- **Secured Endpoints**: 15
+

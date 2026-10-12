@@ -1,0 +1,26 @@
+packages: []
+
+allowBuilds:
+  esbuild: true
+  msw: false
+
+patchedDependencies:
+  # The same patch tap carries (github.com/xraph/tap-frontend, itself ported
+  # from twinos-app's for 1.7.0). Two fixes, both still missing upstream:
+  #
+  # - fetchClientConfig built its URL with new URL("/v1/client-config", base),
+  #   which drops the base path. Loomplane mounts authsome at /authsome, so
+  #   the SDK would ask the origin root, get a 404, and throw "Failed to fetch
+  #   client config".
+  # - Session refresh takes a cross-tab lock (navigator.locks). Refresh tokens
+  #   rotate, so two tabs refreshing at once would race, one would present a
+  #   spent token, and reuse detection could sign the user out everywhere.
+  #   The generated API client's 401 handling relies on it.
+  "@authsome/ui-core@1.7.2": patches/@authsome__ui-core@1.7.2.patch
+  # authsome's paged organization endpoint (the version Loomplane's go.mod
+  # pins) answers { organizations, next_cursor }, but useOrganizations in
+  # 1.7.2, and in authsome's own source at the time of writing, reads
+  # { items, total }. Without this, authsome's OrgSwitcher lists nothing and
+  # shows "Select organization". Drop it once authsome's SDK reads the paged
+  # shape.
+  "@authsome/ui-react@1.7.2": patches/@authsome__ui-react@1.7.2.patch
