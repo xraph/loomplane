@@ -61,6 +61,7 @@ type Config struct {
 	GitHub        GitHubConfig
 	Analysis      AnalysisConfig
 	Planning      PlanningConfig
+	Clouds        CloudsConfig
 	Worker        WorkerConfig
 }
 
@@ -169,6 +170,16 @@ type PlanningConfig struct {
 	ApprovalWindow time.Duration
 }
 
+// CloudsConfig points Loomplane's cloud clients somewhere other than the
+// clouds' own APIs, for tests. Leave both empty in every real
+// deployment.
+type CloudsConfig struct {
+	// GoogleEndpoint replaces every Google Cloud API host.
+	GoogleEndpoint string
+	// VercelEndpoint replaces Vercel's API.
+	VercelEndpoint string
+}
+
 // Bounds on the approval window: long enough to reach a person, short
 // enough that an approved plan still describes the world.
 const (
@@ -272,6 +283,8 @@ func FromSource(src Getter) (Config, error) {
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
+	r.str(&c.Clouds.GoogleEndpoint, "clouds.google_endpoint")
+	r.str(&c.Clouds.VercelEndpoint, "clouds.vercel_endpoint")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err

@@ -156,6 +156,29 @@ func (c *client) do(method, path string, body any, out any) int {
 	return res.StatusCode
 }
 
+// raw returns a response's body as text, whatever its status.
+func (c *client) raw(method, path string) string {
+	c.t.Helper()
+	req, err := http.NewRequestWithContext(c.t.Context(), method, c.base+path, nil)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	req.Header.Set("X-Publishable-Key", c.key)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return string(data)
+}
+
 func (c *client) must(want int, method, path string, body, out any) {
 	c.t.Helper()
 	if got := c.do(method, path, body, out); got != want {

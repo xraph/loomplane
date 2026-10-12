@@ -69,6 +69,13 @@ planning:
   # expires. Between 1m and 2160h (90 days).
   approval_window: "${LOOMPLANE_PLANNING_APPROVAL_WINDOW:-168h}"
 
+# Where Loomplane's cloud clients send requests. Leave these empty: they
+# exist so tests can stand a fake Google Cloud or Vercel in for the real
+# ones.
+clouds:
+  google_endpoint: "${LOOMPLANE_GOOGLE_ENDPOINT:-}"
+  vercel_endpoint: "${LOOMPLANE_VERCEL_ENDPOINT:-}"
+
 worker:
   # Where loomplane-worker serves its health checks, and nothing else.
   http_addr: "${LOOMPLANE_WORKER_HTTP_ADDR:-}"

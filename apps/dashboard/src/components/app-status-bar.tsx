@@ -1,6 +1,7 @@
 // The status bar with what Loomplane can report today: the deployment
-// engine and its clouds, and whether GitHub is connected.
+// engine, the clouds it deploys to, and whether GitHub is connected.
 import {
+  useConnectionsList,
   useGithubStatus,
   useInfrastructureGet,
 } from "@/client/forge/loomplane/hooks"
@@ -13,7 +14,10 @@ export function AppStatusBar() {
   const { openCommand, openShortcuts } = useShell()
   const infra = useQuery(useInfrastructureGet)
   const github = useQuery(useGithubStatus)
-  const clouds = infra.data?.providers.length ?? 0
+  const connections = useQuery(useConnectionsList)
+  const all = connections.data?.connections ?? []
+  const clouds = all.length
+  const unready = all.filter((c) => c.status !== "ready").length
   const installs = github.data?.installations.length ?? 0
 
   return (
@@ -32,21 +36,27 @@ export function AppStatusBar() {
           Engine unknown
         </StatusItem>
       )}
-      {infra.data && (
+      {connections.data && (
         <StatusItem
           hint={
-            clouds
-              ? infra.data.providers.map((p) => p.name).join(", ")
-              : "Clouds arrive with deployments"
+            clouds === 0
+              ? "Connect Google Cloud or Vercel under Integrations to deploy"
+              : unready > 0
+                ? `${unready} of them ${unready === 1 ? "needs" : "need"} attention under Integrations`
+                : all.map((c) => c.name).join(", ")
           }
           className="hidden sm:flex"
         >
-          <StatusLight tone={clouds ? "ok" : "idle"} />
-          {clouds === 0
-            ? "No clouds connected"
-            : clouds === 1
-              ? "1 cloud"
-              : `${clouds} clouds`}
+          <Link to="/integrations" className="flex items-center gap-1.5">
+            <StatusLight
+              tone={clouds === 0 ? "idle" : unready > 0 ? "warn" : "ok"}
+            />
+            {clouds === 0
+              ? "No clouds connected"
+              : clouds === 1
+                ? "1 cloud"
+                : `${clouds} clouds`}
+          </Link>
         </StatusItem>
       )}
       {github.data && (

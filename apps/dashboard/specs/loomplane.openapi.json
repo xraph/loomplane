@@ -71,6 +71,191 @@
         }
       }
     },
+    "/api/v1/connections": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "The organization's cloud connections, never their credentials",
+        "operationId": "connections.list",
+        "responses": {
+          "200": {
+            "description": "Connections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Connect a Google Cloud project or a Vercel account, checking the credential with the cloud first",
+        "operationId": "connections.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "One cloud connection",
+        "operationId": "connections.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "connections.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Remove a cloud connection and its credential",
+        "tags": [
+          "Cloud connections"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "Connection"
+        }
+      }
+    },
+    "/api/v1/connections/{id}/check": {
+      "post": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Ask the cloud again what the connection's credential may do",
+        "operationId": "connections.check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/credential": {
+      "put": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Replace the connection's credential, such as with a rotated key",
+        "operationId": "connections.replace",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/github": {
       "get": {
         "tags": [
@@ -1648,6 +1833,86 @@
           }
         }
       },
+      "Connection": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "cloud",
+          "name",
+          "account",
+          "details",
+          "status",
+          "missing",
+          "message",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConnectionList": {
+        "properties": {
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Connection"
+            }
+          }
+        },
+        "required": [
+          "connections"
+        ],
+        "type": "object",
+        "x-forge-envelope": "connections"
+      },
       "CreateEnvironmentInputBody": {
         "type": "object",
         "required": [
@@ -1659,6 +1924,29 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CreateInputBody": {
+        "type": "object",
+        "required": [
+          "cloud",
+          "name",
+          "credential"
+        ],
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
@@ -2653,6 +2941,21 @@
           },
           "publishable_key": {
             "type": "string"
+          }
+        }
+      },
+      "ReplaceInputBody": {
+        "type": "object",
+        "required": [
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },

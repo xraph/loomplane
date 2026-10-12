@@ -6,6 +6,8 @@ export const entities = {
   'AnalysisList': { fields: { 'analyses': 'Analysis' } },
   'Binding': { idField: 'id' },
   'BindingList': { fields: { 'bindings': 'Binding' } },
+  'Connection': { idField: 'id' },
+  'ConnectionList': { fields: { 'connections': 'Connection' } },
   'Environment': { idField: 'id' },
   'EnvironmentList': { fields: { 'environments': 'Environment' } },
   'GitHubInstallation': { idField: 'id' },

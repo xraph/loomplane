@@ -28,6 +28,7 @@ import (
 	groveext "github.com/xraph/grove/extension"
 
 	"github.com/xraph/loomplane/database/migrations"
+	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	"github.com/xraph/loomplane/extensions/identity"
@@ -128,6 +129,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		projectsext.New(cfg, jobs.Engine),
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
+		connectionsext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),

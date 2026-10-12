@@ -10,6 +10,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { GitHubInstallation } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { CloudConnections } from "@/components/cloud-connections"
 import { Page, PageHeading } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -59,7 +60,7 @@ export function Integrations() {
       <Page>
         <PageHeading
           title="Integrations"
-          description="Where Loomplane reads your code from."
+          description="Where Loomplane reads your code from, and the clouds it deploys to."
         />
 
         <Card>
@@ -162,6 +163,8 @@ export function Integrations() {
             )}
           </CardContent>
         </Card>
+
+        <CloudConnections />
       </Page>
     </>
   )

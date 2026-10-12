@@ -33,6 +33,7 @@ func Group() *migrate.Group {
 		statements("20261012000003", "create_variables", variablesUp, variablesDown),
 		statements("20261012000004", "add_project_style", projectStyleUp, projectStyleDown),
 		statements("20261012000005", "create_planning", planningUp, planningDown),
+		statements("20261012000006", "create_cloud_connections", cloudConnectionsUp, cloudConnectionsDown),
 	)
 	return g
 }
@@ -299,4 +300,31 @@ var planningDown = []string{
 	`DROP TABLE IF EXISTS loomplane_bindings`,
 	`DROP TABLE IF EXISTS loomplane_plans`,
 	`DROP TABLE IF EXISTS loomplane_manifests`,
+}
+
+// A cloud account an organization deploys to. The credential isn't here:
+// it's in Vault, encrypted, under the organization's and the connection's
+// IDs. details holds what's safe to show about it, such as a service
+// account's email.
+var cloudConnectionsUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_cloud_connections (
+		id         TEXT        PRIMARY KEY,
+		org_id     TEXT        NOT NULL,
+		cloud      TEXT        NOT NULL,
+		name       TEXT        NOT NULL,
+		account    TEXT        NOT NULL DEFAULT '',
+		details    JSONB       NOT NULL DEFAULT '{}',
+		status     TEXT        NOT NULL,
+		missing    JSONB       NOT NULL DEFAULT '[]',
+		message    TEXT        NOT NULL DEFAULT '',
+		checked_at TIMESTAMPTZ,
+		created_by TEXT        NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL,
+		updated_at TIMESTAMPTZ NOT NULL,
+		CONSTRAINT loomplane_cloud_connections_org_name UNIQUE (org_id, name)
+	)`,
+}
+
+var cloudConnectionsDown = []string{
+	`DROP TABLE IF EXISTS loomplane_cloud_connections`,
 }

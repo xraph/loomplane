@@ -10,10 +10,16 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { Analysis, AnalysisGraph, AnalysisList, BindingList, ConnectedRepositoryList, Environment, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Variable, VariableList } from './types';
+import type { Analysis, AnalysisGraph, AnalysisList, BindingList, ConnectedRepositoryList, Connection, ConnectionList, Environment, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Variable, VariableList } from './types';
 
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
 export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
+export const useConnectionsList = query<ConnectionList>(ops['connections.list']);
+export const useConnectionsCreate = mutation<Connection, Connection>(ops['connections.create']);
+export const useConnectionsGet = query<Connection>(ops['connections.get']);
+export const useConnectionsDelete = mutation(ops['connections.delete']);
+export const useConnectionsCheck = mutation<Connection, Connection>(ops['connections.check']);
+export const useConnectionsReplace = mutation<Connection, Connection>(ops['connections.replace']);
 export const useGithubStatus = query<GitHubStatus>(ops['github.status']);
 export const useGithubConnect = mutation<GitHubInstallation, GitHubInstallation>(ops['github.connect']);
 export const useGithubDisconnect = mutation(ops['github.disconnect']);

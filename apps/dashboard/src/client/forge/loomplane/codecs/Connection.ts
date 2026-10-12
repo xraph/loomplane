@@ -1,0 +1,5 @@
+import type { Codec } from '../codec-runtime';
+import { codec_Connection_details } from './Connection.details';
+import { codec_Connection_missing } from './Connection.missing';
+
+export const codec_Connection: Codec = {"kind": "object", "fields": {"account": {"ts": "account"}, "checked_at": {"ts": "checkedAt"}, "cloud": {"ts": "cloud"}, "created_at": {"ts": "createdAt"}, "created_by": {"ts": "createdBy"}, "details": {"ts": "details", "codec": () => codec_Connection_details}, "id": {"ts": "id"}, "message": {"ts": "message"}, "missing": {"ts": "missing", "codec": () => codec_Connection_missing}, "name": {"ts": "name"}, "org_id": {"ts": "orgId"}, "status": {"ts": "status"}, "updated_at": {"ts": "updatedAt"}}, "required": ["account", "cloud", "created_at", "created_by", "details", "id", "message", "missing", "name", "org_id", "status", "updated_at"]};

@@ -108,9 +108,36 @@ export interface ConnectedRepositoryList {
   repositories: ConnectedRepository[];
 }
 
+export interface Connection {
+  account: string;
+  checkedAt?: string;
+  cloud: string;
+  createdAt: string;
+  createdBy: string;
+  details: Record<string, any>;
+  id: string;
+  message: string;
+  missing: string[];
+  name: string;
+  orgId: string;
+  status: string;
+  updatedAt: string;
+}
+
+export interface ConnectionList {
+  connections: Connection[];
+}
+
 export interface CreateEnvironmentInputBody {
   kind?: string;
   name: string;
+}
+
+export interface CreateInputBody {
+  cloud: string;
+  credential: string;
+  name: string;
+  settings?: Record<string, any>;
 }
 
 export interface CreateInvitationInputBody {
@@ -389,6 +416,11 @@ export interface PublicConfig {
   appId: string;
   authBasePath: string;
   publishableKey: string;
+}
+
+export interface ReplaceInputBody {
+  credential: string;
+  settings?: Record<string, any>;
 }
 
 export interface Resolution {
