@@ -223,11 +223,18 @@ What we found wiring it, each worked around in the generated program:
 
 FARP isn't used: a gateway's routes come from the manifest, not from live discovery.
 
+## Keysmith
+
+Loomplane's API keys, for the CLI, CI and scripts, are Keysmith keys (`internal/apikeys`), on Keysmith's Postgres store, migrated with everything else. A key is `lp_live_` and 64 hex characters, shown once, stored as a hash. Keysmith's tenant is the organization and its app the authsome app; the member who made a key is its `CreatedBy`, and whether it may write is in its metadata, since Keysmith refuses scopes nobody registered.
+
+A key acts as its maker, in its organization: the identity guard turns it into the same `security.Principal` a session gives, so every route's Warden check applies unchanged, and a member who leaves takes their keys' rights with them. A read-only key fails any permission whose action isn't `read`. Keys can't manage keys. Every key expires, after 90 days unless you choose up to a year.
+
+authsome has API keys of its own, backed by Keysmith when it's given one, but they belong to a user with no organization and need an `X-App-ID` header, which doesn't fit an organization-scoped API. Its middleware only treats `ask_`, `sk_` and `pk_` tokens as keys, so `lp_` never reaches it: the guard checks a Loomplane key before authsome sees the request.
+
 ## Evaluated, not wired yet
 
 | Library | When |
 |---|---|
-| Keysmith | Milestone 6, for CLI and automation API keys |
 | Relay, Herald | When deployments exist to notify about |
 | FARP | Live API discovery, if gateways ever route by schema instead of by path |
 | Forge dashboard extension | Possibly, for an operator view of Dispatch and Ctrl Plane. The product dashboard is `apps/dashboard`. |

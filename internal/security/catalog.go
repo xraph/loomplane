@@ -10,6 +10,10 @@ type Permission struct {
 // Name is the permission as Warden names it.
 func (p Permission) Name() string { return p.Resource + ":" + p.Action }
 
+// Reads reports whether the permission only reads, which is all a
+// read-only API key may do.
+func (p Permission) Reads() bool { return p.Action == "read" }
+
 // The permissions Loomplane checks. Later milestones check the deployment,
 // cloud account and secret ones; they're in the catalog now so a role's
 // meaning doesn't change under existing members when those ship.

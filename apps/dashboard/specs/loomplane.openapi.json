@@ -71,6 +71,86 @@
         }
       }
     },
+    "/api/v1/api-keys": {
+      "get": {
+        "tags": [
+          "API keys"
+        ],
+        "summary": "Your API keys in this organization, or everyone's for an owner or admin",
+        "operationId": "apiKeys.list",
+        "responses": {
+          "200": {
+            "description": "The keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "API keys"
+        ],
+        "summary": "Make an API key that acts as you here. The secret is shown once.",
+        "operationId": "apiKeys.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The key, with its secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedKey"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/api-keys/{id}": {
+      "delete": {
+        "operationId": "apiKeys.revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Revoke an API key, at once",
+        "tags": [
+          "API keys"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "APIKey"
+        }
+      }
+    },
     "/api/v1/connections": {
       "get": {
         "tags": [
@@ -1716,6 +1796,65 @@
   },
   "components": {
     "schemas": {
+      "APIKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "access",
+          "hint",
+          "created_by",
+          "state",
+          "created_at"
+        ],
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "APIKeyList": {
+        "type": "object",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/APIKey"
+            }
+          }
+        }
+      },
       "Action": {
         "type": "object",
         "required": [
@@ -2308,6 +2447,21 @@
           }
         }
       },
+      "CreatedKey": {
+        "type": "object",
+        "required": [
+          "key",
+          "secret"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/APIKey"
+          },
+          "secret": {
+            "type": "string"
+          }
+        }
+      },
       "DecideInputBody": {
         "type": "object",
         "properties": {
@@ -2806,6 +2960,24 @@
             "x-forge-id": true
           },
           "yaml": {
+            "type": "string"
+          }
+        }
+      },
+      "NewKeyBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "access"
+        ],
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "expires_in_days": {
+            "type": "integer"
+          },
+          "name": {
             "type": "string"
           }
         }

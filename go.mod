@@ -30,6 +30,7 @@ require (
 	github.com/xraph/grove v1.7.3
 	github.com/xraph/grove/drivers/pgdriver v1.7.3
 	github.com/xraph/grove/extension v1.7.3
+	github.com/xraph/keysmith v1.7.1
 	github.com/xraph/trove v1.7.0
 	github.com/xraph/vault v1.7.1
 	github.com/xraph/warden v1.7.2
@@ -139,7 +140,6 @@ require (
 	github.com/xraph/grove/drivers/sqlitedriver v1.7.3 // indirect
 	github.com/xraph/grove/kv v1.7.3 // indirect
 	github.com/xraph/grove/kv/drivers/redisdriver v1.7.3 // indirect
-	github.com/xraph/keysmith v1.7.0 // indirect
 	github.com/xraph/ledger v1.7.0 // indirect
 	github.com/xraph/vessel v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect

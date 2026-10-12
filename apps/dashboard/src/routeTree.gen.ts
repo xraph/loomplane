@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
+import { Route as ApiKeysRouteImport } from "./routes/api-keys"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
 import { Route as SignInRouteImport } from "./routes/sign-in"
@@ -23,6 +24,11 @@ import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integratio
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiKeysRoute = ApiKeysRouteImport.update({
+  id: "/api-keys",
+  path: "/api-keys",
   getParentRoute: () => rootRouteImport,
 } as any)
 const InfrastructureRoute = InfrastructureRouteImport.update({
@@ -73,6 +79,7 @@ const IntegrationsGithubSetupRoute = IntegrationsGithubSetupRouteImport.update({
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
+  "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
   "/sign-in": typeof SignInRoute
@@ -85,6 +92,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
+  "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
   "/sign-in": typeof SignInRoute
@@ -98,6 +106,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
+  "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
   "/sign-in": typeof SignInRoute
@@ -112,6 +121,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | "/"
+    | "/api-keys"
     | "/infrastructure"
     | "/members"
     | "/sign-in"
@@ -124,6 +134,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
+    | "/api-keys"
     | "/infrastructure"
     | "/members"
     | "/sign-in"
@@ -136,6 +147,7 @@ export interface FileRouteTypes {
   id:
     | "__root__"
     | "/"
+    | "/api-keys"
     | "/infrastructure"
     | "/members"
     | "/sign-in"
@@ -149,6 +161,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiKeysRoute: typeof ApiKeysRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
   SignInRoute: typeof SignInRoute
@@ -167,6 +180,13 @@ declare module "@tanstack/react-router" {
       path: "/"
       fullPath: "/"
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/api-keys": {
+      id: "/api-keys"
+      path: "/api-keys"
+      fullPath: "/api-keys"
+      preLoaderRoute: typeof ApiKeysRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/infrastructure": {
@@ -237,6 +257,7 @@ declare module "@tanstack/react-router" {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiKeysRoute: ApiKeysRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
   SignInRoute: SignInRoute,

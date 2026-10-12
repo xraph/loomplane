@@ -14,6 +14,7 @@ import (
 	cppg "github.com/xraph/ctrlplane/store/postgres"
 	dispatchpg "github.com/xraph/dispatch/store/postgres"
 	"github.com/xraph/grove/migrate"
+	kspg "github.com/xraph/keysmith/store/postgres"
 	vaultpg "github.com/xraph/vault/store/postgres"
 	wardenpg "github.com/xraph/warden/store/postgres"
 )
@@ -56,6 +57,7 @@ func All() []*migrate.Group {
 		dispatchpg.Migrations,
 		cppg.Migrations,
 		vaultpg.Migrations,
+		kspg.Migrations,
 	}
 }
 

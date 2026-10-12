@@ -9,6 +9,23 @@ export enum ConnectionState {
   ERROR = 'error',
 }
 
+export interface APIKey {
+  access: string;
+  createdAt: string;
+  createdBy: string;
+  expiresAt?: string;
+  hint: string;
+  id: string;
+  lastUsedAt?: string;
+  name: string;
+  revokedAt?: string;
+  state: string;
+}
+
+export interface APIKeyList {
+  keys: APIKey[];
+}
+
 export interface Action {
   changes?: Change[];
   creates: string;
@@ -182,6 +199,11 @@ export interface CreatedInvitation {
   invitation: OrgInvitation;
 }
 
+export interface CreatedKey {
+  key: APIKey;
+  secret: string;
+}
+
 export interface DecideInputBody {
   note?: string;
   revision?: string;
@@ -320,6 +342,12 @@ export interface ManifestDraft {
   manifest?: Manifest;
   projectId: string;
   yaml: string;
+}
+
+export interface NewKeyBody {
+  access: string;
+  expiresInDays?: number;
+  name: string;
 }
 
 export interface Note {

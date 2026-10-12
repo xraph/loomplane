@@ -73,6 +73,59 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly apiKeys = {
+    /**
+     * Make an API key that acts as you here. The secret is shown once.
+     */
+    create: async (body: types.NewKeyBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CreatedKey> => {
+      let __path = `/api/v1/api-keys`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NewKeyBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CreatedKey"],
+      };
+
+      return this.request<types.CreatedKey>(config);
+    },
+
+    /**
+     * Your API keys in this organization, or everyone's for an owner or admin
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.APIKeyList> => {
+      let __path = `/api/v1/api-keys`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["APIKeyList"],
+      };
+
+      return this.request<types.APIKeyList>(config);
+    },
+
+    /**
+     * Revoke an API key, at once
+     */
+    revoke: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/api-keys/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+  };
+
   public readonly bindings = {
     /**
      * What runs each of the project's services and resources in an environment

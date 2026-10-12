@@ -96,6 +96,31 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['AnalysisGraph'],
   },
+  'apiKeys.list': {
+    method: 'GET',
+    path: '/api/v1/api-keys',
+    entity: 'APIKey',
+    rootType: 'APIKeyList',
+    provides: ['APIKey:{id}', 'APIKey[]'],
+    invalidates: [],
+    responseCodec: CODECS['APIKeyList'],
+  },
+  'apiKeys.create': {
+    method: 'POST',
+    path: '/api/v1/api-keys',
+    rootType: 'CreatedKey',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['NewKeyBody'],
+    responseCodec: CODECS['CreatedKey'],
+  },
+  'apiKeys.revoke': {
+    method: 'DELETE',
+    path: '/api/v1/api-keys/{id}',
+    entity: 'APIKey',
+    provides: [],
+    invalidates: ['APIKey[]'],
+  },
   'connections.list': {
     method: 'GET',
     path: '/api/v1/connections',
@@ -538,6 +563,8 @@ export const ops = {
 } as const satisfies Record<string, OperationMeta>;
 
 export const entities = {
+  'APIKey': { idField: 'id' },
+  'APIKeyList': { fields: { 'keys': 'APIKey' } },
   'Analysis': { idField: 'id' },
   'AnalysisGraph': { idField: 'id' },
   'AnalysisList': { fields: { 'analyses': 'Analysis' } },
@@ -545,6 +572,7 @@ export const entities = {
   'BindingList': { fields: { 'bindings': 'Binding' } },
   'Connection': { idField: 'id' },
   'ConnectionList': { fields: { 'connections': 'Connection' } },
+  'CreatedKey': { fields: { 'key': 'APIKey' } },
   'Deployment': { idField: 'id' },
   'DeploymentList': { fields: { 'deployments': 'Deployment' } },
   'Environment': { idField: 'id' },

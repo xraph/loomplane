@@ -29,10 +29,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": api,
-      "/authsome": api,
+      // Each prefix ends in a slash, so a page such as /api-keys stays
+      // with the dashboard.
+      "/api/": api,
+      "/authsome/": api,
       "/openapi.json": api,
-      "/_": api,
+      "/_/": api,
     },
   },
   build: {

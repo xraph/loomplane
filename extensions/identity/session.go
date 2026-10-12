@@ -40,7 +40,7 @@ func (e *Extension) routes(r forge.Router) error {
 	); err != nil {
 		return err
 	}
-	v1 := r.Group("/api/v1", forge.WithGroupMiddleware(e.middleware()...), forge.WithGroupTags("Identity"))
+	v1 := r.Group("/api/v1", forge.WithGroupMiddleware(e.guard()), forge.WithGroupTags("Identity"))
 	if err := v1.GET("/session", e.getSession,
 		forge.WithName("session.get"),
 		forge.WithSummary("The signed-in user, their active organization and their permissions in it"),
@@ -48,7 +48,10 @@ func (e *Extension) routes(r forge.Router) error {
 	); err != nil {
 		return err
 	}
-	return e.memberRoutes(v1)
+	if err := e.memberRoutes(v1); err != nil {
+		return err
+	}
+	return e.keyRoutes(r)
 }
 
 func (e *Extension) getSession(c forge.Context) error {

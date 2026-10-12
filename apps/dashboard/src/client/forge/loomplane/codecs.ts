@@ -14,6 +14,9 @@ import { decode as decodeRef, encode as encodeRef } from './codec-runtime';
 export type { Codec, CodecRef } from './codec-runtime';
 
 export const CODECS: Record<string, Codec> = {
+  "APIKey": {"kind": "object", "fields": {"access": {"ts": "access"}, "created_at": {"ts": "createdAt"}, "created_by": {"ts": "createdBy"}, "expires_at": {"ts": "expiresAt"}, "hint": {"ts": "hint"}, "id": {"ts": "id"}, "last_used_at": {"ts": "lastUsedAt"}, "name": {"ts": "name"}, "revoked_at": {"ts": "revokedAt"}, "state": {"ts": "state"}}, "required": ["access", "created_at", "created_by", "hint", "id", "name", "state"]},
+  "APIKeyList": {"kind": "object", "fields": {"keys": {"ts": "keys", "codec": () => CODECS["APIKeyList.keys"]}}, "required": ["keys"]},
+  "APIKeyList.keys": {"kind": "array", "items": () => CODECS["APIKey"]},
   "Action": {"kind": "object", "fields": {"changes": {"ts": "changes", "codec": () => CODECS["Action.changes"]}, "creates": {"ts": "creates"}, "depends_on": {"ts": "dependsOn", "codec": () => CODECS["Action.depends_on"]}, "engine": {"ts": "engine"}, "id": {"ts": "id"}, "name": {"ts": "name"}, "op": {"ts": "op"}, "provider": {"ts": "provider"}, "reason": {"ts": "reason"}, "region": {"ts": "region"}, "resource": {"ts": "resource", "codec": () => CODECS["ResourceConfig"]}, "service": {"ts": "service", "codec": () => CODECS["ServiceConfig"]}, "step": {"ts": "step"}, "subject": {"ts": "subject"}}, "required": ["creates", "engine", "id", "name", "op", "provider", "reason", "step", "subject"]},
   "Action.changes": {"kind": "array", "items": () => CODECS["Change"]},
   "Action.depends_on": {"kind": "array"},
@@ -45,6 +48,7 @@ export const CODECS: Record<string, Codec> = {
   "CreateProjectInputBody": {"kind": "object", "fields": {"color": {"ts": "color"}, "description": {"ts": "description"}, "icon": {"ts": "icon"}, "name": {"ts": "name"}, "repository_url": {"ts": "repositoryUrl"}, "slug": {"ts": "slug"}}, "required": ["name"]},
   "CreateVariableInputBody": {"kind": "object", "fields": {"environment": {"ts": "environment"}, "key": {"ts": "key"}, "secret": {"ts": "secret"}, "service": {"ts": "service"}, "value": {"ts": "value"}}, "required": ["key", "value"]},
   "CreatedInvitation": {"kind": "object", "fields": {"accept_path": {"ts": "acceptPath"}, "invitation": {"ts": "invitation", "codec": () => CODECS["OrgInvitation"]}}, "required": ["accept_path", "invitation"]},
+  "CreatedKey": {"kind": "object", "fields": {"key": {"ts": "key", "codec": () => CODECS["APIKey"]}, "secret": {"ts": "secret"}}, "required": ["key", "secret"]},
   "DecideInputBody": {"kind": "object", "fields": {"note": {"ts": "note"}, "revision": {"ts": "revision"}}},
   "Defaults": {"kind": "object", "fields": {"provider": {"ts": "provider"}, "region": {"ts": "region"}}},
   "Deployment": {"kind": "object", "fields": {"commit_sha": {"ts": "commitSha"}, "environment": {"ts": "environment"}, "environment_id": {"ts": "environmentId"}, "error": {"ts": "error"}, "finished_at": {"ts": "finishedAt"}, "id": {"ts": "id"}, "org_id": {"ts": "orgId"}, "plan_id": {"ts": "planId"}, "project_id": {"ts": "projectId"}, "retries": {"ts": "retries"}, "source": {"ts": "source"}, "started_at": {"ts": "startedAt"}, "started_by": {"ts": "startedBy"}, "status": {"ts": "status"}, "steps": {"ts": "steps", "codec": () => CODECS["Deployment.steps"]}}, "required": ["commit_sha", "environment", "environment_id", "error", "id", "org_id", "plan_id", "project_id", "retries", "source", "started_at", "started_by", "status", "steps"]},
@@ -83,6 +87,7 @@ export const CODECS: Record<string, Codec> = {
   "Manifest.resources": {"kind": "record"},
   "Manifest.services": {"kind": "record"},
   "ManifestDraft": {"kind": "object", "fields": {"analysis_id": {"ts": "analysisId"}, "commit_sha": {"ts": "commitSha"}, "manifest": {"ts": "manifest", "codec": () => CODECS["Manifest"]}, "project_id": {"ts": "projectId"}, "yaml": {"ts": "yaml"}}, "required": ["analysis_id", "commit_sha", "project_id", "yaml"]},
+  "NewKeyBody": {"kind": "object", "fields": {"access": {"ts": "access"}, "expires_in_days": {"ts": "expiresInDays"}, "name": {"ts": "name"}}, "required": ["access", "name"]},
   "Note": {"kind": "object", "fields": {"message": {"ts": "message"}, "path": {"ts": "path"}}, "required": ["message"]},
   "OrgInvitation": {"kind": "object", "fields": {"created_at": {"ts": "createdAt"}, "email": {"ts": "email"}, "expires_at": {"ts": "expiresAt"}, "id": {"ts": "id"}, "invited_by": {"ts": "invitedBy"}, "role": {"ts": "role"}}, "required": ["created_at", "email", "expires_at", "id", "invited_by", "role"]},
   "OrgInvitationList": {"kind": "object", "fields": {"invitations": {"ts": "invitations", "codec": () => CODECS["OrgInvitationList.invitations"]}}, "required": ["invitations"]},

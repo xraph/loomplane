@@ -51,7 +51,7 @@ import { useOrganization } from "@/lib/organization"
 import { projectStyle } from "@/lib/project-style"
 import { Link, usePath } from "@/lib/router"
 
-const settingsPaths = ["/members", "/variables", "/integrations"]
+const settingsPaths = ["/members", "/variables", "/integrations", "/api-keys"]
 
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
@@ -90,6 +90,11 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           title: "Integrations",
           link: <Link to="/integrations" />,
           isActive: path.startsWith("/integrations"),
+        },
+        {
+          title: "API keys",
+          link: <Link to="/api-keys" />,
+          isActive: path.startsWith("/api-keys"),
         },
       ],
     },

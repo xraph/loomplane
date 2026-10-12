@@ -32,6 +32,11 @@ const HeaderOrganization = "X-Loomplane-Org"
 type Principal struct {
 	UserID string
 	OrgID  string
+	// KeyID is the API key the request came with, if it came with one. A
+	// key acts as the member who made it.
+	KeyID string
+	// ReadOnly limits the request to reading, whatever the member's role.
+	ReadOnly bool
 }
 
 type principalKey struct{}
