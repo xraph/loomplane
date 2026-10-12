@@ -37,10 +37,10 @@ func Group() *migrate.Group {
 		statements("20261012000007", "create_environment_connections", environmentConnectionsUp, environmentConnectionsDown),
 		statements("20261012000008", "create_deployments", deploymentsUp, deploymentsDown),
 		statements("20261012000009", "add_binding_url", bindingURLUp, bindingURLDown),
-		statements("20261013000001", "create_project_sources", sourcesUp, sourcesDown),
-		statements("20261013000002", "create_plan_sources", planSourcesUp, planSourcesDown),
-		statements("20261013000003", "add_deployment_sources", deploymentSourcesUp, deploymentSourcesDown),
-		statements("20261013000004", "backfill_environment_sources", environmentSourcesBackfillUp, environmentSourcesBackfillDown),
+		statements("20261014000001", "create_project_sources", sourcesUp, sourcesDown),
+		statements("20261014000002", "create_plan_sources", planSourcesUp, planSourcesDown),
+		statements("20261014000003", "add_deployment_sources", deploymentSourcesUp, deploymentSourcesDown),
+		statements("20261014000004", "backfill_environment_sources", environmentSourcesBackfillUp, environmentSourcesBackfillDown),
 	)
 	return g
 }
