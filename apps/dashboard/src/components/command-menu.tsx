@@ -6,12 +6,21 @@ import {
   KeyboardIcon,
   MoonIcon,
   PlugIcon,
+  ScanSearchIcon,
   ServerIcon,
   UsersIcon,
 } from "lucide-react"
+import { toast } from "sonner"
 
-import { useProjectsList } from "@/client/forge/loomplane/hooks"
-import { useQuery } from "@/client/hooks"
+import { messageOf } from "@/client/errors"
+import {
+  useAnalysesCreate,
+  useAnalysesList,
+  useProjectsGraph,
+  useProjectsList,
+  useSourcesList,
+} from "@/client/forge/loomplane/hooks"
+import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { useShell } from "@/components/shell"
 import { useTheme } from "@/components/theme-provider"
 import {
@@ -24,10 +33,44 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
+import { analyzeItems, projectIDFromPath } from "@/lib/command-menu"
 import { repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
-import { useNavigate } from "@/lib/router"
+import { useNavigate, usePath } from "@/lib/router"
+
+/**
+ * RepositoryActions offers to analyze the repositories of the project the
+ * page is on. It is only mounted while the menu is open, so the sources are
+ * only loaded then.
+ */
+function RepositoryActions({
+  projectID,
+  onAnalyze,
+}: {
+  projectID: string
+  onAnalyze: (projectID: string, alias?: string) => void
+}) {
+  const { can } = useOrganization()
+  const sources = useQuery(useSourcesList, { path: { id: projectID } })
+  const items = analyzeItems(sources.data?.sources ?? [], can("analysis:run"))
+  if (items.length === 0) return null
+  return (
+    <CommandGroup heading="Repositories">
+      {items.map((item) => (
+        <CommandItem
+          key={item.key || "all"}
+          value={item.search}
+          onSelect={() => onAnalyze(projectID, item.alias)}
+        >
+          <ScanSearchIcon />
+          {item.label}
+          <span className="truncate text-muted-foreground">{item.detail}</span>
+        </CommandItem>
+      ))}
+    </CommandGroup>
+  )
+}
 
 export function CommandMenu({
   open,
@@ -42,6 +85,30 @@ export function CommandMenu({
   const { theme, setTheme } = useTheme()
   const list = useQuery(useProjectsList)
   const projects = list.data?.projects ?? []
+  const projectID = projectIDFromPath(usePath())
+  const start = useMutation(useAnalysesCreate)
+  const invalidate = useInvalidate()
+
+  // The mutation lives here rather than in the group, so it outlasts the
+  // menu closing. The toast says how it went.
+  const analyze = (id: string, alias?: string) => {
+    onOpenChange(false)
+    start
+      .mutateAsync({
+        path: { id },
+        body: alias ? { sources: [alias] } : {},
+      })
+      .then(() => {
+        invalidate(useAnalysesList, { path: { id } })
+        invalidate(useProjectsGraph, { path: { id } })
+        toast.success(
+          alias ? `Analyzing ${alias}` : "Analyzing every repository"
+        )
+      })
+      .catch((err: unknown) =>
+        toast.error(messageOf(err, "The analysis didn't start."))
+      )
+  }
 
   const run = (fn: () => void) => () => {
     onOpenChange(false)
@@ -129,6 +196,9 @@ export function CommandMenu({
                 )
               })}
             </CommandGroup>
+          )}
+          {projectID && (
+            <RepositoryActions projectID={projectID} onAnalyze={analyze} />
           )}
           <CommandGroup heading="Actions">
             {can("project:create") && (
