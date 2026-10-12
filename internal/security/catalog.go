@@ -22,6 +22,13 @@ var (
 	EnvironmentRead   = Permission{"environment", "read"}
 	EnvironmentManage = Permission{"environment", "manage"}
 
+	// AnalysisRun starts a repository analysis. Reading one only needs
+	// ProjectRead.
+	AnalysisRun = Permission{"analysis", "run"}
+	// RepositoryConnect connects and disconnects a Git host account, such
+	// as a GitHub App installation, for the whole organization.
+	RepositoryConnect = Permission{"repository", "connect"}
+
 	DeploymentRead    = Permission{"deployment", "read"}
 	DeploymentCreate  = Permission{"deployment", "create"}
 	DeploymentApprove = Permission{"deployment", "approve"}
@@ -63,10 +70,11 @@ func Catalog() []RoleDef {
 		ProjectRead, EnvironmentRead, DeploymentRead, InfrastructureRead, CloudAccountRead, MemberRead,
 	}
 	developer := append(clone(viewer),
-		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate,
+		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun,
 	)
 	admin := append(clone(developer),
 		ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
+		RepositoryConnect,
 	)
 	owner := append(clone(admin), OrganizationAdminister)
 	return []RoleDef{

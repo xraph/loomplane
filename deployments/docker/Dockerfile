@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Loomplane in one image: the API, with the dashboard it serves.
+# Loomplane in one image: the API with the dashboard it serves, and the
+# analysis worker. The image runs the API; run the worker from the same
+# image with `--entrypoint loomplane-worker`.
 #
 #   docker build -f deployments/docker/Dockerfile -t loomplane .
 #
@@ -37,17 +39,18 @@ COPY cmd ./cmd
 COPY database ./database
 COPY extensions ./extensions
 COPY internal ./internal
+COPY pkg ./pkg
 ARG VERSION=dev
 RUN --mount=type=cache,id=loomplane-gomod,target=/go/pkg/mod \
     --mount=type=cache,id=loomplane-gobuild,target=/root/.cache/go-build \
     go build -trimpath \
       -ldflags "-s -w -X github.com/xraph/loomplane/internal/platform.Version=${VERSION}" \
-      -o /out/loomplane ./cmd/loomplane
+      -o /out/ ./cmd/loomplane ./cmd/loomplane-worker
 
 FROM alpine:${ALPINE_VERSION}
 RUN apk add --no-cache ca-certificates tzdata \
  && adduser -D -H -u 10001 loomplane
-COPY --from=api /out/loomplane /usr/local/bin/loomplane
+COPY --from=api /out/loomplane /out/loomplane-worker /usr/local/bin/
 COPY --from=dashboard /src/apps/dashboard/dist /usr/share/loomplane/dashboard
 COPY config.yaml /etc/loomplane/config.yaml
 ENV LOOMPLANE_CONFIG_DIR=/etc/loomplane \

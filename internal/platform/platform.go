@@ -27,6 +27,7 @@ import (
 	groveext "github.com/xraph/grove/extension"
 
 	"github.com/xraph/loomplane/database/migrations"
+	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
@@ -116,9 +117,49 @@ func Extensions(cfg config.Config) []forge.Extension {
 		jobs,
 		ctrl,
 		projectsext.New(cfg, jobs.Engine),
+		discoveryext.New(cfg, jobs.Engine),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),
 	}
+}
+
+// NewWorker builds loomplane-worker: the process that analyzes
+// repositories. It works the analysis queue and nothing else, serves only
+// health checks, and never migrates; loomplane owns the schema, so start
+// it first.
+func NewWorker(cfg config.Config) (forge.App, error) {
+	app := forge.New(
+		forge.WithAppName("loomplane-worker"),
+		forge.WithAppVersion(Version),
+		forge.WithAppEnvironment(cfg.Environment),
+		forge.WithHTTPAddress(cfg.Worker.HTTPAddr),
+		forge.WithShutdownTimeout(shutdownTimeout),
+		forge.WithEnvPrefix(forgeEnvPrefix),
+	)
+	for _, ext := range WorkerExtensions(cfg) {
+		if err := app.RegisterExtension(ext); err != nil {
+			return nil, fmt.Errorf("register %s: %w", ext.Name(), err)
+		}
+	}
+	return app, nil
+}
+
+// WorkerExtensions lists loomplane-worker's extensions.
+func WorkerExtensions(cfg config.Config) []forge.Extension {
+	db := groveext.New(
+		groveext.WithDSN("postgres", cfg.Database.URL),
+		groveext.WithDriverFactory("postgres", postgres(cfg.Database.PoolSize)),
+		groveext.WithDisableRoutes(),
+	)
+	jobs := dispatchext.New(
+		dispatchext.WithConcurrency(cfg.Analysis.Concurrency),
+		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
+		dispatchext.WithQueues([]string{orchestration.AnalysisQueue}),
+		dispatchext.WithDisableRoutes(),
+		dispatchext.WithDisableMigrate(),
+	)
+	jobs.SetDependencies([]string{groveext.ExtensionName})
+	return []forge.Extension{db, jobs, discoveryext.NewWorker(cfg, jobs.Engine)}
 }
 
 // postgres opens the pool with Loomplane's settings. Connections are

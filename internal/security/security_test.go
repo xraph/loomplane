@@ -10,6 +10,7 @@ import (
 	authid "github.com/xraph/authsome/id"
 	"github.com/xraph/authsome/organization"
 	"github.com/xraph/warden"
+	"github.com/xraph/warden/permission"
 	"github.com/xraph/warden/store/memory"
 )
 
@@ -23,7 +24,13 @@ const (
 // in-memory store, with members as authsome's membership.
 func newAuthorizer(t *testing.T, members map[string]string) *Authorizer {
 	t.Helper()
-	store := memory.New()
+	return authorizerOver(t, memory.New(), members)
+}
+
+// authorizerOver is newAuthorizer over a given store, as a new process
+// would see it: a fresh engine and no memory of ensured tenants.
+func authorizerOver(t *testing.T, store *memory.Store, members map[string]string) *Authorizer {
+	t.Helper()
 	eng, err := warden.NewEngine(warden.WithStore(store))
 	if err != nil {
 		t.Fatalf("warden: %v", err)
@@ -191,6 +198,28 @@ func TestAuthorizer_ensureTenantIsIdempotent(t *testing.T) {
 	}
 	if len(roles) != len(Catalog()) {
 		t.Fatalf("%d roles after two ensures, want %d", len(roles), len(Catalog()))
+	}
+}
+
+func TestAuthorizer_checksBringOlderTenantsUpToDate(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	old := authorizerOver(t, store, nil)
+	if err := old.Assign(ctx, org, alice, RoleDeveloper, "test"); err != nil {
+		t.Fatal(err)
+	}
+	// What an older Loomplane left behind: a developer role without
+	// analysis:run.
+	dev, err := store.GetRoleBySlug(ctx, org, rootNamespace, RoleDeveloper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SetRolePermissions(ctx, org, dev.ID, []permission.Ref{{NamespacePath: rootNamespace, Name: ProjectRead.Name()}}); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := authorizerOver(t, store, nil)
+	if err := upgraded.Require(ctx, Principal{UserID: alice, OrgID: org}, AnalysisRun, ""); err != nil {
+		t.Fatalf("after an upgrade, a developer can't run an analysis: %v", err)
 	}
 }
 

@@ -9,17 +9,23 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 )
 
-// auditor records project changes in Chronicle, in the organization's
-// stream: tenant = organization, app = Loomplane's authsome app.
-type auditor struct {
+// Auditor records project changes in Chronicle, in the organization's
+// stream: tenant = organization, app = Loomplane's authsome app. The
+// discovery extension records analyses through it too.
+type Auditor struct {
 	chronicle *chronicle.Chronicle
 	appID     string
 	log       forge.Logger
 }
 
+// NewAuditor returns an Auditor over c.
+func NewAuditor(c *chronicle.Chronicle, appID string, log forge.Logger) Auditor {
+	return Auditor{chronicle: c, appID: appID, log: log}
+}
+
 // Record implements projects.Auditor. A failed record is logged, never
 // returned: the change it describes has already happened.
-func (a auditor) Record(ctx context.Context, e projects.AuditEvent) {
+func (a Auditor) Record(ctx context.Context, e projects.AuditEvent) {
 	var b *chronicle.EventBuilder
 	switch e.Severity {
 	case "warning":

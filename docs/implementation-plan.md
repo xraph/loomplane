@@ -30,13 +30,31 @@ Left over, none of it blocking Milestone 2:
 
 ## Milestone 2: Repository discovery
 
-1. GitHub connection: a GitHub App per organization, its installation token fetched per job, never stored on a worker.
-2. `cmd/loomplane-worker`: a separate process working Dispatch queues for checkout and analysis. Each analysis runs in a throwaway container with the source and no credentials.
-3. Detectors in `internal/discovery`, behind interfaces in `pkg/discovery`. Deterministic parsers first: `go.work` and `go.mod`, Cargo workspaces, pnpm, npm and Yarn workspaces, Turborepo and Nx, `package.json` scripts and frameworks, Dockerfiles. Every finding carries the file and line it came from and a confidence; anything weakly inferred waits for you to confirm it.
-4. The application graph in `internal/graph`: services, resources and dependencies, versioned per analysis, independent of any cloud.
-5. The analysis as a Dispatch durable workflow, with its progress on the project page.
+Done. Give a project a GitHub URL and choose **Analyze** on its page: you get its services, the packages they share and the resources they need, each with links to the lines it was read from, at the exact commit.
 
-Done when you can import a polyglot monorepo and see its deployable services with the evidence for each.
+- Detectors in `internal/discovery/detect`, behind the contract in `pkg/discovery`. They read and never run anything:
+  - Go: `go.work`, every `go.mod` (with the official parser), and each main package. The frameworks and drivers a main package reaches come from following its imports through the workspace.
+  - Rust: Cargo workspaces and their member globs, binaries the way Cargo finds them, path and workspace dependencies, and features (which database `sqlx` speaks).
+  - Node: npm, Yarn, pnpm and Bun workspaces, Turborepo, Nx and Lerna. A framework counts only when the package is an app built on it, so a library that imports Next.js stays a library. Prisma's provider is read from its schema.
+  - Dockerfiles (ports, base image, which binary a build step builds) and Compose files (backing services, build contexts).
+- Every finding carries its file, line and a confidence. Resources found only from a driver in a dependency list are marked to confirm before anything provisions them.
+- The application graph in `internal/graph`: services, packages, resources and edges, independent of any cloud. Each successful analysis stores one version of it.
+- Analysis is a Dispatch job on its own queue, run by `cmd/loomplane-worker`, with its progress (queued, downloading, reading) on the project page.
+- GitHub: public repositories with no setup, through the tarball API, which pins the exact commit. Private ones go through a GitHub App ([github-app.md](github-app.md)), connected only once GitHub confirms the person connecting can see the installation, with a read-only token for one repository per analysis.
+- Verified with unit tests, integration tests against a fake GitHub (private repositories included), a browser run of the whole flow, and analyses of real public monorepos: Tauri (Rust and TypeScript), OpenMeter (Go and TypeScript) and Dub (a Turborepo).
+
+Where it differs from the plan above, and why:
+
+1. An analysis is one idempotent Dispatch job, not a durable workflow. It's three short steps, each recorded on the analysis, and a failure on the last attempt fails the analysis with its reason. Durable workflows earn their keep in deployments, where approvals wait for days.
+2. There's no throwaway container per analysis. Nothing from the repository runs, so the risk is the parsers, which are pure Go behind size and file-count limits, in a process that holds no sessions. Builds run code; they get real containers in milestone 4.
+3. Weak findings are flagged, but there's no way yet to confirm or dismiss one. That arrives with the manifest in milestone 3, which is where a confirmed graph becomes the plan's input.
+
+Left over:
+
+1. Re-analyzing on push, which needs GitHub webhooks.
+2. A repository picker when creating a project. The Integrations page lists what the App can read, but a project still takes a URL.
+3. Detection limits: Python, Java and the rest are found through their Dockerfiles only. A Go command that imports the server's packages reads as a server, because classification follows imports. A Rust crate with both clap and axum is ambiguous.
+4. The GitHub App flow has only been run against a fake GitHub that checks the App's JWT signature. Try it against a real App before relying on it.
 
 ## Milestone 3: Planning
 

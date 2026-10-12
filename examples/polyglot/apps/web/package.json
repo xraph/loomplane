@@ -1,0 +1,18 @@
+{
+  "name": "@acme/web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@acme/ui": "workspace:*",
+    "@prisma/client": "^6.0.0",
+    "next": "^16.0.0",
+    "react": "^19.0.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

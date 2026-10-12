@@ -88,9 +88,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return errors.New("projects needs the dispatch extension to have registered")
 	}
 	store := projects.NewPgStore(pgdriver.Unwrap(db))
-	e.svc = projects.NewService(store, authz, orchestration.NewEnqueuer(eng), auditor{
-		chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger(),
-	})
+	e.svc = projects.NewService(store, authz, orchestration.NewEnqueuer(eng), NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()))
 	engine.Register(eng, orchestration.ProjectInitJob(e.svc))
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide project service: %w", err)

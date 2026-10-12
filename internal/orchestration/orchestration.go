@@ -21,18 +21,28 @@ import (
 	"github.com/xraph/dispatch/job"
 )
 
-// Queue is the Dispatch queue Loomplane's jobs run on. The dispatch
+// Queue is the Dispatch queue the API process works. The dispatch
 // extension must be told to work it (WithQueues).
 const Queue = "loomplane"
 
+// AnalysisQueue is the queue only loomplane-worker works. Repository
+// analysis reads untrusted code, so it stays out of the API process.
+const AnalysisQueue = "loomplane-analysis"
+
 // Job names. Keep them stable: queued jobs refer to them by name.
 const (
-	JobProjectInitialize = "loomplane.project.initialize"
+	JobProjectInitialize  = "loomplane.project.initialize"
+	JobRepositoryAnalysis = "loomplane.repository.analyze"
 )
 
 const (
 	projectInitRetries = 5
 	projectInitTimeout = 2 * time.Minute
+
+	// AnalysisRetries is how often an analysis job is retried after a
+	// transient failure. The runner fails the analysis on the last try.
+	AnalysisRetries = 3
+	analysisTimeout = 20 * time.Minute
 )
 
 // ProjectInitPayload is the payload of JobProjectInitialize.
@@ -50,6 +60,25 @@ type ProjectInitializer interface {
 func ProjectInitJob(p ProjectInitializer) *job.Definition[ProjectInitPayload] {
 	return job.NewDefinition(JobProjectInitialize, func(ctx context.Context, in ProjectInitPayload) error {
 		return p.Initialize(ctx, in.OrgID, in.ProjectID)
+	})
+}
+
+// AnalysisPayload is the payload of JobRepositoryAnalysis.
+type AnalysisPayload struct {
+	OrgID      string `json:"org_id"`
+	AnalysisID string `json:"analysis_id"`
+}
+
+// AnalysisRunner does the work of JobRepositoryAnalysis.
+type AnalysisRunner interface {
+	Run(ctx context.Context, orgID, analysisID string) error
+}
+
+// AnalysisJob is the job that analyzes a repository. Only the worker
+// registers it.
+func AnalysisJob(r AnalysisRunner) *job.Definition[AnalysisPayload] {
+	return job.NewDefinition(JobRepositoryAnalysis, func(ctx context.Context, in AnalysisPayload) error {
+		return r.Run(ctx, in.OrgID, in.AnalysisID)
 	})
 }
 
@@ -71,6 +100,20 @@ func (q *Enqueuer) InitializeProject(ctx context.Context, orgID, projectID strin
 	)
 	if err != nil {
 		return fmt.Errorf("enqueue %s: %w", JobProjectInitialize, err)
+	}
+	return nil
+}
+
+// AnalyzeRepository enqueues JobRepositoryAnalysis on the analysis queue.
+func (q *Enqueuer) AnalyzeRepository(ctx context.Context, orgID, analysisID string) error {
+	_, err := engine.Enqueue(ctx, q.eng, JobRepositoryAnalysis,
+		AnalysisPayload{OrgID: orgID, AnalysisID: analysisID},
+		job.WithQueue(AnalysisQueue),
+		job.WithMaxRetries(AnalysisRetries),
+		job.WithTimeout(analysisTimeout),
+	)
+	if err != nil {
+		return fmt.Errorf("enqueue %s: %w", JobRepositoryAnalysis, err)
 	}
 	return nil
 }

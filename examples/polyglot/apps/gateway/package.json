@@ -1,0 +1,12 @@
+{
+  "name": "@acme/gateway",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "ioredis": "^5.4.0"
+  }
+}

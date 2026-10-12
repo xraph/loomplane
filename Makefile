@@ -29,7 +29,7 @@ stack: ## Build the image and run all of Loomplane in Docker on LOOMPLANE_PORT (
 down: ## Stop everything compose started (the data volume stays)
 	$(COMPOSE) --profile app down
 
-dev: ## Run the API (forge dev, hot reload) and the dashboard (Vite) together
+dev: ## Run the API (forge dev, hot reload), the analysis worker and the dashboard (Vite)
 	@API_PORT=$(API_PORT) DASHBOARD_DIR=$(DASHBOARD_DIR) bash scripts/dev.sh
 
 dev-api: ## Run only the API with hot reload
@@ -40,14 +40,15 @@ dev-dashboard: ## Run only the dashboard's dev server, proxying the API
 
 build: build-dashboard build-api ## Build the dashboard, then the binary that serves it
 
-build-api: ## Build bin/loomplane
+build-api: ## Build bin/loomplane and bin/loomplane-worker
 	go build $(LDFLAGS) -o bin/loomplane ./cmd/loomplane
+	go build $(LDFLAGS) -o bin/loomplane-worker ./cmd/loomplane-worker
 
 build-dashboard: ## Build the dashboard into apps/dashboard/dist
 	pnpm --dir $(DASHBOARD_DIR) build
 
-run: build ## Build everything and run it on API_PORT
-	LOOMPLANE_HTTP_ADDR=:$(API_PORT) ./bin/loomplane
+run: build ## Build everything and run the API on API_PORT, with the analysis worker
+	@API_PORT=$(API_PORT) bash scripts/run.sh
 
 image: ## Build the container image, tagged with the git version
 	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane:$(VERSION) .

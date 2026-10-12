@@ -38,3 +38,31 @@ dashboard:
 orchestration:
   concurrency: 4
   poll_interval: 1s
+
+github:
+  # GitHub's REST API. Point it at GitHub Enterprise Server's /api/v3 if
+  # that's where your code lives. (Written with its default, like
+  # public_url, because the loader flags an empty URL.)
+  api_url: "${LOOMPLANE_GITHUB_API_URL:-https://api.github.com}"
+  # Where people install the App and sign in to GitHub.
+  web_url: "${LOOMPLANE_GITHUB_WEB_URL:-https://github.com}"
+  # The GitHub App that reads private repositories (docs/github-app.md).
+  # Leave these empty to read public repositories only. Keep the private
+  # key and client secret in the environment.
+  app_id: "${LOOMPLANE_GITHUB_APP_ID:-}"
+  app_slug: "${LOOMPLANE_GITHUB_APP_SLUG:-}"
+  private_key: "${LOOMPLANE_GITHUB_PRIVATE_KEY:-}"
+  private_key_file: "${LOOMPLANE_GITHUB_PRIVATE_KEY_FILE:-}"
+  client_id: "${LOOMPLANE_GITHUB_CLIENT_ID:-}"
+  client_secret: "${LOOMPLANE_GITHUB_CLIENT_SECRET:-}"
+
+# Repository analysis, which loomplane-worker runs.
+analysis:
+  # Where checkouts are extracted while they're analyzed. Empty means the
+  # system's temporary directory.
+  work_dir: "${LOOMPLANE_ANALYSIS_WORK_DIR:-}"
+  concurrency: 2
+
+worker:
+  # Where loomplane-worker serves its health checks, and nothing else.
+  http_addr: "${LOOMPLANE_WORKER_HTTP_ADDR:-}"

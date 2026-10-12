@@ -133,6 +133,8 @@ The identity extension builds a `warden.Engine` on Warden's Postgres store and h
 
 Every check happens in the service layer (`internal/projects/service.go`), not only at the HTTP edge, so the CLI and agents will go through the same checks.
 
+`Authorizer.EnsureTenant` brings an organization's roles up to the current catalog. It used to run only when a role was assigned, so an upgrade that grew a role (milestone 2 gave developers `analysis:run`) never reached organizations whose members already had one. Every check now ensures the tenant first, once per organization per process.
+
 Limits: Warden's own HTTP API isn't mounted.
 
 Tests: `internal/security` runs Warden's real engine over its memory store, including the whole membership lifecycle through the sync plugin. `tests/integration` checks that one organization can't see another's projects.
@@ -147,7 +149,7 @@ Limits: no read API or audit screen yet.
 
 ## Dispatch
 
-Dispatch runs Loomplane's background work. Today that's one job: `loomplane.project.initialize` gives a new project its production and preview environments, then marks it ready.
+Dispatch runs Loomplane's background work, on two queues. `loomplane`, which the API process works, has `loomplane.project.initialize`: it gives a new project its production and preview environments, then marks it ready. `loomplane-analysis`, which only `loomplane-worker` works, has `loomplane.repository.analyze`. The API enqueues analyses without registering their handler, which Dispatch allows (`engine.Enqueue` takes a job name), so an analysis can't run in the API process even by accident.
 
 Loomplane registers the official extension with its own queue added (`WithQueues`), and with Dispatch's HTTP routes and self-migration off. The projects extension registers its job on the engine while extensions register; Dispatch only works its queue once everything has started. `internal/orchestration` enqueues every job, because Dispatch ignores the queue, retry and timeout options on a job definition and only honours the ones passed at enqueue.
 
@@ -161,7 +163,7 @@ What we found:
 
 Config: `orchestration.concurrency`, `orchestration.poll_interval`.
 
-Tests: the service tests run the initialization twice and expect no change; the integration tests wait for a real job to make a project ready.
+Tests: the service tests run the initialization twice and expect no change; the integration tests wait for a real job to make a project ready, and check that an analysis queued with no worker running stays queued.
 
 ## Ctrl Plane
 
@@ -204,6 +206,8 @@ Tests: `internal/config`.
 `apps/dashboard` calls Loomplane and authsome only through clients `forge client generate` writes from `specs/` (`.forge-client.yaml`): one for `/api`, one for authsome's organization endpoints. Everything under `src/client/forge` is generated; `pnpm check:client` fails when it drifts. `src/client/runtime.ts` routes each path to its client, puts the session token on every request, and renews the session through the authsome SDK on a 401. Components use the generated bindings through `useQuery` and `useMutation` from `@forge-go/client-react`, over one normalized cache keyed to the user and organization.
 
 To regenerate after a backend change, run Loomplane, then `make gen-client`.
+
+A Base UI `Button` given `render={<a />}` keeps `role="button"`, which is wrong for something that navigates. For a link that looks like a button, put `cn(buttonVariants())` on a real `<a>` or `Link`; `cn` matters, because it's what lets the variant's border win over the base style's.
 
 Two things to know when you add an endpoint:
 

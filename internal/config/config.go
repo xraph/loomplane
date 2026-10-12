@@ -58,6 +58,69 @@ type Config struct {
 	Identity      IdentityConfig
 	Dashboard     DashboardConfig
 	Orchestration OrchestrationConfig
+	GitHub        GitHubConfig
+	Analysis      AnalysisConfig
+	Worker        WorkerConfig
+}
+
+// WorkerConfig is loomplane-worker's own process settings.
+type WorkerConfig struct {
+	// HTTPAddr is where the worker serves its health checks. It serves
+	// nothing else.
+	HTTPAddr string
+}
+
+// GitHubConfig is how Loomplane reaches GitHub.
+type GitHubConfig struct {
+	// APIURL is GitHub's REST API: https://api.github.com, or your GitHub
+	// Enterprise Server's /api/v3.
+	APIURL string
+	// WebURL is GitHub itself, where people install the App and sign in:
+	// https://github.com, or your GitHub Enterprise Server.
+	WebURL string
+
+	// The GitHub App that reads private repositories. Leave all of these
+	// empty to read public repositories only; set all of them otherwise.
+	// docs/github-app.md says how to create the App.
+	AppID   int64
+	AppSlug string
+	// PrivateKey is the App's PEM private key itself, or PrivateKeyFile
+	// the path to it. Set it from the environment, never in a file you
+	// commit.
+	PrivateKey     string
+	PrivateKeyFile string
+	// ClientID and ClientSecret are the App's OAuth credentials. Loomplane
+	// uses them once per connection, to check that whoever installed the
+	// App can see the installation.
+	ClientID     string
+	ClientSecret string
+}
+
+// AppConfigured reports whether a GitHub App is set up.
+func (g GitHubConfig) AppConfigured() bool {
+	return g.AppID != 0
+}
+
+// appSettingsSet counts the App settings that are set.
+func (g GitHubConfig) appSettingsSet() int {
+	n := 0
+	for _, set := range []bool{
+		g.AppID != 0, g.AppSlug != "", g.PrivateKey != "" || g.PrivateKeyFile != "", g.ClientID != "", g.ClientSecret != "",
+	} {
+		if set {
+			n++
+		}
+	}
+	return n
+}
+
+// AnalysisConfig tunes repository analysis, which loomplane-worker runs.
+type AnalysisConfig struct {
+	// WorkDir is where checkouts are extracted while they're analyzed.
+	// Empty means the system's temporary directory.
+	WorkDir string
+	// Concurrency is how many analyses one worker runs at once.
+	Concurrency int
 }
 
 // DatabaseConfig is the Postgres connection.
@@ -116,6 +179,9 @@ func Defaults() Config {
 			Concurrency:  4,
 			PollInterval: time.Second,
 		},
+		GitHub:   GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
+		Analysis: AnalysisConfig{Concurrency: 2},
+		Worker:   WorkerConfig{HTTPAddr: ":8781"},
 	}
 }
 
@@ -177,6 +243,18 @@ func FromSource(src Getter) (Config, error) {
 	r.integer(&c.Orchestration.Concurrency, "orchestration.concurrency")
 	r.duration(&c.Orchestration.PollInterval, "orchestration.poll_interval")
 
+	r.str(&c.GitHub.APIURL, "github.api_url")
+	r.str(&c.GitHub.WebURL, "github.web_url")
+	r.int64(&c.GitHub.AppID, "github.app_id")
+	r.str(&c.GitHub.AppSlug, "github.app_slug")
+	r.str(&c.GitHub.PrivateKey, "github.private_key")
+	r.str(&c.GitHub.PrivateKeyFile, "github.private_key_file")
+	r.str(&c.GitHub.ClientID, "github.client_id")
+	r.str(&c.GitHub.ClientSecret, "github.client_secret")
+	r.str(&c.Analysis.WorkDir, "analysis.work_dir")
+	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
+	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
+
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
 	}
@@ -217,6 +295,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Orchestration.PollInterval <= 0 {
 		errs = append(errs, errors.New("orchestration.poll_interval must be positive"))
+	}
+	if u, err := url.Parse(c.GitHub.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("github.api_url must be an absolute URL, got %q", c.GitHub.APIURL))
+	}
+	if u, err := url.Parse(c.GitHub.WebURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("github.web_url must be an absolute URL, got %q", c.GitHub.WebURL))
+	}
+	if n := c.GitHub.appSettingsSet(); n != 0 && n != 5 {
+		errs = append(errs, errors.New("a GitHub App needs all of github.app_id, app_slug, private_key (or private_key_file), client_id and client_secret"))
+	}
+	if c.Analysis.Concurrency < 1 {
+		errs = append(errs, errors.New("analysis.concurrency must be at least 1"))
 	}
 	if c.Environment == EnvProduction {
 		errs = append(errs, c.productionChecks()...)
@@ -293,6 +383,17 @@ func (r *reader) integer(dst *int, key string) {
 		}
 		*dst = n
 	}
+}
+
+// int64 reads a whole number that may not fit an int on 32-bit platforms,
+// such as a GitHub App ID.
+func (r *reader) int64(dst *int64, key string) {
+	if _, ok := r.raw(key); !ok {
+		return
+	}
+	var n int
+	r.integer(&n, key)
+	*dst = int64(n)
 }
 
 // boolean reads a bool. confy turns yes/no/on/off into bools even when

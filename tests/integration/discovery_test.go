@@ -1,0 +1,195 @@
+//go:build integration
+
+package integration
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/platform"
+)
+
+const exampleSHA = "fedcba9876543210fedcba9876543210fedcba98"
+
+// exampleTarball is examples/polyglot as a GitHub tarball of one commit.
+func exampleTarball(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	root := "../../examples/polyglot"
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		if err = tw.WriteHeader(&tar.Header{Name: "acme-mono-fedcba9/" + filepath.ToSlash(rel), Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))}); err != nil {
+			return err
+		}
+		_, err = tw.Write(body)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// fakeGitHubServing serves examples/polyglot as acme/mono, the way GitHub's
+// API serves a public repository.
+func fakeGitHubServing(t *testing.T) *httptest.Server {
+	t.Helper()
+	tgz := exampleTarball(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/mono":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/acme/mono/commits/main":
+			_, _ = w.Write([]byte(exampleSHA))
+		case "/repos/acme/mono/tarball/" + exampleSHA:
+			_, _ = w.Write(tgz)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+type analysisBody struct {
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	CommitSHA string `json:"commit_sha"`
+	Error     string `json:"error"`
+	Summary   struct {
+		Services   int `json:"services"`
+		Deployable int `json:"deployable"`
+		Packages   int `json:"packages"`
+		Resources  int `json:"resources"`
+	} `json:"summary"`
+}
+
+func TestDiscovery_theWorkerAnalyzesAProjectsRepository(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+
+	var mono, lab struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &mono)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Lab", "repository_url": "https://gitlab.com/acme/lab"}, &lab)
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/projects/"+lab.ID+"/analyses", nil, nil)
+
+	var a analysisBody
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+mono.ID+"/analyses", nil, &a)
+	if a.Status != "queued" {
+		t.Fatalf("new analysis %+v", a)
+	}
+	// The API never runs an analysis itself: with no worker, it waits.
+	time.Sleep(time.Second)
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/analyses/"+a.ID, nil, &a)
+	if a.Status != "queued" {
+		t.Fatalf("with no worker running, the analysis is %s", a.Status)
+	}
+
+	// The worker is its own app on the same database, as loomplane-worker
+	// would be.
+	worker, err := platform.NewWorker(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
+	defer cancel()
+	if err = worker.Start(ctx); err != nil {
+		t.Fatalf("start worker: %v", err)
+	}
+	defer func() {
+		if serr := worker.Stop(context.Background()); serr != nil {
+			t.Errorf("stop worker: %v", serr)
+		}
+	}()
+	deadline := time.Now().Add(readyTimeout)
+	for a.Status != "succeeded" && a.Status != "failed" {
+		if time.Now().After(deadline) {
+			t.Fatalf("analysis still %s after %s", a.Status, readyTimeout)
+		}
+		time.Sleep(100 * time.Millisecond)
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/analyses/"+a.ID, nil, &a)
+	}
+	if a.Status != "succeeded" || a.CommitSHA != exampleSHA || a.Summary.Services != 7 || a.Summary.Packages != 3 || a.Summary.Resources != 2 {
+		t.Fatalf("finished analysis %+v", a)
+	}
+
+	var g struct {
+		ID    string `json:"id"`
+		Graph struct {
+			Services []struct {
+				Name     string `json:"name"`
+				Kind     string `json:"kind"`
+				Evidence []struct {
+					Path string `json:"path"`
+					Line int    `json:"line"`
+				} `json:"evidence"`
+			} `json:"services"`
+		} `json:"graph"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/analyses/"+a.ID+"/graph", nil, &g)
+	if g.ID != a.ID || len(g.Graph.Services) != 7 {
+		t.Fatalf("graph %+v", g)
+	}
+	api := g.Graph.Services[0]
+	if api.Name != "api" || api.Kind != "http-service" || len(api.Evidence) == 0 || api.Evidence[0].Path != "services/api/main.go" {
+		t.Fatalf("api service %+v", api)
+	}
+
+	var list struct {
+		Analyses []analysisBody `json:"analyses"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+mono.ID+"/analyses", nil, &list)
+	if len(list.Analyses) != 1 || list.Analyses[0].ID != a.ID {
+		t.Fatalf("list %+v", list)
+	}
+	// Finished, it no longer blocks another.
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+mono.ID+"/analyses", map[string]string{"ref": "main"}, nil)
+	c.must(http.StatusConflict, http.MethodPost, "/api/v1/projects/"+mono.ID+"/analyses", nil, nil)
+}

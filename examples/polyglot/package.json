@@ -1,0 +1,8 @@
+{
+  "name": "acme",
+  "private": true,
+  "packageManager": "pnpm@11.5.0",
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  }
+}

@@ -38,3 +38,17 @@ func TokenEncryptor(secretKey string) (bridge.Encryptor, error) {
 	}
 	return ring, nil
 }
+
+// DeriveKey derives a 32-byte key for one purpose from secret_key. label
+// names the purpose; each label gets a key unrelated to every other's.
+func DeriveKey(secretKey, label string) ([]byte, error) {
+	secret, err := base64.StdEncoding.DecodeString(secretKey)
+	if err != nil {
+		return nil, fmt.Errorf("secret_key isn't base64: %w", err)
+	}
+	key, err := hkdf.Key(sha256.New, secret, nil, label, tokenKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("derive %s key: %w", label, err)
+	}
+	return key, nil
+}

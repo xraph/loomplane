@@ -1,6 +1,6 @@
 # Architecture
 
-Loomplane is one Forge application with a React dashboard in front of it. This document covers how a process starts and stops, how the Forge ecosystem libraries connect, which component owns which state, and where the trust boundaries sit. [forge-integration.md](forge-integration.md) has the per-library detail and [implementation-plan.md](implementation-plan.md) has what comes next.
+Loomplane is two Forge processes over one Postgres, with a React dashboard in front: `loomplane`, which serves the API and the dashboard, and `loomplane-worker`, which analyzes repositories. This document covers how a process starts and stops, how the Forge ecosystem libraries connect, which component owns which state, and where the trust boundaries sit. [forge-integration.md](forge-integration.md) has the per-library detail and [implementation-plan.md](implementation-plan.md) has what comes next.
 
 ## The process
 
@@ -17,9 +17,20 @@ forge.App (central migrations)
   ├─ dispatch                   job engine, queue "loomplane"
   ├─ ctrlplane                  lifecycle engine, routes off
   ├─ loomplane-projects         /api/v1/projects, the initialize job
+  ├─ loomplane-discovery        /api/v1/.../analyses, /api/v1/github; queues analyses
   ├─ loomplane-infrastructure   Ctrl Plane's identity bridge, /api/v1/infrastructure
   └─ loomplane-web              apps/dashboard/dist on every other path
+
+cmd/loomplane-worker          same config, no HTTP API, no migrations
+      │
+      ▼
+forge.App
+  ├─ grove                      the same Postgres
+  ├─ dispatch                   queue "loomplane-analysis" only
+  └─ loomplane-discovery-worker the analysis job: fetch, read, store the graph
 ```
+
+The API never runs an analysis. It queues one on `loomplane-analysis`, a queue only the worker works, so code nobody vetted is read in a process that holds no sessions and serves nothing but health checks. Start `loomplane` first: it owns the schema, and the worker doesn't migrate.
 
 Starting goes in three passes, which is what `forge.WithCentralMigrations` buys:
 
@@ -71,6 +82,8 @@ Each kind of state has one owner, and only the owner writes it.
 | Roles, permissions and who holds them, per organization | Warden, written by Loomplane's `security.Sync` and `security.Authorizer` | `warden_*` |
 | The audit trail | Chronicle | `chronicle_*` |
 | Projects and environments | Loomplane | `loomplane_projects`, `loomplane_environments` |
+| Repository analyses, each with one version of the application graph | Loomplane | `loomplane_analyses` |
+| GitHub App installations each organization connected | Loomplane | `loomplane_github_installations` |
 | Job queue, cron, workflow history | Dispatch | `dispatch_*` |
 | Instances, deployments, releases, domains | Ctrl Plane | `cp_*` |
 
@@ -78,7 +91,7 @@ Coming with deployments:
 
 | State | Owner |
 |---|---|
-| Repository analysis, the application graph, the manifest | Loomplane |
+| The manifest (`loomplane.yaml`) | Loomplane |
 | Approved plans, and the map from each Loomplane service to the Ctrl Plane instance or provider resource that runs it | Loomplane |
 | Progress of each deployment workflow | Dispatch's durable runtime |
 | The lifecycle state of what's deployed | Ctrl Plane, for providers it manages; Loomplane's capability adapter, for providers Ctrl Plane can't model (Vercel) |
@@ -106,6 +119,9 @@ A failed provider call surfaces as a failed Dispatch activity with the provider'
                         │                                   │
                         │ secret_key ─HKDF─► token keyring  │
                         │ (future) Vault ─► provider APIs ──┼─► Vercel, GCP, AWS, Render
+                        │                                   │
+ analysis worker ───────┼── one commit's tarball, read only ◄┼── GitHub (a token for
+                        │                                   │   one repo, one hour)
  build workers ◄────────┼── (future) source, never creds    │
 ```
 
@@ -116,6 +132,8 @@ The organization you act in also comes from the session, never from the browser,
 Whether you may do something is Warden's call, made in the service layer for every method. The dashboard hides what your role can't do, but the API checks regardless. Organization roles map to Warden roles: owner to owner, admin to admin, member to developer, and anything else to viewer, so an unexpected role never grants more than reading.
 
 Ctrl Plane and Dispatch don't expose their own HTTP APIs. Ctrl Plane's auth provider is bound to authsome and Warden and never grants `system:admin`.
+
+Repository analysis reads code, and never runs it: no build scripts, no package managers, nothing from the repository. A checkout is one commit's tarball, extracted with hard limits (size, file count, regular files only, no paths outside the checkout, no dependency or build output directories) into a directory the worker deletes afterwards. For a private repository, the worker mints a GitHub App installation token limited to that one repository and to reading it, and stores it nowhere. An organization's analyses only ever use installations that organization connected, and connecting one requires GitHub to confirm the person connecting can see it ([github-app.md](github-app.md)).
 
 Secrets: `secret_key` never leaves the process. authsome's token encryption key is derived from it with HKDF under its own label. Cloud provider credentials will live in Vault (milestone 4), referenced by ID, never in `loomplane.yaml` or logs, and never handed to build workers. Repository builds will run in isolated workers that get the source and nothing else. A Dispatch worker only decides what runs where; it doesn't sandbox anything, so the isolation has to come from the worker's own container. Loomplane's own API keys (Keysmith, milestone 6) are a different thing from cloud credentials and are never stored together.
 

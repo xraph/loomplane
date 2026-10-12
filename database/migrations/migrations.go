@@ -27,6 +27,8 @@ func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
 	g.MustRegister(
 		statements("20261011000001", "create_projects", projectsUp, projectsDown),
+		statements("20261012000001", "create_analyses", analysesUp, analysesDown),
+		statements("20261012000002", "create_github_installations", githubUp, githubDown),
 	)
 	return g
 }
@@ -96,4 +98,54 @@ var projectsUp = []string{
 var projectsDown = []string{
 	`DROP TABLE IF EXISTS loomplane_environments`,
 	`DROP TABLE IF EXISTS loomplane_projects`,
+}
+
+// An analysis is one run of repository discovery; a succeeded one holds a
+// version of the project's application graph, whole, as JSON. attempts
+// counts deliveries of its job, so the worker knows when a transient
+// failure has become the result.
+var analysesUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_analyses (
+		id          TEXT        PRIMARY KEY,
+		org_id      TEXT        NOT NULL,
+		project_id  TEXT        NOT NULL REFERENCES loomplane_projects (id) ON DELETE CASCADE,
+		status      TEXT        NOT NULL,
+		repository  TEXT        NOT NULL,
+		ref         TEXT        NOT NULL DEFAULT '',
+		commit_sha  TEXT        NOT NULL DEFAULT '',
+		error       TEXT        NOT NULL DEFAULT '',
+		summary     JSONB       NOT NULL DEFAULT '{}',
+		graph       JSONB,
+		attempts    INTEGER     NOT NULL DEFAULT 0,
+		created_by  TEXT        NOT NULL,
+		created_at  TIMESTAMPTZ NOT NULL,
+		started_at  TIMESTAMPTZ,
+		finished_at TIMESTAMPTZ
+	)`,
+	`CREATE INDEX IF NOT EXISTS loomplane_analyses_project_created
+		ON loomplane_analyses (org_id, project_id, created_at DESC)`,
+}
+
+var analysesDown = []string{
+	`DROP TABLE IF EXISTS loomplane_analyses`,
+}
+
+// A GitHub App installation an organization has connected. The same
+// installation may be connected to several organizations, each by someone
+// GitHub confirmed can see it. Nothing secret is stored: tokens are minted
+// per analysis.
+var githubUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_github_installations (
+		org_id          TEXT        NOT NULL,
+		installation_id BIGINT      NOT NULL,
+		account         TEXT        NOT NULL,
+		account_type    TEXT        NOT NULL DEFAULT '',
+		created_by      TEXT        NOT NULL,
+		created_at      TIMESTAMPTZ NOT NULL,
+		PRIMARY KEY (org_id, installation_id)
+	)`,
+}
+
+var githubDown = []string{
+	`DROP TABLE IF EXISTS loomplane_github_installations`,
 }

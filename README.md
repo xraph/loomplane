@@ -52,7 +52,7 @@ make run
 
 Open [localhost:8780](http://localhost:8780), create an account, and sign in. Give your organization a name, then create your first project.
 
-Already have `config.local.yaml`? Keep your settings and skip the copy. `make up` starts PostgreSQL only; `make run` builds and starts Loomplane on your machine. Migrations apply automatically at startup.
+Already have `config.local.yaml`? Keep your settings and skip the copy. `make up` starts PostgreSQL only; `make run` builds Loomplane and starts both of its processes on your machine: the API, and the worker that analyzes repositories. Migrations apply automatically at startup.
 
 ### Run it all in Docker
 
@@ -73,6 +73,7 @@ The image runs in development mode with the development secret key, which is fin
 3. When setup finishes, you'll see `production` and `preview`, and the project becomes `ready`.
 4. Open **Infrastructure** to inspect Ctrl Plane's persistence backend and registered providers.
 5. Open **Members** and choose **Invite**. You get a link to pass on yourself, because Loomplane doesn't send email yet. Whoever opens it signs in or signs up with the invited address, then accepts.
+6. Give a project a GitHub URL (any public monorepo works, such as `https://github.com/dubinc/dub`) and choose **Analyze** under **Architecture**. The worker downloads that commit and reads it. You get the services it builds, what they share and the databases they need, each linked to the line it came from.
 
 `ready` means the project's environments exist. It doesn't mean an application has been deployed. The project page draws each environment as a thread: gold while setup runs, green when it's ready.
 
@@ -103,6 +104,8 @@ make dev-dashboard
 | Permissions           | Warden checks access in the service layer, with roles scoped to each organization.                                             |
 | Audit events          | Chronicle records identity activity and project changes. An audit reader and dashboard are still planned.                      |
 | Infrastructure status | Inspect Ctrl Plane's store and registered providers through Loomplane's guarded API.                                           |
+| Repository discovery  | Go, Rust and Node monorepos, Dockerfiles and Compose files, read (never run) into services, packages and resources with evidence. |
+| GitHub                | Public repositories as they are; private ones through a GitHub App, with a read-only token per repository per analysis.         |
 | Dashboard             | React, shadcn/ui on Base UI, light and dark themes, and generated API clients with a shared normalized cache.                  |
 | Persistence           | One PostgreSQL database, with a central migration pass over Loomplane and its library schemas.                                 |
 
@@ -183,6 +186,8 @@ Start with [config.yaml](config.yaml). Your machine's overrides go in `config.lo
 | `LOOMPLANE_DASHBOARD_DIR`            | `apps/dashboard/dist`       | Built dashboard directory.                                                       |
 | `LOOMPLANE_AUTHSOME_APP_ID`          | Built-in development app ID | authsome application ID.                                                         |
 | `LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY` | Built-in development key    | Public authsome application key.                                                 |
+| `LOOMPLANE_GITHUB_*`                 | Unset                       | The GitHub App for private repositories; [docs/github-app.md](docs/github-app.md) lists them. |
+| `LOOMPLANE_WORKER_HTTP_ADDR`         | `:8781`                     | Where `loomplane-worker` serves its health checks.                               |
 
 Generate your own secret with:
 
@@ -233,8 +238,8 @@ The response is `201 Created` with an `initializing` project. Poll its detail an
 | `make stack`            | Build the image and run all of Loomplane in Docker on port 8780.           |
 | `make image`            | Build the container image, tagged with the git version.                    |
 | `make dev`              | Run the API and dashboard with hot reload.                                 |
-| `make build`            | Build the dashboard, then `bin/loomplane`.                                 |
-| `make run`              | Build and run the combined application.                                    |
+| `make build`            | Build the dashboard, then `bin/loomplane` and `bin/loomplane-worker`.      |
+| `make run`              | Build, then run the API and the analysis worker together.                  |
 | `make test`             | Run Go and dashboard unit tests.                                           |
 | `make test-integration` | Boot the app against PostgreSQL, including real background initialization. |
 | `make lint`             | Run golangci-lint, dashboard type checks, and ESLint.                      |
@@ -263,7 +268,7 @@ Don't edit `apps/dashboard/src/client/forge` by hand. The handwritten runtime li
 | ---------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0. Ecosystem evaluation      | Documented                     | Pinned libraries, integration behavior, upstream gaps, and dependency license questions.                                                    |
 | 1. Foundation                | Done                           | Identity, members and invitations, projects, environments, authorization, jobs, audit events, dashboard, container image, and CI.          |
-| 2. Repository discovery      | Planned                        | GitHub App connection, isolated analysis workers, deterministic monorepo parsers, and a versioned application graph with source evidence.   |
+| 2. Repository discovery      | Done                           | GitHub (public, and private through an App), a separate analysis worker, Go, Rust and Node detectors, and a versioned application graph.    |
 | 3. Deployment planning       | Planned                        | Versioned `loomplane.yaml`, provider capabilities, reviewable actions, and approval tied to a plan revision.                                |
 | 4. Real deployments          | Planned                        | Vault credentials, isolated builds, Trove artifacts, Cloud Run through Ctrl Plane, and a Vercel capability adapter.                         |
 | 5. More infrastructure       | Planned                        | AWS ECS/Fargate, Render, managed databases, cross-cloud endpoints, and drift reporting.                                                     |
@@ -279,15 +284,21 @@ The [implementation plan](docs/implementation-plan.md) records the work and comp
 
 ```text
 loomplane/
-├── cmd/loomplane/             Application entry point
+├── cmd/loomplane/             The API and dashboard
+├── cmd/loomplane-worker/      The repository analysis worker
 ├── internal/
 │   ├── config/               Typed configuration and validation
+│   ├── discovery/            Analyses, and the detectors in detect/
+│   ├── graph/                The application graph
 │   ├── infrastructure/       Ctrl Plane identity bridge
 │   ├── orchestration/        Dispatch jobs and enqueue policy
 │   ├── platform/             Forge application composition
 │   ├── projects/             Project and environment domain logic
+│   ├── repositories/         GitHub: checkouts, the App, connections
 │   └── security/             Organization roles and authorization
-├── extensions/               Forge adapters: identity, projects, infra, web
+├── pkg/discovery/            The public contract for detectors
+├── extensions/               Forge adapters: identity, projects, discovery, infra, web
+├── examples/polyglot/        A sample monorepo the detector tests read
 ├── database/migrations/      Loomplane schema and library migration groups
 ├── apps/dashboard/           React application and generated clients
 ├── brand/                    Logo variants, icons, and brand guidelines

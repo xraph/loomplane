@@ -101,6 +101,12 @@ func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, re
 	if p.UserID == "" || p.OrgID == "" {
 		return nil, ErrUnauthenticated
 	}
+	// Once per organization per process, so an upgrade that grows a role
+	// reaches organizations whose members already have one. Assign is the
+	// only other caller, and it only runs when membership changes.
+	if err := a.EnsureTenant(ctx, p.OrgID); err != nil {
+		return nil, err
+	}
 	res, err := a.engine.Check(ctx, &warden.CheckRequest{
 		Subject:  warden.Subject{Kind: warden.SubjectUser, ID: p.UserID},
 		Action:   warden.Action{Name: perm.Action},

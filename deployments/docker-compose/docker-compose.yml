@@ -48,5 +48,26 @@ services:
       - "${LOOMPLANE_PORT:-8780}:8780"
     restart: unless-stopped
 
+  # Analyzes repositories. Same image, its own process: it reads code
+  # nobody vetted, so it stays out of the API. It waits for the API, which
+  # migrates the database.
+  loomplane-worker:
+    profiles: ["app"]
+    image: loomplane:local
+    pull_policy: never
+    entrypoint: ["loomplane-worker"]
+    depends_on:
+      loomplane:
+        condition: service_healthy
+    environment:
+      LOOMPLANE_DATABASE_URL: postgres://loomplane:loomplane@postgres:5432/loomplane?sslmode=disable
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8781/_/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
 volumes:
   loomplane-pgdata:
