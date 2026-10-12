@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -244,7 +245,9 @@ func tarToZip(ctx context.Context, job *Job, w io.Writer) error {
 			continue
 		}
 		_, rel, ok := strings.Cut(strings.TrimPrefix(h.Name, "./"), "/")
-		if !ok || rel == "" {
+		// Nothing that would land outside the directory CodeBuild unpacks
+		// into: an absolute path, or one climbing out with "..".
+		if !ok || rel == "" || !filepath.IsLocal(rel) {
 			continue
 		}
 		fh := &zip.FileHeader{Name: rel, Method: zip.Deflate}

@@ -93,7 +93,7 @@ func TestAPIKeys_actAsTheirMakerUntilRevoked(t *testing.T) {
 	ci.must(http.StatusForbidden, http.MethodDelete, "/api/v1/api-keys/"+read.Key.ID, nil, nil)
 
 	// The list never shows a secret.
-	if raw := ada.raw(http.MethodGet, "/api/v1/api-keys"); strings.Contains(raw, write.Secret) || !strings.Contains(raw, write.Key.ID) {
+	if raw := ada.raw("/api/v1/api-keys"); strings.Contains(raw, write.Secret) || !strings.Contains(raw, write.Key.ID) {
 		t.Fatalf("the list %s", raw)
 	}
 

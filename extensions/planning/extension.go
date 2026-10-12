@@ -159,6 +159,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	})
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
+	e.deploys.Projects = prj
 	executors := map[string]deployments.Executor{
 		"cloud-run": &deployments.CloudRun{
 			Google:      gcp.New(e.cfg.Clouds.GoogleEndpoint),

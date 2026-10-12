@@ -138,7 +138,7 @@ func (c *client) do(method, path string, body any, out any) int {
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		c.t.Fatalf("%s %s: %v", method, path, err)
+		c.t.Fatalf("GET %s: %v", path, err)
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(res.Body)
@@ -156,10 +156,10 @@ func (c *client) do(method, path string, body any, out any) int {
 	return res.StatusCode
 }
 
-// raw returns a response's body as text, whatever its status.
-func (c *client) raw(method, path string) string {
+// raw returns a GET's body as text, whatever its status.
+func (c *client) raw(path string) string {
 	c.t.Helper()
-	req, err := http.NewRequestWithContext(c.t.Context(), method, c.base+path, nil)
+	req, err := http.NewRequestWithContext(c.t.Context(), http.MethodGet, c.base+path, http.NoBody)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func (c *client) raw(method, path string) string {
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		c.t.Fatalf("%s %s: %v", method, path, err)
+		c.t.Fatalf("GET %s: %v", path, err)
 	}
 	defer res.Body.Close()
 	data, err := io.ReadAll(res.Body)
