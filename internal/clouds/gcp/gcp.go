@@ -93,11 +93,18 @@ type Client struct {
 	// endpoint replaces every Google API host when set, for tests.
 	endpoint string
 	base     *http.Client
+	// poll is how often a long-running operation is checked.
+	poll time.Duration
 }
 
-// New returns a Client. An empty endpoint means Google's own hosts.
+// New returns a Client. An empty endpoint means Google's own hosts; any
+// other is a test's fake, which answers at once, so it's polled often.
 func New(endpoint string) *Client {
-	return &Client{endpoint: strings.TrimRight(endpoint, "/"), base: &http.Client{Timeout: requestTimeout}}
+	c := &Client{endpoint: strings.TrimRight(endpoint, "/"), base: &http.Client{Timeout: requestTimeout}, poll: 5 * time.Second}
+	if c.endpoint != "" {
+		c.poll = 100 * time.Millisecond
+	}
+	return c
 }
 
 // url returns an API URL on host, such as "run.googleapis.com".

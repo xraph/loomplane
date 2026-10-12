@@ -54,7 +54,9 @@ func Catalog() []provider.Provider {
 				{Workload: provider.WebApp, Execution: provider.Container, Creates: "Cloud Run service"},
 			},
 			Regions: gcpRegions, Scaling: true,
-			Note: milestone4,
+			// Built with Cloud Build, run as a Ctrl Plane instance
+			// (internal/deployments, internal/clouds/cloudrun).
+			Available: true,
 		},
 		{
 			Name: "ecs-fargate", Title: "AWS ECS on Fargate", Cloud: "aws",

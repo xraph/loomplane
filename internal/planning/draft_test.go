@@ -46,7 +46,7 @@ func TestDraft_ofThePolyglotExamplePlansWithNoProblems(t *testing.T) {
 		t.Errorf("needs: web %v, worker %v", m.Services["web"].Needs, m.Services["worker"].Needs)
 	}
 
-	res := Compute(Input{Environment: "production", Graph: g, Manifest: m, Providers: providers.Registry()})
+	res := Compute(Input{Environment: "production", Graph: g, Manifest: m, Providers: providers.Registry(), Connections: connected})
 	if len(res.Problems) > 0 {
 		t.Fatalf("the draft's plan has problems: %+v", res.Problems)
 	}
@@ -87,7 +87,7 @@ func TestDraft_leavesWeakAndUnprovisionableResourcesForThePlanToAskAbout(t *test
 	if got := m.Services["api-server"].Needs; !slices.Equal(got, []string{"postgres"}) {
 		t.Fatalf("needs %v", got)
 	}
-	res := Compute(Input{Environment: "production", Graph: g, Manifest: m, Providers: providers.Registry()})
+	res := Compute(Input{Environment: "production", Graph: g, Manifest: m, Providers: providers.Registry(), Connections: connected})
 	if len(res.Problems) > 0 {
 		t.Fatalf("the draft's plan is blocked: %+v", res.Problems)
 	}

@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 
 	"github.com/xraph/chronicle"
+	"github.com/xraph/ctrlplane/app"
+	cpext "github.com/xraph/ctrlplane/extension"
 	"github.com/xraph/dispatch/engine"
 	dispatchext "github.com/xraph/dispatch/extension"
 	"github.com/xraph/forge"
@@ -30,6 +32,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/internal/artifacts"
+	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
@@ -53,6 +56,7 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg         config.Config
 	engineOf    func() *engine.Engine
+	ctrlplane   func() *app.CtrlPlane
 	deployments *orchestration.Deployments
 	manifests   *manifests.Service
 	plans       *planning.Service
@@ -62,12 +66,14 @@ type Extension struct {
 
 // New returns the extension. engineOf returns the dispatch extension's
 // engine, which starts and signals each plan's workflow; workflow is the
-// deployment workflow the platform gave Dispatch.
-func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestration.Deployments) *Extension {
+// deployment workflow the platform gave Dispatch; ctrlplane is Ctrl
+// Plane, which runs Cloud Run services.
+func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestration.Deployments, ctrlplane func() *app.CtrlPlane) *Extension {
 	return &Extension{
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Manifests and deployment plans"),
 		cfg:           cfg,
 		engineOf:      engineOf,
+		ctrlplane:     ctrlplane,
 		deployments:   workflow,
 	}
 }
@@ -76,8 +82,8 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 // plan is made from.
 func (e *Extension) Dependencies() []string {
 	return []string{
-		identity.Name, dispatchext.ExtensionName, projectsext.Name, discoveryext.Name, connectionsext.Name,
-		environmentsext.Name,
+		identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
+		connectionsext.Name, environmentsext.Name,
 	}
 }
 
@@ -121,6 +127,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if e.engineOf() == nil {
 		return errors.New("planning needs the dispatch extension to have registered")
 	}
+	cp := e.ctrlplane()
+	if cp == nil {
+		return errors.New("planning needs the ctrlplane extension to have registered")
+	}
 
 	pg := pgdriver.Unwrap(db)
 	log := e.Logger()
@@ -143,7 +153,13 @@ func (e *Extension) Register(fapp forge.App) error {
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
 		},
 		Providers: catalog,
-		Executors: map[string]deployments.Executor{},
+		Executors: map[string]deployments.Executor{
+			"cloud-run": &deployments.CloudRun{
+				Google:      gcp.New(e.cfg.Clouds.GoogleEndpoint),
+				Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
+				Credentials: clouds,
+			},
+		},
 	})
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	return e.routes(fapp.Router(), guard)

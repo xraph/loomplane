@@ -90,6 +90,9 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 	cfg.Orchestration.PollInterval = 100 * time.Millisecond
 	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
 	cfg.Analysis.WorkDir = t.TempDir()
+	google := newFakeGoogle(t)
+	cfg.Clouds.GoogleEndpoint = google.srv.URL
+	cfg.Storage.URL = "mem://"
 	r := start(t, cfg)
 
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
@@ -155,9 +158,20 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 
 	c.must(http.StatusNotFound, http.MethodPost, base+"/plans", map[string]string{"environment": "staging"}, nil)
 	var plan planBody
+	// Cloud Run deploys for real, so the plan needs a Google Cloud
+	// connection first.
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 	waitPlanned(t, c, &plan)
-	if plan.Status != "ready" || plan.Revision == "" || len(plan.Actions) == 0 {
+	if plan.Status != "blocked" || len(plan.Problems) != 1 || plan.Problems[0].Code != "no-connection" {
+		t.Fatalf("plan without a connection %+v", plan)
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	// Ready for review, but not executable: Vercel, ECS and the managed
+	// databases have no adapter yet.
+	if plan.Status != "ready" || plan.Revision == "" || len(plan.Actions) == 0 || plan.Executable {
 		t.Fatalf("plan %+v", plan)
 	}
 	for _, a := range plan.Actions {
@@ -220,7 +234,7 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 		Plans []planBody `json:"plans"`
 	}
 	c.must(http.StatusOK, http.MethodGet, base+"/plans?environment=production", nil, &list)
-	if len(list.Plans) != 3 || list.Plans[0].ID != second.ID {
+	if len(list.Plans) != 4 || list.Plans[0].ID != second.ID {
 		t.Fatalf("plans %+v", list.Plans)
 	}
 	var bindings struct {

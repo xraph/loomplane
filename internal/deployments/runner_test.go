@@ -245,8 +245,8 @@ func answering(t *testing.T, status int) string {
 	return srv.URL
 }
 
-// deploy runs a deployment the way the workflow does.
-func deploy(t *testing.T, r *Runner, plan *planning.Plan) (string, error) {
+// runAll runs a deployment the way the workflow does.
+func runAll(t *testing.T, r *Runner, plan *planning.Plan) (string, error) {
 	t.Helper()
 	ctx := t.Context()
 	id, steps, err := r.Start(ctx, plan.OrgID, plan.ID)
@@ -280,7 +280,7 @@ func TestRunner_deploysInOrderAndLinksServices(t *testing.T) {
 	vars := fakeVariables{"svc:node:apps/web": {"NEXT_PUBLIC_NAME": "Acme"}}
 	r, store, plans := newRunner(t, webAndAPI(), exec, vars)
 
-	id, err := deploy(t, r, webAndAPI())
+	id, err := runAll(t, r, webAndAPI())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestRunner_aVariableWinsOverALink(t *testing.T) {
 	exec := &recorder{url: answering(t, http.StatusOK)}
 	vars := fakeVariables{"svc:node:apps/web": {"API_URL": "https://api.example.com"}}
 	r, _, _ := newRunner(t, webAndAPI(), exec, vars)
-	if _, err := deploy(t, r, webAndAPI()); err != nil {
+	if _, err := runAll(t, r, webAndAPI()); err != nil {
 		t.Fatal(err)
 	}
 	if got := exec.jobs[1].Env["API_URL"]; got != "https://api.example.com" {
@@ -329,7 +329,7 @@ func TestRunner_aVariableWinsOverALink(t *testing.T) {
 func TestRunner_aFailureStopsAndSkipsTheRest(t *testing.T) {
 	exec := &recorder{url: answering(t, http.StatusOK), fail: map[string]error{"api": errors.New("cloud build failed: step 0 exited 1")}}
 	r, store, plans := newRunner(t, webAndAPI(), exec, fakeVariables{})
-	id, err := deploy(t, r, webAndAPI())
+	id, err := runAll(t, r, webAndAPI())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestRunner_aFailureStopsAndSkipsTheRest(t *testing.T) {
 func TestRunner_aServiceThatDoesntAnswerFails(t *testing.T) {
 	exec := &recorder{url: answering(t, http.StatusBadGateway)}
 	r, store, _ := newRunner(t, webAndAPI(), exec, fakeVariables{})
-	id, err := deploy(t, r, webAndAPI())
+	id, err := runAll(t, r, webAndAPI())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -130,7 +130,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
 		connectionsext.New(cfg),
-		planningext.New(cfg, jobs.Engine, deployments),
+		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),
 	}

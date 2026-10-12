@@ -79,11 +79,20 @@ func parse(t *testing.T, yaml string) *manifest.Manifest {
 	return m
 }
 
+// connected is an organization with one ready connection to each cloud,
+// so tests about the plan itself never stop at choosing an account.
+var connected = []ConnectionOption{
+	{ID: "conn_gcp", Name: "Prod", Cloud: "gcp", Ready: true},
+	{ID: "conn_vercel", Name: "Web", Cloud: "vercel", Ready: true},
+	{ID: "conn_aws", Name: "AWS", Cloud: "aws", Ready: true},
+	{ID: "conn_render", Name: "Render", Cloud: "render", Ready: true},
+}
+
 func compute(t *testing.T, yaml, env string, bindings ...*Binding) *Result {
 	t.Helper()
 	return Compute(Input{
 		Environment: env, Graph: polyglot(t), Manifest: parse(t, yaml),
-		Providers: providers.Registry(), Bindings: bindings,
+		Providers: providers.Registry(), Bindings: bindings, Connections: connected,
 	})
 }
 
@@ -171,11 +180,15 @@ func TestCompute_fresh(t *testing.T) {
 		"port-assumed:gateway",
 		// Analysis found these, and the manifest leaves them out.
 		"service-left-out:docs", "service-left-out:ingest", "service-left-out:backfill",
-		"provider-unavailable:cloud-run", "provider-unavailable:vercel",
+		// Cloud Run has an adapter; the rest don't yet.
+		"provider-unavailable:vercel", "provider-unavailable:cloud-sql",
 	} {
 		if !slices.Contains(got, w) {
 			t.Errorf("no warning %s in %v", w, got)
 		}
+	}
+	if slices.Contains(got, "provider-unavailable:cloud-run") {
+		t.Errorf("cloud run is available, but warned about: %v", got)
 	}
 	// web uses Postgres per analysis but only needs api: worth saying.
 	if !slices.Contains(got, "unlinked-resource:web") {
@@ -338,7 +351,7 @@ func TestCompute_findings(t *testing.T) {
 	for i := range g.Resources {
 		g.Resources[i].NeedsConfirmation = true
 	}
-	r := Compute(Input{Environment: "production", Graph: &g, Manifest: parse(t, yaml), Providers: providers.Registry()})
+	r := Compute(Input{Environment: "production", Graph: &g, Manifest: parse(t, yaml), Providers: providers.Registry(), Connections: connected})
 	if !slices.Contains(codes(r.Warnings), "unconfirmed-resource:postgres") {
 		t.Errorf("weak finding not marked unconfirmed: %v", codes(r.Warnings))
 	}

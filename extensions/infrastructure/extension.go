@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	authsome "github.com/xraph/authsome"
 	"github.com/xraph/ctrlplane/app"
@@ -25,6 +26,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/clouds/cloudrun"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -150,10 +152,17 @@ func (e *Extension) status(c forge.Context) error {
 	return c.JSON(http.StatusOK, InfrastructureStatus{Engine: "ctrlplane", Store: "postgres", Providers: providers(e.cp.Providers())})
 }
 
+// providers lists the registered providers every organization shares.
+// Cloud Run providers are each one organization's connection, keyed by
+// its ID, so they're left out: an organization sees its own under
+// Integrations.
 func providers(reg *provider.Registry) []ProviderStatus {
 	all := reg.All()
 	out := make([]ProviderStatus, 0, len(all))
 	for name, p := range all {
+		if strings.HasPrefix(name, cloudrun.KeyPrefix) {
+			continue
+		}
 		info := p.Info()
 		caps := make([]string, 0, len(p.Capabilities()))
 		for _, c := range p.Capabilities() {
