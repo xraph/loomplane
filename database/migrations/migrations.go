@@ -38,6 +38,7 @@ func Group() *migrate.Group {
 		statements("20261012000008", "create_deployments", deploymentsUp, deploymentsDown),
 		statements("20261012000009", "add_binding_url", bindingURLUp, bindingURLDown),
 		statements("20261013000001", "create_project_sources", sourcesUp, sourcesDown),
+		statements("20261013000002", "create_plan_sources", planSourcesUp, planSourcesDown),
 	)
 	return g
 }
@@ -468,4 +469,47 @@ var sourcesDown = []string{
 	`ALTER TABLE loomplane_analyses DROP COLUMN IF EXISTS alias`,
 	`ALTER TABLE loomplane_analyses DROP COLUMN IF EXISTS source_id`,
 	`DROP TABLE IF EXISTS loomplane_project_sources`,
+}
+
+// A plan pins one analysis of each source it was made from, and whether
+// it moves that source or holds it at what's deployed. Each row copies the
+// source's alias, repository and directory, so a plan recomposes exactly
+// even after someone changes a source. An environment's sources are what
+// a deployment last put there; only a successful deployment writes them.
+// The backfill gives every older plan the one source it was made from,
+// moving. loomplane_plans.analysis_id and commit_sha stay, unread, until a
+// later migration drops them.
+var planSourcesUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_plan_sources (
+		plan_id     TEXT    NOT NULL REFERENCES loomplane_plans (id) ON DELETE CASCADE,
+		source_id   TEXT    NOT NULL REFERENCES loomplane_project_sources (id) ON DELETE CASCADE,
+		alias       TEXT    NOT NULL,
+		repository  TEXT    NOT NULL,
+		root        TEXT    NOT NULL DEFAULT '',
+		analysis_id TEXT    NOT NULL REFERENCES loomplane_analyses (id) ON DELETE CASCADE,
+		commit_sha  TEXT    NOT NULL,
+		in_scope    BOOLEAN NOT NULL,
+		PRIMARY KEY (plan_id, source_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS loomplane_environment_sources (
+		environment_id TEXT        NOT NULL REFERENCES loomplane_environments (id) ON DELETE CASCADE,
+		source_id      TEXT        NOT NULL REFERENCES loomplane_project_sources (id) ON DELETE CASCADE,
+		org_id         TEXT        NOT NULL,
+		analysis_id    TEXT        NOT NULL REFERENCES loomplane_analyses (id) ON DELETE CASCADE,
+		commit_sha     TEXT        NOT NULL,
+		plan_id        TEXT        NOT NULL REFERENCES loomplane_plans (id) ON DELETE CASCADE,
+		deployed_at    TIMESTAMPTZ NOT NULL,
+		PRIMARY KEY (environment_id, source_id)
+	)`,
+	`ALTER TABLE loomplane_plans ALTER COLUMN analysis_id DROP NOT NULL`,
+	`INSERT INTO loomplane_plan_sources (plan_id, source_id, alias, repository, root, analysis_id, commit_sha, in_scope)
+		SELECT p.id, a.source_id, a.alias, a.repository, '', p.analysis_id, p.commit_sha, TRUE
+		FROM loomplane_plans p JOIN loomplane_analyses a ON a.id = p.analysis_id
+		WHERE a.source_id IS NOT NULL
+		ON CONFLICT DO NOTHING`,
+}
+
+var planSourcesDown = []string{
+	`DROP TABLE IF EXISTS loomplane_environment_sources`,
+	`DROP TABLE IF EXISTS loomplane_plan_sources`,
 }

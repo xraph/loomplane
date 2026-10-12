@@ -118,3 +118,32 @@ func TestSources_eachProjectsRepositoryBecomesItsFirstSource(t *testing.T) {
 		t.Fatalf("variable services %q", got)
 	}
 }
+
+func TestPlanSources_eachPlanKeepsItsCommit(t *testing.T) {
+	conn := scratch(t)
+	exec(t, conn, projectsUp...)
+	exec(t, conn, analysesUp...)
+	exec(t, conn, variablesUp...)
+	exec(t, conn, projectStyleUp...)
+	exec(t, conn, planningUp...)
+	exec(t, conn,
+		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
+			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/mono', 'ready', 'usr', now(), now())`,
+		`INSERT INTO loomplane_environments (id, org_id, project_id, name, kind, created_at, updated_at) VALUES
+			('env_a', 'org', 'proj_a', 'production', 'production', now(), now())`,
+		`INSERT INTO loomplane_analyses (id, org_id, project_id, status, repository, commit_sha, created_by, created_at) VALUES
+			('anl_a', 'org', 'proj_a', 'succeeded', 'acme/mono', 'abc', 'usr', now())`,
+		`INSERT INTO loomplane_manifests (id, org_id, project_id, revision, body, digest, created_by, created_at) VALUES
+			('man_a', 'org', 'proj_a', 1, 'version: 1', 'd', 'usr', now())`,
+		`INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status, analysis_id, commit_sha,
+			manifest_id, manifest_revision, created_by, created_at) VALUES
+			('plan_a', 'org', 'proj_a', 'env_a', 'production', 'approved', 'anl_a', 'abc', 'man_a', 1, 'usr', now())`,
+	)
+	exec(t, conn, sourcesUp...)
+	exec(t, conn, planSourcesUp...)
+	exec(t, conn, planSourcesUp...)
+	got := strs(t, conn, `SELECT plan_id || ' ' || alias || ' ' || analysis_id || ' ' || commit_sha || ' ' || in_scope::text FROM loomplane_plan_sources`)
+	if !slices.Equal(got, []string{"plan_a mono anl_a abc true"}) {
+		t.Fatalf("plan sources %q", got)
+	}
+}
