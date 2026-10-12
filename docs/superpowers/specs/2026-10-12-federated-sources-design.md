@@ -49,7 +49,7 @@ These were settled while designing, and the rest of the document follows from th
 2. There's one manifest per project, stored in Loomplane as today. Repositories don't carry their own `loomplane.yaml`.
 3. Federation happens at the graph layer. Git stays strictly per repository: one token, one tarball, one SHA each.
 4. Aliases are immutable and never reused, even after a source is removed.
-5. IDs are always alias-qualified. We considered giving an existing project's repository an empty alias so its IDs wouldn't change, and decided against two ID shapes. Manifests and plans haven't shipped and nothing deploys yet, so there's little to migrate.
+5. IDs are always alias-qualified. We considered giving an existing project's repository an empty alias so its IDs wouldn't change, and decided against two ID shapes. Nothing deploys yet, and a manifest for a project with one source stays valid without `repo:`, so the migration only has to touch variables and plans.
 6. Two sources publishing the same package name produce a note, not an edge.
 7. `root` filters the graph after a whole-repository analysis. It does not narrow the checkout.
 8. A held service ignores manifest edits as well as code changes.
@@ -119,7 +119,7 @@ CREATE TABLE loomplane_environment_sources (
 
 For each project with a non-empty `repository_url`, the migration creates one source. The alias is the repository name, slugified and cut to 32 characters, with `-src` appended when it clashes with an ecosystem name. Every `loomplane_variables.service` value is rewritten from `svc:<eco>:<path>` to `svc:<alias>:<eco>:<path>`, and every existing analysis gets that source's ID. Projects with no repository get no source.
 
-Manifest revisions and plans are still uncommitted work at the time of writing, so the migration doesn't rewrite them. If either ships before this does, the migration must also add `repo:` to each manifest service (writing a new revision, not editing old ones) and move each plan's pair into `loomplane_plan_sources`.
+Each existing plan's `analysis_id` and `commit_sha` move into one `loomplane_plan_sources` row with `in_scope` set, before those columns are dropped. Manifest revisions need nothing: every migrated project has exactly one source, so a service without `repo:` resolves to it, and `source` paths were already relative to the repository.
 
 ## Identity
 
@@ -257,7 +257,7 @@ The project page swaps its single-repository header (`pages/project-detail.tsx:2
 
 `ServiceGraph` draws one cluster per source and gives cross-repository `uses` edges their own style, dashed when Likely. `GraphCaption` shows a chip per source (`web@3f2c1a9 · api@9a1b02e`) in place of one `repository@sha`. `evidenceURL` and `commitURL` (`lib/architecture.ts:92`) look up `evidence.source` in `graph.sources`. The services table gets a Repo column, analysis history can be filtered by source, and the command menu gets "Analyze source…".
 
-There's no plan screen yet, only mocks, so the scope picker waits for one. The API takes `scope` from the start.
+The plan screens from `d36ca4a` get two additions. Creating a plan offers a scope picker listing the project's sources, with every source ticked by default and a source with nothing deployed to that environment locked on. Reviewing a plan shows its lockset, one row per source with its commit and whether it moves or is held, and lists the `held` and `cross-repo-impact` findings with the rest.
 
 ## Errors
 
@@ -289,7 +289,7 @@ Four phases, each shippable on its own.
 1. Sources: the table, the migration, the source endpoints, and analyses per source. A project with one source behaves as it does today except that its IDs carry an alias.
 2. Federation: `Requires` in the detectors, `graph.Compose`, root filtering, and `GET /projects/:id/graph`.
 3. Planning: locksets, scopes, held services, the impact finding, and `loomplane_environment_sources`.
-4. Dashboard: the sources panel, the add-source dialog, the clustered graph and links per source.
+4. Dashboard: the sources panel, the add-source dialog, the clustered graph, links per source, and scope and lockset on the plan screens.
 
 Phase 1 changes the data model without changing behaviour. If the migration is wrong, you find out while every project still has exactly one source, which is the easiest state to check.
 
