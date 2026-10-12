@@ -39,6 +39,10 @@ const (
 	LabelListener    = "loomplane-ecs-listener"
 	LabelDesired     = "loomplane-ecs-desired"
 	LabelCPU         = "loomplane-ecs-cpu"
+	// LabelNamespace is the Cloud Map namespace the service joins through
+	// Service Connect, and LabelAlias the name it's reached by there.
+	LabelNamespace = "loomplane-ecs-namespace"
+	LabelAlias     = "loomplane-ecs-alias"
 	// LabelSecret prefixes a label naming the Secrets Manager secret a
 	// variable is read from: "loomplane-secret.KEY" = ARN.
 	LabelSecret = "loomplane-secret."
@@ -173,6 +177,7 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 		Cluster: labels[LabelCluster], Name: name, Task: task, Desired: int32(desired), //nolint:gosec // G115: a small count
 		Subnets: strings.Split(labels[LabelSubnets], ","), Group: labels[LabelGroup],
 		TargetGroup: labels[LabelTargetGroup], Port: port,
+		Namespace: labels[LabelNamespace], Alias: labels[LabelAlias],
 	})
 }
 

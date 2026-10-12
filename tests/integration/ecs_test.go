@@ -41,6 +41,8 @@ type fakeECS struct {
 	// dbPolls how often each was read.
 	dbs     map[string]url.Values
 	dbPolls map[string]int
+	// namespaces are Cloud Map namespaces, by name.
+	namespaces map[string]string
 }
 
 const ecsAPI = "AmazonEC2ContainerServiceV20141113."
@@ -52,6 +54,7 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		groups: map[string]string{}, lbs: map[string]bool{}, tgs: map[string]string{},
 		services: map[string]map[string]any{}, secrets: map[string]string{}, buckets: map[string]bool{}, uploads: map[string]int{},
 		ingress: map[string][]string{}, dbs: map[string]url.Values{}, dbPolls: map[string]int{},
+		namespaces: map[string]string{},
 	}
 	j := func(target string, h func(in map[string]any) (int, any)) {
 		f.json[target] = func(body []byte) (int, string) {
@@ -115,6 +118,29 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		name := in["Name"].(string)
 		e.secrets[name] = in["SecretString"].(string)
 		return 200, map[string]any{"ARN": "arn:aws:secretsmanager:us-east-1:" + awsAccount + ":secret:" + name + "-AbCdEf", "Name": name}
+	})
+	// Cloud Map.
+	const cloudMap = "Route53AutoNaming_v20170314."
+	nsARN := func(id string) string { return "arn:aws:servicediscovery:us-east-1:" + awsAccount + ":namespace/" + id }
+	j(cloudMap+"ListNamespaces", func(map[string]any) (int, any) {
+		list := make([]any, 0, len(e.namespaces))
+		for name, id := range e.namespaces {
+			list = append(list, map[string]any{"Id": id, "Name": name, "Arn": nsARN(id), "Type": "HTTP"})
+		}
+		return 200, map[string]any{"Namespaces": list}
+	})
+	j(cloudMap+"CreateHttpNamespace", func(in map[string]any) (int, any) {
+		id := fmt.Sprintf("ns-%d", len(e.namespaces)+1)
+		e.namespaces[in["Name"].(string)] = id
+		return 200, map[string]any{"OperationId": "op-" + id}
+	})
+	j(cloudMap+"GetOperation", func(in map[string]any) (int, any) {
+		id := strings.TrimPrefix(in["OperationId"].(string), "op-")
+		return 200, map[string]any{"Operation": map[string]any{"Id": in["OperationId"], "Status": "SUCCESS", "Targets": map[string]any{"NAMESPACE": id}}}
+	})
+	j(cloudMap+"GetNamespace", func(in map[string]any) (int, any) {
+		id := in["Id"].(string)
+		return 200, map[string]any{"Namespace": map[string]any{"Id": id, "Arn": nsARN(id), "Type": "HTTP"}}
 	})
 	// ECS.
 	j(ecsAPI+"CreateCluster", func(in map[string]any) (int, any) {
@@ -329,6 +355,7 @@ services:
   worker:
     source: go:services/worker/cmd/worker
     provider: ecs-fargate
+    needs: [api]
 ignore:
   resources: [postgres, redis]
 `
@@ -444,6 +471,17 @@ func TestDeploy_servicesRunOnECSFargate(t *testing.T) {
 	if lb := apiSvc["loadBalancers"].([]any)[0].(map[string]any); lb["containerPort"] != float64(8080) {
 		t.Fatalf("api's load balancer %+v", lb)
 	}
+	// Both join the environment's namespace; api is reached there as
+	// api:8080, and worker, with no port, only calls out.
+	if len(cloud.namespaces) != 1 {
+		t.Fatalf("namespaces %v", cloud.namespaces)
+	}
+	apiSC, workerSC := apiSvc["serviceConnectConfiguration"].(map[string]any), workerSvc["serviceConnectConfiguration"].(map[string]any)
+	alias := apiSC["services"].([]any)[0].(map[string]any)["clientAliases"].([]any)[0].(map[string]any)
+	if apiSC["enabled"] != true || alias["dnsName"] != "api" || alias["port"] != float64(8080) ||
+		workerSC["enabled"] != true || workerSC["namespace"] != apiSC["namespace"] || workerSC["services"] != nil {
+		t.Fatalf("service connect: api %+v, worker %+v", apiSC, workerSC)
+	}
 	// The secret went to Secrets Manager and reaches the task by ARN.
 	var apiTask map[string]any
 	for _, td := range cloud.tasks {
@@ -451,6 +489,20 @@ func TestDeploy_servicesRunOnECSFargate(t *testing.T) {
 		if strings.Contains(ctr["image"].(string), "/loomplane/api-") {
 			apiTask = ctr
 		}
+	}
+	// worker reaches api privately, not through the load balancer.
+	var workerTask map[string]any
+	for _, td := range cloud.tasks {
+		ctr := td["containerDefinitions"].([]any)[0].(map[string]any)
+		if strings.Contains(ctr["image"].(string), "/loomplane/worker-") {
+			workerTask = ctr
+		}
+	}
+	if !slices.ContainsFunc(workerTask["environment"].([]any), func(v any) bool {
+		kv := v.(map[string]any)
+		return kv["name"] == "API_URL" && kv["value"] == "http://api:8080"
+	}) {
+		t.Fatalf("worker's environment %+v", workerTask["environment"])
 	}
 	sec := apiTask["secrets"].([]any)[0].(map[string]any)
 	if sec["name"] != "API_TOKEN" || !strings.HasPrefix(sec["valueFrom"].(string), "arn:aws:secretsmanager:") {

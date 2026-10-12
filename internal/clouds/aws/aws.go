@@ -39,6 +39,8 @@ var Actions = []string{
 	"rds:ModifyDBInstance",
 	"s3:CreateBucket", "s3:PutObject",
 	"secretsmanager:CreateSecret", "secretsmanager:PutSecretValue",
+	"servicediscovery:CreateHttpNamespace", "servicediscovery:CreateService", "servicediscovery:GetNamespace",
+	"servicediscovery:GetOperation", "servicediscovery:ListNamespaces",
 }
 
 // Errors.

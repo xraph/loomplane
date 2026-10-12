@@ -206,7 +206,21 @@ func (f *fakeCloud) run(r *http.Request, p string, body []byte, reply func(any),
 		f.services[name] = svc
 		reply(op)
 	case strings.HasSuffix(p, ":setIamPolicy"):
-		f.public[strings.TrimSuffix(strings.TrimPrefix(p, runPrefix+"/"), ":setIamPolicy")] = true
+		var in struct {
+			Policy struct {
+				Bindings []struct {
+					Members []string `json:"members"`
+				} `json:"bindings"`
+			} `json:"policy"`
+		}
+		_ = json.Unmarshal(body, &in)
+		name := strings.TrimSuffix(strings.TrimPrefix(p, runPrefix+"/"), ":setIamPolicy")
+		delete(f.public, name)
+		for _, b := range in.Policy.Bindings {
+			if slices.Contains(b.Members, "allUsers") {
+				f.public[name] = true
+			}
+		}
 		reply(map[string]any{})
 	default:
 		name := strings.TrimPrefix(p, runPrefix+"/")

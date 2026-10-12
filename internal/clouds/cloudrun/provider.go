@@ -200,10 +200,16 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 	if err != nil {
 		return nil, err
 	}
-	if labels[LabelPublic] == "true" {
-		if err := s.AllowPublic(ctx, p.region, name); err != nil {
-			return nil, err
+	// A private service takes calls from the project's own services only,
+	// which run as its runtime account.
+	invoker := gcp.Public
+	if labels[LabelPublic] != "true" {
+		if invoker, err = s.RuntimeAccount(ctx); err != nil {
+			return nil, fmt.Errorf("find the runtime service account: %w", err)
 		}
+	}
+	if err := s.SetInvokers(ctx, p.region, name, invoker); err != nil {
+		return nil, err
 	}
 	return svc, nil
 }

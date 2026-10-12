@@ -332,15 +332,20 @@ func (s *Session) waitOperation(ctx context.Context, op operation, message strin
 	return nil
 }
 
-// AllowPublic lets anyone call the service. An organization policy that
-// forbids public services makes this fail, and the error says so.
-func (s *Session) AllowPublic(ctx context.Context, region, name string) error {
+// Public is the member that lets anyone call a service.
+const Public = "allUsers"
+
+// SetInvokers sets who may call the service, replacing whoever could
+// before: Public for anyone, or a service account. An organization
+// policy that forbids public services makes Public fail, and the error
+// says so.
+func (s *Session) SetInvokers(ctx context.Context, region, name string, members ...string) error {
 	u := s.c.url("run.googleapis.com", s.servicePath(region, name)+":setIamPolicy")
 	err := s.do(ctx, http.MethodPost, u, map[string]any{
-		"policy": map[string]any{"bindings": []map[string]any{{"role": "roles/run.invoker", "members": []string{"allUsers"}}}},
+		"policy": map[string]any{"bindings": []map[string]any{{"role": "roles/run.invoker", "members": members}}},
 	}, nil)
 	if err != nil {
-		return fmt.Errorf("make %s public: %w", name, err)
+		return fmt.Errorf("set who may call %s: %w", name, err)
 	}
 	return nil
 }

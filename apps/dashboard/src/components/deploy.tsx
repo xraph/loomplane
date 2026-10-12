@@ -1034,6 +1034,12 @@ function ActionRow({ action: a }: { action: Action }) {
             <span key={e.key}>
               {i > 0 && ", "}
               <code className="font-mono">{e.key}</code> from {e.from}
+              {e.address && (
+                <>
+                  {" "}
+                  at <code className="font-mono">{e.address}</code>, privately
+                </>
+              )}
             </span>
           ))}
         </p>

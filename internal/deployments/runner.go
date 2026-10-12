@@ -423,6 +423,10 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			env[link.Key], secret[link.Key] = string(addr), true
 			continue
 		}
+		if link.Address != "" {
+			env[link.Key] = link.Address
+			continue
+		}
 		dep := services[link.From]
 		if dep == nil || dep.URL == "" {
 			return nil, nil, fmt.Errorf("%s needs %s, which has no address yet", a.Name, link.From)

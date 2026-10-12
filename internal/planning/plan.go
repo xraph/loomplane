@@ -131,6 +131,10 @@ type EnvLink struct {
 	// From is the manifest name of the resource or service.
 	From    string  `json:"from"`
 	Subject Subject `json:"subject"`
+	// Address is the private address the service reaches it at, when
+	// they share a network: http://name:port through ECS Service Connect.
+	// Empty means its public URL, known once it's deployed.
+	Address string `json:"address,omitempty"`
 }
 
 // ResourceConfig is everything a resource is provisioned from.

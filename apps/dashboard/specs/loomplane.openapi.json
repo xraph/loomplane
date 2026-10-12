@@ -2454,6 +2454,9 @@
           "subject"
         ],
         "properties": {
+          "address": {
+            "type": "string"
+          },
           "from": {
             "type": "string"
           },

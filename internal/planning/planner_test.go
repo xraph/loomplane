@@ -224,6 +224,8 @@ func TestCompute_problems(t *testing.T) {
 		{"unknown version", "version: 1\nresources:\n  db: {kind: postgres, provider: rds, version: '9.6'}", "unknown-version:db"},
 		{"needs a worker", "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api, needs: [w]}\n  w: {source: services/worker/cmd/worker}", "need-worker:api"},
 		{"needs something off", "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api, needs: [db]}\nresources:\n  db:\n    kind: postgres\n    environments: {production: {enabled: false}}", "need-off:api"},
+		{"private across clouds", "version: 1\nservices:\n  web: {source: apps/web, provider: vercel, needs: [api]}\n  api: {source: services/api, provider: ecs-fargate, public: false}", "private-across-clouds:web"},
+		{"private with no network", "version: 1\ndefaults: {provider: render}\nservices:\n  gw: {source: apps/gateway, needs: [api]}\n  api: {source: services/api, public: false}", "private-unreachable:gw"},
 		{"tool kind", "version: 1\nservices:\n  api: {source: services/api, provider: render, kind: worker}\n  w: {source: services/worker/cmd/worker, provider: cloud-run, kind: http-service}", ""},
 	}
 	for _, tt := range tests {
@@ -375,6 +377,40 @@ resources:
 	keys := []string{api.Service.Env[0].Key, api.Service.Env[1].Key}
 	if !slices.Equal(keys, []string{"ANALYTICS_URL", "DB_URL"}) {
 		t.Errorf("keys = %v", keys)
+	}
+}
+
+func TestCompute_privateLinks(t *testing.T) {
+	// On ECS, services in an environment reach each other by name,
+	// whether or not the one they need is public.
+	ecs := compute(t, `version: 1
+defaults: {provider: ecs-fargate}
+services:
+  gateway: {source: apps/gateway, needs: [api]}
+  api: {source: services/api, public: false}
+ignore: {resources: [postgres, redis]}
+`, "production")
+	if len(ecs.Problems) > 0 {
+		t.Fatalf("problems %v", codes(ecs.Problems))
+	}
+	if link := action(t, ecs, "service:gateway").Service.Env[0]; link.Address != "http://api:8080" {
+		t.Errorf("gateway reaches api at %+v", link)
+	}
+
+	// On Cloud Run, a private service needs an ID token, which the plan
+	// says, and the link is its URL.
+	run := compute(t, `version: 1
+defaults: {provider: cloud-run}
+services:
+  gateway: {source: apps/gateway, needs: [api]}
+  api: {source: services/api, public: false}
+ignore: {resources: [postgres, redis]}
+`, "production")
+	if len(run.Problems) > 0 || !slices.Contains(codes(run.Warnings), "authenticated-call:gateway") {
+		t.Fatalf("problems %v, warnings %v", codes(run.Problems), codes(run.Warnings))
+	}
+	if link := action(t, run, "service:gateway").Service.Env[0]; link.Address != "" {
+		t.Errorf("a Cloud Run link has an address: %+v", link)
 	}
 }
 

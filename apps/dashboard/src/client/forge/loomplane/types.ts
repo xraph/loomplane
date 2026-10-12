@@ -223,6 +223,7 @@ export interface Edge {
 }
 
 export interface EnvLink {
+  address?: string;
   from: string;
   key: string;
   subject: string;

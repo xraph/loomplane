@@ -170,7 +170,7 @@ func (p *planner) checkHTTPS(chosen map[string]string) {
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
-		if a.Provider == "ecs-fargate" && a.Service != nil && a.Service.Public && a.Service.Port > 0 {
+		if a.Provider == ecsFargate && a.Service != nil && a.Service.Public && a.Service.Port > 0 {
 			p.warn(Finding{
 				Code: "plain-http", Subject: ServiceSubject, Name: name, Path: "services." + name,
 				Message: fmt.Sprintf("%s will serve plain HTTP: %s has no certificate. Add an ACM certificate to the connection to serve HTTPS.", name, p.in.Connections[i].Name),
@@ -517,13 +517,31 @@ func (p *planner) link(name string, a *Action) {
 			})
 			continue
 		}
-		if !dep.Service.Public && p.cloud(dep.Provider) != p.cloud(a.Provider) {
-			p.warn(Finding{
+		link := EnvLink{Key: key, From: need, Subject: ServiceSubject}
+		switch {
+		case dep.Provider == ecsFargate && a.Provider == ecsFargate:
+			// Both run in the environment's network, so traffic between
+			// them stays in it, public or not.
+			link.Address = fmt.Sprintf("http://%s:%d", need, dep.Service.Port)
+		case !dep.Service.Public && p.cloud(dep.Provider) != p.cloud(a.Provider):
+			p.problem(Finding{
 				Code: "private-across-clouds", Subject: ServiceSubject, Name: name, Path: base,
-				Message: fmt.Sprintf("%s reaches %s on another cloud, but %s isn't public. Private networking between clouds arrives in milestone 5.", name, need, need),
+				Message: fmt.Sprintf("%s runs on %s, but %s is private on %s, and nothing on another cloud can reach a private service. Make %s public, or run them on the same cloud.", name, cloudTitle(p.cloud(a.Provider)), need, cloudTitle(p.cloud(dep.Provider)), need),
 			})
+			continue
+		case !dep.Service.Public && dep.Provider == cloudRun:
+			p.warn(Finding{
+				Code: "authenticated-call", Subject: ServiceSubject, Name: name, Path: base,
+				Message: fmt.Sprintf("%s is private, so Cloud Run only lets in callers with a Google ID token. Loomplane lets the project's runtime account call it; %s has to send a token from the metadata server, with %s's URL as the audience.", need, name, need),
+			})
+		case !dep.Service.Public && dep.Provider != ecsFargate:
+			p.problem(Finding{
+				Code: "private-unreachable", Subject: ServiceSubject, Name: name, Path: base,
+				Message: fmt.Sprintf("%s is private on %s, which gives other services no way to reach it. Make it public.", need, cloudTitle(p.cloud(dep.Provider))),
+			})
+			continue
 		}
-		a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ServiceSubject})
+		a.Service.Env = append(a.Service.Env, link)
 		a.DependsOn = append(a.DependsOn, dep.ID)
 	}
 	sort.Slice(a.Service.Env, func(i, j int) bool { return a.Service.Env[i].Key < a.Service.Env[j].Key })
@@ -532,6 +550,12 @@ func (p *planner) link(name string, a *Action) {
 	// what's deployed has to happen after them.
 	p.diff(a, a.Service, a.Provider, a.Region)
 }
+
+// Targets the planner knows how services on them reach each other.
+const (
+	ecsFargate = "ecs-fargate"
+	cloudRun   = "cloud-run"
+)
 
 func (p *planner) cloud(name string) string {
 	if prov, err := p.in.Providers.Get(name); err == nil {

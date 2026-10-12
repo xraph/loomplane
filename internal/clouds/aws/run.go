@@ -186,7 +186,11 @@ func (s *Session) RegisterTask(ctx context.Context, t Task) (string, error) {
 		}},
 	}
 	if t.Port > 0 {
-		c.PortMappings = []ecstypes.PortMapping{{ContainerPort: sdk.Int32(t.Port), Protocol: ecstypes.TransportProtocolTcp}}
+		// Service Connect finds the port by its name.
+		c.PortMappings = []ecstypes.PortMapping{{
+			Name: sdk.String(portName), ContainerPort: sdk.Int32(t.Port), Protocol: ecstypes.TransportProtocolTcp,
+			AppProtocol: ecstypes.ApplicationProtocolHttp,
+		}}
 	}
 	for _, k := range slices.Sorted(maps.Keys(t.Env)) {
 		c.Environment = append(c.Environment, ecstypes.KeyValuePair{Name: sdk.String(k), Value: sdk.String(t.Env[k])})
@@ -205,6 +209,9 @@ func (s *Session) RegisterTask(ctx context.Context, t Task) (string, error) {
 	return sdk.ToString(out.TaskDefinition.TaskDefinitionArn), nil
 }
 
+// portName names a task's port, for Service Connect.
+const portName = "http"
+
 // Service is what an ECS service runs and where.
 type Service struct {
 	Cluster     string
@@ -215,6 +222,26 @@ type Service struct {
 	Group       string
 	TargetGroup string
 	Port        int32
+	// Namespace is the Cloud Map namespace the service joins through
+	// Service Connect, so it can reach the environment's other services by
+	// name. Alias is the name it's reached by, when it has a port.
+	Namespace string
+	Alias     string
+}
+
+// serviceConnect is the Service Connect configuration for sv, or nil.
+func (sv Service) serviceConnect() *ecstypes.ServiceConnectConfiguration {
+	if sv.Namespace == "" {
+		return nil
+	}
+	sc := &ecstypes.ServiceConnectConfiguration{Enabled: true, Namespace: sdk.String(sv.Namespace)}
+	if sv.Alias != "" && sv.Port > 0 {
+		sc.Services = []ecstypes.ServiceConnectService{{
+			PortName: sdk.String(portName), DiscoveryName: sdk.String(sv.Alias),
+			ClientAliases: []ecstypes.ServiceConnectClientAlias{{Port: sdk.Int32(sv.Port), DnsName: sdk.String(sv.Alias)}},
+		}}
+	}
+	return sc
 }
 
 // ApplyService creates the service, or rolls the existing one to a new
@@ -229,7 +256,7 @@ func (s *Session) ApplyService(ctx context.Context, sv Service) error {
 	if active {
 		_, err = cli.UpdateService(ctx, &ecs.UpdateServiceInput{
 			Cluster: sdk.String(sv.Cluster), Service: sdk.String(sv.Name), TaskDefinition: sdk.String(sv.Task),
-			DesiredCount: sdk.Int32(sv.Desired),
+			DesiredCount: sdk.Int32(sv.Desired), ServiceConnectConfiguration: sv.serviceConnect(),
 		})
 	} else {
 		in := &ecs.CreateServiceInput{
@@ -238,6 +265,7 @@ func (s *Session) ApplyService(ctx context.Context, sv Service) error {
 			NetworkConfiguration: &ecstypes.NetworkConfiguration{AwsvpcConfiguration: &ecstypes.AwsVpcConfiguration{
 				Subnets: sv.Subnets, SecurityGroups: []string{sv.Group}, AssignPublicIp: ecstypes.AssignPublicIpEnabled,
 			}},
+			ServiceConnectConfiguration: sv.serviceConnect(),
 		}
 		if sv.TargetGroup != "" {
 			in.LoadBalancers = []ecstypes.LoadBalancer{{
