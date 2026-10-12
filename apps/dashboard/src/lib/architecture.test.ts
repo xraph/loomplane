@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import type { Analysis, Graph } from "@/client/forge/loomplane/types"
 import {
+  clusters,
   connections,
   evidenceLabel,
   evidenceURL,
@@ -9,10 +10,15 @@ import {
   kindLabel,
   latestBySource,
   latestSucceeded,
+  linkTo,
+  lockLabel,
+  sourceOf,
   stepIndex,
 } from "@/lib/architecture"
 
 const sha = "0123456789abcdef0123456789abcdef01234567"
+const web = { alias: "web", repository: "acme/web", commitSha: sha }
+const api = { alias: "api", repository: "acme/api", commitSha: "f".repeat(40) }
 
 describe("evidenceURL", () => {
   it("links to the line at the exact commit", () => {
@@ -211,6 +217,39 @@ describe("latestBySource", () => {
     expect([...got.entries()].map(([k, a]) => `${k}:${a.id}`)).toEqual([
       "web:3",
       "api:2",
+    ])
+  })
+})
+
+describe("linkTo", () => {
+  it("links into the source the evidence names", () => {
+    expect(
+      linkTo([web, api], { path: "go.mod", line: 3, detail: "", source: "api" })
+    ).toBe(`https://github.com/acme/api/blob/${"f".repeat(40)}/go.mod#L3`)
+  })
+  it("falls back to the only source, and to nothing when it can't tell", () => {
+    expect(sourceOf([web])?.alias).toBe("web")
+    expect(linkTo([web, api], { path: "go.mod", detail: "" })).toBe("")
+  })
+})
+
+describe("lockLabel", () => {
+  it("names each source's commit", () => {
+    expect(lockLabel([web, api])).toBe("web@0123456 · api@fffffff")
+  })
+})
+
+describe("clusters", () => {
+  it("groups services by source, in alias order", () => {
+    const g = {
+      services: [
+        { id: "svc:web:node:.", source: "web" },
+        { id: "svc:api:go:cmd/api", source: "api" },
+      ],
+    } as Graph
+    expect(clusters(g).map((c) => `${c.alias}:${c.services.length}`)).toEqual([
+      "api:1",
+      "web:1",
     ])
   })
 })

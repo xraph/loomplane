@@ -8,6 +8,7 @@ import type {
   Graph,
   Package,
   Resource,
+  Service,
 } from "@/client/forge/loomplane/types"
 
 /** The statuses of an analysis that hasn't finished, in order. */
@@ -97,6 +98,52 @@ export function evidenceURL(
   const path = ev.path.split("/").map(encodeURIComponent).join("/")
   const line = ev.line ? `#L${ev.line}` : ""
   return `https://github.com/${repository}/blob/${sha}/${path}${line}`
+}
+
+/** SourceLink is a source as a graph or a plan names it: enough to link into it. */
+export interface SourceLink {
+  alias: string
+  repository: string
+  commitSha: string
+}
+
+/**
+ * sourceOf finds the source a finding was read from. A graph of one
+ * source may not name it, so the only one is the answer then.
+ */
+export function sourceOf(
+  sources: SourceLink[],
+  alias?: string
+): SourceLink | undefined {
+  if (alias) return sources.find((s) => s.alias === alias)
+  return sources.length === 1 ? sources[0] : undefined
+}
+
+/** linkTo links a finding to its line in whichever source it came from, or "" when that isn't known. */
+export function linkTo(sources: SourceLink[], ev: Evidence): string {
+  const s = sourceOf(sources, ev.source)
+  return s?.commitSha ? evidenceURL(s.repository, s.commitSha, ev) : ""
+}
+
+/** lockLabel names the commits something was read from: "web@3f2c1a9 · api@9a1b02e". */
+export function lockLabel(
+  sources: { alias: string; commitSha: string }[]
+): string {
+  return sources.map((s) => `${s.alias}@${shortSHA(s.commitSha)}`).join(" · ")
+}
+
+/** clusters groups a graph's services by the source they came from, in alias order. */
+export function clusters(
+  graph: Graph
+): { alias: string; services: Service[] }[] {
+  const by = new Map<string, Service[]>()
+  for (const s of graph.services) {
+    const alias = s.source ?? ""
+    by.set(alias, [...(by.get(alias) ?? []), s])
+  }
+  return [...by.keys()]
+    .sort()
+    .map((alias) => ({ alias, services: by.get(alias)! }))
 }
 
 /** commitURL links to the commit an analysis read. */

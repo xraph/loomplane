@@ -19,6 +19,7 @@ import type { Graph, Resource, Service } from "@/client/forge/loomplane/types"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
+  clusters,
   connections,
   ecosystemLabel,
   kindLabel,
@@ -108,8 +109,18 @@ function columnsOf(graph: Graph, nodeW: number): Column[] {
     h: nodeH,
     service: s,
   })
+  // With several repositories, each gets its own column, so you can see
+  // which one a service lives in.
+  const groups = clusters(graph)
+  const serviceColumns =
+    groups.length > 1
+      ? groups.map((g) => ({
+          title: g.alias,
+          items: [...g.services].sort((a, b) => rank(a) - rank(b)).map(asNode),
+        }))
+      : [{ title: "Services", items: ordered.map(asNode) }]
   return [
-    { title: "Services", items: ordered.map(asNode) },
+    ...serviceColumns,
     {
       title: "Resources",
       items: graph.resources.map((r) => ({

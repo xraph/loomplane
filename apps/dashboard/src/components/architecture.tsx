@@ -97,13 +97,14 @@ import {
   connections,
   ecosystemLabel,
   evidenceLabel,
-  evidenceURL,
   isActive,
   kindLabel,
   latestBySource,
   latestSucceeded,
+  linkTo,
   resourceLabel,
   shortSHA,
+  type SourceLink,
   stepIndex,
   stepLabel,
   steps,
@@ -450,23 +451,28 @@ function AnalyzeOnce({ project }: { project: Project }) {
   )
 }
 
-/** GraphCaption says which commit the graph was read from, and when. */
-export function GraphCaption({ analysis }: { analysis: Analysis }) {
+/** GraphCaption says which commit of each repository the graph was read from. */
+export function GraphCaption({ graph }: { graph: Graph }) {
+  const read = (graph.sources ?? []).filter((s) => s.commitSha)
   return (
     <p className="text-xs text-muted-foreground">
       Read from{" "}
-      <a
-        className="font-mono text-foreground underline-offset-4 hover:underline"
-        href={commitURL(analysis.repository, analysis.commitSha)}
-        target="_blank"
-        rel="noreferrer"
-      >
-        {analysis.repository}@{shortSHA(analysis.commitSha)}
-      </a>
-      {analysis.ref ? ` (${analysis.ref})` : ""}
-      {analysis.finishedAt ? `, ${formatDate(analysis.finishedAt)}` : ""}. Hover
-      a node to trace what it needs, click it for the evidence. Dashed links
-      lead to resources nobody has confirmed yet.
+      {read.map((s, i) => (
+        <span key={s.alias}>
+          {i > 0 && ", "}
+          <a
+            className="font-mono text-foreground underline-offset-4 hover:underline"
+            href={commitURL(s.repository, s.commitSha)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {read.length > 1 ? `${s.alias}@` : `${s.repository}@`}
+            {shortSHA(s.commitSha)}
+          </a>
+        </span>
+      ))}
+      . Hover a node to trace what it needs, click it for the evidence. Dashed
+      links lead to resources nobody has confirmed yet.
     </p>
   )
 }
@@ -562,10 +568,10 @@ export function ServicesTable({
 
 /** Structure is the monorepo around the services: tooling, packages, skips. */
 export function Structure({
-  analysis,
+  sources,
   graph,
 }: {
-  analysis: Analysis
+  sources: SourceLink[]
   graph: Graph
 }) {
   const tooling = [
@@ -598,25 +604,35 @@ export function Structure({
             </span>
           </summary>
           <ul className="mt-3 grid gap-1.5">
-            {graph.packages.map((p) => (
-              <li key={p.id} className="flex flex-wrap items-baseline gap-2">
-                <span>{p.name}</span>
-                <span className="text-xs text-muted-foreground">
-                  {ecosystemLabel(p.ecosystem)}
-                </span>
-                <a
-                  className="font-mono text-xs text-muted-foreground underline-offset-4 hover:underline"
-                  href={evidenceURL(analysis.repository, analysis.commitSha, {
-                    path: p.path,
-                    detail: "",
-                  })}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {p.path}
-                </a>
-              </li>
-            ))}
+            {graph.packages.map((p) => {
+              const href = linkTo(sources, {
+                path: p.path,
+                detail: "",
+                source: p.source,
+              })
+              return (
+                <li key={p.id} className="flex flex-wrap items-baseline gap-2">
+                  <span>{p.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {ecosystemLabel(p.ecosystem)}
+                  </span>
+                  {href ? (
+                    <a
+                      className="font-mono text-xs text-muted-foreground underline-offset-4 hover:underline"
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {p.path}
+                    </a>
+                  ) : (
+                    <code className="font-mono text-xs text-muted-foreground">
+                      {p.path}
+                    </code>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </details>
       )}
@@ -791,6 +807,8 @@ function Chips({
     label: string
     selection?: GraphSelection
     note?: string
+    /** from names the repository a package comes from, when it isn't the service's own. */
+    from?: { alias: string; dashed: boolean }
   }[]
   onSelect: (s: GraphSelection) => void
 }) {
@@ -813,6 +831,17 @@ function Chips({
         ) : (
           <Badge key={it.id} variant="secondary" className="font-normal">
             {it.label}
+            {it.from && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "h-4 px-1.5 text-[0.65rem] font-normal",
+                  it.from.dashed && "border-dashed text-muted-foreground"
+                )}
+              >
+                {it.from.alias}
+              </Badge>
+            )}
           </Badge>
         )
       )}
@@ -822,12 +851,12 @@ function Chips({
 
 /** ServiceDetail is the sheet for one service: how it runs and the proof. */
 export function ServiceDetail({
-  analysis,
+  sources,
   graph,
   service: s,
   onSelect,
 }: {
-  analysis: Analysis
+  sources: SourceLink[]
   graph: Graph
   service: Service
   onSelect: (s: GraphSelection) => void
@@ -894,14 +923,29 @@ export function ServiceDetail({
                 <span className="text-sm">Uses</span>
                 <Chips
                   onSelect={onSelect}
-                  items={uses.map((p) => ({ id: p.id, label: p.name }))}
+                  items={uses.map((p) => ({
+                    id: p.id,
+                    label: p.name,
+                    // A package from another repository says which one, and
+                    // a link nobody is sure of is drawn dashed.
+                    from:
+                      p.source && p.source !== s.source
+                        ? {
+                            alias: p.source,
+                            dashed:
+                              graph.edges.find(
+                                (e) => e.from === s.id && e.to === p.id
+                              )?.confidence === "likely",
+                          }
+                        : undefined,
+                  }))}
                 />
               </div>
             )}
           </DetailSection>
         )}
         <DetailSection title="How Loomplane found it">
-          <EvidenceList analysis={analysis} evidence={s.evidence} />
+          <EvidenceList sources={sources} evidence={s.evidence} />
         </DetailSection>
       </div>
     </>
@@ -910,12 +954,12 @@ export function ServiceDetail({
 
 /** ResourceDetail is the sheet for one resource and who needs it. */
 export function ResourceDetail({
-  analysis,
+  sources,
   graph,
   resource: r,
   onSelect,
 }: {
-  analysis: Analysis
+  sources: SourceLink[]
   graph: Graph
   resource: Resource
   onSelect: (s: GraphSelection) => void
@@ -945,7 +989,7 @@ export function ResourceDetail({
           title={review ? "Why Loomplane suggests it" : "Evidence"}
         >
           <EvidenceList
-            analysis={analysis}
+            sources={sources}
             evidence={r.evidence}
             tone={review ? "weld" : "muted"}
           />
@@ -984,11 +1028,11 @@ export function ResourceDetail({
 
 /** EvidenceList links each finding to the line it was read from. */
 export function EvidenceList({
-  analysis,
+  sources,
   evidence,
   tone = "muted",
 }: {
-  analysis: Analysis
+  sources: SourceLink[]
   evidence: Evidence[]
   tone?: "muted" | "weld"
 }) {
@@ -1003,18 +1047,7 @@ export function EvidenceList({
             )}
           />
           <div className="grid min-w-0 gap-1">
-            <a
-              href={evidenceURL(analysis.repository, analysis.commitSha, ev)}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 font-mono text-xs underline-offset-4 hover:underline"
-            >
-              <span className="truncate">{evidenceLabel(ev)}</span>
-              <ExternalLinkIcon
-                className="size-3 shrink-0"
-                aria-hidden="true"
-              />
-            </a>
+            <EvidenceLink href={linkTo(sources, ev)} ev={ev} />
             {ev.detail && (
               <pre className="overflow-x-auto rounded-md bg-muted px-2 py-1 font-mono text-xs whitespace-pre-wrap">
                 {ev.detail}
@@ -1024,5 +1057,25 @@ export function EvidenceList({
         </li>
       ))}
     </ul>
+  )
+}
+
+/** EvidenceLink is a finding's place, linked when we know which commit to link into. */
+function EvidenceLink({ href, ev }: { href: string; ev: Evidence }) {
+  if (!href) {
+    return (
+      <code className="truncate font-mono text-xs">{evidenceLabel(ev)}</code>
+    )
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1 font-mono text-xs underline-offset-4 hover:underline"
+    >
+      <span className="truncate">{evidenceLabel(ev)}</span>
+      <ExternalLinkIcon className="size-3 shrink-0" aria-hidden="true" />
+    </a>
   )
 }

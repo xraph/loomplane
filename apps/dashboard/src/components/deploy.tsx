@@ -81,7 +81,12 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import { resourceLabel, shortSHA } from "@/lib/architecture"
+import {
+  lockLabel,
+  resourceLabel,
+  shortSHA,
+  type SourceLink,
+} from "@/lib/architecture"
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
@@ -204,7 +209,7 @@ function DraftedManifest({ project }: { project: Project }) {
     <ManifestEditor
       project={project}
       yaml={draft.data.yaml}
-      draftedFrom={draft.data.commitSha}
+      draftedFrom={lockLabel(draft.data.sources)}
     />
   )
 }
@@ -224,7 +229,7 @@ function ManifestEditor({
   yaml: string
   revision?: number
   savedAt?: string
-  /** draftedFrom is the commit a draft was made from; set for a draft. */
+  /** draftedFrom names the commits a draft was made from; set for a draft. */
   draftedFrom?: string
 }) {
   const { can } = useOrganization()
@@ -265,7 +270,7 @@ function ManifestEditor({
         </CardTitle>
         <CardDescription>
           {drafted
-            ? `A draft from commit ${shortSHA(draftedFrom)}: every service on the first target that runs it, and every resource found with good evidence. Check it, then save it as the first revision.`
+            ? `A draft from ${draftedFrom}: every service on the first target that runs it, and every resource found with good evidence. Check it, then save it as the first revision.`
             : "Where each service runs and what it needs. Every save adds a revision, and each plan names the one it was made from."}
         </CardDescription>
         <CardAction>
@@ -585,8 +590,16 @@ function PlanBody({
   const invalidate = useInvalidate()
   const planned = !isPlanning(plan.status) && plan.status !== "failed"
   // Evidence links need the commit the plan was made from.
-  const evidenceFrom =
-    analysis && analysis.id === plan.analysisId ? analysis : undefined
+  const evidenceFrom: SourceLink[] | undefined =
+    analysis && analysis.id === plan.analysisId
+      ? [
+          {
+            alias: analysis.source,
+            repository: analysis.repository,
+            commitSha: analysis.commitSha,
+          },
+        ]
+      : undefined
 
   const replan = async () => {
     try {
@@ -658,7 +671,7 @@ function PlanBody({
               tone="bad"
               project={project}
               environment={plan.environment}
-              analysis={evidenceFrom}
+              sources={evidenceFrom}
             />
           </Section>
         )}
@@ -669,7 +682,7 @@ function PlanBody({
               tone="warn"
               project={project}
               environment={plan.environment}
-              analysis={evidenceFrom}
+              sources={evidenceFrom}
             />
           </Section>
         )}
@@ -751,13 +764,13 @@ function Findings({
   tone,
   project,
   environment,
-  analysis,
+  sources,
 }: {
   findings: Finding[]
   tone: "bad" | "warn"
   project: Project
   environment: string
-  analysis?: Analysis
+  sources?: SourceLink[]
 }) {
   const { can } = useOrganization()
   const mayEdit = can("project:update")
@@ -797,10 +810,10 @@ function Findings({
                   cloud={f.path.slice(connectionPath.length)}
                 />
               )}
-            {analysis && f.evidence && f.evidence.length > 0 && (
+            {sources && f.evidence && f.evidence.length > 0 && (
               <>
                 <EvidenceList
-                  analysis={analysis}
+                  sources={sources}
                   evidence={f.evidence.slice(0, evidenceShown)}
                 />
                 {f.evidence.length > evidenceShown && (

@@ -5,22 +5,22 @@ import {
   GitCommitHorizontalIcon,
   SparklesIcon,
 } from "lucide-react"
-import { type ReactNode, useState } from "react"
+import { type ReactNode, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
-  useAnalysesGraph,
   useEnvironmentsList,
   useProjectsDelete,
   useProjectsGet,
+  useProjectsGraph,
   useProjectsUpdate,
 } from "@/client/forge/loomplane/hooks"
 import type {
-  Analysis,
   Environment,
   Graph,
   Project,
+  ProjectView,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
 import {
@@ -155,59 +155,60 @@ function Loaded({ project }: { project: Project }) {
   const analyses = useAnalyses(project.id)
 
   // One graph for the whole page: the header's languages, the review
-  // banners, every tab and the detail sheet all read it.
-  if (analyses.shown) {
-    return (
-      <WithGraph analysisID={analyses.shown.id}>
-        {(graph) => (
-          <Body
-            project={project}
-            environments={environments.data?.environments}
-            analyses={analyses}
-            graph={graph}
-          />
-        )}
-      </WithGraph>
-    )
-  }
+  // banners, every tab and the detail sheet all read it. It is joined
+  // from the newest successful analysis of every repository, so it is
+  // fetched again while any of them runs, and once more when the last
+  // one stops, to pick up what it found.
+  const view = useQuery(useProjectsGraph, { path: { id: project.id } })
+  useRefetchWhile(analyses.running, view.refetch)
+  useRefetchAfter(analyses.running, view.refetch)
+
   return (
     <Body
       project={project}
       environments={environments.data?.environments}
       analyses={analyses}
-      graph={null}
+      view={view.data ?? null}
+      viewError={view.status === "error" ? view.error : undefined}
     />
   )
 }
 
-function WithGraph({
-  analysisID,
-  children,
-}: {
-  analysisID: string
-  children: (graph: Graph | null) => ReactNode
-}) {
-  const graph = useQuery(useAnalysesGraph, { path: { id: analysisID } })
-  return children(graph.data?.graph ?? null)
+/** useRefetchAfter refetches once when active turns false, so the last tick isn't missed. */
+function useRefetchAfter(active: boolean, refetch: () => Promise<unknown>) {
+  const was = useRef(active)
+  useEffect(() => {
+    if (was.current && !active) refetch().catch(() => undefined)
+    was.current = active
+  }, [active, refetch])
 }
 
 function Body({
   project,
   environments,
   analyses,
-  graph,
+  view,
+  viewError,
 }: {
   project: Project
   environments?: Environment[]
   analyses: ReturnType<typeof useAnalyses>
-  graph: Graph | null
+  view: ProjectView | null
+  viewError?: unknown
 }) {
   const { can } = useOrganization()
   const update = useMutation(useProjectsUpdate)
   const [selected, setSelected] = useState<GraphSelection | null>(null)
   const mayRun = can("analysis:run")
   const mayEdit = can("project:update")
-  const shown = analyses.shown
+  const graph = view?.graph ?? null
+  // The header names one branch and commit, which only means something
+  // when the graph was read from one analysis. The caption under the graph
+  // names every commit.
+  const shownAnalyses = (view?.sources ?? []).flatMap((s) =>
+    s.shown ? [s.shown] : []
+  )
+  const shown = shownAnalyses.length === 1 ? shownAnalyses[0] : undefined
   const style = projectStyle(project)
   const ecosystems = [...new Set(graph?.services.map((s) => s.ecosystem))]
   const toReview = graph?.resources.filter(needsReview) ?? []
@@ -372,11 +373,12 @@ function Body({
           <Discovered
             project={project}
             analyses={analyses}
-            graph={graph}
+            view={view}
+            viewError={viewError}
             mayRun={mayRun}
             mayEdit={mayEdit}
           >
-            {(g, a) =>
+            {(g) =>
               g.services.length + g.resources.length > 0 ? (
                 <>
                   <ServiceGraph
@@ -384,7 +386,7 @@ function Body({
                     selected={selected}
                     onSelect={setSelected}
                   />
-                  <GraphCaption analysis={a} />
+                  <GraphCaption graph={g} />
                 </>
               ) : (
                 <ServicesTable graph={g} onSelect={setSelected} />
@@ -396,14 +398,15 @@ function Body({
           <Discovered
             project={project}
             analyses={analyses}
-            graph={graph}
+            view={view}
+            viewError={viewError}
             mayRun={mayRun}
             mayEdit={mayEdit}
           >
-            {(g, a) => (
+            {(g) => (
               <>
                 <ServicesTable graph={g} onSelect={setSelected} />
-                <Structure analysis={a} graph={g} />
+                <Structure sources={g.sources ?? []} graph={g} />
               </>
             )}
           </Discovered>
@@ -419,7 +422,7 @@ function Body({
           <DeployTab
             project={project}
             environments={environments ?? []}
-            analysis={shown}
+            analysis={analyses.shown}
           />
         </TabsContent>
         <TabsContent value="analyses">
@@ -446,17 +449,17 @@ function Body({
         }}
       >
         <SheetContent className="w-full gap-0 sm:max-w-md">
-          {shown && graph && selectedService && (
+          {graph && selectedService && (
             <ServiceDetail
-              analysis={shown}
+              sources={graph.sources ?? []}
               graph={graph}
               service={selectedService}
               onSelect={setSelected}
             />
           )}
-          {shown && graph && selectedResource && (
+          {graph && selectedResource && (
             <ResourceDetail
-              analysis={shown}
+              sources={graph.sources ?? []}
               graph={graph}
               resource={selectedResource}
               onSelect={setSelected}
@@ -477,23 +480,25 @@ function needName(kind: string): string {
 }
 
 /**
- * Discovered renders children with the analysis graph, or says why there
+ * Discovered renders children with the project's graph, or says why there
  * isn't one yet: no repository, no analysis, or still loading.
  */
 function Discovered({
   project,
   analyses,
-  graph,
+  view,
+  viewError,
   mayRun,
   mayEdit,
   children,
 }: {
   project: Project
   analyses: ReturnType<typeof useAnalyses>
-  graph: Graph | null
+  view: ProjectView | null
+  viewError?: unknown
   mayRun: boolean
   mayEdit: boolean
-  children: (graph: Graph, analysis: Analysis) => ReactNode
+  children: (graph: Graph) => ReactNode
 }) {
   if (project.repositories.length === 0) {
     return <ConnectRepository project={project} mayEdit={mayEdit} />
@@ -507,10 +512,20 @@ function Discovered({
       </Alert>
     )
   }
-  if (!analyses.loaded || (analyses.shown && !graph)) {
+  if (viewError) {
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>
+          {messageOf(viewError, "The project's graph couldn't be loaded.")}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  if (!analyses.loaded || !view) {
     return <Skeleton className="h-72 w-full rounded-xl" />
   }
-  if (!analyses.shown || !graph) {
+  const graph = view.graph
+  if (!graph || !view.sources.some((s) => s.shown)) {
     return (
       <NotAnalyzed
         project={project}
@@ -519,7 +534,7 @@ function Discovered({
       />
     )
   }
-  return children(graph, analyses.shown)
+  return children(graph)
 }
 
 function Details({ project }: { project: Project }) {

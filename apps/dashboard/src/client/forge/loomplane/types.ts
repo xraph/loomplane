@@ -86,6 +86,7 @@ export interface BuildSystem {
   evidence: Evidence;
   name: string;
   path: string;
+  source?: string;
 }
 
 export interface Change {
@@ -253,6 +254,7 @@ export interface Evidence {
   detail: string;
   line?: number;
   path: string;
+  source?: string;
 }
 
 export interface Finding {
@@ -284,6 +286,7 @@ export interface Graph {
   packages: Package[];
   resources: Resource[];
   services: Service[];
+  sources?: SourceRef[];
   version: number;
   workspaces: Workspace[];
 }
@@ -315,16 +318,16 @@ export interface Manifest {
 }
 
 export interface ManifestDraft {
-  analysisId: string;
-  commitSha: string;
   manifest?: Manifest;
   projectId: string;
+  sources: SourceRef[];
   yaml: string;
 }
 
 export interface Note {
   message: string;
   path?: string;
+  source?: string;
 }
 
 export interface OrgInvitation {
@@ -360,7 +363,9 @@ export interface Package {
   id: string;
   name: string;
   path: string;
+  requires?: Requirement[];
   runtime?: string;
+  source?: string;
 }
 
 export interface Plan {
@@ -422,6 +427,12 @@ export interface ProjectList {
   projects: Project[];
 }
 
+export interface ProjectView {
+  graph?: Graph;
+  projectId: string;
+  sources: SourceState[];
+}
+
 export interface Provider {
   available: boolean;
   cloud: string;
@@ -462,6 +473,13 @@ export interface PublicConfig {
 export interface ReplaceInputBody {
   credential: string;
   settings?: Record<string, any>;
+}
+
+export interface Requirement {
+  evidence: Evidence;
+  git?: string;
+  name: string;
+  version?: string;
 }
 
 export interface Resolution {
@@ -544,8 +562,11 @@ export interface Service {
   name: string;
   path: string;
   ports?: number[];
+  requires?: Requirement[];
   runtime?: string;
+  source?: string;
   unit?: string;
+  unitName?: string;
 }
 
 export interface ServiceConfig {
@@ -594,6 +615,20 @@ export interface Source {
 
 export interface SourceList {
   sources: Source[];
+}
+
+export interface SourceRef {
+  alias: string;
+  analysisId: string;
+  commitSha: string;
+  repository: string;
+  root?: string;
+}
+
+export interface SourceState {
+  latest?: Analysis;
+  shown?: Analysis;
+  source: Source;
 }
 
 export interface StartAnalysisInputBody {
@@ -658,6 +693,7 @@ export interface Workspace {
   evidence: Evidence[];
   members: string[];
   path: string;
+  source?: string;
   tool: string;
 }
 

@@ -741,6 +741,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * The project's application graph, joined from the newest successful analysis of each repository
+     */
+    graph: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProjectView> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/graph`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProjectView"],
+      };
+
+      return this.request<types.ProjectView>(config);
+    },
+
+    /**
      * The organization's projects, newest first
      */
     list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProjectList> => {

@@ -1150,6 +1150,38 @@
         }
       }
     },
+    "/api/v1/projects/{id}/graph": {
+      "get": {
+        "tags": [
+          "Analyses"
+        ],
+        "summary": "The project's application graph, joined from the newest successful analysis of each repository",
+        "operationId": "projects.graph",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The graph",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/manifest": {
       "get": {
         "tags": [
@@ -2128,6 +2160,9 @@
           },
           "path": {
             "type": "string"
+          },
+          "source": {
+            "type": "string"
           }
         }
       },
@@ -2679,6 +2714,9 @@
           },
           "path": {
             "type": "string"
+          },
+          "source": {
+            "type": "string"
           }
         }
       },
@@ -2807,6 +2845,12 @@
               "$ref": "#/components/schemas/Service"
             }
           },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            }
+          },
           "version": {
             "type": "integer"
           },
@@ -2910,23 +2954,22 @@
         "type": "object",
         "required": [
           "project_id",
-          "analysis_id",
-          "commit_sha",
+          "sources",
           "yaml"
         ],
         "properties": {
-          "analysis_id": {
-            "type": "string"
-          },
-          "commit_sha": {
-            "type": "string"
-          },
           "manifest": {
             "$ref": "#/components/schemas/Manifest"
           },
           "project_id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            }
           },
           "yaml": {
             "type": "string"
@@ -2943,6 +2986,9 @@
             "type": "string"
           },
           "path": {
+            "type": "string"
+          },
+          "source": {
             "type": "string"
           }
         }
@@ -3076,7 +3122,16 @@
           "path": {
             "type": "string"
           },
+          "requires": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Requirement"
+            }
+          },
           "runtime": {
+            "type": "string"
+          },
+          "source": {
             "type": "string"
           }
         }
@@ -3316,6 +3371,28 @@
         "type": "object",
         "x-forge-envelope": "projects"
       },
+      "ProjectView": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "sources"
+        ],
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/Graph"
+          },
+          "project_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceState"
+            }
+          }
+        }
+      },
       "Provider": {
         "type": "object",
         "required": [
@@ -3464,6 +3541,27 @@
           "settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "Requirement": {
+        "type": "object",
+        "required": [
+          "name",
+          "evidence"
+        ],
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/Evidence"
+          },
+          "git": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
           }
         }
       },
@@ -3753,10 +3851,22 @@
               "type": "integer"
             }
           },
+          "requires": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Requirement"
+            }
+          },
           "runtime": {
             "type": "string"
           },
+          "source": {
+            "type": "string"
+          },
           "unit": {
+            "type": "string"
+          },
+          "unit_name": {
             "type": "string"
           }
         }
@@ -3930,6 +4040,49 @@
         ],
         "type": "object",
         "x-forge-envelope": "sources"
+      },
+      "SourceRef": {
+        "type": "object",
+        "required": [
+          "alias",
+          "repository",
+          "commit_sha",
+          "analysis_id"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "analysis_id": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          }
+        }
+      },
+      "SourceState": {
+        "type": "object",
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "latest": {
+            "$ref": "#/components/schemas/Analysis"
+          },
+          "shown": {
+            "$ref": "#/components/schemas/Analysis"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          }
+        }
       },
       "StartAnalysisInputBody": {
         "type": "object",
@@ -4141,6 +4294,9 @@
             }
           },
           "path": {
+            "type": "string"
+          },
+          "source": {
             "type": "string"
           },
           "tool": {
