@@ -21,12 +21,14 @@ require (
 	github.com/aws/smithy-go v1.28.5
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/joho/godotenv v1.5.1
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/xraph/authsome v1.7.3-0.20261010165401-f1acbe4f253d
 	github.com/xraph/chronicle v1.8.0
 	github.com/xraph/confy v1.0.3
 	github.com/xraph/ctrlplane v1.7.0
 	github.com/xraph/dispatch v1.8.0
 	github.com/xraph/forge v1.12.8
+	github.com/xraph/go-utils v1.3.0
 	github.com/xraph/grove v1.7.3
 	github.com/xraph/grove/drivers/pgdriver v1.7.3
 	github.com/xraph/grove/extension v1.7.3
@@ -89,6 +91,7 @@ require (
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/consul/api v1.34.4 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -125,6 +128,8 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/segmentio/asm v1.1.3 // indirect
+	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/uptrace/bunrouter v1.0.23 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
@@ -135,13 +140,13 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
 	github.com/xraph/forge/extensions/auth v1.12.7 // indirect
-	github.com/xraph/go-utils v1.3.0 // indirect
 	github.com/xraph/grove/drivers/mongodriver v1.7.3 // indirect
 	github.com/xraph/grove/drivers/sqlitedriver v1.7.3 // indirect
 	github.com/xraph/grove/kv v1.7.3 // indirect
 	github.com/xraph/grove/kv/drivers/redisdriver v1.7.3 // indirect
 	github.com/xraph/ledger v1.7.0 // indirect
 	github.com/xraph/vessel v1.0.4 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.9.1 // indirect

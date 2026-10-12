@@ -156,5 +156,4 @@ func TestPlugin_aProviderPluginDeploysLikeABuiltInTarget(t *testing.T) {
 			}
 		}
 	}
-
 }
