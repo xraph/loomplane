@@ -39,6 +39,7 @@ var (
 	ErrEnvironmentNotFound = errors.New("environment not found")
 	ErrEnvironmentExists   = errors.New("this project already has an environment with that name")
 	ErrLastEnvironment     = errors.New("a project needs at least one environment, so its last one can't be deleted")
+	ErrRepository          = errors.New("the repository couldn't be attached")
 )
 
 // Project is an application an organization deploys with Loomplane. Its
@@ -49,18 +50,21 @@ var (
 // generated client, which keeps one normalized copy per ID. A tag, not a
 // Forge interface, so this package stays free of Forge.
 type Project struct {
-	ID            string    `json:"id" forge:"id"`
-	OrgID         string    `json:"org_id"`
-	Name          string    `json:"name"`
-	Slug          string    `json:"slug"`
-	Description   string    `json:"description"`
-	Icon          string    `json:"icon"`
-	Color         string    `json:"color"`
-	RepositoryURL string    `json:"repository_url"`
-	Status        string    `json:"status"`
-	CreatedBy     string    `json:"created_by"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID          string `json:"id" forge:"id"`
+	OrgID       string `json:"org_id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`
+	Color       string `json:"color"`
+	// Repositories are the "owner/name" of each repository the project
+	// builds from, by alias. Its sources belong to discovery; the store
+	// reads them so a list of projects can show them.
+	Repositories []string  `json:"repositories"`
+	Status       string    `json:"status"`
+	CreatedBy    string    `json:"created_by"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Environment is a place a project deploys to, such as production.

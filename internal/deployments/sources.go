@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -37,7 +38,11 @@ func (g *GitHubSources) Store(ctx context.Context, orgID string, project *projec
 	if ok, err := g.Artifacts.Exists(ctx, key); err != nil || ok {
 		return err
 	}
-	repo, err := repositories.ParseGitHubURL(project.RepositoryURL)
+	// A project with several repositories deploys from its first until deployments learn to fetch each one.
+	if len(project.Repositories) == 0 {
+		return errors.New("this project has no repository to deploy from; add one first")
+	}
+	repo, err := repositories.ParseGitHubURL("github.com/" + project.Repositories[0])
 	if err != nil {
 		return err
 	}

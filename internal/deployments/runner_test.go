@@ -137,7 +137,7 @@ func (f *fakePlans) DeleteBinding(_ context.Context, _, id string) error {
 type fakeProjects struct{}
 
 func (fakeProjects) GetProject(context.Context, string, string) (*projects.Project, error) {
-	return &projects.Project{ID: "proj_1", RepositoryURL: "https://github.com/acme/mono"}, nil
+	return &projects.Project{ID: "proj_1", Repositories: []string{"acme/mono"}}, nil
 }
 
 type fakeCredentials struct{}

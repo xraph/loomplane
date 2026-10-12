@@ -26,7 +26,26 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
 var _ Store = (*PgStore)(nil)
 
-const projectColumns = `id, org_id, name, slug, description, icon, color, repository_url, status, created_by, created_at, updated_at`
+const projectColumns = `id, org_id, name, slug, description, icon, color, status, created_by, created_at, updated_at`
+
+// projectSelect reads a project with the repositories its live sources
+// name. The sources table is discovery's; reading it here saves the
+// dashboard a request per project.
+const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.icon, p.color, p.status,
+	p.created_by, p.created_at, p.updated_at,
+	COALESCE((SELECT array_agg(s.repository ORDER BY s.alias) FROM loomplane_project_sources s
+		WHERE s.project_id = p.id AND s.removed_at IS NULL), '{}')
+	FROM loomplane_projects p`
+
+func scanProject(row pgx.Row) (*Project, error) {
+	var p Project
+	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.Status,
+		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &p.Repositories); err != nil {
+		return nil, err
+	}
+	p.normalize()
+	return &p, nil
+}
 
 // CreateProject inserts p and its environments in one transaction. A slug
 // already used in the organization is ErrSlugTaken.
@@ -37,8 +56,8 @@ func (s *PgStore) CreateProject(ctx context.Context, p *Project, envs []*Environ
 	}
 	defer func() { err = rollback(tx, err) }()
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_projects (`+projectColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		p.ID, p.OrgID, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepositoryURL, p.Status, p.CreatedBy, p.CreatedAt, p.UpdatedAt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		p.ID, p.OrgID, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.Status, p.CreatedBy, p.CreatedAt, p.UpdatedAt)
 	if isUniqueViolation(err) {
 		return ErrSlugTaken
 	}
@@ -72,35 +91,30 @@ func rollback(tx driver.Tx, err error) error {
 
 // GetProject returns the project, or ErrNotFound.
 func (s *PgStore) GetProject(ctx context.Context, orgID, id string) (*Project, error) {
-	var p Project
-	err := s.db.QueryRow(ctx, `SELECT `+projectColumns+` FROM loomplane_projects WHERE org_id = $1 AND id = $2`, orgID, id).
-		Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepositoryURL, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
+	p, err := scanProject(s.db.QueryRow(ctx, projectSelect+` WHERE p.org_id = $1 AND p.id = $2`, orgID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get project: %w", err)
 	}
-	p.normalize()
-	return &p, nil
+	return p, nil
 }
 
 // ListProjects returns the organization's projects, newest first.
 func (s *PgStore) ListProjects(ctx context.Context, orgID string) ([]*Project, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+projectColumns+` FROM loomplane_projects
-		WHERE org_id = $1 ORDER BY created_at DESC, id DESC`, orgID)
+	rows, err := s.db.Query(ctx, projectSelect+` WHERE p.org_id = $1 ORDER BY p.created_at DESC, p.id DESC`, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
 	defer rows.Close() // read-only; Err below reports iteration failures
 	out := []*Project{}
 	for rows.Next() {
-		var p Project
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepositoryURL, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		p, err := scanProject(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
-		p.normalize()
-		out = append(out, &p)
+		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
@@ -109,12 +123,12 @@ func (s *PgStore) ListProjects(ctx context.Context, orgID string) ([]*Project, e
 }
 
 // UpdateProject writes p's mutable fields: name, description, icon, color,
-// repository, status and updated_at.
+// status and updated_at.
 func (s *PgStore) UpdateProject(ctx context.Context, p *Project) error {
 	res, err := s.db.Exec(ctx, `UPDATE loomplane_projects
-		SET name = $3, description = $4, icon = $5, color = $6, repository_url = $7, status = $8, updated_at = $9
+		SET name = $3, description = $4, icon = $5, color = $6, status = $7, updated_at = $8
 		WHERE org_id = $1 AND id = $2`,
-		p.OrgID, p.ID, p.Name, p.Description, p.Icon, p.Color, p.RepositoryURL, p.Status, p.UpdatedAt)
+		p.OrgID, p.ID, p.Name, p.Description, p.Icon, p.Color, p.Status, p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("update project: %w", err)
 	}
@@ -229,6 +243,9 @@ func (s *PgStore) ListEnvironments(ctx context.Context, orgID, projectID string)
 // clock is set.
 func (p *Project) normalize() {
 	p.CreatedAt, p.UpdatedAt = p.CreatedAt.UTC(), p.UpdatedAt.UTC()
+	if p.Repositories == nil {
+		p.Repositories = []string{}
+	}
 }
 
 func requireOneRow(res interface{ RowsAffected() (int64, error) }) error {

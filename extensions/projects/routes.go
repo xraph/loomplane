@@ -55,7 +55,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithResponseSchema(http.StatusOK, "The project", projects.Project{}),
 		}},
 		{http.MethodPatch, "/projects/:id", e.update, []forge.RouteOption{
-			forge.WithName("projects.update"), forge.WithSummary("Change a project's name, description, repository, icon or color"),
+			forge.WithName("projects.update"), forge.WithSummary("Change a project's name, description, icon or color"),
 			forge.WithRequestSchema(projects.UpdateProjectInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The project", projects.Project{}),
 		}},

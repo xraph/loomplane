@@ -65,8 +65,19 @@ type Service struct {
 	init     Initializer
 	audit    Auditor
 	cleaners []Cleaner
+	attacher Attacher
 	now      func() time.Time
 }
+
+// Attacher attaches the repository a new project was created with, as its
+// first source, and returns its "owner/name". discovery's Service is the
+// real one; projects can't import it, since it imports projects.
+type Attacher interface {
+	AttachRepository(ctx context.Context, p security.Principal, proj *Project, repositoryURL string) (string, error)
+}
+
+// SetAttacher sets the Attacher. Call it while the app registers.
+func (s *Service) SetAttacher(a Attacher) { s.attacher = a }
 
 // AddCleaner registers a Cleaner, run after every project or environment
 // deletion. Call it while the app registers, before any request arrives.
@@ -85,9 +96,10 @@ func NewService(store Store, authz Authorizer, init Initializer, audit Auditor) 
 
 // CreateProjectInput is what a caller sends to create a project.
 type CreateProjectInput struct {
-	Name          string `json:"name"`
-	Slug          string `json:"slug,omitempty"`
-	Description   string `json:"description,omitempty"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug,omitempty"`
+	Description string `json:"description,omitempty"`
+	// RepositoryURL is attached as the project's first source.
 	RepositoryURL string `json:"repository_url,omitempty"`
 	// Icon and Color are names from style.go. Leaving either out picks
 	// one at random, so a new project's tile is never blank.
@@ -98,9 +110,8 @@ type CreateProjectInput struct {
 // UpdateProjectInput changes a project. A nil field is left alone. The slug never
 // changes: other systems will key on it.
 type UpdateProjectInput struct {
-	Name          *string `json:"name,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	RepositoryURL *string `json:"repository_url,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
 	// An icon or color can change but can't be cleared: an empty one is
 	// invalid, like an unknown one.
 	Icon  *string `json:"icon,omitempty"`
@@ -113,6 +124,10 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	if err := s.authz.Require(ctx, p, security.ProjectCreate, ""); err != nil {
 		return nil, err
 	}
+	repo := strings.TrimSpace(in.RepositoryURL)
+	if repo != "" && s.attacher == nil {
+		return nil, fmt.Errorf("%w: this Loomplane can't attach repositories", ErrInvalid)
+	}
 	proj, err := s.build(p, in)
 	if err != nil {
 		return nil, err
@@ -123,6 +138,18 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	}
 	if err := s.store.CreateProject(ctx, proj, envs); err != nil {
 		return nil, err
+	}
+	if repo != "" {
+		full, err := s.attacher.AttachRepository(ctx, p, proj, repo)
+		if err != nil {
+			// A project that can't read its own repository is worse than
+			// none, so take it back out.
+			if derr := s.store.DeleteProject(context.WithoutCancel(ctx), proj.OrgID, proj.ID); derr != nil {
+				err = errors.Join(err, fmt.Errorf("remove the project again: %w", derr))
+			}
+			return nil, fmt.Errorf("%w: %w", ErrRepository, err)
+		}
+		proj.Repositories = []string{full}
 	}
 	if err := s.init.InitializeProject(ctx, proj.OrgID, proj.ID); err != nil {
 		// Without its job the project would stay initializing forever, so
@@ -153,8 +180,7 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	if err := validateDescription(desc); err != nil {
 		return nil, err
 	}
-	repo := strings.TrimSpace(in.RepositoryURL)
-	if err := validateRepositoryURL(repo); err != nil {
+	if err := validateRepositoryURL(strings.TrimSpace(in.RepositoryURL)); err != nil {
 		return nil, err
 	}
 	icon := pickStyle(strings.TrimSpace(in.Icon), icons)
@@ -173,7 +199,7 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	return &Project{
 		ID: id.String(), OrgID: p.OrgID, Name: name, Slug: slug, Description: desc,
 		Icon: icon, Color: color,
-		RepositoryURL: repo, Status: StatusInitializing, CreatedBy: p.UserID,
+		Repositories: []string{}, Status: StatusInitializing, CreatedBy: p.UserID,
 		CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
@@ -194,7 +220,7 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]*Project, e
 	return s.store.ListProjects(ctx, p.OrgID)
 }
 
-// Update changes a project's name, description, repository, icon or color.
+// Update changes a project's name, description, icon or color.
 func (s *Service) Update(ctx context.Context, p security.Principal, id string, in UpdateProjectInput) (*Project, error) {
 	if err := s.authz.Require(ctx, p, security.ProjectUpdate, id); err != nil {
 		return nil, err
@@ -204,7 +230,7 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 		return nil, err
 	}
 	// The audit trail names the fields an update set, so a new icon reads
-	// differently from a new repository.
+	// differently from a new description.
 	fields := []string{}
 	if in.Name != nil {
 		name := strings.TrimSpace(*in.Name)
@@ -221,14 +247,6 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 		}
 		proj.Description = desc
 		fields = append(fields, "description")
-	}
-	if in.RepositoryURL != nil {
-		repo := strings.TrimSpace(*in.RepositoryURL)
-		if err := validateRepositoryURL(repo); err != nil {
-			return nil, err
-		}
-		proj.RepositoryURL = repo
-		fields = append(fields, "repository_url")
 	}
 	if in.Icon != nil {
 		icon := strings.TrimSpace(*in.Icon)

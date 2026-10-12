@@ -181,12 +181,28 @@ func (a *auditRecorder) Record(_ context.Context, e AuditEvent) {
 	a.events = append(a.events, e)
 }
 
+// attachRecorder stands in for discovery: it attaches every repository as
+// ada/engine, or fails with err.
+type attachRecorder struct {
+	urls []string
+	err  error
+}
+
+func (a *attachRecorder) AttachRepository(_ context.Context, _ security.Principal, proj *Project, url string) (string, error) {
+	if a.err != nil {
+		return "", a.err
+	}
+	a.urls = append(a.urls, proj.ID+" "+url)
+	return "ada/engine", nil
+}
+
 type fixture struct {
-	svc   *Service
-	store *memStore
-	init  *initRecorder
-	audit *auditRecorder
-	authz *security.Authorizer
+	svc    *Service
+	store  *memStore
+	init   *initRecorder
+	audit  *auditRecorder
+	attach *attachRecorder
+	authz  *security.Authorizer
 }
 
 func newFixture(t *testing.T) fixture {
@@ -197,10 +213,11 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	f := fixture{
-		store: newMemStore(), init: &initRecorder{}, audit: &auditRecorder{},
+		store: newMemStore(), init: &initRecorder{}, audit: &auditRecorder{}, attach: &attachRecorder{},
 		authz: security.NewAuthorizer(eng, ws, nil),
 	}
 	f.svc = NewService(f.store, f.authz, f.init, f.audit)
+	f.svc.SetAttacher(f.attach)
 	return f
 }
 
@@ -226,6 +243,9 @@ func TestService_createInitializeAndRead(t *testing.T) {
 	}
 	if len(f.init.queued) != 1 || f.init.queued[0] != p.ID {
 		t.Fatalf("initialization queued for %v", f.init.queued)
+	}
+	if !slices.Equal(p.Repositories, []string{"ada/engine"}) || len(f.attach.urls) != 1 {
+		t.Fatalf("repositories %v, attached %v", p.Repositories, f.attach.urls)
 	}
 	// Environments exist from the start, before the job runs.
 	if envs, eerr := f.svc.Environments(ctx, dev, p.ID); eerr != nil || len(envs) != len(DefaultEnvironments()) {
@@ -600,5 +620,30 @@ func TestService_environments(t *testing.T) {
 	}
 	if err := f.svc.DeleteEnvironment(ctx, dev, p.ID, "env_missing"); !errors.Is(err, ErrEnvironmentNotFound) {
 		t.Fatalf("delete a missing environment: %v", err)
+	}
+}
+
+func TestService_createRemovesTheProjectWhenItsRepositoryCantBeAttached(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	f.attach.err = errors.New("Loomplane can't read that repository")
+
+	_, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine", RepositoryURL: "https://github.com/ada/private"})
+	if !errors.Is(err, ErrRepository) {
+		t.Fatalf("Create: %v", err)
+	}
+	list, err := f.svc.List(ctx, dev)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("a half-made project was left behind: %v, %+v", err, list)
+	}
+}
+
+func TestService_aRepositoryNeedsAnAttacher(t *testing.T) {
+	f := newFixture(t)
+	f.svc.SetAttacher(nil)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	if _, err := f.svc.Create(context.Background(), dev, CreateProjectInput{Name: "Engine", RepositoryURL: "https://github.com/ada/engine"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create: %v", err)
 	}
 }
