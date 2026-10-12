@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -112,8 +113,101 @@ func (b *builder) add(p Part) {
 	}
 }
 
-// link is filled in by the next task.
-func (b *builder) link() {}
+// link adds an edge for each dependency one source declares on a package
+// another source publishes. The edge is certain when the declaration
+// names the other repository itself (a Rust git dependency, a Go module
+// path on github.com) and likely when only the name matches. A name two
+// other sources publish gets no edge, only a note: a wrong edge is worse
+// than a missing one.
+func (b *builder) link() {
+	type key struct {
+		eco  discovery.Ecosystem
+		name string
+	}
+	published := map[key]map[string][]string{} // source alias to node IDs
+	publish := func(k key, source, id string) {
+		if published[k] == nil {
+			published[k] = map[string][]string{}
+		}
+		published[k][source] = append(published[k][source], id)
+	}
+	hasPackage := map[string]bool{}
+	for _, p := range b.g.Packages {
+		if p.Name == "" {
+			continue
+		}
+		publish(key{p.Ecosystem, p.Name}, p.Source, p.ID)
+		hasPackage[p.Source+"\x00"+string(p.Ecosystem)+"\x00"+p.Name] = true
+	}
+	// A unit with no library, only services, is published by its services.
+	for _, s := range b.g.Services {
+		if s.UnitName != "" && !hasPackage[s.Source+"\x00"+string(s.Ecosystem)+"\x00"+s.UnitName] {
+			publish(key{s.Ecosystem, s.UnitName}, s.Source, s.ID)
+		}
+	}
+	repos := map[string]string{}
+	for _, src := range b.g.Sources {
+		repos[src.Alias] = src.Repository
+	}
+	noted := map[string]bool{}
+	use := func(from, source string, eco discovery.Ecosystem, reqs []discovery.Requirement) {
+		for _, req := range reqs {
+			others := map[string][]string{}
+			for src, nodes := range published[key{eco, req.Name}] {
+				if src != source {
+					others[src] = nodes
+				}
+			}
+			if len(others) > 1 {
+				names := slices.Sorted(maps.Keys(others))
+				msg := fmt.Sprintf("%s is published by %s, so Loomplane can't tell which one %s uses.", req.Name, strings.Join(names, " and "), source)
+				if !noted[msg] {
+					noted[msg] = true
+					b.g.Notes = append(b.g.Notes, discovery.Note{Source: source, Path: req.Evidence.Path, Message: msg})
+				}
+				continue
+			}
+			for target, nodes := range others {
+				conf := discovery.Likely
+				if structural(req, eco, repos[target]) {
+					conf = discovery.Certain
+				}
+				for _, id := range nodes {
+					b.edge(from, id, Uses, conf, req.Evidence)
+				}
+			}
+		}
+	}
+	for _, s := range b.g.Services {
+		use(s.ID, s.Source, s.Ecosystem, s.Requires)
+	}
+	for _, p := range b.g.Packages {
+		use(p.ID, p.Source, p.Ecosystem, p.Requires)
+	}
+}
+
+// structural reports whether a requirement names the repository itself,
+// not only a package name anyone could publish. GitHub owners and names
+// ignore case, so the comparison does too.
+func structural(req discovery.Requirement, eco discovery.Ecosystem, repository string) bool {
+	if repository == "" {
+		return false
+	}
+	repo := strings.ToLower(repository)
+	switch eco {
+	case discovery.Rust:
+		git := strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(req.Git)), "/"), ".git")
+		for _, prefix := range []string{"https://github.com/", "http://github.com/", "ssh://git@github.com/", "git@github.com:"} {
+			if rest, ok := strings.CutPrefix(git, prefix); ok {
+				return rest == repo
+			}
+		}
+	case discovery.Go:
+		name := strings.ToLower(req.Name)
+		return name == "github.com/"+repo || strings.HasPrefix(name, "github.com/"+repo+"/")
+	}
+	return false
+}
 
 // qualify puts alias into a service or package ID. Resource IDs are the
 // project's, not a repository's, so they stay as they are.

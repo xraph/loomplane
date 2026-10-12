@@ -104,3 +104,75 @@ func TestCompose_notesWhatItCouldntJoin(t *testing.T) {
 		t.Fatalf("notes %q", msgs)
 	}
 }
+
+func kitGraph(name string) *Graph {
+	return Build(&pd.Report{Units: []pd.Unit{{ID: "go:.", Ecosystem: pd.Go, Name: name, Path: "."}}})
+}
+
+func uiGraph() *Graph {
+	return Build(&pd.Report{Units: []pd.Unit{{ID: "node:.", Ecosystem: pd.Node, Name: "@acme/tokens", Path: "."}}})
+}
+
+func edgeBetween(g *Graph, from, to string) *Edge {
+	for i := range g.Edges {
+		if g.Edges[i].From == from && g.Edges[i].To == to {
+			return &g.Edges[i]
+		}
+	}
+	return nil
+}
+
+func TestCompose_linksAGoModuleOnItsRepositoryAsCertain(t *testing.T) {
+	g := Compose([]Part{{Source: ref("api", "acme/api"), Graph: apiGraph()}, {Source: ref("kit", "Acme/Kit"), Graph: kitGraph("github.com/acme/kit/log")}})
+	e := edgeBetween(g, "svc:api:go:cmd/api", "pkg:kit:go:.")
+	if e == nil || e.Kind != Uses || e.Confidence != pd.Certain || e.Evidence[0].Source != "api" || e.Evidence[0].Line != 5 {
+		t.Fatalf("edge %+v in %+v", e, g.Edges)
+	}
+}
+
+func TestCompose_linksAnNPMNameAsLikely(t *testing.T) {
+	site := Build(&pd.Report{Units: []pd.Unit{{
+		ID: "node:.", Ecosystem: pd.Node, Name: "site", Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "site", Path: "."}},
+		Requires:    []pd.Requirement{{Name: "@acme/tokens", Evidence: pd.Evidence{Path: "package.json", Line: 9}}},
+	}}})
+	g := Compose([]Part{{Source: ref("site", "acme/site"), Graph: site}, {Source: ref("ui", "acme/ui"), Graph: uiGraph()}})
+	if e := edgeBetween(g, "svc:site:node:.", "pkg:ui:node:."); e == nil || e.Confidence != pd.Likely {
+		t.Fatalf("edge %+v in %+v", e, g.Edges)
+	}
+
+	// Published twice, the name is ambiguous: no edge, only a note.
+	g = Compose([]Part{
+		{Source: ref("site", "acme/site"), Graph: site},
+		{Source: ref("ui", "acme/ui"), Graph: uiGraph()},
+		{Source: ref("vendor", "acme/vendor"), Graph: uiGraph()},
+	})
+	if slices.ContainsFunc(g.Edges, func(e Edge) bool { return e.From == "svc:site:node:." }) {
+		t.Fatalf("an ambiguous name got an edge: %+v", g.Edges)
+	}
+	if !slices.ContainsFunc(g.Notes, func(n pd.Note) bool {
+		return n.Source == "site" && strings.Contains(n.Message, "@acme/tokens is published by ui and vendor")
+	}) {
+		t.Fatalf("notes %+v", g.Notes)
+	}
+}
+
+func TestCompose_linksARustGitDependencyAsCertain(t *testing.T) {
+	app := Build(&pd.Report{Units: []pd.Unit{{
+		ID: "rust:.", Ecosystem: pd.Rust, Name: "app", Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "app", Path: "src/main.rs"}},
+		Requires:    []pd.Requirement{{Name: "kit", Git: "https://github.com/Acme/Crates.git", Evidence: pd.Evidence{Path: "Cargo.toml", Line: 6}}},
+	}}})
+	crates := Build(&pd.Report{Units: []pd.Unit{{ID: "rust:kit", Ecosystem: pd.Rust, Name: "kit", Path: "kit"}}})
+	g := Compose([]Part{{Source: ref("app", "acme/app"), Graph: app}, {Source: ref("crates", "acme/crates"), Graph: crates}})
+	if e := edgeBetween(g, "svc:app:rust:src/main.rs", "pkg:crates:rust:kit"); e == nil || e.Confidence != pd.Certain {
+		t.Fatalf("edge %+v in %+v", e, g.Edges)
+	}
+}
+
+func TestCompose_neverLinksARepositoryToItself(t *testing.T) {
+	g := Compose([]Part{{Source: ref("api", "acme/api"), Graph: apiGraph()}})
+	if len(g.Edges) != 1 || g.Edges[0].To != "res:postgres" {
+		t.Fatalf("edges %+v", g.Edges)
+	}
+}
