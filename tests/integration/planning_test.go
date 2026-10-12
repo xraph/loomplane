@@ -33,9 +33,17 @@ type planBody struct {
 		Code string `json:"code"`
 		Name string `json:"name"`
 	} `json:"warnings"`
-	Executable   bool   `json:"executable"`
-	DecidedBy    string `json:"decided_by"`
-	DecisionNote string `json:"decision_note"`
+	Executable    bool   `json:"executable"`
+	DecidedBy     string `json:"decided_by"`
+	DecisionNote  string `json:"decision_note"`
+	EnvironmentID string `json:"environment_id"`
+	Sources       []struct {
+		SourceID   string `json:"source_id"`
+		Alias      string `json:"alias"`
+		AnalysisID string `json:"analysis_id"`
+		CommitSHA  string `json:"commit_sha"`
+		InScope    bool   `json:"in_scope"`
+	} `json:"sources"`
 }
 
 // analyze runs one analysis of each of a project's sources with a worker

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest"
 
 import type { Action, Manifest, Provider } from "@/client/forge/loomplane/types"
-import { planStatus, steps, withIgnored, withResource } from "@/lib/plans"
+import {
+  planStatus,
+  scopeBody,
+  steps,
+  withIgnored,
+  withResource,
+} from "@/lib/plans"
 
 const manifest: Manifest = {
   version: 1,
@@ -55,6 +61,15 @@ describe("withResource", () => {
   it("leaves the provider out when nothing provisions the kind", () => {
     const m = withResource(manifest, "kafka", providers)
     expect(m.resources).toEqual({ kafka: { kind: "kafka" } })
+  })
+})
+
+describe("scopeBody", () => {
+  it("sends no scope when every repository moves", () => {
+    expect(scopeBody(["api", "web"], ["web", "api"])).toEqual({})
+  })
+  it("names the repositories that move otherwise", () => {
+    expect(scopeBody(["api", "web"], ["web"])).toEqual({ scope: ["web"] })
   })
 })
 

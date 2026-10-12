@@ -3,10 +3,13 @@
 package integration
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/xraph/loomplane/internal/config"
 )
@@ -141,5 +144,62 @@ func TestSources_aRepositoryAttachedTwiceIsListedOnce(t *testing.T) {
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+proj.ID, nil, &proj)
 	if !slices.Equal(proj.Repositories, []string{"acme/mono"}) {
 		t.Fatalf("repositories %v, want acme/mono once", proj.Repositories)
+	}
+}
+
+func TestPlanning_aScopedPlanHoldsWhatsDeployed(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubRepos(t, map[string][]byte{
+		"acme/mono": exampleTarball(t),
+		"acme/site": tarball(t, "acme-site-fedcba9", siteFiles),
+	}).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, c)
+
+	var proj struct {
+		ID    string `json:"id"`
+		OrgID string `json:"org_id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Shop", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	c.must(http.StatusCreated, http.MethodPost, base+"/sources", map[string]string{"repository": "acme/site", "alias": "site"}, nil)
+	analyzeAll(t, cfg, c, proj.ID)
+	manifest := "version: 1\ndefaults:\n  provider: cloud-run\nservices:\n  api:\n    repo: mono\n    source: services/api\n  site:\n    repo: site\n    source: .\n    provider: vercel\n"
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": manifest}, nil)
+
+	var full planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]any{"environment": "production"}, &full)
+	waitPlanned(t, c, &full)
+	if full.Status != "ready" || len(full.Sources) != 2 || !full.Sources[0].InScope || !full.Sources[1].InScope {
+		t.Fatalf("full plan %+v", full)
+	}
+
+	// Nothing of mono is deployed, so a plan that holds it can't be made.
+	c.must(http.StatusPreconditionFailed, http.MethodPost, base+"/plans", map[string]any{"environment": "production", "scope": []string{"site"}}, nil)
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, base+"/plans", map[string]any{"environment": "production", "scope": []string{"gone"}}, nil)
+
+	// What milestone 4's executor will write once a deployment succeeds.
+	conn, err := pgx.Connect(context.Background(), cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	mono := full.Sources[0]
+	if _, err = conn.Exec(context.Background(), `INSERT INTO loomplane_environment_sources
+		(environment_id, source_id, org_id, analysis_id, commit_sha, plan_id, deployed_at) VALUES ($1, $2, $3, $4, $5, $6, now())`,
+		full.EnvironmentID, mono.SourceID, proj.OrgID, mono.AnalysisID, mono.CommitSHA, full.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var scoped planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]any{"environment": "production", "scope": []string{"site"}}, &scoped)
+	waitPlanned(t, c, &scoped)
+	if scoped.Status != "ready" || scoped.Sources[0].Alias != "mono" || scoped.Sources[0].InScope || scoped.Sources[0].CommitSHA != mono.CommitSHA || !scoped.Sources[1].InScope {
+		t.Fatalf("scoped plan %+v", scoped)
 	}
 }

@@ -65,6 +65,19 @@ export function steps(actions: Action[]): Action[][] {
 }
 
 /**
+ * scopeBody is the part of a new plan's body that says which repositories
+ * move. With all of them, it says nothing, so the plan follows the
+ * project when it gains another.
+ */
+export function scopeBody(
+  all: string[],
+  chosen: string[]
+): { scope?: string[] } {
+  const moving = all.filter((a) => chosen.includes(a))
+  return moving.length === all.length ? {} : { scope: moving }
+}
+
+/**
  * changeCount says how much a plan would change, leaving out what it
  * keeps as it is.
  */

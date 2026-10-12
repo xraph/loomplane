@@ -19,6 +19,7 @@ import {
   usePlansList,
   usePlansReject,
   useProvidersList,
+  useSourcesList,
 } from "@/client/forge/loomplane/hooks"
 import type {
   Action,
@@ -27,6 +28,7 @@ import type {
   Finding,
   Manifest,
   Plan,
+  PlanSource,
   Project,
 } from "@/client/forge/loomplane/types"
 import {
@@ -81,7 +83,13 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import { lockLabel, resourceLabel, type SourceLink } from "@/lib/architecture"
+import {
+  commitURL,
+  lockLabel,
+  resourceLabel,
+  shortSHA,
+  type SourceLink,
+} from "@/lib/architecture"
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
@@ -92,6 +100,7 @@ import {
   isPlanning,
   opLabel,
   planStatus,
+  scopeBody,
   steps,
   withIgnored,
   withResource,
@@ -125,12 +134,7 @@ export function DeployTab({
       >
         <SheetContent className="w-full gap-0 sm:max-w-xl">
           {planID && (
-            <PlanReview
-              id={planID}
-              project={project}
-              analysis={analysis}
-              onPlanned={setPlanID}
-            />
+            <PlanReview id={planID} project={project} onPlanned={setPlanID} />
           )}
         </SheetContent>
       </Sheet>
@@ -366,18 +370,32 @@ function PlansCard({
   const { can } = useOrganization()
   const plans = useQuery(usePlansList, { path: { id: project.id } })
   const create = useMutation(usePlansCreate)
+  const sources = useQuery(useSourcesList, { path: { id: project.id } })
   const [environment, setEnvironment] = useState(environments[0]?.name ?? "")
+  // null means every repository moves, including one added later.
+  const [moving, setMoving] = useState<string[] | null>(null)
   const list = plans.data?.plans ?? []
   useRefetchWhile(
     list.some((p) => isPlanning(p.status)),
     plans.refetch
   )
+  const aliases = (sources.data?.sources ?? [])
+    .filter((s) => !s.removedAt)
+    .map((s) => s.alias)
+  const chosen = aliases.filter((a) => moving === null || moving.includes(a))
+
+  const toggle = (alias: string) =>
+    setMoving(
+      chosen.includes(alias)
+        ? chosen.filter((a) => a !== alias)
+        : [...chosen, alias]
+    )
 
   const plan = async () => {
     try {
       const p = await create.mutateAsync({
         path: { id: project.id },
-        body: { environment },
+        body: { environment, ...scopeBody(aliases, chosen) },
       })
       void plans.refetch()
       onOpen(p.id)
@@ -395,7 +413,25 @@ function PlansCard({
           and the latest analysis. Planning never touches a cloud.
         </CardDescription>
         {can("deployment:create") && environments.length > 0 && (
-          <CardAction className="flex items-center gap-2">
+          <CardAction className="flex flex-wrap items-center justify-end gap-2">
+            {aliases.length > 1 &&
+              aliases.map((alias) => (
+                <Button
+                  key={alias}
+                  type="button"
+                  size="sm"
+                  variant={chosen.includes(alias) ? "secondary" : "outline"}
+                  aria-pressed={chosen.includes(alias)}
+                  title={
+                    chosen.includes(alias)
+                      ? `${alias} moves in this plan`
+                      : `${alias} is held at what's deployed`
+                  }
+                  onClick={() => toggle(alias)}
+                >
+                  {alias}
+                </Button>
+              ))}
             <Select
               value={environment}
               onValueChange={(v) => setEnvironment(v ?? environment)}
@@ -418,7 +454,11 @@ function PlansCard({
             <Button
               size="sm"
               className="rounded-full"
-              disabled={!environment || create.isPending}
+              disabled={
+                !environment ||
+                create.isPending ||
+                (aliases.length > 0 && chosen.length === 0)
+              }
               onClick={() => void plan()}
             >
               {create.isPending ? <Spinner /> : <WorkflowIcon />}
@@ -530,12 +570,10 @@ function PlanStatus({ status }: { status: string }) {
 function PlanReview({
   id,
   project,
-  analysis,
   onPlanned,
 }: {
   id: string
   project: Project
-  analysis?: Analysis
   onPlanned: (id: string) => void
 }) {
   const plan = useQuery(usePlansGet, { path: { id } })
@@ -559,48 +597,35 @@ function PlanReview({
       </div>
     )
   }
-  return (
-    <PlanBody
-      plan={plan.data}
-      project={project}
-      analysis={analysis}
-      onPlanned={onPlanned}
-    />
-  )
+  return <PlanBody plan={plan.data} project={project} onPlanned={onPlanned} />
 }
 
 function PlanBody({
   plan,
   project,
-  analysis,
   onPlanned,
 }: {
   plan: Plan
   project: Project
-  analysis?: Analysis
   onPlanned: (id: string) => void
 }) {
   const { can } = useOrganization()
   const create = useMutation(usePlansCreate)
   const invalidate = useInvalidate()
   const planned = !isPlanning(plan.status) && plan.status !== "failed"
-  // Evidence links need the commit the plan was made from.
-  const evidenceFrom: SourceLink[] | undefined =
-    analysis && plan.sources.some((s) => s.analysisId === analysis.id)
-      ? [
-          {
-            alias: analysis.source,
-            repository: analysis.repository,
-            commitSha: analysis.commitSha,
-          },
-        ]
-      : undefined
 
   const replan = async () => {
     try {
       const p = await create.mutateAsync({
         path: { id: project.id },
-        body: { environment: plan.environment },
+        body: {
+          environment: plan.environment,
+          // Planning again moves what this plan moved and holds what it held.
+          ...scopeBody(
+            plan.sources.map((s) => s.alias),
+            plan.sources.filter((s) => s.inScope).map((s) => s.alias)
+          ),
+        },
       })
       invalidate(usePlansList)
       onPlanned(p.id)
@@ -619,8 +644,7 @@ function PlanBody({
           </Badge>
         </SheetTitle>
         <SheetDescription>
-          From <code className="font-mono">{lockLabel(plan.sources)}</code> and
-          manifest revision {plan.manifestRevision}.{" "}
+          Made from manifest revision {plan.manifestRevision}.{" "}
           {plan.status === "ready" && plan.expiresAt && (
             <>
               It waits for a decision until{" "}
@@ -644,6 +668,11 @@ function PlanBody({
       </SheetHeader>
 
       <div className="flex-1 divide-y overflow-y-auto">
+        {plan.sources.length > 0 && (
+          <Section title="Built from">
+            <Lockset sources={plan.sources} />
+          </Section>
+        )}
         {isPlanning(plan.status) && (
           <div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground">
             <Spinner />
@@ -665,7 +694,7 @@ function PlanBody({
               tone="bad"
               project={project}
               environment={plan.environment}
-              sources={evidenceFrom}
+              sources={plan.sources}
             />
           </Section>
         )}
@@ -676,7 +705,7 @@ function PlanBody({
               tone="warn"
               project={project}
               environment={plan.environment}
-              sources={evidenceFrom}
+              sources={plan.sources}
             />
           </Section>
         )}
@@ -712,6 +741,39 @@ function PlanBody({
         )}
       </SheetFooter>
     </>
+  )
+}
+
+/**
+ * Lockset lists the commit a plan pinned in each repository, and whether
+ * the plan moves that repository or holds it at what's deployed.
+ */
+function Lockset({ sources }: { sources: PlanSource[] }) {
+  return (
+    <ul className="grid gap-2">
+      {sources.map((s) => (
+        <li
+          key={s.sourceId}
+          className={cn(
+            "flex items-center gap-3 text-sm",
+            !s.inScope && "text-muted-foreground"
+          )}
+        >
+          <span className="min-w-16 font-medium">{s.alias}</span>
+          <a
+            className="font-mono text-xs underline-offset-4 hover:underline"
+            href={commitURL(s.repository, s.commitSha)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {shortSHA(s.commitSha)}
+          </a>
+          <Badge variant={s.inScope ? "secondary" : "outline"}>
+            {s.inScope ? "moves" : "held"}
+          </Badge>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -764,7 +826,7 @@ function Findings({
   tone: "bad" | "warn"
   project: Project
   environment: string
-  sources?: SourceLink[]
+  sources: SourceLink[]
 }) {
   const { can } = useOrganization()
   const mayEdit = can("project:update")
@@ -804,7 +866,7 @@ function Findings({
                   cloud={f.path.slice(connectionPath.length)}
                 />
               )}
-            {sources && f.evidence && f.evidence.length > 0 && (
+            {f.evidence && f.evidence.length > 0 && (
               <>
                 <EvidenceList
                   sources={sources}
