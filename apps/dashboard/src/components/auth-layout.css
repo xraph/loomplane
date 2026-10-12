@@ -1,0 +1,223 @@
+.auth-layout {
+  --background: #fafafa;
+  --foreground: #171717;
+  --card: #fafafa;
+  --card-foreground: #171717;
+  --primary: #d8a00d;
+  --primary-foreground: #171717;
+  --ring: #b58200;
+  --input: #d9d9d6;
+  --muted-foreground: #696963;
+  --auth-thread-paper: #c9c9bf;
+  --auth-thread-gold: #e3ae3b;
+
+  display: grid;
+  min-height: 100svh;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.dark .auth-layout {
+  --background: #171717;
+  --foreground: #fafafa;
+  --card: #171717;
+  --card-foreground: #fafafa;
+  --primary: #e3ae3b;
+  --primary-foreground: #171717;
+  --ring: #e3ae3b;
+  --input: #454540;
+  --muted-foreground: #aaa9a1;
+}
+
+.auth-access {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 24px;
+}
+
+.auth-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.auth-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 20px;
+  width: 100%;
+  max-width: 400px;
+  margin-inline: auto;
+  padding-block: 32px;
+}
+
+.auth-footer {
+  padding-top: 16px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+/* Authsome owns the form and its states. These rules adjust its card's
+   presentation, including its otherwise centered footer, in this frame. */
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.auth-card > div {
+  padding-inline: 0;
+}
+
+.auth-card > div:first-child {
+  gap: 8px;
+  padding-top: 0;
+  padding-bottom: 28px;
+  text-align: left;
+}
+
+.auth-card > div:first-child > div:first-child {
+  margin: 0 0 28px;
+}
+
+.auth-card > div:first-child > .font-semibold {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+}
+
+.auth-card > div:first-child > div:last-child:not(.font-semibold) {
+  max-width: 38ch;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.auth-card > div:last-child {
+  justify-content: flex-start;
+  padding-bottom: 0;
+  text-align: left;
+}
+
+.auth-card :where(input:not([type="checkbox"]):not([type="hidden"])) {
+  min-height: 44px;
+  padding-inline: 12px;
+  font-size: 14px;
+}
+
+.auth-card input[autocomplete$="password"] {
+  padding-right: 40px;
+}
+
+.auth-card button[type="submit"] {
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.auth-card a:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+
+.auth-story {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .auth-layout {
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    padding: 16px;
+  }
+
+  .auth-access {
+    padding: 20px 48px 24px;
+  }
+
+  .auth-content {
+    padding-block: 48px;
+  }
+
+  .auth-story {
+    position: relative;
+    display: flex;
+    min-height: min(640px, calc(100svh - 32px));
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+    border: 1px solid #34342e;
+    border-radius: 20px;
+    background: #20201d;
+    color: #fafafa;
+  }
+
+  .auth-story-heading {
+    z-index: 1;
+    padding: clamp(32px, 4vw, 64px) clamp(32px, 4vw, 64px) 0;
+  }
+
+  .auth-story-heading h2 {
+    font-size: clamp(30px, 3.25vw, 52px);
+    font-weight: 500;
+    line-height: 1.12;
+    letter-spacing: -0.045em;
+  }
+
+  .auth-story-heading p {
+    margin-top: 20px;
+    color: #b5b5ab;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .auth-story-art {
+    position: relative;
+    flex: 1;
+    min-height: 160px;
+    margin-block: 12px;
+  }
+
+  .auth-weave {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    color: #fafafa;
+  }
+
+  .auth-story-footer {
+    padding: 0 clamp(32px, 4vw, 64px) 36px;
+    color: #c5c5ba;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .auth-story-line {
+    display: block;
+    width: 32px;
+    height: 3px;
+    margin-bottom: 16px;
+    border-radius: 2px;
+    background: var(--auth-thread-gold);
+  }
+}
+
+@media (max-width: 479px) {
+  .auth-access {
+    padding: 16px 24px 24px;
+  }
+
+  .auth-content {
+    justify-content: flex-start;
+    padding-top: 40px;
+  }
+}
