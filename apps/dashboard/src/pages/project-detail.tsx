@@ -512,7 +512,8 @@ function Discovered({
       </Alert>
     )
   }
-  if (viewError) {
+  // A failed poll keeps the graph already loaded; only say so when there is none.
+  if (viewError && !view) {
     return (
       <Alert variant="destructive">
         <AlertDescription>

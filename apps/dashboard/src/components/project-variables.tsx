@@ -4,8 +4,7 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
-  useAnalysesGraph,
-  useAnalysesList,
+  useProjectsGraph,
   useProjectVariablesCreate,
   useProjectVariablesList,
   useVariablesDelete,
@@ -54,7 +53,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { latestSucceeded } from "@/lib/architecture"
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
 import { layerLabel, ownLayer, reachLabel, type Target } from "@/lib/variables"
@@ -77,33 +75,19 @@ export function ProjectVariables({
   project: Project
   environments: Environment[]
 }) {
-  const analyses = useQuery(useAnalysesList, { path: { id: project.id } })
-  const latest = latestSucceeded(analyses.data?.analyses ?? [])
-  if (latest) {
-    return (
-      <WithServices
-        analysisID={latest.id}
-        project={project}
-        environments={environments}
-      />
-    )
-  }
-  return <Panel project={project} environments={environments} services={[]} />
-}
-
-function WithServices({
-  analysisID,
-  project,
-  environments,
-}: {
-  analysisID: string
-  project: Project
-  environments: Environment[]
-}) {
-  const graph = useQuery(useAnalysesGraph, { path: { id: analysisID } })
-  const services = (graph.data?.graph.services ?? [])
+  // The composed graph names services the way the API checks them, with
+  // the alias of the repository each comes from.
+  const view = useQuery(useProjectsGraph, { path: { id: project.id } })
+  const graph = view.data?.graph
+  // Two repositories can each have a service of the same name, so the
+  // repository is part of the name once there is more than one.
+  const several = (graph?.sources?.length ?? 0) > 1
+  const services = (graph?.services ?? [])
     .filter((s) => s.deployable)
-    .map((s) => ({ id: s.id, name: s.name }))
+    .map((s) => ({
+      id: s.id,
+      name: several && s.source ? `${s.name} (${s.source})` : s.name,
+    }))
   return (
     <Panel project={project} environments={environments} services={services} />
   )
