@@ -1,0 +1,52 @@
+# Loomplane's local stack.
+#
+#   docker compose -f deployments/docker-compose/docker-compose.yml up -d
+#
+# starts the Postgres Loomplane keeps all its state in, which is what you
+# want beside `make dev`. Add the app profile to run Loomplane itself from
+# its container image as well:
+#
+#   docker compose -f deployments/docker-compose/docker-compose.yml --profile app up -d --build
+#
+# Postgres's host port is 55532, so it runs beside a Postgres you already
+# have on 5432. config.local.yaml.example points at it.
+name: loomplane
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: loomplane
+      POSTGRES_PASSWORD: loomplane
+      POSTGRES_DB: loomplane
+    ports:
+      - "55532:5432"
+    volumes:
+      - loomplane-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loomplane -d loomplane"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  # The image runs in development mode with the development secret key.
+  # It shares the database `make dev` uses, so stop one before starting the
+  # other; they'd also both want port 8780 unless you set LOOMPLANE_PORT.
+  loomplane:
+    profiles: ["app"]
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile
+    image: loomplane:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LOOMPLANE_DATABASE_URL: postgres://loomplane:loomplane@postgres:5432/loomplane?sslmode=disable
+      LOOMPLANE_PUBLIC_URL: http://localhost:${LOOMPLANE_PORT:-8780}
+    ports:
+      - "${LOOMPLANE_PORT:-8780}:8780"
+    restart: unless-stopped
+
+volumes:
+  loomplane-pgdata:

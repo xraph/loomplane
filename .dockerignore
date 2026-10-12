@@ -1,0 +1,18 @@
+# The image builds from sources only. Anything built or installed on the
+# host stays out, so a stale dist or a macOS node_modules can't leak in.
+.git
+**/node_modules
+apps/dashboard/dist
+apps/dashboard/*.tsbuildinfo
+bin
+.forge
+.playwright-cli
+config.local.yaml
+config.local.yml
+.env
+.env.*
+*.test
+*.out
+.DS_Store
+docs
+brand

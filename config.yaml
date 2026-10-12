@@ -1,0 +1,40 @@
+# Loomplane configuration.
+#
+# Loomplane reads this file, then config.local.yaml beside it (git ignores
+# it), with LOOMPLANE_ environment variables wired in. A value written as
+# "${LOOMPLANE_SOMETHING:-}" comes from that variable; when the variable is
+# unset, Loomplane uses its built-in default (internal/config, Defaults).
+#
+# Keep secrets in the environment, never in this file.
+
+# development, staging or production. Production refuses the development
+# secret key and an http public_url.
+environment: "${LOOMPLANE_ENVIRONMENT:-}"
+# Where the API listens. `forge dev -p` and PORT override it in development.
+http_addr: "${LOOMPLANE_HTTP_ADDR:-}"
+# The address browsers and the CLI reach Loomplane at.
+# (Written with its default because Forge's config loader flags an empty
+# value for any key named like a URL.)
+public_url: "${LOOMPLANE_PUBLIC_URL:-http://localhost:8780}"
+# 32 random bytes, base64 (openssl rand -base64 32). Authsome's token
+# encryption key is derived from it.
+secret_key: "${LOOMPLANE_SECRET_KEY:-}"
+
+database:
+  # postgres://user:password@host:port/db?sslmode=disable
+  url: "${LOOMPLANE_DATABASE_URL:-}"
+  pool_size: 16
+
+identity:
+  base_path: /authsome
+  app_id: "${LOOMPLANE_AUTHSOME_APP_ID:-}"
+  publishable_key: "${LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY:-}"
+  require_email_verification: false
+
+dashboard:
+  # The built dashboard (pnpm --dir apps/dashboard build).
+  dir: "${LOOMPLANE_DASHBOARD_DIR:-}"
+
+orchestration:
+  concurrency: 4
+  poll_interval: 1s

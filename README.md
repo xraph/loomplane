@@ -52,7 +52,19 @@ make run
 
 Open [localhost:8780](http://localhost:8780), create an account, and sign in. Give your organization a name, then create your first project.
 
-Already have `config.local.yaml`? Keep your settings and skip the copy. The Compose stack starts PostgreSQL only; `make run` builds and starts Loomplane on your machine. Migrations apply automatically at startup.
+Already have `config.local.yaml`? Keep your settings and skip the copy. `make up` starts PostgreSQL only; `make run` builds and starts Loomplane on your machine. Migrations apply automatically at startup.
+
+### Run it all in Docker
+
+No Go or Node on your machine? You don't need them for this:
+
+```bash
+make stack
+```
+
+That builds the image from `deployments/docker/Dockerfile` and starts it beside PostgreSQL on [localhost:8780](http://localhost:8780). Set `LOOMPLANE_PORT` for another port. The container shares the database `make dev` uses, so stop one before you start the other. `make down` stops both.
+
+The image runs in development mode with the development secret key, which is fine on a laptop. Anywhere else, set `LOOMPLANE_ENVIRONMENT=production`, `LOOMPLANE_SECRET_KEY` and an https `LOOMPLANE_PUBLIC_URL`. Production refuses to start without them.
 
 ### Try the project flow
 
@@ -60,6 +72,7 @@ Already have `config.local.yaml`? Keep your settings and skip the copy. The Comp
 2. Open the project. It begins in `initializing` while Dispatch prepares its environments.
 3. When setup finishes, you'll see `production` and `preview`, and the project becomes `ready`.
 4. Open **Infrastructure** to inspect Ctrl Plane's persistence backend and registered providers.
+5. Open **Members** and choose **Invite**. You get a link to pass on yourself, because Loomplane doesn't send email yet. Whoever opens it signs in or signs up with the invited address, then accepts.
 
 `ready` means the project's environments exist. It doesn't mean an application has been deployed. The project page draws each environment as a thread: gold while setup runs, green when it's ready.
 
@@ -84,6 +97,7 @@ make dev-dashboard
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Accounts and sessions | Sign-up, sign-in, session refresh, and account controls through authsome.                                                      |
 | Organizations         | Create an organization and switch the active organization on your session.                                                     |
+| Members               | Invite people by link, change their roles, and remove them. Nobody grants a role above their own.                              |
 | Projects              | Create, list, view, update, and delete projects through the API. The dashboard covers creation, listing, detail, and deletion. |
 | Environments          | A Dispatch job creates production and preview records for each new project. Initialization is idempotent.                      |
 | Permissions           | Warden checks access in the service layer, with roles scoped to each organization.                                             |
@@ -149,7 +163,9 @@ Your session selects the organization. Every project query and permission check 
 | `member`                | Developer      | Read, create, and update.                                                            |
 | Any other role          | Viewer         | Read only.                                                                           |
 
-All four roles can read environments and infrastructure status. The permission catalog also reserves permissions for deployments, cloud accounts, and secrets, whose workflows are planned.
+All four roles can read environments, infrastructure status and the member list. Owners and admins invite people, change roles and remove members, but never above their own role, and nobody changes their own role or removes themselves from the members page.
+
+The permission catalog also reserves permissions for deployments, cloud accounts, and secrets, whose workflows are planned.
 
 The API checks permissions even when the dashboard hides an action. Ctrl Plane and Dispatch's own HTTP APIs are disabled; Loomplane exposes the routes it authorizes. Ctrl Plane's identity bridge never grants `system:admin`.
 
@@ -213,7 +229,9 @@ The response is `201 Created` with an `initializing` project. Poll its detail an
 | Command                 | What it does                                                               |
 | ----------------------- | -------------------------------------------------------------------------- |
 | `make setup`            | Download Go modules and install dashboard packages.                        |
-| `make up` / `make down` | Start or stop local PostgreSQL. Stopping preserves the data volume.        |
+| `make up` / `make down` | Start PostgreSQL, or stop everything Compose started. Data volume is kept. |
+| `make stack`            | Build the image and run all of Loomplane in Docker on port 8780.           |
+| `make image`            | Build the container image, tagged with the git version.                    |
 | `make dev`              | Run the API and dashboard with hot reload.                                 |
 | `make build`            | Build the dashboard, then `bin/loomplane`.                                 |
 | `make run`              | Build and run the combined application.                                    |
@@ -244,7 +262,7 @@ Don't edit `apps/dashboard/src/client/forge` by hand. The handwritten runtime li
 | Milestone                    | Status                         | Scope                                                                                                                                       |
 | ---------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0. Ecosystem evaluation      | Documented                     | Pinned libraries, integration behavior, upstream gaps, and dependency license questions.                                                    |
-| 1. Foundation                | Implemented, follow-ups remain | Identity, projects, environments, authorization, jobs, audit events, and dashboard. Container packaging, membership screens, and CI remain. |
+| 1. Foundation                | Done                           | Identity, members and invitations, projects, environments, authorization, jobs, audit events, dashboard, container image, and CI.          |
 | 2. Repository discovery      | Planned                        | GitHub App connection, isolated analysis workers, deterministic monorepo parsers, and a versioned application graph with source evidence.   |
 | 3. Deployment planning       | Planned                        | Versioned `loomplane.yaml`, provider capabilities, reviewable actions, and approval tied to a plan revision.                                |
 | 4. Real deployments          | Planned                        | Vault credentials, isolated builds, Trove artifacts, Cloud Run through Ctrl Plane, and a Vercel capability adapter.                         |
@@ -274,7 +292,7 @@ loomplane/
 ├── apps/dashboard/           React application and generated clients
 ├── brand/                    Logo variants, icons, and brand guidelines
 ├── tests/integration/        Whole-application PostgreSQL tests
-├── deployments/              Local Docker Compose stack
+├── deployments/              Container image and the Docker Compose stack
 ├── scripts/                  Development process runner
 └── docs/                     Architecture, plans, integration notes, artwork
 ```

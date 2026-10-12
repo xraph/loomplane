@@ -1,0 +1,19 @@
+# Forge Configuration
+# This file uses smart defaults - only specify what you need to override.
+# See https://forge.dev/docs/configuration for full documentation.
+
+project:
+    name: loomplane
+    version: 0.1.0
+    description: loomplane - A Forge application
+    type: monorepo
+    layout: single-module
+    module: github.com/xraph/loomplane
+dev:
+    auto_discover: true
+    watch:
+        enabled: true
+database:
+    driver: postgres
+build:
+    auto_discover: true

@@ -1,0 +1,6 @@
+# Copy to config.local.yaml for settings on your own machine. Git ignores
+# config.local.yaml. A key set there wins over config.yaml.
+
+database:
+  # Matches deployments/docker-compose/docker-compose.yml.
+  url: postgres://loomplane:loomplane@localhost:55532/loomplane?sslmode=disable

@@ -1,0 +1,349 @@
+package projects
+
+import (
+	"context"
+	"errors"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/xraph/warden"
+	"github.com/xraph/warden/store/memory"
+
+	"github.com/xraph/loomplane/internal/security"
+)
+
+const org = "aorg_test"
+
+// memStore is an in-memory Store for the service's tests. PgStore's own
+// behaviour is covered against Postgres in tests/integration.
+type memStore struct {
+	mu       sync.Mutex
+	projects map[string]*Project
+	envs     map[string]*Environment
+}
+
+func newMemStore() *memStore {
+	return &memStore{projects: map[string]*Project{}, envs: map[string]*Environment{}}
+}
+
+func (m *memStore) CreateProject(_ context.Context, p *Project) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, q := range m.projects {
+		if q.OrgID == p.OrgID && q.Slug == p.Slug {
+			return ErrSlugTaken
+		}
+	}
+	c := *p
+	m.projects[p.ID] = &c
+	return nil
+}
+
+func (m *memStore) GetProject(_ context.Context, orgID, id string) (*Project, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.projects[id]
+	if !ok || p.OrgID != orgID {
+		return nil, ErrNotFound
+	}
+	c := *p
+	return &c, nil
+}
+
+func (m *memStore) ListProjects(_ context.Context, orgID string) ([]*Project, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Project{}
+	for _, p := range m.projects {
+		if p.OrgID == orgID {
+			c := *p
+			out = append(out, &c)
+		}
+	}
+	return out, nil
+}
+
+func (m *memStore) UpdateProject(_ context.Context, p *Project) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if q, ok := m.projects[p.ID]; !ok || q.OrgID != p.OrgID {
+		return ErrNotFound
+	}
+	c := *p
+	m.projects[p.ID] = &c
+	return nil
+}
+
+func (m *memStore) DeleteProject(_ context.Context, orgID, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.projects[id]; !ok || p.OrgID != orgID {
+		return ErrNotFound
+	}
+	delete(m.projects, id)
+	for k, e := range m.envs {
+		if e.ProjectID == id {
+			delete(m.envs, k)
+		}
+	}
+	return nil
+}
+
+func (m *memStore) EnsureEnvironment(_ context.Context, e *Environment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.projects[e.ProjectID]; !ok {
+		return nil
+	}
+	for _, x := range m.envs {
+		if x.ProjectID == e.ProjectID && x.Name == e.Name {
+			return nil
+		}
+	}
+	c := *e
+	m.envs[e.ID] = &c
+	return nil
+}
+
+func (m *memStore) ListEnvironments(_ context.Context, orgID, projectID string) ([]*Environment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Environment{}
+	for _, e := range m.envs {
+		if e.OrgID == orgID && e.ProjectID == projectID {
+			c := *e
+			out = append(out, &c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// initRecorder stands in for the Dispatch enqueuer.
+type initRecorder struct {
+	queued []string
+	err    error
+}
+
+func (r *initRecorder) InitializeProject(_ context.Context, _, projectID string) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.queued = append(r.queued, projectID)
+	return nil
+}
+
+type auditRecorder struct{ actions []string }
+
+func (a *auditRecorder) Record(_ context.Context, e AuditEvent) {
+	a.actions = append(a.actions, e.Action)
+}
+
+type fixture struct {
+	svc   *Service
+	store *memStore
+	init  *initRecorder
+	audit *auditRecorder
+	authz *security.Authorizer
+}
+
+func newFixture(t *testing.T) fixture {
+	t.Helper()
+	ws := memory.New()
+	eng, err := warden.NewEngine(warden.WithStore(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := fixture{
+		store: newMemStore(), init: &initRecorder{}, audit: &auditRecorder{},
+		authz: security.NewAuthorizer(eng, ws, nil),
+	}
+	f.svc = NewService(f.store, f.authz, f.init, f.audit)
+	return f
+}
+
+func (f fixture) principal(t *testing.T, user, role string) security.Principal {
+	t.Helper()
+	if err := f.authz.Assign(context.Background(), org, user, role, "test"); err != nil {
+		t.Fatal(err)
+	}
+	return security.Principal{UserID: user, OrgID: org}
+}
+
+func TestService_createInitializeAndRead(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "  Difference Engine ", RepositoryURL: "git@github.com:ada/engine.git"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if p.Slug != "difference-engine" || p.Name != "Difference Engine" || p.Status != StatusInitializing || p.OrgID != org || p.CreatedBy != "ausr_dev" {
+		t.Fatalf("created %+v", p)
+	}
+	if len(f.init.queued) != 1 || f.init.queued[0] != p.ID {
+		t.Fatalf("initialization queued for %v", f.init.queued)
+	}
+
+	// The job may run twice; the second run must change nothing.
+	for range 2 {
+		if err = f.svc.Initialize(ctx, org, p.ID); err != nil {
+			t.Fatalf("Initialize: %v", err)
+		}
+	}
+	got, err := f.svc.Get(ctx, dev, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusReady {
+		t.Fatalf("status %q after initialization", got.Status)
+	}
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envs) != len(DefaultEnvironments()) {
+		t.Fatalf("%d environments, want %d", len(envs), len(DefaultEnvironments()))
+	}
+	if strings.Join(f.audit.actions, ",") != "project.create" {
+		t.Fatalf("audit %v", f.audit.actions)
+	}
+}
+
+func TestService_rolesAreEnforced(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	viewer := f.principal(t, "ausr_viewer", security.RoleViewer)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	stranger := security.Principal{UserID: "ausr_stranger", OrgID: org}
+
+	if _, err := f.svc.Create(ctx, viewer, CreateProjectInput{Name: "x"}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("viewer create: %v", err)
+	}
+	if _, err := f.svc.List(ctx, stranger); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("stranger list: %v", err)
+	}
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.List(ctx, viewer); err != nil {
+		t.Fatalf("viewer list: %v", err)
+	}
+	if err := f.svc.Delete(ctx, dev, p.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("developer delete: %v", err)
+	}
+	if err := f.svc.Delete(ctx, admin, p.ID); err != nil {
+		t.Fatalf("admin delete: %v", err)
+	}
+	if _, err := f.svc.Get(ctx, admin, p.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get after delete: %v", err)
+	}
+}
+
+func TestService_otherOrganizationsAreInvisible(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := security.Principal{UserID: "ausr_other", OrgID: "aorg_other"}
+	if err = f.authz.Assign(ctx, other.OrgID, other.UserID, security.RoleOwner, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.svc.Get(ctx, other, p.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other org reading the project: %v, want ErrNotFound", err)
+	}
+	list, err := f.svc.List(ctx, other)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("other org lists %d projects (%v)", len(list), err)
+	}
+}
+
+func TestService_createRollsBackWhenEnqueueFails(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	f.init.err = errors.New("dispatch is down")
+	if _, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"}); err == nil {
+		t.Fatal("Create succeeded without its initialization job")
+	}
+	list, err := f.svc.List(ctx, dev)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("a stranded project was left behind: %d (%v)", len(list), err)
+	}
+}
+
+func TestService_validation(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	tests := []struct {
+		name string
+		in   CreateProjectInput
+	}{
+		{"empty name", CreateProjectInput{Name: "   "}},
+		{"long name", CreateProjectInput{Name: strings.Repeat("a", maxNameLength+1)}},
+		{"name with no slug", CreateProjectInput{Name: "!!!"}},
+		{"bad slug", CreateProjectInput{Name: "ok", Slug: "Not_A_Slug"}},
+		{"double hyphen", CreateProjectInput{Name: "ok", Slug: "a--b"}},
+		{"http repository", CreateProjectInput{Name: "ok", RepositoryURL: "http://github.com/a/b"}},
+		{"credentials in repository", CreateProjectInput{Name: "ok", RepositoryURL: "https://me:token@github.com/a/b"}},
+		{"long description", CreateProjectInput{Name: "ok", Description: strings.Repeat("d", maxDescriptionLength+1)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := f.svc.Create(ctx, dev, tt.in); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("error %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestService_updateKeepsSlug(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, desc := "Analytical Engine", "Now with loops"
+	got, err := f.svc.Update(ctx, dev, p.ID, UpdateProjectInput{Name: &name, Description: &desc})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Name != name || got.Description != desc || got.Slug != "engine" {
+		t.Fatalf("updated %+v", got)
+	}
+	empty := " "
+	if _, err := f.svc.Update(ctx, dev, p.ID, UpdateProjectInput{Name: &empty}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("blank name: %v", err)
+	}
+}
+
+func TestSlugify(t *testing.T) {
+	tests := map[string]string{
+		"Difference Engine":         "difference-engine",
+		"  API -- Gateway!! ":       "api-gateway",
+		"Ünïcödé Service":           "n-c-d-service",
+		"already-a-slug":            "already-a-slug",
+		"!!!":                       "",
+		strings.Repeat("ab ", 30):   "ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab",
+		"Service 2 (EU) / Frontend": "service-2-eu-frontend",
+	}
+	for in, want := range tests {
+		if got := Slugify(in); got != want {
+			t.Errorf("Slugify(%q) = %q, want %q", in, got, want)
+		}
+		if got := Slugify(in); got != "" && validateSlug(got) != nil {
+			t.Errorf("Slugify(%q) = %q, which isn't a valid slug", in, got)
+		}
+	}
+}

@@ -1,0 +1,165 @@
+// Package platform composes Loomplane: one Forge app with the ecosystem's
+// extensions and Loomplane's own, registered in dependency order.
+//
+// Lifecycle (Forge central migrations):
+//
+//  1. Forge registers every extension in dependency order. Nothing touches
+//     the database yet; the grove extension only collects migration groups.
+//  2. One migration pass runs every group: Loomplane's own, authsome,
+//     Warden, Chronicle, Dispatch and Ctrl Plane (database/migrations).
+//  3. Forge starts every extension in the same order, then binds HTTP.
+//
+// Shutdown runs the other way, and the grove extension closes the pool last.
+package platform
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	cpext "github.com/xraph/ctrlplane/extension"
+	dispatchext "github.com/xraph/dispatch/extension"
+	"github.com/xraph/forge"
+	"github.com/xraph/grove"
+	groveDriver "github.com/xraph/grove/driver"
+	"github.com/xraph/grove/drivers/pgdriver"
+	_ "github.com/xraph/grove/drivers/pgdriver/pgmigrate" // registers the Postgres migration executor
+	groveext "github.com/xraph/grove/extension"
+
+	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/extensions/identity"
+	infraext "github.com/xraph/loomplane/extensions/infrastructure"
+	projectsext "github.com/xraph/loomplane/extensions/projects"
+	"github.com/xraph/loomplane/extensions/web"
+	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/infrastructure"
+	"github.com/xraph/loomplane/internal/orchestration"
+)
+
+// Version is set at build time:
+// -ldflags "-X github.com/xraph/loomplane/internal/platform.Version=...".
+var Version = "0.1.0-dev"
+
+const (
+	shutdownTimeout = 30 * time.Second
+	openTimeout     = 30 * time.Second
+	maxConnLifetime = 30 * time.Minute
+	maxConnIdleTime = 5 * time.Minute
+	// forgeEnvPrefix is one nobody sets: Loomplane reads its own LOOMPLANE_
+	// variables (internal/config), and Forge shouldn't read them too.
+	forgeEnvPrefix = "LOOMPLANE_FORGE_"
+)
+
+// New builds the app. It does no I/O: Forge registers and starts the
+// extensions when the app starts.
+func New(cfg config.Config) (forge.App, error) {
+	app := forge.New(
+		forge.WithAppName("loomplane"),
+		forge.WithAppVersion(Version),
+		forge.WithAppEnvironment(cfg.Environment),
+		forge.WithHTTPAddress(cfg.HTTPAddr),
+		forge.WithShutdownTimeout(shutdownTimeout),
+		forge.WithEnvPrefix(forgeEnvPrefix),
+		forge.WithCentralMigrations(),
+		forge.WithAppRouterOptions(forge.WithOpenAPI(openAPI(cfg))),
+	)
+	for _, ext := range Extensions(cfg) {
+		if err := app.RegisterExtension(ext); err != nil {
+			return nil, fmt.Errorf("register %s: %w", ext.Name(), err)
+		}
+	}
+	return app, nil
+}
+
+// Extensions lists Loomplane's extensions. Each declares what it depends
+// on, and Forge orders them from that.
+func Extensions(cfg config.Config) []forge.Extension {
+	db := groveext.New(
+		groveext.WithDSN("postgres", cfg.Database.URL),
+		groveext.WithDriverFactory("postgres", postgres(cfg.Database.PoolSize)),
+		groveext.WithMigrations(migrations.All()...),
+		groveext.WithCentralMigrations(),
+		// Grove's CRDT sync routes; Loomplane doesn't use CRDTs.
+		groveext.WithDisableRoutes(),
+	)
+
+	jobs := dispatchext.New(
+		dispatchext.WithConcurrency(cfg.Orchestration.Concurrency),
+		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
+		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
+		// Dispatch's admin API needs a Forge auth registry and, for writes,
+		// its durable delivery audit. Loomplane exposes job state through
+		// its own API instead.
+		dispatchext.WithDisableRoutes(),
+		dispatchext.WithDisableMigrate(),
+	)
+	// Dispatch finds the database in DI while it registers, and declares no
+	// dependency of its own, so without this it could register first.
+	jobs.SetDependencies([]string{groveext.ExtensionName})
+
+	cpAuth := infrastructure.NewAuthProvider()
+	ctrl := cpext.New(
+		cpext.WithAuthProvider(cpAuth),
+		// Ctrl Plane's handlers check the tenant but never authorize the
+		// action; Loomplane's API reaches Ctrl Plane in-process instead.
+		cpext.WithDisableRoutes(),
+		cpext.WithDisableMigrate(),
+	)
+	// Same as Dispatch: without the database in DI, Ctrl Plane falls back to
+	// an in-memory store. The infrastructure extension refuses to start if
+	// it did anyway.
+	ctrl.SetDependencies([]string{groveext.ExtensionName})
+
+	return []forge.Extension{
+		db,
+		identity.New(cfg),
+		jobs,
+		ctrl,
+		projectsext.New(cfg, jobs.Engine),
+		infraext.New(cpAuth, ctrl.CtrlPlane),
+		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),
+	}
+}
+
+// postgres opens the pool with Loomplane's settings. Connections are
+// recycled, so a pool behind a proxy or a failover doesn't hold dead ones.
+func postgres(poolSize int) groveext.DriverFactory {
+	return func(ctx context.Context, dsn string) (grove.GroveDriver, error) {
+		ctx, cancel := context.WithTimeout(ctx, openTimeout)
+		defer cancel()
+		pg := pgdriver.New()
+		opts := []groveDriver.Option{
+			groveDriver.WithMaxConnLifetime(maxConnLifetime),
+			groveDriver.WithMaxConnIdleTime(maxConnIdleTime),
+		}
+		if poolSize > 0 {
+			opts = append(opts, groveDriver.WithPoolSize(poolSize))
+		}
+		if err := pg.Open(ctx, dsn, opts...); err != nil {
+			return nil, fmt.Errorf("open postgres: %w", err)
+		}
+		if err := pg.Ping(ctx); err != nil {
+			_ = pg.Close() // the ping error is the one worth reporting
+			return nil, fmt.Errorf("ping postgres: %w", err)
+		}
+		return pg, nil
+	}
+}
+
+func openAPI(cfg config.Config) forge.OpenAPIConfig {
+	dev := cfg.IsDevelopment()
+	return forge.OpenAPIConfig{
+		Title:       "Loomplane",
+		Description: "Loomplane's API: organizations' projects, environments and infrastructure.",
+		Version:     Version,
+		Servers:     []forge.OpenAPIServer{{URL: cfg.PublicURL}},
+		Security: map[string]forge.SecurityScheme{
+			"session": {Type: "http", Scheme: "bearer", Description: "An authsome session token, sent as a bearer token."},
+		},
+		SpecEnabled: true,
+		SpecPath:    "/openapi.json",
+		UIEnabled:   dev,
+		UIPath:      "/swagger",
+		PrettyJSON:  dev,
+	}
+}
