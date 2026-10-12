@@ -300,3 +300,20 @@ func TestRust_aBinaryCallingItsOwnLibraryInheritsItsFrameworks(t *testing.T) {
 		t.Fatalf("frameworks %+v", fw)
 	}
 }
+
+func TestGo_requirementsOutsideTheCheckoutAreKept(t *testing.T) {
+	r := run(t, Go{}, map[string]string{
+		"go.mod":     "module example.com/root\n\ngo 1.26\n\nrequire (\n\tgithub.com/acme/kit v1.2.0\n\texample.com/lib v0.0.0\n\tgolang.org/x/sync v0.8.0 // indirect\n)\n\nreplace example.com/lib => ./lib\n",
+		"main.go":    "package main\n\nfunc main() {}\n",
+		"lib/go.mod": "module example.com/lib\n\ngo 1.26\n",
+		"lib/lib.go": "package lib\n",
+	})
+	root := onlyUnit(t, r, "go:.")
+	if len(root.Requires) != 1 {
+		t.Fatalf("requires %+v", root.Requires)
+	}
+	req := root.Requires[0]
+	if req.Name != "github.com/acme/kit" || req.Version != "v1.2.0" || req.Evidence.Path != "go.mod" || req.Evidence.Line != 6 {
+		t.Fatalf("requirement %+v", req)
+	}
+}

@@ -326,6 +326,7 @@ func goUnit(m *goModule, mods []*goModule, pkgs map[string]*goPackage) discovery
 		u.Runtime = "go " + m.mod.Go.Version
 	}
 	u.DependsOn = goDependencies(m, mods)
+	u.Requires = goRequires(m, mods)
 
 	var mains []*goPackage
 	for _, p := range pkgs {
@@ -380,6 +381,32 @@ func goDependencies(m *goModule, mods []*goModule) []discovery.Dependency {
 	}
 	sort.Slice(deps, func(i, j int) bool { return deps[i].Unit < deps[j].Unit })
 	return deps
+}
+
+// goRequires lists the modules m requires that no module in the checkout
+// is, and no directory replace points into it. Indirect requirements are
+// left out: they're what m's dependencies need, not what it uses.
+func goRequires(m *goModule, mods []*goModule) []discovery.Requirement {
+	local := map[string]bool{}
+	for _, other := range mods {
+		local[other.path] = true
+	}
+	for _, rep := range m.mod.Replace {
+		if modfile.IsDirectoryPath(rep.New.Path) {
+			local[rep.Old.Path] = true
+		}
+	}
+	var out []discovery.Requirement
+	for _, req := range m.mod.Require {
+		if req.Indirect || local[req.Mod.Path] {
+			continue
+		}
+		out = append(out, discovery.Requirement{
+			Name: req.Mod.Path, Version: req.Mod.Version,
+			Evidence: evidence(m.data, m.file, req.Syntax.Start.Line),
+		})
+	}
+	return out
 }
 
 // goEntrypoint walks everything the main package imports inside this

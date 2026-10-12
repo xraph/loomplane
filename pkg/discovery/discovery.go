@@ -62,6 +62,9 @@ type Evidence struct {
 	Line int `json:"line,omitempty"`
 	// Detail is what was read there, such as `use ./services/api`.
 	Detail string `json:"detail"`
+	// Source is the alias of the repository Path is in. It's empty in one
+	// repository's analysis, and set when graphs from several are joined.
+	Source string `json:"source,omitempty"`
 }
 
 // FrameworkKind says what a framework is for.
@@ -136,12 +139,25 @@ type Unit struct {
 	Commands    Commands      `json:"commands"`
 	// DependsOn are other units in this repository this one uses.
 	DependsOn []Dependency `json:"depends_on,omitempty"`
-	Evidence  []Evidence   `json:"evidence"`
+	// Requires are the dependencies it declares that nothing in this
+	// checkout provides. Another repository of the same project might.
+	Requires []Requirement `json:"requires,omitempty"`
+	Evidence []Evidence    `json:"evidence"`
 }
 
-// Dependency is a unit's use of another unit in the same repository.
+// Dependency is a unit's use of another unit in the same checkout.
 type Dependency struct {
 	Unit     string   `json:"unit"`
+	Evidence Evidence `json:"evidence"`
+}
+
+// Requirement is a dependency a unit declares on something outside the
+// checkout: a module, crate or package, by the name it's published under.
+type Requirement struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	// Git is the repository URL a Rust git dependency names.
+	Git      string   `json:"git,omitempty"`
 	Evidence Evidence `json:"evidence"`
 }
 
@@ -149,16 +165,20 @@ type Dependency struct {
 type Workspace struct {
 	Ecosystem Ecosystem `json:"ecosystem"`
 	// Tool is go-work, cargo, pnpm, npm, yarn or bun.
-	Tool     string     `json:"tool"`
-	Path     string     `json:"path"`
-	Members  []string   `json:"members"`
+	Tool    string   `json:"tool"`
+	Path    string   `json:"path"`
+	Members []string `json:"members"`
+	// Source is the alias of the repository it was found in, set when graphs are joined.
+	Source   string     `json:"source,omitempty"`
 	Evidence []Evidence `json:"evidence"`
 }
 
 // BuildSystem is a monorepo build tool, such as Turborepo or Nx.
 type BuildSystem struct {
-	Name     string   `json:"name"`
-	Path     string   `json:"path"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+	// Source is the alias of the repository it was found in, set when graphs are joined.
+	Source   string   `json:"source,omitempty"`
 	Evidence Evidence `json:"evidence"`
 }
 
@@ -179,7 +199,9 @@ type Image struct {
 
 // Note is something the analysis couldn't read, or chose not to.
 type Note struct {
-	Path    string `json:"path,omitempty"`
+	Path string `json:"path,omitempty"`
+	// Source is the alias of the repository it was found in, set when graphs are joined.
+	Source  string `json:"source,omitempty"`
 	Message string `json:"message"`
 }
 
