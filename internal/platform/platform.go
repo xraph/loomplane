@@ -134,6 +134,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 	ctrl.SetDependencies([]string{groveext.ExtensionName})
 
 	return []forge.Extension{
+		newSchemaGuard(cfg),
 		db,
 		identity.New(cfg),
 		jobs,
@@ -188,7 +189,7 @@ func WorkerExtensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithCronLeaderTTL(workerCronLease),
 	)
 	jobs.SetDependencies([]string{groveext.ExtensionName})
-	return []forge.Extension{db, jobs, discoveryext.NewWorker(cfg, jobs.Engine)}
+	return []forge.Extension{newSchemaGuard(cfg), db, jobs, discoveryext.NewWorker(cfg, jobs.Engine)}
 }
 
 // owner names this process to Dispatch's durable runtime, which leases
