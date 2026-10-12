@@ -225,10 +225,19 @@ type RunContainer struct {
 	Resources *RunResources `json:"resources,omitempty"`
 }
 
-// RunEnv is one variable.
+// RunEnv is one variable: a value, or a reference to a secret.
 type RunEnv struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name        string          `json:"name"`
+	Value       string          `json:"value,omitempty"`
+	ValueSource *RunValueSource `json:"valueSource,omitempty"`
+}
+
+// RunValueSource reads a variable from Secret Manager.
+type RunValueSource struct {
+	SecretKeyRef struct {
+		Secret  string `json:"secret"`
+		Version string `json:"version"`
+	} `json:"secretKeyRef"`
 }
 
 // RunPort is the port a container listens on.

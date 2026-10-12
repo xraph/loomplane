@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -248,9 +250,17 @@ func (c *CloudRun) provider(job *Job) string {
 	return key
 }
 
-func spec(job *Job, image string) (s cpprovider.ServiceSpec, labels map[string]string) {
+// spec is what Ctrl Plane runs: the service without its secrets, which
+// stay in Secret Manager. secrets are the labels naming their versions.
+func spec(job *Job, image string, secrets map[string]string) (s cpprovider.ServiceSpec, labels map[string]string) {
 	cfg := job.Action.Service
-	s = cpprovider.ServiceSpec{Name: mainService, Image: image, Env: job.Env}
+	env := map[string]string{}
+	for k, v := range job.Env {
+		if !job.Secrets[k] {
+			env[k] = v
+		}
+	}
+	s = cpprovider.ServiceSpec{Name: mainService, Image: image, Env: env}
 	if cfg.Port > 0 {
 		s.Ports = []cpprovider.PortSpec{{Container: cfg.Port, Protocol: "http"}}
 	}
@@ -263,7 +273,51 @@ func spec(job *Job, image string) (s cpprovider.ServiceSpec, labels map[string]s
 		s.Resources.MemoryMB = cfg.Size.Memory
 		labels[cloudrun.LabelCPU] = strconv.FormatFloat(cfg.Size.CPU, 'f', -1, 64)
 	}
+	maps.Copy(labels, secrets)
 	return s, labels
+}
+
+// storeSecrets puts each secret variable in Secret Manager as a new
+// version, lets the service's runtime account read it, and returns the
+// labels that point the service at those versions.
+func (c *CloudRun) storeSecrets(ctx context.Context, s *gcp.Session, job *Job) (map[string]string, error) {
+	if len(job.Secrets) == 0 {
+		return nil, nil
+	}
+	job.Progress(StepDeploying, "Storing secrets in Secret Manager")
+	account, err := s.RuntimeAccount(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("find the runtime service account: %w", err)
+	}
+	labels := map[string]string{}
+	for _, key := range slices.Sorted(maps.Keys(job.Secrets)) {
+		secretID := secretName(job, key)
+		if err := s.EnsureSecret(ctx, secretID); err != nil {
+			return nil, fmt.Errorf("create secret %s: %w", key, err)
+		}
+		version, err := s.AddSecretVersion(ctx, secretID, []byte(job.Env[key]))
+		if err != nil {
+			return nil, fmt.Errorf("store secret %s: %w", key, err)
+		}
+		if err := s.AllowSecret(ctx, secretID, account); err != nil {
+			return nil, fmt.Errorf("let the service read secret %s: %w", key, err)
+		}
+		labels[cloudrun.LabelSecret+key] = secretID + ":" + version
+	}
+	return labels, nil
+}
+
+// secretName is the Secret Manager secret a service's variable is kept
+// in: letters, digits, hyphens and underscores.
+func secretName(job *Job, key string) string {
+	name := "lp-" + instanceSlug(job) + "-" + key
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		}
+		return '-'
+	}, name)
 }
 
 // run creates the Ctrl Plane instance the first time, and deploys to it
@@ -271,8 +325,20 @@ func spec(job *Job, image string) (s cpprovider.ServiceSpec, labels map[string]s
 // the revision serves.
 func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID, url string, err error) {
 	key := c.provider(job)
+	gkey, err := gcp.ParseKey(job.Credential)
+	if err != nil {
+		return "", "", err
+	}
+	s, err := c.Google.Session(ctx, gkey)
+	if err != nil {
+		return "", "", err
+	}
+	secrets, err := c.storeSecrets(ctx, s, job)
+	if err != nil {
+		return "", "", err
+	}
 	ctx = infrastructure.WithPrincipal(ctx, principal(job))
-	sp, labels := spec(job, image)
+	sp, labels := spec(job, image, secrets)
 
 	inst, err := c.current(ctx, job, key)
 	if err != nil {
@@ -292,7 +358,7 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 		return "", "", fmt.Errorf("update the cloud run service: %w", err)
 	}
 	if _, err := c.Ctrl.Deploys.Deploy(ctx, deploy.DeployRequest{
-		InstanceID: inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: job.Env}},
+		InstanceID: inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: sp.Env}},
 		CommitSHA: job.Deployment.CommitSHA, Notes: "Plan " + job.Plan.ID,
 	}); err != nil {
 		return "", "", fmt.Errorf("deploy to cloud run: %w", err)

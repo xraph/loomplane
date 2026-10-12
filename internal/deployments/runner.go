@@ -54,6 +54,10 @@ type Job struct {
 	// Env are the variables the service gets: its resolved variables and
 	// the addresses of what it needs.
 	Env map[string]string
+	// Secrets are the keys of Env that are secret. An executor keeps them
+	// in the cloud's secret store where it has one, and never passes them
+	// through Ctrl Plane, which stores what it's given.
+	Secrets map[string]bool
 	// Source opens the commit's tarball, as GitHub serves it: gzip, with
 	// one top-level directory.
 	Source func(ctx context.Context) (io.ReadCloser, int64, error)
@@ -97,7 +101,7 @@ type Credentials interface {
 
 // Variables resolves what a service gets in an environment.
 type Variables interface {
-	Values(ctx context.Context, orgID, projectID, environment, service string) (map[string]string, error)
+	Values(ctx context.Context, orgID, projectID, environment, service string) (values map[string]string, secret map[string]bool, err error)
 }
 
 // Sources downloads a commit and stores it as an artifact.
@@ -327,7 +331,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return r.plans.DeleteBinding(ctx, d.OrgID, current.ID)
 	}
 	if a.Service != nil {
-		if job.Env, err = r.env(ctx, d, a, byName); err != nil {
+		if job.Env, job.Secrets, err = r.env(ctx, d, a, byName); err != nil {
 			return err
 		}
 	}
@@ -348,25 +352,25 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 // env is what a service gets: its resolved variables, then the address of
 // each thing it needs. A variable someone set wins over an address
 // Loomplane would set, so you can point a service elsewhere.
-func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services map[string]*planning.Binding) (map[string]string, error) {
-	env, err := r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service)
+func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services map[string]*planning.Binding) (env map[string]string, secret map[string]bool, err error) {
+	env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service)
 	if err != nil {
-		return nil, fmt.Errorf("resolve variables: %w", err)
+		return nil, nil, fmt.Errorf("resolve variables: %w", err)
 	}
 	for _, link := range a.Service.Env {
 		if _, set := env[link.Key]; set {
 			continue
 		}
 		if link.Subject != planning.ServiceSubject {
-			return nil, fmt.Errorf("%s needs %s, which Loomplane can't provision yet", a.Name, link.From)
+			return nil, nil, fmt.Errorf("%s needs %s, which Loomplane can't provision yet", a.Name, link.From)
 		}
 		dep := services[link.From]
 		if dep == nil || dep.URL == "" {
-			return nil, fmt.Errorf("%s needs %s, which has no address yet", a.Name, link.From)
+			return nil, nil, fmt.Errorf("%s needs %s, which has no address yet", a.Name, link.From)
 		}
 		env[link.Key] = dep.URL
 	}
-	return env, nil
+	return env, secret, nil
 }
 
 // verify waits for a deployed service to answer with anything but a

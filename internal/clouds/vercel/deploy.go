@@ -69,15 +69,20 @@ func (c *Client) EnsureProject(ctx context.Context, tok Token, name string, s Pr
 
 func same(a, b *string) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
 
-// SetEnv sets variables on a project's production target, encrypted,
-// replacing earlier values of the same keys.
-func (c *Client) SetEnv(ctx context.Context, tok Token, projectID string, env map[string]string) error {
+// SetEnv sets variables on a project's production target, replacing
+// earlier values of the same keys. Every value is encrypted; the secret
+// ones are sensitive too, so Vercel never shows them again.
+func (c *Client) SetEnv(ctx context.Context, tok Token, projectID string, env map[string]string, secret map[string]bool) error {
 	if len(env) == 0 {
 		return nil
 	}
 	vars := make([]map[string]any, 0, len(env))
 	for k, v := range env {
-		vars = append(vars, map[string]any{"key": k, "value": v, "type": "encrypted", "target": []string{"production"}})
+		kind := "encrypted"
+		if secret[k] {
+			kind = "sensitive"
+		}
+		vars = append(vars, map[string]any{"key": k, "value": v, "type": kind, "target": []string{"production"}})
 	}
 	q := url.Values{"upsert": {"true"}}
 	if err := c.json(ctx, tok, http.MethodPost, "/v10/projects/"+url.PathEscape(projectID)+"/env", q, vars, nil); err != nil {

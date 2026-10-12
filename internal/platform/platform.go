@@ -50,6 +50,8 @@ const (
 	openTimeout     = 30 * time.Second
 	maxConnLifetime = 30 * time.Minute
 	maxConnIdleTime = 5 * time.Minute
+	apiCronLease    = 10 * time.Second
+	workerCronLease = 5 * time.Second
 	// forgeEnvPrefix is one nobody sets: Loomplane reads its own LOOMPLANE_
 	// variables (internal/config), and Forge shouldn't read them too.
 	forgeEnvPrefix = "LOOMPLANE_FORGE_"
@@ -98,6 +100,11 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
 		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
 		dispatchext.WithDurableWorkflows(deployments.Options(owner(), cfg.Orchestration.Concurrency)),
+		// Followers check for a leader every half lease. A short lease
+		// means a leader that stops, a restarted replica or a stopped
+		// worker, is replaced in seconds, and the drift check keeps its
+		// schedule, for one small write every five seconds.
+		dispatchext.WithCronLeaderTTL(apiCronLease),
 		// Dispatch's admin API needs a Forge auth registry and, for writes,
 		// its durable delivery audit. Loomplane exposes job state through
 		// its own API instead.
@@ -170,6 +177,10 @@ func WorkerExtensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithQueues([]string{orchestration.AnalysisQueue}),
 		dispatchext.WithDisableRoutes(),
 		dispatchext.WithDisableMigrate(),
+		// The worker schedules nothing, but every Dispatch app competes for
+		// cron leadership and none gives it up when it stops, so its lease
+		// is short too.
+		dispatchext.WithCronLeaderTTL(workerCronLease),
 	)
 	jobs.SetDependencies([]string{groveext.ExtensionName})
 	return []forge.Extension{db, jobs, discoveryext.NewWorker(cfg, jobs.Engine)}

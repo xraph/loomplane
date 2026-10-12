@@ -35,6 +35,11 @@ const (
 	LabelMinScale = "loomplane-min-instances"
 	LabelMaxScale = "loomplane-max-instances"
 	LabelCPU      = "loomplane-cpu"
+	// LabelSecret prefixes a label naming the Secret Manager version a
+	// variable is read from: "loomplane-secret.KEY" = "SECRET:VERSION".
+	// Secret values never pass through Ctrl Plane, which stores what it's
+	// given; only these references do.
+	LabelSecret = "loomplane-secret."
 )
 
 // KeyPrefix starts every Cloud Run provider's registry key.
@@ -141,6 +146,19 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 	container := gcp.RunContainer{Image: spec.Image}
 	for _, k := range slices.Sorted(maps.Keys(spec.Env)) {
 		container.Env = append(container.Env, gcp.RunEnv{Name: k, Value: spec.Env[k]})
+	}
+	for _, l := range slices.Sorted(maps.Keys(labels)) {
+		key, ok := strings.CutPrefix(l, LabelSecret)
+		if !ok {
+			continue
+		}
+		secret, version, ok := strings.Cut(labels[l], ":")
+		if !ok {
+			return nil, fmt.Errorf("label %s names no secret version: %q", l, labels[l])
+		}
+		ref := &gcp.RunValueSource{}
+		ref.SecretKeyRef.Secret, ref.SecretKeyRef.Version = secret, version
+		container.Env = append(container.Env, gcp.RunEnv{Name: key, ValueSource: ref})
 	}
 	if len(spec.Ports) > 0 && spec.Ports[0].Container > 0 {
 		container.Ports = []gcp.RunPort{{ContainerPort: spec.Ports[0].Container}}

@@ -165,12 +165,15 @@ func (fakeCredentials) Credential(_ context.Context, _, id string) (*connections
 
 type fakeVariables map[string]map[string]string
 
-func (f fakeVariables) Values(_ context.Context, _, _, _, service string) (map[string]string, error) {
-	out := map[string]string{}
+func (f fakeVariables) Values(_ context.Context, _, _, _, service string) (values map[string]string, secret map[string]bool, err error) {
+	values, secret = map[string]string{}, map[string]bool{}
 	for k, v := range f[service] {
-		out[k] = v
+		values[k] = v
+		if strings.HasPrefix(k, "SECRET_") {
+			secret[k] = true
+		}
 	}
-	return out, nil
+	return values, secret, nil
 }
 
 type fakeSources struct{ stored []string }

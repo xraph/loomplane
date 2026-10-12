@@ -3,7 +3,9 @@
 package integration
 
 import (
+	"context"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/xraph/loomplane/internal/config"
 )
@@ -35,12 +39,17 @@ type fakeCloud struct {
 	// failBuilds makes builds fail while it's set.
 	failBuilds bool
 	failed     map[string]bool
+	// secrets are Secret Manager's versions by secret, and who may read
+	// each.
+	secrets map[string][][]byte
+	readers map[string][]string
 }
 
 func newFakeCloud(base string) *fakeCloud {
 	return &fakeCloud{
 		base: base, uploads: map[string][]byte{}, repos: map[string]bool{}, polls: map[string]int{},
 		services: map[string]map[string]any{}, public: map[string]bool{}, failed: map[string]bool{},
+		secrets: map[string][][]byte{}, readers: map[string][]string{},
 	}
 }
 
@@ -93,6 +102,40 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(map[string]any{"name": strings.TrimPrefix(p, "/v2/"), "done": true})
 	case strings.HasPrefix(p, runPrefix):
 		f.run(r, p, body, reply, notFound)
+	case r.Method == http.MethodGet && p == "/v3/projects/acme-prod":
+		reply(map[string]any{"name": "projects/123456", "projectId": "acme-prod"})
+	case r.Method == http.MethodPost && p == "/v1/projects/acme-prod/secrets":
+		id := r.URL.Query().Get("secretId")
+		if _, ok := f.secrets[id]; ok {
+			w.WriteHeader(http.StatusConflict)
+			reply(map[string]any{"error": map[string]any{"message": "exists"}})
+			return
+		}
+		f.secrets[id] = nil
+		reply(map[string]any{"name": "projects/acme-prod/secrets/" + id})
+	case r.Method == http.MethodPost && strings.HasSuffix(p, ":addVersion"):
+		id := strings.TrimSuffix(strings.TrimPrefix(p, "/v1/projects/acme-prod/secrets/"), ":addVersion")
+		var in struct {
+			Payload struct {
+				Data string `json:"data"`
+			} `json:"payload"`
+		}
+		_ = json.Unmarshal(body, &in)
+		data, _ := base64.StdEncoding.DecodeString(in.Payload.Data)
+		f.secrets[id] = append(f.secrets[id], data)
+		reply(map[string]any{"name": fmt.Sprintf("projects/123456/secrets/%s/versions/%d", id, len(f.secrets[id]))})
+	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1/projects/acme-prod/secrets/") && strings.HasSuffix(p, ":setIamPolicy"):
+		id := strings.TrimSuffix(strings.TrimPrefix(p, "/v1/projects/acme-prod/secrets/"), ":setIamPolicy")
+		var in struct {
+			Policy struct {
+				Bindings []struct {
+					Members []string `json:"members"`
+				} `json:"bindings"`
+			} `json:"policy"`
+		}
+		_ = json.Unmarshal(body, &in)
+		f.readers[id] = in.Policy.Bindings[0].Members
+		reply(map[string]any{})
 	case strings.HasPrefix(p, "/run/"):
 		// The deployed service itself, answering its health check.
 		_, _ = w.Write([]byte("hello from " + strings.TrimPrefix(p, "/run/")))
@@ -231,6 +274,9 @@ func TestDeploy_aGoServiceRunsOnCloudRun(t *testing.T) {
 	c.must(http.StatusOK, http.MethodGet, base+"/environments", nil, &envs)
 	c.must(http.StatusCreated, http.MethodPost, base+"/variables",
 		map[string]any{"key": "GREETING", "value": "hello", "environment": "production"}, nil)
+	const secretValue = "s3cr3t-token-of-api"
+	c.must(http.StatusCreated, http.MethodPost, base+"/variables",
+		map[string]any{"key": "API_TOKEN", "value": secretValue, "secret": true, "environment": "production"}, nil)
 	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": apiOnCloudRun}, nil)
 
 	var plan planBody
@@ -274,6 +320,41 @@ func TestDeploy_aGoServiceRunsOnCloudRun(t *testing.T) {
 		return m["name"] == "GREETING" && m["value"] == "hello"
 	}) {
 		t.Fatalf("api didn't get its variable: %+v", env)
+	}
+	// The secret reaches the service through Secret Manager, readable by
+	// its runtime account only, and never as a value.
+	var ref map[string]any
+	for _, e := range env {
+		if m := e.(map[string]any); m["name"] == "API_TOKEN" {
+			if _, plain := m["value"]; plain {
+				t.Fatalf("API_TOKEN set as a value: %+v", m)
+			}
+			ref = m["valueSource"].(map[string]any)["secretKeyRef"].(map[string]any)
+		}
+	}
+	secretID, _ := ref["secret"].(string)
+	cloud.mu.Lock()
+	versions, readers := cloud.secrets[secretID], cloud.readers[secretID]
+	cloud.mu.Unlock()
+	if ref["version"] != "1" || len(versions) != 1 || string(versions[0]) != secretValue ||
+		!slices.Equal(readers, []string{"serviceAccount:123456-compute@developer.gserviceaccount.com"}) {
+		t.Fatalf("secret %v: versions %q, readers %v", ref, versions, readers)
+	}
+	// Ctrl Plane stores what it's given in plain JSON, so it's given no
+	// secret.
+	pg, err := pgx.Connect(context.Background(), cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close(context.Background())
+	for _, table := range []string{"cp_instances", "cp_releases", "cp_deployments"} {
+		var n int
+		if err := pg.QueryRow(context.Background(), "SELECT count(*) FROM "+table+" t WHERE t::text LIKE '%' || $1 || '%'", secretValue).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			t.Fatalf("%s holds the secret in %d rows", table, n)
+		}
 	}
 	cloud.mu.Lock()
 	public := len(cloud.public)

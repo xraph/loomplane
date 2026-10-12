@@ -462,8 +462,9 @@ function ConnectDialog({
                 <FieldDescription>
                   A JSON key for a service account in the project you deploy to.
                   It needs Cloud Run Admin, Cloud Build Editor, Artifact
-                  Registry Administrator, Storage Admin and Service Account
-                  User; Loomplane says which are missing.
+                  Registry Administrator, Storage Admin, Secret Manager Admin,
+                  Service Account User and Browser; Loomplane says which are
+                  missing.
                 </FieldDescription>
               </Field>
             ) : (
