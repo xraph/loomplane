@@ -705,3 +705,74 @@ func TestCompute_onlyHeldServicesAreImpacted(t *testing.T) {
 		t.Fatalf("a held package counted as a user: %+v", r.Warnings)
 	}
 }
+
+func TestCompute_turningAHeldServiceOffWaits(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	off := strings.Replace(federatedYAML, "    needs: [db]\n", "    needs: [db]\n    environments:\n      production:\n        enabled: false\n", 1)
+	r := computeFed(t, off, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	if api := action(t, r, "service:api"); api.Op != Keep {
+		t.Fatalf("api %+v", api)
+	}
+	site := action(t, r, "service:site")
+	if site.Op != Keep || !slices.ContainsFunc(site.Service.Env, func(e EnvLink) bool { return e.Key == "API_URL" && e.From == "api" }) {
+		t.Fatalf("site %s %+v", site.Op, site.Service.Env)
+	}
+	if held := warning(r, "held", "api"); held == nil || !strings.Contains(held.Message, "manifest changes wait") {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+}
+
+func TestCompute_movingAHeldServicesSourceWaits(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	tests := []struct{ name, source, problem string }{
+		{"not found", "services/apiv2", "Analysis found no service at services/apiv2"},
+		{"ambiguous", "crates/ingest", "More than one service is at crates/ingest"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			yaml := strings.Replace(federatedYAML, "source: services/api", "source: "+tt.source, 1)
+			r := computeFed(t, yaml, []string{"mono"}, live...)
+			if len(r.Problems) != 0 {
+				t.Fatalf("problems %v", codes(r.Problems))
+			}
+			if api := action(t, r, "service:api"); api.Op != Keep || api.Service.Source != "services/api" {
+				t.Fatalf("api %+v", api)
+			}
+			if held := warning(r, "held", "api"); held == nil || !strings.Contains(held.Message, tt.problem) {
+				t.Fatalf("warnings %+v", r.Warnings)
+			}
+			if warning(r, "service-left-out", "api") != nil {
+				t.Fatalf("a held service was left out: %v", codes(r.Warnings))
+			}
+		})
+	}
+}
+
+func TestCompute_whatAHeldServiceUsesIsntDeleted(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	yaml := strings.Replace(federatedYAML, "    needs: [db]\n", "", 1)
+	yaml = strings.Replace(yaml, "resources:\n  db:\n    kind: postgres\n    provider: cloud-sql\n", "", 1)
+	if r := computeFed(t, yaml, nil, live...); action(t, r, "resource:db").Op != Delete {
+		t.Fatal("the test needs db deleted when nothing is held")
+	}
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	db := action(t, r, "resource:db")
+	if db.Op != Keep || db.Resource == nil || db.Resource.Kind != "postgres" {
+		t.Fatalf("db %+v", db)
+	}
+	held := warning(r, "held", "db")
+	if held == nil || !strings.Contains(held.Message, "api in mono") || !strings.Contains(held.Message, "still uses it") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	api := action(t, r, "service:api")
+	if !slices.Equal(api.DependsOn, []string{"resource:db"}) || api.Step <= db.Step {
+		t.Fatalf("api runs at step %d after %v, db at %d", api.Step, api.DependsOn, db.Step)
+	}
+}
