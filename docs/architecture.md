@@ -18,6 +18,7 @@ forge.App (central migrations)
   ├─ ctrlplane                  lifecycle engine, routes off
   ├─ loomplane-projects         /api/v1/projects, the initialize job
   ├─ loomplane-discovery        /api/v1/.../analyses, /api/v1/github; queues analyses
+  ├─ loomplane-environments     /api/v1/variables and each project's; secrets in Vault
   ├─ loomplane-infrastructure   Ctrl Plane's identity bridge, /api/v1/infrastructure
   └─ loomplane-web              apps/dashboard/dist on every other path
 
@@ -81,7 +82,9 @@ Each kind of state has one owner, and only the owner writes it.
 | Users, sessions, organizations, members, invitations | authsome | authsome's |
 | Roles, permissions and who holds them, per organization | Warden, written by Loomplane's `security.Sync` and `security.Authorizer` | `warden_*` |
 | The audit trail | Chronicle | `chronicle_*` |
-| Projects and environments | Loomplane | `loomplane_projects`, `loomplane_environments` |
+| Projects and environments (every project has at least one) | Loomplane | `loomplane_projects`, `loomplane_environments` |
+| Variables on every layer: organization, project, service | Loomplane | `loomplane_variables` |
+| Secret variable values, encrypted and versioned | Vault | `vault_secrets` |
 | Repository analyses, each with one version of the application graph | Loomplane | `loomplane_analyses` |
 | GitHub App installations each organization connected | Loomplane | `loomplane_github_installations` |
 | Job queue, cron, workflow history | Dispatch | `dispatch_*` |
@@ -135,7 +138,7 @@ Ctrl Plane and Dispatch don't expose their own HTTP APIs. Ctrl Plane's auth prov
 
 Repository analysis reads code, and never runs it: no build scripts, no package managers, nothing from the repository. A checkout is one commit's tarball, extracted with hard limits (size, file count, regular files only, no paths outside the checkout, no dependency or build output directories) into a directory the worker deletes afterwards. For a private repository, the worker mints a GitHub App installation token limited to that one repository and to reading it, and stores it nowhere. An organization's analyses only ever use installations that organization connected, and connecting one requires GitHub to confirm the person connecting can see it ([github-app.md](github-app.md)).
 
-Secrets: `secret_key` never leaves the process. authsome's token encryption key is derived from it with HKDF under its own label. Cloud provider credentials will live in Vault (milestone 4), referenced by ID, never in `loomplane.yaml` or logs, and never handed to build workers. Repository builds will run in isolated workers that get the source and nothing else. A Dispatch worker only decides what runs where; it doesn't sandbox anything, so the isolation has to come from the worker's own container. Loomplane's own API keys (Keysmith, milestone 6) are a different thing from cloud credentials and are never stored together.
+Secrets: `secret_key` never leaves the process. Every key Loomplane needs is derived from it with HKDF under a label of its own: authsome's token encryption, the GitHub install state's signature, and Vault's encryption of variable secrets. A secret variable's value goes straight into Vault, AES-256-GCM encrypted and versioned, and the API never returns it; a check constraint keeps it out of `loomplane_variables` entirely. Vault's secrets carry no tenant, so Loomplane builds every Vault key from its own organization and variable IDs, never from a caller's input. Deleting a project or an environment cascades its variables in Postgres, and a sweep then removes their secrets from Vault. Cloud provider credentials will live in Vault too (milestone 4), referenced by ID, never in `loomplane.yaml` or logs, and never handed to build workers. Repository builds will run in isolated workers that get the source and nothing else. A Dispatch worker only decides what runs where; it doesn't sandbox anything, so the isolation has to come from the worker's own container. Loomplane's own API keys (Keysmith, milestone 6) are a different thing from cloud credentials and are never stored together.
 
 ## Deployment, as it will run
 

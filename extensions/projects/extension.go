@@ -107,7 +107,10 @@ func fail(err error) error {
 	switch {
 	case errors.Is(err, projects.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, projects.ErrNotFound.Error())
-	case errors.Is(err, projects.ErrSlugTaken):
+	case errors.Is(err, projects.ErrEnvironmentNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, err.Error())
+	case errors.Is(err, projects.ErrSlugTaken), errors.Is(err, projects.ErrEnvironmentExists),
+		errors.Is(err, projects.ErrLastEnvironment):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, projects.ErrInvalid):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())

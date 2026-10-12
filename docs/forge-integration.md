@@ -147,6 +147,20 @@ The identity extension builds it with `chronicle.New` over Chronicle's Postgres 
 
 Limits: no read API or audit screen yet.
 
+## Vault
+
+Vault keeps the values of secret variables. Loomplane uses its library, not its Forge extension: `secret.NewService` over Vault's Postgres store (`store/postgres`, on the same grove database) with an AES-256-GCM encryptor whose key is derived from `secret_key`. Vault's migration group runs in the central pass with the others, and its secrets live under their own Vault app, `loomplane-variables` (`internal/environments/vault.go`, wired in `extensions/environments`).
+
+Every `Set` archives the previous value as a version, so changing a secret keeps a history Loomplane doesn't expose yet. Reads, writes and deletes are by key.
+
+What we found:
+
+- Vault's README says tenant isolation is by design and cross-tenant reads are structurally impossible. For secrets they aren't: `vault_secrets` is unique by key and app, with no tenant column, and the store never reads the tenant from the context. Loomplane builds every key as `<organization>/<variable ID>` from its own records, so a caller can't name another organization's secret. Worth fixing upstream, or the README should say secrets are app-scoped only.
+- `secret.ListOpts` can't filter by key prefix, so the sweep that removes orphaned secrets pages through the whole `loomplane-variables` app and filters by organization itself.
+- Its runtime config has app-wide values with per-tenant overrides. That doesn't reach Loomplane's layers (organization, project, service, each per environment), so the variables themselves are Loomplane's, and Vault holds only the secret values.
+
+Tests: `internal/environments` runs the real Vault secret service over Vault's memory store. `tests/integration` checks the stored secret is encrypted and that deleting an environment or a project leaves no secret behind.
+
 ## Dispatch
 
 Dispatch runs Loomplane's background work, on two queues. `loomplane`, which the API process works, has `loomplane.project.initialize`: it gives a new project its production and preview environments, then marks it ready. `loomplane-analysis`, which only `loomplane-worker` works, has `loomplane.repository.analyze`. The API enqueues analyses without registering their handler, which Dispatch allows (`engine.Enqueue` takes a job name), so an analysis can't run in the API process even by accident.
@@ -194,7 +208,6 @@ Tests: `internal/config`.
 
 | Library | When |
 |---|---|
-| Vault | Milestone 4, for cloud provider credentials and environment secrets |
 | Keysmith | Milestone 6, for CLI and automation API keys |
 | Trove | Milestone 4, for build artifacts, through Dispatch's artifact support |
 | Relay, Herald | When deployments exist to notify about |

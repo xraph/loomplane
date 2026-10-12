@@ -72,6 +72,17 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithName("environments.list"), forge.WithSummary("A project's environments"),
 			forge.WithResponseSchema(http.StatusOK, "Environments", EnvironmentList{}),
 		}},
+		{http.MethodPost, "/projects/:id/environments", e.createEnvironment, []forge.RouteOption{
+			forge.WithName("environments.create"), forge.WithSummary("Add an environment to a project"),
+			forge.WithRequestSchema(projects.CreateEnvironmentInput{}),
+			forge.WithResponseSchema(http.StatusCreated, "The new environment", projects.Environment{}),
+		}},
+		{http.MethodDelete, "/projects/:id/environments/:envId", e.deleteEnvironment, []forge.RouteOption{
+			forge.WithName("environments.delete"),
+			forge.WithSummary("Delete an environment and the variables set on it. A project's last environment can't be deleted."),
+			forge.WithNoContentResponse(),
+			forge.WithEntity(forge.EntityDef{Type: "Environment", IDField: "id"}),
+		}},
 	}
 	for _, rt := range routes {
 		var err error
@@ -177,6 +188,33 @@ func (e *Extension) environments(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, EnvironmentList{Environments: values(envs)})
+}
+
+func (e *Extension) createEnvironment(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in projects.CreateEnvironmentInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON: {\"name\": \"staging\"}")
+	}
+	env, err := e.svc.CreateEnvironment(c.Request().Context(), p, c.Param("id"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusCreated, env)
+}
+
+func (e *Extension) deleteEnvironment(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	if err := e.svc.DeleteEnvironment(c.Request().Context(), p, c.Param("id"), c.Param("envId")); err != nil {
+		return fail(err)
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 // values copies a list of records out of their pointers, never returning nil

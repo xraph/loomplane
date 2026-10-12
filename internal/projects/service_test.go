@@ -28,7 +28,7 @@ func newMemStore() *memStore {
 	return &memStore{projects: map[string]*Project{}, envs: map[string]*Environment{}}
 }
 
-func (m *memStore) CreateProject(_ context.Context, p *Project) error {
+func (m *memStore) CreateProject(_ context.Context, p *Project, envs []*Environment) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, q := range m.projects {
@@ -38,6 +38,10 @@ func (m *memStore) CreateProject(_ context.Context, p *Project) error {
 	}
 	c := *p
 	m.projects[p.ID] = &c
+	for _, e := range envs {
+		ec := *e
+		m.envs[e.ID] = &ec
+	}
 	return nil
 }
 
@@ -91,19 +95,50 @@ func (m *memStore) DeleteProject(_ context.Context, orgID, id string) error {
 	return nil
 }
 
-func (m *memStore) EnsureEnvironment(_ context.Context, e *Environment) error {
+func (m *memStore) CreateEnvironment(_ context.Context, e *Environment) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.projects[e.ProjectID]; !ok {
-		return nil
+	if p, ok := m.projects[e.ProjectID]; !ok || p.OrgID != e.OrgID {
+		return ErrNotFound
 	}
 	for _, x := range m.envs {
 		if x.ProjectID == e.ProjectID && x.Name == e.Name {
-			return nil
+			return ErrEnvironmentExists
 		}
 	}
 	c := *e
 	m.envs[e.ID] = &c
+	return nil
+}
+
+func (m *memStore) GetEnvironment(_ context.Context, orgID, projectID, id string) (*Environment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.envs[id]
+	if !ok || e.OrgID != orgID || e.ProjectID != projectID {
+		return nil, ErrEnvironmentNotFound
+	}
+	c := *e
+	return &c, nil
+}
+
+func (m *memStore) DeleteEnvironment(_ context.Context, orgID, projectID, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.envs[id]
+	if !ok || e.OrgID != orgID || e.ProjectID != projectID {
+		return ErrEnvironmentNotFound
+	}
+	n := 0
+	for _, x := range m.envs {
+		if x.ProjectID == projectID {
+			n++
+		}
+	}
+	if n <= 1 {
+		return ErrLastEnvironment
+	}
+	delete(m.envs, id)
 	return nil
 }
 
@@ -186,6 +221,10 @@ func TestService_createInitializeAndRead(t *testing.T) {
 	}
 	if len(f.init.queued) != 1 || f.init.queued[0] != p.ID {
 		t.Fatalf("initialization queued for %v", f.init.queued)
+	}
+	// Environments exist from the start, before the job runs.
+	if envs, eerr := f.svc.Environments(ctx, dev, p.ID); eerr != nil || len(envs) != len(DefaultEnvironments()) {
+		t.Fatalf("environments before initialization: %d, %v", len(envs), eerr)
 	}
 
 	// The job may run twice; the second run must change nothing.
@@ -345,5 +384,75 @@ func TestSlugify(t *testing.T) {
 		if got := Slugify(in); got != "" && validateSlug(got) != nil {
 			t.Errorf("Slugify(%q) = %q, which isn't a valid slug", in, got)
 		}
+	}
+}
+
+type sweepCounter struct{ orgs []string }
+
+func (c *sweepCounter) Sweep(_ context.Context, orgID string) { c.orgs = append(c.orgs, orgID) }
+
+func TestService_environments(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	sweeps := &sweepCounter{}
+	f.svc.AddCleaner(sweeps)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	viewer := f.principal(t, "ausr_viewer", security.RoleViewer)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	staging, err := f.svc.CreateEnvironment(ctx, dev, p.ID, CreateEnvironmentInput{Name: " staging "})
+	if err != nil || staging.Name != "staging" || staging.Kind != KindStaging {
+		t.Fatalf("create staging: %+v, %v", staging, err)
+	}
+	qa, err := f.svc.CreateEnvironment(ctx, dev, p.ID, CreateEnvironmentInput{Name: "qa-eu"})
+	if err != nil || qa.Kind != KindDevelopment {
+		t.Fatalf("create qa-eu: %+v, %v", qa, err)
+	}
+	refusals := []struct {
+		name string
+		p    security.Principal
+		in   CreateEnvironmentInput
+		want error
+	}{
+		{"viewer", viewer, CreateEnvironmentInput{Name: "demo"}, security.ErrForbidden},
+		{"taken", dev, CreateEnvironmentInput{Name: "production"}, ErrEnvironmentExists},
+		{"upper case", dev, CreateEnvironmentInput{Name: "Prod"}, ErrInvalid},
+		{"double hyphen", dev, CreateEnvironmentInput{Name: "a--b"}, ErrInvalid},
+		{"unknown kind", dev, CreateEnvironmentInput{Name: "demo", Kind: "canary"}, ErrInvalid},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, cerr := f.svc.CreateEnvironment(ctx, tt.p, p.ID, tt.in); !errors.Is(cerr, tt.want) {
+				t.Fatalf("CreateEnvironment: %v, want %v", cerr, tt.want)
+			}
+		})
+	}
+
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, e := range envs {
+		if i == len(envs)-1 {
+			if err := f.svc.DeleteEnvironment(ctx, dev, p.ID, e.ID); !errors.Is(err, ErrLastEnvironment) {
+				t.Fatalf("deleting the last environment: %v", err)
+			}
+			break
+		}
+		if err := f.svc.DeleteEnvironment(ctx, dev, p.ID, e.ID); err != nil {
+			t.Fatalf("delete %s: %v", e.Name, err)
+		}
+	}
+	if left, _ := f.svc.Environments(ctx, dev, p.ID); len(left) != 1 {
+		t.Fatalf("%d environments left", len(left))
+	}
+	if len(sweeps.orgs) != len(envs)-1 {
+		t.Fatalf("cleaners ran %d times", len(sweeps.orgs))
+	}
+	if err := f.svc.DeleteEnvironment(ctx, dev, p.ID, "env_missing"); !errors.Is(err, ErrEnvironmentNotFound) {
+		t.Fatalf("delete a missing environment: %v", err)
 	}
 }

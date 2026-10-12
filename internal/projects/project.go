@@ -11,24 +11,34 @@ import (
 	"time"
 )
 
-// Project statuses. A project is initializing until its environments
-// exist; a Dispatch job does that (internal/orchestration).
+// Project statuses. A project is initializing until the background job
+// that sets it up has run (internal/orchestration). It has its
+// environments from the moment it exists.
 const (
 	StatusInitializing = "initializing"
 	StatusReady        = "ready"
 )
 
-// Environment kinds.
+// Environment kinds. The kind says what an environment is for, which
+// deployment strategies (milestone 4) go by; the name is free.
 const (
-	KindProduction = "production"
-	KindPreview    = "preview"
+	KindProduction  = "production"
+	KindStaging     = "staging"
+	KindPreview     = "preview"
+	KindDevelopment = "development"
 )
+
+// Kinds lists the environment kinds, most important first.
+func Kinds() []string { return []string{KindProduction, KindStaging, KindPreview, KindDevelopment} }
 
 // Errors the service and stores return.
 var (
-	ErrNotFound  = errors.New("project not found")
-	ErrSlugTaken = errors.New("a project with that slug already exists in this organization")
-	ErrInvalid   = errors.New("invalid project")
+	ErrNotFound            = errors.New("project not found")
+	ErrSlugTaken           = errors.New("a project with that slug already exists in this organization")
+	ErrInvalid             = errors.New("invalid project")
+	ErrEnvironmentNotFound = errors.New("environment not found")
+	ErrEnvironmentExists   = errors.New("this project already has an environment with that name")
+	ErrLastEnvironment     = errors.New("a project needs at least one environment, so its last one can't be deleted")
 )
 
 // Project is an application an organization deploys with Loomplane.

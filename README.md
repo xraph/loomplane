@@ -69,13 +69,14 @@ The image runs in development mode with the development secret key, which is fin
 ### Try the project flow
 
 1. Choose **New project** and enter a name. A repository URL and description are optional.
-2. Open the project. It begins in `initializing` while Dispatch prepares its environments.
-3. When setup finishes, you'll see `production` and `preview`, and the project becomes `ready`.
+2. Open the project. Its `production` and `preview` environments are there from the start; add others, like `staging`, from the Environments card. A project always keeps at least one.
+3. It shows `initializing` until a Dispatch job finishes setting it up, then `ready`.
 4. Open **Infrastructure** to inspect Ctrl Plane's persistence backend and registered providers.
 5. Open **Members** and choose **Invite**. You get a link to pass on yourself, because Loomplane doesn't send email yet. Whoever opens it signs in or signs up with the invited address, then accepts.
 6. Give a project a GitHub URL (any public monorepo works, such as `https://github.com/dubinc/dub`) and choose **Analyze** under **Architecture**. The worker downloads that commit and reads it. You get the services it builds, what they share and the databases they need, each linked to the line it came from.
+7. Open **Variables** in the sidebar and set something every project should get, like `LOG_LEVEL`. On a project's page, the Variables card shows what it resolves to in each environment, for the whole project or one service, and lets you override it there.
 
-`ready` means the project's environments exist. It doesn't mean an application has been deployed. The project page draws each environment as a thread: gold while setup runs, green when it's ready.
+`ready` means the project is set up. It doesn't mean an application has been deployed. The project page draws each environment as a thread: gold while setup runs, green when it's ready.
 
 ### Develop with hot reload
 
@@ -100,7 +101,8 @@ make dev-dashboard
 | Organizations         | Create an organization and switch the active organization on your session.                                                     |
 | Members               | Invite people by link, change their roles, and remove them. Nobody grants a role above their own.                              |
 | Projects              | Create, list, view, update, and delete projects through the API. The dashboard covers creation, listing, detail, and deletion. |
-| Environments          | A Dispatch job creates production and preview records for each new project. Initialization is idempotent.                      |
+| Environments          | Every project has production and preview from the moment it exists, and at least one always. Add staging or any other. |
+| Variables             | Organization, project and service layers, each for every environment or one; the most specific wins. Secrets are encrypted in Vault and never shown again. |
 | Permissions           | Warden checks access in the service layer, with roles scoped to each organization.                                             |
 | Audit events          | Chronicle records identity activity and project changes. An audit reader and dashboard are still planned.                      |
 | Infrastructure status | Inspect Ctrl Plane's store and registered providers through Loomplane's guarded API.                                           |
@@ -289,6 +291,7 @@ loomplane/
 ├── internal/
 │   ├── config/               Typed configuration and validation
 │   ├── discovery/            Analyses, and the detectors in detect/
+│   ├── environments/         Layered variables, with secrets in Vault
 │   ├── graph/                The application graph
 │   ├── infrastructure/       Ctrl Plane identity bridge
 │   ├── orchestration/        Dispatch jobs and enqueue policy
@@ -297,7 +300,7 @@ loomplane/
 │   ├── repositories/         GitHub: checkouts, the App, connections
 │   └── security/             Organization roles and authorization
 ├── pkg/discovery/            The public contract for detectors
-├── extensions/               Forge adapters: identity, projects, discovery, infra, web
+├── extensions/               Forge adapters: identity, projects, discovery, environments, infra, web
 ├── examples/polyglot/        A sample monorepo the detector tests read
 ├── database/migrations/      Loomplane schema and library migration groups
 ├── apps/dashboard/           React application and generated clients

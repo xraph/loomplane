@@ -29,6 +29,15 @@ var (
 	// as a GitHub App installation, for the whole organization.
 	RepositoryConnect = Permission{"repository", "connect"}
 
+	// VariableRead reads variables. A secret's value is never readable by
+	// anyone, whatever their role.
+	VariableRead = Permission{"variable", "read"}
+	// VariableManage sets a project's variables and its services'.
+	VariableManage = Permission{"variable", "manage"}
+	// OrganizationVariableManage sets the organization-wide variables
+	// every project inherits.
+	OrganizationVariableManage = Permission{"organization_variable", "manage"}
+
 	DeploymentRead    = Permission{"deployment", "read"}
 	DeploymentCreate  = Permission{"deployment", "create"}
 	DeploymentApprove = Permission{"deployment", "approve"}
@@ -68,13 +77,14 @@ type RoleDef struct {
 func Catalog() []RoleDef {
 	viewer := []Permission{
 		ProjectRead, EnvironmentRead, DeploymentRead, InfrastructureRead, CloudAccountRead, MemberRead,
+		VariableRead,
 	}
 	developer := append(clone(viewer),
-		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun,
+		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun, VariableManage,
 	)
 	admin := append(clone(developer),
 		ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
-		RepositoryConnect,
+		RepositoryConnect, OrganizationVariableManage,
 	)
 	owner := append(clone(admin), OrganizationAdminister)
 	return []RoleDef{

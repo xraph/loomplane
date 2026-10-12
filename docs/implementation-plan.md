@@ -56,6 +56,17 @@ Left over:
 3. Detection limits: Python, Java and the rest are found through their Dockerfiles only. A Go command that imports the server's packages reads as a server, because classification follows imports. A Rust crate with both clap and axum is ambiguous.
 4. The GitHub App flow has only been run against a fake GitHub that checks the App's JWT signature. Try it against a real App before relying on it.
 
+## Environments and variables
+
+Added after milestone 2, because deployments need configuration to deploy with.
+
+- Every project has at least one environment, always. A new project's production and preview environments are created in the same transaction as the project. You can add others (staging, a QA environment), and deleting the last one is refused, with the project's row locked so two deletes can't race past the rule.
+- Variables are set on three layers, each for every environment or for one: the organization (every project inherits these; an environment is named, so `production` means every project's production), a project, and one of its services (from the latest analysis). For a service in an environment, each key takes the most specific value: service beats project beats organization, and one environment beats every environment. The API's resolved view shows the winning value and what it overrides.
+- Secret variables are encrypted in Vault and write-only: the API never returns their value, and the audit trail records keys, never values. Owners and admins set organization-wide variables; developers set their projects'.
+- In the dashboard: environments on each project page, a Variables card that resolves an environment for the project or one service and lets you set, edit or override at that layer, and an organization-wide Variables page.
+
+Left over: nothing reads the resolved variables yet. Deployments (milestone 4) will, and they'll be the only path that reveals a secret. A variable can't move to another layer or environment once set; delete it and set it again. Environments can't be renamed, because organization-wide variables name them.
+
 ## Milestone 3: Planning
 
 1. `loomplane.yaml` in `pkg/manifest`, with a JSON schema and versioning. It names services, resources and provider choices, and nothing about Forge.

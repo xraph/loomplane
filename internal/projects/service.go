@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -35,6 +36,13 @@ type Initializer interface {
 	InitializeProject(ctx context.Context, orgID, projectID string) error
 }
 
+// Cleaner tidies up after a project or environment is deleted: whatever it
+// keeps that the database's own cascade can't reach. It's best effort, and
+// logs its own failures; the deletion has already happened.
+type Cleaner interface {
+	Sweep(ctx context.Context, orgID string)
+}
+
 // Auditor records changes worth an audit trail. Recording must not fail the
 // change, so it returns nothing; the implementation logs its own failures.
 type Auditor interface {
@@ -52,11 +60,22 @@ type AuditEvent struct {
 
 // Service is the project API: every method checks the caller's role first.
 type Service struct {
-	store Store
-	authz Authorizer
-	init  Initializer
-	audit Auditor
-	now   func() time.Time
+	store    Store
+	authz    Authorizer
+	init     Initializer
+	audit    Auditor
+	cleaners []Cleaner
+	now      func() time.Time
+}
+
+// AddCleaner registers a Cleaner, run after every project or environment
+// deletion. Call it while the app registers, before any request arrives.
+func (s *Service) AddCleaner(c Cleaner) { s.cleaners = append(s.cleaners, c) }
+
+func (s *Service) sweep(ctx context.Context, orgID string) {
+	for _, c := range s.cleaners {
+		c.Sweep(context.WithoutCancel(ctx), orgID)
+	}
 }
 
 // NewService returns a Service. audit may be nil.
@@ -90,7 +109,11 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	if err != nil {
 		return nil, err
 	}
-	if err := s.store.CreateProject(ctx, proj); err != nil {
+	envs, err := s.defaultEnvironments(proj)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.CreateProject(ctx, proj, envs); err != nil {
 		return nil, err
 	}
 	if err := s.init.InitializeProject(ctx, proj.OrgID, proj.ID); err != nil {
@@ -201,6 +224,92 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 		return err
 	}
 	s.record(ctx, AuditEvent{Action: "project.delete", Severity: "warning", ProjectID: id, Principal: p})
+	s.sweep(ctx, p.OrgID)
+	return nil
+}
+
+// defaultEnvironments are a new project's environments.
+func (s *Service) defaultEnvironments(proj *Project) ([]*Environment, error) {
+	defs := DefaultEnvironments()
+	out := make([]*Environment, 0, len(defs))
+	for _, def := range defs {
+		id, err := typeid.Generate("env")
+		if err != nil {
+			return nil, fmt.Errorf("generate environment id: %w", err)
+		}
+		env := def
+		env.ID, env.OrgID, env.ProjectID = id.String(), proj.OrgID, proj.ID
+		env.CreatedAt, env.UpdatedAt = proj.CreatedAt, proj.CreatedAt
+		out = append(out, &env)
+	}
+	return out, nil
+}
+
+// CreateEnvironmentInput is what a caller sends to add an environment.
+type CreateEnvironmentInput struct {
+	// Name is lower case letters, digits and hyphens, unique in the project.
+	Name string `json:"name"`
+	// Kind is production, staging, preview or development. Empty picks it
+	// from the name: "staging" is staging, anything unfamiliar development.
+	Kind string `json:"kind,omitempty"`
+}
+
+var environmentNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
+
+// ValidEnvironmentName reports whether name can name an environment.
+func ValidEnvironmentName(name string) bool {
+	return environmentNamePattern.MatchString(name) && !strings.Contains(name, "--")
+}
+
+// CreateEnvironment adds an environment to a project.
+func (s *Service) CreateEnvironment(ctx context.Context, p security.Principal, projectID string, in CreateEnvironmentInput) (*Environment, error) {
+	if err := s.authz.Require(ctx, p, security.EnvironmentManage, projectID); err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(in.Name)
+	if !ValidEnvironmentName(name) {
+		return nil, fmt.Errorf("%w: an environment name is 1 to 32 lower case letters, digits and single hyphens", ErrInvalid)
+	}
+	kind := strings.TrimSpace(in.Kind)
+	if kind == "" {
+		kind = KindDevelopment
+		if slices.Contains(Kinds(), name) {
+			kind = name
+		}
+	}
+	if !slices.Contains(Kinds(), kind) {
+		return nil, fmt.Errorf("%w: kind must be one of %s", ErrInvalid, strings.Join(Kinds(), ", "))
+	}
+	id, err := typeid.Generate("env")
+	if err != nil {
+		return nil, fmt.Errorf("generate environment id: %w", err)
+	}
+	now := s.now().UTC()
+	env := &Environment{ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, Name: name, Kind: kind, CreatedAt: now, UpdatedAt: now}
+	if err := s.store.CreateEnvironment(ctx, env); err != nil {
+		return nil, err
+	}
+	s.record(ctx, AuditEvent{Action: "environment.create", Severity: "info", ProjectID: projectID, Principal: p,
+		Attributes: map[string]any{"environment": name, "kind": kind}})
+	return env, nil
+}
+
+// DeleteEnvironment removes an environment and everything set on it. A
+// project's last environment can't go.
+func (s *Service) DeleteEnvironment(ctx context.Context, p security.Principal, projectID, envID string) error {
+	if err := s.authz.Require(ctx, p, security.EnvironmentManage, projectID); err != nil {
+		return err
+	}
+	env, err := s.store.GetEnvironment(ctx, p.OrgID, projectID, envID)
+	if err != nil {
+		return err
+	}
+	if err := s.store.DeleteEnvironment(ctx, p.OrgID, projectID, envID); err != nil {
+		return err
+	}
+	s.record(ctx, AuditEvent{Action: "environment.delete", Severity: "warning", ProjectID: projectID, Principal: p,
+		Attributes: map[string]any{"environment": env.Name}})
+	s.sweep(ctx, p.OrgID)
 	return nil
 }
 
@@ -215,11 +324,12 @@ func (s *Service) Environments(ctx context.Context, p security.Principal, projec
 	return s.store.ListEnvironments(ctx, p.OrgID, projectID)
 }
 
-// Initialize gives a new project its default environments and marks it
-// ready. The initialization job calls it, with no caller to check: the job
-// was only enqueued by a Create that passed its check. It's safe to run
-// more than once, since Dispatch retries a failed job and may run one again
-// after a crash. A project deleted in the meantime is not an error.
+// Initialize finishes setting a new project up in the background and marks
+// it ready. Its environments already exist: Create makes them with the
+// project. The initialization job calls it, with no caller to check: the
+// job was only enqueued by a Create that passed its check. It's safe to
+// run more than once, since Dispatch retries a failed job and may run one
+// again after a crash. A project deleted in the meantime is not an error.
 func (s *Service) Initialize(ctx context.Context, orgID, projectID string) error {
 	proj, err := s.store.GetProject(ctx, orgID, projectID)
 	if errors.Is(err, ErrNotFound) {
@@ -228,23 +338,10 @@ func (s *Service) Initialize(ctx context.Context, orgID, projectID string) error
 	if err != nil {
 		return err
 	}
-	now := s.now().UTC()
-	for _, def := range DefaultEnvironments() {
-		id, err := typeid.Generate("env")
-		if err != nil {
-			return fmt.Errorf("generate environment id: %w", err)
-		}
-		env := def
-		env.ID, env.OrgID, env.ProjectID = id.String(), orgID, projectID
-		env.CreatedAt, env.UpdatedAt = now, now
-		if err := s.store.EnsureEnvironment(ctx, &env); err != nil {
-			return fmt.Errorf("ensure environment %s: %w", def.Name, err)
-		}
-	}
 	if proj.Status == StatusReady {
 		return nil
 	}
-	proj.Status, proj.UpdatedAt = StatusReady, now
+	proj.Status, proj.UpdatedAt = StatusReady, s.now().UTC()
 	return s.store.UpdateProject(ctx, proj)
 }
 

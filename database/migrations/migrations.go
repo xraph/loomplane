@@ -14,6 +14,7 @@ import (
 	cppg "github.com/xraph/ctrlplane/store/postgres"
 	dispatchpg "github.com/xraph/dispatch/store/postgres"
 	"github.com/xraph/grove/migrate"
+	vaultpg "github.com/xraph/vault/store/postgres"
 	wardenpg "github.com/xraph/warden/store/postgres"
 )
 
@@ -29,6 +30,7 @@ func Group() *migrate.Group {
 		statements("20261011000001", "create_projects", projectsUp, projectsDown),
 		statements("20261012000001", "create_analyses", analysesUp, analysesDown),
 		statements("20261012000002", "create_github_installations", githubUp, githubDown),
+		statements("20261012000003", "create_variables", variablesUp, variablesDown),
 	)
 	return g
 }
@@ -45,6 +47,7 @@ func All() []*migrate.Group {
 		chronpg.Migrations,
 		dispatchpg.Migrations,
 		cppg.Migrations,
+		vaultpg.Migrations,
 	}
 }
 
@@ -148,4 +151,39 @@ var githubUp = []string{
 
 var githubDown = []string{
 	`DROP TABLE IF EXISTS loomplane_github_installations`,
+}
+
+// A variable set on one layer: organization-wide (no project), a project,
+// or one of its services; for every environment or for one. A project's
+// variable for one environment references it, so deleting either deletes
+// the variable. An organization-wide one names its environment instead,
+// since it applies to that environment in every project. A secret's value
+// isn't here at all: it's in Vault, encrypted.
+var variablesUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_variables (
+		id             TEXT        PRIMARY KEY,
+		org_id         TEXT        NOT NULL,
+		project_id     TEXT        REFERENCES loomplane_projects (id) ON DELETE CASCADE,
+		environment_id TEXT        REFERENCES loomplane_environments (id) ON DELETE CASCADE,
+		environment    TEXT        NOT NULL DEFAULT '',
+		service        TEXT        NOT NULL DEFAULT '',
+		key            TEXT        NOT NULL,
+		value          TEXT        NOT NULL DEFAULT '',
+		secret         BOOLEAN     NOT NULL DEFAULT FALSE,
+		created_by     TEXT        NOT NULL,
+		updated_by     TEXT        NOT NULL,
+		created_at     TIMESTAMPTZ NOT NULL,
+		updated_at     TIMESTAMPTZ NOT NULL,
+		CONSTRAINT loomplane_variables_service_in_project CHECK (project_id IS NOT NULL OR service = ''),
+		CONSTRAINT loomplane_variables_environment_in_project CHECK (project_id IS NOT NULL OR environment_id IS NULL),
+		CONSTRAINT loomplane_variables_secret_not_stored CHECK (NOT secret OR value = '')
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS loomplane_variables_layer_key
+		ON loomplane_variables (org_id, COALESCE(project_id, ''), service, environment, key)`,
+	`CREATE INDEX IF NOT EXISTS loomplane_variables_project
+		ON loomplane_variables (org_id, project_id)`,
+}
+
+var variablesDown = []string{
+	`DROP TABLE IF EXISTS loomplane_variables`,
 }

@@ -93,3 +93,33 @@ type Store interface {
 	// Graph returns a succeeded analysis's graph, or ErrNoGraph.
 	Graph(ctx context.Context, orgID, id string) (*graph.Graph, error)
 }
+
+// ServiceCatalog answers which services a project has, from its latest
+// successful analysis.
+type ServiceCatalog struct {
+	Store Store
+}
+
+// Services returns the latest analysis's services by ID, with their
+// names. A project never analyzed has none.
+func (c ServiceCatalog) Services(ctx context.Context, orgID, projectID string) (map[string]string, error) {
+	list, err := c.Store.ListAnalyses(ctx, orgID, projectID, listLimit)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, a := range list {
+		if a.Status != StatusSucceeded {
+			continue
+		}
+		g, err := c.Store.Graph(ctx, orgID, a.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range g.Services {
+			out[s.ID] = s.Name
+		}
+		return out, nil
+	}
+	return out, nil
+}
