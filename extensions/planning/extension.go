@@ -36,6 +36,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/internal/artifacts"
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
@@ -160,6 +161,11 @@ func (e *Extension) Register(fapp forge.App) error {
 		},
 		"vercel":    &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
 		"cloud-sql": &deployments.CloudSQL{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
+		"ecs-fargate": &deployments.ECS{
+			AWS:         aws.New(e.cfg.Clouds.AWSEndpoint),
+			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
+			Credentials: clouds,
+		},
 	}
 	// Resource credentials, such as a database's password, get a Vault
 	// key of their own, derived from secret_key.

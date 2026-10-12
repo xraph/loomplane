@@ -350,7 +350,7 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 	ctx = infrastructure.WithPrincipal(ctx, principal(job))
 	sp, labels := spec(job, image, secrets)
 
-	inst, err := c.current(ctx, job, key)
+	inst, err := currentInstance(ctx, c.Ctrl, job, key)
 	if err != nil {
 		return "", "", err
 	}
@@ -380,22 +380,23 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 	return inst.ID.String(), url, nil
 }
 
-// current finds the instance the action deploys to: its binding's, or one
-// an earlier attempt created before it could record a binding. One on
-// another provider, from a replaced action, is deleted first.
-func (c *CloudRun) current(ctx context.Context, job *Job, key string) (*instance.Instance, error) {
+// currentInstance finds the Ctrl Plane instance an action deploys to: its
+// binding's, or one an earlier attempt created before it could record a
+// binding. One on another provider, from a replaced action, is deleted
+// first.
+func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (*instance.Instance, error) {
 	var inst *instance.Instance
 	if job.Binding != nil && job.Binding.ExternalID != "" {
 		iid, err := id.Parse(job.Binding.ExternalID)
 		if err != nil {
 			return nil, fmt.Errorf("the binding names no instance: %w", err)
 		}
-		if inst, err = c.Ctrl.Instances.Get(ctx, iid); err != nil && !errors.Is(err, ctrlplane.ErrNotFound) {
+		if inst, err = ctrl.Instances.Get(ctx, iid); err != nil && !errors.Is(err, ctrlplane.ErrNotFound) {
 			return nil, err
 		}
 	}
 	if inst == nil {
-		found, err := c.Ctrl.Instances.GetBySlug(ctx, instanceSlug(job))
+		found, err := ctrl.Instances.GetBySlug(ctx, instanceSlug(job))
 		if err != nil && !errors.Is(err, ctrlplane.ErrNotFound) {
 			return nil, err
 		}
@@ -403,7 +404,7 @@ func (c *CloudRun) current(ctx context.Context, job *Job, key string) (*instance
 	}
 	if inst != nil && inst.ProviderName != key {
 		job.Progress(StepDeploying, "Removing the service it replaces")
-		if err := c.Ctrl.Instances.Delete(ctx, inst.ID); err != nil {
+		if err := ctrl.Instances.Delete(ctx, inst.ID); err != nil {
 			return nil, fmt.Errorf("remove the service it replaces: %w", err)
 		}
 		return nil, nil

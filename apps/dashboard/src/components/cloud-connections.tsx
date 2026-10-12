@@ -348,6 +348,9 @@ function ConnectDialog({
   const [region, setRegion] = useState(
     (replacing?.details.region as string | undefined) ?? "us-east-1"
   )
+  const [certificate, setCertificate] = useState(
+    (replacing?.details.certificate_arn as string | undefined) ?? ""
+  )
   const [error, setError] = useState("")
   const busy = create.isPending || replace.isPending
 
@@ -379,7 +382,12 @@ function ConnectDialog({
       cloud === "vercel" && team.trim()
         ? { team_id: team.trim() }
         : cloud === "aws"
-          ? { region: region.trim() }
+          ? {
+              region: region.trim(),
+              ...(certificate.trim()
+                ? { certificate_arn: certificate.trim() }
+                : {}),
+            }
           : undefined
     // An AWS key is two values; Loomplane stores them together.
     const secret =
@@ -551,6 +559,24 @@ function ConnectDialog({
                   />
                   <FieldDescription>
                     Everything Loomplane creates in this account goes here.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="connection-certificate">
+                    Certificate ARN (optional)
+                  </FieldLabel>
+                  <Input
+                    id="connection-certificate"
+                    value={certificate}
+                    onChange={(e) => setCertificate(e.target.value)}
+                    placeholder={`arn:aws:acm:${region || "us-east-1"}:...:certificate/...`}
+                    spellCheck={false}
+                    className="font-mono text-xs md:text-xs"
+                  />
+                  <FieldDescription>
+                    An ACM certificate in the same region. With one, public
+                    services on ECS answer over HTTPS; without, the load
+                    balancer serves plain HTTP and plans warn you.
                   </FieldDescription>
                 </Field>
               </>

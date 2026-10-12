@@ -69,7 +69,10 @@ func Catalog() []provider.Provider {
 				{Workload: provider.Worker, Execution: provider.Container, Creates: "ECS service on Fargate"},
 			},
 			Regions: awsRegions, Scaling: true,
-			Note: milestone5,
+			// Built with CodeBuild, run as a Ctrl Plane instance behind
+			// the environment's load balancer (internal/deployments,
+			// internal/clouds/ecs).
+			Available: true,
 		},
 		{
 			Name: "render", Title: "Render", Cloud: "render",

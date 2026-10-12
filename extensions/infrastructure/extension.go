@@ -27,6 +27,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/clouds/cloudrun"
+	"github.com/xraph/loomplane/internal/clouds/ecs"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -160,7 +161,7 @@ func providers(reg *provider.Registry) []ProviderStatus {
 	all := reg.All()
 	out := make([]ProviderStatus, 0, len(all))
 	for name, p := range all {
-		if strings.HasPrefix(name, cloudrun.KeyPrefix) {
+		if strings.HasPrefix(name, cloudrun.KeyPrefix) || strings.HasPrefix(name, ecs.KeyPrefix) {
 			continue
 		}
 		info := p.Info()

@@ -108,9 +108,16 @@ func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check,
 	if err := aws.CheckRegion(region); err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	return Check{Details: map[string]string{
-		"region": region, "access_key": "…" + key.AccessKeyID[len(key.AccessKeyID)-4:],
-	}}, nil
+	details := map[string]string{"region": region, "access_key": "…" + key.AccessKeyID[len(key.AccessKeyID)-4:]}
+	// An ACM certificate in the region serves public ECS services over
+	// HTTPS; without one they serve HTTP.
+	if cert := strings.TrimSpace(settings["certificate_arn"]); cert != "" {
+		if !strings.HasPrefix(cert, "arn:aws:acm:"+region+":") || !strings.Contains(cert, ":certificate/") {
+			return Check{}, fmt.Errorf("%w: %q isn't an ACM certificate in %s", ErrInvalid, cert, region)
+		}
+		details["certificate_arn"] = cert
+	}
+	return Check{Details: details}, nil
 }
 
 // Check implements Checker: it asks STS who the key is, then IAM's policy

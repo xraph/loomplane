@@ -446,7 +446,10 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	}
 	out := make([]ConnectionOption, 0, len(all))
 	for _, c := range all {
-		out = append(out, ConnectionOption{ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady})
+		out = append(out, ConnectionOption{
+			ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
+			HTTPS: c.Details["certificate_arn"] != "",
+		})
 	}
 	return out, nil
 }

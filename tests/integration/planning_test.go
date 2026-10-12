@@ -94,6 +94,7 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 	cfg.Clouds.GoogleEndpoint = google.srv.URL
 	cfg.Clouds.VercelEndpoint = fakeVercel(t, "vcl_0123456789abcdef").URL
 	cfg.Storage.URL = "mem://"
+	cfg.Clouds.AWSEndpoint = newFakeAWS(t).srv.URL
 	r := start(t, cfg)
 
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
@@ -159,21 +160,28 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 
 	c.must(http.StatusNotFound, http.MethodPost, base+"/plans", map[string]string{"environment": "staging"}, nil)
 	var plan planBody
-	// Cloud Run deploys for real, so the plan needs a Google Cloud
-	// connection first.
+	// Cloud Run, Vercel and ECS deploy for real, so the plan needs a
+	// connection to each cloud first.
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 	waitPlanned(t, c, &plan)
-	if plan.Status != "blocked" || len(plan.Problems) != 2 || plan.Problems[0].Code != "no-connection" || plan.Problems[1].Code != "no-connection" {
+	if plan.Status != "blocked" || len(plan.Problems) != 3 {
 		t.Fatalf("plan without connections %+v", plan)
+	}
+	for _, p := range plan.Problems {
+		if p.Code != "no-connection" {
+			t.Fatalf("plan without connections %+v", plan)
+		}
 	}
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
 		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
 		map[string]string{"cloud": "vercel", "name": "Web", "credential": "vcl_0123456789abcdef"}, nil)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]any{"cloud": "aws", "name": "AWS", "credential": awsKey(awsKeyID), "settings": map[string]string{"region": "us-east-1"}}, nil)
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 	waitPlanned(t, c, &plan)
-	// Ready for review, but not executable: ECS and the managed databases
-	// have no adapter yet.
+	// Ready for review, but not executable: Memorystore has no adapter
+	// yet.
 	if plan.Status != "ready" || plan.Revision == "" || len(plan.Actions) == 0 || plan.Executable {
 		t.Fatalf("plan %+v", plan)
 	}

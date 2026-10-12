@@ -44,6 +44,9 @@ type ConnectionOption struct {
 	Name  string
 	Cloud string
 	Ready bool
+	// HTTPS says whether the connection serves public services over
+	// HTTPS where that takes a certificate of its own, as ECS does.
+	HTTPS bool
 }
 
 // cloudTitles name the clouds connections are for, for people.
@@ -152,6 +155,28 @@ func (p *planner) use(prov *provider.Provider) {
 		return
 	}
 	p.clouds[prov.Cloud] = true
+}
+
+// checkHTTPS warns about public services on ECS when the AWS connection
+// they deploy with has no certificate: they'll serve plain HTTP.
+func (p *planner) checkHTTPS(chosen map[string]string) {
+	id := chosen["aws"]
+	if id == "" {
+		return
+	}
+	i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
+	if i < 0 || p.in.Connections[i].HTTPS {
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.services)) {
+		a := p.services[name]
+		if a.Provider == "ecs-fargate" && a.Service != nil && a.Service.Public && a.Service.Port > 0 {
+			p.warn(Finding{
+				Code: "plain-http", Subject: ServiceSubject, Name: name, Path: "services." + name,
+				Message: fmt.Sprintf("%s will serve plain HTTP: %s has no certificate. Add an ACM certificate to the connection to serve HTTPS.", name, p.in.Connections[i].Name),
+			})
+		}
+	}
 }
 
 // connect settles which connection each cloud the plan uses deploys
@@ -823,6 +848,7 @@ func (p *planner) finish() *Result {
 		return a.ID < b.ID
 	})
 	connections := p.connect()
+	p.checkHTTPS(connections)
 	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings, Connections: connections}
 	for _, a := range p.actions {
 		r.Actions = append(r.Actions, *a)

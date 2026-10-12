@@ -126,6 +126,23 @@ Left over, for after the acceptance run:
 3. Services find each other by public URL. A service that isn't public gets no address its dependents can reach until private networking arrives in milestone 5.
 4. Ctrl Plane gaps worth fixing upstream: instances keep the provider's name rather than its registry key, providers get credentials only at construction, Deploy carries only images and variables, and nothing polls status after a call returns.
 
-## Milestones 5 and 6
+## Milestone 5: Extended orchestration
 
-AWS ECS and Fargate as a Ctrl Plane provider, then Render; managed databases; environment secrets; endpoints between services on different clouds; Bastion where you run a gateway; drift detection and recovery from partial failure. Then the CLI on Keysmith keys, a provider SDK, backups, upgrades, and MCP for agents.
+In progress. Done when a polyglot application deploys across several providers and Loomplane keeps one consistent record of what runs where.
+
+Done so far:
+
+1. Recovery from partial failure. A failed deployment can be retried from the step that failed, with the plan that was approved; steps that succeeded stay as they are.
+2. Drift detection. A Dispatch job on the cron leader compares every binding with what its cloud has live and records anything gone or changed. It only reads. The next plan creates or updates it back, and only an approved plan changes anything, so there's one authority. Bindings also record the commit each service was built from, so new code is a change a plan picks up.
+3. Environment secrets. On Cloud Run they live in Secret Manager and reach the service by reference, readable by its runtime account only; on Vercel they're sensitive variables. No secret is handed to Ctrl Plane, which stores what it's given in plain JSON.
+4. A managed database. Postgres and MySQL on Cloud SQL, with a generated password kept in Vault, reached from Cloud Run through the Cloud SQL connector. A database is only reachable from services on its own cloud, so anything else needing it is a problem on the plan.
+5. AWS connections: an access key, a region, and an optional ACM certificate, checked with STS and IAM's policy simulator.
+6. ECS on Fargate. Images build on CodeBuild into ECR, from the commit's tarball repacked as the zip CodeBuild reads from S3; services with a Dockerfile build from it, the rest with buildpacks. Loomplane creates the CodeBuild role and the task execution role. Services run in the account's default VPC as ECS services that Ctrl Plane drives through a provider per connection, the way Cloud Run's works. Each environment gets one Application Load Balancer, and each public service a listener port of its own, since without a domain there's no host to route on and paths break apps that expect the root: the first gets 80, or 443 with the connection's certificate, then 8000 and up. A plan for an account without a certificate warns that its public services serve plain HTTP. Secrets go to Secrets Manager and reach the task by ARN.
+
+Next, RDS for Postgres and MySQL, reachable from the environment's tasks only.
+
+Still to do after that: a gateway where it fits (Bastion is a library and Forge extension with no image of its own, path routing only, and an unauthenticated admin API, so it would be a Loomplane-built gateway with its routes baked in at deploy time), and private endpoints between services on different clouds.
+
+## Milestone 6
+
+The CLI on Keysmith keys, a provider SDK, backups, upgrades, and MCP for agents.
