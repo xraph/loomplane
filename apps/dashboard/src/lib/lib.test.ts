@@ -114,6 +114,7 @@ describe("repositoriesLabel", () => {
   it.each([
     [[], ""],
     [["acme/web"], "acme/web"],
+    [["acme/mono"], "acme/mono"],
     [["acme/web", "acme/api", "acme/kit"], "acme/web +2"],
   ])("repositoriesLabel(%j) is %j", (repos, want) => {
     expect(repositoriesLabel(repos)).toBe(want)

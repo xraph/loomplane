@@ -266,7 +266,7 @@ function RemoveSource({
         <AlertDialogHeader>
           <AlertDialogTitle>Remove {source?.alias}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Its services leave the graph. The alias {source?.alias} stays taken,
+            Loomplane stops analyzing it. The alias {source?.alias} stays taken,
             so plans made with it keep meaning {source?.repository}, and you
             can't give it to another repository later.
           </AlertDialogDescription>

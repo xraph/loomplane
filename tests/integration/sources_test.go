@@ -93,3 +93,30 @@ func TestSources_aProjectBuildsFromSeveralRepositories(t *testing.T) {
 		t.Fatalf("repositories after removing site %v", proj.Repositories)
 	}
 }
+
+func TestSources_aRepositoryAttachedTwiceIsListedOnce(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.GitHub.APIURL = fakeGitHubRepos(t, map[string][]byte{
+		"acme/mono": exampleTarball(t),
+	}).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, c)
+
+	var proj struct {
+		ID           string   `json:"id"`
+		Repositories []string `json:"repositories"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Monorepo"}, &proj)
+	base := "/api/v1/projects/" + proj.ID + "/sources"
+	c.must(http.StatusCreated, http.MethodPost, base, map[string]string{"repository": "acme/mono", "alias": "platform", "root": "services"}, nil)
+	c.must(http.StatusCreated, http.MethodPost, base, map[string]string{"repository": "acme/mono", "alias": "apps", "root": "apps"}, nil)
+
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+proj.ID, nil, &proj)
+	if !slices.Equal(proj.Repositories, []string{"acme/mono"}) {
+		t.Fatalf("repositories %v, want acme/mono once", proj.Repositories)
+	}
+}

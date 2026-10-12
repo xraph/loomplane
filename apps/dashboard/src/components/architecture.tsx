@@ -23,6 +23,7 @@ import {
   useProjectsGet,
   useProjectsList,
   useSourcesCreate,
+  useSourcesList,
 } from "@/client/forge/loomplane/hooks"
 import type {
   Analysis,
@@ -146,6 +147,10 @@ export function AnalyzeActions({
   running: boolean
 }) {
   const start = useMutation(useAnalysesCreate)
+  const sources = useQuery(useSourcesList, { path: { id: project.id } })
+  // The API refuses a ref when a project has several sources, so the choice
+  // is only offered for one.
+  const single = sources.data?.sources.filter((s) => !s.removedAt).length === 1
   const [choosing, setChoosing] = useState(false)
   const [ref, setRef] = useState("")
   const busy = running || start.isPending
@@ -170,7 +175,7 @@ export function AnalyzeActions({
 
   return (
     <>
-      {project.repositories.length === 1 && (
+      {single && (
         <Button
           variant="outline"
           className="rounded-full"

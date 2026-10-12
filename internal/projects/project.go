@@ -58,7 +58,7 @@ type Project struct {
 	Icon        string `json:"icon"`
 	Color       string `json:"color"`
 	// Repositories are the "owner/name" of each repository the project
-	// builds from, by alias. Its sources belong to discovery; the store
+	// builds from, each once, by its first alias. Its sources belong to discovery; the store
 	// reads them so a list of projects can show them.
 	Repositories []string  `json:"repositories"`
 	Status       string    `json:"status"`
