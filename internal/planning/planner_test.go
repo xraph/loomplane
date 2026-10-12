@@ -1193,3 +1193,19 @@ func TestCompute_aGatewayIsNeverHeld(t *testing.T) {
 		t.Fatalf("edge %+v", edge)
 	}
 }
+
+func TestCompute_aGatewayRouteToAHeldServiceThatRunsNowhereIsAProblem(t *testing.T) {
+	// Nothing is deployed, and the plan holds site, so site isn't created
+	// and edge has nothing to send / to.
+	base := strings.Replace(edgeYAML, "    needs: [api]\n", "", 1)
+	r := computeFed(t, base, []string{"site"})
+	if got := codes(r.Problems); !slices.Contains(got, "need-held:edge") {
+		t.Fatalf("problems %v", got)
+	}
+	for _, p := range r.Problems {
+		if p.Code == "need-held" && (p.Path != "gateways.edge.routes[1]" || !strings.Contains(p.Message, "edge routes to site, which is in site") ||
+			!strings.Contains(p.Message, "add site to the scope")) {
+			t.Fatalf("problem %+v", p)
+		}
+	}
+}
