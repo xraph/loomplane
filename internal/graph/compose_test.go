@@ -171,8 +171,102 @@ func TestCompose_linksARustGitDependencyAsCertain(t *testing.T) {
 }
 
 func TestCompose_neverLinksARepositoryToItself(t *testing.T) {
-	g := Compose([]Part{{Source: ref("api", "acme/api"), Graph: apiGraph()}})
-	if len(g.Edges) != 1 || g.Edges[0].To != "res:postgres" {
-		t.Fatalf("edges %+v", g.Edges)
+	// One source both requires and publishes github.com/acme/api/kit, so
+	// only the same-source check keeps link from adding an edge.
+	req := pd.Requirement{Name: "github.com/acme/api/kit", Version: "v0.1.0", Evidence: pd.Evidence{Path: "go.mod", Line: 11}}
+	self := Build(&pd.Report{Units: []pd.Unit{
+		{ID: "go:.", Ecosystem: pd.Go, Name: "github.com/acme/api", Path: ".",
+			Entrypoints: []pd.Entrypoint{{Name: "api", Path: "cmd/api"}}, Requires: []pd.Requirement{req}},
+		{ID: "go:kit", Ecosystem: pd.Go, Name: "github.com/acme/api/kit", Path: "kit"},
+	}})
+	g := Compose([]Part{{Source: ref("api", "acme/api"), Graph: self}})
+	if len(g.Packages) != 1 || g.Packages[0].Name != "github.com/acme/api/kit" {
+		t.Fatalf("packages %+v: the test needs the source to publish what it requires", g.Packages)
+	}
+	if len(g.Edges) != 0 {
+		t.Fatalf("a source got an edge to what it publishes itself: %+v", g.Edges)
+	}
+}
+
+func TestCompose_aUnitWithOnlyServicesIsPublishedByThem(t *testing.T) {
+	tools := Build(&pd.Report{Units: []pd.Unit{{
+		ID: "go:.", Ecosystem: pd.Go, Name: "github.com/acme/tools", Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "a", Path: "cmd/a"}, {Name: "b", Path: "cmd/b"}},
+	}}})
+	if len(tools.Packages) != 0 {
+		t.Fatalf("packages %+v: the unit must have only services", tools.Packages)
+	}
+	app := Build(&pd.Report{Units: []pd.Unit{{
+		ID: "go:.", Ecosystem: pd.Go, Name: "github.com/acme/app", Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "app", Path: "cmd/app"}},
+		Requires:    []pd.Requirement{{Name: "github.com/acme/tools", Evidence: pd.Evidence{Path: "go.mod", Line: 3}}},
+	}}})
+	g := Compose([]Part{{Source: ref("app", "acme/app"), Graph: app}, {Source: ref("tools", "acme/tools"), Graph: tools}})
+	for _, to := range []string{"svc:tools:go:cmd/a", "svc:tools:go:cmd/b"} {
+		if e := edgeBetween(g, "svc:app:go:cmd/app", to); e == nil || e.Confidence != pd.Certain {
+			t.Errorf("no certain edge to %s in %+v", to, g.Edges)
+		}
+	}
+}
+
+func TestStructural_needsTheRepositoryItself(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		req  pd.Requirement
+		eco  pd.Ecosystem
+		repo string
+		want bool
+	}{
+		{"go module of the repository", pd.Requirement{Name: "github.com/acme/kit/log"}, pd.Go, "acme/kit", true},
+		{"go module of another owner", pd.Requirement{Name: "github.com/other/kit"}, pd.Go, "acme/kit", false},
+		{"go module of a longer name", pd.Requirement{Name: "github.com/acme/kitchen"}, pd.Go, "acme/kit", false},
+		{"go module on another host", pd.Requirement{Name: "gitlab.com/acme/kit"}, pd.Go, "acme/kit", false},
+		{"rust git url of the repository", pd.Requirement{Git: "https://github.com/Acme/Kit.git"}, pd.Rust, "acme/kit", true},
+		{"rust git url of another repository", pd.Requirement{Git: "https://github.com/acme/other"}, pd.Rust, "acme/kit", false},
+		{"rust git url on another host", pd.Requirement{Git: "https://gitlab.com/acme/kit"}, pd.Rust, "acme/kit", false},
+		{"rust requirement with no git url", pd.Requirement{Name: "kit"}, pd.Rust, "acme/kit", false},
+		{"node name is never structural", pd.Requirement{Name: "@acme/kit"}, pd.Node, "acme/kit", false},
+		{"no repository", pd.Requirement{Name: "github.com/acme/kit"}, pd.Go, "", false},
+	} {
+		if got := structural(tt.req, tt.eco, tt.repo); got != tt.want {
+			t.Errorf("%s: structural = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestCompose_rootRecomputesWhatItsResourcesRestOn(t *testing.T) {
+	g := Build(&pd.Report{Units: []pd.Unit{
+		{ID: "node:apps/web", Ecosystem: pd.Node, Name: "web", Path: "apps/web",
+			Entrypoints: []pd.Entrypoint{{Name: "web", Path: "apps/web", Resources: []pd.ResourceUse{
+				{Kind: "redis", Confidence: pd.Possible, Evidence: pd.Evidence{Path: "apps/web/package.json", Line: 4}},
+			}}}},
+		{ID: "node:services/edge", Ecosystem: pd.Node, Name: "edge", Path: "services/edge",
+			Entrypoints: []pd.Entrypoint{{Name: "edge", Path: "services/edge", Resources: []pd.ResourceUse{
+				{Kind: "redis", Confidence: pd.Certain, Evidence: pd.Evidence{Path: "services/edge/package.json", Line: 6}},
+			}}}},
+	}})
+	if r := g.Resources[0]; r.Confidence != pd.Certain {
+		t.Fatalf("the per-source graph should see redis as certain: %+v", r)
+	}
+	web := ref("web", "acme/web")
+	web.Root = "apps/web"
+	composed := Compose([]Part{{Source: web, Graph: g}})
+	if len(composed.Resources) != 1 {
+		t.Fatalf("resources %+v", composed.Resources)
+	}
+	redis := composed.Resources[0]
+	if redis.ID != "res:redis" || redis.Confidence != pd.Possible || !redis.NeedsConfirmation {
+		t.Fatalf("redis %+v: it rests only on what apps/web does, which is a guess", redis)
+	}
+	for _, ev := range redis.Evidence {
+		if strings.HasPrefix(ev.Path, "services/") {
+			t.Fatalf("redis keeps evidence from a service the root drops: %+v", redis.Evidence)
+		}
+	}
+	if len(redis.Evidence) != 1 {
+		t.Fatalf("evidence %+v", redis.Evidence)
+	}
+	if g.Resources[0].Confidence != pd.Certain || len(g.Resources[0].Evidence) != 2 {
+		t.Fatalf("rooted changed its input: %+v", g.Resources[0])
 	}
 }

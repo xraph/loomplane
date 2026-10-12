@@ -276,11 +276,53 @@ func rooted(g *Graph, root string) *Graph {
 	out := *g
 	out.Services = slices.DeleteFunc(slices.Clone(g.Services), func(s Service) bool { return !keep[s.ID] })
 	out.Packages = slices.DeleteFunc(slices.Clone(g.Packages), func(p Package) bool { return !keep[p.ID] })
-	out.Resources = slices.DeleteFunc(slices.Clone(g.Resources), func(r Resource) bool {
-		return !keep[r.ID] && !slices.ContainsFunc(r.Evidence, func(ev discovery.Evidence) bool { return under(ev.Path, root) })
-	})
 	out.Edges = slices.DeleteFunc(slices.Clone(g.Edges), func(e Edge) bool { return !keep[e.From] || !keep[e.To] })
+	out.Resources = nil
+	for _, r := range g.Resources {
+		if kept, ok := restedResource(r, out.Edges, root, keep[r.ID]); ok {
+			out.Resources = append(out.Resources, kept)
+		}
+	}
+	if out.Resources == nil {
+		out.Resources = []Resource{}
+	}
 	return &out
+}
+
+// restedResource says what a resource looks like once only the nodes under
+// a root remain. The resource's confidence and evidence were gathered from
+// every service that uses it, including the ones the root drops, so a
+// resource a kept service reaches is rebuilt from the kept edges to it:
+// the strongest confidence among them and all of their evidence. One kept
+// only because some of its evidence is under the root keeps just that
+// evidence. ok is false when nothing of the resource is left.
+func restedResource(r Resource, kept []Edge, root string, reached bool) (res Resource, ok bool) {
+	if reached {
+		var rebuilt *Resource
+		for _, e := range kept {
+			if e.To != r.ID || e.Kind != Needs {
+				continue
+			}
+			if rebuilt == nil {
+				rebuilt = &Resource{ID: r.ID, Kind: r.Kind, Confidence: e.Confidence}
+			}
+			if e.Confidence.Rank() > rebuilt.Confidence.Rank() {
+				rebuilt.Confidence = e.Confidence
+			}
+			for _, ev := range e.Evidence {
+				rebuilt.Evidence = addEvidence(rebuilt.Evidence, ev)
+			}
+		}
+		if rebuilt != nil {
+			rebuilt.NeedsConfirmation = rebuilt.Confidence == discovery.Possible
+			sortEvidence(rebuilt.Evidence)
+			return *rebuilt, true
+		}
+		return r, true
+	}
+	res = r
+	res.Evidence = slices.DeleteFunc(slices.Clone(r.Evidence), func(ev discovery.Evidence) bool { return !under(ev.Path, root) })
+	return res, len(res.Evidence) > 0
 }
 
 func under(p, root string) bool { return p == root || strings.HasPrefix(p, root+"/") }
