@@ -37,6 +37,7 @@ func Group() *migrate.Group {
 		statements("20261012000007", "create_environment_connections", environmentConnectionsUp, environmentConnectionsDown),
 		statements("20261012000008", "create_deployments", deploymentsUp, deploymentsDown),
 		statements("20261012000009", "add_binding_url", bindingURLUp, bindingURLDown),
+		statements("20261013000001", "create_project_sources", sourcesUp, sourcesDown),
 	)
 	return g
 }
@@ -388,4 +389,79 @@ var bindingURLUp = []string{
 
 var bindingURLDown = []string{
 	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS url`,
+}
+
+// A source is a repository, or a directory of one, that a project builds
+// from; a project has any number. A removed source keeps its row, so its
+// alias stays taken: plans and variables name sources by alias, and an
+// alias must always mean the same repository. An analysis reads one
+// source; its alias is copied onto it, which is safe because aliases never
+// change.
+//
+// The backfill turns each project's repository_url into its first source,
+// with the alias internal/discovery.AliasFor would pick, and qualifies the
+// service IDs its variables name with that alias. A URL that isn't on
+// GitHub gets no source: it could never be analyzed. repository_url stays,
+// unread, so a rollback still finds it; a later migration drops it. Each
+// UPDATE only touches a project with exactly one source, which keeps a
+// re-run from guessing between two.
+var sourcesUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_project_sources (
+		id         TEXT        PRIMARY KEY,
+		org_id     TEXT        NOT NULL,
+		project_id TEXT        NOT NULL REFERENCES loomplane_projects (id) ON DELETE CASCADE,
+		alias      TEXT        NOT NULL,
+		repository TEXT        NOT NULL,
+		root       TEXT        NOT NULL DEFAULT '',
+		ref        TEXT        NOT NULL DEFAULT '',
+		created_by TEXT        NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL,
+		updated_at TIMESTAMPTZ NOT NULL,
+		removed_at TIMESTAMPTZ,
+		CONSTRAINT loomplane_project_sources_alias UNIQUE (project_id, alias)
+	)`,
+	`CREATE INDEX IF NOT EXISTS loomplane_project_sources_repository
+		ON loomplane_project_sources (repository)`,
+	`ALTER TABLE loomplane_analyses ADD COLUMN IF NOT EXISTS source_id TEXT
+		REFERENCES loomplane_project_sources (id) ON DELETE CASCADE`,
+	`ALTER TABLE loomplane_analyses ADD COLUMN IF NOT EXISTS alias TEXT NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS loomplane_analyses_source_created
+		ON loomplane_analyses (org_id, source_id, created_at DESC)`,
+	`WITH m AS (
+		SELECT id, org_id, created_by, created_at,
+			regexp_match(repository_url, 'github\.com[/:]([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+)') AS parts
+		FROM loomplane_projects WHERE repository_url <> ''
+	), r AS (
+		SELECT id, org_id, created_by, created_at,
+			parts[1] || '/' || regexp_replace(parts[2], '\.git$', '') AS repository,
+			trim(both '-' FROM regexp_replace(lower(regexp_replace(parts[2], '\.git$', '')), '[^a-z0-9]+', '-', 'g')) AS base
+		FROM m WHERE parts IS NOT NULL
+	), a AS (
+		SELECT *, rtrim(left(CASE WHEN base = '' THEN 'repo' WHEN base ~ '^[0-9]' THEN 'r-' || base ELSE base END, 32), '-') AS alias
+		FROM r
+	)
+	INSERT INTO loomplane_project_sources (id, org_id, project_id, alias, repository, root, ref, created_by, created_at, updated_at)
+	SELECT 'src_' || substr(md5('source:' || id), 1, 26), org_id, id,
+		CASE WHEN alias IN ('go', 'rust', 'node', 'container') THEN alias || '-src' ELSE alias END,
+		repository, '', '', created_by, created_at, created_at
+	FROM a
+	ON CONFLICT DO NOTHING`,
+	`UPDATE loomplane_analyses a SET source_id = s.id, alias = s.alias
+		FROM loomplane_project_sources s
+		WHERE a.source_id IS NULL AND s.project_id = a.project_id
+		AND (SELECT count(*) FROM loomplane_project_sources x WHERE x.project_id = a.project_id) = 1`,
+	`UPDATE loomplane_variables v SET service = 'svc:' || s.alias || ':' || substr(v.service, 5)
+		FROM loomplane_project_sources s
+		WHERE v.project_id = s.project_id AND v.service LIKE 'svc:%'
+		AND split_part(v.service, ':', 2) IN ('go', 'rust', 'node', 'container')
+		AND (SELECT count(*) FROM loomplane_project_sources x WHERE x.project_id = v.project_id) = 1`,
+}
+
+var sourcesDown = []string{
+	`UPDATE loomplane_variables v SET service = 'svc:' || substr(v.service, length('svc:' || s.alias || ':') + 1)
+		FROM loomplane_project_sources s
+		WHERE v.project_id = s.project_id AND v.service LIKE 'svc:' || s.alias || ':%'`,
+	`ALTER TABLE loomplane_analyses DROP COLUMN IF EXISTS alias`,
+	`ALTER TABLE loomplane_analyses DROP COLUMN IF EXISTS source_id`,
+	`DROP TABLE IF EXISTS loomplane_project_sources`,
 }
