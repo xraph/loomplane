@@ -14,4 +14,8 @@ export const entities = {
   'OrgMemberList': { fields: { 'members': 'OrgMember' } },
   'Project': { idField: 'id' },
   'ProjectList': { fields: { 'projects': 'Project' } },
+  'Resolution': { fields: { 'variables': 'ResolvedVariable' } },
+  'ResolvedVariable': { fields: { 'overrides': 'Variable', 'variable': 'Variable' } },
+  'Variable': { idField: 'id' },
+  'VariableList': { fields: { 'variables': 'Variable' } },
 } as const satisfies Record<string, EntityMeta>;

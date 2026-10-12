@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_Variable: Codec = {"kind": "object", "fields": {"created_at": {"ts": "createdAt"}, "created_by": {"ts": "createdBy"}, "environment": {"ts": "environment"}, "id": {"ts": "id"}, "key": {"ts": "key"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "scope": {"ts": "scope"}, "secret": {"ts": "secret"}, "service": {"ts": "service"}, "updated_at": {"ts": "updatedAt"}, "updated_by": {"ts": "updatedBy"}, "value": {"ts": "value"}}, "required": ["created_at", "created_by", "environment", "id", "key", "org_id", "scope", "secret", "updated_at", "updated_by", "value"]};

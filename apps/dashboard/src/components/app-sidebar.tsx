@@ -1,5 +1,11 @@
 import { OrgSwitcher, UserButton } from "@authsome/ui-components"
-import { FolderGit2Icon, PlugIcon, ServerIcon, UsersIcon } from "lucide-react"
+import {
+  BracesIcon,
+  FolderGit2Icon,
+  PlugIcon,
+  ServerIcon,
+  UsersIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
@@ -25,6 +31,12 @@ const nav = [
     label: "Projects",
     icon: FolderGit2Icon,
     active: (p: string) => p === "/" || p.startsWith("/projects"),
+  },
+  {
+    to: "/variables",
+    label: "Variables",
+    icon: BracesIcon,
+    active: (p: string) => p.startsWith("/variables"),
   },
   {
     to: "/infrastructure",

@@ -75,6 +75,40 @@ export class RESTClient extends Client {
 
   public readonly environments = {
     /**
+     * Add an environment to a project
+     */
+    create: async (id: string, body: types.CreateEnvironmentInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Environment> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CreateEnvironmentInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Environment"],
+      };
+
+      return this.request<types.Environment>(config);
+    },
+
+    /**
+     * Delete an environment and the variables set on it. A project's last environment can't be deleted.
+     */
+    delete: async (id: string, envId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(envId))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
      * A project's environments
      */
     list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EnvironmentList> => {
@@ -236,6 +270,43 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly projectVariables = {
+    /**
+     * Set a variable for a project, or for one of its services
+     */
+    create: async (id: string, body: types.CreateVariableInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Variable> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/variables`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CreateVariableInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Variable"],
+      };
+
+      return this.request<types.Variable>(config);
+    },
+
+    /**
+     * A project's own variables, project-wide and per service
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.VariableList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/variables`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["VariableList"],
+      };
+
+      return this.request<types.VariableList>(config);
+    },
+
+  };
+
   public readonly projects = {
     /**
      * Create a project and start initializing it
@@ -357,6 +428,102 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Session>(config);
+    },
+
+  };
+
+  public readonly variables = {
+    /**
+     * Set an organization-wide variable, for every environment or for one by name
+     */
+    create: async (body: types.CreateVariableInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Variable> => {
+      let __path = `/api/v1/variables`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CreateVariableInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Variable"],
+      };
+
+      return this.request<types.Variable>(config);
+    },
+
+    /**
+     * Delete a variable, and its secret
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/variables/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The organization-wide variables every project inherits
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.VariableList> => {
+      let __path = `/api/v1/variables`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["VariableList"],
+      };
+
+      return this.request<types.VariableList>(config);
+    },
+
+    /**
+     * What a project, or one of its services, gets in an environment, and which layer each value comes from
+     */
+    resolve: async (id: string, environment?: string, service?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Resolution> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/variables/resolved`;
+      const queryParams: Record<string, any> = {};
+      queryParams['environment'] = environment;
+      if (service !== undefined) {
+        queryParams['service'] = service;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Resolution"],
+      };
+
+      return this.request<types.Resolution>(config);
+    },
+
+    /**
+     * Change a variable's value, or whether it's secret
+     */
+    update: async (id: string, body: types.UpdateVariableInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Variable> => {
+      let __path = `/api/v1/variables/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["UpdateVariableInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Variable"],
+      };
+
+      return this.request<types.Variable>(config);
     },
 
   };

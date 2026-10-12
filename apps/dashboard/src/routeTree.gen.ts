@@ -14,6 +14,7 @@ import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
 import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
+import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
@@ -44,6 +45,11 @@ const SignUpRoute = SignUpRouteImport.update({
   path: "/sign-up",
   getParentRoute: () => rootRouteImport,
 } as any)
+const VariablesRoute = VariablesRouteImport.update({
+  id: "/variables",
+  path: "/variables",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
   id: "/integrations/",
   path: "/integrations/",
@@ -71,6 +77,7 @@ export interface FileRoutesByFullPath {
   "/members": typeof MembersRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/variables": typeof VariablesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/integrations/": typeof IntegrationsIndexRoute
@@ -82,6 +89,7 @@ export interface FileRoutesByTo {
   "/members": typeof MembersRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/variables": typeof VariablesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/integrations": typeof IntegrationsIndexRoute
@@ -94,6 +102,7 @@ export interface FileRoutesById {
   "/members": typeof MembersRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/variables": typeof VariablesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/integrations/": typeof IntegrationsIndexRoute
@@ -107,6 +116,7 @@ export interface FileRouteTypes {
     | "/members"
     | "/sign-in"
     | "/sign-up"
+    | "/variables"
     | "/invitations/accept"
     | "/projects/$id"
     | "/integrations/"
@@ -118,6 +128,7 @@ export interface FileRouteTypes {
     | "/members"
     | "/sign-in"
     | "/sign-up"
+    | "/variables"
     | "/invitations/accept"
     | "/projects/$id"
     | "/integrations"
@@ -129,6 +140,7 @@ export interface FileRouteTypes {
     | "/members"
     | "/sign-in"
     | "/sign-up"
+    | "/variables"
     | "/invitations/accept"
     | "/projects/$id"
     | "/integrations/"
@@ -141,6 +153,7 @@ export interface RootRouteChildren {
   MembersRoute: typeof MembersRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
+  VariablesRoute: typeof VariablesRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
@@ -184,6 +197,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SignUpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/variables": {
+      id: "/variables"
+      path: "/variables"
+      fullPath: "/variables"
+      preLoaderRoute: typeof VariablesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/integrations/": {
       id: "/integrations/"
       path: "/integrations"
@@ -221,6 +241,7 @@ const rootRouteChildren: RootRouteChildren = {
   MembersRoute: MembersRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
+  VariablesRoute: VariablesRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,

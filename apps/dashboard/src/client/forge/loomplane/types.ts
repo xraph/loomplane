@@ -64,6 +64,11 @@ export interface ConnectedRepositoryList {
   repositories: ConnectedRepository[];
 }
 
+export interface CreateEnvironmentInputBody {
+  kind?: string;
+  name: string;
+}
+
 export interface CreateInvitationInputBody {
   email: string;
   role?: string;
@@ -74,6 +79,14 @@ export interface CreateProjectInputBody {
   name: string;
   repositoryUrl?: string;
   slug?: string;
+}
+
+export interface CreateVariableInputBody {
+  environment?: string;
+  key: string;
+  secret?: boolean;
+  service?: string;
+  value: string;
 }
 
 export interface CreatedInvitation {
@@ -210,6 +223,19 @@ export interface PublicConfig {
   publishableKey: string;
 }
 
+export interface Resolution {
+  environment: string;
+  projectId: string;
+  service?: string;
+  variables: ResolvedVariable[];
+}
+
+export interface ResolvedVariable {
+  key: string;
+  overrides: Variable[];
+  variable: Variable;
+}
+
 export interface Resource {
   confidence: string;
   evidence: Evidence[];
@@ -258,6 +284,31 @@ export interface UpdateProjectInputBody {
   description?: string;
   name?: string;
   repositoryUrl?: string;
+}
+
+export interface UpdateVariableInputBody {
+  secret?: boolean;
+  value: string;
+}
+
+export interface Variable {
+  createdAt: string;
+  createdBy: string;
+  environment: string;
+  id: string;
+  key: string;
+  orgId: string;
+  projectId?: string;
+  scope: string;
+  secret: boolean;
+  service?: string;
+  updatedAt: string;
+  updatedBy: string;
+  value: string;
+}
+
+export interface VariableList {
+  variables: Variable[];
 }
 
 export interface Workspace {

@@ -528,6 +528,205 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Add an environment to a project",
+        "operationId": "environments.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEnvironmentInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Environment"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/environments/{envId}": {
+      "delete": {
+        "operationId": "environments.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "envId",
+            "in": "path",
+            "description": "Path parameter: envId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Delete an environment and the variables set on it. A project's last environment can't be deleted.",
+        "tags": [
+          "Projects"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "Environment"
+        }
+      }
+    },
+    "/api/v1/projects/{id}/variables": {
+      "get": {
+        "tags": [
+          "Variables"
+        ],
+        "summary": "A project's own variables, project-wide and per service",
+        "operationId": "projectVariables.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Variables",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "summary": "Set a variable for a project, or for one of its services",
+        "operationId": "projectVariables.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVariableInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The variable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Variable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/variables/resolved": {
+      "get": {
+        "tags": [
+          "Variables"
+        ],
+        "summary": "What a project, or one of its services, gets in an environment, and which layer each value comes from",
+        "operationId": "variables.resolve",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resolution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resolution"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/public-config": {
@@ -565,6 +764,127 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/variables": {
+      "get": {
+        "tags": [
+          "Variables"
+        ],
+        "summary": "The organization-wide variables every project inherits",
+        "operationId": "variables.list",
+        "responses": {
+          "200": {
+            "description": "Variables",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "summary": "Set an organization-wide variable, for every environment or for one by name",
+        "operationId": "variables.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVariableInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The variable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Variable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/variables/{id}": {
+      "delete": {
+        "operationId": "variables.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Delete a variable, and its secret",
+        "tags": [
+          "Variables"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "Variable"
+        }
+      },
+      "patch": {
+        "tags": [
+          "Variables"
+        ],
+        "summary": "Change a variable's value, or whether it's secret",
+        "operationId": "variables.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVariableInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The variable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Variable"
                 }
               }
             }
@@ -758,6 +1078,20 @@
           }
         }
       },
+      "CreateEnvironmentInputBody": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "CreateInvitationInputBody": {
         "type": "object",
         "required": [
@@ -788,6 +1122,30 @@
             "type": "string"
           },
           "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateVariableInputBody": {
+        "type": "object",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          },
+          "value": {
             "type": "string"
           }
         }
@@ -1294,6 +1652,53 @@
           }
         }
       },
+      "Resolution": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "environment",
+          "variables"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "variables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResolvedVariable"
+            }
+          }
+        }
+      },
+      "ResolvedVariable": {
+        "type": "object",
+        "required": [
+          "key",
+          "variable",
+          "overrides"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "overrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variable"
+            }
+          },
+          "variable": {
+            "$ref": "#/components/schemas/Variable"
+          }
+        }
+      },
       "Resource": {
         "type": "object",
         "required": [
@@ -1462,6 +1867,95 @@
             "type": "string"
           }
         }
+      },
+      "UpdateVariableInputBody": {
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "secret": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "Variable": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "scope",
+          "key",
+          "value",
+          "secret",
+          "environment",
+          "created_by",
+          "updated_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "key": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "VariableList": {
+        "properties": {
+          "variables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variable"
+            }
+          }
+        },
+        "required": [
+          "variables"
+        ],
+        "type": "object",
+        "x-forge-envelope": "variables"
       },
       "Workspace": {
         "type": "object",

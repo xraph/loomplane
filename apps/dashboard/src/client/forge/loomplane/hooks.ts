@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { Analysis, AnalysisGraph, AnalysisList, ConnectedRepositoryList, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, OrgInvitationList, OrgMemberList, Project, ProjectList, PublicConfig, Session } from './types';
+import type { Analysis, AnalysisGraph, AnalysisList, ConnectedRepositoryList, Environment, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, OrgInvitationList, OrgMemberList, Project, ProjectList, PublicConfig, Resolution, Session, Variable, VariableList } from './types';
 
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
 export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
@@ -30,5 +30,14 @@ export const useProjectsDelete = mutation(ops['projects.delete']);
 export const useAnalysesList = query<AnalysisList>(ops['analyses.list']);
 export const useAnalysesCreate = mutation<Analysis, Analysis>(ops['analyses.create']);
 export const useEnvironmentsList = query<EnvironmentList>(ops['environments.list']);
+export const useEnvironmentsCreate = mutation<Environment, Environment>(ops['environments.create']);
+export const useEnvironmentsDelete = mutation(ops['environments.delete']);
+export const useProjectVariablesList = query<VariableList>(ops['projectVariables.list']);
+export const useProjectVariablesCreate = mutation<Variable, Variable>(ops['projectVariables.create']);
+export const useVariablesResolve = query<Resolution>(ops['variables.resolve']);
 export const usePublicConfigGet = query<PublicConfig>(ops['publicConfig.get']);
 export const useSessionGet = query<Session>(ops['session.get']);
+export const useVariablesList = query<VariableList>(ops['variables.list']);
+export const useVariablesCreate = mutation<Variable, Variable>(ops['variables.create']);
+export const useVariablesUpdate = mutation<Variable, Variable>(ops['variables.update']);
+export const useVariablesDelete = mutation(ops['variables.delete']);

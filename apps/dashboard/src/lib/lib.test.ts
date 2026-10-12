@@ -47,7 +47,7 @@ const env = (name: string): Environment => ({
 })
 
 describe("weftRows", () => {
-  it("shows the default environments as setting up before the job runs", () => {
+  it("stands the defaults in while the environments load", () => {
     expect(weftRows(project("initializing"), [])).toEqual([
       { name: "production", ready: false },
       { name: "preview", ready: false },
@@ -63,17 +63,9 @@ describe("weftRows", () => {
     ])
   })
 
-  it("adds environments beyond the defaults", () => {
-    const rows = weftRows(project("ready"), [
-      env("production"),
-      env("preview"),
-      env("staging"),
-    ])
-    expect(rows.map((r) => r.name)).toEqual([
-      "production",
-      "preview",
-      "staging",
-    ])
+  it("shows the environments the project has, and only those", () => {
+    const rows = weftRows(project("ready"), [env("production"), env("staging")])
+    expect(rows.map((r) => r.name)).toEqual(["production", "staging"])
   })
 })
 

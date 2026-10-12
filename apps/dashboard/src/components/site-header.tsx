@@ -15,7 +15,7 @@ import { Link } from "@/lib/router"
 
 export type Crumb = {
   label: string
-  to?: "/" | "/infrastructure" | "/members" | "/integrations"
+  to?: "/" | "/infrastructure" | "/members" | "/integrations" | "/variables"
 }
 
 /** SiteHeader is the bar above every page: the sidebar toggle and where you are. */

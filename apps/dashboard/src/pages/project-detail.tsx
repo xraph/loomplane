@@ -10,6 +10,11 @@ import {
 import type { Environment, Project } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
 import { Architecture } from "@/components/architecture"
+import {
+  AddEnvironment,
+  EnvironmentList,
+} from "@/components/environment-manager"
+import { ProjectVariables } from "@/components/project-variables"
 import { SiteHeader } from "@/components/site-header"
 import { isReady, StatusBadge } from "@/components/status-badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -27,6 +32,7 @@ import {
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -38,8 +44,8 @@ import { formatDate, repoLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { useNavigate } from "@/lib/router"
 
-// Every new project gets these. Until its environments exist they show as
-// threads still being set up.
+// Every new project starts with these. They stand in as threads while the
+// real list loads.
 const defaultEnvironments = ["production", "preview"]
 
 export function ProjectDetail({ id }: { id: string }) {
@@ -83,6 +89,7 @@ export function ProjectDetail({ id }: { id: string }) {
             project={project.data}
             environments={environments.data?.environments ?? []}
             mayDelete={can("project:delete")}
+            mayManageEnvironments={can("environment:manage")}
           />
         )}
       </div>
@@ -94,10 +101,12 @@ function Loaded({
   project,
   environments,
   mayDelete,
+  mayManageEnvironments,
 }: {
   project: Project
   environments: Environment[]
   mayDelete: boolean
+  mayManageEnvironments: boolean
 }) {
   return (
     <>
@@ -121,18 +130,34 @@ function Loaded({
           <CardDescription>
             {isReady(project.status)
               ? "Where this project deploys. Services and providers are woven in as you add them."
-              : "Loomplane is setting up this project's environments."}
+              : "Loomplane is setting up this project."}
           </CardDescription>
+          {mayManageEnvironments && (
+            <CardAction>
+              <AddEnvironment project={project} />
+            </CardAction>
+          )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
           <Weave
             rows={weftRows(project, environments)}
             label={`Environments of ${project.name}`}
           />
+          {environments.length > 0 && (
+            <EnvironmentList
+              project={project}
+              environments={environments}
+              mayManage={mayManageEnvironments}
+            />
+          )}
         </CardContent>
       </Card>
 
       <Architecture project={project} />
+
+      {environments.length > 0 && (
+        <ProjectVariables project={project} environments={environments} />
+      )}
 
       <Card>
         <CardHeader>
@@ -181,20 +206,20 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * weftRows lists a project's environments as threads: the defaults first,
- * each ready once it exists and the project has finished setting up.
+ * weftRows lists a project's environments as threads, ready once the
+ * project has finished setting up. A project has its environments from the
+ * moment it's created, so the defaults only stand in while the list loads.
  */
 export function weftRows(
   project: Project,
   environments: Environment[]
 ): WeftRow[] {
-  const exist = new Set(environments.map((e) => e.name))
-  const names = [
-    ...new Set([...defaultEnvironments, ...environments.map((e) => e.name)]),
-  ]
-  return names.map((name) => ({
-    name,
-    ready: exist.has(name) && isReady(project.status),
+  if (environments.length === 0) {
+    return defaultEnvironments.map((name) => ({ name, ready: false }))
+  }
+  return environments.map((e) => ({
+    name: e.name,
+    ready: isReady(project.status),
   }))
 }
 
