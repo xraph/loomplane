@@ -73,6 +73,31 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly bindings = {
+    /**
+     * What runs each of the project's services and resources in an environment
+     */
+    list: async (id: string, environment?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BindingList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/bindings`;
+      const queryParams: Record<string, any> = {};
+      queryParams['environment'] = environment;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BindingList"],
+      };
+
+      return this.request<types.BindingList>(config);
+    },
+
+  };
+
   public readonly environments = {
     /**
      * Add an environment to a project
@@ -251,6 +276,75 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly manifests = {
+    /**
+     * The project's manifest: where its services run and what they need
+     */
+    current: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Revision> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/manifest`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Revision"],
+      };
+
+      return this.request<types.Revision>(config);
+    },
+
+    /**
+     * A first manifest proposed from the project's latest analysis, to review before saving
+     */
+    draft: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ManifestDraft> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/manifest/draft`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ManifestDraft"],
+      };
+
+      return this.request<types.ManifestDraft>(config);
+    },
+
+    /**
+     * The project's latest manifest revisions, newest first
+     */
+    history: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RevisionList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/manifest/revisions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RevisionList"],
+      };
+
+      return this.request<types.RevisionList>(config);
+    },
+
+    /**
+     * Save a new revision of the project's manifest, as YAML or as a parsed manifest
+     */
+    save: async (id: string, body: types.SaveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Revision> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/manifest`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SaveInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Revision"],
+      };
+
+      return this.request<types.Revision>(config);
+    },
+
+  };
+
   public readonly members = {
     /**
      * The organization's members, with their names and emails
@@ -266,6 +360,103 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.OrgMemberList>(config);
+    },
+
+  };
+
+  public readonly plans = {
+    /**
+     * Approve a ready plan, naming the revision you reviewed
+     */
+    approve: async (id: string, body: types.DecideInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
+      let __path = `/api/v1/plans/${encodeURIComponent(String(id))}/approve`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DecideInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Plan"],
+      };
+
+      return this.request<types.Plan>(config);
+    },
+
+    /**
+     * Plan an environment from the current manifest and the latest analysis, replacing its open plan
+     */
+    create: async (id: string, body: types.CreatePlanInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/plans`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CreatePlanInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Plan"],
+      };
+
+      return this.request<types.Plan>(config);
+    },
+
+    /**
+     * One plan, with its actions and findings
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
+      let __path = `/api/v1/plans/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Plan"],
+      };
+
+      return this.request<types.Plan>(config);
+    },
+
+    /**
+     * The project's latest plans, newest first
+     */
+    list: async (id: string, environment?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PlanList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/plans`;
+      const queryParams: Record<string, any> = {};
+      if (environment !== undefined) {
+        queryParams['environment'] = environment;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PlanList"],
+      };
+
+      return this.request<types.PlanList>(config);
+    },
+
+    /**
+     * Reject a ready plan
+     */
+    reject: async (id: string, body: types.DecideInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
+      let __path = `/api/v1/plans/${encodeURIComponent(String(id))}/reject`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DecideInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Plan"],
+      };
+
+      return this.request<types.Plan>(config);
     },
 
   };
@@ -390,6 +581,25 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Project>(config);
+    },
+
+  };
+
+  public readonly providers = {
+    /**
+     * The deployment targets a manifest can name, and what each runs and provisions
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderList> => {
+      let __path = `/api/v1/providers`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderList"],
+      };
+
+      return this.request<types.ProviderList>(config);
     },
 
   };

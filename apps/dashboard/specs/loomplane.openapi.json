@@ -274,6 +274,124 @@
         }
       }
     },
+    "/api/v1/plans/{id}": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "One plan, with its actions and findings",
+        "operationId": "plans.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plans/{id}/approve": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Approve a ready plan, naming the revision you reviewed",
+        "operationId": "plans.approve",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plans/{id}/reject": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Reject a ready plan",
+        "operationId": "plans.reject",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "tags": [
@@ -498,6 +616,46 @@
         }
       }
     },
+    "/api/v1/projects/{id}/bindings": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "What runs each of the project's services and resources in an environment",
+        "operationId": "bindings.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bindings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindingList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/environments": {
       "get": {
         "tags": [
@@ -606,6 +764,233 @@
         "x-forge-entity": {
           "idField": "id",
           "type": "Environment"
+        }
+      }
+    },
+    "/api/v1/projects/{id}/manifest": {
+      "get": {
+        "tags": [
+          "Manifests"
+        ],
+        "summary": "The project's manifest: where its services run and what they need",
+        "operationId": "manifests.current",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Revision"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Manifests"
+        ],
+        "summary": "Save a new revision of the project's manifest, as YAML or as a parsed manifest",
+        "operationId": "manifests.save",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The current revision, unchanged when nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Revision"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Revision"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/manifest/draft": {
+      "get": {
+        "tags": [
+          "Manifests"
+        ],
+        "summary": "A first manifest proposed from the project's latest analysis, to review before saving",
+        "operationId": "manifests.draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManifestDraft"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/manifest/revisions": {
+      "get": {
+        "tags": [
+          "Manifests"
+        ],
+        "summary": "The project's latest manifest revisions, newest first",
+        "operationId": "manifests.history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/plans": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "The project's latest plans, newest first",
+        "operationId": "plans.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Plan an environment from the current manifest and the latest analysis, replacing its open plan",
+        "operationId": "plans.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlanInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -722,6 +1107,27 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Resolution"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/providers": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "The deployment targets a manifest can name, and what each runs and provisions",
+        "operationId": "providers.list",
+        "responses": {
+          "200": {
+            "description": "Providers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderList"
                 }
               }
             }
@@ -895,6 +1301,70 @@
   },
   "components": {
     "schemas": {
+      "Action": {
+        "type": "object",
+        "required": [
+          "id",
+          "op",
+          "subject",
+          "name",
+          "provider",
+          "engine",
+          "creates",
+          "reason",
+          "step"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            }
+          },
+          "creates": {
+            "type": "string"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "engine": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceConfig"
+          },
+          "service": {
+            "$ref": "#/components/schemas/ServiceConfig"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
       "Analysis": {
         "type": "object",
         "required": [
@@ -950,7 +1420,7 @@
             "type": "string"
           },
           "summary": {
-            "$ref": "#/components/schemas/Summary"
+            "$ref": "#/components/schemas/GraphSummary"
           }
         }
       },
@@ -985,6 +1455,87 @@
         "type": "object",
         "x-forge-envelope": "analyses"
       },
+      "Binding": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "subject",
+          "name",
+          "provider",
+          "region",
+          "engine",
+          "external_id",
+          "config",
+          "plan_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BindingList": {
+        "properties": {
+          "bindings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Binding"
+            }
+          }
+        },
+        "required": [
+          "bindings"
+        ],
+        "type": "object",
+        "x-forge-envelope": "bindings"
+      },
       "BuildSystem": {
         "type": "object",
         "required": [
@@ -1000,6 +1551,25 @@
             "type": "string"
           },
           "path": {
+            "type": "string"
+          }
+        }
+      },
+      "Change": {
+        "type": "object",
+        "required": [
+          "field",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
             "type": "string"
           }
         }
@@ -1106,6 +1676,17 @@
           }
         }
       },
+      "CreatePlanInputBody": {
+        "type": "object",
+        "required": [
+          "environment"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          }
+        }
+      },
       "CreateProjectInputBody": {
         "type": "object",
         "required": [
@@ -1171,6 +1752,28 @@
           }
         }
       },
+      "DecideInputBody": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "Defaults": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      },
       "Edge": {
         "type": "object",
         "required": [
@@ -1197,6 +1800,25 @@
             "type": "string"
           },
           "to": {
+            "type": "string"
+          }
+        }
+      },
+      "EnvLink": {
+        "type": "object",
+        "required": [
+          "key",
+          "from",
+          "subject"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "subject": {
             "type": "string"
           }
         }
@@ -1268,6 +1890,36 @@
             "type": "integer"
           },
           "path": {
+            "type": "string"
+          }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "subject": {
             "type": "string"
           }
         }
@@ -1378,6 +2030,45 @@
           }
         }
       },
+      "GraphSummary": {
+        "properties": {
+          "deployable": {
+            "type": "integer"
+          },
+          "needs_confirmation": {
+            "type": "integer"
+          },
+          "packages": {
+            "type": "integer"
+          },
+          "resources": {
+            "type": "integer"
+          },
+          "services": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "services",
+          "deployable",
+          "packages",
+          "resources",
+          "needs_confirmation"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/graph.Summary"
+      },
+      "Ignore": {
+        "type": "object",
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "InfrastructureStatus": {
         "type": "object",
         "required": [
@@ -1396,6 +2087,60 @@
             }
           },
           "store": {
+            "type": "string"
+          }
+        }
+      },
+      "Manifest": {
+        "type": "object",
+        "required": [
+          "version",
+          "defaults",
+          "ignore"
+        ],
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/Defaults"
+          },
+          "ignore": {
+            "$ref": "#/components/schemas/Ignore"
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "services": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "ManifestDraft": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "analysis_id",
+          "commit_sha",
+          "yaml"
+        ],
+        "properties": {
+          "analysis_id": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/Manifest"
+          },
+          "project_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "yaml": {
             "type": "string"
           }
         }
@@ -1548,6 +2293,160 @@
           }
         }
       },
+      "Plan": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "status",
+          "revision",
+          "analysis_id",
+          "commit_sha",
+          "manifest_id",
+          "manifest_revision",
+          "actions",
+          "problems",
+          "warnings",
+          "summary",
+          "executable",
+          "error",
+          "created_by",
+          "created_at",
+          "decided_by",
+          "decision_note"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          },
+          "analysis_id": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "decided_at": {
+            "type": "string"
+          },
+          "decided_by": {
+            "type": "string"
+          },
+          "decision_note": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "executable": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "manifest_id": {
+            "type": "string"
+          },
+          "manifest_revision": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "planned_at": {
+            "type": "string"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/PlanningSummary"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          }
+        }
+      },
+      "PlanList": {
+        "properties": {
+          "plans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Plan"
+            }
+          }
+        },
+        "required": [
+          "plans"
+        ],
+        "type": "object",
+        "x-forge-envelope": "plans"
+      },
+      "PlanningSummary": {
+        "properties": {
+          "create": {
+            "type": "integer"
+          },
+          "delete": {
+            "type": "integer"
+          },
+          "keep": {
+            "type": "integer"
+          },
+          "replace": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "create",
+          "update",
+          "replace",
+          "delete",
+          "keep"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
+      },
       "Project": {
         "type": "object",
         "required": [
@@ -1621,6 +2520,76 @@
         "type": "object",
         "x-forge-envelope": "projects"
       },
+      "Provider": {
+        "type": "object",
+        "required": [
+          "name",
+          "title",
+          "cloud",
+          "description",
+          "model",
+          "scaling",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "provisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Provisions"
+            }
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Runs"
+            }
+          },
+          "scaling": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderList": {
+        "type": "object",
+        "required": [
+          "providers"
+        ],
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Provider"
+            }
+          }
+        }
+      },
       "ProviderStatus": {
         "type": "object",
         "required": [
@@ -1644,6 +2613,27 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "Provisions": {
+        "type": "object",
+        "required": [
+          "kind",
+          "creates"
+        ],
+        "properties": {
+          "creates": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1743,6 +2733,155 @@
           }
         }
       },
+      "ResourceConfig": {
+        "type": "object",
+        "required": [
+          "provider",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Revision": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "revision",
+          "yaml",
+          "digest",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/Manifest"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "yaml": {
+            "type": "string"
+          }
+        }
+      },
+      "RevisionList": {
+        "properties": {
+          "revisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Revision"
+            }
+          }
+        },
+        "required": [
+          "revisions"
+        ],
+        "type": "object",
+        "x-forge-envelope": "revisions"
+      },
+      "Runs": {
+        "type": "object",
+        "required": [
+          "workload",
+          "execution",
+          "creates"
+        ],
+        "properties": {
+          "creates": {
+            "type": "string"
+          },
+          "execution": {
+            "type": "string"
+          },
+          "workload": {
+            "type": "string"
+          }
+        }
+      },
+      "SaveInputBody": {
+        "type": "object",
+        "properties": {
+          "manifest": {
+            "type": "object",
+            "required": [
+              "version",
+              "defaults",
+              "ignore"
+            ],
+            "properties": {
+              "defaults": {
+                "$ref": "#/components/schemas/Defaults"
+              },
+              "ignore": {
+                "$ref": "#/components/schemas/Ignore"
+              },
+              "resources": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "services": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "version": {
+                "type": "integer"
+              }
+            }
+          },
+          "yaml": {
+            "type": "string"
+          }
+        }
+      },
+      "Scale": {
+        "type": "object",
+        "required": [
+          "min",
+          "max"
+        ],
+        "properties": {
+          "max": {
+            "type": "integer"
+          },
+          "min": {
+            "type": "integer"
+          }
+        }
+      },
       "Service": {
         "type": "object",
         "required": [
@@ -1811,6 +2950,67 @@
           }
         }
       },
+      "ServiceConfig": {
+        "type": "object",
+        "required": [
+          "provider",
+          "workload",
+          "execution",
+          "source",
+          "ecosystem",
+          "public"
+        ],
+        "properties": {
+          "build": {
+            "type": "string"
+          },
+          "ecosystem": {
+            "type": "string"
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvLink"
+            }
+          },
+          "execution": {
+            "type": "string"
+          },
+          "framework": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "region": {
+            "type": "string"
+          },
+          "scale": {
+            "$ref": "#/components/schemas/Scale"
+          },
+          "size": {
+            "$ref": "#/components/schemas/Size"
+          },
+          "source": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "workload": {
+            "type": "string"
+          }
+        }
+      },
       "Session": {
         "type": "object",
         "required": [
@@ -1833,38 +3033,26 @@
           }
         }
       },
+      "Size": {
+        "type": "object",
+        "required": [
+          "cpu",
+          "memory"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "number"
+          },
+          "memory": {
+            "type": "integer"
+          }
+        }
+      },
       "StartAnalysisInputBody": {
         "type": "object",
         "properties": {
           "ref": {
             "type": "string"
-          }
-        }
-      },
-      "Summary": {
-        "type": "object",
-        "required": [
-          "services",
-          "deployable",
-          "packages",
-          "resources",
-          "needs_confirmation"
-        ],
-        "properties": {
-          "deployable": {
-            "type": "integer"
-          },
-          "needs_confirmation": {
-            "type": "integer"
-          },
-          "packages": {
-            "type": "integer"
-          },
-          "resources": {
-            "type": "integer"
-          },
-          "services": {
-            "type": "integer"
           }
         }
       },

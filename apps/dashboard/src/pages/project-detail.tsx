@@ -36,6 +36,7 @@ import {
   Structure,
   useAnalyses,
 } from "@/components/architecture"
+import { DeployTab } from "@/components/deploy"
 import { EnvironmentCards } from "@/components/environment-manager"
 import { Page, PageHeading } from "@/components/page"
 import { ProjectStylePopover } from "@/components/project-style-picker"
@@ -354,6 +355,7 @@ function Body({
             )}
           </TabsTrigger>
           <TabsTrigger value="variables">Variables</TabsTrigger>
+          <TabsTrigger value="deploy">Deploy</TabsTrigger>
           <TabsTrigger value="analyses">
             Analyses
             {analyses.list.length > 0 && (
@@ -410,6 +412,13 @@ function Body({
           ) : (
             <Skeleton className="h-40 w-full rounded-xl" />
           )}
+        </TabsContent>
+        <TabsContent value="deploy">
+          <DeployTab
+            project={project}
+            environments={environments ?? []}
+            analysis={shown}
+          />
         </TabsContent>
         <TabsContent value="analyses">
           {analyses.error ? (

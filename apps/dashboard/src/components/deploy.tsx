@@ -1,0 +1,974 @@
+// The Deploy tab: a project's manifest, and the plans made from it. A plan
+// says what deploying an environment would do; nothing here touches a
+// cloud. Approving a plan records the decision against the exact revision
+// that was reviewed.
+import { FileCodeIcon, RotateCcwIcon, WorkflowIcon } from "lucide-react"
+import { useState } from "react"
+import { toast } from "sonner"
+
+import { messageOf, statusOf } from "@/client/errors"
+import {
+  useManifestsCurrent,
+  useManifestsDraft,
+  useManifestsSave,
+  usePlansApprove,
+  usePlansCreate,
+  usePlansGet,
+  usePlansList,
+  usePlansReject,
+  useProvidersList,
+} from "@/client/forge/loomplane/hooks"
+import type {
+  Action,
+  Analysis,
+  Environment,
+  Finding,
+  Manifest,
+  Plan,
+  Project,
+} from "@/client/forge/loomplane/types"
+import {
+  useInvalidate,
+  useMutation,
+  useQuery,
+  useRefetchWhile,
+} from "@/client/hooks"
+import { EvidenceList } from "@/components/architecture"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Textarea } from "@/components/ui/textarea"
+import { resourceLabel, shortSHA } from "@/lib/architecture"
+import { formatDate } from "@/lib/format"
+import { useOrganization } from "@/lib/organization"
+import {
+  changeCount,
+  isOpen,
+  isPlanning,
+  opLabel,
+  planStatus,
+  steps,
+  withIgnored,
+  withResource,
+} from "@/lib/plans"
+import { cn } from "@/lib/utils"
+
+export function DeployTab({
+  project,
+  environments,
+  analysis,
+}: {
+  project: Project
+  environments: Environment[]
+  /** analysis is the latest succeeded analysis, if there is one. */
+  analysis?: Analysis
+}) {
+  const [planID, setPlanID] = useState<string | null>(null)
+  return (
+    <div className="grid gap-6">
+      <ManifestCard project={project} analysis={analysis} />
+      <PlansCard
+        project={project}
+        environments={environments}
+        onOpen={setPlanID}
+      />
+      <Sheet
+        open={!!planID}
+        onOpenChange={(open) => {
+          if (!open) setPlanID(null)
+        }}
+      >
+        <SheetContent className="w-full gap-0 sm:max-w-xl">
+          {planID && (
+            <PlanReview
+              id={planID}
+              project={project}
+              analysis={analysis}
+              onPlanned={setPlanID}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
+    </div>
+  )
+}
+
+function ManifestCard({
+  project,
+  analysis,
+}: {
+  project: Project
+  analysis?: Analysis
+}) {
+  const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
+  if (current.data) {
+    return (
+      <ManifestEditor
+        key={current.data.id}
+        project={project}
+        yaml={current.data.yaml}
+        revision={current.data.revision}
+        savedAt={current.data.createdAt}
+      />
+    )
+  }
+  if (current.status === "error" && statusOf(current.error) === 404) {
+    if (!analysis) {
+      return (
+        <Empty className="border border-dashed">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <FileCodeIcon />
+            </EmptyMedia>
+            <EmptyTitle>No manifest yet</EmptyTitle>
+            <EmptyDescription>
+              The manifest says where each service runs. Analyze the repository
+              first, and Loomplane drafts one from what it finds.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )
+    }
+    return <DraftedManifest project={project} />
+  }
+  if (current.status === "error") {
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>
+          {messageOf(current.error, "The manifest couldn't be loaded.")}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  return <Skeleton className="h-80 w-full rounded-xl" />
+}
+
+function DraftedManifest({ project }: { project: Project }) {
+  const draft = useQuery(useManifestsDraft, { path: { id: project.id } })
+  if (draft.status === "error") {
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>
+          {messageOf(draft.error, "No manifest could be drafted.")}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  if (!draft.data) return <Skeleton className="h-80 w-full rounded-xl" />
+  return (
+    <ManifestEditor
+      project={project}
+      yaml={draft.data.yaml}
+      draftedFrom={draft.data.commitSha}
+    />
+  )
+}
+
+/**
+ * ManifestEditor edits loomplane.yaml as text. A save that doesn't parse
+ * comes back with every problem and where it is.
+ */
+function ManifestEditor({
+  project,
+  yaml,
+  revision,
+  savedAt,
+  draftedFrom,
+}: {
+  project: Project
+  yaml: string
+  revision?: number
+  savedAt?: string
+  /** draftedFrom is the commit a draft was made from; set for a draft. */
+  draftedFrom?: string
+}) {
+  const { can } = useOrganization()
+  const mayEdit = can("project:update")
+  const save = useMutation(useManifestsSave)
+  const invalidate = useInvalidate()
+  const [text, setText] = useState(yaml)
+  const [problems, setProblems] = useState<string[]>([])
+  const dirty = text !== yaml
+  const drafted = draftedFrom !== undefined
+
+  const submit = async () => {
+    setProblems([])
+    try {
+      const rev = await save.mutateAsync({
+        path: { id: project.id },
+        body: { yaml: text },
+      })
+      invalidate(useManifestsCurrent)
+      toast.success(
+        rev.revision === revision
+          ? "Nothing changed, so no new revision"
+          : `Saved revision ${rev.revision}`
+      )
+    } catch (err) {
+      setProblems(
+        manifestProblems(messageOf(err, "The manifest wasn't saved."))
+      )
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <FileCodeIcon className="size-4 text-muted-foreground" />
+          loomplane.yaml
+        </CardTitle>
+        <CardDescription>
+          {drafted
+            ? `A draft from commit ${shortSHA(draftedFrom)}: every service on the first target that runs it, and every resource found with good evidence. Check it, then save it as the first revision.`
+            : "Where each service runs and what it needs. Every save adds a revision, and each plan names the one it was made from."}
+        </CardDescription>
+        <CardAction>
+          {drafted ? (
+            <Badge variant="outline" className="border-weld/60">
+              Draft
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="tabular-nums">
+              Revision {revision}
+            </Badge>
+          )}
+        </CardAction>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <Textarea
+          aria-label="Manifest"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          readOnly={!mayEdit}
+          spellCheck={false}
+          aria-invalid={problems.length > 0}
+          className="max-h-[32rem] min-h-64 font-mono text-xs leading-relaxed md:text-xs"
+        />
+        {problems.length > 0 && (
+          <Alert variant="destructive">
+            <AlertTitle>The manifest wasn&apos;t saved</AlertTitle>
+            <AlertDescription>
+              <ul className="grid gap-1">
+                {problems.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
+      </CardContent>
+      {mayEdit && (
+        <CardFooter className="justify-between gap-3">
+          <span className="text-xs text-muted-foreground">
+            {savedAt && (
+              <>
+                Saved <time dateTime={savedAt}>{formatDate(savedAt)}</time>
+              </>
+            )}
+          </span>
+          <div className="flex gap-2">
+            {dirty && (
+              <Button
+                variant="ghost"
+                className="rounded-full"
+                onClick={() => {
+                  setText(yaml)
+                  setProblems([])
+                }}
+              >
+                <RotateCcwIcon />
+                Undo changes
+              </Button>
+            )}
+            <Button
+              className="rounded-full"
+              disabled={(!dirty && !drafted) || save.isPending}
+              onClick={() => void submit()}
+            >
+              {save.isPending && <Spinner />}
+              {drafted ? "Save manifest" : "Save revision"}
+            </Button>
+          </div>
+        </CardFooter>
+      )}
+    </Card>
+  )
+}
+
+/**
+ * manifestProblems splits the API's "invalid manifest: a; b" into one
+ * line per problem.
+ */
+function manifestProblems(message: string): string[] {
+  const body = message.replace(/^Invalid manifest:\s*/i, "")
+  if (body === message) return [message]
+  return body
+    .replace(/\.$/, "")
+    .split("; ")
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+}
+
+function PlansCard({
+  project,
+  environments,
+  onOpen,
+}: {
+  project: Project
+  environments: Environment[]
+  onOpen: (id: string) => void
+}) {
+  const { can } = useOrganization()
+  const plans = useQuery(usePlansList, { path: { id: project.id } })
+  const create = useMutation(usePlansCreate)
+  const [environment, setEnvironment] = useState(environments[0]?.name ?? "")
+  const list = plans.data?.plans ?? []
+  useRefetchWhile(
+    list.some((p) => isPlanning(p.status)),
+    plans.refetch
+  )
+
+  const plan = async () => {
+    try {
+      const p = await create.mutateAsync({
+        path: { id: project.id },
+        body: { environment },
+      })
+      void plans.refetch()
+      onOpen(p.id)
+    } catch (err) {
+      toast.error(messageOf(err, "The plan couldn't start."))
+    }
+  }
+
+  return (
+    <Card className="pb-0">
+      <CardHeader>
+        <CardTitle>Plans</CardTitle>
+        <CardDescription>
+          What deploying an environment would do, worked out from the manifest
+          and the latest analysis. Planning never touches a cloud.
+        </CardDescription>
+        {can("deployment:create") && environments.length > 0 && (
+          <CardAction className="flex items-center gap-2">
+            <Select
+              value={environment}
+              onValueChange={(v) => setEnvironment(v ?? environment)}
+            >
+              <SelectTrigger
+                size="sm"
+                aria-label="Environment"
+                className="min-w-32"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {environments.map((e) => (
+                  <SelectItem key={e.id} value={e.name}>
+                    {e.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              className="rounded-full"
+              disabled={!environment || create.isPending}
+              onClick={() => void plan()}
+            >
+              {create.isPending ? <Spinner /> : <WorkflowIcon />}
+              Plan
+            </Button>
+          </CardAction>
+        )}
+      </CardHeader>
+      <CardContent className="px-0">
+        {plans.status === "error" ? (
+          <Alert variant="destructive" className="mx-4 mb-4 w-auto">
+            <AlertDescription>
+              {messageOf(plans.error, "Plans couldn't be loaded.")}
+            </AlertDescription>
+          </Alert>
+        ) : !plans.data ? (
+          <div className="px-4 pb-4">
+            <Skeleton className="h-24 w-full" />
+          </div>
+        ) : list.length === 0 ? (
+          <p className="border-t px-4 py-8 text-center text-sm text-muted-foreground">
+            No plans yet. Save a manifest, then plan an environment.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="pl-4">Environment</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Changes</TableHead>
+                <TableHead>From</TableHead>
+                <TableHead className="pr-4">Planned</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {list.map((p) => (
+                <TableRow
+                  key={p.id}
+                  className="cursor-pointer"
+                  onClick={() => onOpen(p.id)}
+                >
+                  <TableCell className="pl-4 font-medium">
+                    <button
+                      type="button"
+                      className="outline-none focus-visible:underline"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpen(p.id)
+                      }}
+                    >
+                      {p.environment}
+                    </button>
+                  </TableCell>
+                  <TableCell>
+                    <PlanStatus status={p.status} />
+                  </TableCell>
+                  <TableCell className="text-muted-foreground tabular-nums">
+                    {summaryLine(p)}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {shortSHA(p.commitSha)} · r{p.manifestRevision}
+                  </TableCell>
+                  <TableCell className="pr-4 text-muted-foreground">
+                    <time dateTime={p.createdAt}>
+                      {formatDate(p.createdAt)}
+                    </time>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function summaryLine(p: Plan): string {
+  if (isPlanning(p.status)) return "Working it out"
+  if (p.status === "failed") return "None"
+  if (p.problems.length > 0)
+    return `${p.problems.length} ${p.problems.length === 1 ? "problem" : "problems"}`
+  const n = changeCount(p)
+  return n === 0
+    ? "Nothing to change"
+    : `${n} ${n === 1 ? "change" : "changes"}`
+}
+
+function PlanStatus({ status }: { status: string }) {
+  const s = planStatus(status)
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "inline-block h-1.5 w-3 shrink-0 rounded-full",
+          s.tone === "ok" && "bg-overdye",
+          s.tone === "bad" && "bg-destructive",
+          s.tone === "quiet" && "bg-muted-foreground/40",
+          s.tone === "wait" &&
+            "animate-pulse bg-weld motion-reduce:animate-none"
+        )}
+      />
+      {s.label}
+    </span>
+  )
+}
+
+function PlanReview({
+  id,
+  project,
+  analysis,
+  onPlanned,
+}: {
+  id: string
+  project: Project
+  analysis?: Analysis
+  onPlanned: (id: string) => void
+}) {
+  const plan = useQuery(usePlansGet, { path: { id } })
+  useRefetchWhile(!!plan.data && isPlanning(plan.data.status), plan.refetch)
+  if (plan.status === "error") {
+    return (
+      <div className="p-4">
+        <Alert variant="destructive">
+          <AlertDescription>
+            {messageOf(plan.error, "The plan couldn't be loaded.")}
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+  if (!plan.data) {
+    return (
+      <div className="grid gap-3 p-4">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    )
+  }
+  return (
+    <PlanBody
+      plan={plan.data}
+      project={project}
+      analysis={analysis}
+      onPlanned={onPlanned}
+    />
+  )
+}
+
+function PlanBody({
+  plan,
+  project,
+  analysis,
+  onPlanned,
+}: {
+  plan: Plan
+  project: Project
+  analysis?: Analysis
+  onPlanned: (id: string) => void
+}) {
+  const { can } = useOrganization()
+  const create = useMutation(usePlansCreate)
+  const invalidate = useInvalidate()
+  const planned = !isPlanning(plan.status) && plan.status !== "failed"
+  // Evidence links need the commit the plan was made from.
+  const evidenceFrom =
+    analysis && analysis.id === plan.analysisId ? analysis : undefined
+
+  const replan = async () => {
+    try {
+      const p = await create.mutateAsync({
+        path: { id: project.id },
+        body: { environment: plan.environment },
+      })
+      invalidate(usePlansList)
+      onPlanned(p.id)
+    } catch (err) {
+      toast.error(messageOf(err, "The plan couldn't start."))
+    }
+  }
+
+  return (
+    <>
+      <SheetHeader className="border-b">
+        <SheetTitle className="flex items-center gap-3">
+          Plan for {plan.environment}
+          <Badge variant="outline" className="font-normal">
+            <PlanStatus status={plan.status} />
+          </Badge>
+        </SheetTitle>
+        <SheetDescription>
+          From commit{" "}
+          <code className="font-mono">{shortSHA(plan.commitSha)}</code> and
+          manifest revision {plan.manifestRevision}.{" "}
+          {plan.status === "ready" && plan.expiresAt && (
+            <>
+              It waits for a decision until{" "}
+              <time dateTime={plan.expiresAt}>
+                {formatDate(plan.expiresAt)}
+              </time>
+              .
+            </>
+          )}
+          {plan.decidedAt && plan.status !== "superseded" && (
+            <>
+              Settled{" "}
+              <time dateTime={plan.decidedAt}>
+                {formatDate(plan.decidedAt)}
+              </time>
+              {plan.decisionNote ? `: ${plan.decisionNote}` : "."}
+            </>
+          )}
+        </SheetDescription>
+      </SheetHeader>
+
+      <div className="flex-1 divide-y overflow-y-auto">
+        {isPlanning(plan.status) && (
+          <div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground">
+            <Spinner />
+            Working out what this environment needs
+          </div>
+        )}
+        {plan.status === "failed" && (
+          <div className="px-4 py-4">
+            <Alert variant="destructive">
+              <AlertTitle>Planning failed</AlertTitle>
+              <AlertDescription>{plan.error}</AlertDescription>
+            </Alert>
+          </div>
+        )}
+        {plan.problems.length > 0 && (
+          <Section title="Problems to fix before this can be approved">
+            <Findings
+              findings={plan.problems}
+              tone="bad"
+              project={project}
+              analysis={evidenceFrom}
+            />
+          </Section>
+        )}
+        {plan.warnings.length > 0 && (
+          <Section title="Worth a look">
+            <Findings
+              findings={plan.warnings}
+              tone="warn"
+              project={project}
+              analysis={evidenceFrom}
+            />
+          </Section>
+        )}
+        {planned && (
+          <Section title="What it would do">
+            {plan.actions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Nothing: what&apos;s deployed already matches the manifest.
+              </p>
+            ) : (
+              <Steps actions={plan.actions} />
+            )}
+          </Section>
+        )}
+      </div>
+
+      <SheetFooter className="border-t">
+        {plan.status === "ready" && can("deployment:approve") ? (
+          <Decide plan={plan} />
+        ) : (
+          !isOpen(plan.status) &&
+          can("deployment:create") && (
+            <Button
+              variant="outline"
+              className="rounded-full"
+              disabled={create.isPending}
+              onClick={() => void replan()}
+            >
+              {create.isPending ? <Spinner /> : <WorkflowIcon />}
+              Plan {plan.environment} again
+            </Button>
+          )
+        )}
+      </SheetFooter>
+    </>
+  )
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className="grid grid-cols-[minmax(0,1fr)] gap-3 px-4 py-4">
+      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+      {children}
+    </section>
+  )
+}
+
+// A finding can rest on dozens of lines; the first few make the case.
+const evidenceShown = 3
+
+/**
+ * Findings lists a plan's problems or warnings. A resource analysis found
+ * that the manifest doesn't provision can be added or ignored from here.
+ */
+function Findings({
+  findings,
+  tone,
+  project,
+  analysis,
+}: {
+  findings: Finding[]
+  tone: "bad" | "warn"
+  project: Project
+  analysis?: Analysis
+}) {
+  const { can } = useOrganization()
+  const mayEdit = can("project:update")
+  return (
+    <ul className="grid grid-cols-[minmax(0,1fr)] gap-3">
+      {findings.map((f, i) => (
+        <li key={`${f.code}:${f.name ?? ""}:${i}`} className="flex gap-2.5">
+          <span
+            aria-hidden="true"
+            className={cn(
+              "mt-1.5 size-1.5 shrink-0 rounded-full",
+              tone === "bad" ? "bg-destructive" : "bg-weld"
+            )}
+          />
+          <div className="grid min-w-0 gap-1.5">
+            <p className="text-sm">{f.message}</p>
+            {f.path && (
+              <code className="font-mono text-xs text-muted-foreground">
+                {f.path}
+              </code>
+            )}
+            {analysis && f.evidence && f.evidence.length > 0 && (
+              <>
+                <EvidenceList
+                  analysis={analysis}
+                  evidence={f.evidence.slice(0, evidenceShown)}
+                />
+                {f.evidence.length > evidenceShown && (
+                  <p className="text-xs text-muted-foreground">
+                    And {f.evidence.length - evidenceShown} more places.
+                  </p>
+                )}
+              </>
+            )}
+            {mayEdit &&
+              f.name &&
+              (f.code === "unconfirmed-resource" ||
+                f.code === "unprovided-resource") && (
+                <ResourceChoice project={project} kind={f.name} />
+              )}
+          </div>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/**
+ * ResourceChoice answers a finding about a resource the manifest doesn't
+ * provision: add one, or ignore the kind. Either saves a new manifest
+ * revision; planning again shows the result.
+ */
+function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
+  const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
+  const providers = useQuery(useProvidersList)
+  const save = useMutation(useManifestsSave)
+  const invalidate = useInvalidate()
+  const manifest = current.data?.manifest
+  const catalog = providers.data?.providers
+  if (!manifest || !catalog) return null
+  // Adding a resource nothing provisions would only block the next plan.
+  const provisionable = catalog.some((p) =>
+    p.provisions?.some((v) => v.kind === kind)
+  )
+
+  const apply = async (next: Manifest, done: string) => {
+    try {
+      await save.mutateAsync({
+        path: { id: project.id },
+        body: { manifest: next },
+      })
+      invalidate(useManifestsCurrent)
+      toast.success(`${done}. Plan again to see the result.`)
+    } catch (err) {
+      toast.error(messageOf(err, "The manifest wasn't saved."))
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap gap-2 pt-1">
+      {provisionable && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="rounded-full"
+          disabled={save.isPending}
+          onClick={() =>
+            void apply(
+              withResource(manifest, kind, catalog),
+              `Added ${resourceLabel(kind)} to the manifest`
+            )
+          }
+        >
+          Add {resourceLabel(kind)}
+        </Button>
+      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        className="rounded-full"
+        disabled={save.isPending}
+        onClick={() =>
+          void apply(
+            withIgnored(manifest, kind),
+            `The manifest ignores ${resourceLabel(kind)} now`
+          )
+        }
+      >
+        It doesn&apos;t use {resourceLabel(kind)}
+      </Button>
+    </div>
+  )
+}
+
+function Steps({ actions }: { actions: Action[] }) {
+  const grouped = steps(actions)
+  return (
+    <ol className="grid gap-4">
+      {grouped.map((group, i) => (
+        <li key={group[0].step} className="grid gap-2">
+          {grouped.length > 1 && (
+            <p className="text-xs text-muted-foreground">
+              {i === 0 ? "First" : "Then"}
+            </p>
+          )}
+          <ul className="grid gap-2">
+            {group.map((a) => (
+              <ActionRow key={a.id} action={a} />
+            ))}
+          </ul>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function ActionRow({ action: a }: { action: Action }) {
+  const env = a.service?.env ?? []
+  return (
+    <li className="grid gap-1.5 rounded-lg border px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge
+          variant={a.op === "delete" ? "destructive" : "secondary"}
+          className="font-normal"
+        >
+          {opLabel(a.op)}
+        </Badge>
+        <span className="font-medium">{a.name}</span>
+        <span className="text-sm text-muted-foreground">
+          {a.creates} on {a.provider}
+          {a.region ? `, ${a.region}` : ""}
+        </span>
+      </div>
+      {a.reason && <p className="text-xs text-muted-foreground">{a.reason}</p>}
+      {a.changes && a.changes.length > 0 && (
+        <ul className="grid gap-0.5 font-mono text-xs">
+          {a.changes.map((c) => (
+            <li key={c.field}>
+              {c.field}: <span className="text-muted-foreground">{c.from}</span>{" "}
+              → {c.to}
+            </li>
+          ))}
+        </ul>
+      )}
+      {env.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Gets{" "}
+          {env.map((e, i) => (
+            <span key={e.key}>
+              {i > 0 && ", "}
+              <code className="font-mono">{e.key}</code> from {e.from}
+            </span>
+          ))}
+        </p>
+      )}
+    </li>
+  )
+}
+
+/** Decide approves or rejects a ready plan, naming its revision. */
+function Decide({ plan }: { plan: Plan }) {
+  const approve = useMutation(usePlansApprove)
+  const reject = useMutation(usePlansReject)
+  const invalidate = useInvalidate()
+  const [note, setNote] = useState("")
+  const busy = approve.isPending || reject.isPending
+
+  const decide = async (yes: boolean) => {
+    try {
+      const body = { revision: plan.revision, note: note.trim() || undefined }
+      const p = yes
+        ? await approve.mutateAsync({ path: { id: plan.id }, body })
+        : await reject.mutateAsync({ path: { id: plan.id }, body })
+      invalidate(usePlansList)
+      invalidate(usePlansGet)
+      toast.success(
+        p.status === "stale"
+          ? "What's deployed changed since this plan was made. Plan again."
+          : yes
+            ? "Approved"
+            : "Rejected"
+      )
+    } catch (err) {
+      toast.error(messageOf(err, "The decision wasn't recorded."))
+    }
+  }
+
+  return (
+    <div className="grid w-full gap-2">
+      <Textarea
+        aria-label="Note"
+        placeholder="A note for the record (optional)"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        maxLength={2000}
+        className="min-h-12"
+      />
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="ghost"
+          className="rounded-full"
+          disabled={busy}
+          onClick={() => void decide(false)}
+        >
+          {reject.isPending && <Spinner />}
+          Reject
+        </Button>
+        <Button
+          className="rounded-full"
+          disabled={busy || plan.problems.length > 0}
+          onClick={() => void decide(true)}
+        >
+          {approve.isPending && <Spinner />}
+          Approve
+        </Button>
+      </div>
+    </div>
+  )
+}

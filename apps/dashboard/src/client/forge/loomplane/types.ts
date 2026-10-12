@@ -9,6 +9,23 @@ export enum ConnectionState {
   ERROR = 'error',
 }
 
+export interface Action {
+  changes?: Change[];
+  creates: string;
+  dependsOn?: string[];
+  engine: string;
+  id: string;
+  name: string;
+  op: string;
+  provider: string;
+  reason: string;
+  region?: string;
+  resource?: ResourceConfig;
+  service?: ServiceConfig;
+  step: number;
+  subject: string;
+}
+
 export interface Analysis {
   commitSha: string;
   createdAt: string;
@@ -22,7 +39,7 @@ export interface Analysis {
   repository: string;
   startedAt?: string;
   status: string;
-  summary: Summary;
+  summary: GraphSummary;
 }
 
 export interface AnalysisGraph {
@@ -34,10 +51,37 @@ export interface AnalysisList {
   analyses: Analysis[];
 }
 
+export interface Binding {
+  config: string;
+  createdAt: string;
+  engine: string;
+  environmentId: string;
+  externalId: string;
+  id: string;
+  name: string;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  provider: string;
+  region: string;
+  subject: string;
+  updatedAt: string;
+}
+
+export interface BindingList {
+  bindings: Binding[];
+}
+
 export interface BuildSystem {
   evidence: Evidence;
   name: string;
   path: string;
+}
+
+export interface Change {
+  field: string;
+  from: string;
+  to: string;
 }
 
 export interface Commands {
@@ -74,6 +118,10 @@ export interface CreateInvitationInputBody {
   role?: string;
 }
 
+export interface CreatePlanInputBody {
+  environment: string;
+}
+
 export interface CreateProjectInputBody {
   color?: string;
   description?: string;
@@ -96,12 +144,28 @@ export interface CreatedInvitation {
   invitation: OrgInvitation;
 }
 
+export interface DecideInputBody {
+  note?: string;
+  revision?: string;
+}
+
+export interface Defaults {
+  provider?: string;
+  region?: string;
+}
+
 export interface Edge {
   confidence: string;
   evidence: Evidence[];
   from: string;
   kind: string;
   to: string;
+}
+
+export interface EnvLink {
+  from: string;
+  key: string;
+  subject: string;
 }
 
 export interface Environment {
@@ -122,6 +186,15 @@ export interface Evidence {
   detail: string;
   line?: number;
   path: string;
+}
+
+export interface Finding {
+  code: string;
+  evidence?: Evidence[];
+  message: string;
+  name?: string;
+  path?: string;
+  subject?: string;
 }
 
 export interface GitHubInstallation {
@@ -148,10 +221,38 @@ export interface Graph {
   workspaces: Workspace[];
 }
 
+export interface GraphSummary {
+  deployable: number;
+  needsConfirmation: number;
+  packages: number;
+  resources: number;
+  services: number;
+}
+
+export interface Ignore {
+  resources?: string[];
+}
+
 export interface InfrastructureStatus {
   engine: string;
   providers: ProviderStatus[];
   store: string;
+}
+
+export interface Manifest {
+  defaults: Defaults;
+  ignore: Ignore;
+  resources?: Record<string, any>;
+  services?: Record<string, any>;
+  version: number;
+}
+
+export interface ManifestDraft {
+  analysisId: string;
+  commitSha: string;
+  manifest?: Manifest;
+  projectId: string;
+  yaml: string;
 }
 
 export interface Note {
@@ -195,6 +296,45 @@ export interface Package {
   runtime?: string;
 }
 
+export interface Plan {
+  actions: Action[];
+  analysisId: string;
+  commitSha: string;
+  createdAt: string;
+  createdBy: string;
+  decidedAt?: string;
+  decidedBy: string;
+  decisionNote: string;
+  environment: string;
+  environmentId: string;
+  error: string;
+  executable: boolean;
+  expiresAt?: string;
+  id: string;
+  manifestId: string;
+  manifestRevision: number;
+  orgId: string;
+  plannedAt?: string;
+  problems: Finding[];
+  projectId: string;
+  revision: string;
+  status: string;
+  summary: PlanningSummary;
+  warnings: Finding[];
+}
+
+export interface PlanList {
+  plans: Plan[];
+}
+
+export interface PlanningSummary {
+  create: number;
+  delete: number;
+  keep: number;
+  replace: number;
+  update: number;
+}
+
 export interface Project {
   color: string;
   createdAt: string;
@@ -214,11 +354,35 @@ export interface ProjectList {
   projects: Project[];
 }
 
+export interface Provider {
+  available: boolean;
+  cloud: string;
+  description: string;
+  model: string;
+  name: string;
+  note?: string;
+  provisions?: Provisions[];
+  regions?: string[];
+  runs?: Runs[];
+  scaling: boolean;
+  title: string;
+}
+
+export interface ProviderList {
+  providers: Provider[];
+}
+
 export interface ProviderStatus {
   capabilities: string[];
   name: string;
   region: string;
   version: string;
+}
+
+export interface Provisions {
+  creates: string;
+  kind: string;
+  versions?: string[];
 }
 
 export interface PublicConfig {
@@ -248,6 +412,51 @@ export interface Resource {
   needsConfirmation: boolean;
 }
 
+export interface ResourceConfig {
+  kind: string;
+  provider: string;
+  region?: string;
+  version?: string;
+}
+
+export interface Revision {
+  createdAt: string;
+  createdBy: string;
+  digest: string;
+  id: string;
+  manifest?: Manifest;
+  orgId: string;
+  projectId: string;
+  revision: number;
+  yaml: string;
+}
+
+export interface RevisionList {
+  revisions: Revision[];
+}
+
+export interface Runs {
+  creates: string;
+  execution: string;
+  workload: string;
+}
+
+export interface SaveInputBody {
+  manifest?: {
+  defaults: Defaults;
+  ignore: Ignore;
+  resources?: Record<string, any>;
+  services?: Record<string, any>;
+  version: number;
+};
+  yaml?: string;
+}
+
+export interface Scale {
+  max: number;
+  min: number;
+}
+
 export interface Service {
   commands: Commands;
   confidence: string;
@@ -266,22 +475,37 @@ export interface Service {
   unit?: string;
 }
 
+export interface ServiceConfig {
+  build?: string;
+  ecosystem: string;
+  env?: EnvLink[];
+  execution: string;
+  framework?: string;
+  image?: string;
+  port?: number;
+  provider: string;
+  public: boolean;
+  region?: string;
+  scale?: Scale;
+  size?: Size;
+  source: string;
+  start?: string;
+  workload: string;
+}
+
 export interface Session {
   orgId: string;
   permissions: string[];
   userId: string;
 }
 
-export interface StartAnalysisInputBody {
-  ref?: string;
+export interface Size {
+  cpu: number;
+  memory: number;
 }
 
-export interface Summary {
-  deployable: number;
-  needsConfirmation: number;
-  packages: number;
-  resources: number;
-  services: number;
+export interface StartAnalysisInputBody {
+  ref?: string;
 }
 
 export interface UpdateProjectInputBody {

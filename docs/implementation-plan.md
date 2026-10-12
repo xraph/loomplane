@@ -69,13 +69,29 @@ Left over: nothing reads the resolved variables yet. Deployments (milestone 4) w
 
 ## Milestone 3: Planning
 
-1. `loomplane.yaml` in `pkg/manifest`, with a JSON schema and versioning. It names services, resources and provider choices, and nothing about Forge.
-2. The provider capability registry in `pkg/provider`: what each target can run (long-running containers, serverless functions, static and edge builds) and the resources it can provision.
-3. The planner in `internal/planning`: graph plus manifest plus capabilities, to a list of actions. Where Ctrl Plane models the action, the plan says so.
-4. Approval as a signal to the deployment workflow, checked against the plan's revision.
-5. The map from Loomplane services to the resources that run them.
+Done. Analyze a project, open its Deploy tab, and you get a drafted `loomplane.yaml`. Save it, choose an environment and **Plan**: Loomplane works out what deploying it would do and waits for someone to approve or reject that, without touching a cloud.
 
-Done when Loomplane produces a reviewable plan without touching a cloud.
+- `loomplane.yaml` in `pkg/manifest`: services by where their source lives, the resources they need, and the target each runs on, with overrides per environment. It's versioned, refuses fields it doesn't know, and ships a JSON schema for editors. Nothing in it mentions Forge.
+- Each project keeps its manifest as a history of revisions. Saving never edits one, so a plan names exactly the revision it was made from, and saving the same thing twice adds nothing.
+- A project with an analysis and no manifest gets a draft: every deployable service on the first target that runs its kind, and every resource found with good evidence on a target that provisions it, preferring the cloud most of the services landed on. You review it before it's saved.
+- The provider catalog in `pkg/provider` and `internal/providers`: what Vercel, Cloud Run, ECS on Fargate, Render and the managed databases run and provision, and which of Ctrl Plane or Loomplane would carry each action out. None of them has an adapter yet, so every plan says it's for review.
+- The planner in `internal/planning` turns the graph, the manifest and the catalog into ordered actions (create, update, replace, delete, keep), with the variables each service gets for what it needs. Problems block a plan; warnings don't.
+- Weak findings get answered here. A resource analysis wasn't sure about, or one the manifest doesn't provision, shows up as a warning on the plan, and you can add it or tell Loomplane the application doesn't use it. Either one saves a new manifest revision.
+- Each plan runs as a Dispatch durable workflow: plan, then wait for a decision with a durable timer as the deadline (a week by default, `planning.approval_window`). Approving names the plan's revision. If what's deployed changed since the plan was made, the approval comes back stale instead of approved. A new plan for the same environment replaces the open one.
+- Bindings record what runs each service and resource in an environment. Deployments will write them, and planning reads them to know what exists, so once something is deployed the next plan keeps it instead of creating it again.
+- In the dashboard: the Deploy tab, with the manifest editor (a save that doesn't parse lists every problem with its line), the project's plans, and a review sheet with the findings, the evidence behind them, the actions step by step, and approve or reject.
+- Verified with unit tests for the manifest, the planner and the draft, an integration test that drafts, saves, plans, approves across a restart, supersedes and rejects, and a browser run against OpenMeter.
+
+Where it differs from the plan above, and why:
+
+1. The deployment workflow runs in the API process, not in `loomplane-worker`. It only reads and writes Loomplane's own records, never a repository's code, so it doesn't need the worker's isolation. Builds will, and they'll get it in milestone 4.
+2. The draft wasn't in the brief. Without it, the first thing you'd see after an analysis is an empty YAML file.
+
+Left over:
+
+1. Nothing happens after approval yet. Milestone 4 adds provisioning, builds and deploys to the same workflow, behind a new `DeploymentBuild`.
+2. Adding or ignoring a resource from a plan saves the manifest from its parsed form, so comments in the YAML don't survive it. Edits made in the editor keep them.
+3. There's no diff between manifest revisions in the dashboard, only the current one.
 
 ## Milestone 4: Real deployments
 

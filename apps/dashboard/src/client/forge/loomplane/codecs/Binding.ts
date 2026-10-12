@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_Binding: Codec = {"kind": "object", "fields": {"config": {"ts": "config"}, "created_at": {"ts": "createdAt"}, "engine": {"ts": "engine"}, "environment_id": {"ts": "environmentId"}, "external_id": {"ts": "externalId"}, "id": {"ts": "id"}, "name": {"ts": "name"}, "org_id": {"ts": "orgId"}, "plan_id": {"ts": "planId"}, "project_id": {"ts": "projectId"}, "provider": {"ts": "provider"}, "region": {"ts": "region"}, "subject": {"ts": "subject"}, "updated_at": {"ts": "updatedAt"}}, "required": ["config", "created_at", "engine", "environment_id", "external_id", "id", "name", "org_id", "plan_id", "project_id", "provider", "region", "subject", "updated_at"]};
