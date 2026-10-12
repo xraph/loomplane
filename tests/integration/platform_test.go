@@ -209,12 +209,19 @@ func TestPlatform_projectLifecycleSurvivesRestart(t *testing.T) {
 
 	var proj projects.Project
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Difference Engine"}, &proj)
-	if proj.Status != projects.StatusInitializing || proj.Slug != "difference-engine" {
+	if proj.Status != projects.StatusInitializing || proj.Slug != "difference-engine" || proj.Icon == "" || proj.Color == "" {
 		t.Fatalf("created %+v", proj)
 	}
 	c.must(http.StatusConflict, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Difference Engine"}, nil)
 
 	waitReady(t, c, proj.ID)
+
+	// The style a caller picks is written back, and an unknown one refused.
+	c.must(http.StatusOK, http.MethodPatch, "/api/v1/projects/"+proj.ID, map[string]string{"icon": "rocket", "color": "teal"}, &proj)
+	if proj.Icon != "rocket" || proj.Color != "teal" {
+		t.Fatalf("restyled %+v", proj)
+	}
+	c.must(http.StatusBadRequest, http.MethodPatch, "/api/v1/projects/"+proj.ID, map[string]string{"icon": "unicorn"}, nil)
 
 	var envs struct {
 		Environments []projects.Environment `json:"environments"`
@@ -252,7 +259,8 @@ func TestPlatform_projectLifecycleSurvivesRestart(t *testing.T) {
 		Projects []projects.Project `json:"projects"`
 	}
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects", nil, &list)
-	if len(list.Projects) != 1 || list.Projects[0].ID != proj.ID || list.Projects[0].Status != projects.StatusReady {
+	if len(list.Projects) != 1 || list.Projects[0].ID != proj.ID || list.Projects[0].Status != projects.StatusReady ||
+		list.Projects[0].Icon != "rocket" || list.Projects[0].Color != "teal" {
 		t.Fatalf("after restart: %+v", list.Projects)
 	}
 

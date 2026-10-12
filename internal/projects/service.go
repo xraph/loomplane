@@ -89,6 +89,10 @@ type CreateProjectInput struct {
 	Slug          string `json:"slug,omitempty"`
 	Description   string `json:"description,omitempty"`
 	RepositoryURL string `json:"repository_url,omitempty"`
+	// Icon and Color are names from style.go. Leaving either out picks
+	// one at random, so a new project's tile is never blank.
+	Icon  string `json:"icon,omitempty"`
+	Color string `json:"color,omitempty"`
 }
 
 // UpdateProjectInput changes a project. A nil field is left alone. The slug never
@@ -97,6 +101,10 @@ type UpdateProjectInput struct {
 	Name          *string `json:"name,omitempty"`
 	Description   *string `json:"description,omitempty"`
 	RepositoryURL *string `json:"repository_url,omitempty"`
+	// An icon or color can change but can't be cleared: an empty one is
+	// invalid, like an unknown one.
+	Icon  *string `json:"icon,omitempty"`
+	Color *string `json:"color,omitempty"`
 }
 
 // Create adds a project to the caller's organization and starts its
@@ -149,6 +157,14 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	if err := validateRepositoryURL(repo); err != nil {
 		return nil, err
 	}
+	icon := pickStyle(strings.TrimSpace(in.Icon), icons)
+	if err := validateIcon(icon); err != nil {
+		return nil, err
+	}
+	color := pickStyle(strings.TrimSpace(in.Color), colors)
+	if err := validateColor(color); err != nil {
+		return nil, err
+	}
 	id, err := typeid.Generate("proj")
 	if err != nil {
 		return nil, fmt.Errorf("generate project id: %w", err)
@@ -156,6 +172,7 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	now := s.now().UTC()
 	return &Project{
 		ID: id.String(), OrgID: p.OrgID, Name: name, Slug: slug, Description: desc,
+		Icon: icon, Color: color,
 		RepositoryURL: repo, Status: StatusInitializing, CreatedBy: p.UserID,
 		CreatedAt: now, UpdatedAt: now,
 	}, nil
@@ -177,7 +194,7 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]*Project, e
 	return s.store.ListProjects(ctx, p.OrgID)
 }
 
-// Update changes a project's name, description or repository.
+// Update changes a project's name, description, repository, icon or color.
 func (s *Service) Update(ctx context.Context, p security.Principal, id string, in UpdateProjectInput) (*Project, error) {
 	if err := s.authz.Require(ctx, p, security.ProjectUpdate, id); err != nil {
 		return nil, err
@@ -186,12 +203,16 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 	if err != nil {
 		return nil, err
 	}
+	// The audit trail names the fields an update set, so a new icon reads
+	// differently from a new repository.
+	fields := []string{}
 	if in.Name != nil {
 		name := strings.TrimSpace(*in.Name)
 		if err := validateName(name); err != nil {
 			return nil, err
 		}
 		proj.Name = name
+		fields = append(fields, "name")
 	}
 	if in.Description != nil {
 		desc := strings.TrimSpace(*in.Description)
@@ -199,6 +220,7 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 			return nil, err
 		}
 		proj.Description = desc
+		fields = append(fields, "description")
 	}
 	if in.RepositoryURL != nil {
 		repo := strings.TrimSpace(*in.RepositoryURL)
@@ -206,12 +228,30 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 			return nil, err
 		}
 		proj.RepositoryURL = repo
+		fields = append(fields, "repository_url")
+	}
+	if in.Icon != nil {
+		icon := strings.TrimSpace(*in.Icon)
+		if err := validateIcon(icon); err != nil {
+			return nil, err
+		}
+		proj.Icon = icon
+		fields = append(fields, "icon")
+	}
+	if in.Color != nil {
+		color := strings.TrimSpace(*in.Color)
+		if err := validateColor(color); err != nil {
+			return nil, err
+		}
+		proj.Color = color
+		fields = append(fields, "color")
 	}
 	proj.UpdatedAt = s.now().UTC()
 	if err := s.store.UpdateProject(ctx, proj); err != nil {
 		return nil, err
 	}
-	s.record(ctx, AuditEvent{Action: "project.update", Severity: "info", ProjectID: proj.ID, Principal: p})
+	s.record(ctx, AuditEvent{Action: "project.update", Severity: "info", ProjectID: proj.ID, Principal: p,
+		Attributes: map[string]any{"fields": fields}})
 	return proj, nil
 }
 

@@ -16,3 +16,28 @@ export function repoLabel(url: string): string {
     .replace(/^git@([^:]+):/, "$1/")
     .replace(/\.git$/, "")
 }
+
+/**
+ * githubRepo is "owner/name" for a GitHub repository URL or git@ address,
+ * and empty for anything else. Analyses read GitHub, so the dashboard links
+ * and labels repositories by this.
+ */
+export function githubRepo(url: string): string {
+  const m = url
+    .trim()
+    .match(
+      /^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/
+    )
+  return m?.[1] ?? ""
+}
+
+/**
+ * repositoryURL turns what someone typed into the URL the API stores:
+ * "owner/name" becomes a GitHub URL, and a full URL or git@ address is kept
+ * as it is.
+ */
+export function repositoryURL(input: string): string {
+  const v = input.trim()
+  if (/^[\w.-]+\/[\w.-]+$/.test(v)) return `https://github.com/${v}`
+  return v
+}

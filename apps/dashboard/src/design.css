@@ -1,0 +1,168 @@
+/*
+ * The dashboard's design layer on top of the shadcn theme. Everything here
+ * serves the loom: a warm light that follows the work, a shuttle that glows
+ * at the head of a running thread, a dotted canvas for the service graph,
+ * and a terminal for logs. Nothing moves for people who ask for reduced
+ * motion. The mock (src/mock) shares it.
+ */
+@property --glow-x {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 50%;
+}
+
+:root {
+  --terminal: oklch(0.17 0.004 286);
+  --terminal-foreground: oklch(0.93 0.004 286);
+  --terminal-muted: oklch(0.62 0.006 286);
+  --terminal-line: oklch(1 0 0 / 7%);
+}
+
+.dark {
+  --terminal: oklch(0.13 0.004 286);
+}
+
+@layer components {
+  /* Weld gold is too light to read as text on paper; this keeps the hue and
+     takes enough of the foreground to pass contrast in both themes. */
+  .text-weld-ink {
+    color: color-mix(in oklch, var(--weld) 62%, var(--foreground));
+  }
+
+  .shuttle-glow {
+    box-shadow:
+      0 0 0 3px color-mix(in oklch, var(--weld) 22%, transparent),
+      0 0 16px 3px color-mix(in oklch, var(--weld) 50%, transparent);
+  }
+
+  /* The hero's warm corner: weld gold glowing in from the top right. */
+  .hero-glow {
+    background-image: radial-gradient(
+      85% 75% at 100% 0%,
+      color-mix(in oklch, oklch(0.76 0.16 68) 70%, transparent) 0%,
+      color-mix(in oklch, var(--weld) 22%, transparent) 40%,
+      transparent 68%
+    );
+  }
+  .dark .hero-glow {
+    background-image: radial-gradient(
+      85% 75% at 100% 0%,
+      color-mix(in oklch, oklch(0.7 0.15 68) 38%, transparent) 0%,
+      color-mix(in oklch, var(--weld) 10%, transparent) 40%,
+      transparent 68%
+    );
+  }
+
+  /* A warm light where a deployment's thread is: it follows the shuttle while
+     the deploy runs and rests where it stopped. */
+  .loom-glow {
+    --glow-color: oklch(0.76 0.16 68);
+    --glow-strength: 34%;
+    background-image: radial-gradient(
+      55% 160% at var(--glow-x) 0%,
+      color-mix(in oklch, var(--glow-color) var(--glow-strength), transparent),
+      transparent 72%
+    );
+    transition: --glow-x 1s linear;
+  }
+  .loom-glow[data-tone="failed"] {
+    --glow-color: var(--destructive);
+    --glow-strength: 18%;
+  }
+  .loom-glow[data-tone="quiet"] {
+    --glow-strength: 16%;
+  }
+  .dark .loom-glow {
+    --glow-strength: 20%;
+  }
+  .dark .loom-glow[data-tone="failed"] {
+    --glow-strength: 14%;
+  }
+  .dark .loom-glow[data-tone="quiet"] {
+    --glow-strength: 10%;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .loom-glow {
+      transition: none;
+    }
+  }
+
+  /* A dotted canvas for the service graph. */
+  .canvas-dots {
+    background-image: radial-gradient(
+      color-mix(in oklch, var(--foreground) 12%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 18px 18px;
+  }
+
+  .thread-shuttle {
+    position: relative;
+    overflow: hidden;
+  }
+  .thread-shuttle::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 45%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklch, white 70%, transparent),
+      transparent
+    );
+    transform: translateX(-120%);
+    animation: thread-shuttle 1.8s cubic-bezier(0.6, 0, 0.3, 1) infinite;
+  }
+  @keyframes thread-shuttle {
+    to {
+      transform: translateX(260%);
+    }
+  }
+
+  /* The one orchestrated moment: threads draw in from the left on load. */
+  .loom-draw {
+    animation: loom-draw 900ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  @keyframes loom-draw {
+    from {
+      clip-path: inset(0 100% 0 0);
+    }
+    to {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .thread-shuttle::after {
+      animation: none;
+      display: none;
+    }
+    .loom-draw {
+      animation: none;
+    }
+  }
+}
+
+/*
+ * DotProgress: shadcn's Progress drawn as a field of dots. Unlayered so it
+ * outranks the track's own bg utility.
+ */
+.dot-progress [data-slot="progress-track"] {
+  height: 35px;
+  border-radius: 0;
+  background: radial-gradient(
+      circle,
+      color-mix(in oklch, var(--foreground) 13%, transparent) 2px,
+      transparent 2.5px
+    )
+    0 0 / 7px 7px;
+}
+.dot-progress [data-slot="progress-indicator"] {
+  border-radius: 0;
+  background: radial-gradient(circle, var(--weld) 2px, transparent 2.5px) 0 0 /
+    7px 7px;
+}
+.dot-progress-sm [data-slot="progress-track"] {
+  height: 14px;
+}

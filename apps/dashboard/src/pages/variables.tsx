@@ -12,9 +12,11 @@ import {
 import type { Variable } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { DeleteVariable, Value } from "@/components/project-variables"
+import { Page, PageHeading } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   Empty,
   EmptyDescription,
@@ -77,22 +79,22 @@ export function Variables() {
   return (
     <>
       <SiteHeader crumbs={[{ label: "Variables" }]} />
-      <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Variables</h1>
-            <p className="max-w-prose text-sm text-muted-foreground">
-              Organization-wide values every project inherits. A project, or one
-              of its services, can override any of them on its own page.
-            </p>
-          </div>
-          {mayManage && (
-            <Button onClick={() => setDialog({ kind: "create" })}>
-              <PlusIcon />
-              Set variable
-            </Button>
-          )}
-        </div>
+      <Page>
+        <PageHeading
+          title="Variables"
+          description="Organization-wide values every project inherits. A project, or one of its services, can override any of them on its own page."
+          actions={
+            mayManage && (
+              <Button
+                className="rounded-full"
+                onClick={() => setDialog({ kind: "create" })}
+              >
+                <PlusIcon />
+                Set variable
+              </Button>
+            )
+          }
+        />
 
         {list.status === "error" && (
           <Alert variant="destructive">
@@ -102,10 +104,10 @@ export function Variables() {
           </Alert>
         )}
         {!list.data && list.status !== "error" && (
-          <Skeleton className="h-40 w-full" />
+          <Skeleton className="h-40 w-full rounded-xl" />
         )}
         {list.data && list.data.variables.length === 0 && (
-          <Empty className="border">
+          <Empty className="border border-dashed">
             <EmptyHeader>
               <EmptyTitle>No organization-wide variables yet</EmptyTitle>
               <EmptyDescription>
@@ -117,10 +119,10 @@ export function Variables() {
           </Empty>
         )}
         {list.data && list.data.variables.length > 0 && (
-          <div className="overflow-hidden rounded-lg border">
+          <Card className="py-0">
             <Table>
-              <TableHeader className="bg-muted">
-                <TableRow>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
                   <TableHead>Key</TableHead>
                   <TableHead>Value</TableHead>
                   <TableHead>Applies in</TableHead>
@@ -176,9 +178,9 @@ export function Variables() {
                 ))}
               </TableBody>
             </Table>
-          </div>
+          </Card>
         )}
-      </div>
+      </Page>
       <VariableDialog
         open={dialog !== null}
         onOpenChange={(open) => !open && setDialog(null)}

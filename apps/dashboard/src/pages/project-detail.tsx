@@ -1,23 +1,53 @@
+import {
+  CopyIcon,
+  FolderGit2Icon,
+  GitBranchIcon,
+  GitCommitHorizontalIcon,
+  SparklesIcon,
+} from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useAnalysesGraph,
   useEnvironmentsList,
   useProjectsDelete,
   useProjectsGet,
+  useProjectsUpdate,
 } from "@/client/forge/loomplane/hooks"
-import type { Environment, Project } from "@/client/forge/loomplane/types"
+import type {
+  Analysis,
+  Environment,
+  Graph,
+  Project,
+} from "@/client/forge/loomplane/types"
 import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
-import { Architecture } from "@/components/architecture"
 import {
-  AddEnvironment,
-  EnvironmentList,
-} from "@/components/environment-manager"
+  AnalysisBanner,
+  AnalysisHistory,
+  AnalyzeActions,
+  ConnectRepository,
+  GraphCaption,
+  NotAnalyzed,
+  ResourceDetail,
+  ServiceDetail,
+  ServicesTable,
+  Structure,
+  useAnalyses,
+} from "@/components/architecture"
+import { EnvironmentCards } from "@/components/environment-manager"
+import { Page, PageHeading } from "@/components/page"
+import { ProjectStylePopover } from "@/components/project-style-picker"
 import { ProjectVariables } from "@/components/project-variables"
+import {
+  type GraphSelection,
+  needsReview,
+  ServiceGraph,
+} from "@/components/service-graph"
 import { SiteHeader } from "@/components/site-header"
-import { isReady, StatusBadge } from "@/components/status-badge"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { isReady } from "@/lib/projects"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,36 +59,42 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Weave, type WeftRow } from "@/components/weave"
-import { formatDate, repoLabel } from "@/lib/format"
+import { Spinner } from "@/components/ui/spinner"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ecosystemLabel, resourceLabel, shortSHA } from "@/lib/architecture"
+import { formatDate, githubRepo, repoLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
-import { useNavigate } from "@/lib/router"
-
-// Every new project starts with these. They stand in as threads while the
-// real list loads.
-const defaultEnvironments = ["production", "preview"]
+import { projectStyle } from "@/lib/project-style"
+import { Link, useNavigate } from "@/lib/router"
+import { cn } from "@/lib/utils"
 
 export function ProjectDetail({ id }: { id: string }) {
-  const { can } = useOrganization()
   const project = useQuery(useProjectsGet, { path: { id } })
-  const environments = useQuery(useEnvironmentsList, { path: { id } })
-  const settingUp = !!project.data && !isReady(project.data.status)
+  const missing = project.status === "error" && statusOf(project.error) === 404
 
   // The environments arrive from a background job; watch until it's done.
-  useRefetchWhile(settingUp, project.refetch)
-  useRefetchWhile(settingUp, environments.refetch)
-
-  const missing = project.status === "error" && statusOf(project.error) === 404
+  useRefetchWhile(
+    !!project.data && !isReady(project.data.status),
+    project.refetch
+  )
 
   return (
     <>
@@ -68,159 +104,470 @@ export function ProjectDetail({ id }: { id: string }) {
           { label: project.data?.name ?? "Project" },
         ]}
       />
-      <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-        {project.status === "error" && (
-          <Alert variant="destructive">
-            <AlertDescription>
-              {missing
-                ? "This project doesn't exist in this organization."
-                : messageOf(project.error, "The project couldn't be loaded.")}
-            </AlertDescription>
-          </Alert>
-        )}
+      <Page>
+        {project.status === "error" &&
+          (missing ? (
+            <Empty className="border border-dashed">
+              <EmptyHeader>
+                <EmptyTitle>No such project here</EmptyTitle>
+                <EmptyDescription>
+                  It may have been deleted, or it belongs to another
+                  organization. Pick one from the sidebar.
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Link to="/" className={buttonVariants()}>
+                  Back to projects
+                </Link>
+              </EmptyContent>
+            </Empty>
+          ) : (
+            <Alert variant="destructive">
+              <AlertDescription>
+                {messageOf(project.error, "The project couldn't be loaded.")}
+              </AlertDescription>
+            </Alert>
+          ))}
         {!project.data && project.status !== "error" && (
-          <div className="flex flex-col gap-4" aria-busy="true">
-            <Skeleton className="h-8 w-64" />
-            <Skeleton className="h-40 w-full" />
+          <div className="grid gap-6" aria-busy="true">
+            <Skeleton className="h-10 w-72" />
+            <div className="grid gap-4 md:grid-cols-2">
+              <Skeleton className="h-28 rounded-xl" />
+              <Skeleton className="h-28 rounded-xl" />
+            </div>
+            <Skeleton className="h-72 rounded-xl" />
           </div>
         )}
-        {project.data && (
-          <Loaded
-            project={project.data}
-            environments={environments.data?.environments ?? []}
-            mayDelete={can("project:delete")}
-            mayManageEnvironments={can("environment:manage")}
+        {project.data && <Loaded project={project.data} />}
+      </Page>
+    </>
+  )
+}
+
+function Loaded({ project }: { project: Project }) {
+  const environments = useQuery(useEnvironmentsList, {
+    path: { id: project.id },
+  })
+  const settingUp = !isReady(project.status)
+  useRefetchWhile(settingUp, environments.refetch)
+  const analyses = useAnalyses(project.id)
+
+  // One graph for the whole page: the header's languages, the review
+  // banners, every tab and the detail sheet all read it.
+  if (analyses.shown) {
+    return (
+      <WithGraph analysisID={analyses.shown.id}>
+        {(graph) => (
+          <Body
+            project={project}
+            environments={environments.data?.environments}
+            analyses={analyses}
+            graph={graph}
           />
         )}
-      </div>
-    </>
+      </WithGraph>
+    )
+  }
+  return (
+    <Body
+      project={project}
+      environments={environments.data?.environments}
+      analyses={analyses}
+      graph={null}
+    />
   )
 }
 
-function Loaded({
+function WithGraph({
+  analysisID,
+  children,
+}: {
+  analysisID: string
+  children: (graph: Graph | null) => ReactNode
+}) {
+  const graph = useQuery(useAnalysesGraph, { path: { id: analysisID } })
+  return children(graph.data?.graph ?? null)
+}
+
+function Body({
   project,
   environments,
-  mayDelete,
-  mayManageEnvironments,
+  analyses,
+  graph,
 }: {
   project: Project
-  environments: Environment[]
-  mayDelete: boolean
-  mayManageEnvironments: boolean
+  environments?: Environment[]
+  analyses: ReturnType<typeof useAnalyses>
+  graph: Graph | null
 }) {
+  const { can } = useOrganization()
+  const update = useMutation(useProjectsUpdate)
+  const [selected, setSelected] = useState<GraphSelection | null>(null)
+  const mayRun = can("analysis:run")
+  const mayEdit = can("project:update")
+  const shown = analyses.shown
+  const style = projectStyle(project)
+  const repo = githubRepo(project.repositoryUrl)
+  const ecosystems = [...new Set(graph?.services.map((s) => s.ecosystem))]
+  const toReview = graph?.resources.filter(needsReview) ?? []
+
+  const restyle = (change: { icon?: string; color?: string }) => {
+    update
+      .mutateAsync({ path: { id: project.id }, body: change })
+      .catch((err: unknown) =>
+        toast.error(messageOf(err, "The icon and color weren't saved."))
+      )
+  }
+
+  const selectedService =
+    selected?.kind === "service"
+      ? graph?.services.find((s) => s.id === selected.id)
+      : undefined
+  const selectedResource =
+    selected?.kind === "resource"
+      ? graph?.resources.find((r) => r.id === selected.id)
+      : undefined
+
   return (
     <>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {project.name}
-          </h1>
-          {project.description && (
-            <p className="max-w-prose text-sm text-muted-foreground">
-              {project.description}
-            </p>
+      <PageHeading
+        title={
+          <span className="flex items-center gap-3">
+            <ProjectStylePopover
+              name={project.name}
+              icon={style.icon}
+              color={style.color}
+              onChange={mayEdit ? restyle : undefined}
+            />
+            <span className="min-w-0 truncate">{project.name}</span>
+          </span>
+        }
+        description={project.description || undefined}
+        actions={
+          project.repositoryUrl && mayRun ? (
+            <AnalyzeActions project={project} running={analyses.running} />
+          ) : undefined
+        }
+      >
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          {project.repositoryUrl ? (
+            <Badge
+              variant="outline"
+              className="h-6 gap-1.5 font-normal"
+              render={
+                repo ? (
+                  <a
+                    href={`https://github.com/${repo}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  />
+                ) : undefined
+              }
+            >
+              <FolderGit2Icon />
+              {repoLabel(project.repositoryUrl)}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="h-6 gap-1.5 font-normal">
+              <FolderGit2Icon />
+              No repository yet
+            </Badge>
+          )}
+          {shown?.ref && (
+            <Badge variant="outline" className="h-6 gap-1.5 font-normal">
+              <GitBranchIcon />
+              {shown.ref}
+            </Badge>
+          )}
+          {shown?.commitSha && (
+            <Badge
+              variant="outline"
+              className="h-6 gap-1.5 font-mono font-normal"
+            >
+              <GitCommitHorizontalIcon />
+              {shortSHA(shown.commitSha)}
+            </Badge>
+          )}
+          {ecosystems.map((e) => (
+            <Badge key={e} variant="secondary" className="font-normal">
+              {ecosystemLabel(e)}
+            </Badge>
+          ))}
+          {!isReady(project.status) && (
+            <Badge variant="outline" className="h-6 gap-1.5 font-normal">
+              <span className="h-1.5 w-3 animate-pulse rounded-full bg-weld motion-reduce:animate-none" />
+              Setting up
+            </Badge>
           )}
         </div>
-        <StatusBadge status={project.status} />
-      </div>
+      </PageHeading>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Environments</CardTitle>
-          <CardDescription>
-            {isReady(project.status)
-              ? "Where this project deploys. Services and providers are woven in as you add them."
-              : "Loomplane is setting up this project."}
-          </CardDescription>
-          {mayManageEnvironments && (
-            <CardAction>
-              <AddEnvironment project={project} />
-            </CardAction>
+      <EnvironmentCards
+        project={project}
+        environments={environments ?? []}
+        loading={!environments}
+        mayManage={can("environment:manage")}
+      />
+
+      {analyses.latest && <AnalysisBanner analysis={analyses.latest} />}
+
+      {toReview.map((r) => (
+        <Alert
+          key={r.id}
+          className="items-center gap-y-1 rounded-xl border-dashed border-weld/60 bg-[color-mix(in_oklch,var(--weld)_5%,var(--card))] p-4 has-[>svg]:gap-x-3 md:has-[>svg]:grid-cols-[auto_1fr_auto]"
+        >
+          <SparklesIcon className="text-weld-ink size-5!" />
+          <AlertTitle>
+            Loomplane thinks {project.name} needs {needName(r.kind)}, but
+            isn&apos;t sure
+          </AlertTitle>
+          <AlertDescription className="col-start-2">
+            {r.evidence[0]
+              ? `Read from ${r.evidence[0].path}${r.evidence[0].line ? `:${r.evidence[0].line}` : ""}. `
+              : ""}
+            Nothing is provisioned for it until someone confirms it.
+          </AlertDescription>
+          <div className="col-start-2 mt-2 flex gap-2 md:col-start-3 md:row-span-2 md:row-start-1 md:mt-0">
+            <Button
+              variant="outline"
+              className="rounded-full"
+              onClick={() => setSelected({ kind: "resource", id: r.id })}
+            >
+              Review
+            </Button>
+          </div>
+        </Alert>
+      ))}
+
+      <Tabs defaultValue="graph">
+        <TabsList
+          variant="line"
+          className="mb-2 max-w-full justify-start overflow-x-auto"
+        >
+          <TabsTrigger value="graph">Graph</TabsTrigger>
+          <TabsTrigger value="services">
+            Services
+            {graph && (
+              <span className="text-muted-foreground tabular-nums">
+                {graph.services.length}
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="variables">Variables</TabsTrigger>
+          <TabsTrigger value="analyses">
+            Analyses
+            {analyses.list.length > 0 && (
+              <span className="text-muted-foreground tabular-nums">
+                {analyses.list.length}
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+        </TabsList>
+        <TabsContent value="graph" className="grid gap-3">
+          <Discovered
+            project={project}
+            analyses={analyses}
+            graph={graph}
+            mayRun={mayRun}
+            mayEdit={mayEdit}
+          >
+            {(g, a) =>
+              g.services.length + g.resources.length > 0 ? (
+                <>
+                  <ServiceGraph
+                    graph={g}
+                    selected={selected}
+                    onSelect={setSelected}
+                  />
+                  <GraphCaption analysis={a} />
+                </>
+              ) : (
+                <ServicesTable graph={g} onSelect={setSelected} />
+              )
+            }
+          </Discovered>
+        </TabsContent>
+        <TabsContent value="services" className="grid gap-4">
+          <Discovered
+            project={project}
+            analyses={analyses}
+            graph={graph}
+            mayRun={mayRun}
+            mayEdit={mayEdit}
+          >
+            {(g, a) => (
+              <>
+                <ServicesTable graph={g} onSelect={setSelected} />
+                <Structure analysis={a} graph={g} />
+              </>
+            )}
+          </Discovered>
+        </TabsContent>
+        <TabsContent value="variables">
+          {environments && environments.length > 0 ? (
+            <ProjectVariables project={project} environments={environments} />
+          ) : (
+            <Skeleton className="h-40 w-full rounded-xl" />
           )}
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <Weave
-            rows={weftRows(project, environments)}
-            label={`Environments of ${project.name}`}
-          />
-          {environments.length > 0 && (
-            <EnvironmentList
-              project={project}
-              environments={environments}
-              mayManage={mayManageEnvironments}
+        </TabsContent>
+        <TabsContent value="analyses">
+          {analyses.error ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                {messageOf(analyses.error, "Analyses couldn't be loaded.")}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <AnalysisHistory analyses={analyses.list} />
+          )}
+        </TabsContent>
+        <TabsContent value="settings" className="grid gap-6">
+          <Details project={project} />
+          {can("project:delete") && <DeleteProject project={project} />}
+        </TabsContent>
+      </Tabs>
+
+      <Sheet
+        open={!!selectedService || !!selectedResource}
+        onOpenChange={(open) => {
+          if (!open) setSelected(null)
+        }}
+      >
+        <SheetContent className="w-full gap-0 sm:max-w-md">
+          {shown && graph && selectedService && (
+            <ServiceDetail
+              analysis={shown}
+              graph={graph}
+              service={selectedService}
+              onSelect={setSelected}
             />
           )}
-        </CardContent>
-      </Card>
-
-      <Architecture project={project} />
-
-      {environments.length > 0 && (
-        <ProjectVariables project={project} environments={environments} />
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Details</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid gap-4 text-sm sm:grid-cols-2">
-            <Fact label="Repository">
-              {project.repositoryUrl ? (
-                <code className="font-mono">
-                  {repoLabel(project.repositoryUrl)}
-                </code>
-              ) : (
-                <span className="text-muted-foreground">
-                  None yet. Add one under Architecture.
-                </span>
-              )}
-            </Fact>
-            <Fact label="Slug">
-              <code className="font-mono">{project.slug}</code>
-            </Fact>
-            <Fact label="Created">
-              <time dateTime={project.createdAt}>
-                {formatDate(project.createdAt)}
-              </time>
-            </Fact>
-            <Fact label="Project ID">
-              <code className="font-mono break-all">{project.id}</code>
-            </Fact>
-          </dl>
-        </CardContent>
-      </Card>
-
-      {mayDelete && <DeleteProject project={project} />}
+          {shown && graph && selectedResource && (
+            <ResourceDetail
+              analysis={shown}
+              graph={graph}
+              resource={selectedResource}
+              onSelect={setSelected}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </>
   )
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd>{children}</dd>
-    </div>
-  )
+// Resource labels are names, except two common nouns that read wrong
+// capitalized mid-sentence.
+function needName(kind: string): string {
+  if (kind === "object-storage") return "object storage"
+  if (kind === "search") return "a search engine"
+  return resourceLabel(kind)
 }
 
 /**
- * weftRows lists a project's environments as threads, ready once the
- * project has finished setting up. A project has its environments from the
- * moment it's created, so the defaults only stand in while the list loads.
+ * Discovered renders children with the analysis graph, or says why there
+ * isn't one yet: no repository, no analysis, or still loading.
  */
-export function weftRows(
-  project: Project,
-  environments: Environment[]
-): WeftRow[] {
-  if (environments.length === 0) {
-    return defaultEnvironments.map((name) => ({ name, ready: false }))
+function Discovered({
+  project,
+  analyses,
+  graph,
+  mayRun,
+  mayEdit,
+  children,
+}: {
+  project: Project
+  analyses: ReturnType<typeof useAnalyses>
+  graph: Graph | null
+  mayRun: boolean
+  mayEdit: boolean
+  children: (graph: Graph, analysis: Analysis) => ReactNode
+}) {
+  if (!project.repositoryUrl) {
+    return <ConnectRepository project={project} mayEdit={mayEdit} />
   }
-  return environments.map((e) => ({
-    name: e.name,
-    ready: isReady(project.status),
-  }))
+  if (analyses.error) {
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>
+          {messageOf(analyses.error, "Analyses couldn't be loaded.")}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  if (!analyses.loaded || (analyses.shown && !graph)) {
+    return <Skeleton className="h-72 w-full rounded-xl" />
+  }
+  if (!analyses.shown || !graph) {
+    return (
+      <NotAnalyzed
+        project={project}
+        mayRun={mayRun}
+        running={analyses.running}
+      />
+    )
+  }
+  return children(graph, analyses.shown)
+}
+
+function Details({ project }: { project: Project }) {
+  const copy = (value: string, what: string) => () => {
+    void navigator.clipboard?.writeText(value)
+    toast.success(`Copied the ${what}`)
+  }
+  const rows: [string, ReactNode][] = [
+    [
+      "Repository",
+      project.repositoryUrl ? (
+        <code className="font-mono text-xs">
+          {repoLabel(project.repositoryUrl)}
+        </code>
+      ) : (
+        <span className="text-muted-foreground">None yet</span>
+      ),
+    ],
+    ["Slug", <code className="font-mono text-xs">{project.slug}</code>],
+    [
+      "Project ID",
+      <span className="flex items-center gap-1">
+        <code className="font-mono text-xs break-all">{project.id}</code>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="text-muted-foreground"
+          aria-label="Copy project ID"
+          onClick={copy(project.id, "project ID")}
+        >
+          <CopyIcon />
+        </Button>
+      </span>,
+    ],
+    [
+      "Created",
+      <time dateTime={project.createdAt}>{formatDate(project.createdAt)}</time>,
+    ],
+  ]
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Details</CardTitle>
+        <CardDescription>
+          The slug never changes, because other systems key on it.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-3 text-sm">
+          {rows.map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-muted-foreground">{k}</dt>
+              <dd className="min-w-0">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </CardContent>
+    </Card>
+  )
 }
 
 function DeleteProject({ project }: { project: Project }) {
@@ -243,7 +590,7 @@ function DeleteProject({ project }: { project: Project }) {
   }
 
   return (
-    <Card className="border-destructive/40">
+    <Card className={cn("border-destructive/40")}>
       <CardHeader>
         <CardTitle>Delete project</CardTitle>
         <CardDescription>
@@ -255,7 +602,11 @@ function DeleteProject({ project }: { project: Project }) {
         <AlertDialog open={open} onOpenChange={setOpen}>
           <AlertDialogTrigger
             render={
-              <Button variant="destructive" disabled={remove.isPending} />
+              <Button
+                variant="destructive"
+                className="rounded-full"
+                disabled={remove.isPending}
+              />
             }
           >
             Delete project
@@ -264,7 +615,7 @@ function DeleteProject({ project }: { project: Project }) {
             <AlertDialogHeader>
               <AlertDialogTitle>Delete {project.name}?</AlertDialogTitle>
               <AlertDialogDescription>
-                Its production and preview environments go with it. This can't
+                Its environments and their variables go with it. This can&apos;t
                 be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -275,6 +626,7 @@ function DeleteProject({ project }: { project: Project }) {
                 disabled={remove.isPending}
                 onClick={() => void confirm()}
               >
+                {remove.isPending && <Spinner />}
                 Delete project
               </AlertDialogAction>
             </AlertDialogFooter>

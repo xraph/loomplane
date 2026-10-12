@@ -26,7 +26,7 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
 var _ Store = (*PgStore)(nil)
 
-const projectColumns = `id, org_id, name, slug, description, repository_url, status, created_by, created_at, updated_at`
+const projectColumns = `id, org_id, name, slug, description, icon, color, repository_url, status, created_by, created_at, updated_at`
 
 // CreateProject inserts p and its environments in one transaction. A slug
 // already used in the organization is ErrSlugTaken.
@@ -37,8 +37,8 @@ func (s *PgStore) CreateProject(ctx context.Context, p *Project, envs []*Environ
 	}
 	defer func() { err = rollback(tx, err) }()
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_projects (`+projectColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		p.ID, p.OrgID, p.Name, p.Slug, p.Description, p.RepositoryURL, p.Status, p.CreatedBy, p.CreatedAt, p.UpdatedAt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		p.ID, p.OrgID, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepositoryURL, p.Status, p.CreatedBy, p.CreatedAt, p.UpdatedAt)
 	if isUniqueViolation(err) {
 		return ErrSlugTaken
 	}
@@ -74,7 +74,7 @@ func rollback(tx driver.Tx, err error) error {
 func (s *PgStore) GetProject(ctx context.Context, orgID, id string) (*Project, error) {
 	var p Project
 	err := s.db.QueryRow(ctx, `SELECT `+projectColumns+` FROM loomplane_projects WHERE org_id = $1 AND id = $2`, orgID, id).
-		Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.RepositoryURL, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepositoryURL, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -96,7 +96,7 @@ func (s *PgStore) ListProjects(ctx context.Context, orgID string) ([]*Project, e
 	out := []*Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.RepositoryURL, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepositoryURL, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
 		p.normalize()
@@ -108,13 +108,13 @@ func (s *PgStore) ListProjects(ctx context.Context, orgID string) ([]*Project, e
 	return out, nil
 }
 
-// UpdateProject writes p's mutable fields: name, description, repository,
-// status and updated_at.
+// UpdateProject writes p's mutable fields: name, description, icon, color,
+// repository, status and updated_at.
 func (s *PgStore) UpdateProject(ctx context.Context, p *Project) error {
 	res, err := s.db.Exec(ctx, `UPDATE loomplane_projects
-		SET name = $3, description = $4, repository_url = $5, status = $6, updated_at = $7
+		SET name = $3, description = $4, icon = $5, color = $6, repository_url = $7, status = $8, updated_at = $9
 		WHERE org_id = $1 AND id = $2`,
-		p.OrgID, p.ID, p.Name, p.Description, p.RepositoryURL, p.Status, p.UpdatedAt)
+		p.OrgID, p.ID, p.Name, p.Description, p.Icon, p.Color, p.RepositoryURL, p.Status, p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("update project: %w", err)
 	}

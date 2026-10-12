@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -170,10 +171,14 @@ func (r *initRecorder) InitializeProject(_ context.Context, _, projectID string)
 	return nil
 }
 
-type auditRecorder struct{ actions []string }
+type auditRecorder struct {
+	actions []string
+	events  []AuditEvent
+}
 
 func (a *auditRecorder) Record(_ context.Context, e AuditEvent) {
 	a.actions = append(a.actions, e.Action)
+	a.events = append(a.events, e)
 }
 
 type fixture struct {
@@ -335,6 +340,11 @@ func TestService_validation(t *testing.T) {
 		{"http repository", CreateProjectInput{Name: "ok", RepositoryURL: "http://github.com/a/b"}},
 		{"credentials in repository", CreateProjectInput{Name: "ok", RepositoryURL: "https://me:token@github.com/a/b"}},
 		{"long description", CreateProjectInput{Name: "ok", Description: strings.Repeat("d", maxDescriptionLength+1)}},
+		{"unknown icon", CreateProjectInput{Name: "ok", Icon: "unicorn"}},
+		{"lucide's name for an icon", CreateProjectInput{Name: "ok", Icon: "shopping-bag"}},
+		{"icon in the wrong case", CreateProjectInput{Name: "ok", Icon: "Store"}},
+		{"unknown color", CreateProjectInput{Name: "ok", Color: "chartreuse"}},
+		{"color as hex", CreateProjectInput{Name: "ok", Color: "#ffcc00"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -364,6 +374,142 @@ func TestService_updateKeepsSlug(t *testing.T) {
 	empty := " "
 	if _, err := f.svc.Update(ctx, dev, p.ID, UpdateProjectInput{Name: &empty}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("blank name: %v", err)
+	}
+}
+
+func TestService_createStyle(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	// An empty want means any of the names will do: the service picked.
+	tests := []struct {
+		name                string
+		icon, color         string
+		wantIcon, wantColor string
+	}{
+		{name: "both picked when left out"},
+		{name: "both kept when given", icon: "rocket", color: "teal", wantIcon: "rocket", wantColor: "teal"},
+		{name: "color picked when only the icon is given", icon: "atom", wantIcon: "atom"},
+		{name: "icon picked when only the color is given", color: "slate", wantColor: "slate"},
+		{name: "spaces trimmed", icon: " leaf ", color: " green ", wantIcon: "leaf", wantColor: "green"},
+		{name: "blank picks", icon: "  ", color: "  "},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine " + strings.Repeat("i", i+1), Icon: tt.icon, Color: tt.color})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			checkStyle(t, p.Icon, tt.wantIcon, icons)
+			checkStyle(t, p.Color, tt.wantColor, colors)
+			got, err := f.svc.Get(ctx, dev, p.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Icon != p.Icon || got.Color != p.Color {
+				t.Fatalf("stored %s/%s, created %s/%s", got.Icon, got.Color, p.Icon, p.Color)
+			}
+		})
+	}
+}
+
+// checkStyle fails unless got is want, or, with no want, one of names.
+func checkStyle(t *testing.T, got, want string, names []string) {
+	t.Helper()
+	if want != "" && got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if !slices.Contains(names, got) {
+		t.Fatalf("%q isn't one of %v", got, names)
+	}
+}
+
+func TestService_createPicksAVarietyOfStyles(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	// A fair pick gives twenty projects the same color once in 10^19 runs,
+	// so this only fails when the pick stops being random.
+	const projectCount = 20
+	seenIcons, seenColors := map[string]bool{}, map[string]bool{}
+	for i := range projectCount {
+		p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine " + strings.Repeat("i", i+1)})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		seenIcons[p.Icon], seenColors[p.Color] = true, true
+	}
+	if len(seenIcons) < 2 || len(seenColors) < 2 {
+		t.Fatalf("%d projects wore %d icons and %d colors", projectCount, len(seenIcons), len(seenColors))
+	}
+}
+
+func TestService_updateStyle(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine", Icon: "store", Color: "gold"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	str := func(s string) *string { return &s }
+	changes := []struct {
+		name                string
+		in                  UpdateProjectInput
+		wantIcon, wantColor string
+		wantFields          []string
+	}{
+		{"icon only", UpdateProjectInput{Icon: str("rocket")}, "rocket", "gold", []string{"icon"}},
+		{"color only", UpdateProjectInput{Color: str(" teal ")}, "rocket", "teal", []string{"color"}},
+		{"both", UpdateProjectInput{Icon: str("hexagon"), Color: str("slate")}, "hexagon", "slate", []string{"icon", "color"}},
+		{"neither", UpdateProjectInput{Name: str("Analytical Engine")}, "hexagon", "slate", []string{"name"}},
+	}
+	for _, tt := range changes {
+		t.Run(tt.name, func(t *testing.T) {
+			got, uerr := f.svc.Update(ctx, dev, p.ID, tt.in)
+			if uerr != nil {
+				t.Fatalf("Update: %v", uerr)
+			}
+			if got.Icon != tt.wantIcon || got.Color != tt.wantColor {
+				t.Fatalf("updated to %s/%s, want %s/%s", got.Icon, got.Color, tt.wantIcon, tt.wantColor)
+			}
+			stored, gerr := f.svc.Get(ctx, dev, p.ID)
+			if gerr != nil {
+				t.Fatal(gerr)
+			}
+			if stored.Icon != tt.wantIcon || stored.Color != tt.wantColor {
+				t.Fatalf("stored %s/%s, want %s/%s", stored.Icon, stored.Color, tt.wantIcon, tt.wantColor)
+			}
+			last := f.audit.events[len(f.audit.events)-1]
+			if fields, _ := last.Attributes["fields"].([]string); last.Action != "project.update" || !slices.Equal(fields, tt.wantFields) {
+				t.Fatalf("audited %s %v, want project.update %v", last.Action, last.Attributes, tt.wantFields)
+			}
+		})
+	}
+
+	refusals := []struct {
+		name string
+		in   UpdateProjectInput
+	}{
+		{"unknown icon", UpdateProjectInput{Icon: str("unicorn")}},
+		{"unknown color", UpdateProjectInput{Color: str("chartreuse")}},
+		{"empty icon", UpdateProjectInput{Icon: str("")}},
+		{"blank color", UpdateProjectInput{Color: str("  ")}},
+		{"good icon, unknown color", UpdateProjectInput{Icon: str("zap"), Color: str("mauve")}},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, uerr := f.svc.Update(ctx, dev, p.ID, tt.in); !errors.Is(uerr, ErrInvalid) {
+				t.Fatalf("error %v, want ErrInvalid", uerr)
+			}
+			stored, gerr := f.svc.Get(ctx, dev, p.ID)
+			if gerr != nil {
+				t.Fatal(gerr)
+			}
+			if stored.Icon != "hexagon" || stored.Color != "slate" {
+				t.Fatalf("a refused update left %s/%s behind", stored.Icon, stored.Color)
+			}
+		})
 	}
 }
 

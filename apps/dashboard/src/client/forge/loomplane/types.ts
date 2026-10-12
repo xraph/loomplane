@@ -75,7 +75,9 @@ export interface CreateInvitationInputBody {
 }
 
 export interface CreateProjectInputBody {
+  color?: string;
   description?: string;
+  icon?: string;
   name: string;
   repositoryUrl?: string;
   slug?: string;
@@ -194,9 +196,11 @@ export interface Package {
 }
 
 export interface Project {
+  color: string;
   createdAt: string;
   createdBy: string;
   description: string;
+  icon: string;
   id: string;
   name: string;
   orgId: string;
@@ -281,7 +285,9 @@ export interface Summary {
 }
 
 export interface UpdateProjectInputBody {
+  color?: string;
   description?: string;
+  icon?: string;
   name?: string;
   repositoryUrl?: string;
 }

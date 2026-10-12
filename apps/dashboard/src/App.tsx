@@ -3,6 +3,8 @@ import { Navigate, Outlet } from "@tanstack/react-router"
 
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
+import { AppStatusBar } from "@/components/app-status-bar"
+import { ShellProvider } from "@/components/shell"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading } from "@/components/route-feedback"
@@ -62,13 +64,16 @@ export function App() {
 function Shell() {
   const { session } = useOrganization()
   return (
-    <SidebarProvider>
-      <AppSidebar />
-      {/* Keyed on the organization, so switching remounts every page. */}
-      <SidebarInset key={session.orgId}>
-        <Outlet />
-      </SidebarInset>
-    </SidebarProvider>
+    <ShellProvider>
+      <SidebarProvider>
+        <AppSidebar />
+        {/* Keyed on the organization, so switching remounts every page. */}
+        <SidebarInset key={session.orgId} className="min-w-0">
+          <Outlet />
+          <AppStatusBar />
+        </SidebarInset>
+      </SidebarProvider>
+    </ShellProvider>
   )
 }
 

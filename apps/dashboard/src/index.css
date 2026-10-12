@@ -3,6 +3,7 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist-mono";
 @import "@fontsource-variable/geist";
+@import "./design.css";
 
 /* authsome's components ship Tailwind classes, not a stylesheet of their
    own here: scanning them renders them in this theme's tokens. */
@@ -11,15 +12,14 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * The theme is shadcn preset b1YmpVjlo (nova on Base UI, neutral, Geist). Loomplane
- * adds three colors of its own, used for status in the weave
- * (components/weave.tsx): weld for a thread still being woven (in
- * progress), overdye for one that's done (ready), and warp for the threads
- * the weave is strung on.
+ * The theme is shadcn preset b1YmpVjlo (nova on Base UI, neutral, Geist).
+ * Loomplane adds three colors of its own, from the logo's loom: weld for
+ * work still moving or waiting on someone, overdye for work that's done,
+ * and warp for what hasn't started. design.css builds on them.
  */
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: "Geist Variable", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
   --color-weld: var(--weld);
   --color-overdye: var(--overdye);
@@ -149,51 +149,8 @@
   html {
     @apply font-sans;
   }
-  button:not(:disabled), [role="button"]:not(:disabled) {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
     cursor: pointer;
-  }
-}
-
-/*
- * The weave (components/weave.tsx): a thread still being set up runs
- * through the warp like a shuttle; a ready one lies still. Nothing moves
- * for people who ask for reduced motion.
- */
-@layer components {
-  .weave-warp {
-    fill: var(--warp);
-  }
-  .weave-over {
-    fill: var(--warp);
-    stroke: color-mix(in oklch, var(--foreground) 12%, transparent);
-    stroke-width: 0.5;
-  }
-  .weave-weft[data-ready="true"] .weave-thread {
-    fill: var(--overdye);
-  }
-  .weave-weft[data-ready="false"] .weave-thread {
-    fill: var(--weld);
-  }
-  .weave-weft[data-ready="false"] .weave-shuttle {
-    animation: weave-shuttle 2.4s cubic-bezier(0.6, 0, 0.3, 1) infinite;
-    animation-delay: calc(var(--row, 0) * 0.35s);
-  }
-  @keyframes weave-shuttle {
-    0% {
-      transform: scaleX(0);
-    }
-    60%,
-    100% {
-      transform: scaleX(1);
-    }
-  }
-  .weave-shuttle {
-    transform-box: fill-box;
-    transform-origin: left center;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .weave-weft[data-ready="false"] .weave-shuttle {
-      animation: none;
-    }
   }
 }

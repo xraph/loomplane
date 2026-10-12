@@ -375,7 +375,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Change a project's name, description or repository
+     * Change a project's name, description, repository, icon or color
      */
     update: async (id: string, body: types.UpdateProjectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}`;

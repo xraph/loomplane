@@ -37,14 +37,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -183,79 +176,72 @@ function Panel({
     : "for the whole project"
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Variables</CardTitle>
-        <CardDescription>
-          What {project.name} runs with. A value set for a service beats one set
-          for the project, which beats the organization&apos;s, and a value for
-          one environment beats one for every environment.
-        </CardDescription>
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          items={environments.map((e) => ({ label: e.name, value: e.name }))}
+          value={env}
+          onValueChange={(v) => setEnv(v as string)}
+        >
+          <SelectTrigger size="sm" aria-label="Environment" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {environments.map((e) => (
+              <SelectItem key={e.id} value={e.name}>
+                {e.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          items={[
+            { label: "Whole project", value: "" },
+            ...services.map((s) => ({ label: s.name, value: s.id })),
+          ]}
+          value={service}
+          onValueChange={(v) => setService(v as string)}
+        >
+          <SelectTrigger size="sm" aria-label="Service" className="w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Whole project</SelectItem>
+            {services.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {mayManage && env && (
-          <CardAction>
-            <Button size="sm" onClick={() => setDialog({ kind: "create" })}>
-              <PlusIcon />
-              Set variable
-            </Button>
-          </CardAction>
-        )}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex flex-wrap gap-3">
-          <Select
-            items={environments.map((e) => ({ label: e.name, value: e.name }))}
-            value={env}
-            onValueChange={(v) => setEnv(v as string)}
+          <Button
+            size="sm"
+            className="ml-auto"
+            onClick={() => setDialog({ kind: "create" })}
           >
-            <SelectTrigger aria-label="Environment" className="min-w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {environments.map((e) => (
-                <SelectItem key={e.id} value={e.name}>
-                  {e.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            items={[
-              { label: "Whole project", value: "" },
-              ...services.map((s) => ({ label: s.name, value: s.id })),
-            ]}
-            value={service}
-            onValueChange={(v) => setService(v as string)}
-          >
-            <SelectTrigger aria-label="Service" className="min-w-48">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">Whole project</SelectItem>
-              {services.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {services.length === 0 && (
-          <p className="text-xs text-muted-foreground">
-            Analyze the repository under Architecture to set variables for one
-            service.
-          </p>
+            <PlusIcon />
+            Set variable
+          </Button>
         )}
-        {env && (
-          <Resolved
-            project={project}
-            environment={env}
-            target={target}
-            mayManage={mayManage}
-            onEdit={(variable) => setDialog({ kind: "edit", variable })}
-            onOverride={(key) => setDialog({ kind: "create", presetKey: key })}
-          />
-        )}
-      </CardContent>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        A value set for a service beats one set for the project, which beats the
+        organization&apos;s, and a value for one environment beats one for every
+        environment.
+        {services.length === 0 &&
+          " Analyze the repository to set variables for one service."}
+      </p>
+      {env && (
+        <Resolved
+          project={project}
+          environment={env}
+          target={target}
+          mayManage={mayManage}
+          onEdit={(variable) => setDialog({ kind: "edit", variable })}
+          onOverride={(key) => setDialog({ kind: "create", presetKey: key })}
+        />
+      )}
       {env && (
         <VariableDialog
           open={dialog !== null}
@@ -278,7 +264,7 @@ function Panel({
           submit={save}
         />
       )}
-    </Card>
+    </div>
   )
 }
 
@@ -310,21 +296,23 @@ function Resolved({
       </Alert>
     )
   }
-  if (!resolved.data) return <Skeleton className="h-24 w-full" />
+  if (!resolved.data) return <Skeleton className="h-24 w-full rounded-xl" />
   const rows = resolved.data.variables
   if (rows.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Nothing set for {target.serviceName ?? "this project"} in {environment}{" "}
-        yet, here or organization-wide.
-      </p>
+      <Card className="py-0">
+        <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+          Nothing set for {target.serviceName ?? "this project"} in{" "}
+          {environment} yet, here or organization-wide.
+        </p>
+      </Card>
     )
   }
   return (
-    <div className="overflow-hidden rounded-lg border">
+    <Card className="py-0">
       <Table>
-        <TableHeader className="bg-muted">
-          <TableRow>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
             <TableHead>Key</TableHead>
             <TableHead>Value</TableHead>
             <TableHead>From</TableHead>
@@ -348,7 +336,7 @@ function Resolved({
           ))}
         </TableBody>
       </Table>
-    </div>
+    </Card>
   )
 }
 
@@ -369,13 +357,18 @@ function Row({
   const own = ownLayer(v, target)
   return (
     <TableRow>
-      <TableCell className="font-mono text-sm">{row.key}</TableCell>
+      <TableCell className="font-mono text-xs font-medium">{row.key}</TableCell>
       <TableCell className="max-w-xs">
         <Value variable={v} />
       </TableCell>
       <TableCell>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge variant={own ? "default" : "secondary"}>{layerLabel(v)}</Badge>
+          <Badge
+            variant={own ? "secondary" : "outline"}
+            className="font-normal"
+          >
+            {layerLabel(v)}
+          </Badge>
           <span className="text-xs text-muted-foreground">{reachLabel(v)}</span>
         </div>
         {row.overrides.length > 0 && (

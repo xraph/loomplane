@@ -8,6 +8,7 @@ import {
 } from "@/client/forge/authsome/hooks"
 import { useSessionGet } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation } from "@/client/hooks"
+import { BrandLogo } from "@/components/brand-logo"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,7 +20,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
-import { Mark } from "@/components/weave"
 import { clearInvite } from "@/lib/invite"
 import { useNavigate } from "@/lib/router"
 
@@ -81,12 +81,7 @@ export function AcceptInvitation({ token }: { token: string }) {
   return (
     <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10">
       <div className="flex w-full max-w-sm flex-col gap-6">
-        <div className="flex items-center gap-2 self-center font-medium">
-          <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Mark className="size-5" />
-          </span>
-          Loomplane
-        </div>
+        <BrandLogo className="w-36 self-center" />
         <Card>
           <CardHeader className="text-center">
             <CardTitle className="text-xl">Join an organization</CardTitle>

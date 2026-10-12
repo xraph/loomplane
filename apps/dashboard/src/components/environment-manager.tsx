@@ -1,4 +1,4 @@
-import { PlusIcon } from "lucide-react"
+import { PlusIcon, Trash2Icon } from "lucide-react"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
@@ -23,8 +23,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
+import { isReady } from "@/lib/projects"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -48,7 +56,17 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils"
 import { environmentKinds, kindFor } from "@/lib/variables"
+
+// Every new project starts with these. They stand in while the real list
+// loads.
+const defaultEnvironments = ["production", "preview"]
 
 /** AddEnvironment adds an environment, such as staging, to a project. */
 export function AddEnvironment({ project }: { project: Project }) {
@@ -87,13 +105,17 @@ export function AddEnvironment({ project }: { project: Project }) {
 
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+      <Button
+        variant="outline"
+        onClick={() => setOpen(true)}
+        className="h-auto min-h-28 flex-col gap-2 rounded-xl border-dashed bg-transparent text-muted-foreground shadow-none hover:bg-muted/40"
+      >
         <PlusIcon />
         Add environment
       </Button>
       <Dialog open={open} onOpenChange={close}>
         <DialogContent className="sm:max-w-md">
-          <form onSubmit={(e) => void submit(e)}>
+          <form onSubmit={(e) => void submit(e)} className="grid gap-5">
             <DialogHeader>
               <DialogTitle>Add an environment</DialogTitle>
               <DialogDescription>
@@ -101,7 +123,7 @@ export function AddEnvironment({ project }: { project: Project }) {
                 variables.
               </DialogDescription>
             </DialogHeader>
-            <FieldGroup className="py-4">
+            <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="environment-name">Name</FieldLabel>
                 <Input
@@ -170,39 +192,73 @@ export function AddEnvironment({ project }: { project: Project }) {
 }
 
 /**
- * EnvironmentList shows a project's environments with what each is for,
- * and lets someone who may remove all but the last.
+ * EnvironmentCards shows where a project deploys, one card each, and lets
+ * someone who may add environments and remove all but the last.
  */
-export function EnvironmentList({
+export function EnvironmentCards({
   project,
   environments,
+  loading,
   mayManage,
 }: {
   project: Project
   environments: Environment[]
+  /** Stands in the defaults every project starts with while the list loads. */
+  loading: boolean
   mayManage: boolean
 }) {
+  const cards = loading
+    ? defaultEnvironments.map((name) => ({ id: name, name, kind: name }))
+    : environments
+  const count = cards.length + (mayManage ? 1 : 0)
   return (
-    <ul className="flex flex-wrap gap-2">
-      {environments.map((env) => (
-        <li
-          key={env.id}
-          className="flex items-center gap-2 rounded-lg border py-1 pr-1 pl-3 text-sm"
-        >
-          <span className="font-medium">{env.name}</span>
-          {env.kind !== env.name && (
-            <Badge variant="secondary">{env.kind}</Badge>
-          )}
-          {mayManage && (
-            <DeleteEnvironment
-              project={project}
-              environment={env}
-              last={environments.length === 1}
-            />
-          )}
-        </li>
-      ))}
-    </ul>
+    <div
+      className={cn(
+        "grid gap-4",
+        count > 1 && "md:grid-cols-2",
+        count > 2 && "xl:grid-cols-3"
+      )}
+    >
+      {cards.map((env) => {
+        const real = environments.find((e) => e.id === env.id)
+        return (
+          <Card key={env.id} className="min-w-0">
+            <CardHeader>
+              <CardTitle className="capitalize">{env.name}</CardTitle>
+              {env.kind !== env.name && (
+                <CardDescription>
+                  {environmentKinds.find((k) => k.value === env.kind)?.label ??
+                    env.kind}
+                </CardDescription>
+              )}
+              {mayManage && real && (
+                <CardAction>
+                  <DeleteEnvironment
+                    project={project}
+                    environment={real}
+                    last={environments.length === 1}
+                  />
+                </CardAction>
+              )}
+            </CardHeader>
+            <CardContent>
+              {loading || !isReady(project.status) ? (
+                <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="h-1.5 w-3 animate-pulse rounded-full bg-weld motion-reduce:animate-none" />
+                  Setting up
+                </span>
+              ) : (
+                <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="h-1.5 w-3 rounded-full bg-warp" />
+                  Not deployed yet
+                </span>
+              )}
+            </CardContent>
+          </Card>
+        )
+      })}
+      {mayManage && !loading && <AddEnvironment project={project} />}
+    </div>
   )
 }
 
@@ -219,6 +275,31 @@ function DeleteEnvironment({
   const invalidate = useInvalidate()
   // Controlled: Base UI's AlertDialogAction doesn't close the dialog.
   const [open, setOpen] = useState(false)
+
+  if (last) {
+    // aria-disabled, not disabled: a disabled button never shows the
+    // tooltip that says why.
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="text-muted-foreground opacity-50"
+              aria-label={`Delete ${environment.name}`}
+              aria-disabled="true"
+            />
+          }
+        >
+          <Trash2Icon />
+        </TooltipTrigger>
+        <TooltipContent>
+          A project needs at least one environment
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
 
   const confirm = async () => {
     try {
@@ -241,17 +322,14 @@ function DeleteEnvironment({
         render={
           <Button
             variant="ghost"
-            size="xs"
-            disabled={last || remove.isPending}
-            title={
-              last
-                ? "A project needs at least one environment"
-                : `Delete ${environment.name}`
-            }
+            size="icon-xs"
+            className="text-muted-foreground"
+            aria-label={`Delete ${environment.name}`}
+            disabled={remove.isPending}
           />
         }
       >
-        Delete
+        <Trash2Icon />
       </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>

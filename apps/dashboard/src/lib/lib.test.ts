@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest"
 
 import { messageOf, statusOf } from "@/client/errors"
 import { HTTPError } from "@/client/forge/loomplane/fetch"
-import type { Environment, Project } from "@/client/forge/loomplane/types"
-import { repoLabel } from "@/lib/format"
+import { githubRepo, repoLabel, repositoryURL } from "@/lib/format"
+import { colorNames, iconNames, projectStyle } from "@/lib/project-style"
 import { slugify } from "@/lib/slug"
-import { weftRows } from "@/pages/project-detail"
 
 describe("slugify", () => {
   // The same cases as TestSlugify in internal/projects: the dashboard's
@@ -20,52 +19,6 @@ describe("slugify", () => {
     ["Service 2 (EU) / Frontend", "service-2-eu-frontend"],
   ])("slugify(%j) is %j", (name, want) => {
     expect(slugify(name)).toBe(want)
-  })
-})
-
-const project = (status: string): Project => ({
-  id: "proj_1",
-  orgId: "aorg_1",
-  name: "Engine",
-  slug: "engine",
-  description: "",
-  repositoryUrl: "",
-  status,
-  createdBy: "ausr_1",
-  createdAt: "2026-10-12T03:10:26Z",
-  updatedAt: "2026-10-12T03:10:26Z",
-})
-
-const env = (name: string): Environment => ({
-  id: `env_${name}`,
-  orgId: "aorg_1",
-  projectId: "proj_1",
-  name,
-  kind: name,
-  createdAt: "2026-10-12T03:10:26Z",
-  updatedAt: "2026-10-12T03:10:26Z",
-})
-
-describe("weftRows", () => {
-  it("stands the defaults in while the environments load", () => {
-    expect(weftRows(project("initializing"), [])).toEqual([
-      { name: "production", ready: false },
-      { name: "preview", ready: false },
-    ])
-  })
-
-  it("marks environments ready once the project is", () => {
-    expect(
-      weftRows(project("ready"), [env("production"), env("preview")])
-    ).toEqual([
-      { name: "production", ready: true },
-      { name: "preview", ready: true },
-    ])
-  })
-
-  it("shows the environments the project has, and only those", () => {
-    const rows = weftRows(project("ready"), [env("production"), env("staging")])
-    expect(rows.map((r) => r.name)).toEqual(["production", "staging"])
   })
 })
 
@@ -98,5 +51,56 @@ describe("repoLabel", () => {
     ["git@github.com:acme/storefront.git", "github.com/acme/storefront"],
   ])("repoLabel(%j) is %j", (url, want) => {
     expect(repoLabel(url)).toBe(want)
+  })
+})
+
+describe("githubRepo", () => {
+  it.each([
+    ["https://github.com/acme/storefront", "acme/storefront"],
+    ["https://github.com/acme/storefront.git", "acme/storefront"],
+    ["https://github.com/acme/store.front/", "acme/store.front"],
+    ["git@github.com:acme/storefront.git", "acme/storefront"],
+    ["https://gitlab.com/acme/storefront", ""],
+    ["acme/storefront", ""],
+  ])("githubRepo(%j) is %j", (url, want) => {
+    expect(githubRepo(url)).toBe(want)
+  })
+})
+
+describe("repositoryURL", () => {
+  it.each([
+    ["acme/storefront", "https://github.com/acme/storefront"],
+    [" acme/storefront ", "https://github.com/acme/storefront"],
+    [
+      "git@github.com:acme/storefront.git",
+      "git@github.com:acme/storefront.git",
+    ],
+    ["https://gitlab.com/acme/x", "https://gitlab.com/acme/x"],
+  ])("repositoryURL(%j) is %j", (input, want) => {
+    expect(repositoryURL(input)).toBe(want)
+  })
+})
+
+describe("projectStyle", () => {
+  it("keeps the icon and color the server sent", () => {
+    expect(projectStyle({ id: "p1", icon: "rocket", color: "teal" })).toEqual({
+      icon: "rocket",
+      color: "teal",
+    })
+  })
+
+  it("falls back to the same pick for the same ID", () => {
+    const a = projectStyle({ id: "proj_abc", icon: "unicorn", color: "" })
+    const b = projectStyle({ id: "proj_abc" })
+    expect(a).toEqual(b)
+    expect(iconNames).toContain(a.icon)
+    expect(colorNames).toContain(a.color)
+  })
+
+  it("spreads different IDs over the icons", () => {
+    const icons = new Set(
+      Array.from({ length: 40 }, (_, i) => projectStyle({ id: `p${i}` }).icon)
+    )
+    expect(icons.size).toBeGreaterThan(10)
   })
 })

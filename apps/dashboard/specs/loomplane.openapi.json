@@ -387,7 +387,7 @@
         "tags": [
           "Projects"
         ],
-        "summary": "Change a project's name, description or repository",
+        "summary": "Change a project's name, description, repository, icon or color",
         "operationId": "projects.update",
         "parameters": [
           {
@@ -1112,7 +1112,13 @@
           "name"
         ],
         "properties": {
+          "color": {
+            "type": "string"
+          },
           "description": {
+            "type": "string"
+          },
+          "icon": {
             "type": "string"
           },
           "name": {
@@ -1550,6 +1556,8 @@
           "name",
           "slug",
           "description",
+          "icon",
+          "color",
           "repository_url",
           "status",
           "created_by",
@@ -1557,6 +1565,9 @@
           "updated_at"
         ],
         "properties": {
+          "color": {
+            "type": "string"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -1565,6 +1576,9 @@
             "type": "string"
           },
           "description": {
+            "type": "string"
+          },
+          "icon": {
             "type": "string"
           },
           "id": {
@@ -1857,7 +1871,13 @@
       "UpdateProjectInputBody": {
         "type": "object",
         "properties": {
+          "color": {
+            "type": "string"
+          },
           "description": {
+            "type": "string"
+          },
+          "icon": {
             "type": "string"
           },
           "name": {

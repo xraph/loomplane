@@ -10,6 +10,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { GitHubInstallation } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { Page, PageHeading } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -55,15 +56,11 @@ export function Integrations() {
   return (
     <>
       <SiteHeader crumbs={[{ label: "Integrations" }]} />
-      <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Integrations
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Where Loomplane reads your code from.
-          </p>
-        </div>
+      <Page>
+        <PageHeading
+          title="Integrations"
+          description="Where Loomplane reads your code from."
+        />
 
         <Card>
           <CardHeader>
@@ -119,10 +116,10 @@ export function Integrations() {
               )}
             {status.data && status.data.installations.length > 0 && (
               <>
-                <div className="overflow-hidden rounded-lg border">
+                <Card className="py-0">
                   <Table>
-                    <TableHeader className="bg-muted">
-                      <TableRow>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
                         <TableHead>Account</TableHead>
                         <TableHead className="hidden sm:table-cell">
                           Connected
@@ -159,13 +156,13 @@ export function Integrations() {
                       ))}
                     </TableBody>
                   </Table>
-                </div>
+                </Card>
                 <Repositories />
               </>
             )}
           </CardContent>
         </Card>
-      </div>
+      </Page>
     </>
   )
 }

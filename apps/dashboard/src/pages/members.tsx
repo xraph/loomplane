@@ -15,6 +15,7 @@ import type {
   OrgMember,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { Page, PageHeading, SectionHeading } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -30,13 +31,8 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -83,21 +79,22 @@ export function Members() {
   return (
     <>
       <SiteHeader crumbs={[{ label: "Members" }]} />
-      <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Members</h1>
-            <p className="text-sm text-muted-foreground">
-              Everyone in this organization, and what each of them can do.
-            </p>
-          </div>
-          {mayManage && (
-            <Button onClick={() => setInviting(true)}>
-              <UserPlusIcon />
-              Invite
-            </Button>
-          )}
-        </div>
+      <Page>
+        <PageHeading
+          title="Members"
+          description="Everyone in this organization, and what each of them can do."
+          actions={
+            mayManage && (
+              <Button
+                className="rounded-full"
+                onClick={() => setInviting(true)}
+              >
+                <UserPlusIcon />
+                Invite
+              </Button>
+            )
+          }
+        />
 
         {members.status === "error" && (
           <Alert variant="destructive">
@@ -107,13 +104,13 @@ export function Members() {
           </Alert>
         )}
         {!members.data && members.status !== "error" && (
-          <Skeleton className="h-40 w-full" />
+          <Skeleton className="h-40 w-full rounded-xl" />
         )}
         {members.data && (
-          <div className="overflow-hidden rounded-lg border">
+          <Card className="py-0">
             <Table>
-              <TableHeader className="bg-muted">
-                <TableRow>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
                   <TableHead>Person</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead className="hidden md:table-cell">Joined</TableHead>
@@ -137,11 +134,11 @@ export function Members() {
                 ))}
               </TableBody>
             </Table>
-          </div>
+          </Card>
         )}
 
         {mayManage && <PendingInvitations />}
-      </div>
+      </Page>
 
       {mayManage && (
         <InviteDialog
@@ -214,13 +211,30 @@ function MemberRow({
   return (
     <TableRow>
       <TableCell>
-        <div className="flex items-center gap-2 font-medium">
-          {member.name || member.email || member.userId}
-          {isMe && <Badge variant="secondary">You</Badge>}
+        <div className="flex items-center gap-3">
+          <Avatar className="size-8 rounded-lg">
+            <AvatarFallback className="rounded-lg text-xs font-medium">
+              {initialsOf(member.name || member.email)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="grid min-w-0">
+            <div className="flex items-center gap-2 font-medium">
+              <span className="truncate">
+                {member.name || member.email || member.userId}
+              </span>
+              {isMe && (
+                <Badge variant="secondary" className="font-normal">
+                  You
+                </Badge>
+              )}
+            </div>
+            {member.name && (
+              <div className="truncate text-xs text-muted-foreground">
+                {member.email}
+              </div>
+            )}
+          </div>
         </div>
-        {member.name && (
-          <div className="text-xs text-muted-foreground">{member.email}</div>
-        )}
       </TableCell>
       <TableCell>
         {canTouch ? (
@@ -298,17 +312,15 @@ function PendingInvitations() {
   const list = invitations.data?.invitations ?? []
   if (!invitations.data || list.length === 0) return null
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Pending invitations</CardTitle>
-        <CardDescription>
-          Each link works once, for a week, for the email it was sent to.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+    <section className="grid gap-3">
+      <SectionHeading
+        title="Pending invitations"
+        description="Each link works once, for a week, for the email it was sent to."
+      />
+      <Card className="py-0">
         <Table>
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead>Email</TableHead>
               <TableHead>Role</TableHead>
               <TableHead className="hidden md:table-cell">Invited by</TableHead>
@@ -332,8 +344,19 @@ function PendingInvitations() {
             ))}
           </TableBody>
         </Table>
-      </CardContent>
-    </Card>
+      </Card>
+    </section>
+  )
+}
+
+// Two letters for the avatar: first and last name, or the start of an email.
+function initialsOf(nameOrEmail: string): string {
+  const words = nameOrEmail.split(/[\s@._-]+/).filter(Boolean)
+  return (
+    words
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase())
+      .join("") || "?"
   )
 }
 

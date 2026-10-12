@@ -31,6 +31,7 @@ func Group() *migrate.Group {
 		statements("20261012000001", "create_analyses", analysesUp, analysesDown),
 		statements("20261012000002", "create_github_installations", githubUp, githubDown),
 		statements("20261012000003", "create_variables", variablesUp, variablesDown),
+		statements("20261012000004", "add_project_style", projectStyleUp, projectStyleDown),
 	)
 	return g
 }
@@ -186,4 +187,43 @@ var variablesUp = []string{
 
 var variablesDown = []string{
 	`DROP TABLE IF EXISTS loomplane_variables`,
+}
+
+// A project's icon and color draw its tile in the dashboard. The service
+// picks both for new projects (internal/projects/style.go); the backfill
+// gives every older project a pair. It hashes the ID rather than rolling
+// dice, so a project comes out the same on every database it runs on, and
+// it only fills empty values, so a re-run leaves earlier picks and later
+// edits alone. Color hashes a prefixed ID: with the bare one, 48 and 10
+// share a factor and an even icon would always get an even color. The
+// bigint cast is for abs, which overflows on the one int4 with no positive
+// twin.
+//
+// The arrays copy the lists in style.go, in the same order, as they stood
+// when this was written.
+var projectStyleUp = []string{
+	`ALTER TABLE loomplane_projects ADD COLUMN IF NOT EXISTS icon TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_projects ADD COLUMN IF NOT EXISTS color TEXT NOT NULL DEFAULT ''`,
+	`UPDATE loomplane_projects p
+		SET icon = n.names[1 + mod(abs(hashtext(p.id)::bigint), cardinality(n.names))]
+		FROM (SELECT ARRAY[
+			'store', 'bag', 'card', 'receipt', 'wallet', 'truck', 'bell', 'mail',
+			'chat', 'megaphone', 'users', 'calendar', 'database', 'chart', 'search', 'sparkles',
+			'bot', 'radar', 'server', 'cpu', 'webhook', 'braces', 'terminal', 'workflow',
+			'package', 'layers', 'smartphone', 'globe', 'pin', 'health', 'learning', 'book',
+			'film', 'music', 'image', 'gamepad', 'shield', 'key', 'fingerprint', 'rocket',
+			'zap', 'compass', 'anchor', 'leaf', 'flame', 'mountain', 'atom', 'hexagon'
+		] AS names) n
+		WHERE p.icon = ''`,
+	`UPDATE loomplane_projects p
+		SET color = n.names[1 + mod(abs(hashtext('color:' || p.id)::bigint), cardinality(n.names))]
+		FROM (SELECT ARRAY[
+			'gold', 'orange', 'red', 'rose', 'violet', 'indigo', 'blue', 'teal', 'green', 'slate'
+		] AS names) n
+		WHERE p.color = ''`,
+}
+
+var projectStyleDown = []string{
+	`ALTER TABLE loomplane_projects DROP COLUMN IF EXISTS color`,
+	`ALTER TABLE loomplane_projects DROP COLUMN IF EXISTS icon`,
 }

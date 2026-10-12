@@ -41,7 +41,9 @@ var (
 	ErrLastEnvironment     = errors.New("a project needs at least one environment, so its last one can't be deleted")
 )
 
-// Project is an application an organization deploys with Loomplane.
+// Project is an application an organization deploys with Loomplane. Its
+// Icon and Color draw its tile in the dashboard; style.go lists the names
+// each can take.
 //
 // The forge:"id" tags mark each type's identity for the dashboard's
 // generated client, which keeps one normalized copy per ID. A tag, not a
@@ -52,6 +54,8 @@ type Project struct {
 	Name          string    `json:"name"`
 	Slug          string    `json:"slug"`
 	Description   string    `json:"description"`
+	Icon          string    `json:"icon"`
+	Color         string    `json:"color"`
 	RepositoryURL string    `json:"repository_url"`
 	Status        string    `json:"status"`
 	CreatedBy     string    `json:"created_by"`

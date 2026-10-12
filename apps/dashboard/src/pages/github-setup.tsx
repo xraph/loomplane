@@ -7,6 +7,7 @@ import {
   useGithubStatus,
 } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation } from "@/client/hooks"
+import { Page } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { buttonVariants } from "@/components/ui/button"
@@ -61,7 +62,7 @@ export function GitHubSetup({ installationId, code, state }: GitHubSetupProps) {
           { label: "GitHub" },
         ]}
       />
-      <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
+      <Page>
         <Card className="max-w-xl">
           <CardHeader>
             <CardTitle>
@@ -114,7 +115,7 @@ export function GitHubSetup({ installationId, code, state }: GitHubSetupProps) {
             </div>
           </CardContent>
         </Card>
-      </div>
+      </Page>
     </>
   )
 }

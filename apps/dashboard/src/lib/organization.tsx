@@ -63,6 +63,10 @@ export function OrganizationGate({
     async (orgId: string) => {
       await switchOrg.mutateAsync({ body: { orgId } })
       window.localStorage.setItem(lastOrgKey, orgId)
+      // The session is in the new organization now. Without this the
+      // refetch still names the old one, and the API refuses it as a tab
+      // that's fallen out of step (409).
+      setTabOrganization(orgId)
       await refetchSession()
     },
     [switchOrg, refetchSession]
