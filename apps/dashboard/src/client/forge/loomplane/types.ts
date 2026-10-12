@@ -197,6 +197,19 @@ export interface Defaults {
   region?: string;
 }
 
+export interface DeployedList {
+  sources: DeployedRepository[];
+}
+
+export interface DeployedRepository {
+  alias: string;
+  commitSha: string;
+  deployedAt: string;
+  planId: string;
+  repository: string;
+  sourceId: string;
+}
+
 export interface Deployment {
   commitSha: string;
   environment: string;

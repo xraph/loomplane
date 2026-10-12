@@ -395,6 +395,45 @@ func (s *Service) Bindings(ctx context.Context, p security.Principal, projectID,
 	return s.store.ListBindings(ctx, p.OrgID, env.ID)
 }
 
+// Deployed returns what's deployed of each of a project's live
+// repositories in an environment, by alias. A repository nothing has
+// deployed there yet isn't listed, and neither is a removed one, which no
+// plan can name.
+func (s *Service) Deployed(ctx context.Context, p security.Principal, projectID, environment string) ([]*DeployedRepository, error) {
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
+		return nil, err
+	}
+	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+		return nil, err
+	}
+	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(environment))
+	if err != nil {
+		return nil, err
+	}
+	sources, err := s.analyses.ListSources(ctx, p.OrgID, projectID, false)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.store.DeployedSources(ctx, p.OrgID, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	deployed := map[string]*DeployedSource{}
+	for _, d := range rows {
+		deployed[d.SourceID] = d
+	}
+	out := []*DeployedRepository{}
+	for _, src := range sources {
+		if d := deployed[src.ID]; d != nil {
+			out = append(out, &DeployedRepository{
+				SourceID: src.ID, Alias: src.Alias, Repository: src.Repository,
+				CommitSHA: d.CommitSHA, PlanID: d.PlanID, DeployedAt: d.DeployedAt,
+			})
+		}
+	}
+	return out, nil
+}
+
 // Providers returns the deployment targets a manifest can name.
 func (s *Service) Providers() []*provider.Provider { return s.providers.List() }
 

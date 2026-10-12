@@ -1150,6 +1150,47 @@
         }
       }
     },
+    "/api/v1/projects/{id}/environments/{environment}/deployed": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "The commit of each of the project's repositories deployed in the environment; one with nothing deployed there isn't listed, and a plan can't hold it",
+        "operationId": "deployed.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "description": "Path parameter: environment",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What's deployed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployedList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/graph": {
       "get": {
         "tags": [
@@ -2502,6 +2543,54 @@
           },
           "region": {
             "type": "string"
+          }
+        }
+      },
+      "DeployedList": {
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeployedRepository"
+            }
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "type": "object",
+        "x-forge-envelope": "sources"
+      },
+      "DeployedRepository": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "alias",
+          "repository",
+          "commit_sha",
+          "plan_id",
+          "deployed_at"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "deployed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string",
+            "x-forge-id": true
           }
         }
       },

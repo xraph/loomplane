@@ -56,6 +56,17 @@ func (BindingList) ForgeEnvelope() forge.EnvelopeDef {
 	return forge.EnvelopeDef{ItemsField: "bindings"}
 }
 
+// DeployedList is the body of GET
+// /api/v1/projects/:id/environments/:environment/deployed.
+type DeployedList struct {
+	Sources []planning.DeployedRepository `json:"sources"`
+}
+
+// ForgeEnvelope tells the generated client the list wraps Sources.
+func (DeployedList) ForgeEnvelope() forge.EnvelopeDef {
+	return forge.EnvelopeDef{ItemsField: "sources"}
+}
+
 // EnvironmentConnections is the body of the environment connection
 // routes: which connection the environment deploys to each cloud with,
 // where someone chose.
@@ -145,6 +156,11 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("Reject a ready plan"),
 			forge.WithRequestSchema(planning.DecideInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The plan", planning.Plan{}),
+		}},
+		{http.MethodGet, "/projects/:id/environments/:environment/deployed", e.listDeployed, []forge.RouteOption{
+			forge.WithName("deployed.list"),
+			forge.WithSummary("The commit of each of the project's repositories deployed in the environment; one with nothing deployed there isn't listed, and a plan can't hold it"),
+			forge.WithResponseSchema(http.StatusOK, "What's deployed", DeployedList{}),
 		}},
 		{http.MethodGet, "/projects/:id/environments/:environment/connections", e.environmentConnections, []forge.RouteOption{
 			forge.WithName("environmentConnections.get"),
@@ -372,6 +388,22 @@ func (e *Extension) listBindings(c forge.Context) error {
 	out := BindingList{Bindings: make([]planning.Binding, 0, len(bindings))}
 	for _, b := range bindings {
 		out.Bindings = append(out.Bindings, *b)
+	}
+	return c.JSON(http.StatusOK, out)
+}
+
+func (e *Extension) listDeployed(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	list, err := e.plans.Deployed(c.Request().Context(), p, c.Param("id"), c.Param("environment"))
+	if err != nil {
+		return fail(err)
+	}
+	out := DeployedList{Sources: make([]planning.DeployedRepository, 0, len(list))}
+	for _, d := range list {
+		out.Sources = append(out.Sources, *d)
 	}
 	return c.JSON(http.StatusOK, out)
 }

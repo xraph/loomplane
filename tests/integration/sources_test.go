@@ -179,6 +179,24 @@ func TestPlanning_aScopedPlanHoldsWhatsDeployed(t *testing.T) {
 		t.Fatalf("full plan %+v", full)
 	}
 
+	// The scope picker reads what's deployed to lock on what isn't.
+	type deployedBody struct {
+		Sources []struct {
+			SourceID   string    `json:"source_id"`
+			Alias      string    `json:"alias"`
+			Repository string    `json:"repository"`
+			CommitSHA  string    `json:"commit_sha"`
+			PlanID     string    `json:"plan_id"`
+			DeployedAt time.Time `json:"deployed_at"`
+		} `json:"sources"`
+	}
+	var deployed deployedBody
+	c.must(http.StatusOK, http.MethodGet, base+"/environments/production/deployed", nil, &deployed)
+	if deployed.Sources == nil || len(deployed.Sources) != 0 {
+		t.Fatalf("deployed before anything was %+v", deployed)
+	}
+	c.must(http.StatusNotFound, http.MethodGet, base+"/environments/nowhere/deployed", nil, nil)
+
 	// Nothing of mono is deployed, so a plan that holds it can't be made.
 	c.must(http.StatusPreconditionFailed, http.MethodPost, base+"/plans", map[string]any{"environment": "production", "scope": []string{"site"}}, nil)
 	c.must(http.StatusUnprocessableEntity, http.MethodPost, base+"/plans", map[string]any{"environment": "production", "scope": []string{"gone"}}, nil)
@@ -194,6 +212,14 @@ func TestPlanning_aScopedPlanHoldsWhatsDeployed(t *testing.T) {
 		(environment_id, source_id, org_id, analysis_id, commit_sha, plan_id, deployed_at) VALUES ($1, $2, $3, $4, $5, $6, now())`,
 		full.EnvironmentID, mono.SourceID, proj.OrgID, mono.AnalysisID, mono.CommitSHA, full.ID); err != nil {
 		t.Fatal(err)
+	}
+	c.must(http.StatusOK, http.MethodGet, base+"/environments/production/deployed", nil, &deployed)
+	if len(deployed.Sources) != 1 {
+		t.Fatalf("deployed %+v", deployed)
+	}
+	if d := deployed.Sources[0]; d.SourceID != mono.SourceID || d.Alias != "mono" || d.Repository != "acme/mono" ||
+		d.CommitSHA != mono.CommitSHA || d.PlanID != full.ID || d.DeployedAt.IsZero() {
+		t.Fatalf("deployed %+v", d)
 	}
 
 	var scoped planBody

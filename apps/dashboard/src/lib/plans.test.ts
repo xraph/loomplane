@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 
 import type { Action, Manifest, Provider } from "@/client/forge/loomplane/types"
 import {
+  chosenScope,
+  lockedOn,
   planStatus,
   scopeBody,
   steps,
@@ -92,6 +94,46 @@ describe("toggleScope", () => {
   })
   it("goes back to every repository once all of them move", () => {
     expect(toggleScope(["api", "web"], ["api"], "web")).toBeNull()
+  })
+  it("won't hold a repository that's locked on", () => {
+    const locked = new Set(["web"])
+    expect(
+      toggleScope(["api", "web"], ["api", "web"], "web", locked)
+    ).toBeNull()
+    expect(
+      toggleScope(["api", "web", "db"], ["api", "web"], "web", locked)
+    ).toEqual(["api", "web"])
+    // The rest still toggle.
+    expect(toggleScope(["api", "web"], ["api", "web"], "api", locked)).toEqual([
+      "web",
+    ])
+  })
+})
+
+describe("lockedOn", () => {
+  it("locks on each repository with nothing deployed", () => {
+    expect(lockedOn(["api", "web", "db"], ["api"])).toEqual(
+      new Set(["web", "db"])
+    )
+  })
+  it("locks nothing once everything is deployed", () => {
+    expect(lockedOn(["api", "web"], ["web", "api", "gone"]).size).toBe(0)
+  })
+})
+
+describe("chosenScope", () => {
+  it("is every repository when the picker holds none back", () => {
+    expect(chosenScope(["api", "web"], null, new Set())).toEqual(["api", "web"])
+  })
+  it("keeps a locked repository in, even one the picker held", () => {
+    expect(chosenScope(["api", "web", "db"], ["api"], new Set(["db"]))).toEqual(
+      ["api", "db"]
+    )
+  })
+  it("plans everything when nothing is deployed", () => {
+    const all = ["api", "web"]
+    const chosen = chosenScope(all, [], lockedOn(all, []))
+    expect(scopeBody(all, chosen)).toEqual({})
   })
 })
 

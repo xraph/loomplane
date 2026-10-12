@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { Analysis, AnalysisGraph, AnalysisList, BindingList, ConnectedRepositoryList, Connection, ConnectionList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Source, SourceList, Variable, VariableList } from './types';
+import type { Analysis, AnalysisGraph, AnalysisList, BindingList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Source, SourceList, Variable, VariableList } from './types';
 
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
 export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
@@ -47,6 +47,7 @@ export const useEnvironmentsCreate = mutation<Environment, Environment>(ops['env
 export const useEnvironmentsDelete = mutation(ops['environments.delete']);
 export const useEnvironmentConnectionsGet = query<EnvironmentConnections>(ops['environmentConnections.get']);
 export const useEnvironmentConnectionsChoose = mutation(ops['environmentConnections.choose']);
+export const useDeployedList = query<DeployedList>(ops['deployed.list']);
 export const useProjectsGraph = query<ProjectView>(ops['projects.graph']);
 export const useManifestsCurrent = query<Revision>(ops['manifests.current']);
 export const useManifestsSave = mutation<Revision, Revision>(ops['manifests.save']);

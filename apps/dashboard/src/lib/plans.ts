@@ -78,18 +78,47 @@ export function scopeBody(
 }
 
 /**
+ * lockedOn is the repositories a plan of an environment has to move:
+ * those with nothing deployed there yet. A plan holds a repository at
+ * what's deployed, so one with nothing deployed can't be held.
+ */
+export function lockedOn(aliases: string[], deployed: string[]): Set<string> {
+  return new Set(aliases.filter((a) => !deployed.includes(a)))
+}
+
+/**
+ * chosenScope is the repositories a new plan moves: the ones the picker
+ * moves (null is all of them), and every locked one, which the picker
+ * can't hold.
+ */
+export function chosenScope(
+  all: string[],
+  moving: string[] | null,
+  locked: Set<string>
+): string[] {
+  return all.filter(
+    (a) => moving === null || moving.includes(a) || locked.has(a)
+  )
+}
+
+/**
  * toggleScope moves or holds one repository in the scope picker. Once every
  * repository moves again it returns null, the picker's "all of them", so a
- * repository added later moves by default too.
+ * repository added later moves by default too. A locked repository stays
+ * as it is.
  */
 export function toggleScope(
   all: string[],
   chosen: string[],
-  alias: string
+  alias: string,
+  locked: Set<string> = new Set()
 ): string[] | null {
-  const next = chosen.includes(alias)
-    ? chosen.filter((a) => a !== alias)
-    : [...chosen, alias]
+  let next = chosen
+  if (!locked.has(alias)) {
+    next = chosen.includes(alias)
+      ? chosen.filter((a) => a !== alias)
+      : [...chosen, alias]
+  }
   return all.every((a) => next.includes(a)) ? null : next
 }
 

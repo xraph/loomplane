@@ -9,6 +9,7 @@ import { toast } from "sonner"
 import { messageOf, statusOf } from "@/client/errors"
 import {
   useConnectionsList,
+  useDeployedList,
   useEnvironmentConnectionsChoose,
   useManifestsCurrent,
   useManifestsDraft,
@@ -96,8 +97,10 @@ import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
 import {
   changeCount,
+  chosenScope,
   isOpen,
   isPlanning,
+  lockedOn,
   opLabel,
   planStatus,
   scopeBody,
@@ -370,36 +373,11 @@ function PlansCard({
 }) {
   const { can } = useOrganization()
   const plans = useQuery(usePlansList, { path: { id: project.id } })
-  const create = useMutation(usePlansCreate)
-  const sources = useQuery(useSourcesList, { path: { id: project.id } })
-  const [environment, setEnvironment] = useState(environments[0]?.name ?? "")
-  // null means every repository moves, including one added later.
-  const [moving, setMoving] = useState<string[] | null>(null)
   const list = plans.data?.plans ?? []
   useRefetchWhile(
     list.some((p) => isPlanning(p.status)),
     plans.refetch
   )
-  const aliases = (sources.data?.sources ?? [])
-    .filter((s) => !s.removedAt)
-    .map((s) => s.alias)
-  const chosen = aliases.filter((a) => moving === null || moving.includes(a))
-
-  const toggle = (alias: string) =>
-    setMoving(toggleScope(aliases, chosen, alias))
-
-  const plan = async () => {
-    try {
-      const p = await create.mutateAsync({
-        path: { id: project.id },
-        body: { environment, ...scopeBody(aliases, chosen) },
-      })
-      void plans.refetch()
-      onOpen(p.id)
-    } catch (err) {
-      toast.error(messageOf(err, "The plan couldn't start."))
-    }
-  }
 
   return (
     <Card className="pb-0">
@@ -410,58 +388,14 @@ function PlansCard({
           and the latest analysis. Planning never touches a cloud.
         </CardDescription>
         {can("deployment:create") && environments.length > 0 && (
-          <CardAction className="flex flex-wrap items-center justify-end gap-2">
-            {aliases.length > 1 &&
-              aliases.map((alias) => (
-                <Button
-                  key={alias}
-                  type="button"
-                  size="sm"
-                  variant={chosen.includes(alias) ? "secondary" : "outline"}
-                  aria-pressed={chosen.includes(alias)}
-                  title={
-                    chosen.includes(alias)
-                      ? `${alias} moves in this plan`
-                      : `${alias} is held at what's deployed`
-                  }
-                  onClick={() => toggle(alias)}
-                >
-                  {alias}
-                </Button>
-              ))}
-            <Select
-              value={environment}
-              onValueChange={(v) => setEnvironment(v ?? environment)}
-            >
-              <SelectTrigger
-                size="sm"
-                aria-label="Environment"
-                className="min-w-32"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {environments.map((e) => (
-                  <SelectItem key={e.id} value={e.name}>
-                    {e.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              size="sm"
-              className="rounded-full"
-              disabled={
-                !environment ||
-                create.isPending ||
-                (aliases.length > 0 && chosen.length === 0)
-              }
-              onClick={() => void plan()}
-            >
-              {create.isPending ? <Spinner /> : <WorkflowIcon />}
-              Plan
-            </Button>
-          </CardAction>
+          <PlanControls
+            project={project}
+            environments={environments}
+            onPlanned={(id) => {
+              void plans.refetch()
+              onOpen(id)
+            }}
+          />
         )}
       </CardHeader>
       <CardContent className="px-0">
@@ -530,6 +464,114 @@ function PlansCard({
         )}
       </CardContent>
     </Card>
+  )
+}
+
+// PlanControls plans an environment, moving the repositories the scope
+// picker chose. It's only shown once there's an environment, so what's
+// deployed is always read for a real one.
+function PlanControls({
+  project,
+  environments,
+  onPlanned,
+}: {
+  project: Project
+  environments: Environment[]
+  onPlanned: (id: string) => void
+}) {
+  const create = useMutation(usePlansCreate)
+  const sources = useQuery(useSourcesList, { path: { id: project.id } })
+  const [environment, setEnvironment] = useState(environments[0]?.name ?? "")
+  const deployed = useQuery(useDeployedList, {
+    path: { id: project.id, environment },
+  })
+  // null means every repository moves, including one added later.
+  const [moving, setMoving] = useState<string[] | null>(null)
+  const aliases = (sources.data?.sources ?? [])
+    .filter((s) => !s.removedAt)
+    .map((s) => s.alias)
+  // Until what's deployed is known, every repository moves: a full plan
+  // never asks to hold something that isn't there.
+  const running = deployed.data?.sources.map((d) => d.alias)
+  const known = running !== undefined
+  const locked = known ? lockedOn(aliases, running) : new Set(aliases)
+  const chosen = chosenScope(aliases, moving, locked)
+
+  const toggle = (alias: string) =>
+    setMoving(toggleScope(aliases, chosen, alias, locked))
+
+  const plan = async () => {
+    try {
+      const p = await create.mutateAsync({
+        path: { id: project.id },
+        body: { environment, ...scopeBody(aliases, chosen) },
+      })
+      onPlanned(p.id)
+    } catch (err) {
+      toast.error(messageOf(err, "The plan couldn't start."))
+    }
+  }
+
+  const title = (alias: string) => {
+    if (locked.has(alias)) {
+      return known
+        ? `Nothing from ${alias} runs in ${environment} yet, so a plan has to include it`
+        : `${alias} moves until Loomplane knows what runs in ${environment}`
+    }
+    return chosen.includes(alias)
+      ? `${alias} moves in this plan`
+      : `${alias} is held at what's deployed`
+  }
+
+  return (
+    <CardAction className="flex flex-wrap items-center justify-end gap-2">
+      {aliases.length > 1 &&
+        aliases.map((alias) => (
+          <Button
+            key={alias}
+            type="button"
+            size="sm"
+            variant={chosen.includes(alias) ? "secondary" : "outline"}
+            aria-pressed={chosen.includes(alias)}
+            // A locked toggle stays focusable, so its title still says why
+            // it can't be turned off.
+            aria-disabled={locked.has(alias) || undefined}
+            className={cn(locked.has(alias) && "cursor-not-allowed")}
+            title={title(alias)}
+            onClick={() => toggle(alias)}
+          >
+            {alias}
+          </Button>
+        ))}
+      <Select
+        value={environment}
+        onValueChange={(v) => setEnvironment(v ?? environment)}
+      >
+        <SelectTrigger size="sm" aria-label="Environment" className="min-w-32">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {environments.map((e) => (
+            <SelectItem key={e.id} value={e.name}>
+              {e.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Button
+        size="sm"
+        className="rounded-full"
+        disabled={
+          !environment ||
+          create.isPending ||
+          (aliases.length > 0 && chosen.length === 0)
+        }
+        onClick={() => void plan()}
+      >
+        {create.isPending ? <Spinner /> : <WorkflowIcon />}
+        Plan
+      </Button>
+    </CardAction>
   )
 }
 

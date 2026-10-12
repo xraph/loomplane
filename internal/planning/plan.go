@@ -217,6 +217,18 @@ type DeployedSource struct {
 	DeployedAt    time.Time `json:"deployed_at"`
 }
 
+// DeployedRepository is what's deployed of one of a project's live
+// repositories in an environment, named for people: a scope picker locks
+// on every repository without one, since a plan can't hold it.
+type DeployedRepository struct {
+	SourceID   string    `json:"source_id" forge:"id"`
+	Alias      string    `json:"alias"`
+	Repository string    `json:"repository"`
+	CommitSHA  string    `json:"commit_sha"`
+	PlanID     string    `json:"plan_id"`
+	DeployedAt time.Time `json:"deployed_at"`
+}
+
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {

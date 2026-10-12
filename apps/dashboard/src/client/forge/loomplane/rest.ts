@@ -201,6 +201,25 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly deployed = {
+    /**
+     * The commit of each of the project's repositories deployed in the environment; one with nothing deployed there isn't listed, and a plan can't hold it
+     */
+    list: async (id: string, environment: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployedList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/deployed`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployedList"],
+      };
+
+      return this.request<types.DeployedList>(config);
+    },
+
+  };
+
   public readonly deployments = {
     /**
      * The deployment an approved plan started
