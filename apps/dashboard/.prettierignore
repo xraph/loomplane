@@ -1,0 +1,11 @@
+node_modules/
+coverage/
+.pnpm-store/
+pnpm-lock.yaml
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+src/client/forge/
+specs/
+
+src/routeTree.gen.ts

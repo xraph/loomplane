@@ -92,7 +92,7 @@ make dev-dashboard
 | Dashboard             | React, shadcn/ui on Base UI, light and dark themes, and generated API clients with a shared normalized cache.                  |
 | Persistence           | One PostgreSQL database, with a central migration pass over Loomplane and its library schemas.                                 |
 
-The dashboard uses a woven mark, Geist typography, and gold and green status colors. Its environment illustration respects reduced-motion preferences.
+The dashboard uses TanStack Router with typed file routes and automatic page splitting. It has a woven mark, Geist typography, and gold and green status colors. Its environment illustration respects reduced-motion preferences.
 
 ## Architecture
 

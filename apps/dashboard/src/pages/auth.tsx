@@ -4,7 +4,7 @@ import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AuthLayout } from "@/components/auth-layout"
 import { BrandLogo } from "@/components/brand-logo"
-import { navigate } from "@/lib/router"
+import { useNavigate } from "@/lib/router"
 
 /** Sign-in and sign-up, from authsome's own components. */
 export function AuthPage({
@@ -14,6 +14,7 @@ export function AuthPage({
   mode: "sign-in" | "sign-up"
   notice?: string
 }) {
+  const navigate = useNavigate()
   return (
     <AuthLayout
       title={
@@ -36,7 +37,9 @@ export function AuthPage({
           align="left"
           variant="borderless"
           className="auth-card"
-          onSuccess={() => navigate("/", { replace: true })}
+          onSuccess={() => {
+            void navigate({ to: "/", replace: true })
+          }}
         />
       ) : (
         <SignUpForm
@@ -48,7 +51,7 @@ export function AuthPage({
           onSuccess={() => {
             // authsome's sign-up doesn't sign in; the account exists now.
             toast.success("Account created. Sign in to continue.")
-            navigate("/sign-in", { replace: true })
+            void navigate({ to: "/sign-in", replace: true })
           }}
         />
       )}
