@@ -2,8 +2,8 @@ import type { Source } from "@/client/forge/loomplane/types"
 
 /** projectIDFromPath reads the project a page belongs to, if it is one. */
 export function projectIDFromPath(path: string): string | undefined {
-  const id = /^\/projects\/([^/]+)/.exec(path)?.[1]
-  return id ? decodeURIComponent(id) : undefined
+  // The router has already decoded the pathname, so the id is used as it is.
+  return /^\/projects\/([^/]+)/.exec(path)?.[1]
 }
 
 /** AnalyzeItem is one "Analyze …" entry in the command menu. */
@@ -40,7 +40,7 @@ export function analyzeItems(
   return [
     ...items,
     {
-      key: "",
+      key: "*",
       label: "Analyze all repositories",
       detail: `${live.length} repositories`,
       search: "analyze all repositories",

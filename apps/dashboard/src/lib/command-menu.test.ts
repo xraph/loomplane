@@ -23,6 +23,20 @@ describe("projectIDFromPath", () => {
     expect(projectIDFromPath("/projects/prj_1/plans")).toBe("prj_1")
   })
 
+  it("ignores a trailing slash", () => {
+    expect(projectIDFromPath("/projects/prj_1/")).toBe("prj_1")
+  })
+
+  it("doesn't match a path that only starts with the same letters", () => {
+    expect(projectIDFromPath("/projectsX")).toBeUndefined()
+    expect(projectIDFromPath("/projectsX/prj_1")).toBeUndefined()
+  })
+
+  it("doesn't throw on a malformed % sequence", () => {
+    expect(() => projectIDFromPath("/projects/%E0%A4%A")).not.toThrow()
+    expect(projectIDFromPath("/projects/%E0%A4%A")).toBe("%E0%A4%A")
+  })
+
   it("gives nothing elsewhere", () => {
     expect(projectIDFromPath("/")).toBeUndefined()
     expect(projectIDFromPath("/projects")).toBeUndefined()
@@ -49,6 +63,7 @@ describe("analyzeItems", () => {
       "Analyze all repositories",
     ])
     expect(items[2].alias).toBeUndefined()
+    expect(items[2].key).toBe("*")
   })
 
   it("skips removed sources and counts only the live ones", () => {

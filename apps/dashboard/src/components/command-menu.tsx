@@ -59,7 +59,7 @@ function RepositoryActions({
     <CommandGroup heading="Repositories">
       {items.map((item) => (
         <CommandItem
-          key={item.key || "all"}
+          key={item.key}
           value={item.search}
           onSelect={() => onAnalyze(projectID, item.alias)}
         >
@@ -197,7 +197,7 @@ export function CommandMenu({
               })}
             </CommandGroup>
           )}
-          {projectID && (
+          {projectID && can("analysis:run") && (
             <RepositoryActions projectID={projectID} onAnalyze={analyze} />
           )}
           <CommandGroup heading="Actions">
