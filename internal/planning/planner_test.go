@@ -1209,3 +1209,79 @@ func TestCompute_aGatewayRouteToAHeldServiceThatRunsNowhereIsAProblem(t *testing
 		}
 	}
 }
+
+// drifted is live with one binding marked as drifted.
+func drifted(live []*Binding, name, drift, message string) []*Binding {
+	out := make([]*Binding, 0, len(live))
+	for _, b := range live {
+		c := *b
+		if c.Name == name {
+			c.Drift, c.DriftMessage = drift, message
+		}
+		out = append(out, &c)
+	}
+	return out
+}
+
+func TestCompute_aHeldServiceDeletedOutsideLoomplaneThatsNeededIsAProblem(t *testing.T) {
+	live := drifted(deployed(t, computeFed(t, federatedYAML, nil)), "api", DriftMissing, "")
+
+	// site, which the plan moves, needs api, which it holds and can't
+	// rebuild.
+	r := computeFed(t, federatedYAML, []string{"mono"}, live...)
+	if api := action(t, r, "service:api"); api.Op != Keep {
+		t.Fatalf("api %+v", api)
+	}
+	var found *Finding
+	for i := range r.Problems {
+		if r.Problems[i].Code == "held-missing" && r.Problems[i].Name == "api" {
+			found = &r.Problems[i]
+		}
+	}
+	want := "api was deleted outside Loomplane, and mono, which it comes from, is held, so this plan can't bring it back. Add mono to the scope."
+	if found == nil || found.Message != want {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+
+	// A gateway's route needs it too.
+	viaEdge := strings.Replace(edgeYAML, "    needs: [api]\n", "", 1)
+	live = drifted(deployed(t, computeFed(t, viaEdge, nil)), "api", DriftMissing, "")
+	r = computeFed(t, viaEdge, []string{"mono"}, live...)
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-missing:api"}) {
+		t.Fatalf("problems %v", got)
+	}
+
+	// What's kept for a held service is the same: api, held, uses db,
+	// which the manifest dropped.
+	noDB := strings.Replace(federatedYAML, "    needs: [db]\n", "", 1)
+	noDB = strings.Replace(noDB, "resources:\n  db:\n    kind: postgres\n    provider: cloud-sql\n", "", 1)
+	live = drifted(deployed(t, computeFed(t, federatedYAML, nil)), "db", DriftMissing, "")
+	r = computeFed(t, noDB, []string{"mono"}, live...)
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-missing:db"}) || !strings.Contains(r.Problems[0].Message, "this plan keeps it for mono") {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+}
+
+func TestCompute_driftOnAHeldServiceNothingNeedsIsAWarning(t *testing.T) {
+	first := deployed(t, computeFed(t, federatedYAML, nil))
+	// site no longer needs api.
+	yaml := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
+
+	for _, tt := range []struct{ name, drift, message, want string }{
+		{"missing", DriftMissing, "", "api was deleted outside Loomplane, and mono, which it comes from, is held, so it stays gone until a plan that moves mono brings it back."},
+		{"changed", DriftChanged, "another revision is live", "api was changed outside Loomplane (another revision is live), and mono, which it comes from, is held, so it stays that way until a plan that moves mono deploys it as planned again."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := computeFed(t, yaml, []string{"mono"}, drifted(first, "api", tt.drift, tt.message)...)
+			if len(r.Problems) != 0 {
+				t.Fatalf("problems %v", codes(r.Problems))
+			}
+			if api := action(t, r, "service:api"); api.Op != Keep {
+				t.Fatalf("api %+v", api)
+			}
+			if w := warning(r, "held-drifted", "api"); w == nil || w.Message != tt.want {
+				t.Fatalf("warnings %+v", r.Warnings)
+			}
+		})
+	}
+}

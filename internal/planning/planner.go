@@ -90,6 +90,7 @@ func Compute(in Input) *Result {
 		heldNew:   map[string]string{},
 		held:      map[string]string{},
 		retained:  map[string]*Action{},
+		keptFor:   map[string][]string{},
 	}
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
@@ -97,6 +98,7 @@ func Compute(in Input) *Result {
 	p.planResources()
 	p.planServices()
 	p.planGateways()
+	p.heldDrift()
 	p.checkFindings()
 	p.impact()
 	p.planDeletes()
@@ -132,6 +134,9 @@ type planner struct {
 	// retained are keep actions, by action ID, for what held services use
 	// that the plan would otherwise remove.
 	retained map[string]*Action
+	// keptFor are the aliases of the held repositories each retained
+	// action is kept for, by action ID.
+	keptFor map[string][]string
 }
 
 func actionID(s Subject, name string) string { return string(s) + ":" + name }
@@ -462,6 +467,86 @@ func (p *planner) keep(name, alias string, b *Binding) {
 	p.actions = append(p.actions, a)
 }
 
+// heldDrift reports drift on what the plan keeps as deployed because it
+// holds the repository it comes from: held services, and what they use.
+// It stays held either way, since the plan doesn't fetch that repository
+// and so can't rebuild it. Something deleted outside Loomplane that the
+// plan still links to or routes to is a problem, because what needs it
+// would point at nothing. Anything else that drifted is a warning.
+func (p *planner) heldDrift() {
+	type heldItem struct {
+		id      string
+		aliases []string
+		// kept is true for what's kept for a held service rather than
+		// held itself.
+		kept bool
+	}
+	items := make([]heldItem, 0, len(p.held)+len(p.retained))
+	for name, alias := range p.held {
+		items = append(items, heldItem{id: actionID(ServiceSubject, name), aliases: []string{alias}})
+	}
+	for id := range p.retained {
+		items = append(items, heldItem{id: id, aliases: p.keptFor[id], kept: true})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].id < items[j].id })
+	for _, it := range items {
+		b := p.bindings[it.id]
+		if b == nil || (b.Drift != DriftMissing && b.Drift != DriftChanged) {
+			continue
+		}
+		repos, scope := heldScope(it.aliases)
+		from := fmt.Sprintf("%s, which it comes from, is held", repos)
+		if it.kept {
+			from = fmt.Sprintf("this plan keeps it for %s, which it holds back", repos)
+		}
+		path := "services." + b.Name
+		if b.Subject == ResourceSubject {
+			path = "resources." + b.Name
+		}
+		f := Finding{Subject: b.Subject, Name: b.Name, Path: path}
+		switch {
+		case b.Drift == DriftMissing && p.needed(it.id):
+			f.Code = "held-missing"
+			f.Message = fmt.Sprintf("%s was deleted outside Loomplane, and %s, so this plan can't bring it back. %s", b.Name, from, scope)
+			p.problem(f)
+			continue
+		case b.Drift == DriftMissing:
+			f.Message = fmt.Sprintf("%s was deleted outside Loomplane, and %s, so it stays gone until a plan that moves %s brings it back.", b.Name, from, repos)
+		default:
+			f.Message = fmt.Sprintf("%s was changed outside Loomplane (%s), and %s, so it stays that way until a plan that moves %s deploys it as planned again.", b.Name, b.DriftMessage, from, repos)
+		}
+		f.Code = "held-drifted"
+		p.warn(f)
+	}
+}
+
+// heldScope names held repositories for a message, and says what fixes
+// them: adding them to the scope, or planning every repository when a
+// binding doesn't say which one it's from.
+func heldScope(aliases []string) (repos, scope string) {
+	if len(aliases) == 0 || slices.Contains(aliases, "") {
+		return "a repository this plan holds back", "Plan every repository."
+	}
+	repos = strings.Join(aliases, " and ")
+	return repos, fmt.Sprintf("Add %s to the scope.", repos)
+}
+
+// needed reports whether anything else in the plan links or routes to the
+// action with this ID.
+func (p *planner) needed(id string) bool {
+	for _, a := range p.actions {
+		if a.ID == id || a.Service == nil {
+			continue
+		}
+		for _, e := range a.Service.Env {
+			if actionID(e.Subject, e.From) == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // kept is a keep action for what a binding deployed, with the binding's
 // configuration, counting its cloud the way an unchanged action's is.
 func (p *planner) kept(b *Binding, reason string) *Action {
@@ -492,7 +577,10 @@ func (p *planner) kept(b *Binding, reason string) *Action {
 // it that does the using, when that isn't the root itself.
 type holder struct {
 	root, via string
-	env       []EnvLink
+	// alias is the held repository the root comes from, empty when its
+	// binding doesn't say.
+	alias string
+	env   []EnvLink
 }
 
 func (h holder) String() string {
@@ -525,7 +613,7 @@ func (p *planner) retain() {
 	roots := map[string]bool{}
 	for _, name := range p.in.Manifest.ServiceNames() {
 		if alias, held := p.held[name]; held {
-			queue = append(queue, holder{root: heldLabel(name, alias), env: p.services[name].Service.Env})
+			queue = append(queue, holder{root: heldLabel(name, alias), alias: alias, env: p.services[name].Service.Env})
 			roots[actionID(ServiceSubject, name)] = true
 		}
 	}
@@ -542,7 +630,7 @@ func (p *planner) retain() {
 			continue
 		}
 		if alias, held := p.heldRepo(cfg); held {
-			queue = append(queue, holder{root: heldLabel(b.Name, alias), env: cfg.Env})
+			queue = append(queue, holder{root: heldLabel(b.Name, alias), alias: alias, env: cfg.Env})
 			roots[id] = true
 		}
 	}
@@ -564,13 +652,16 @@ func (p *planner) retain() {
 			if who := h.String(); !slices.Contains(users[id], who) {
 				users[id] = append(users[id], who)
 			}
+			if !slices.Contains(p.keptFor[id], h.alias) {
+				p.keptFor[id] = append(p.keptFor[id], h.alias)
+			}
 			if b.Subject != ServiceSubject || followed[id] {
 				continue
 			}
 			followed[id] = true
 			var cfg ServiceConfig
 			if json.Unmarshal(b.Config, &cfg) == nil {
-				queue = append(queue, holder{root: h.root, via: b.Name, env: cfg.Env})
+				queue = append(queue, holder{root: h.root, via: b.Name, alias: h.alias, env: cfg.Env})
 			}
 		}
 	}
