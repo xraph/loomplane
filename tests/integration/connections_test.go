@@ -27,6 +27,8 @@ type fakeGoogle struct {
 	srv     *httptest.Server
 	mu      sync.Mutex
 	granted []string
+	// deploy serves the APIs a deployment calls, when a test sets it.
+	deploy http.Handler
 }
 
 func newFakeGoogle(t *testing.T) *fakeGoogle {
@@ -62,6 +64,10 @@ func newFakeGoogle(t *testing.T) *fakeGoogle {
 			f.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": held})
 		default:
+			if f.deploy != nil {
+				f.deploy.ServeHTTP(w, r)
+				return
+			}
 			http.NotFound(w, r)
 		}
 	}))

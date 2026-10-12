@@ -42,10 +42,14 @@ import (
 	chronpg "github.com/xraph/chronicle/store/postgres"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
+	"github.com/xraph/grove/drivers/pgdriver"
 	groveext "github.com/xraph/grove/extension"
+	"github.com/xraph/keysmith"
+	kspg "github.com/xraph/keysmith/store/postgres"
 	"github.com/xraph/warden"
 	wardenpg "github.com/xraph/warden/store/postgres"
 
+	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/httpx"
 	"github.com/xraph/loomplane/internal/security"
@@ -80,6 +84,7 @@ type Extension struct {
 	authz  *security.Authorizer
 	audit  *chronicle.Chronicle
 	engine *authsome.Engine
+	keys   *apikeys.Service
 	router forge.Router
 }
 
@@ -118,6 +123,11 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("chronicle: %w", err)
 	}
 	e.authz = security.NewAuthorizer(e.warden, wstore, e.membership)
+	smith, err := keysmith.NewEngine(keysmith.WithStore(kspg.New(pgdriver.Unwrap(db))))
+	if err != nil {
+		return fmt.Errorf("keysmith: %w", err)
+	}
+	e.keys = apikeys.New(smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
 	if e.engine, err = e.buildEngine(); err != nil {
 		return err
 	}
@@ -128,7 +138,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		forge.ProvideValue(c, e.authz),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
-		forge.ProvideValue(c, Guard(e.middleware())),
+		forge.ProvideValue(c, Guard{e.guard()}),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
 	}

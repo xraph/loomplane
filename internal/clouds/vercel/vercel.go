@@ -37,14 +37,18 @@ var (
 type Client struct {
 	endpoint string
 	http     *http.Client
+	// poll is how often a deployment is checked.
+	poll time.Duration
 }
 
-// New returns a Client. An empty endpoint means Vercel's own.
+// New returns a Client. An empty endpoint means Vercel's own; any other
+// is a test's fake, which answers at once, so it's polled often.
 func New(endpoint string) *Client {
-	if endpoint == "" {
-		endpoint = DefaultEndpoint
+	c := &Client{endpoint: DefaultEndpoint, http: &http.Client{Timeout: requestTimeout}, poll: 5 * time.Second}
+	if endpoint != "" {
+		c.endpoint, c.poll = strings.TrimRight(endpoint, "/"), 100*time.Millisecond
 	}
-	return &Client{endpoint: strings.TrimRight(endpoint, "/"), http: &http.Client{Timeout: requestTimeout}}
+	return c
 }
 
 // Token is an access token, and the team it acts for. TeamID is empty
@@ -68,6 +72,8 @@ type APIError struct {
 	Status  int
 	Code    string
 	Message string
+	// Missing are the files a deployment named that Vercel hasn't got.
+	Missing []string
 }
 
 func (e *APIError) Error() string {
@@ -113,13 +119,14 @@ func (c *Client) do(ctx context.Context, tok Token, method, path string, query u
 	if res.StatusCode >= 300 {
 		var e struct {
 			Error struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
+				Code    string   `json:"code"`
+				Message string   `json:"message"`
+				Missing []string `json:"missing"`
 			} `json:"error"`
 		}
 		ae := &APIError{Status: res.StatusCode, Message: strings.TrimSpace(string(data))}
 		if json.Unmarshal(data, &e) == nil && e.Error.Message != "" {
-			ae.Code, ae.Message = e.Error.Code, e.Error.Message
+			ae.Code, ae.Message, ae.Missing = e.Error.Code, e.Error.Message, e.Error.Missing
 		}
 		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
 			return fmt.Errorf("%w: %s", ErrRejected, ae.Message)

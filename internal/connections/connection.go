@@ -17,6 +17,7 @@ import (
 const (
 	GCP    = "gcp"
 	Vercel = "vercel"
+	AWS    = "aws"
 )
 
 // Statuses. A connection is checked when it's made and whenever someone

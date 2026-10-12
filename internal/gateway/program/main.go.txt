@@ -1,0 +1,111 @@
+// Command gateway is a Loomplane gateway: Bastion, routing the paths in
+// routes.json to the services Loomplane deployed. Loomplane generates
+// this program and builds it on your cloud's builder, with the routes
+// fixed at deploy time; each route's target address arrives in a
+// variable, the same way any service finds what it needs.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+
+	"github.com/xraph/bastion"
+	"github.com/xraph/bastion/extension"
+	"github.com/xraph/forge"
+)
+
+// route is one entry of routes.json.
+type route struct {
+	Path        string `json:"path"`
+	To          string `json:"to"`
+	Env         string `json:"env"`
+	StripPrefix bool   `json:"strip_prefix"`
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "gateway:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	file := os.Getenv("LOOMPLANE_ROUTES")
+	if file == "" {
+		file = "/routes.json"
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	var routes []route
+	if err := json.Unmarshal(data, &routes); err != nil {
+		return fmt.Errorf("read %s: %w", file, err)
+	}
+	configs := make([]bastion.RouteConfig, 0, len(routes))
+	for _, r := range routes {
+		target := os.Getenv(r.Env)
+		if target == "" {
+			return fmt.Errorf("%s isn't set; Loomplane sets it to %s's address", r.Env, r.To)
+		}
+		configs = append(configs, bastion.RouteConfig{
+			Path:        strings.TrimSuffix(r.Path, "/") + "/*",
+			Targets:     []bastion.TargetConfig{{URL: target, Weight: 1}},
+			StripPrefix: r.StripPrefix && r.Path != "/",
+			Protocol:    bastion.ProtocolHTTP,
+			// The longest prefix wins.
+			Priority:    len(r.Path),
+			Enabled:     true,
+			ServiceName: r.To,
+		})
+	}
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	app := forge.NewApp(forge.AppConfig{
+		Name: "loomplane-gateway", Version: "1", HTTPAddress: ":" + port,
+		Extensions: []forge.Extension{gateway{extension.New(
+			bastion.WithRoutes(configs),
+			// No admin API or dashboard: they'd be open to anyone who can
+			// reach the gateway, and the routes never change at runtime.
+			bastion.WithDashboardEnabled(false),
+			bastion.WithOpenAPIEnabled(false),
+			bastion.WithDiscoveryEnabled(false),
+			// Each route has one target, itself a load-balanced service,
+			// so there's nothing to fail over to; probing a path the app
+			// may not serve would only take the route down.
+			bastion.WithHealthCheck(bastion.HealthCheckConfig{}),
+		)}},
+	})
+	return app.Run()
+}
+
+// gateway is Bastion's extension, with the request's own path.
+type gateway struct{ *extension.Extension }
+
+// Register implements forge.Extension.
+func (g gateway) Register(app forge.App) error {
+	if err := g.Extension.Register(app); err != nil {
+		return err
+	}
+	g.Gateway().Hooks().OnRequest(keepTrailingSlash)
+	return nil
+}
+
+// keepTrailingSlash puts back the trailing slash Forge's router trims
+// before Bastion sees the request, so /docs/ reaches the service as
+// /docs/ and not as /docs, which many servers redirect to /docs/.
+func keepTrailingSlash(r *http.Request, _ *bastion.Route) error {
+	sent, _, _ := strings.Cut(r.RequestURI, "?")
+	if strings.HasSuffix(sent, "/") && !strings.HasSuffix(r.URL.Path, "/") {
+		r.URL.Path += "/"
+		if r.URL.RawPath != "" {
+			r.URL.RawPath += "/"
+		}
+	}
+	return nil
+}

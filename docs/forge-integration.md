@@ -173,6 +173,7 @@ What we found:
 - The extension declares no dependency on grove and finds the database while registering, so `internal/platform` adds the dependency.
 - On a fresh database the engine tries to register its worker row before the tables exist and logs a warning; the heartbeat registers it again a moment later.
 - Dispatch has two workflow engines. The older `workflow` package runs a whole workflow synchronously in the caller and resumes every running workflow inside `engine.Start`, so an approval waiting for a day would hold startup. Deployment workflows use the durable runtime (`durable/runtime`), which has leases, durable timers and signals; an approval is a signal. Its handlers have to be given to the extension when it's built, before the planning extension exists, so `internal/platform` builds them (`orchestration.NewDeployments`) and the planning extension binds the planner to them while it registers.
+- Every Dispatch app competes for cron leadership, there's no way to opt out, and a stopped app keeps the lease until it expires. Followers only look for a leader every half lease, which by default is 30 seconds. The API runs with a 10-second lease and `loomplane-worker`, which schedules nothing, with 5, so a leader that stops is replaced in seconds and the drift check keeps its schedule.
 - The durable worker runs on the context `Start` was given. `forge.App.Run` passes `context.Background()`, so the server is fine, but start the app with a timeout and the worker stops the moment that context is cancelled, with nothing in the logs. Plans then sit in "planning" for good. The integration tests start the app the way `Run` does for this reason.
 - The HTTP API needs a Forge auth registry and Warden, and its writes answer 503 unless durable delivery is configured, which is Postgres-only. It's off; job state will be shown through Loomplane's API.
 
@@ -205,14 +206,37 @@ Watch out for confy's quirks: an environment variable can't reach a snake_case k
 
 Tests: `internal/config`.
 
+## Trove
+
+`internal/artifacts` keeps each deployment's source, the commit's tarball, in a Trove bucket (`storage.url`: `file://` on disk, `mem://` in tests). Builders read it back from there, so every builder gets the same bytes.
+
+## Bastion
+
+Loomplane doesn't run Bastion itself. A `gateways:` entry in `loomplane.yaml` becomes a small Go program on Bastion (`internal/gateway`), generated with the routes baked in and built on the cloud's own builder like any service, so application traffic never passes through Loomplane. Each route's target arrives in a variable, the way any service finds what it needs. The program pins Bastion v1.1.1 on Forge v1.9.2, with its own `go.sum`; the embedded files are named `.txt` so Go doesn't treat them as part of this module, and a test builds the generated program with `-mod=readonly`.
+
+What we found wiring it, each worked around in the generated program:
+
+- `bastion.New` registers routes but never wires the proxy ("proxy handler not set"); `bastion/extension.New` does, at the cost of pulling in its Mongo, Postgres and SQLite stores.
+- The admin REST API has no authentication of its own. It's only registered when the dashboard is enabled, so the gateway disables the dashboard, OpenAPI aggregation and discovery.
+- Active health checks are on by default against `/_/health`. An app that doesn't serve that path gets its route taken down after three probes, so the gateway turns health checks off: each route has one target, already load balanced by its cloud.
+- Forge's router trims a trailing slash before Bastion sees the request, so `/docs/` reached the service as `/docs`, which many servers redirect back to `/docs/`. The gateway adds an `OnRequest` hook, after `Register` creates the hook engine, that restores the slash from `RequestURI`.
+
+FARP isn't used: a gateway's routes come from the manifest, not from live discovery.
+
+## Keysmith
+
+Loomplane's API keys, for the CLI, CI and scripts, are Keysmith keys (`internal/apikeys`), on Keysmith's Postgres store, migrated with everything else. A key is `lp_live_` and 64 hex characters, shown once, stored as a hash. Keysmith's tenant is the organization and its app the authsome app; the member who made a key is its `CreatedBy`, and whether it may write is in its metadata, since Keysmith refuses scopes nobody registered.
+
+A key acts as its maker, in its organization: the identity guard turns it into the same `security.Principal` a session gives, so every route's Warden check applies unchanged, and a member who leaves takes their keys' rights with them. A read-only key fails any permission whose action isn't `read`. Keys can't manage keys. Every key expires, after 90 days unless you choose up to a year.
+
+authsome has API keys of its own, backed by Keysmith when it's given one, but they belong to a user with no organization and need an `X-App-ID` header, which doesn't fit an organization-scoped API. Its middleware only treats `ask_`, `sk_` and `pk_` tokens as keys, so `lp_` never reaches it: the guard checks a Loomplane key before authsome sees the request.
+
 ## Evaluated, not wired yet
 
 | Library | When |
 |---|---|
-| Keysmith | Milestone 6, for CLI and automation API keys |
-| Trove | Milestone 4, for build artifacts, through Dispatch's artifact support |
 | Relay, Herald | When deployments exist to notify about |
-| Bastion, FARP | Milestone 5, gateway configuration on customer infrastructure |
+| FARP | Live API discovery, if gateways ever route by schema instead of by path |
 | Forge dashboard extension | Possibly, for an operator view of Dispatch and Ctrl Plane. The product dashboard is `apps/dashboard`. |
 
 ## The dashboard's client

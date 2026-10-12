@@ -8,6 +8,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
 // ConnectionList is the body of GET /api/v1/connections.
@@ -20,8 +21,62 @@ func (ConnectionList) ForgeEnvelope() forge.EnvelopeDef {
 	return forge.EnvelopeDef{ItemsField: "connections"}
 }
 
+// CloudForm is a cloud you can connect, and what connecting it asks for.
+// Built-in clouds have forms of their own in the dashboard; a provider
+// plugin's cloud is described by the plugin.
+type CloudForm struct {
+	Cloud      string        `json:"cloud"`
+	Title      string        `json:"title"`
+	Builtin    bool          `json:"builtin"`
+	Credential string        `json:"credential,omitempty"`
+	Help       string        `json:"help,omitempty"`
+	Settings   []sdk.Setting `json:"settings,omitempty"`
+}
+
+// CloudList is the body of GET /api/v1/connection-clouds.
+type CloudList struct {
+	Clouds []CloudForm `json:"clouds"`
+}
+
+func (e *Extension) clouds() (CloudList, error) {
+	out := CloudList{Clouds: []CloudForm{
+		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true},
+		{Cloud: connections.Vercel, Title: "Vercel", Builtin: true},
+		{Cloud: connections.AWS, Title: "AWS", Builtin: true},
+	}}
+	plugs, err := e.plugins.Plugins()
+	if err != nil {
+		return out, err
+	}
+	seen := map[string]bool{connections.GCP: true, connections.Vercel: true, connections.AWS: true}
+	for _, p := range plugs {
+		if seen[p.Cloud()] {
+			continue
+		}
+		seen[p.Cloud()] = true
+		f := p.Description.Connection
+		out.Clouds = append(out.Clouds, CloudForm{
+			Cloud: p.Cloud(), Title: f.Title, Credential: f.Credential, Help: f.Help, Settings: f.Settings,
+		})
+	}
+	return out, nil
+}
+
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud connections"))
+	if err := g.GET("/connection-clouds", func(c forge.Context) error {
+		list, err := e.clouds()
+		if err != nil {
+			return err
+		}
+		return c.JSON(http.StatusOK, list)
+	},
+		forge.WithName("connectionClouds.list"),
+		forge.WithSummary("The clouds you can connect, built in or from a provider plugin, and what each asks for"),
+		forge.WithResponseSchema(http.StatusOK, "Clouds", CloudList{}),
+	); err != nil {
+		return err
+	}
 	if err := g.GET("/connections", e.list,
 		forge.WithName("connections.list"),
 		forge.WithSummary("The organization's cloud connections, never their credentials"),

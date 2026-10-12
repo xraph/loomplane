@@ -63,6 +63,9 @@ func NewAuthorizer(engine Engine, store Store, members MembershipFunc) *Authoriz
 // Require returns nil when p may perform perm on the resource, ErrForbidden
 // when it may not, and any other error when Warden couldn't decide.
 func (a *Authorizer) Require(ctx context.Context, p Principal, perm Permission, resourceID string) error {
+	if p.ReadOnly && !perm.Reads() {
+		return fmt.Errorf("%w (%s): this API key can only read", ErrForbidden, perm.Name())
+	}
 	res, err := a.check(ctx, p, perm, resourceID)
 	if err != nil {
 		return err
@@ -90,6 +93,9 @@ func (a *Authorizer) Require(ctx context.Context, p Principal, perm Permission, 
 // Allowed reports whether p may perform perm, for answers such as which
 // buttons the dashboard shows. It never repairs.
 func (a *Authorizer) Allowed(ctx context.Context, p Principal, perm Permission) (bool, error) {
+	if p.ReadOnly && !perm.Reads() {
+		return false, nil
+	}
 	res, err := a.check(ctx, p, perm, "")
 	if err != nil {
 		return false, err

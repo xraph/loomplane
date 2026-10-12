@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest"
 import type { Action, Manifest, Provider } from "@/client/forge/loomplane/types"
 import {
   chosenScope,
+  deployedCommits,
+  deploymentStatus,
   lockedOn,
   planStatus,
   scopeBody,
+  stepStatus,
   steps,
   toggleScope,
   withIgnored,
@@ -172,5 +175,45 @@ describe("planStatus", () => {
     ]) {
       expect(planStatus(s).label).not.toBe(s)
     }
+  })
+})
+
+describe("deployment statuses", () => {
+  it("names every status the API sends", () => {
+    for (const s of ["running", "succeeded", "failed"]) {
+      expect(deploymentStatus(s).label).not.toBe(s)
+    }
+    for (const s of [
+      "pending",
+      "building",
+      "deploying",
+      "verifying",
+      "succeeded",
+      "failed",
+      "skipped",
+    ]) {
+      expect(stepStatus(s).label).not.toBe(s)
+    }
+  })
+
+  it("names each repository a deployment moved at its commit", () => {
+    const a = "a".repeat(40)
+    const b = "b".repeat(40)
+    expect(
+      deployedCommits({
+        commitSha: "api@aaaaaaa web@bbbbbbb",
+        sources: [
+          { alias: "api", repository: "acme/api", commitSha: a, key: "" },
+          { alias: "web", repository: "acme/web", commitSha: b, key: "" },
+        ],
+      })
+    ).toBe("api@aaaaaaa · web@bbbbbbb")
+    // A deployment from before each repository was named.
+    expect(
+      deployedCommits({
+        commitSha: a,
+        sources: [{ alias: "", repository: "", commitSha: a, key: "k" }],
+      })
+    ).toBe("aaaaaaa")
   })
 })

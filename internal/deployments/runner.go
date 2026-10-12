@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -29,6 +31,17 @@ type Executor interface {
 	// Remove deletes what runs an action. Something already gone is not
 	// an error.
 	Remove(ctx context.Context, job *Job, b *planning.Binding) error
+	// Observe reads what's live for a binding, without changing anything.
+	Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error)
+}
+
+// Observation is what's live for a binding.
+type Observation struct {
+	// Exists is false when it's been deleted.
+	Exists bool
+	// Revision is what's live: an image, or a Vercel deployment. Empty
+	// when the provider can't tell.
+	Revision string
 }
 
 // Job is one action to carry out, with everything its executor needs.
@@ -43,10 +56,21 @@ type Job struct {
 	// Env are the variables the service gets: its resolved variables and
 	// the addresses of what it needs.
 	Env map[string]string
+	// Secrets are the keys of Env that are secret. An executor keeps them
+	// in the cloud's secret store where it has one, and never passes them
+	// through Ctrl Plane, which stores what it's given.
+	Secrets map[string]bool
 	// Source opens the tarball of the repository the service is built
 	// from, at the plan's commit, as GitHub serves it: gzip, with one
 	// top-level directory.
 	Source func(ctx context.Context) (io.ReadCloser, int64, error)
+	// CommitSHA is the commit of the repository the service is built
+	// from. It's empty for a resource or a gateway.
+	CommitSHA string
+	// SourceID names what Source opens, at least 12 characters: the
+	// commit, or for a gateway, its generated source. Builds name their
+	// uploads and tag their images with it.
+	SourceID string
 	// Binding is what runs the action now, or nil.
 	Binding *planning.Binding
 	// Resume is what Checkpoint saved in an earlier attempt, such as a
@@ -57,7 +81,21 @@ type Job struct {
 	Checkpoint func(data []byte) error
 	// Progress shows what the step is doing.
 	Progress func(status, message string)
+	// Keep and Recall store and read a resource's credentials, such as a
+	// database password, in Vault, scoped to this resource in this
+	// environment. A retried step recalls what it kept.
+	Keep   func(ctx context.Context, field string, value []byte) error
+	Recall func(ctx context.Context, field string) ([]byte, error)
+	// Forget deletes everything kept for the resource, once it's gone.
+	Forget func(ctx context.Context) error
+	// Attach are the resources a service needs, which some providers have
+	// to wire to it: a Cloud SQL instance Cloud Run mounts.
+	Attach []*planning.Binding
 }
+
+// ResourceURL is the field a resource executor keeps its address under,
+// which the services that need it get.
+const ResourceURL = "url"
 
 // Outcome is what an executor did.
 type Outcome struct {
@@ -67,6 +105,9 @@ type Outcome struct {
 	URL        string
 	// Image is the container image a build produced.
 	Image string
+	// Revision is what went live, which a drift check compares with:
+	// the image, or a Vercel deployment.
+	Revision string
 }
 
 // Plans reads plans and bindings, and records what's deployed.
@@ -87,7 +128,7 @@ type Credentials interface {
 
 // Variables resolves what a service gets in an environment.
 type Variables interface {
-	Values(ctx context.Context, orgID, projectID, environment, service string) (map[string]string, error)
+	Values(ctx context.Context, orgID, projectID, environment, service string) (values map[string]string, secret map[string]bool, err error)
 }
 
 // Sources downloads a commit and stores it as an artifact.
@@ -108,6 +149,7 @@ type Runner struct {
 	sources     Sources
 	providers   *provider.Registry
 	executors   map[string]Executor
+	resources   ResourceSecrets
 	http        *http.Client
 	now         func() time.Time
 	// verifyWait is how long a deployed service has to answer.
@@ -124,13 +166,16 @@ type RunnerDeps struct {
 	Providers   *provider.Registry
 	// Executors carry out each provider's actions, by provider name.
 	Executors map[string]Executor
+	// Resources keeps provisioned resources' credentials. It may be nil
+	// when nothing is provisioned.
+	Resources ResourceSecrets
 }
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
 		store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -274,6 +319,23 @@ func sourceFor(d *Deployment, repo string) (string, error) {
 	return found.Key, nil
 }
 
+// commitFor is the commit an action builds from: the one its plan pinned
+// for the service's repository. A service from a plan that names no
+// repository takes the deployment's commit, which is the one commit when
+// the deployment moves one repository. A resource builds nothing, and a
+// gateway is built from what Loomplane generates, so neither has one.
+func commitFor(d *Deployment, a planning.Action) string {
+	switch {
+	case a.Service == nil || a.Service.Gateway != nil:
+		return ""
+	case a.Service.CommitSHA != "":
+		return a.Service.CommitSHA
+	case len(d.Sources) == 1:
+		return d.Sources[0].CommitSHA
+	}
+	return d.CommitSHA
+}
+
 // Run carries out one action of a deployment. resume is the last
 // checkpoint an earlier attempt saved, or nil; heartbeat saves one and
 // tells Dispatch the activity is alive.
@@ -355,20 +417,60 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	var current *planning.Binding
 	byName := map[string]*planning.Binding{}
+	resources := map[string]*planning.Binding{}
 	for _, b := range bindings {
 		if string(b.Subject)+":"+b.Name == a.ID {
 			current = b
 		}
-		if b.Subject == planning.ServiceSubject {
+		switch b.Subject {
+		case planning.ServiceSubject:
 			byName[b.Name] = b
+		case planning.ResourceSubject:
+			resources[b.Name] = b
 		}
 	}
 	job := &Job{
 		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
 		Resume: resume, Checkpoint: heartbeat, Progress: progress,
+		Keep: func(ctx context.Context, field string, value []byte) error {
+			if r.resources == nil {
+				return errors.New("no resource credential store")
+			}
+			return r.resources.Put(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field), value)
+		},
+		Recall: func(ctx context.Context, field string) ([]byte, error) {
+			if r.resources == nil {
+				return nil, ErrNoCredential
+			}
+			return r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field))
+		},
+		Forget: func(ctx context.Context) error {
+			if r.resources == nil {
+				return nil
+			}
+			for _, field := range []string{ResourceURL, passwordField} {
+				if derr := r.resources.Delete(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field)); derr != nil {
+					return derr
+				}
+			}
+			return nil
+		},
 		Source: func(context.Context) (io.ReadCloser, int64, error) {
 			return nil, 0, errors.New("only a service is built from a repository")
 		},
+		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
+	}
+	// A gateway is built from the source Loomplane generates for its
+	// routes, not from the repository.
+	if a.Service != nil && a.Service.Gateway != nil {
+		data, id, gerr := gateway.Source(a.Service.Gateway)
+		if gerr != nil {
+			return fmt.Errorf("generate the gateway: %w", gerr)
+		}
+		job.SourceID = id
+		job.Source = func(context.Context) (io.ReadCloser, int64, error) {
+			return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+		}
 	}
 	if a.Op == planning.Delete {
 		if current == nil {
@@ -381,16 +483,23 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return r.plans.DeleteBinding(ctx, d.OrgID, current.ID)
 	}
 	if a.Service != nil {
-		repo := a.Service.Repo
-		job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
-			key, serr := sourceFor(d, repo)
-			if serr != nil {
-				return nil, 0, serr
+		if a.Service.Gateway == nil {
+			repo := a.Service.Repo
+			job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
+				key, serr := sourceFor(d, repo)
+				if serr != nil {
+					return nil, 0, serr
+				}
+				return r.sources.Open(ctx, key)
 			}
-			return r.sources.Open(ctx, key)
 		}
-		if job.Env, err = r.env(ctx, d, a, byName); err != nil {
+		if job.Env, job.Secrets, err = r.env(ctx, d, a, byName, resources); err != nil {
 			return err
+		}
+		for _, link := range a.Service.Env {
+			if b := resources[link.From]; link.Subject == planning.ResourceSubject && b != nil {
+				job.Attach = append(job.Attach, b)
+			}
 		}
 	}
 	out, err := exec.Apply(ctx, job)
@@ -404,31 +513,47 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			return err
 		}
 	}
-	return r.bind(ctx, d, a, current, out)
+	return r.bind(ctx, d, a, current, out, connID)
 }
 
 // env is what a service gets: its resolved variables, then the address of
 // each thing it needs. A variable someone set wins over an address
 // Loomplane would set, so you can point a service elsewhere.
-func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services map[string]*planning.Binding) (map[string]string, error) {
-	env, err := r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service)
-	if err != nil {
-		return nil, fmt.Errorf("resolve variables: %w", err)
+func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services, resources map[string]*planning.Binding) (env map[string]string, secret map[string]bool, err error) {
+	if a.Service.Gateway != nil {
+		// A gateway gets the addresses it routes to and nothing else: none
+		// of the project's variables, and so none of its secrets.
+		env, secret = map[string]string{}, map[string]bool{}
+	} else if env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service); err != nil {
+		return nil, nil, fmt.Errorf("resolve variables: %w", err)
 	}
 	for _, link := range a.Service.Env {
 		if _, set := env[link.Key]; set {
 			continue
 		}
-		if link.Subject != planning.ServiceSubject {
-			return nil, fmt.Errorf("%s needs %s, which Loomplane can't provision yet", a.Name, link.From)
+		if link.Subject == planning.ResourceSubject {
+			// A resource's address holds its credentials, so it's secret.
+			if resources[link.From] == nil || r.resources == nil {
+				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
+			}
+			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s needs %s: %w", a.Name, link.From, err)
+			}
+			env[link.Key], secret[link.Key] = string(addr), true
+			continue
+		}
+		if link.Address != "" {
+			env[link.Key] = link.Address
+			continue
 		}
 		dep := services[link.From]
 		if dep == nil || dep.URL == "" {
-			return nil, fmt.Errorf("%s needs %s, which has no address yet", a.Name, link.From)
+			return nil, nil, fmt.Errorf("%s needs %s, which has no address yet", a.Name, link.From)
 		}
 		env[link.Key] = dep.URL
 	}
-	return env, nil
+	return env, secret, nil
 }
 
 // verify waits for a deployed service to answer with anything but a
@@ -462,7 +587,7 @@ func (r *Runner) verify(ctx context.Context, url string) error {
 	}
 }
 
-func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, current *planning.Binding, out *Outcome) error {
+func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, current *planning.Binding, out *Outcome, connID string) error {
 	var cfg any = a.Service
 	if a.Subject == planning.ResourceSubject {
 		cfg = a.Resource
@@ -475,6 +600,7 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 	b := &planning.Binding{
 		OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Subject: a.Subject, Name: a.Name,
 		Provider: a.Provider, Region: a.Region, Engine: a.Engine, ExternalID: out.ExternalID, Config: raw, URL: out.URL,
+		ConnectionID: connID, Revision: out.Revision, CommitSHA: commitFor(d, a),
 		PlanID: d.PlanID, CreatedAt: now, UpdatedAt: now,
 	}
 	if current != nil {

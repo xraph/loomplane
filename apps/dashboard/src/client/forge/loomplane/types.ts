@@ -9,6 +9,23 @@ export enum ConnectionState {
   ERROR = 'error',
 }
 
+export interface APIKey {
+  access: string;
+  createdAt: string;
+  createdBy: string;
+  expiresAt?: string;
+  hint: string;
+  id: string;
+  lastUsedAt?: string;
+  name: string;
+  revokedAt?: string;
+  state: string;
+}
+
+export interface APIKeyList {
+  keys: APIKey[];
+}
+
 export interface Action {
   changes?: Change[];
   creates: string;
@@ -61,18 +78,24 @@ export interface AnalysisList {
 }
 
 export interface Binding {
+  commitSha: string;
   config: string;
+  connectionId: string;
   createdAt: string;
+  drift: string;
+  driftMessage: string;
   engine: string;
   environmentId: string;
   externalId: string;
   id: string;
   name: string;
+  observedAt?: string;
   orgId: string;
   planId: string;
   projectId: string;
   provider: string;
   region: string;
+  revision: string;
   subject: string;
   updatedAt: string;
   url: string;
@@ -97,6 +120,19 @@ export interface Change {
 
 export interface ChooseConnectionInputBody {
   connectionId: string;
+}
+
+export interface CloudForm {
+  builtin: boolean;
+  cloud: string;
+  credential?: string;
+  help?: string;
+  settings?: Setting[];
+  title: string;
+}
+
+export interface CloudList {
+  clouds: CloudForm[];
 }
 
 export interface Commands {
@@ -187,6 +223,11 @@ export interface CreatedInvitation {
   invitation: OrgInvitation;
 }
 
+export interface CreatedKey {
+  key: APIKey;
+  secret: string;
+}
+
 export interface DecideInputBody {
   note?: string;
   revision?: string;
@@ -220,6 +261,7 @@ export interface Deployment {
   orgId: string;
   planId: string;
   projectId: string;
+  retries: number;
   sources: SourceArtifact[];
   startedAt: string;
   startedBy: string;
@@ -240,6 +282,7 @@ export interface Edge {
 }
 
 export interface EnvLink {
+  address?: string;
   from: string;
   key: string;
   subject: string;
@@ -325,6 +368,7 @@ export interface InfrastructureStatus {
 
 export interface Manifest {
   defaults: Defaults;
+  gateways?: Record<string, any>;
   ignore: Ignore;
   resources?: Record<string, any>;
   services?: Record<string, any>;
@@ -336,6 +380,12 @@ export interface ManifestDraft {
   projectId: string;
   sources: SourceRef[];
   yaml: string;
+}
+
+export interface NewKeyBody {
+  access: string;
+  expiresInDays?: number;
+  name: string;
 }
 
 export interface Note {
@@ -549,6 +599,13 @@ export interface RevisionList {
   revisions: Revision[];
 }
 
+export interface Route {
+  env: string;
+  path: string;
+  stripPrefix?: boolean;
+  to: string;
+}
+
 export interface Runs {
   creates: string;
   execution: string;
@@ -558,6 +615,7 @@ export interface Runs {
 export interface SaveInputBody {
   manifest?: {
   defaults: Defaults;
+  gateways?: Record<string, any>;
   ignore: Ignore;
   resources?: Record<string, any>;
   services?: Record<string, any>;
@@ -599,6 +657,7 @@ export interface ServiceConfig {
   env?: EnvLink[];
   execution: string;
   framework?: string;
+  gateway?: Route[];
   image?: string;
   port?: number;
   provider: string;
@@ -617,6 +676,12 @@ export interface Session {
   orgId: string;
   permissions: string[];
   userId: string;
+}
+
+export interface Setting {
+  key: string;
+  label: string;
+  required?: boolean;
 }
 
 export interface Size {

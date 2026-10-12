@@ -44,10 +44,13 @@ type ConnectionOption struct {
 	Name  string
 	Cloud string
 	Ready bool
+	// HTTPS says whether the connection serves public services over
+	// HTTPS where that takes a certificate of its own, as ECS does.
+	HTTPS bool
 }
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {
@@ -93,6 +96,7 @@ func Compute(in Input) *Result {
 	}
 	p.planResources()
 	p.planServices()
+	p.planGateways()
 	p.checkFindings()
 	p.impact()
 	p.planDeletes()
@@ -165,6 +169,32 @@ func (p *planner) use(prov *provider.Provider) {
 		return
 	}
 	p.clouds[prov.Cloud] = true
+}
+
+// checkHTTPS warns about public services on ECS when the AWS connection
+// they deploy with has no certificate: they'll serve plain HTTP.
+func (p *planner) checkHTTPS(chosen map[string]string) {
+	id := chosen["aws"]
+	if id == "" {
+		return
+	}
+	i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
+	if i < 0 || p.in.Connections[i].HTTPS {
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.services)) {
+		a := p.services[name]
+		if a.Provider == ecsFargate && a.Service != nil && a.Service.Public && a.Service.Port > 0 {
+			path := "services." + name
+			if a.Service.Gateway != nil {
+				path = "gateways." + name
+			}
+			p.warn(Finding{
+				Code: "plain-http", Subject: ServiceSubject, Name: name, Path: path,
+				Message: fmt.Sprintf("%s will serve plain HTTP: %s has no certificate. Add an ACM certificate to the connection to serve HTTPS.", name, p.in.Connections[i].Name),
+			})
+		}
+	}
 }
 
 // connect settles which connection each cloud the plan uses deploys
@@ -826,6 +856,13 @@ func (p *planner) link(name string, a *Action) {
 				}
 				continue
 			}
+			if rc, sc := p.cloud(dep.Provider), p.cloud(a.Provider); rc != sc {
+				p.problem(Finding{
+					Code: "unreachable-resource", Subject: ServiceSubject, Name: name, Path: base,
+					Message: fmt.Sprintf("%s runs on %s, but %s is on %s, and a managed resource is only reachable from its own cloud. Put them on the same one.", name, cloudTitle(sc), need, cloudTitle(rc)),
+				})
+				continue
+			}
 			a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
 			a.DependsOn = append(a.DependsOn, dep.ID)
 			continue
@@ -854,13 +891,31 @@ func (p *planner) link(name string, a *Action) {
 			})
 			continue
 		}
-		if !dep.Service.Public && p.cloud(dep.Provider) != p.cloud(a.Provider) {
-			p.warn(Finding{
+		link := EnvLink{Key: key, From: need, Subject: ServiceSubject}
+		switch {
+		case dep.Provider == ecsFargate && a.Provider == ecsFargate:
+			// Both run in the environment's network, so traffic between
+			// them stays in it, public or not.
+			link.Address = fmt.Sprintf("http://%s:%d", need, dep.Service.Port)
+		case !dep.Service.Public && p.cloud(dep.Provider) != p.cloud(a.Provider):
+			p.problem(Finding{
 				Code: "private-across-clouds", Subject: ServiceSubject, Name: name, Path: base,
-				Message: fmt.Sprintf("%s reaches %s on another cloud, but %s isn't public. Private networking between clouds arrives in milestone 5.", name, need, need),
+				Message: fmt.Sprintf("%s runs on %s, but %s is private on %s, and nothing on another cloud can reach a private service. Make %s public, or run them on the same cloud.", name, cloudTitle(p.cloud(a.Provider)), need, cloudTitle(p.cloud(dep.Provider)), need),
 			})
+			continue
+		case !dep.Service.Public && dep.Provider == cloudRun:
+			p.warn(Finding{
+				Code: "authenticated-call", Subject: ServiceSubject, Name: name, Path: base,
+				Message: fmt.Sprintf("%s is private, so Cloud Run only lets in callers with a Google ID token. Loomplane lets the project's runtime account call it; %s has to send a token from the metadata server, with %s's URL as the audience.", need, name, need),
+			})
+		case !dep.Service.Public && dep.Provider != ecsFargate:
+			p.problem(Finding{
+				Code: "private-unreachable", Subject: ServiceSubject, Name: name, Path: base,
+				Message: fmt.Sprintf("%s is private on %s, which gives other services no way to reach it. Make it public.", need, cloudTitle(p.cloud(dep.Provider))),
+			})
+			continue
 		}
-		a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ServiceSubject})
+		a.Service.Env = append(a.Service.Env, link)
 		a.DependsOn = append(a.DependsOn, dep.ID)
 	}
 	sort.Slice(a.Service.Env, func(i, j int) bool { return a.Service.Env[i].Key < a.Service.Env[j].Key })
@@ -869,6 +924,12 @@ func (p *planner) link(name string, a *Action) {
 	// what's deployed has to happen after them.
 	p.diff(a, a.Service, a.Provider, a.Region)
 }
+
+// Targets the planner knows how services on them reach each other.
+const (
+	ecsFargate = "ecs-fargate"
+	cloudRun   = "cloud-run"
+)
 
 func (p *planner) cloud(name string) string {
 	if prov, err := p.in.Providers.Get(name); err == nil {
@@ -940,6 +1001,14 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		a.Reason = fmt.Sprintf("Nothing runs %s in %s yet.", a.Name, p.in.Environment)
 		return
 	}
+	// Something deleted outside Loomplane is planned as if it had never
+	// been deployed. Its binding stays, so a deployment replaces it, or
+	// removes it if the manifest no longer wants it.
+	if b.Drift == DriftMissing {
+		a.Op, a.Changes = Create, nil
+		a.Reason = fmt.Sprintf("%s was deleted outside Loomplane, so it's created again.", a.Name)
+		return
+	}
 	a.Op, a.Changes = "", changes(b.Config, cfg)
 	switch {
 	case b.Provider != providerName:
@@ -958,14 +1027,54 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		}
 		return
 	}
+	// A service runs code, so a new commit is a change too. A gateway's
+	// code is Loomplane's, so its routes are what change it.
+	newCode := p.newCode(a, b)
 	switch {
-	case len(a.Changes) > 0:
+	case len(a.Changes) > 0 && !newCode:
 		a.Op = Update
 		a.Reason = fmt.Sprintf("%s's configuration changed.", a.Name)
+	case newCode && len(a.Changes) > 1:
+		a.Op = Update
+		a.Reason = fmt.Sprintf("%s has new code and a changed configuration.", a.Name)
+	case newCode:
+		a.Op = Update
+		a.Reason = fmt.Sprintf("%s has new code.", a.Name)
+	case b.Drift == DriftChanged:
+		a.Op = Update
+		a.Reason = fmt.Sprintf("%s was changed outside Loomplane (%s), so it's deployed as planned again.", a.Name, b.DriftMessage)
 	default:
 		a.Op = Keep
 		a.Reason = "Unchanged."
 	}
+}
+
+// newCode reports whether a service is built from another commit than
+// the one deployed, and if so says so as a "commit" change in place of the
+// commit_sha its configuration carries. The commit is the one the plan
+// pins for the service's own repository. A binding that doesn't record
+// its commit is compared by its configuration alone.
+func (p *planner) newCode(a *Action, b *Binding) bool {
+	if a.Subject != ServiceSubject || a.Service == nil || a.Service.Gateway != nil {
+		return false
+	}
+	from, to := b.CommitSHA, a.Service.CommitSHA
+	if from == "" || to == "" {
+		return false
+	}
+	a.Changes = slices.DeleteFunc(a.Changes, func(c Change) bool { return c.Field == "commit_sha" })
+	if from == to {
+		return false
+	}
+	a.Changes = append(a.Changes, Change{Field: "commit", From: short(from), To: short(to)})
+	return true
+}
+
+func short(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 // changes compares two configurations field by field, as JSON.
@@ -1263,6 +1372,9 @@ func (p *planner) keepHeld(b *Binding, repo string) {
 func (p *planner) wanted(b *Binding) (wanted, on bool) {
 	m := p.in.Manifest
 	if b.Subject == ServiceSubject {
+		if g, ok := m.Gateways[b.Name]; ok {
+			return true, manifest.On(g.For(p.in.Environment, m.Defaults).Enabled)
+		}
 		s, ok := m.Services[b.Name]
 		return ok, ok && manifest.On(s.For(p.in.Environment, m.Defaults).Enabled)
 	}
@@ -1304,6 +1416,7 @@ func (p *planner) finish() *Result {
 		return a.ID < b.ID
 	})
 	connections := p.connect()
+	p.checkHTTPS(connections)
 	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings, Connections: connections}
 	for _, a := range p.actions {
 		r.Actions = append(r.Actions, *a)

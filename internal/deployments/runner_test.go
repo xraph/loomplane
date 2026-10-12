@@ -96,6 +96,23 @@ func (m *memStore) Finish(_ context.Context, _, id, status, reason string, at ti
 	return nil
 }
 
+func (m *memStore) Reopen(_ context.Context, _, id string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := m.d[id]
+	if d.Status != StatusFailed {
+		return false, nil
+	}
+	d.Status, d.Error, d.FinishedAt = StatusRunning, "", nil
+	for i := range d.Steps {
+		if d.Steps[i].Status == StepFailed || d.Steps[i].Status == StepSkipped {
+			d.Steps[i].Status = StepPending
+		}
+	}
+	d.Retries++
+	return true, nil
+}
+
 type fakePlans struct {
 	mu       sync.Mutex
 	plan     *planning.Plan
@@ -151,12 +168,15 @@ func (fakeCredentials) Credential(_ context.Context, _, id string) (*connections
 
 type fakeVariables map[string]map[string]string
 
-func (f fakeVariables) Values(_ context.Context, _, _, _, service string) (map[string]string, error) {
-	out := map[string]string{}
+func (f fakeVariables) Values(_ context.Context, _, _, _, service string) (values map[string]string, secret map[string]bool, err error) {
+	values, secret = map[string]string{}, map[string]bool{}
 	for k, v := range f[service] {
-		out[k] = v
+		values[k] = v
+		if strings.HasPrefix(k, "SECRET_") {
+			secret[k] = true
+		}
 	}
-	return out, nil
+	return values, secret, nil
 }
 
 // fakeSources stores a tarball whose content is the repository and commit
@@ -166,11 +186,16 @@ type fakeSources struct {
 	stored []string
 	repos  []string
 	files  map[string]string
+	// fail makes storing these repositories fail.
+	fail map[string]bool
 }
 
 func (f *fakeSources) Store(_ context.Context, _, repository, sha, key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail[repository] {
+		return errors.New("github is down")
+	}
 	f.stored = append(f.stored, key)
 	f.repos = append(f.repos, repository)
 	if f.files == nil {
@@ -233,6 +258,10 @@ func (r *recorder) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 
 func (r *recorder) Remove(context.Context, *Job, *planning.Binding) error { return nil }
 
+func (r *recorder) Observe(context.Context, *connections.Connection, []byte, *planning.Binding) (*Observation, error) {
+	return &Observation{Exists: true}, nil
+}
+
 func available(t *testing.T) *provider.Registry {
 	t.Helper()
 	catalog := providers.Catalog()
@@ -289,8 +318,8 @@ func answering(t *testing.T, status int) string {
 	return srv.URL
 }
 
-// deploy runs a deployment the way the workflow does.
-func deploy(t *testing.T, r *Runner, plan *planning.Plan) (string, error) {
+// runAll runs a deployment the way the workflow does.
+func runAll(t *testing.T, r *Runner, plan *planning.Plan) (string, error) {
 	t.Helper()
 	ctx := t.Context()
 	id, steps, err := r.Start(ctx, plan.OrgID, plan.ID)
@@ -324,7 +353,7 @@ func TestRunner_deploysInOrderAndLinksServices(t *testing.T) {
 	vars := fakeVariables{"svc:node:apps/web": {"NEXT_PUBLIC_NAME": "Acme"}}
 	r, store, plans := newRunner(t, webAndAPI(), exec, vars)
 
-	id, err := deploy(t, r, webAndAPI())
+	id, err := runAll(t, r, webAndAPI())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +392,7 @@ func TestRunner_aVariableWinsOverALink(t *testing.T) {
 	exec := &recorder{url: answering(t, http.StatusOK)}
 	vars := fakeVariables{"svc:node:apps/web": {"API_URL": "https://api.example.com"}}
 	r, _, _ := newRunner(t, webAndAPI(), exec, vars)
-	if _, err := deploy(t, r, webAndAPI()); err != nil {
+	if _, err := runAll(t, r, webAndAPI()); err != nil {
 		t.Fatal(err)
 	}
 	if got := exec.jobs[1].Env["API_URL"]; got != "https://api.example.com" {
@@ -374,7 +403,7 @@ func TestRunner_aVariableWinsOverALink(t *testing.T) {
 func TestRunner_aFailureStopsAndSkipsTheRest(t *testing.T) {
 	exec := &recorder{url: answering(t, http.StatusOK), fail: map[string]error{"api": errors.New("cloud build failed: step 0 exited 1")}}
 	r, store, plans := newRunner(t, webAndAPI(), exec, fakeVariables{})
-	id, err := deploy(t, r, webAndAPI())
+	id, err := runAll(t, r, webAndAPI())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +422,7 @@ func TestRunner_aFailureStopsAndSkipsTheRest(t *testing.T) {
 func TestRunner_aServiceThatDoesntAnswerFails(t *testing.T) {
 	exec := &recorder{url: answering(t, http.StatusBadGateway)}
 	r, store, _ := newRunner(t, webAndAPI(), exec, fakeVariables{})
-	id, err := deploy(t, r, webAndAPI())
+	id, err := runAll(t, r, webAndAPI())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +531,7 @@ func TestRunner_fetchesEachRepositoryItMoves(t *testing.T) {
 func TestRunner_buildsEachServiceFromItsRepository(t *testing.T) {
 	exec := &recorder{url: answering(t, http.StatusOK)}
 	r, _, _ := newRunner(t, threeRepos(), exec, fakeVariables{})
-	if _, err := deploy(t, r, threeRepos()); err != nil {
+	if _, err := runAll(t, r, threeRepos()); err != nil {
 		t.Fatal(err)
 	}
 	if exec.read["api"] != "acme/api@"+shaAPI || exec.read["web"] != "acme/web@"+shaWeb {
@@ -514,7 +543,7 @@ func TestRunner_buildsEachServiceFromItsRepository(t *testing.T) {
 	plan.Actions[1].Service.Repo = "kit"
 	exec = &recorder{url: answering(t, http.StatusOK)}
 	r, store, _ := newRunner(t, plan, exec, fakeVariables{})
-	id, err := deploy(t, r, plan)
+	id, err := runAll(t, r, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,5 +584,64 @@ func TestRunner_recordsWhatsDeployedOnlyOnSuccess(t *testing.T) {
 	}
 	if len(plans.deployed) != 0 {
 		t.Fatalf("a failed deployment recorded %+v", plans.deployed)
+	}
+}
+
+func TestRunner_aRetryStoresOnlyTheRepositoriesAFailureMissed(t *testing.T) {
+	ctx := t.Context()
+	exec := &recorder{url: answering(t, http.StatusOK)}
+	r, store, plans := newRunner(t, threeRepos(), exec, fakeVariables{})
+	sources := r.sources.(*fakeSources)
+	sources.fail = map[string]bool{"acme/web": true}
+
+	id, steps, err := r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.FetchSource(ctx, "org_1", id); err == nil {
+		t.Fatal("stored web while GitHub was down")
+	}
+	if err = r.Finish(ctx, "org_1", id, "The source couldn't be stored"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, rerr := store.Reopen(ctx, "org_1", id); !ok || rerr != nil {
+		t.Fatalf("reopen: %v, %v", ok, rerr)
+	}
+
+	// The retry stores web, and api only the once.
+	sources.fail = nil
+	if err = r.FetchSource(ctx, "org_1", id); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sources.repos, []string{"acme/api", "acme/web"}) {
+		t.Fatalf("stored from %q", sources.repos)
+	}
+	for _, group := range steps {
+		for _, action := range group {
+			if err = r.Run(ctx, "org_1", id, action, nil, func([]byte) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.deployed) != 2 {
+		t.Fatalf("recorded %+v", plans.deployed)
+	}
+	// Each service is built, named and bound at its own repository's commit.
+	for _, j := range exec.jobs {
+		want := shaWeb
+		if j.Action.Name == "api" {
+			want = shaAPI
+		}
+		if j.CommitSHA != want || j.SourceID != want {
+			t.Errorf("%s built at %q, named %q, want %s", j.Action.Name, j.CommitSHA, j.SourceID, want)
+		}
+	}
+	for _, b := range plans.bindings {
+		if want := map[string]string{"api": shaAPI, "web": shaWeb}[b.Name]; b.CommitSHA != want {
+			t.Errorf("%s bound at %q, want %s", b.Name, b.CommitSHA, want)
+		}
 	}
 }

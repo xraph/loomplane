@@ -10,6 +10,9 @@ import { messageOf, statusOf } from "@/client/errors"
 import {
   useConnectionsList,
   useDeployedList,
+  useDeploymentsForPlan,
+  useDeploymentsList,
+  useDeploymentsRetry,
   useEnvironmentConnectionsChoose,
   useManifestsCurrent,
   useManifestsDraft,
@@ -25,6 +28,7 @@ import {
 import type {
   Action,
   Analysis,
+  Deployment,
   Environment,
   Finding,
   Manifest,
@@ -98,14 +102,19 @@ import { Link } from "@/lib/router"
 import {
   changeCount,
   chosenScope,
+  deployedCommits,
+  deploymentStatus,
+  isDeploying,
   isOpen,
   isPlanning,
   lockedOn,
   opLabel,
   planStatus,
   scopeBody,
+  stepStatus,
   steps,
   toggleScope,
+  type Tone,
   withIgnored,
   withResource,
 } from "@/lib/plans"
@@ -130,6 +139,7 @@ export function DeployTab({
         environments={environments}
         onOpen={setPlanID}
       />
+      <DeploymentsCard project={project} onOpen={setPlanID} />
       <Sheet
         open={!!planID}
         onOpenChange={(open) => {
@@ -587,7 +597,12 @@ function summaryLine(p: Plan): string {
 }
 
 function PlanStatus({ status }: { status: string }) {
-  const s = planStatus(status)
+  return <StatusPill {...planStatus(status)} />
+}
+
+/** StatusPill is a status with a light that says how it's going. */
+function StatusPill({ label, tone }: { label: string; tone: Tone }) {
+  const s = { label, tone }
   return (
     <span className="inline-flex items-center gap-2">
       <span
@@ -748,8 +763,17 @@ function PlanBody({
             />
           </Section>
         )}
+        {plan.status === "approved" && plan.executable && (
+          <Section title="Deployment">
+            <DeploymentProgress planId={plan.id} />
+          </Section>
+        )}
         {planned && (
-          <Section title="What it would do">
+          <Section
+            title={
+              plan.status === "approved" ? "What it does" : "What it would do"
+            }
+          >
             {plan.actions.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Nothing: what&apos;s deployed already matches the manifest.
@@ -1086,6 +1110,7 @@ function Steps({ actions }: { actions: Action[] }) {
 
 function ActionRow({ action: a }: { action: Action }) {
   const env = a.service?.env ?? []
+  const routes = a.service?.gateway ?? []
   return (
     <li className="grid gap-1.5 rounded-lg border px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -1112,6 +1137,18 @@ function ActionRow({ action: a }: { action: Action }) {
           ))}
         </ul>
       )}
+      {routes.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          A gateway Loomplane builds, routing{" "}
+          {routes.map((r, i) => (
+            <span key={r.path}>
+              {i > 0 && ", "}
+              <code className="font-mono">{r.path}</code> to {r.to}
+              {r.stripPrefix && " without the prefix"}
+            </span>
+          ))}
+        </p>
+      )}
       {env.length > 0 && (
         <p className="text-xs text-muted-foreground">
           Gets{" "}
@@ -1119,6 +1156,12 @@ function ActionRow({ action: a }: { action: Action }) {
             <span key={e.key}>
               {i > 0 && ", "}
               <code className="font-mono">{e.key}</code> from {e.from}
+              {e.address && (
+                <>
+                  {" "}
+                  at <code className="font-mono">{e.address}</code>, privately
+                </>
+              )}
             </span>
           ))}
         </p>
@@ -1147,7 +1190,9 @@ function Decide({ plan }: { plan: Plan }) {
         p.status === "stale"
           ? "What's deployed changed since this plan was made. Plan again."
           : yes
-            ? "Approved"
+            ? plan.executable
+              ? "Approved. Deploying now."
+              : "Approved"
             : "Rejected"
       )
     } catch (err) {
@@ -1184,6 +1229,214 @@ function Decide({ plan }: { plan: Plan }) {
           Approve
         </Button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * DeploymentProgress shows an approved plan's deployment, step by step,
+ * as it goes.
+ */
+function DeploymentProgress({ planId }: { planId: string }) {
+  const deployment = useQuery(useDeploymentsForPlan, { path: { id: planId } })
+  const missing =
+    deployment.status === "error" && statusOf(deployment.error) === 404
+  // It starts a moment after approval, then runs for a while.
+  useRefetchWhile(
+    missing || (!!deployment.data && isDeploying(deployment.data.status)),
+    deployment.refetch,
+    2000
+  )
+  if (missing || !deployment.data) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner />
+        Starting the deployment
+      </p>
+    )
+  }
+  return <DeploymentSteps deployment={deployment.data} />
+}
+
+function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
+  return (
+    <div className="grid gap-3">
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <StatusPill {...deploymentStatus(d.status)} />
+        <span className="text-muted-foreground">
+          Started <time dateTime={d.startedAt}>{formatDate(d.startedAt)}</time>
+          {d.finishedAt && (
+            <>
+              , finished{" "}
+              <time dateTime={d.finishedAt}>{formatDate(d.finishedAt)}</time>
+            </>
+          )}
+        </span>
+      </p>
+      {d.error && (
+        <Alert variant="destructive">
+          <AlertDescription className="wrap-anywhere">
+            {d.error}
+          </AlertDescription>
+        </Alert>
+      )}
+      {d.status === "failed" && <RetryDeployment deployment={d} />}
+      {d.steps.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Nothing to change: everything was already deployed.
+        </p>
+      ) : (
+        <ul className="grid gap-2">
+          {d.steps.map((s) => (
+            <li
+              key={s.actionId}
+              className="grid gap-1 rounded-lg border px-3 py-2.5"
+            >
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="font-medium">{s.name}</span>
+                <span className="text-sm">
+                  <StatusPill {...stepStatus(s.status)} />
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {opLabel(s.op)} on {s.provider}
+                </span>
+              </div>
+              {s.message && (
+                <p className="text-xs wrap-anywhere text-muted-foreground">
+                  {s.message}
+                </p>
+              )}
+              {s.url && s.status === "succeeded" && (
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-fit text-sm underline-offset-4 hover:underline"
+                >
+                  {s.url.replace(/^https?:\/\//, "")}
+                </a>
+              )}
+              {s.image && (
+                <code className="font-mono text-xs wrap-anywhere text-muted-foreground">
+                  {s.image}
+                </code>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** DeploymentsCard lists the project's latest deployments. */
+function DeploymentsCard({
+  project,
+  onOpen,
+}: {
+  project: Project
+  onOpen: (planId: string) => void
+}) {
+  const list = useQuery(useDeploymentsList, { path: { id: project.id } })
+  const deployments = list.data?.deployments ?? []
+  useRefetchWhile(
+    deployments.some((d) => isDeploying(d.status)),
+    list.refetch,
+    2000
+  )
+  if (list.status === "error" || deployments.length === 0) return null
+  return (
+    <Card className="pb-0">
+      <CardHeader>
+        <CardTitle>Deployments</CardTitle>
+        <CardDescription>
+          Each approved plan, carried out. Open one to see its steps.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="px-0">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="pl-4">Environment</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Commit</TableHead>
+              <TableHead className="pr-4">Started</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {deployments.map((d) => (
+              <TableRow
+                key={d.id}
+                className="cursor-pointer"
+                onClick={() => onOpen(d.planId)}
+              >
+                <TableCell className="pl-4 font-medium">
+                  <button
+                    type="button"
+                    className="outline-none focus-visible:underline"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onOpen(d.planId)
+                    }}
+                  >
+                    {d.environment}
+                  </button>
+                </TableCell>
+                <TableCell>
+                  <StatusPill {...deploymentStatus(d.status)} />
+                </TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">
+                  {deployedCommits(d)}
+                </TableCell>
+                <TableCell className="pr-4 text-muted-foreground">
+                  <time dateTime={d.startedAt}>{formatDate(d.startedAt)}</time>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * RetryDeployment runs a failed deployment's failed and skipped steps
+ * again, with the plan that was approved.
+ */
+function RetryDeployment({ deployment: d }: { deployment: Deployment }) {
+  const { can } = useOrganization()
+  const retry = useMutation(useDeploymentsRetry)
+  const invalidate = useInvalidate()
+  if (!can("deployment:approve")) return null
+
+  const run = async () => {
+    try {
+      await retry.mutateAsync({ path: { id: d.id } })
+      invalidate(useDeploymentsForPlan)
+      invalidate(useDeploymentsList)
+      toast.success("Retrying from the step that failed")
+    } catch (err) {
+      toast.error(messageOf(err, "The deployment couldn't be retried."))
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button
+        variant="outline"
+        className="rounded-full"
+        disabled={retry.isPending}
+        onClick={() => void run()}
+      >
+        {retry.isPending ? <Spinner /> : <RotateCcwIcon />}
+        Retry from the failed step
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        Steps that succeeded stay as they are.
+        {d.retries > 0 &&
+          ` Retried ${d.retries} ${d.retries === 1 ? "time" : "times"} so far.`}
+      </span>
     </div>
   )
 }

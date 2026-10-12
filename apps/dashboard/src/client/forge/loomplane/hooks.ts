@@ -10,10 +10,14 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { Analysis, AnalysisGraph, AnalysisList, BindingList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Source, SourceList, Variable, VariableList } from './types';
+import type { APIKeyList, Analysis, AnalysisGraph, AnalysisList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Source, SourceList, Variable, VariableList } from './types';
 
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
 export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
+export const useApiKeysList = query<APIKeyList>(ops['apiKeys.list']);
+export const useApiKeysCreate = mutation(ops['apiKeys.create']);
+export const useApiKeysRevoke = mutation(ops['apiKeys.revoke']);
+export const useConnectionCloudsList = query<CloudList>(ops['connectionClouds.list']);
 export const useConnectionsList = query<ConnectionList>(ops['connections.list']);
 export const useConnectionsCreate = mutation<Connection, Connection>(ops['connections.create']);
 export const useConnectionsGet = query<Connection>(ops['connections.get']);
@@ -21,6 +25,7 @@ export const useConnectionsDelete = mutation(ops['connections.delete']);
 export const useConnectionsCheck = mutation<Connection, Connection>(ops['connections.check']);
 export const useConnectionsReplace = mutation<Connection, Connection>(ops['connections.replace']);
 export const useDeploymentsGet = query<Deployment>(ops['deployments.get']);
+export const useDeploymentsRetry = mutation<Deployment, Deployment>(ops['deployments.retry']);
 export const useGithubStatus = query<GitHubStatus>(ops['github.status']);
 export const useGithubConnect = mutation<GitHubInstallation, GitHubInstallation>(ops['github.connect']);
 export const useGithubDisconnect = mutation(ops['github.disconnect']);

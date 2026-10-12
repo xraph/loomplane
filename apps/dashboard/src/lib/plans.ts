@@ -3,10 +3,12 @@
 
 import type {
   Action,
+  Deployment,
   Manifest,
   Plan,
   Provider,
 } from "@/client/forge/loomplane/types"
+import { lockLabel, shortSHA } from "@/lib/architecture"
 
 /** isPlanning reports whether a plan is still being worked out. */
 export function isPlanning(status: string): boolean {
@@ -18,7 +20,7 @@ export function isOpen(status: string): boolean {
   return status === "planning" || status === "ready"
 }
 
-type Tone = "ok" | "wait" | "bad" | "quiet"
+export type Tone = "ok" | "wait" | "bad" | "quiet"
 
 const statuses: Record<string, { label: string; tone: Tone }> = {
   planning: { label: "Planning", tone: "wait" },
@@ -175,4 +177,50 @@ export function withIgnored(m: Manifest, kind: string): Manifest {
   const ignored = m.ignore?.resources ?? []
   if (ignored.includes(kind)) return m
   return { ...m, ignore: { ...m.ignore, resources: [...ignored, kind] } }
+}
+
+const deploymentStatuses: Record<string, { label: string; tone: Tone }> = {
+  running: { label: "Deploying", tone: "wait" },
+  succeeded: { label: "Deployed", tone: "ok" },
+  failed: { label: "Failed", tone: "bad" },
+}
+
+/**
+ * deployedCommits names what a deployment moved: each repository at its
+ * short commit, or the one commit of a deployment from before each
+ * repository was named.
+ */
+export function deployedCommits(
+  d: Pick<Deployment, "commitSha" | "sources">
+): string {
+  const named = (d.sources ?? []).filter((s) => s.alias)
+  return named.length > 0 ? lockLabel(named) : shortSHA(d.commitSha)
+}
+
+/** deploymentStatus names a deployment's status, with how it should look. */
+export function deploymentStatus(status: string): {
+  label: string
+  tone: Tone
+} {
+  return deploymentStatuses[status] ?? { label: status, tone: "quiet" }
+}
+
+const stepStatuses: Record<string, { label: string; tone: Tone }> = {
+  pending: { label: "Waiting", tone: "quiet" },
+  building: { label: "Building", tone: "wait" },
+  deploying: { label: "Deploying", tone: "wait" },
+  verifying: { label: "Checking", tone: "wait" },
+  succeeded: { label: "Done", tone: "ok" },
+  failed: { label: "Failed", tone: "bad" },
+  skipped: { label: "Skipped", tone: "quiet" },
+}
+
+/** stepStatus names a deployment step's status, with how it should look. */
+export function stepStatus(status: string): { label: string; tone: Tone } {
+  return stepStatuses[status] ?? { label: status, tone: "quiet" }
+}
+
+/** isDeploying reports whether a deployment is still running. */
+export function isDeploying(status: string): boolean {
+  return status === "running"
 }

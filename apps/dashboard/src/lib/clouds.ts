@@ -12,6 +12,11 @@ export const clouds = {
     credential: "Access token",
     account: "Account",
   },
+  aws: {
+    label: "AWS",
+    credential: "Access key",
+    account: "Account",
+  },
 } as const
 
 export type Cloud = keyof typeof clouds
@@ -32,8 +37,14 @@ const rolesByService: Record<string, { role: string; title: string }> = {
     role: "roles/cloudbuild.builds.editor",
     title: "Cloud Build Editor",
   },
+  cloudsql: { role: "roles/cloudsql.admin", title: "Cloud SQL Admin" },
   iam: { role: "roles/iam.serviceAccountUser", title: "Service Account User" },
+  resourcemanager: { role: "roles/browser", title: "Browser" },
   run: { role: "roles/run.admin", title: "Cloud Run Admin" },
+  secretmanager: {
+    role: "roles/secretmanager.admin",
+    title: "Secret Manager Admin",
+  },
   storage: { role: "roles/storage.admin", title: "Storage Admin" },
 }
 

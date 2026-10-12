@@ -14,6 +14,7 @@ import (
 	cppg "github.com/xraph/ctrlplane/store/postgres"
 	dispatchpg "github.com/xraph/dispatch/store/postgres"
 	"github.com/xraph/grove/migrate"
+	kspg "github.com/xraph/keysmith/store/postgres"
 	vaultpg "github.com/xraph/vault/store/postgres"
 	wardenpg "github.com/xraph/warden/store/postgres"
 )
@@ -37,6 +38,8 @@ func Group() *migrate.Group {
 		statements("20261012000007", "create_environment_connections", environmentConnectionsUp, environmentConnectionsDown),
 		statements("20261012000008", "create_deployments", deploymentsUp, deploymentsDown),
 		statements("20261012000009", "add_binding_url", bindingURLUp, bindingURLDown),
+		statements("20261013000001", "add_deployment_retries", deploymentRetriesUp, deploymentRetriesDown),
+		statements("20261013000002", "add_binding_drift", bindingDriftUp, bindingDriftDown),
 		statements("20261014000001", "create_project_sources", sourcesUp, sourcesDown),
 		statements("20261014000002", "create_plan_sources", planSourcesUp, planSourcesDown),
 		statements("20261014000003", "add_deployment_sources", deploymentSourcesUp, deploymentSourcesDown),
@@ -58,6 +61,7 @@ func All() []*migrate.Group {
 		dispatchpg.Migrations,
 		cppg.Migrations,
 		vaultpg.Migrations,
+		kspg.Migrations,
 	}
 }
 
@@ -392,6 +396,36 @@ var bindingURLUp = []string{
 
 var bindingURLDown = []string{
 	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS url`,
+}
+
+// How often a failed deployment was retried.
+var deploymentRetriesUp = []string{
+	`ALTER TABLE loomplane_deployments ADD COLUMN IF NOT EXISTS retries INTEGER NOT NULL DEFAULT 0`,
+}
+
+var deploymentRetriesDown = []string{
+	`ALTER TABLE loomplane_deployments DROP COLUMN IF EXISTS retries`,
+}
+
+// What a binding's drift check needs and finds: the connection that
+// deployed it, the revision and commit that went live, and what the last
+// check saw.
+var bindingDriftUp = []string{
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS connection_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS revision TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS commit_sha TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS drift TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS drift_message TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS observed_at TIMESTAMPTZ`,
+}
+
+var bindingDriftDown = []string{
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS observed_at`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS drift_message`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS drift`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS commit_sha`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS revision`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS connection_id`,
 }
 
 // A source is a repository, or a directory of one, that a project builds

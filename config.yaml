@@ -69,6 +69,11 @@ planning:
   # expires. Between 1m and 2160h (90 days).
   approval_window: "${LOOMPLANE_PLANNING_APPROVAL_WINDOW:-168h}"
 
+# How often everything deployed is compared with what its cloud has live.
+# 0 turns the check off. It only records drift; the next plan fixes it.
+drift:
+  interval: "${LOOMPLANE_DRIFT_INTERVAL:-30m}"
+
 # Where artifacts go, such as each deployment's source. file:///path for a
 # directory; empty means .loomplane/storage under the working directory.
 storage:
@@ -80,6 +85,15 @@ storage:
 clouds:
   google_endpoint: "${LOOMPLANE_GOOGLE_ENDPOINT:-}"
   vercel_endpoint: "${LOOMPLANE_VERCEL_ENDPOINT:-}"
+  aws_endpoint: "${LOOMPLANE_AWS_ENDPOINT:-}"
+
+providers:
+  # Deployment targets that run as their own services, built with
+  # pkg/provider/sdk. Each is a url and the token it was started with:
+  #   plugins:
+  #     - url: http://fly-provider:9000
+  #       token: "${FLY_PROVIDER_TOKEN}"
+  plugins: []
 
 worker:
   # Where loomplane-worker serves its health checks, and nothing else.

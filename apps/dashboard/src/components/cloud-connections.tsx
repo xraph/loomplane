@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import {
   useConnectionsCheck,
+  useConnectionCloudsList,
   useConnectionsCreate,
   useConnectionsDelete,
   useConnectionsList,
@@ -214,7 +215,22 @@ function ConnectionRow({
           </div>
         )}
       </div>
-      {c.status === "incomplete" && (
+      {c.status === "incomplete" && c.cloud === "aws" && (
+        <Alert className="border-weld/50">
+          <AlertTitle>
+            It works, but can&apos;t do everything a deployment needs
+          </AlertTitle>
+          <AlertDescription className="grid gap-2">
+            <p>Allow these actions for its IAM user, then check again:</p>
+            <ul className="grid gap-1 font-mono text-xs">
+              {c.missing.map((a) => (
+                <li key={a}>{a}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
+      {c.status === "incomplete" && c.cloud !== "aws" && (
         <Alert className="border-weld/50">
           <AlertTitle>
             It works, but can&apos;t do everything a deployment needs
@@ -321,13 +337,25 @@ function ConnectDialog({
   const replace = useMutation(useConnectionsReplace)
   const invalidate = useInvalidate()
   const file = useRef<HTMLInputElement>(null)
-  const [cloud, setCloud] = useState<Cloud>(
-    (replacing?.cloud as Cloud | undefined) ?? "gcp"
+  const [cloud, setCloud] = useState<string>(replacing?.cloud ?? "gcp")
+  // Clouds a provider plugin adds, with the form each one describes.
+  const available = useQuery(useConnectionCloudsList)
+  const extras = (available.data?.clouds ?? []).filter((c) => !c.builtin)
+  const extra = extras.find((c) => c.cloud === cloud)
+  const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
+    () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
   const [name, setName] = useState("")
   const [credential, setCredential] = useState("")
   const [team, setTeam] = useState(
     (replacing?.details.team_id as string | undefined) ?? ""
+  )
+  const [keyID, setKeyID] = useState("")
+  const [region, setRegion] = useState(
+    (replacing?.details.region as string | undefined) ?? "us-east-1"
+  )
+  const [certificate, setCertificate] = useState(
+    (replacing?.details.certificate_arn as string | undefined) ?? ""
   )
   const [error, setError] = useState("")
   const busy = create.isPending || replace.isPending
@@ -336,6 +364,7 @@ function ConnectDialog({
     if (!next) {
       setName("")
       setCredential("")
+      setKeyID("")
       setError("")
     }
     onOpenChange(next)
@@ -355,16 +384,39 @@ function ConnectDialog({
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError("")
-    const settings =
-      cloud === "vercel" && team.trim() ? { team_id: team.trim() } : undefined
+    const trimmed = Object.fromEntries(
+      Object.entries(extraSettings)
+        .map(([k, v]) => [k, v.trim()])
+        .filter(([, v]) => v !== "")
+    )
+    const settings = extra
+      ? trimmed
+      : cloud === "vercel" && team.trim()
+        ? { team_id: team.trim() }
+        : cloud === "aws"
+          ? {
+              region: region.trim(),
+              ...(certificate.trim()
+                ? { certificate_arn: certificate.trim() }
+                : {}),
+            }
+          : undefined
+    // An AWS key is two values; Loomplane stores them together.
+    const secret =
+      cloud === "aws"
+        ? JSON.stringify({
+            access_key_id: keyID.trim(),
+            secret_access_key: credential.trim(),
+          })
+        : credential
     try {
       const c = replacing
         ? await replace.mutateAsync({
             path: { id: replacing.id },
-            body: { credential, settings },
+            body: { credential: secret, settings },
           })
         : await create.mutateAsync({
-            body: { cloud, name: name.trim(), credential, settings },
+            body: { cloud, name: name.trim(), credential: secret, settings },
           })
       invalidate(useConnectionsList)
       toast.success(
@@ -378,7 +430,7 @@ function ConnectDialog({
     }
   }
 
-  const info = clouds[cloud]
+  const info = (clouds as Record<string, (typeof clouds)[Cloud]>)[cloud]
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="sm:max-w-lg">
@@ -405,11 +457,17 @@ function ConnectDialog({
                     spacing={0}
                     value={[cloud]}
                     onValueChange={(v) => {
-                      if (v[0]) setCloud(v[0] as Cloud)
+                      if (v[0]) setCloud(v[0])
                     }}
                   >
                     <ToggleGroupItem value="gcp">Google Cloud</ToggleGroupItem>
                     <ToggleGroupItem value="vercel">Vercel</ToggleGroupItem>
+                    <ToggleGroupItem value="aws">AWS</ToggleGroupItem>
+                    {extras.map((c) => (
+                      <ToggleGroupItem key={c.cloud} value={c.cloud}>
+                        {c.title}
+                      </ToggleGroupItem>
+                    ))}
                   </ToggleGroup>
                 </Field>
                 <Field>
@@ -419,7 +477,11 @@ function ConnectDialog({
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder={
-                      cloud === "gcp" ? "Production project" : "Web team"
+                      cloud === "gcp"
+                        ? "Production project"
+                        : cloud === "aws"
+                          ? "Production account"
+                          : "Web team"
                     }
                     required
                   />
@@ -462,10 +524,118 @@ function ConnectDialog({
                 <FieldDescription>
                   A JSON key for a service account in the project you deploy to.
                   It needs Cloud Run Admin, Cloud Build Editor, Artifact
-                  Registry Administrator, Storage Admin and Service Account
-                  User; Loomplane says which are missing.
+                  Registry Administrator, Storage Admin, Secret Manager Admin,
+                  Service Account User and Browser; Loomplane says which are
+                  missing.
                 </FieldDescription>
               </Field>
+            ) : cloud === "aws" ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="connection-key-id">
+                    Access key ID
+                  </FieldLabel>
+                  <Input
+                    id="connection-key-id"
+                    autoComplete="off"
+                    value={keyID}
+                    onChange={(e) => setKeyID(e.target.value)}
+                    placeholder="AKIA..."
+                    spellCheck={false}
+                    className="font-mono"
+                    required
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="connection-secret">
+                    Secret access key
+                  </FieldLabel>
+                  <Input
+                    id="connection-secret"
+                    type="password"
+                    autoComplete="off"
+                    value={credential}
+                    onChange={(e) => setCredential(e.target.value)}
+                    required
+                  />
+                  <FieldDescription>
+                    An access key for an IAM user Loomplane deploys as. It needs
+                    ECS, ECR, CodeBuild, load balancing, IAM roles, RDS and
+                    Secrets Manager; Loomplane lists any action it lacks.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="connection-region">Region</FieldLabel>
+                  <Input
+                    id="connection-region"
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    placeholder="us-east-1"
+                    spellCheck={false}
+                    required
+                  />
+                  <FieldDescription>
+                    Everything Loomplane creates in this account goes here.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="connection-certificate">
+                    Certificate ARN (optional)
+                  </FieldLabel>
+                  <Input
+                    id="connection-certificate"
+                    value={certificate}
+                    onChange={(e) => setCertificate(e.target.value)}
+                    placeholder={`arn:aws:acm:${region || "us-east-1"}:...:certificate/...`}
+                    spellCheck={false}
+                    className="font-mono text-xs md:text-xs"
+                  />
+                  <FieldDescription>
+                    An ACM certificate in the same region. With one, public
+                    services on ECS answer over HTTPS; without, the load
+                    balancer serves plain HTTP and plans warn you.
+                  </FieldDescription>
+                </Field>
+              </>
+            ) : extra ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="connection-credential">
+                    {extra.credential || "Credential"}
+                  </FieldLabel>
+                  <Textarea
+                    id="connection-credential"
+                    value={credential}
+                    onChange={(e) => setCredential(e.target.value)}
+                    spellCheck={false}
+                    autoComplete="off"
+                    className="max-h-40 min-h-16 font-mono text-xs md:text-xs"
+                    required
+                  />
+                  {extra.help && (
+                    <FieldDescription>{extra.help}</FieldDescription>
+                  )}
+                </Field>
+                {(extra.settings ?? []).map((st) => (
+                  <Field key={st.key}>
+                    <FieldLabel htmlFor={`connection-setting-${st.key}`}>
+                      {st.label}
+                      {!st.required && " (optional)"}
+                    </FieldLabel>
+                    <Input
+                      id={`connection-setting-${st.key}`}
+                      value={extraSettings[st.key] ?? ""}
+                      onChange={(e) =>
+                        setExtraSettings((cur) => ({
+                          ...cur,
+                          [st.key]: e.target.value,
+                        }))
+                      }
+                      required={st.required}
+                    />
+                  </Field>
+                ))}
+              </>
             ) : (
               <>
                 <Field>

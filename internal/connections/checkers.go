@@ -7,8 +7,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
+	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
 // GCPChecker checks Google Cloud service account keys.
@@ -89,5 +91,75 @@ func rejected(err error) bool {
 	var ge *gcp.APIError
 	var ve *vercel.APIError
 	return errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
+		errors.Is(err, aws.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
 		errors.As(err, &ge) || errors.As(err, &ve)
+}
+
+// AWSChecker checks AWS access keys. The one setting is region, which is
+// required: everything Loomplane makes lives in it.
+type AWSChecker struct{ Client *aws.Client }
+
+// Parse implements Checker.
+func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
+	key, err := aws.ParseKey(credential)
+	if err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	region := strings.TrimSpace(settings["region"])
+	if err := aws.CheckRegion(region); err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	details := map[string]string{"region": region, "access_key": "…" + key.AccessKeyID[len(key.AccessKeyID)-4:]}
+	// An ACM certificate in the region serves public ECS services over
+	// HTTPS; without one they serve HTTP.
+	if cert := strings.TrimSpace(settings["certificate_arn"]); cert != "" {
+		if !strings.HasPrefix(cert, "arn:aws:acm:"+region+":") || !strings.Contains(cert, ":certificate/") {
+			return Check{}, fmt.Errorf("%w: %q isn't an ACM certificate in %s", ErrInvalid, cert, region)
+		}
+		details["certificate_arn"] = cert
+	}
+	return Check{Details: details}, nil
+}
+
+// Check implements Checker: it asks STS who the key is, then IAM's policy
+// simulator which actions a deployment needs it may take. A key that may
+// not run the simulator is ready, with its permissions unchecked.
+func (a AWSChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
+	c, err := a.Parse(credential, settings)
+	if err != nil {
+		return Check{}, err
+	}
+	key, err := aws.ParseKey(credential)
+	if err != nil {
+		return Check{}, err
+	}
+	who, err := a.Client.Identify(ctx, key, c.Details["region"])
+	if err != nil {
+		return Check{}, err
+	}
+	c.Account = who.Account
+	c.Details["principal"] = who.ARN
+	missing, checked, err := a.Client.Missing(ctx, key, c.Details["region"], principalARN(who.ARN))
+	if err != nil {
+		return Check{}, err
+	}
+	if !checked {
+		c.Details["permissions"] = "unchecked"
+	}
+	c.Missing = missing
+	return c, nil
+}
+
+// principalARN is what the policy simulator takes for an identity: an
+// assumed role's session ARN names the role instead.
+func principalARN(arn string) string {
+	if !strings.Contains(arn, ":assumed-role/") {
+		return arn
+	}
+	parts := strings.Split(arn, ":")
+	if len(parts) < 6 {
+		return arn
+	}
+	role := strings.Split(strings.TrimPrefix(parts[5], "assumed-role/"), "/")[0]
+	return "arn:aws:iam::" + parts[4] + ":role/" + role
 }

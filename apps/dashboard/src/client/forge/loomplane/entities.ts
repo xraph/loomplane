@@ -1,6 +1,8 @@
 import type { EntityMeta } from './ops';
 
 export const entities = {
+  'APIKey': { idField: 'id' },
+  'APIKeyList': { fields: { 'keys': 'APIKey' } },
   'Analysis': { idField: 'id' },
   'AnalysisGraph': { idField: 'id' },
   'AnalysisList': { fields: { 'analyses': 'Analysis' } },
@@ -8,6 +10,7 @@ export const entities = {
   'BindingList': { fields: { 'bindings': 'Binding' } },
   'Connection': { idField: 'id' },
   'ConnectionList': { fields: { 'connections': 'Connection' } },
+  'CreatedKey': { fields: { 'key': 'APIKey' } },
   'Deployment': { idField: 'id' },
   'DeploymentList': { fields: { 'deployments': 'Deployment' } },
   'Environment': { idField: 'id' },

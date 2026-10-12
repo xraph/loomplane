@@ -396,31 +396,32 @@ func (s *Service) record(ctx context.Context, action string, p security.Principa
 }
 
 // Values returns what one service gets in an environment as plain values,
-// secrets revealed, for a deployment to set on it. It's the only path that
+// secrets revealed, for a deployment to set on it, and which keys are
+// secret, so an executor can keep them in the cloud's secret store. It's the only path that
 // reveals a secret, and it checks no role: only Loomplane's deployment
 // workflow calls it, for a plan someone was allowed to approve. Nothing it
 // returns is logged or stored.
-func (s *Service) Values(ctx context.Context, orgID, projectID, environment, service string) (map[string]string, error) {
+func (s *Service) Values(ctx context.Context, orgID, projectID, environment, service string) (values map[string]string, secret map[string]bool, err error) {
 	env, err := s.environment(ctx, orgID, projectID, environment)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	candidates, err := s.store.ForEnvironment(ctx, orgID, projectID, env.ID, env.Name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out := map[string]string{}
+	values, secret = map[string]string{}, map[string]bool{}
 	for _, r := range resolve(candidates, service) {
 		v := r.Variable
 		if !v.Secret {
-			out[r.Key] = v.Value
+			values[r.Key] = v.Value
 			continue
 		}
 		value, err := s.secrets.Reveal(ctx, orgID, v.ID)
 		if err != nil {
-			return nil, fmt.Errorf("reveal %s: %w", r.Key, err)
+			return nil, nil, fmt.Errorf("reveal %s: %w", r.Key, err)
 		}
-		out[r.Key] = string(value)
+		values[r.Key], secret[r.Key] = string(value), true
 	}
-	return out, nil
+	return values, secret, nil
 }

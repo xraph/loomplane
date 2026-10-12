@@ -454,6 +454,9 @@ type deployedRef struct {
 	Region     string `json:"region"`
 	ExternalID string `json:"external_id"`
 	Config     string `json:"config"`
+	CommitSHA  string `json:"commit_sha"`
+	Revision   string `json:"revision"`
+	Drift      string `json:"drift"`
 }
 
 // compute plans a plan from its pinned commits and manifest, against what's
@@ -510,6 +513,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	for _, b := range bindings {
 		in.Deployed = append(in.Deployed, deployedRef{
 			ID: b.ID, Provider: b.Provider, Region: b.Region, ExternalID: b.ExternalID, Config: string(b.Config),
+			CommitSHA: b.CommitSHA, Revision: b.Revision, Drift: b.Drift,
 		})
 	}
 	revision, err := Digest(in)
@@ -529,7 +533,10 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	}
 	out := make([]ConnectionOption, 0, len(all))
 	for _, c := range all {
-		out = append(out, ConnectionOption{ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady})
+		out = append(out, ConnectionOption{
+			ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
+			HTTPS: c.Details["certificate_arn"] != "",
+		})
 	}
 	return out, nil
 }

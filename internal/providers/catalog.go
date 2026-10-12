@@ -27,7 +27,6 @@ var (
 )
 
 const (
-	milestone4 = "Loomplane's adapter for it arrives in milestone 4."
 	milestone5 = "Loomplane's adapter for it arrives in milestone 5."
 )
 
@@ -43,7 +42,9 @@ func Catalog() []provider.Provider {
 				{Workload: provider.WebApp, Execution: provider.Serverless, Creates: "Vercel project"},
 				{Workload: provider.StaticSite, Execution: provider.Static, Creates: "Vercel project"},
 			},
-			Note: milestone4,
+			// Uploaded and built by Vercel, through a Loomplane adapter
+			// (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "cloud-run", Title: "Google Cloud Run", Cloud: "gcp",
@@ -54,7 +55,9 @@ func Catalog() []provider.Provider {
 				{Workload: provider.WebApp, Execution: provider.Container, Creates: "Cloud Run service"},
 			},
 			Regions: gcpRegions, Scaling: true,
-			Note: milestone4,
+			// Built with Cloud Build, run as a Ctrl Plane instance
+			// (internal/deployments, internal/clouds/cloudrun).
+			Available: true,
 		},
 		{
 			Name: "ecs-fargate", Title: "AWS ECS on Fargate", Cloud: "aws",
@@ -66,7 +69,10 @@ func Catalog() []provider.Provider {
 				{Workload: provider.Worker, Execution: provider.Container, Creates: "ECS service on Fargate"},
 			},
 			Regions: awsRegions, Scaling: true,
-			Note: milestone5,
+			// Built with CodeBuild, run as a Ctrl Plane instance behind
+			// the environment's load balancer (internal/deployments,
+			// internal/clouds/ecs).
+			Available: true,
 		},
 		{
 			Name: "render", Title: "Render", Cloud: "render",
@@ -94,7 +100,9 @@ func Catalog() []provider.Provider {
 				{Kind: "mysql", Creates: "Cloud SQL for MySQL instance", Versions: []string{"8.4", "8.0"}},
 			},
 			Regions: gcpRegions,
-			Note:    milestone5,
+			// Provisioned by Loomplane, reached through the Cloud SQL
+			// connector (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "memorystore", Title: "Google Memorystore", Cloud: "gcp",
@@ -121,7 +129,9 @@ func Catalog() []provider.Provider {
 				{Kind: "mysql", Creates: "RDS for MySQL instance", Versions: []string{"8.4", "8.0"}},
 			},
 			Regions: awsRegions,
-			Note:    milestone5,
+			// Provisioned by Loomplane, reachable from the environment's
+			// ECS tasks only (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "elasticache", Title: "Amazon ElastiCache", Cloud: "aws",

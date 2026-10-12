@@ -63,7 +63,25 @@ type Config struct {
 	Planning      PlanningConfig
 	Clouds        CloudsConfig
 	Storage       StorageConfig
+	Drift         DriftConfig
 	Worker        WorkerConfig
+	Providers     ProvidersConfig
+}
+
+// ProvidersConfig adds deployment targets Loomplane doesn't ship with.
+type ProvidersConfig struct {
+	// Plugins are providers that run as their own services and speak the
+	// protocol in pkg/provider/sdk.
+	Plugins []PluginConfig
+}
+
+// PluginConfig is one provider plugin.
+type PluginConfig struct {
+	// URL is where it listens, such as http://fly-provider:9000.
+	URL string
+	// Token is the token it was started with. Loomplane sends it with
+	// every request, and the provider refuses anything without it.
+	Token string
 }
 
 // WorkerConfig is loomplane-worker's own process settings.
@@ -171,6 +189,13 @@ type PlanningConfig struct {
 	ApprovalWindow time.Duration
 }
 
+// DriftConfig schedules the drift check.
+type DriftConfig struct {
+	// Interval is how often everything deployed is compared with what its
+	// provider has live. Zero turns the check off.
+	Interval time.Duration
+}
+
 // StorageConfig is where artifacts go, such as the source of each
 // deployment.
 type StorageConfig struct {
@@ -188,6 +213,8 @@ type CloudsConfig struct {
 	GoogleEndpoint string
 	// VercelEndpoint replaces Vercel's API.
 	VercelEndpoint string
+	// AWSEndpoint replaces every AWS endpoint.
+	AWSEndpoint string
 }
 
 // Bounds on the approval window: long enough to reach a person, short
@@ -219,6 +246,7 @@ func Defaults() Config {
 		GitHub:   GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
 		Analysis: AnalysisConfig{Concurrency: 2},
 		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
+		Drift:    DriftConfig{Interval: 30 * time.Minute},
 		Worker:   WorkerConfig{HTTPAddr: ":8781"},
 	}
 }
@@ -294,8 +322,11 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
 	r.str(&c.Storage.URL, "storage.url")
+	r.duration(&c.Drift.Interval, "drift.interval")
 	r.str(&c.Clouds.GoogleEndpoint, "clouds.google_endpoint")
 	r.str(&c.Clouds.VercelEndpoint, "clouds.vercel_endpoint")
+	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
+	r.plugins(&c.Providers.Plugins, "providers.plugins")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -337,6 +368,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Orchestration.PollInterval <= 0 {
 		errs = append(errs, errors.New("orchestration.poll_interval must be positive"))
+	}
+	for i, p := range c.Providers.Plugins {
+		if u, err := url.Parse(p.URL); err != nil || u.Scheme == "" || u.Host == "" {
+			errs = append(errs, fmt.Errorf("providers.plugins[%d].url must be an absolute URL, got %q", i, p.URL))
+		}
+		if p.Token == "" {
+			errs = append(errs, fmt.Errorf("providers.plugins[%d].token is required: the provider refuses requests without it", i))
+		}
+	}
+	if c.Drift.Interval != 0 && c.Drift.Interval < time.Second {
+		errs = append(errs, fmt.Errorf("drift.interval must be 0, to turn it off, or at least 1s, got %s", c.Drift.Interval))
 	}
 	if c.Planning.ApprovalWindow < minApprovalWindow || c.Planning.ApprovalWindow > maxApprovalWindow {
 		errs = append(errs, fmt.Errorf("planning.approval_window must be between %s and %s, got %s",
@@ -397,6 +439,33 @@ func (r *reader) raw(key string) (any, bool) {
 
 func (r *reader) fail(key, want string, v any) {
 	r.errs = append(r.errs, fmt.Errorf("%s must be %s, got %q", key, want, fmt.Sprint(v)))
+}
+
+// plugins reads a list of {url, token}.
+func (r *reader) plugins(dst *[]PluginConfig, key string) {
+	v, ok := r.raw(key)
+	if !ok {
+		return
+	}
+	list, ok := v.([]any)
+	if !ok {
+		r.fail(key, "a list of {url, token}", v)
+		return
+	}
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			r.fail(fmt.Sprintf("%s[%d]", key, i), "{url, token}", item)
+			continue
+		}
+		get := func(k string) string {
+			if s, ok := m[k]; ok && s != nil {
+				return strings.TrimSpace(fmt.Sprint(s))
+			}
+			return ""
+		}
+		*dst = append(*dst, PluginConfig{URL: get("url"), Token: get("token")})
+	}
 }
 
 func (r *reader) str(dst *string, key string) {

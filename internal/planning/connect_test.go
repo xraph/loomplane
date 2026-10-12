@@ -96,10 +96,43 @@ func TestCompute_choosesAConnectionPerCloud(t *testing.T) {
 }
 
 func TestCompute_unavailableTargetsNeedNoConnection(t *testing.T) {
-	// With the catalog as it ships, nothing is available: the plan is for
-	// review, and asks for no connection.
-	res := Compute(Input{Environment: "production", Graph: polyglot(t), Manifest: parse(t, webAndAPI), Providers: providers.Registry()})
+	// With no target available, the plan is for review, and asks for no
+	// connection.
+	catalog := providers.Catalog()
+	list := make([]provider.Provider, 0, len(catalog))
+	for _, p := range catalog {
+		p.Available, p.Note = false, "Not yet."
+		list = append(list, p)
+	}
+	none, err := provider.NewRegistry(list...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := Compute(Input{Environment: "production", Graph: polyglot(t), Manifest: parse(t, webAndAPI), Providers: none})
 	if len(res.Problems) != 0 || len(res.Connections) != 0 || res.Executable {
 		t.Fatalf("problems %+v, connections %v, executable %v", res.Problems, res.Connections, res.Executable)
+	}
+}
+
+func TestCompute_aResourceOnAnotherCloudIsUnreachable(t *testing.T) {
+	const manifest = `version: 1
+services:
+  web:
+    source: apps/web
+    provider: vercel
+    needs: [db]
+  api:
+    source: services/api
+    provider: cloud-run
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+`
+	res := Compute(Input{Environment: "production", Graph: polyglot(t), Manifest: parse(t, manifest), Providers: deployable(t),
+		Connections: []ConnectionOption{{ID: "g", Cloud: "gcp", Ready: true}, {ID: "v", Cloud: "vercel", Ready: true}}})
+	if got := findingCodes(res.Problems); !slices.Equal(got, []string{"unreachable-resource"}) || res.Problems[0].Name != "web" {
+		t.Fatalf("problems %+v", res.Problems)
 	}
 }

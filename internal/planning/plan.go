@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -129,6 +130,9 @@ type ServiceConfig struct {
 	// Env are the variables Loomplane sets so the service finds what it
 	// needs. The values exist only once those things are deployed.
 	Env []EnvLink `json:"env,omitempty"`
+	// Gateway are a gateway's routes. A service with routes is a gateway
+	// Loomplane generates and builds, not code from the repository.
+	Gateway []gateway.Route `json:"gateway,omitempty"`
 }
 
 // EnvLink is a variable a service gets with the address of something it
@@ -138,6 +142,10 @@ type EnvLink struct {
 	// From is the manifest name of the resource or service.
 	From    string  `json:"from"`
 	Subject Subject `json:"subject"`
+	// Address is the private address the service reaches it at, when
+	// they share a network: http://name:port through ECS Service Connect.
+	// Empty means its public URL, known once it's deployed.
+	Address string `json:"address,omitempty"`
 }
 
 // ResourceConfig is everything a resource is provisioned from.
@@ -319,11 +327,31 @@ type Binding struct {
 	// URL is where a deployed service answers, which the services that
 	// need it are given.
 	URL string `json:"url"`
+	// ConnectionID is the cloud connection that deployed it, which drift
+	// checks read it back with.
+	ConnectionID string `json:"connection_id"`
+	// Revision is what's live: a container image, or a Vercel deployment.
+	Revision string `json:"revision"`
+	// CommitSHA is the commit a service was built from.
+	CommitSHA string `json:"commit_sha"`
+	// Drift is what the last check found: empty when it matched, or
+	// DriftMissing or DriftChanged.
+	Drift        string     `json:"drift"`
+	DriftMessage string     `json:"drift_message"`
+	ObservedAt   *time.Time `json:"observed_at"`
 	// PlanID is the plan whose deployment last wrote the binding.
 	PlanID    string    `json:"plan_id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// Drift a check can find.
+const (
+	// DriftMissing is something deleted outside Loomplane.
+	DriftMissing = "missing"
+	// DriftChanged is something changed outside Loomplane.
+	DriftChanged = "changed"
+)
 
 // Store persists plans and bindings, scoped to an organization: another
 // organization's read as not found.
@@ -352,6 +380,11 @@ type Store interface {
 	SetEnvironmentConnection(ctx context.Context, orgID, projectID, environmentID, cloud, connectionID string) error
 
 	ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error)
+	// AllBindings pages through every organization's bindings, in ID
+	// order after the given ID, for the drift check.
+	AllBindings(ctx context.Context, after string, limit int) ([]*Binding, error)
+	// RecordDrift stores what a drift check found.
+	RecordDrift(ctx context.Context, orgID, id, drift, message string, at time.Time) error
 	PutBinding(ctx context.Context, b *Binding) error
 	DeleteBinding(ctx context.Context, orgID, id string) error
 

@@ -111,12 +111,40 @@ How it fits together:
 Steps:
 
 1. Cloud connections, in Vault, with the API and the Integrations card. Done.
-2. Connections on plans, and Cloud Run and Vercel marked available, so a plan using them is executable.
-3. Deployment records, one source artifact in Trove for each repository the plan moves, and the workflow after approval. A successful deployment also writes `loomplane_environment_sources`, which is what a scoped plan holds the other sources at.
-4. Cloud Build and the Cloud Run provider for Ctrl Plane.
-5. The Vercel adapter.
-6. Health checks, deployment progress in the dashboard, and the acceptance run on real accounts.
+2. Connections on plans, chosen per environment when there's more than one. Done.
+3. Deployment records, one source artifact in Trove for each repository the plan moves, and the workflow after approval. A successful deployment also writes `loomplane_environment_sources`, which is what a scoped plan holds the other sources at. Done.
+4. Cloud Build and the Cloud Run provider for Ctrl Plane. Done.
+5. The Vercel adapter. Done.
+6. Deployment progress in the dashboard: each step on the approved plan, recent deployments on the Deploy tab, and what runs in each environment on its card. Done.
+7. The acceptance run on real accounts: a Google Cloud project and a Vercel account. Waiting on credentials.
 
-## Milestones 5 and 6
+Everything up to step 6 is tested against fakes that stand in for Google Cloud and Vercel over HTTP, including the full approval of a Next.js app on Vercel that finds its Go API on Cloud Run. The fakes check what a real cloud would refuse: tokens, file digests, missing files. They can't prove the real APIs agree, which is what step 7 is for.
 
-AWS ECS and Fargate as a Ctrl Plane provider, then Render; managed databases; environment secrets; endpoints between services on different clouds; Bastion where you run a gateway; drift detection and recovery from partial failure. Then the CLI on Keysmith keys, a provider SDK, backups, upgrades, and MCP for agents.
+Left over, for after the acceptance run:
+
+1. Variables, secrets included, are set as plain environment variables on Cloud Run and as encrypted variables on Vercel. Secret Manager for Cloud Run comes with milestone 5's environment secrets.
+2. A Dockerfile is built from its own directory. One that expects the repository root needs a setting the manifest doesn't have yet.
+3. Services find each other by public URL. A service that isn't public gets no address its dependents can reach until private networking arrives in milestone 5.
+4. Ctrl Plane gaps worth fixing upstream: instances keep the provider's name rather than its registry key, providers get credentials only at construction, Deploy carries only images and variables, and nothing polls status after a call returns.
+
+## Milestone 5: Extended orchestration
+
+Done, apart from the acceptance run on real accounts. Done when a polyglot application deploys across several providers and Loomplane keeps one consistent record of what runs where.
+
+Done so far:
+
+1. Recovery from partial failure. A failed deployment can be retried from the step that failed, with the plan that was approved; steps that succeeded stay as they are.
+2. Drift detection. A Dispatch job on the cron leader compares every binding with what its cloud has live and records anything gone or changed. It only reads. The next plan creates or updates it back, and only an approved plan changes anything, so there's one authority. Bindings also record the commit each service was built from, and a plan compares it with the commit it pins for that service's own repository, so new code in one repository is a change a plan picks up and a held repository's services stay as they are.
+3. Environment secrets. On Cloud Run they live in Secret Manager and reach the service by reference, readable by its runtime account only; on Vercel they're sensitive variables. No secret is handed to Ctrl Plane, which stores what it's given in plain JSON.
+4. A managed database. Postgres and MySQL on Cloud SQL, with a generated password kept in Vault, reached from Cloud Run through the Cloud SQL connector. A database is only reachable from services on its own cloud, so anything else needing it is a problem on the plan.
+5. AWS connections: an access key, a region, and an optional ACM certificate, checked with STS and IAM's policy simulator.
+6. ECS on Fargate. Images build on CodeBuild into ECR, from the tarball of the service's repository at its commit, repacked as the zip CodeBuild reads from S3; services with a Dockerfile build from it, the rest with buildpacks. Loomplane creates the CodeBuild role and the task execution role. Services run in the account's default VPC as ECS services that Ctrl Plane drives through a provider per connection, the way Cloud Run's works. Each environment gets one Application Load Balancer, and each public service a listener port of its own, since without a domain there's no host to route on and paths break apps that expect the root: the first gets 80, or 443 with the connection's certificate, then 8000 and up. A plan for an account without a certificate warns that its public services serve plain HTTP. Secrets go to Secrets Manager and reach the task by ARN.
+7. RDS for Postgres and MySQL, in the default VPC and not publicly reachable. Each environment's databases share a security group that takes the database port from its ECS tasks' group and nothing else. As on Cloud SQL, the password is generated, kept in Vault before it's used, and reaches services in the address, through Secrets Manager. A binding records the engine and major version, so RDS's own minor upgrades aren't drift.
+8. Secure endpoints between services. On ECS, each environment's services join a Cloud Map namespace through Service Connect, and a service that needs another on ECS gets `http://name:port`, so traffic between them stays in the VPC whether or not the one it needs is public; the environment's tasks group lets in itself for that. On Cloud Run, a private service lets in only the project's runtime account, which every service Loomplane deploys there runs as, and the plan warns that callers have to send a Google ID token. Setting who may call a service now replaces the policy, so a service that stops being public stops being public. A private service needed from another cloud, or on a target with no private network, is a problem on the plan: there's no way to reach it, so Loomplane won't wire an address that can't work. A private link between clouds would need a VPN between them, which is out of scope for now.
+9. Gateways. A `gateways:` entry routes paths to services through one public address. Bastion has no image of its own, so Loomplane generates a small program on it with the routes baked in, builds it on Cloud Build or CodeBuild like any service, and runs it on Cloud Run or ECS; traffic never passes through Loomplane. It has no admin API, gets the addresses it routes to and none of the project's variables, and isn't rebuilt for a new commit, only for new routes. On ECS it reaches private services inside the environment; elsewhere a route to a private service is a problem on the plan, since a gateway can't present Cloud Run's ID token. [forge-integration.md](forge-integration.md) lists what we found wiring Bastion.
+
+Left over: the acceptance run on real Google Cloud and AWS accounts, with milestone 4's; private links between clouds, which would need a VPN; and Memorystore, ElastiCache, Cloud Storage and the other catalog entries that still have no adapter.
+
+## Milestone 6
+
+The CLI on Keysmith keys, a provider SDK, backups, upgrades, and MCP for agents.

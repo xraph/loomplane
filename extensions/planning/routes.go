@@ -183,6 +183,11 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("One deployment, with each step's progress"),
 			forge.WithResponseSchema(http.StatusOK, "The deployment", deployments.Deployment{}),
 		}},
+		{http.MethodPost, "/deployments/:id/retry", e.retryDeployment, []forge.RouteOption{
+			forge.WithName("deployments.retry"),
+			forge.WithSummary("Run a failed deployment's failed and skipped steps again, with the plan that was approved"),
+			forge.WithResponseSchema(http.StatusOK, "The deployment, running again", deployments.Deployment{}),
+		}},
 		{http.MethodGet, "/plans/:id/deployment", e.planDeployment, []forge.RouteOption{
 			forge.WithName("deployments.forPlan"),
 			forge.WithSummary("The deployment an approved plan started"),
@@ -472,6 +477,18 @@ func (e *Extension) planDeployment(c forge.Context) error {
 		return err
 	}
 	d, err := e.deploys.ForPlan(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, d)
+}
+
+func (e *Extension) retryDeployment(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	d, err := e.deploys.Retry(c.Request().Context(), p, c.Param("id"))
 	if err != nil {
 		return fail(err)
 	}

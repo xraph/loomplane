@@ -71,6 +71,107 @@
         }
       }
     },
+    "/api/v1/api-keys": {
+      "get": {
+        "tags": [
+          "API keys"
+        ],
+        "summary": "Your API keys in this organization, or everyone's for an owner or admin",
+        "operationId": "apiKeys.list",
+        "responses": {
+          "200": {
+            "description": "The keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "API keys"
+        ],
+        "summary": "Make an API key that acts as you here. The secret is shown once.",
+        "operationId": "apiKeys.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The key, with its secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedKey"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/api-keys/{id}": {
+      "delete": {
+        "operationId": "apiKeys.revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Revoke an API key, at once",
+        "tags": [
+          "API keys"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "APIKey"
+        }
+      }
+    },
+    "/api/v1/connection-clouds": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "The clouds you can connect, built in or from a provider plugin, and what each asks for",
+        "operationId": "connectionClouds.list",
+        "responses": {
+          "200": {
+            "description": "Clouds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections": {
       "get": {
         "tags": [
@@ -277,6 +378,38 @@
         "responses": {
           "200": {
             "description": "The deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/retry": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Run a failed deployment's failed and skipped steps again, with the plan that was approved",
+        "operationId": "deployments.retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deployment, running again",
             "content": {
               "application/json": {
                 "schema": {
@@ -1918,6 +2051,65 @@
   },
   "components": {
     "schemas": {
+      "APIKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "access",
+          "hint",
+          "created_by",
+          "state",
+          "created_at"
+        ],
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "APIKeyList": {
+        "type": "object",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/APIKey"
+            }
+          }
+        }
+      },
       "Action": {
         "type": "object",
         "required": [
@@ -2115,17 +2307,34 @@
           "external_id",
           "config",
           "url",
+          "connection_id",
+          "revision",
+          "commit_sha",
+          "drift",
+          "drift_message",
           "plan_id",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
           "config": {
+            "type": "string"
+          },
+          "connection_id": {
             "type": "string"
           },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "drift": {
+            "type": "string"
+          },
+          "drift_message": {
+            "type": "string"
           },
           "engine": {
             "type": "string"
@@ -2143,6 +2352,9 @@
           "name": {
             "type": "string"
           },
+          "observed_at": {
+            "type": "string"
+          },
           "org_id": {
             "type": "string"
           },
@@ -2156,6 +2368,9 @@
             "type": "string"
           },
           "region": {
+            "type": "string"
+          },
+          "revision": {
             "type": "string"
           },
           "subject": {
@@ -2234,6 +2449,51 @@
         "properties": {
           "connection_id": {
             "type": "string"
+          }
+        }
+      },
+      "CloudForm": {
+        "type": "object",
+        "required": [
+          "cloud",
+          "title",
+          "builtin"
+        ],
+        "properties": {
+          "builtin": {
+            "type": "boolean"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "string"
+          },
+          "help": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Setting"
+            }
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "CloudList": {
+        "type": "object",
+        "required": [
+          "clouds"
+        ],
+        "properties": {
+          "clouds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudForm"
+            }
           }
         }
       },
@@ -2524,6 +2784,21 @@
           }
         }
       },
+      "CreatedKey": {
+        "type": "object",
+        "required": [
+          "key",
+          "secret"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/APIKey"
+          },
+          "secret": {
+            "type": "string"
+          }
+        }
+      },
       "DecideInputBody": {
         "type": "object",
         "properties": {
@@ -2607,6 +2882,7 @@
           "sources",
           "error",
           "steps",
+          "retries",
           "started_by",
           "started_at"
         ],
@@ -2638,6 +2914,9 @@
           },
           "project_id": {
             "type": "string"
+          },
+          "retries": {
+            "type": "integer"
           },
           "sources": {
             "type": "array",
@@ -2716,6 +2995,9 @@
           "subject"
         ],
         "properties": {
+          "address": {
+            "type": "string"
+          },
           "from": {
             "type": "string"
           },
@@ -3031,6 +3313,10 @@
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
           },
+          "gateways": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "ignore": {
             "$ref": "#/components/schemas/Ignore"
           },
@@ -3069,6 +3355,24 @@
             }
           },
           "yaml": {
+            "type": "string"
+          }
+        }
+      },
+      "NewKeyBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "access"
+        ],
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "expires_in_days": {
+            "type": "integer"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -3853,6 +4157,28 @@
         "type": "object",
         "x-forge-envelope": "revisions"
       },
+      "Route": {
+        "type": "object",
+        "required": [
+          "path",
+          "to",
+          "env"
+        ],
+        "properties": {
+          "env": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "strip_prefix": {
+            "type": "boolean"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
       "Runs": {
         "type": "object",
         "required": [
@@ -3885,6 +4211,10 @@
             "properties": {
               "defaults": {
                 "$ref": "#/components/schemas/Defaults"
+              },
+              "gateways": {
+                "type": "object",
+                "additionalProperties": true
               },
               "ignore": {
                 "$ref": "#/components/schemas/Ignore"
@@ -4035,6 +4365,12 @@
           "framework": {
             "type": "string"
           },
+          "gateway": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Route"
+            }
+          },
           "image": {
             "type": "string"
           },
@@ -4092,6 +4428,24 @@
           },
           "user_id": {
             "type": "string"
+          }
+        }
+      },
+      "Setting": {
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
           }
         }
       },

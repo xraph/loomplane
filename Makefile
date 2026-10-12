@@ -38,11 +38,14 @@ dev-api: ## Run only the API with hot reload
 dev-dashboard: ## Run only the dashboard's dev server, proxying the API
 	LOOMPLANE_API_URL=http://localhost:$(API_PORT) pnpm --dir $(DASHBOARD_DIR) dev
 
-build: build-dashboard build-api ## Build the dashboard, then the binary that serves it
+build: build-dashboard build-api build-cli ## Build the dashboard, the binary that serves it, and loomctl
 
 build-api: ## Build bin/loomplane and bin/loomplane-worker
 	go build $(LDFLAGS) -o bin/loomplane ./cmd/loomplane
 	go build $(LDFLAGS) -o bin/loomplane-worker ./cmd/loomplane-worker
+
+build-cli: ## Build bin/loomctl, the command-line client
+	go build $(LDFLAGS) -o bin/loomctl ./cmd/loomctl
 
 build-dashboard: ## Build the dashboard into apps/dashboard/dist
 	pnpm --dir $(DASHBOARD_DIR) build

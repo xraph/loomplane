@@ -58,7 +58,6 @@ services:
   worker:
     source: services/worker/cmd/worker
     provider: ecs-fargate
-    needs: [cache]
     environments:
       preview:
         enabled: false
@@ -80,11 +79,20 @@ func parse(t *testing.T, yaml string) *manifest.Manifest {
 	return m
 }
 
+// connected is an organization with one ready connection to each cloud,
+// so tests about the plan itself never stop at choosing an account.
+var connected = []ConnectionOption{
+	{ID: "conn_gcp", Name: "Prod", Cloud: "gcp", Ready: true},
+	{ID: "conn_vercel", Name: "Web", Cloud: "vercel", Ready: true},
+	{ID: "conn_aws", Name: "AWS", Cloud: "aws", Ready: true},
+	{ID: "conn_render", Name: "Render", Cloud: "render", Ready: true},
+}
+
 func compute(t *testing.T, yaml, env string, bindings ...*Binding) *Result {
 	t.Helper()
 	return Compute(Input{
 		Environment: env, Graph: polyglot(t), Manifest: parse(t, yaml),
-		Providers: providers.Registry(), Bindings: bindings,
+		Providers: providers.Registry(), Bindings: bindings, Connections: connected,
 	})
 }
 
@@ -172,10 +180,20 @@ func TestCompute_fresh(t *testing.T) {
 		"port-assumed:gateway",
 		// Analysis found these, and the manifest leaves them out.
 		"service-left-out:docs", "service-left-out:ingest", "service-left-out:backfill",
-		"provider-unavailable:cloud-run", "provider-unavailable:vercel",
+		// Cloud Run, Vercel, Cloud SQL and ECS have adapters; Memorystore
+		// doesn't yet.
+		"provider-unavailable:memorystore",
+		// The worker uses Redis per analysis, but the cache is on another
+		// cloud, so it needs nothing.
+		"unlinked-resource:worker",
 	} {
 		if !slices.Contains(got, w) {
 			t.Errorf("no warning %s in %v", w, got)
+		}
+	}
+	for _, ok := range []string{"provider-unavailable:cloud-run", "provider-unavailable:vercel", "provider-unavailable:cloud-sql", "provider-unavailable:ecs-fargate"} {
+		if slices.Contains(got, ok) {
+			t.Errorf("%s has an adapter, but was warned about: %v", ok, got)
 		}
 	}
 	// web uses Postgres per analysis but only needs api: worth saying.
@@ -207,6 +225,8 @@ func TestCompute_problems(t *testing.T) {
 		{"unknown version", "version: 1\nresources:\n  db: {kind: postgres, provider: rds, version: '9.6'}", "unknown-version:db"},
 		{"needs a worker", "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api, needs: [w]}\n  w: {source: services/worker/cmd/worker}", "need-worker:api"},
 		{"needs something off", "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api, needs: [db]}\nresources:\n  db:\n    kind: postgres\n    environments: {production: {enabled: false}}", "need-off:api"},
+		{"private across clouds", "version: 1\nservices:\n  web: {source: apps/web, provider: vercel, needs: [api]}\n  api: {source: services/api, provider: ecs-fargate, public: false}", "private-across-clouds:web"},
+		{"private with no network", "version: 1\ndefaults: {provider: render}\nservices:\n  gw: {source: apps/gateway, needs: [api]}\n  api: {source: services/api, public: false}", "private-unreachable:gw"},
 		{"tool kind", "version: 1\nservices:\n  api: {source: services/api, provider: render, kind: worker}\n  w: {source: services/worker/cmd/worker, provider: cloud-run, kind: http-service}", ""},
 	}
 	for _, tt := range tests {
@@ -339,7 +359,7 @@ func TestCompute_findings(t *testing.T) {
 	for i := range g.Resources {
 		g.Resources[i].NeedsConfirmation = true
 	}
-	r := Compute(Input{Environment: "production", Graph: &g, Manifest: parse(t, yaml), Providers: providers.Registry()})
+	r := Compute(Input{Environment: "production", Graph: &g, Manifest: parse(t, yaml), Providers: providers.Registry(), Connections: connected})
 	if !slices.Contains(codes(r.Warnings), "unconfirmed-resource:postgres") {
 		t.Errorf("weak finding not marked unconfirmed: %v", codes(r.Warnings))
 	}
@@ -358,6 +378,40 @@ resources:
 	keys := []string{api.Service.Env[0].Key, api.Service.Env[1].Key}
 	if !slices.Equal(keys, []string{"ANALYTICS_URL", "DB_URL"}) {
 		t.Errorf("keys = %v", keys)
+	}
+}
+
+func TestCompute_privateLinks(t *testing.T) {
+	// On ECS, services in an environment reach each other by name,
+	// whether or not the one they need is public.
+	ecs := compute(t, `version: 1
+defaults: {provider: ecs-fargate}
+services:
+  gateway: {source: apps/gateway, needs: [api]}
+  api: {source: services/api, public: false}
+ignore: {resources: [postgres, redis]}
+`, "production")
+	if len(ecs.Problems) > 0 {
+		t.Fatalf("problems %v", codes(ecs.Problems))
+	}
+	if link := action(t, ecs, "service:gateway").Service.Env[0]; link.Address != "http://api:8080" {
+		t.Errorf("gateway reaches api at %+v", link)
+	}
+
+	// On Cloud Run, a private service needs an ID token, which the plan
+	// says, and the link is its URL.
+	run := compute(t, `version: 1
+defaults: {provider: cloud-run}
+services:
+  gateway: {source: apps/gateway, needs: [api]}
+  api: {source: services/api, public: false}
+ignore: {resources: [postgres, redis]}
+`, "production")
+	if len(run.Problems) > 0 || !slices.Contains(codes(run.Warnings), "authenticated-call:gateway") {
+		t.Fatalf("problems %v, warnings %v", codes(run.Problems), codes(run.Warnings))
+	}
+	if link := action(t, run, "service:gateway").Service.Env[0]; link.Address != "" {
+		t.Errorf("a Cloud Run link has an address: %+v", link)
 	}
 }
 
@@ -424,7 +478,7 @@ func computeFed(t *testing.T, yaml string, held []string, bindings ...*Binding) 
 	}
 	return Compute(Input{
 		Environment: "production", Graph: federated(t), Manifest: parse(t, yaml),
-		Providers: providers.Registry(), Bindings: bindings, Held: h,
+		Providers: providers.Registry(), Bindings: bindings, Held: h, Connections: connected,
 	})
 }
 
@@ -736,7 +790,7 @@ func TestCompute_onlyHeldServicesAreImpacted(t *testing.T) {
 	}
 	r := Compute(Input{
 		Environment: "production", Graph: g, Manifest: parse(t, federatedYAML),
-		Providers: providers.Registry(), Held: map[string]bool{"lib": true},
+		Providers: providers.Registry(), Held: map[string]bool{"lib": true}, Connections: connected,
 	})
 	if slices.ContainsFunc(r.Warnings, func(f Finding) bool { return f.Code == "cross-repo-impact" }) {
 		t.Fatalf("a held package counted as a user: %+v", r.Warnings)
@@ -783,6 +837,68 @@ func TestCompute_movingAHeldServicesSourceWaits(t *testing.T) {
 			}
 			if warning(r, "service-left-out", "api") != nil {
 				t.Fatalf("a held service was left out: %v", codes(r.Warnings))
+			}
+		})
+	}
+}
+
+func TestCompute_gateways(t *testing.T) {
+	const onECS = `version: 1
+defaults: {provider: ecs-fargate}
+services:
+  api: {source: services/api, public: false}
+  web: {source: apps/web, provider: vercel}
+gateways:
+  edge:
+    routes:
+      - {path: /api, to: api, strip_prefix: true}
+      - {path: /, to: web}
+ignore: {resources: [postgres, redis]}
+`
+	r := compute(t, onECS, "production")
+	if len(r.Problems) > 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	edge := action(t, r, "service:edge")
+	api, web := action(t, r, "service:api"), action(t, r, "service:web")
+	if edge.Step <= max(api.Step, web.Step) || !edge.Service.Public || edge.Service.Image != "Dockerfile" {
+		t.Fatalf("edge %+v", edge)
+	}
+	// api is private, reached inside the environment; web by its URL.
+	if len(edge.Service.Env) != 2 || edge.Service.Env[0].Address != "http://api:8080" || edge.Service.Env[1].Address != "" {
+		t.Fatalf("edge's links %+v", edge.Service.Env)
+	}
+	if len(edge.Service.Gateway) != 2 || edge.Service.Gateway[0].Env != "API_URL" || !edge.Service.Gateway[0].StripPrefix {
+		t.Fatalf("edge's routes %+v", edge.Service.Gateway)
+	}
+
+	// A gateway's code is Loomplane's: a new commit alone doesn't change it.
+	at := func(commit string, live []*Binding) *Result {
+		return Compute(Input{
+			Environment: "production", Graph: atCommit(polyglot(t), commit), Manifest: parse(t, onECS), Providers: providers.Registry(),
+			Bindings: live, Connections: connected,
+		})
+	}
+	live := deployed(t, at("aaaaaaaaaaaa", nil))
+	for _, b := range live {
+		b.CommitSHA = "aaaaaaaaaaaa"
+	}
+	next := at("bbbbbbbbbbbb", live)
+	if a := action(t, next, "service:edge"); a.Op != Keep {
+		t.Errorf("edge on a new commit: %s %+v", a.Op, a.Changes)
+	}
+	if a := action(t, next, "service:api"); a.Op != Update || len(a.Changes) != 1 || a.Changes[0].Field != "commit" {
+		t.Errorf("api on a new commit: %s %+v", a.Op, a.Changes)
+	}
+
+	for _, tt := range []struct{ name, yaml, want string }{
+		{"on vercel", "version: 1\nservices:\n  web: {source: apps/web, provider: vercel}\ngateways:\n  edge: {provider: vercel, routes: [{path: /, to: web}]}", "gateway-unsupported:edge"},
+		{"private on cloud run", "version: 1\ndefaults: {provider: cloud-run}\nservices:\n  api: {source: services/api, public: false}\ngateways:\n  edge: {routes: [{path: /, to: api}]}\nignore: {resources: [postgres, redis]}", "gateway-cant-reach:edge"},
+		{"to a worker", "version: 1\ndefaults: {provider: ecs-fargate}\nservices:\n  w: {source: services/worker/cmd/worker}\ngateways:\n  edge: {routes: [{path: /, to: w}]}", "need-worker:edge"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codes(compute(t, tt.yaml, "production").Problems); !slices.Contains(got, tt.want) {
+				t.Fatalf("problems %v, want %s", got, tt.want)
 			}
 		})
 	}
@@ -855,7 +971,6 @@ services:
   site:
     repo: site
     source: .
-    provider: vercel
     needs: [db]
 resources:
   db:
@@ -935,8 +1050,11 @@ func TestCompute_aServiceDeployedFromAHeldRepositoryStaysHeldWhenItsRepoMoves(t 
 }
 
 func TestCompute_severalHeldUsersOfSomethingAgreeWithIt(t *testing.T) {
-	// api and site both need db, and both are held, in different repositories.
+	// api and site both need db, and both are held, in different
+	// repositories. site runs on Cloud Run here, since a service on Vercel
+	// can't reach a database on Google Cloud.
 	both := strings.Replace(federatedYAML, "needs: [api]", "needs: [api, db]", 1)
+	both = strings.Replace(both, "    provider: vercel\n", "", 1)
 	live := deployed(t, computeFed(t, both, nil))
 	yaml := strings.Replace(federatedYAML, "    needs: [db]\n", "", 1)
 	yaml = strings.Replace(yaml, "resources:\n  db:\n    kind: postgres\n    provider: cloud-sql\n", "", 1)

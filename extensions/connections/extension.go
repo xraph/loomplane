@@ -18,10 +18,12 @@ import (
 	vaultpg "github.com/xraph/vault/store/postgres"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -32,13 +34,15 @@ const Name = "loomplane-connections"
 // the extensions that deploy with it.
 type Extension struct {
 	*forge.BaseExtension
-	cfg config.Config
-	svc *connections.Service
+	cfg     config.Config
+	plugins *plugins.Set
+	svc     *connections.Service
 }
 
 // New returns the extension.
-func New(cfg config.Config) *Extension {
+func New(cfg config.Config, plugs *plugins.Set) *Extension {
 	return &Extension{
+		plugins:       plugs,
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Cloud connections"),
 		cfg:           cfg,
 	}
@@ -85,12 +89,24 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	log := e.Logger()
+	checkers := map[string]connections.Checker{
+		connections.GCP:    connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
+		connections.Vercel: connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		connections.AWS:    connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
+	}
+	// A provider plugin's cloud is connected through the plugin.
+	plugs, err := e.plugins.Plugins()
+	if err != nil {
+		return err
+	}
+	for _, p := range plugs {
+		if _, taken := checkers[p.Cloud()]; !taken {
+			checkers[p.Cloud()] = connections.PluginChecker{Client: p.Client}
+		}
+	}
 	e.svc = connections.NewService(
 		connections.NewPgStore(pgdriver.Unwrap(db)), secrets,
-		map[string]connections.Checker{
-			connections.GCP:    connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
-			connections.Vercel: connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
-		},
+		checkers,
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)

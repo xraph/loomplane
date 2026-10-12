@@ -26,7 +26,8 @@ describe("rolesFor", () => {
 describe("clouds", () => {
   it("labels known clouds and passes others through", () => {
     expect(cloudLabel("gcp")).toBe("Google Cloud")
-    expect(cloudLabel("aws")).toBe("aws")
+    expect(cloudLabel("aws")).toBe("AWS")
+    expect(cloudLabel("azure")).toBe("azure")
   })
 
   it("recognizes a service account key", () => {
