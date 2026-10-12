@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import {
   useConnectionsCheck,
+  useConnectionCloudsList,
   useConnectionsCreate,
   useConnectionsDelete,
   useConnectionsList,
@@ -336,8 +337,13 @@ function ConnectDialog({
   const replace = useMutation(useConnectionsReplace)
   const invalidate = useInvalidate()
   const file = useRef<HTMLInputElement>(null)
-  const [cloud, setCloud] = useState<Cloud>(
-    (replacing?.cloud as Cloud | undefined) ?? "gcp"
+  const [cloud, setCloud] = useState<string>(replacing?.cloud ?? "gcp")
+  // Clouds a provider plugin adds, with the form each one describes.
+  const available = useQuery(useConnectionCloudsList)
+  const extras = (available.data?.clouds ?? []).filter((c) => !c.builtin)
+  const extra = extras.find((c) => c.cloud === cloud)
+  const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
+    () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
   const [name, setName] = useState("")
   const [credential, setCredential] = useState("")
@@ -378,8 +384,14 @@ function ConnectDialog({
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError("")
-    const settings =
-      cloud === "vercel" && team.trim()
+    const trimmed = Object.fromEntries(
+      Object.entries(extraSettings)
+        .map(([k, v]) => [k, v.trim()])
+        .filter(([, v]) => v !== "")
+    )
+    const settings = extra
+      ? trimmed
+      : cloud === "vercel" && team.trim()
         ? { team_id: team.trim() }
         : cloud === "aws"
           ? {
@@ -418,7 +430,7 @@ function ConnectDialog({
     }
   }
 
-  const info = clouds[cloud]
+  const info = (clouds as Record<string, (typeof clouds)[Cloud]>)[cloud]
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="sm:max-w-lg">
@@ -445,12 +457,17 @@ function ConnectDialog({
                     spacing={0}
                     value={[cloud]}
                     onValueChange={(v) => {
-                      if (v[0]) setCloud(v[0] as Cloud)
+                      if (v[0]) setCloud(v[0])
                     }}
                   >
                     <ToggleGroupItem value="gcp">Google Cloud</ToggleGroupItem>
                     <ToggleGroupItem value="vercel">Vercel</ToggleGroupItem>
                     <ToggleGroupItem value="aws">AWS</ToggleGroupItem>
+                    {extras.map((c) => (
+                      <ToggleGroupItem key={c.cloud} value={c.cloud}>
+                        {c.title}
+                      </ToggleGroupItem>
+                    ))}
                   </ToggleGroup>
                 </Field>
                 <Field>
@@ -579,6 +596,45 @@ function ConnectDialog({
                     balancer serves plain HTTP and plans warn you.
                   </FieldDescription>
                 </Field>
+              </>
+            ) : extra ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="connection-credential">
+                    {extra.credential || "Credential"}
+                  </FieldLabel>
+                  <Textarea
+                    id="connection-credential"
+                    value={credential}
+                    onChange={(e) => setCredential(e.target.value)}
+                    spellCheck={false}
+                    autoComplete="off"
+                    className="max-h-40 min-h-16 font-mono text-xs md:text-xs"
+                    required
+                  />
+                  {extra.help && (
+                    <FieldDescription>{extra.help}</FieldDescription>
+                  )}
+                </Field>
+                {(extra.settings ?? []).map((st) => (
+                  <Field key={st.key}>
+                    <FieldLabel htmlFor={`connection-setting-${st.key}`}>
+                      {st.label}
+                      {!st.required && " (optional)"}
+                    </FieldLabel>
+                    <Input
+                      id={`connection-setting-${st.key}`}
+                      value={extraSettings[st.key] ?? ""}
+                      onChange={(e) =>
+                        setExtraSettings((cur) => ({
+                          ...cur,
+                          [st.key]: e.target.value,
+                        }))
+                      }
+                      required={st.required}
+                    />
+                  </Field>
+                ))}
               </>
             ) : (
               <>

@@ -112,6 +112,19 @@ export interface ChooseConnectionInputBody {
   connectionId: string;
 }
 
+export interface CloudForm {
+  builtin: boolean;
+  cloud: string;
+  credential?: string;
+  help?: string;
+  settings?: Setting[];
+  title: string;
+}
+
+export interface CloudList {
+  clouds: CloudForm[];
+}
+
 export interface Commands {
   build?: string;
   dev?: string;
@@ -608,6 +621,12 @@ export interface Session {
   orgId: string;
   permissions: string[];
   userId: string;
+}
+
+export interface Setting {
+  key: string;
+  label: string;
+  required?: boolean;
 }
 
 export interface Size {

@@ -151,6 +151,25 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionClouds = {
+    /**
+     * The clouds you can connect, built in or from a provider plugin, and what each asks for
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudList> => {
+      let __path = `/api/v1/connection-clouds`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudList"],
+      };
+
+      return this.request<types.CloudList>(config);
+    },
+
+  };
+
   public readonly connections = {
     /**
      * Ask the cloud again what the connection's credential may do

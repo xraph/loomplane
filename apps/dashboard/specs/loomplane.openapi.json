@@ -151,6 +151,27 @@
         }
       }
     },
+    "/api/v1/connection-clouds": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "The clouds you can connect, built in or from a provider plugin, and what each asks for",
+        "operationId": "connectionClouds.list",
+        "responses": {
+          "200": {
+            "description": "Clouds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections": {
       "get": {
         "tags": [
@@ -2166,6 +2187,51 @@
           }
         }
       },
+      "CloudForm": {
+        "type": "object",
+        "required": [
+          "cloud",
+          "title",
+          "builtin"
+        ],
+        "properties": {
+          "builtin": {
+            "type": "boolean"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "string"
+          },
+          "help": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Setting"
+            }
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "CloudList": {
+        "type": "object",
+        "required": [
+          "clouds"
+        ],
+        "properties": {
+          "clouds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudForm"
+            }
+          }
+        }
+      },
       "Commands": {
         "type": "object",
         "properties": {
@@ -3923,6 +3989,24 @@
           },
           "user_id": {
             "type": "string"
+          }
+        }
+      },
+      "Setting": {
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
           }
         }
       },

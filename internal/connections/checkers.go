@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
+	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
 // GCPChecker checks Google Cloud service account keys.
@@ -90,7 +91,7 @@ func rejected(err error) bool {
 	var ge *gcp.APIError
 	var ve *vercel.APIError
 	return errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
-		errors.Is(err, aws.ErrRejected) ||
+		errors.Is(err, aws.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
 		errors.As(err, &ge) || errors.As(err, &ve)
 }
 

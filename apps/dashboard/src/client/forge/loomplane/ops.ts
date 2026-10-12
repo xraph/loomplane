@@ -121,6 +121,13 @@ export const ops = {
     provides: [],
     invalidates: ['APIKey[]'],
   },
+  'connectionClouds.list': {
+    method: 'GET',
+    path: '/api/v1/connection-clouds',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['CloudList'],
+  },
   'connections.list': {
     method: 'GET',
     path: '/api/v1/connections',

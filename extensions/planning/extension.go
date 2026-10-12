@@ -47,6 +47,7 @@ import (
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/repositories"
@@ -64,6 +65,7 @@ type Extension struct {
 	engineOf    func() *engine.Engine
 	ctrlplane   func() *app.CtrlPlane
 	deployments *orchestration.Deployments
+	plugins     *plugins.Set
 	manifests   *manifests.Service
 	plans       *planning.Service
 	deploys     *deployments.Service
@@ -74,8 +76,9 @@ type Extension struct {
 // engine, which starts and signals each plan's workflow; workflow is the
 // deployment workflow the platform gave Dispatch; ctrlplane is Ctrl
 // Plane, which runs Cloud Run services.
-func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestration.Deployments, ctrlplane func() *app.CtrlPlane) *Extension {
+func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestration.Deployments, ctrlplane func() *app.CtrlPlane, plugs *plugins.Set) *Extension {
 	return &Extension{
+		plugins:       plugs,
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Manifests and deployment plans"),
 		cfg:           cfg,
 		engineOf:      engineOf,
@@ -167,6 +170,17 @@ func (e *Extension) Register(fapp forge.App) error {
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
+	}
+	// Provider plugins join the catalog and carry out their own actions.
+	plugs, err := e.plugins.Plugins()
+	if err != nil {
+		return err
+	}
+	for _, p := range plugs {
+		if rerr := catalog.Register(p.Description.Provider); rerr != nil {
+			return fmt.Errorf("provider plugin %s: %w", p.Name(), rerr)
+		}
+		executors[p.Name()] = &deployments.Plugin{Client: p.Client, Every: e.cfg.Orchestration.PollInterval}
 	}
 	// Resource credentials, such as a database's password, get a Vault
 	// key of their own, derived from secret_key.

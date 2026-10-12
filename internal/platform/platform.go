@@ -39,6 +39,7 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/orchestration"
+	"github.com/xraph/loomplane/internal/plugins"
 )
 
 // Version is set at build time:
@@ -115,6 +116,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// dependency of its own, so without this it could register first.
 	jobs.SetDependencies([]string{groveext.ExtensionName})
 
+	// Provider plugins, described when the first extension that needs
+	// them registers.
+	plugs := plugins.NewSet(cfg.Providers.Plugins)
+
 	cpAuth := infrastructure.NewAuthProvider()
 	ctrl := cpext.New(
 		cpext.WithAuthProvider(cpAuth),
@@ -136,8 +141,8 @@ func Extensions(cfg config.Config) []forge.Extension {
 		projectsext.New(cfg, jobs.Engine),
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
-		connectionsext.New(cfg),
-		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane),
+		connectionsext.New(cfg, plugs),
+		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),
 	}

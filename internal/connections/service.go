@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -71,7 +73,7 @@ type ReplaceInput struct {
 func (s *Service) checker(cloud string) (Checker, error) {
 	c, ok := s.checkers[cloud]
 	if !ok {
-		return nil, fmt.Errorf("%w: Loomplane connects gcp, vercel and aws, not %q", ErrInvalid, cloud)
+		return nil, fmt.Errorf("%w: Loomplane connects %s, not %q", ErrInvalid, strings.Join(slices.Sorted(maps.Keys(s.checkers)), ", "), cloud)
 	}
 	return c, nil
 }
