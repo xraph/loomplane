@@ -81,6 +81,29 @@ func TestSources_aProjectBuildsFromSeveralRepositories(t *testing.T) {
 		t.Fatalf("analyses %+v", analyses)
 	}
 
+	var view struct {
+		Graph struct {
+			Services []struct {
+				ID     string `json:"id"`
+				Source string `json:"source"`
+			} `json:"services"`
+			Sources []struct {
+				Alias     string `json:"alias"`
+				CommitSHA string `json:"commit_sha"`
+			} `json:"sources"`
+		} `json:"graph"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+proj.ID+"/graph", nil, &view)
+	if len(view.Graph.Sources) != 2 || view.Graph.Sources[1].CommitSHA != exampleSHA ||
+		!slices.ContainsFunc(view.Graph.Services, func(s struct {
+			ID     string `json:"id"`
+			Source string `json:"source"`
+		}) bool {
+			return s.ID == "svc:site:node:."
+		}) {
+		t.Fatalf("graph %+v", view.Graph)
+	}
+
 	c.must(http.StatusOK, http.MethodPatch, base+"/site", map[string]string{"ref": "main"}, &site)
 	if site.Ref != "main" {
 		t.Fatalf("updated site %+v", site)

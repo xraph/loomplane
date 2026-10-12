@@ -114,31 +114,21 @@ type Store interface {
 }
 
 // ServiceCatalog answers which services a project has, from its latest
-// successful analysis.
+// successful analysis of each of its sources.
 type ServiceCatalog struct {
 	Store Store
 }
 
-// Services returns the latest analysis's services by ID, with their
-// names. A project never analyzed has none.
+// Services returns the services of the project's composed graph by ID,
+// with their names. A project never analyzed has none.
 func (c ServiceCatalog) Services(ctx context.Context, orgID, projectID string) (map[string]string, error) {
-	list, err := c.Store.ListAnalyses(ctx, orgID, projectID, listLimit)
+	g, _, err := ProjectGraph(ctx, c.Store, orgID, projectID)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]string{}
-	for _, a := range list {
-		if a.Status != StatusSucceeded {
-			continue
-		}
-		g, err := c.Store.Graph(ctx, orgID, a.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range g.Services {
-			out[s.ID] = s.Name
-		}
-		return out, nil
+	for _, s := range g.Services {
+		out[s.ID] = s.Name
 	}
 	return out, nil
 }

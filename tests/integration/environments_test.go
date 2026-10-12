@@ -134,10 +134,10 @@ func TestEnvironments_everyProjectHasOneAndVariablesLayer(t *testing.T) {
 	set("/api/v1/variables", map[string]any{"key": "LOG_LEVEL", "value": "info"})
 	set("/api/v1/variables", map[string]any{"key": "LOG_LEVEL", "value": "warn", "environment": "production"})
 	dbURL := set(projectVars, map[string]any{"key": "DATABASE_URL", "value": "postgres://prod-db/app", "secret": true, "environment": "production"})
-	set(projectVars, map[string]any{"key": "PORT", "value": "3000", "service": "svc:node:apps/web"})
+	set(projectVars, map[string]any{"key": "PORT", "value": "3000", "service": "svc:mono:node:apps/web"})
 	stagingSecret := set(projectVars, map[string]any{"key": "STRIPE_KEY", "value": "sk_test_123", "secret": true, "environment": "staging"})
 	c.must(http.StatusUnprocessableEntity, http.MethodPost, projectVars, map[string]any{"key": "PORT", "value": "1", "service": "svc:go:not-there"}, nil)
-	c.must(http.StatusConflict, http.MethodPost, projectVars, map[string]any{"key": "PORT", "value": "1", "service": "svc:node:apps/web"}, nil)
+	c.must(http.StatusConflict, http.MethodPost, projectVars, map[string]any{"key": "PORT", "value": "1", "service": "svc:mono:node:apps/web"}, nil)
 	if dbURL.Value != "" || !dbURL.Secret {
 		t.Fatalf("a secret came back with its value: %+v", dbURL)
 	}
@@ -159,7 +159,7 @@ func TestEnvironments_everyProjectHasOneAndVariablesLayer(t *testing.T) {
 
 	var res resolution
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+project.ID+"/variables/resolved?"+
-		url.Values{"environment": {"production"}, "service": {"svc:node:apps/web"}}.Encode(), nil, &res)
+		url.Values{"environment": {"production"}, "service": {"svc:mono:node:apps/web"}}.Encode(), nil, &res)
 	got := map[string]string{}
 	for _, rv := range res.Variables {
 		got[rv.Key] = rv.Variable.Scope + ":" + rv.Variable.Value

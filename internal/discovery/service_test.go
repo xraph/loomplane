@@ -689,3 +689,32 @@ func TestSources_refusals(t *testing.T) {
 		t.Fatalf("a repository Loomplane can't read: %v", err)
 	}
 }
+
+func TestService_projectGraphComposesEverySource(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	f.source(t, project, "web", "acme/site", "")
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	queued, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only mono's analysis runs; web's is still queued.
+	if err = f.runner.Run(ctx, org, queued[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	view, err := f.svc.ProjectGraph(ctx, f.as(t, "ausr_viewer", security.RoleViewer), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Sources) != 2 || view.Sources[0].Shown == nil || view.Sources[1].Shown != nil || view.Sources[1].Latest == nil {
+		t.Fatalf("sources %+v", view.Sources)
+	}
+	if len(view.Graph.Services) != 7 || !strings.HasPrefix(view.Graph.Services[0].ID, "svc:mono:") {
+		t.Fatalf("services %+v", view.Graph.Services)
+	}
+	known, err := ServiceCatalog{Store: f.store}.Services(ctx, org, project)
+	if err != nil || known[view.Graph.Services[0].ID] == "" {
+		t.Fatalf("catalog %v, %v", known, err)
+	}
+}

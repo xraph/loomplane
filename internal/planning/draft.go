@@ -38,7 +38,7 @@ func Draft(g *graph.Graph, reg *provider.Registry) *manifest.Manifest {
 		}
 		name := unique(nameOf(gs.Name, "service"), taken)
 		names[gs.ID] = name
-		s := manifest.Service{Source: strings.TrimPrefix(gs.ID, "svc:")}
+		s := manifest.Service{Source: gs.Local()}
 		if able := reg.Running(provider.Workload(gs.Kind)); len(able) > 0 {
 			s.Provider = able[0].Name
 			clouds[able[0].Cloud]++

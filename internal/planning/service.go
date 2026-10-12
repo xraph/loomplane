@@ -48,11 +48,9 @@ type Projects interface {
 	ListEnvironments(ctx context.Context, orgID, projectID string) ([]*projects.Environment, error)
 }
 
-// Analyses reads repository analyses and their graphs.
-type Analyses interface {
-	ListAnalyses(ctx context.Context, orgID, projectID string, limit int) ([]*discovery.Analysis, error)
-	Graph(ctx context.Context, orgID, id string) (*graph.Graph, error)
-}
+// Analyses reads a project's sources, their analyses and the graphs those
+// found. discovery.PgStore is the real one.
+type Analyses = discovery.Graphs
 
 // Manifests reads manifest revisions.
 type Manifests interface {
@@ -223,13 +221,21 @@ func (s *Service) environment(ctx context.Context, orgID, projectID, name string
 }
 
 func (s *Service) latestAnalysis(ctx context.Context, orgID, projectID string) (*discovery.Analysis, error) {
-	list, err := s.analyses.ListAnalyses(ctx, orgID, projectID, analysisLookback)
+	// A plan still pins one analysis; planning from every source's
+	// analysis comes later, so this serves the first source that has one.
+	sources, err := s.analyses.ListSources(ctx, orgID, projectID, false)
 	if err != nil {
 		return nil, err
 	}
-	for _, a := range list {
-		if a.Status == discovery.StatusSucceeded {
-			return a, nil
+	for _, src := range sources {
+		list, err := s.analyses.ListSourceAnalyses(ctx, orgID, src.ID, analysisLookback)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range list {
+			if a.Status == discovery.StatusSucceeded {
+				return a, nil
+			}
 		}
 	}
 	return nil, ErrNoAnalysis
@@ -577,14 +583,14 @@ func (s *Service) Fail(ctx context.Context, orgID, planID, reason string) error 
 // ManifestDraft is a proposed first manifest and what it was drawn from.
 type ManifestDraft struct {
 	// ProjectID keys the draft for the dashboard's client.
-	ProjectID  string             `json:"project_id" forge:"id"`
-	AnalysisID string             `json:"analysis_id"`
-	CommitSHA  string             `json:"commit_sha"`
-	YAML       string             `json:"yaml"`
-	Manifest   *manifest.Manifest `json:"manifest"`
+	ProjectID string `json:"project_id" forge:"id"`
+	// Sources are the commits the draft was drawn from.
+	Sources  []graph.SourceRef  `json:"sources"`
+	YAML     string             `json:"yaml"`
+	Manifest *manifest.Manifest `json:"manifest"`
 }
 
-// DraftManifest proposes a manifest from the project's latest analysis.
+// DraftManifest proposes a manifest from the project's composed graph.
 // It saves nothing: the caller reviews it and saves it as the first
 // revision.
 func (s *Service) DraftManifest(ctx context.Context, p security.Principal, projectID string) (*ManifestDraft, error) {
@@ -594,22 +600,21 @@ func (s *Service) DraftManifest(ctx context.Context, p security.Principal, proje
 	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
 		return nil, err
 	}
-	analysis, err := s.latestAnalysis(ctx, p.OrgID, projectID)
+	g, states, err := discovery.ProjectGraph(ctx, s.analyses, p.OrgID, projectID)
 	if err != nil {
 		return nil, err
 	}
-	g, err := s.analyses.Graph(ctx, p.OrgID, analysis.ID)
-	if err != nil {
-		return nil, err
+	if !slices.ContainsFunc(states, func(st discovery.SourceState) bool { return st.Shown != nil }) {
+		return nil, ErrNoAnalysis
 	}
 	m := Draft(g, s.providers)
 	data, err := manifest.Marshal(m)
 	if err != nil {
 		return nil, err
 	}
-	return &ManifestDraft{
-		ProjectID: projectID, AnalysisID: analysis.ID, CommitSHA: analysis.CommitSHA, YAML: string(data), Manifest: m,
-	}, nil
+	// A source not analyzed yet has no commit, so it drew nothing.
+	drawn := slices.DeleteFunc(slices.Clone(g.Sources), func(r graph.SourceRef) bool { return r.CommitSHA == "" })
+	return &ManifestDraft{ProjectID: projectID, Sources: drawn, YAML: string(data), Manifest: m}, nil
 }
 
 // EnvironmentConnections returns which connection an environment deploys

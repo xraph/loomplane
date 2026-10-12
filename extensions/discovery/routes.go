@@ -63,6 +63,13 @@ func (e *Extension) analysisRoutes(r forge.Router, guard identity.Guard) error {
 	); err != nil {
 		return err
 	}
+	if err := g.GET("/projects/:id/graph", e.projectGraph,
+		forge.WithName("projects.graph"),
+		forge.WithSummary("The project's application graph, joined from the newest successful analysis of each repository"),
+		forge.WithResponseSchema(http.StatusOK, "The graph", discovery.ProjectView{}),
+	); err != nil {
+		return err
+	}
 	if err := g.GET("/analyses/:id", e.get,
 		forge.WithName("analyses.get"),
 		forge.WithSummary("One analysis"),
@@ -155,6 +162,18 @@ func (e *Extension) list(c forge.Context) error {
 		out.Analyses = append(out.Analyses, *a)
 	}
 	return c.JSON(http.StatusOK, out)
+}
+
+func (e *Extension) projectGraph(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	view, err := e.svc.ProjectGraph(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, view)
 }
 
 func (e *Extension) get(c forge.Context) error {
