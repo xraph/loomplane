@@ -680,6 +680,43 @@ func TestCompute_anOlderBindingOfAHeldProjectIsntDeleted(t *testing.T) {
 	}
 }
 
+func TestCompute_anOlderBindingIsntDeletedWhileAnyRepositoryIsHeld(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	// site's binding was written before services knew their repository.
+	var site *Binding
+	for _, b := range live {
+		if b.Subject == ServiceSubject && b.Name == "site" {
+			site = b
+		}
+	}
+	if site == nil {
+		t.Fatalf("no site binding in %+v", live)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(site.Config, &cfg); err != nil || cfg["repo"] != "site" {
+		t.Fatalf("binding %s", site.Config)
+	}
+	delete(cfg, "repo")
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site.Config = data
+
+	if r := computeFed(t, federatedWithoutSite, nil, live...); action(t, r, "service:site").Op != Delete {
+		t.Fatal("the test needs site deleted when nothing is held")
+	}
+	// Only mono is held, but nothing says which repository site came from,
+	// so a scoped plan can't rule out that it's a held one.
+	r := computeFed(t, federatedWithoutSite, []string{"mono"}, live...)
+	if slices.ContainsFunc(r.Actions, func(a Action) bool { return a.ID == "service:site" && a.Op == Delete }) {
+		t.Fatalf("an older binding was deleted by a scoped plan: %+v", r.Actions)
+	}
+	if warning(r, "held", "site") == nil {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+}
+
 func TestCompute_unknownRepoWithoutRepositories(t *testing.T) {
 	r := compute(t, "version: 1\nservices:\n  api: {repo: mono, source: services/api, provider: cloud-run}\n", "production")
 	if len(r.Problems) != 1 || r.Problems[0].Code != "unknown-repo" || !strings.Contains(r.Problems[0].Message, "this project has no repositories") {

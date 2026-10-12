@@ -1070,28 +1070,47 @@ func (p *planner) planDeletes() {
 
 // heldRepo reports whether a deployed service's repository is held. A
 // binding from before repositories has none, which in a project with one
-// repository can only be that one.
+// repository can only be that one. In a project with more, it could be any
+// of them, so it counts as held whenever this plan holds any repository:
+// a scoped plan never deletes it, and the next full plan rewrites it with
+// its repository. The alias is empty when it can't be told.
 func (p *planner) heldRepo(cfg ServiceConfig) (string, bool) {
 	repo := cfg.Repo
-	if sources := p.in.Graph.Sources; repo == "" && len(sources) == 1 {
-		repo = sources[0].Alias
+	if repo != "" {
+		return repo, p.in.Held[repo]
 	}
-	return repo, repo != "" && p.in.Held[repo]
+	if sources := p.in.Graph.Sources; len(sources) == 1 {
+		return sources[0].Alias, p.in.Held[sources[0].Alias]
+	}
+	for _, held := range p.in.Held {
+		if held {
+			return "", true
+		}
+	}
+	return "", false
 }
 
 // keepHeld leaves a deployed service of a held repository running when
 // the manifest no longer plans it, saying why it isn't deleted. One the
 // manifest still wants on couldn't be planned, and a problem says why.
+// An empty repo is a binding that doesn't say which repository it's from.
 func (p *planner) keepHeld(b *Binding, repo string) {
 	wanted, on := p.wanted(b)
+	in := fmt.Sprintf("it's in %s, which this plan holds back", repo)
+	if repo == "" {
+		in = "it was deployed before Loomplane recorded which repository a service is from, and this plan holds some back"
+	}
 	var msg string
 	switch {
 	case !wanted:
-		msg = fmt.Sprintf("The manifest no longer has %s, but it's in %s, which this plan holds back, so it keeps running.", b.Name, repo)
+		msg = fmt.Sprintf("The manifest no longer has %s, but %s, so it keeps running.", b.Name, in)
 	case !on:
-		msg = fmt.Sprintf("%s is off in %s, but it's in %s, which this plan holds back, so it keeps running.", b.Name, p.in.Environment, repo)
+		msg = fmt.Sprintf("%s is off in %s, but %s, so it keeps running.", b.Name, p.in.Environment, in)
 	default:
 		return
+	}
+	if repo == "" {
+		msg += " Plan every repository to remove it."
 	}
 	p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "services", Message: msg})
 }
