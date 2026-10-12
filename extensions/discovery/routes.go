@@ -21,6 +21,16 @@ func (AnalysisList) ForgeEnvelope() forge.EnvelopeDef {
 	return forge.EnvelopeDef{ItemsField: "analyses"}
 }
 
+// SourceList is the body of GET /api/v1/projects/:id/sources.
+type SourceList struct {
+	Sources []discovery.Source `json:"sources"`
+}
+
+// ForgeEnvelope tells the generated client the list wraps Sources.
+func (SourceList) ForgeEnvelope() forge.EnvelopeDef {
+	return forge.EnvelopeDef{ItemsField: "sources"}
+}
+
 // AnalysisGraph is the application graph a succeeded analysis found, keyed
 // by the analysis's ID. A separate entity from Analysis, so a list of
 // analyses never carries, or overwrites, a whole graph.
@@ -30,10 +40,17 @@ type AnalysisGraph struct {
 }
 
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
+	if err := e.analysisRoutes(r, guard); err != nil {
+		return err
+	}
+	return e.sourceRoutes(r, guard)
+}
+
+func (e *Extension) analysisRoutes(r forge.Router, guard identity.Guard) error {
 	g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Analyses"))
 	if err := g.POST("/projects/:id/analyses", e.start,
 		forge.WithName("analyses.create"),
-		forge.WithSummary("Analyze the project's repository: find its services, packages and the resources they need"),
+		forge.WithSummary("Analyze the project's repositories, or the ones named"),
 		forge.WithRequestSchema(discovery.StartAnalysisInput{}),
 		forge.WithResponseSchema(http.StatusCreated, "The queued analyses, one per source", AnalysisList{}),
 	); err != nil {
@@ -60,6 +77,39 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	)
 }
 
+func (e *Extension) sourceRoutes(r forge.Router, guard identity.Guard) error {
+	s := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Sources"))
+	if err := s.GET("/projects/:id/sources", e.listSources,
+		forge.WithName("sources.list"),
+		forge.WithSummary("The repositories the project builds from, by alias"),
+		forge.WithResponseSchema(http.StatusOK, "Sources", SourceList{}),
+	); err != nil {
+		return err
+	}
+	if err := s.POST("/projects/:id/sources", e.addSource,
+		forge.WithName("sources.create"),
+		forge.WithSummary("Attach a repository, or a directory of one, after checking Loomplane can read it"),
+		forge.WithRequestSchema(discovery.AddSourceInput{}),
+		forge.WithResponseSchema(http.StatusCreated, "The source", discovery.Source{}),
+	); err != nil {
+		return err
+	}
+	if err := s.PATCH("/projects/:id/sources/:alias", e.updateSource,
+		forge.WithName("sources.update"),
+		forge.WithSummary("Change the directory or branch a source reads"),
+		forge.WithRequestSchema(discovery.UpdateSourceInput{}),
+		forge.WithResponseSchema(http.StatusOK, "The source", discovery.Source{}),
+	); err != nil {
+		return err
+	}
+	return s.DELETE("/projects/:id/sources/:alias", e.removeSource,
+		forge.WithName("sources.delete"),
+		forge.WithSummary("Detach a source. Its alias stays taken, so old plans keep their meaning."),
+		forge.WithNoContentResponse(),
+		forge.WithEntity(forge.EntityDef{Type: "Source", IDField: "id"}),
+	)
+}
+
 func principal(c forge.Context) (security.Principal, error) {
 	p, ok := security.PrincipalFrom(c.Request().Context())
 	if !ok {
@@ -77,7 +127,7 @@ func (e *Extension) start(c forge.Context) error {
 	// An empty body is fine: it means the default branch.
 	if c.Request().ContentLength != 0 {
 		if err = c.BindJSON(&in); err != nil {
-			return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON: {\"ref\": \"main\"}")
+			return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"sources": ["web"], "ref": "main"}`)
 		}
 	}
 	queued, err := e.svc.Start(c.Request().Context(), p, c.Param("id"), in)
@@ -129,4 +179,63 @@ func (e *Extension) graph(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, AnalysisGraph{ID: c.Param("id"), Graph: *g})
+}
+
+func (e *Extension) listSources(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	list, err := e.svc.Sources(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	out := SourceList{Sources: make([]discovery.Source, 0, len(list))}
+	for _, s := range list {
+		out.Sources = append(out.Sources, *s)
+	}
+	return c.JSON(http.StatusOK, out)
+}
+
+func (e *Extension) addSource(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in discovery.AddSourceInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"repository": "acme/web"}`)
+	}
+	src, err := e.svc.AddSource(c.Request().Context(), p, c.Param("id"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusCreated, src)
+}
+
+func (e *Extension) updateSource(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in discovery.UpdateSourceInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"ref": "main"}`)
+	}
+	src, err := e.svc.UpdateSource(c.Request().Context(), p, c.Param("id"), c.Param("alias"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, src)
+}
+
+func (e *Extension) removeSource(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	if err = e.svc.RemoveSource(c.Request().Context(), p, c.Param("id"), c.Param("alias")); err != nil {
+		return fail(err)
+	}
+	return c.NoContent(http.StatusNoContent)
 }

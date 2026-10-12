@@ -58,29 +58,72 @@ func exampleTarball(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-// fakeGitHubServing serves examples/polyglot as acme/mono, the way GitHub's
-// API serves a public repository.
-func fakeGitHubServing(t *testing.T) *httptest.Server {
+// fakeGitHubRepos serves each tarball as the repository its key names, on
+// a main branch at exampleSHA, the way GitHub's API serves a public
+// repository.
+func fakeGitHubRepos(t *testing.T, repos map[string][]byte) *httptest.Server {
 	t.Helper()
-	tgz := exampleTarball(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/repos/acme/mono":
-			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
-		case "/repos/acme/mono/commits/main":
-			_, _ = w.Write([]byte(exampleSHA))
-		case "/repos/acme/mono/tarball/" + exampleSHA:
-			_, _ = w.Write(tgz)
-		default:
-			http.NotFound(w, r)
+		for name, tgz := range repos {
+			switch r.URL.Path {
+			case "/repos/" + name:
+				_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+				return
+			case "/repos/" + name + "/commits/main":
+				_, _ = w.Write([]byte(exampleSHA))
+				return
+			case "/repos/" + name + "/tarball/" + exampleSHA:
+				_, _ = w.Write(tgz)
+				return
+			}
 		}
+		http.NotFound(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
 }
 
+// fakeGitHubServing serves examples/polyglot as acme/mono.
+func fakeGitHubServing(t *testing.T) *httptest.Server {
+	t.Helper()
+	return fakeGitHubRepos(t, map[string][]byte{"acme/mono": exampleTarball(t)})
+}
+
+// tarball packs files the way GitHub's tarball endpoint does: under one
+// top directory.
+func tarball(t *testing.T, top string, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	for name, body := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: top + "/" + name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// siteFiles is a Next.js app in a repository of its own, which uses a
+// package published from elsewhere.
+var siteFiles = map[string]string{
+	"package.json": `{"name": "site", "scripts": {"build": "next build", "start": "next start"},
+  "dependencies": {"next": "15.0.0", "react": "19.0.0", "@acme/ui": "^1.0.0"}}`,
+	"app/page.tsx": "export default function Page() { return null }\n",
+}
+
 type analysisBody struct {
 	ID        string `json:"id"`
+	Source    string `json:"source"`
 	Status    string `json:"status"`
 	CommitSHA string `json:"commit_sha"`
 	Error     string `json:"error"`
@@ -113,15 +156,21 @@ func TestDiscovery_theWorkerAnalyzesAProjectsRepository(t *testing.T) {
 	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
 	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
 
-	var mono, lab struct {
+	var mono struct {
 		ID string `json:"id"`
 	}
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &mono)
-	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Lab", "repository_url": "https://gitlab.com/acme/lab"}, &lab)
-	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/projects/"+lab.ID+"/analyses", nil, nil)
+	// Only GitHub is supported, so a GitLab project isn't created at all.
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Lab", "repository_url": "https://gitlab.com/acme/lab"}, nil)
 
-	var a analysisBody
-	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+mono.ID+"/analyses", nil, &a)
+	var queued struct {
+		Analyses []analysisBody `json:"analyses"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+mono.ID+"/analyses", nil, &queued)
+	if len(queued.Analyses) != 1 {
+		t.Fatalf("queued %+v", queued)
+	}
+	a := queued.Analyses[0]
 	if a.Status != "queued" {
 		t.Fatalf("new analysis %+v", a)
 	}

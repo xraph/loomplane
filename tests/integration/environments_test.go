@@ -109,8 +109,14 @@ func TestEnvironments_everyProjectHasOneAndVariablesLayer(t *testing.T) {
 	c.must(http.StatusBadRequest, http.MethodPost, "/api/v1/projects/"+project.ID+"/environments", map[string]string{"name": "Not OK"}, nil)
 
 	// Analyze it, so its services can have variables of their own.
-	var a analysisBody
-	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+project.ID+"/analyses", nil, &a)
+	var queued struct {
+		Analyses []analysisBody `json:"analyses"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+project.ID+"/analyses", nil, &queued)
+	if len(queued.Analyses) != 1 {
+		t.Fatalf("queued %+v", queued)
+	}
+	a := queued.Analyses[0]
 	for deadline := time.Now().Add(readyTimeout); a.Status != "succeeded"; time.Sleep(100 * time.Millisecond) {
 		if a.Status == "failed" || time.Now().After(deadline) {
 			t.Fatalf("analysis %+v", a)

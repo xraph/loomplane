@@ -38,6 +38,10 @@ import (
 // Name is the API extension's name.
 const Name = "loomplane-discovery"
 
+// The compiler proves the service is what a new project attaches its
+// repository through.
+var _ projects.Attacher = (*discovery.Service)(nil)
+
 // Extension serves the analysis API and the GitHub connection.
 type Extension struct {
 	*forge.BaseExtension
@@ -95,6 +99,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}); err != nil {
 		return err
 	}
+	e.svc.SetAccess(discovery.GitHubAccess{Tokens: e.github, Fetcher: repositories.NewGitHub(e.cfg.GitHub.APIURL)})
+	// A new project's repository is attached as its first source, which
+	// only discovery knows how to do.
+	projectSvc, err := forge.InjectType[*projects.Service](c)
+	if err != nil {
+		return fmt.Errorf("discovery needs the projects extension: %w", err)
+	}
+	projectSvc.SetAttacher(e.svc)
 	// Deployments mint repository tokens with the same connections.
 	if err := forge.ProvideValue(c, e.github); err != nil {
 		return fmt.Errorf("provide the GitHub connections: %w", err)
@@ -152,11 +164,14 @@ func (e *Extension) Start(context.Context) error {
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
-	case errors.Is(err, discovery.ErrNotFound), errors.Is(err, projects.ErrNotFound):
+	case errors.Is(err, discovery.ErrNotFound), errors.Is(err, discovery.ErrSourceNotFound), errors.Is(err, projects.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, discovery.ErrAlreadyActive), errors.Is(err, discovery.ErrNoGraph):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
-	case errors.Is(err, discovery.ErrNoSources), errors.Is(err, discovery.ErrInvalid):
+	case errors.Is(err, discovery.ErrAliasTaken), errors.Is(err, discovery.ErrRootsOverlap):
+		return forge.NewHTTPError(http.StatusConflict, err.Error())
+	case errors.Is(err, discovery.ErrNoSources), errors.Is(err, discovery.ErrInvalid), errors.Is(err, discovery.ErrAliasReserved),
+		errors.Is(err, discovery.ErrInvalidSource), errors.Is(err, discovery.ErrSourceInaccessible):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, readable(err))
 	case errors.Is(err, repositories.ErrInstallationNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())

@@ -144,8 +144,14 @@ func TestGitHub_aConnectedInstallationReadsPrivateRepositories(t *testing.T) {
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Private", "repository_url": "https://github.com/acme/private"}, &project)
 	analyze := func() analysisBody {
 		t.Helper()
-		var a analysisBody
-		c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+project.ID+"/analyses", nil, &a)
+		var queued struct {
+			Analyses []analysisBody `json:"analyses"`
+		}
+		c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+project.ID+"/analyses", nil, &queued)
+		if len(queued.Analyses) != 1 {
+			t.Fatalf("queued %+v", queued)
+		}
+		a := queued.Analyses[0]
 		deadline := time.Now().Add(readyTimeout)
 		for a.Status != "succeeded" && a.Status != "failed" {
 			if time.Now().After(deadline) {

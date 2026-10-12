@@ -38,9 +38,14 @@ type planBody struct {
 	DecisionNote string `json:"decision_note"`
 }
 
-// analyze runs one analysis of a project with a worker of its own, and
-// stops the worker once it's done.
+// analyze runs one analysis of each of a project's sources with a worker
+// of its own, and stops the worker once they're done.
 func analyze(t *testing.T, cfg config.Config, c *client, projectID string) {
+	t.Helper()
+	analyzeAll(t, cfg, c, projectID)
+}
+
+func analyzeAll(t *testing.T, cfg config.Config, c *client, projectID string) []analysisBody {
 	t.Helper()
 	worker, err := platform.NewWorker(cfg)
 	if err != nil {
@@ -56,19 +61,25 @@ func analyze(t *testing.T, cfg config.Config, c *client, projectID string) {
 			t.Errorf("stop worker: %v", serr)
 		}
 	}()
-	var a analysisBody
-	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+projectID+"/analyses", nil, &a)
+	var list struct {
+		Analyses []analysisBody `json:"analyses"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+projectID+"/analyses", nil, &list)
 	deadline := time.Now().Add(readyTimeout)
-	for a.Status != "succeeded" && a.Status != "failed" {
-		if time.Now().After(deadline) {
-			t.Fatalf("analysis still %s after %s", a.Status, readyTimeout)
+	for i := range list.Analyses {
+		a := &list.Analyses[i]
+		for a.Status != "succeeded" && a.Status != "failed" {
+			if time.Now().After(deadline) {
+				t.Fatalf("analysis of %s still %s after %s", a.Source, a.Status, readyTimeout)
+			}
+			time.Sleep(100 * time.Millisecond)
+			c.must(http.StatusOK, http.MethodGet, "/api/v1/analyses/"+a.ID, nil, a)
 		}
-		time.Sleep(100 * time.Millisecond)
-		c.must(http.StatusOK, http.MethodGet, "/api/v1/analyses/"+a.ID, nil, &a)
+		if a.Status != "succeeded" {
+			t.Fatalf("analysis of %s failed: %s", a.Source, a.Error)
+		}
 	}
-	if a.Status != "succeeded" {
-		t.Fatalf("analysis failed: %s", a.Error)
-	}
+	return list.Analyses
 }
 
 // waitPlanned polls a plan until planning is over.
