@@ -147,7 +147,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Warn:   func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})
 	deployStore := deployments.NewPgStore(pg)
-	e.deploys = deployments.NewService(deployStore, authz)
+	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		Store: deployStore, Plans: planStore, Projects: prj, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{
@@ -204,7 +204,7 @@ func fail(err error) error {
 		errors.Is(err, deployments.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict),
+	case errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph):

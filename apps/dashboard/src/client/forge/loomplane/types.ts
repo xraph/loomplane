@@ -196,6 +196,7 @@ export interface Deployment {
   orgId: string;
   planId: string;
   projectId: string;
+  retries: number;
   source: string;
   startedAt: string;
   startedBy: string;

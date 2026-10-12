@@ -95,6 +95,23 @@ func (m *memStore) Finish(_ context.Context, _, id, status, reason string, at ti
 	return nil
 }
 
+func (m *memStore) Reopen(_ context.Context, _, id string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := m.d[id]
+	if d.Status != StatusFailed {
+		return false, nil
+	}
+	d.Status, d.Error, d.FinishedAt = StatusRunning, "", nil
+	for i := range d.Steps {
+		if d.Steps[i].Status == StepFailed || d.Steps[i].Status == StepSkipped {
+			d.Steps[i].Status = StepPending
+		}
+	}
+	d.Retries++
+	return true, nil
+}
+
 type fakePlans struct {
 	mu       sync.Mutex
 	plan     *planning.Plan

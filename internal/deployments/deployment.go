@@ -51,8 +51,10 @@ type Deployment struct {
 	// Source is the artifact key of the commit's tarball, once stored.
 	Source string `json:"source"`
 	// Error says why the deployment failed.
-	Error      string     `json:"error"`
-	Steps      []Step     `json:"steps"`
+	Error string `json:"error"`
+	Steps []Step `json:"steps"`
+	// Retries counts how often someone retried it after it failed.
+	Retries    int        `json:"retries"`
 	StartedBy  string     `json:"started_by"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at"`
@@ -115,4 +117,22 @@ type Store interface {
 	UpdateStep(ctx context.Context, orgID, id string, s Step) error
 	// Finish settles a running deployment.
 	Finish(ctx context.Context, orgID, id, status, reason string, at time.Time) error
+	// Reopen sets a failed deployment running again, with its failed and
+	// skipped steps pending. It returns false, with no error, when the
+	// deployment isn't failed, such as when another retry won.
+	Reopen(ctx context.Context, orgID, id string) (bool, error)
+}
+
+// Order groups a deployment's steps by plan step, in the order they run.
+func (d *Deployment) Order() [][]string {
+	var out [][]string
+	last := 0
+	for i, s := range d.Steps {
+		if i == 0 || s.Order != last {
+			out = append(out, nil)
+			last = s.Order
+		}
+		out[len(out)-1] = append(out[len(out)-1], s.ActionID)
+	}
+	return out
 }

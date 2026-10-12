@@ -37,6 +37,7 @@ func Group() *migrate.Group {
 		statements("20261012000007", "create_environment_connections", environmentConnectionsUp, environmentConnectionsDown),
 		statements("20261012000008", "create_deployments", deploymentsUp, deploymentsDown),
 		statements("20261012000009", "add_binding_url", bindingURLUp, bindingURLDown),
+		statements("20261013000001", "add_deployment_retries", deploymentRetriesUp, deploymentRetriesDown),
 	)
 	return g
 }
@@ -388,4 +389,13 @@ var bindingURLUp = []string{
 
 var bindingURLDown = []string{
 	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS url`,
+}
+
+// How often a failed deployment was retried.
+var deploymentRetriesUp = []string{
+	`ALTER TABLE loomplane_deployments ADD COLUMN IF NOT EXISTS retries INTEGER NOT NULL DEFAULT 0`,
+}
+
+var deploymentRetriesDown = []string{
+	`ALTER TABLE loomplane_deployments DROP COLUMN IF EXISTS retries`,
 }

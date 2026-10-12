@@ -250,6 +250,22 @@ export class RESTClient extends Client {
       return this.request<types.DeploymentList>(config);
     },
 
+    /**
+     * Run a failed deployment's failed and skipped steps again, with the plan that was approved
+     */
+    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Deployment"],
+      };
+
+      return this.request<types.Deployment>(config);
+    },
+
   };
 
   public readonly environmentConnections = {

@@ -288,6 +288,38 @@
         }
       }
     },
+    "/api/v1/deployments/{id}/retry": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Run a failed deployment's failed and skipped steps again, with the plan that was approved",
+        "operationId": "deployments.retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deployment, running again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/github": {
       "get": {
         "tags": [
@@ -2289,6 +2321,7 @@
           "source",
           "error",
           "steps",
+          "retries",
           "started_by",
           "started_at"
         ],
@@ -2320,6 +2353,9 @@
           },
           "project_id": {
             "type": "string"
+          },
+          "retries": {
+            "type": "integer"
           },
           "source": {
             "type": "string"

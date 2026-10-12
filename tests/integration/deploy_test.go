@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,12 +32,15 @@ type fakeCloud struct {
 	services map[string]map[string]any
 	patches  int
 	public   map[string]bool
+	// failBuilds makes builds fail while it's set.
+	failBuilds bool
+	failed     map[string]bool
 }
 
 func newFakeCloud(base string) *fakeCloud {
 	return &fakeCloud{
 		base: base, uploads: map[string][]byte{}, repos: map[string]bool{}, polls: map[string]int{},
-		services: map[string]map[string]any{}, public: map[string]bool{},
+		services: map[string]map[string]any{}, public: map[string]bool{}, failed: map[string]bool{},
 	}
 }
 
@@ -71,14 +75,20 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var b map[string]any
 		_ = json.Unmarshal(body, &b)
 		f.builds = append(f.builds, b)
-		reply(map[string]any{"metadata": map[string]any{"build": map[string]any{"id": "build-1"}}})
-	case r.Method == http.MethodGet && p == "/v1/projects/acme-prod/builds/build-1":
-		f.polls["build-1"]++
+		id := fmt.Sprintf("build-%d", len(f.builds))
+		f.failed[id] = f.failBuilds
+		reply(map[string]any{"metadata": map[string]any{"build": map[string]any{"id": id}}})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1/projects/acme-prod/builds/"):
+		id := strings.TrimPrefix(p, "/v1/projects/acme-prod/builds/")
+		f.polls[id]++
 		status := "WORKING"
-		if f.polls["build-1"] > 1 {
+		switch {
+		case f.polls[id] > 1 && f.failed[id]:
+			status = "FAILURE"
+		case f.polls[id] > 1:
 			status = "SUCCESS"
 		}
-		reply(map[string]any{"id": "build-1", "status": status, "logUrl": "https://console/build-1"})
+		reply(map[string]any{"id": id, "status": status, "statusDetail": "step 0 exited 1", "logUrl": "https://console/" + id})
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v2/projects/acme-prod/locations/us-central1/operations/"):
 		reply(map[string]any{"name": strings.TrimPrefix(p, "/v2/"), "done": true})
 	case strings.HasPrefix(p, runPrefix):
@@ -499,5 +509,87 @@ func TestDeploy_aNextAppOnVercelFindsItsGoAPIOnCloudRun(t *testing.T) {
 	}
 	if vc.deployed[0]["target"] != "production" {
 		t.Fatalf("deployed to %v", vc.deployed[0]["target"])
+	}
+}
+
+func TestDeploy_aFailedDeploymentIsRetriedFromWhereItStopped(t *testing.T) {
+	google := newFakeGoogle(t)
+	cloud := newFakeCloud(google.srv.URL)
+	cloud.failBuilds = true
+	google.deploy = cloud
+	const vercelToken = "vcl_0123456789abcdef"
+	vc := newFakeVercelDeploys(t, vercelToken)
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.GoogleEndpoint = google.srv.URL
+	cfg.Clouds.VercelEndpoint = vc.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "vercel", "name": "Web", "credential": vercelToken}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": webAndAPIManifest}, nil)
+
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	d := approveAndWait(t, c, plan)
+	if d.Status != "failed" || !strings.Contains(d.Error, "step 0 exited 1") ||
+		d.Steps[0].Status != "failed" || d.Steps[1].Status != "skipped" {
+		t.Fatalf("deployment %+v", d)
+	}
+	// Retrying something that hasn't failed is refused; so is retrying as
+	// a developer, which the role catalog covers elsewhere.
+	c.must(http.StatusNotFound, http.MethodPost, "/api/v1/deployments/dep_nope/retry", nil, nil)
+
+	// The build is fixed; retrying runs the failed step with a new build,
+	// then the step it skipped.
+	cloud.mu.Lock()
+	cloud.failBuilds = false
+	cloud.mu.Unlock()
+	c.must(http.StatusOK, http.MethodPost, "/api/v1/deployments/"+d.ID+"/retry", nil, &d)
+	if d.Status != "running" || d.Steps[0].Status != "pending" || d.Steps[1].Status != "pending" {
+		t.Fatalf("reopened %+v", d)
+	}
+	c.must(http.StatusConflict, http.MethodPost, "/api/v1/deployments/"+d.ID+"/retry", nil, nil)
+	deadline := time.Now().Add(readyTimeout)
+	for d.Status == "running" {
+		if time.Now().After(deadline) {
+			t.Fatalf("retry still running: %+v", d)
+		}
+		time.Sleep(100 * time.Millisecond)
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/deployments/"+d.ID, nil, &d)
+	}
+	if d.Status != "succeeded" || d.Steps[0].Status != "succeeded" || d.Steps[1].Status != "succeeded" || d.Steps[1].URL == "" {
+		t.Fatalf("retried %+v", d)
+	}
+	cloud.mu.Lock()
+	builds := len(cloud.builds)
+	cloud.mu.Unlock()
+	if builds != 2 {
+		t.Fatalf("%d builds, want the failed one and the retry", builds)
 	}
 }

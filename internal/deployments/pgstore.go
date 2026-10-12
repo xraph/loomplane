@@ -24,13 +24,13 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 
 const columns = `id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status, source,
-	error, steps, started_by, started_at, finished_at`
+	error, steps, retries, started_by, started_at, finished_at`
 
 func scan(row pgx.Row) (*Deployment, error) {
 	var d Deployment
 	var steps []byte
 	if err := row.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.EnvironmentID, &d.Environment, &d.PlanID, &d.CommitSHA,
-		&d.Status, &d.Source, &d.Error, &steps, &d.StartedBy, &d.StartedAt, &d.FinishedAt); err != nil {
+		&d.Status, &d.Source, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(steps, &d.Steps); err != nil {
@@ -49,10 +49,10 @@ func (s *PgStore) CreateDeployment(ctx context.Context, d *Deployment) (*Deploym
 		return nil, fmt.Errorf("encode steps: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_deployments (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (plan_id) DO NOTHING`,
 		d.ID, d.OrgID, d.ProjectID, d.EnvironmentID, d.Environment, d.PlanID, d.CommitSHA, d.Status, d.Source,
-		d.Error, steps, d.StartedBy, d.StartedAt, d.FinishedAt)
+		d.Error, steps, d.Retries, d.StartedBy, d.StartedAt, d.FinishedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert deployment: %w", err)
 	}
@@ -172,4 +172,49 @@ func (s *PgStore) Finish(ctx context.Context, orgID, id, status, reason string, 
 		return fmt.Errorf("finish deployment: %w", err)
 	}
 	return nil
+}
+
+// Reopen implements Store, in one transaction, so of two retries at once
+// one reopens the deployment and the other finds it running.
+func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	var raw []byte
+	err = tx.QueryRow(ctx, `SELECT steps FROM loomplane_deployments
+		WHERE org_id = $1 AND id = $2 AND status = 'failed' FOR UPDATE`, orgID, id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Not failed: end the transaction here, since the deferred
+		// rollback only runs on an error.
+		if rerr := tx.Rollback(); rerr != nil {
+			return false, fmt.Errorf("rollback: %w", rerr)
+		}
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read deployment: %w", err)
+	}
+	var steps []Step
+	if err = json.Unmarshal(raw, &steps); err != nil {
+		return false, fmt.Errorf("decode steps: %w", err)
+	}
+	for i := range steps {
+		if steps[i].Status == StepFailed || steps[i].Status == StepSkipped {
+			steps[i].Status, steps[i].Message, steps[i].StartedAt, steps[i].FinishedAt = StepPending, "Waiting to retry", nil, nil
+		}
+	}
+	if raw, err = json.Marshal(steps); err != nil {
+		return false, fmt.Errorf("encode steps: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments
+		SET status = 'running', error = '', finished_at = NULL, steps = $3, retries = retries + 1
+		WHERE org_id = $1 AND id = $2`, orgID, id, raw); err != nil {
+		return false, fmt.Errorf("reopen deployment: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit: %w", err)
+	}
+	return true, nil
 }

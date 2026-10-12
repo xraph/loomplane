@@ -11,6 +11,7 @@ import {
   useConnectionsList,
   useDeploymentsForPlan,
   useDeploymentsList,
+  useDeploymentsRetry,
   useEnvironmentConnectionsChoose,
   useManifestsCurrent,
   useManifestsDraft,
@@ -1151,6 +1152,7 @@ function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
           </AlertDescription>
         </Alert>
       )}
+      {d.status === "failed" && <RetryDeployment deployment={d} />}
       {d.steps.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           Nothing to change: everything was already deployed.
@@ -1267,5 +1269,46 @@ function DeploymentsCard({
         </Table>
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * RetryDeployment runs a failed deployment's failed and skipped steps
+ * again, with the plan that was approved.
+ */
+function RetryDeployment({ deployment: d }: { deployment: Deployment }) {
+  const { can } = useOrganization()
+  const retry = useMutation(useDeploymentsRetry)
+  const invalidate = useInvalidate()
+  if (!can("deployment:approve")) return null
+
+  const run = async () => {
+    try {
+      await retry.mutateAsync({ path: { id: d.id } })
+      invalidate(useDeploymentsForPlan)
+      invalidate(useDeploymentsList)
+      toast.success("Retrying from the step that failed")
+    } catch (err) {
+      toast.error(messageOf(err, "The deployment couldn't be retried."))
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button
+        variant="outline"
+        className="rounded-full"
+        disabled={retry.isPending}
+        onClick={() => void run()}
+      >
+        {retry.isPending ? <Spinner /> : <RotateCcwIcon />}
+        Retry from the failed step
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        Steps that succeeded stay as they are.
+        {d.retries > 0 &&
+          ` Retried ${d.retries} ${d.retries === 1 ? "time" : "times"} so far.`}
+      </span>
+    </div>
   )
 }

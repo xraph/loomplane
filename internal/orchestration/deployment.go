@@ -28,10 +28,12 @@ const (
 	DeploymentBuild = "deployment-v2"
 
 	WorkflowDeployment = "loomplane.deployment"
-	ActivityPlan       = "loomplane.plan"
-	ActivityDecide     = "loomplane.plan.decide"
-	ActivityExpire     = "loomplane.plan.expire"
-	ActivityFail       = "loomplane.plan.fail"
+	// WorkflowRetry runs a failed deployment's remaining steps again.
+	WorkflowRetry  = "loomplane.deployment.retry"
+	ActivityPlan   = "loomplane.plan"
+	ActivityDecide = "loomplane.plan.decide"
+	ActivityExpire = "loomplane.plan.expire"
+	ActivityFail   = "loomplane.plan.fail"
 
 	// Activities after approval: record the deployment, store the source,
 	// carry out each action, settle it.
@@ -199,7 +201,7 @@ func (d *Deployments) Options(owner string, concurrency int) drt.Options {
 	return drt.Options{
 		Namespace: DurableNamespace, Queue: DurableQueue, BuildID: DeploymentBuild, Owner: owner,
 		Concurrency: concurrency,
-		Workflows:   map[string]drt.WorkflowFunc{WorkflowDeployment: d.workflow},
+		Workflows:   map[string]drt.WorkflowFunc{WorkflowDeployment: d.workflow, WorkflowRetry: d.retry},
 		Activities: map[string]drt.ActivityFunc{
 			ActivityPlan:   d.plan,
 			ActivityDecide: d.decide,
@@ -283,7 +285,17 @@ func deploy(w *drt.Workflow, in DeploymentInput) ([]byte, error) {
 	if started.DeploymentID == "" {
 		return finished(PlanApproved)
 	}
-	dep := deployInput{OrgID: in.OrgID, DeploymentID: started.DeploymentID}
+	if err := runSteps(w, in.OrgID, started); err != nil {
+		return nil, err
+	}
+	return json.Marshal(Outcome{Status: PlanApproved, Deployment: started.DeploymentID})
+}
+
+// runSteps stores the source, runs each action in order until one fails,
+// and settles the deployment. Actions that already succeeded return at
+// once, which is what lets a retry run the same steps again.
+func runSteps(w *drt.Workflow, orgID string, started deployStarted) error {
+	dep := deployInput{OrgID: orgID, DeploymentID: started.DeploymentID}
 	reason := ""
 	if err := callInto(w, "deploy-source", ActivityDeploySource, dep, sourceTimeout, 0, activityAttempts, nil); err != nil {
 		reason = "The source couldn't be stored: " + err.Error()
@@ -303,10 +315,50 @@ func deploy(w *drt.Workflow, in DeploymentInput) ([]byte, error) {
 	}
 	done := dep
 	done.Reason = reason
-	if err := callInto(w, "deploy-finish", ActivityDeployFinish, done, activityTimeout, 0, activityAttempts, nil); err != nil {
+	return callInto(w, "deploy-finish", ActivityDeployFinish, done, activityTimeout, 0, activityAttempts, nil)
+}
+
+// retryInput restarts a failed deployment's remaining steps.
+type retryInput struct {
+	OrgID        string     `json:"org_id"`
+	DeploymentID string     `json:"deployment_id"`
+	Steps        [][]string `json:"steps"`
+}
+
+// retry is the retry workflow: the deployment was reopened before it
+// started, so it runs the steps again, and those that succeeded the first
+// time return at once.
+func (d *Deployments) retry(w *drt.Workflow, input []byte) ([]byte, error) {
+	var in retryInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, fmt.Errorf("decode retry input: %w", err)
+	}
+	if err := runSteps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps}); err != nil {
 		return nil, err
 	}
-	return json.Marshal(Outcome{Status: PlanApproved, Deployment: started.DeploymentID})
+	return json.Marshal(Outcome{Status: PlanApproved, Deployment: in.DeploymentID})
+}
+
+// Retry starts a reopened deployment's steps again. retryID names this
+// retry, so a repeated request starts it once.
+func (d *Deployments) Retry(ctx context.Context, orgID, deploymentID, retryID string, steps [][]string) error {
+	eng, err := d.engine()
+	if err != nil {
+		return err
+	}
+	input, err := json.Marshal(retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps})
+	if err != nil {
+		return fmt.Errorf("encode retry input: %w", err)
+	}
+	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{
+		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: retryID, RunID: runID},
+		RequestID: "start:" + retryID, WorkflowType: WorkflowRetry, BuildID: DeploymentBuild,
+		Queue: DurableQueue, Input: input,
+	})
+	if err != nil {
+		return fmt.Errorf("start retry workflow: %w", err)
+	}
+	return nil
 }
 
 // callInto runs an activity and decodes its output into out, if out isn't

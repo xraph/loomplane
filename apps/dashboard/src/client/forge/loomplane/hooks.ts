@@ -21,6 +21,7 @@ export const useConnectionsDelete = mutation(ops['connections.delete']);
 export const useConnectionsCheck = mutation<Connection, Connection>(ops['connections.check']);
 export const useConnectionsReplace = mutation<Connection, Connection>(ops['connections.replace']);
 export const useDeploymentsGet = query<Deployment>(ops['deployments.get']);
+export const useDeploymentsRetry = mutation<Deployment, Deployment>(ops['deployments.retry']);
 export const useGithubStatus = query<GitHubStatus>(ops['github.status']);
 export const useGithubConnect = mutation<GitHubInstallation, GitHubInstallation>(ops['github.connect']);
 export const useGithubDisconnect = mutation(ops['github.disconnect']);

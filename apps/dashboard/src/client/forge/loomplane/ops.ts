@@ -159,6 +159,15 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['Deployment'],
   },
+  'deployments.retry': {
+    method: 'POST',
+    path: '/api/v1/deployments/{id}/retry',
+    entity: 'Deployment',
+    rootType: 'Deployment',
+    provides: ['Deployment:{id}'],
+    invalidates: ['Deployment[]'],
+    responseCodec: CODECS['Deployment'],
+  },
   'github.status': {
     method: 'GET',
     path: '/api/v1/github',
