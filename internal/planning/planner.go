@@ -85,6 +85,7 @@ func Compute(in Input) *Result {
 		clouds:    map[string]bool{},
 		bindings:  map[string]*Binding{},
 		heldNew:   map[string]string{},
+		held:      map[string]bool{},
 	}
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
@@ -120,6 +121,9 @@ type planner struct {
 	// heldNew are the held services that run nowhere yet, by manifest
 	// name, with the alias of the repository that holds them.
 	heldNew map[string]string
+	// held are the held services kept as they're deployed, by manifest
+	// name.
+	held map[string]bool
 }
 
 func actionID(s Subject, name string) string { return string(s) + ":" + name }
@@ -299,6 +303,7 @@ func (p *planner) planResources() {
 func (p *planner) planServices() {
 	m := p.in.Manifest
 	p.graphServices = map[string]*graph.Service{}
+	var held []string
 	for _, name := range m.ServiceNames() {
 		s := m.Services[name]
 		base := "services." + name
@@ -312,88 +317,144 @@ func (p *planner) planServices() {
 		if !manifest.On(set.Enabled) {
 			continue
 		}
-		if p.in.Held[gs.Source] && p.bindings[actionID(ServiceSubject, name)] == nil {
-			p.heldNew[name] = gs.Source
-			p.warn(Finding{
-				Code: "held", Subject: ServiceSubject, Name: name, Path: base,
-				Message: fmt.Sprintf("%s is in %s, which this plan holds back, and nothing runs it in %s yet, so it isn't created.", name, gs.Source, p.in.Environment),
-			})
+		if p.in.Held[gs.Source] {
+			b := p.bindings[actionID(ServiceSubject, name)]
+			if b == nil {
+				p.heldNew[name] = gs.Source
+				p.warn(Finding{
+					Code: "held", Subject: ServiceSubject, Name: name, Path: base,
+					Message: fmt.Sprintf("%s is in %s, which this plan holds back, and nothing runs it in %s yet, so it isn't created.", name, gs.Source, p.in.Environment),
+				})
+				continue
+			}
+			p.keep(name, gs.Source, b)
+			held = append(held, name)
 			continue
 		}
-		kind := string(gs.Kind)
-		if s.Kind != "" {
-			kind = s.Kind
-		}
-		if !graph.ServiceKind(kind).Deployable() {
-			p.problem(Finding{
-				Code: "not-deployable", Subject: ServiceSubject, Name: name, Path: base + ".source",
-				Message: fmt.Sprintf("%s at %s is a %s, which Loomplane doesn't deploy. Set %s.kind if analysis got it wrong.", name, s.Source, kind, base),
-			})
+		a := p.desired(name, base, s, gs, set)
+		if a == nil {
 			continue
-		}
-		workload := provider.Workload(kind)
-		able := p.in.Providers.Running(workload)
-		prov := p.lookup(ServiceSubject, name, base+".provider", set.Provider, able)
-		if prov == nil {
-			continue
-		}
-		runs, ok := prov.Running(workload)
-		if !ok {
-			p.problem(Finding{
-				Code: "provider-cant-run", Subject: ServiceSubject, Name: name, Path: base + ".provider",
-				Message: fmt.Sprintf("%s doesn't run a %s like %s. %s", prov.Title, kind, name, couldUse(able)),
-			})
-			continue
-		}
-		cfg := p.serviceConfig(name, base, gs, prov, runs, set)
-		a := &Action{
-			ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
-			Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
-			Service: cfg,
 		}
 		p.services[name] = a
 		p.actions = append(p.actions, a)
 	}
 	// Needs are settled once every service has its action, since a service
-	// can need one planned after it.
+	// can need one planned after it. A held service keeps the links it was
+	// deployed with.
 	for _, name := range m.ServiceNames() {
-		if a := p.services[name]; a != nil {
+		a := p.services[name]
+		switch {
+		case a == nil:
+		case p.held[name]:
+			p.linkHeld(a)
+		default:
 			p.link(name, a)
 		}
 	}
-	p.hold()
+	for _, name := range held {
+		p.waits(name)
+	}
 	p.order()
 }
 
-// hold keeps each held service as it's deployed: a keep action carrying
-// the deployed configuration, so whatever needs it still gets its address
-// and nothing deletes it. A change the manifest would make waits for a
-// plan that moves its repository, with a warning saying so.
-func (p *planner) hold() {
-	for _, name := range p.in.Manifest.ServiceNames() {
-		a, gs := p.services[name], p.graphServices[name]
-		if a == nil || gs == nil || !p.in.Held[gs.Source] {
-			continue
-		}
-		b := p.bindings[a.ID]
-		if b == nil {
-			continue // planServices left those out
-		}
-		if a.Op != Keep {
-			p.warn(Finding{
-				Code: "held", Subject: ServiceSubject, Name: name, Path: "services." + name,
-				Message: fmt.Sprintf("%s is in %s, which this plan holds back, so this waits for a plan that moves %s: %s", name, gs.Source, gs.Source, a.Reason),
-			})
-		}
-		var cfg ServiceConfig
-		if json.Unmarshal(b.Config, &cfg) == nil {
-			a.Service = &cfg
-		}
-		a.Op, a.Changes, a.Provider, a.Region = Keep, nil, b.Provider, b.Region
-		// The manifest may name another provider, but the keep is of what runs.
-		a.Engine, a.Creates = b.Engine, p.creates(b)
-		a.Reason = fmt.Sprintf("Held: this plan doesn't move %s.", gs.Source)
+// desired builds the action the manifest asks for a service, before its
+// needs are linked, or reports why it can't.
+func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Service, set manifest.Settings) *Action {
+	kind := string(gs.Kind)
+	if s.Kind != "" {
+		kind = s.Kind
 	}
+	if !graph.ServiceKind(kind).Deployable() {
+		p.problem(Finding{
+			Code: "not-deployable", Subject: ServiceSubject, Name: name, Path: base + ".source",
+			Message: fmt.Sprintf("%s at %s is a %s, which Loomplane doesn't deploy. Set %s.kind if analysis got it wrong.", name, s.Source, kind, base),
+		})
+		return nil
+	}
+	workload := provider.Workload(kind)
+	able := p.in.Providers.Running(workload)
+	prov := p.lookup(ServiceSubject, name, base+".provider", set.Provider, able)
+	if prov == nil {
+		return nil
+	}
+	runs, ok := prov.Running(workload)
+	if !ok {
+		p.problem(Finding{
+			Code: "provider-cant-run", Subject: ServiceSubject, Name: name, Path: base + ".provider",
+			Message: fmt.Sprintf("%s doesn't run a %s like %s. %s", prov.Title, kind, name, couldUse(able)),
+		})
+		return nil
+	}
+	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
+	return &Action{
+		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
+		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
+		Service: cfg,
+	}
+}
+
+// keep plans a held service as it's deployed: a keep action carrying the
+// deployed configuration, so whatever needs it still gets its address and
+// nothing deletes it. The manifest isn't consulted, so nothing it says
+// about the service can block the plan.
+func (p *planner) keep(name, alias string, b *Binding) {
+	cfg := ServiceConfig{Provider: b.Provider, Region: b.Region}
+	_ = json.Unmarshal(b.Config, &cfg) //nolint:errcheck // a binding that doesn't parse keeps its provider and region, and nothing else is known
+	if prov, err := p.in.Providers.Get(b.Provider); err == nil {
+		p.use(prov)
+	}
+	a := &Action{
+		ID: actionID(ServiceSubject, name), Op: Keep, Subject: ServiceSubject, Name: name,
+		Provider: b.Provider, Region: b.Region, Engine: b.Engine, Creates: p.creates(b),
+		Service: &cfg, Reason: fmt.Sprintf("Held: this plan doesn't move %s.", alias),
+	}
+	p.held[name] = true
+	p.services[name] = a
+	p.actions = append(p.actions, a)
+}
+
+// linkHeld orders a held service after what it was deployed against and
+// is still in the plan.
+func (p *planner) linkHeld(a *Action) {
+	for _, e := range a.Service.Env {
+		var dep *Action
+		if e.Subject == ResourceSubject {
+			dep = p.resources[e.From]
+		} else {
+			dep = p.services[e.From]
+		}
+		if dep != nil && !slices.Contains(a.DependsOn, dep.ID) {
+			a.DependsOn = append(a.DependsOn, dep.ID)
+		}
+	}
+	sort.Strings(a.DependsOn)
+}
+
+// waits says when the manifest would change a held service, which the
+// plan holds back. It works out what the manifest asks for with every
+// finding, cloud and provider it touches thrown away, so asking can't
+// change the plan.
+func (p *planner) waits(name string) {
+	m := p.in.Manifest
+	s, gs := m.Services[name], p.graphServices[name]
+	base := "services." + name
+	problems, warnings, unready, clouds := p.problems, p.warnings, p.unready, p.clouds
+	p.problems, p.warnings, p.unready, p.clouds = nil, nil, map[string]string{}, map[string]bool{}
+	a := p.desired(name, base, s, gs, s.For(p.in.Environment, m.Defaults))
+	if a != nil {
+		p.link(name, a)
+	}
+	found := p.problems
+	p.problems, p.warnings, p.unready, p.clouds = problems, warnings, unready, clouds
+	if a != nil && a.Op == Keep && len(found) == 0 {
+		return
+	}
+	alias := gs.Source
+	msg := fmt.Sprintf("%s is in %s, which this plan holds back, so its manifest changes wait for a plan that moves %s.", name, alias, alias)
+	if len(found) > 0 {
+		msg += " Its manifest also has a problem to fix first: " + found[0].Message
+	}
+	p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: name, Path: base, Message: msg})
 }
 
 // match finds the graph service a manifest service names: in the
@@ -449,9 +510,13 @@ func (p *planner) repoOf(name, base string, s manifest.Service) (string, bool) {
 		if slices.ContainsFunc(sources, func(r graph.SourceRef) bool { return r.Alias == s.Repo }) {
 			return s.Repo, true
 		}
+		msg := fmt.Sprintf("%s.repo is %s, which isn't one of this project's repositories: %s.", base, s.Repo, aliases(sources))
+		if len(sources) == 0 {
+			msg = fmt.Sprintf("%s.repo is %s, but this project has no repositories.", base, s.Repo)
+		}
 		p.problem(Finding{
 			Code: "unknown-repo", Subject: ServiceSubject, Name: name, Path: base + ".repo",
-			Message: fmt.Sprintf("%s.repo is %s, which isn't one of this project's repositories: %s.", base, s.Repo, aliases(sources)),
+			Message: msg,
 		})
 		return "", false
 	}
@@ -636,7 +701,7 @@ func (p *planner) order() {
 		}
 		seen[name] = true
 		step := 2
-		for _, need := range p.in.Manifest.Services[name].Needs {
+		for _, need := range p.needs(name, a) {
 			if p.services[need] != nil {
 				step = max(step, depth(need, seen)+1)
 			}
@@ -649,6 +714,22 @@ func (p *planner) order() {
 			depth(name, map[string]bool{})
 		}
 	}
+}
+
+// needs are the services a service runs after: what the manifest says it
+// needs, or for a held service, what it was deployed against. Those can
+// form a cycle validation never saw, which order cuts at step 2.
+func (p *planner) needs(name string, a *Action) []string {
+	if !p.held[name] {
+		return p.in.Manifest.Services[name].Needs
+	}
+	var out []string
+	for _, id := range a.DependsOn {
+		if dep, ok := strings.CutPrefix(id, string(ServiceSubject)+":"); ok {
+			out = append(out, dep)
+		}
+	}
+	return out
 }
 
 // diff sets an action's op from what's deployed: create when nothing is,
@@ -801,16 +882,20 @@ func (p *planner) impact() {
 	}
 	g := p.in.Graph
 	source, label := map[string]string{}, map[string]string{}
+	service := map[string]bool{}
 	for _, s := range g.Services {
 		source[s.ID], label[s.ID] = s.Source, s.Name
+		service[s.ID] = true
 	}
 	for _, pk := range g.Packages {
 		source[pk.ID], label[pk.ID] = pk.Source, pk.Name
 	}
 	users := map[string][]string{}
 	for _, e := range g.Edges {
+		// Only a held service counts as a user: it's what runs with the
+		// version it declares.
 		from, to := source[e.From], source[e.To]
-		if e.Kind != graph.Uses || from == "" || to == "" || from == to || !p.in.Held[from] || p.in.Held[to] {
+		if e.Kind != graph.Uses || !service[e.From] || from == "" || to == "" || from == to || !p.in.Held[from] || p.in.Held[to] {
 			continue
 		}
 		users[e.To] = append(users[e.To], fmt.Sprintf("%s in %s", label[e.From], from))
@@ -862,9 +947,11 @@ func (p *planner) planDeletes() {
 		}
 		if b.Subject == ServiceSubject {
 			var cfg ServiceConfig
-			if json.Unmarshal(b.Config, &cfg) == nil && p.in.Held[cfg.Repo] {
-				p.keepHeld(b, cfg.Repo)
-				continue
+			if json.Unmarshal(b.Config, &cfg) == nil {
+				if repo, held := p.heldRepo(cfg); held {
+					p.keepHeld(b, repo)
+					continue
+				}
 			}
 		}
 		reason := fmt.Sprintf("The manifest no longer has %s.", b.Name)
@@ -890,6 +977,17 @@ func (p *planner) planDeletes() {
 			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
 		})
 	}
+}
+
+// heldRepo reports whether a deployed service's repository is held. A
+// binding from before repositories has none, which in a project with one
+// repository can only be that one.
+func (p *planner) heldRepo(cfg ServiceConfig) (string, bool) {
+	repo := cfg.Repo
+	if sources := p.in.Graph.Sources; repo == "" && len(sources) == 1 {
+		repo = sources[0].Alias
+	}
+	return repo, repo != "" && p.in.Held[repo]
 }
 
 // keepHeld leaves a deployed service of a held repository running when

@@ -380,8 +380,9 @@ func TestCompute_deterministic(t *testing.T) {
 // federated is polyglot as "mono", beside a Next.js site in a repository
 // of its own that uses @acme/kit, which a third repository, "kit",
 // publishes. Polyglot already publishes an @acme/ui, and a name two
-// repositories publish gets no edge, so kit's package has its own.
-func federated(t *testing.T) *graph.Graph {
+// repositories publish gets no edge, so kit's package has its own. extra
+// adds more repositories.
+func federated(t *testing.T, extra ...graph.Part) *graph.Graph {
 	t.Helper()
 	site := graph.Build(&pd.Report{Units: []pd.Unit{{
 		ID: "node:.", Ecosystem: pd.Node, Name: "site", Path: ".",
@@ -389,11 +390,11 @@ func federated(t *testing.T) *graph.Graph {
 		Requires:    []pd.Requirement{{Name: "@acme/kit", Version: "^1.0.0", Evidence: pd.Evidence{Path: "package.json", Line: 9}}},
 	}}})
 	kit := graph.Build(&pd.Report{Units: []pd.Unit{{ID: "node:.", Ecosystem: pd.Node, Name: "@acme/kit", Path: "."}}})
-	return graph.Compose([]graph.Part{
+	return graph.Compose(append([]graph.Part{
 		{Source: graph.SourceRef{Alias: "mono", Repository: "acme/mono", CommitSHA: strings.Repeat("a", 40)}, Graph: polyglot(t)},
 		{Source: graph.SourceRef{Alias: "site", Repository: "acme/site", CommitSHA: strings.Repeat("b", 40)}, Graph: site},
 		{Source: graph.SourceRef{Alias: "kit", Repository: "acme/kit", CommitSHA: strings.Repeat("c", 40)}, Graph: kit},
-	})
+	}, extra...))
 }
 
 const federatedYAML = `version: 1
@@ -524,5 +525,183 @@ func TestCompute_movingAPackageNamesWhatItsHeldUsersAre(t *testing.T) {
 	// Nothing held, nothing to warn about.
 	if slices.ContainsFunc(computeFed(t, federatedYAML, nil, live...).Warnings, func(f Finding) bool { return f.Code == "cross-repo-impact" }) {
 		t.Fatal("a plan that moves everything warned about impact")
+	}
+}
+
+func warning(r *Result, code, name string) *Finding {
+	for i := range r.Warnings {
+		if r.Warnings[i].Code == code && r.Warnings[i].Name == name {
+			return &r.Warnings[i]
+		}
+	}
+	return nil
+}
+
+func TestCompute_aHeldServicesManifestProblemWaits(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	r := computeFed(t, strings.Replace(federatedYAML, "provider: vercel", "provider: nope", 1), []string{"site"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	site := action(t, r, "service:site")
+	if site.Op != Keep || site.Provider != "vercel" || site.Service.Provider != "vercel" {
+		t.Fatalf("site %+v", site)
+	}
+	held := warning(r, "held", "site")
+	if held == nil || !strings.Contains(held.Message, "manifest changes wait") || !strings.Contains(held.Message, "a problem to fix first") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	if api := action(t, r, "service:api"); api.Op != Keep {
+		t.Fatalf("api %+v", api)
+	}
+}
+
+func TestCompute_aHeldServiceMovedToAnotherCloudStaysWhereItRuns(t *testing.T) {
+	catalog := providers.Catalog()
+	list := make([]provider.Provider, 0, len(catalog))
+	for _, p := range catalog {
+		if p.Name == "cloud-run" || p.Name == "vercel" || p.Name == "render" {
+			p.Available, p.Note = true, ""
+		}
+		list = append(list, p)
+	}
+	reg, err := provider.NewRegistry(list...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := func(yaml string, held map[string]bool, bindings []*Binding) Input {
+		return Input{
+			Environment: "production", Graph: federated(t), Manifest: parse(t, yaml), Providers: reg,
+			Bindings: bindings, Held: held,
+			Connections: []ConnectionOption{
+				{ID: "conn_g", Name: "Prod", Cloud: "gcp", Ready: true},
+				{ID: "conn_v", Name: "Web", Cloud: "vercel", Ready: true},
+			},
+		}
+	}
+	live := deployed(t, Compute(in(federatedYAML, nil, nil)))
+	moved := strings.Replace(federatedYAML, "provider: vercel", "provider: render", 1)
+
+	// Moving everything, render needs a connection nobody has.
+	if r := Compute(in(moved, nil, live)); !slices.Contains(findingCodes(r.Problems), "no-connection") {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+
+	r := Compute(in(moved, map[string]bool{"site": true}, live))
+	if slices.Contains(findingCodes(r.Problems), "no-connection") {
+		t.Fatalf("a held service asked for a connection: %v", codes(r.Problems))
+	}
+	site := action(t, r, "service:site")
+	if site.Op != Keep || site.Provider != "vercel" || site.Creates != "Vercel project" {
+		t.Fatalf("site %+v", site)
+	}
+	if r.Connections["vercel"] != "conn_v" || r.Connections["render"] != "" {
+		t.Fatalf("connections %v", r.Connections)
+	}
+	if warning(r, "held", "site") == nil {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+}
+
+// withGateway adds polyglot's gateway, which has no port on record.
+const withGateway = `  gateway:
+    repo: mono
+    source: apps/gateway
+`
+
+func TestCompute_aHeldServiceGetsNoWarningsFromItsManifest(t *testing.T) {
+	yaml := strings.Replace(federatedYAML, "resources:\n", withGateway+"resources:\n", 1)
+	first := computeFed(t, yaml, nil)
+	if warning(first, "port-assumed", "gateway") == nil {
+		t.Fatalf("the test needs gateway's port assumed: %v", codes(first.Warnings))
+	}
+	r := computeFed(t, yaml, []string{"mono"}, deployed(t, first)...)
+	if warning(r, "port-assumed", "gateway") != nil {
+		t.Fatalf("a held service was configured from its manifest: %v", codes(r.Warnings))
+	}
+	if gw := action(t, r, "service:gateway"); gw.Op != Keep || gw.Service.Port != DefaultPort {
+		t.Fatalf("gateway %+v", gw)
+	}
+	if warning(r, "held", "gateway") != nil {
+		t.Fatalf("an unchanged held service warned: %v", codes(r.Warnings))
+	}
+}
+
+func TestCompute_aHeldServiceKeepsTheLinksItWasDeployedWith(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	yaml := strings.Replace(federatedYAML, "    needs: [db]\n", "    needs: [db, gateway]\n", 1)
+	yaml = strings.Replace(yaml, "resources:\n", withGateway+"resources:\n", 1)
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	if warning(r, "held", "gateway") == nil || warning(r, "held", "api") == nil {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+	api, site := action(t, r, "service:api"), action(t, r, "service:site")
+	if api.Op != Keep || !slices.Equal(api.DependsOn, []string{"resource:db"}) || len(api.Service.Env) != 1 {
+		t.Fatalf("api %+v", api)
+	}
+	if api.Step < 2 || site.Step <= api.Step || site.Op != Keep {
+		t.Fatalf("api runs at step %d, site at %d (%s)", api.Step, site.Step, site.Op)
+	}
+}
+
+func TestCompute_anOlderBindingOfAHeldProjectIsntDeleted(t *testing.T) {
+	g := graph.Compose([]graph.Part{
+		{Source: graph.SourceRef{Alias: "mono", Repository: "acme/mono", CommitSHA: strings.Repeat("a", 40)}, Graph: polyglot(t)},
+	})
+	in := func(yaml string, held map[string]bool, bindings []*Binding) Input {
+		return Input{Environment: "production", Graph: g, Manifest: parse(t, yaml), Providers: providers.Registry(), Bindings: bindings, Held: held}
+	}
+	live := deployed(t, Compute(in("version: 1\ndefaults: {provider: cloud-run}\nservices:\n  api: {source: services/api}\n", nil, nil)))
+	// Written before services knew their repository.
+	var cfg map[string]any
+	if err := json.Unmarshal(live[0].Config, &cfg); err != nil || cfg["repo"] != "mono" {
+		t.Fatalf("binding %s", live[0].Config)
+	}
+	delete(cfg, "repo")
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live[0].Config = data
+
+	gone := "version: 1\nresources:\n  db: {kind: postgres, provider: cloud-sql}\n"
+	if r := Compute(in(gone, nil, live)); action(t, r, "service:api").Op != Delete {
+		t.Fatal("the test needs api deleted when nothing is held")
+	}
+	r := Compute(in(gone, map[string]bool{"mono": true}, live))
+	if slices.ContainsFunc(r.Actions, func(a Action) bool { return a.ID == "service:api" }) {
+		t.Fatalf("an older binding of a held project was planned: %+v", r.Actions)
+	}
+	if warning(r, "held", "api") == nil {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+}
+
+func TestCompute_unknownRepoWithoutRepositories(t *testing.T) {
+	r := compute(t, "version: 1\nservices:\n  api: {repo: mono, source: services/api, provider: cloud-run}\n", "production")
+	if len(r.Problems) != 1 || r.Problems[0].Code != "unknown-repo" || !strings.Contains(r.Problems[0].Message, "this project has no repositories") {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+}
+
+func TestCompute_onlyHeldServicesAreImpacted(t *testing.T) {
+	// A library in a repository of its own that uses kit's package.
+	lib := graph.Build(&pd.Report{Units: []pd.Unit{{
+		ID: "node:.", Ecosystem: pd.Node, Name: "@acme/lib", Path: ".",
+		Requires: []pd.Requirement{{Name: "@acme/kit", Version: "^1.0.0", Evidence: pd.Evidence{Path: "package.json", Line: 4}}},
+	}}})
+	g := federated(t, graph.Part{Source: graph.SourceRef{Alias: "lib", Repository: "acme/lib", CommitSHA: strings.Repeat("d", 40)}, Graph: lib})
+	if !slices.ContainsFunc(g.Edges, func(e graph.Edge) bool { return e.From == "pkg:lib:node:." && e.Kind == graph.Uses }) {
+		t.Fatalf("the test needs lib to use kit: %+v", g.Edges)
+	}
+	r := Compute(Input{
+		Environment: "production", Graph: g, Manifest: parse(t, federatedYAML),
+		Providers: providers.Registry(), Held: map[string]bool{"lib": true},
+	})
+	if slices.ContainsFunc(r.Warnings, func(f Finding) bool { return f.Code == "cross-repo-impact" }) {
+		t.Fatalf("a held package counted as a user: %+v", r.Warnings)
 	}
 }
