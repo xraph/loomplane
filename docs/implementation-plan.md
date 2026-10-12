@@ -51,10 +51,11 @@ Where it differs from the plan above, and why:
 
 Left over:
 
-1. Re-analyzing on push, which needs GitHub webhooks.
-2. A repository picker when creating a project. The Integrations page lists what the App can read, but a project still takes a URL.
+1. Re-analyzing on push, which needs GitHub webhooks. Sources are indexed by repository, so a push to `owner/name` maps to the sources that track it with one lookup.
+2. A repository picker when creating a project. The add-source dialog already suggests repositories from the GitHub connection, but the new-project dialog still takes a URL, which becomes the project's first source.
 3. Detection limits: Python, Java and the rest are found through their Dockerfiles only. A Go command that imports the server's packages reads as a server, because classification follows imports. A Rust crate with both clap and axum is ambiguous.
 4. The GitHub App flow has only been run against a fake GitHub that checks the App's JWT signature. Try it against a real App before relying on it.
+5. A cleanup migration. It drops `loomplane_projects.repository_url`, `loomplane_plans.analysis_id` and `commit_sha`, and `loomplane_deployments.source`. Sources and plan locksets replaced all four, nothing reads them now, and they stay only so a rollback to the previous release still finds them.
 
 ## Environments and variables
 
@@ -111,7 +112,7 @@ Steps:
 
 1. Cloud connections, in Vault, with the API and the Integrations card. Done.
 2. Connections on plans, and Cloud Run and Vercel marked available, so a plan using them is executable.
-3. Deployment records, the source artifact in Trove, and the workflow after approval.
+3. Deployment records, one source artifact in Trove for each repository the plan moves, and the workflow after approval. A successful deployment also writes `loomplane_environment_sources`, which is what a scoped plan holds the other sources at.
 4. Cloud Build and the Cloud Run provider for Ctrl Plane.
 5. The Vercel adapter.
 6. Health checks, deployment progress in the dashboard, and the acceptance run on real accounts.
