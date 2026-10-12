@@ -225,6 +225,14 @@ export function latestBySource(analyses: Analysis[]): Map<string, Analysis> {
   return out
 }
 
+/**
+ * spansSources says whether a list names more than one source, so a table
+ * only spends a column on the repository when it tells rows apart.
+ */
+export function spansSources(items: { source?: string }[]): boolean {
+  return new Set(items.map((i) => i.source ?? "")).size > 1
+}
+
 /** latestSucceeded is the newest analysis that produced a graph. */
 export function latestSucceeded(analyses: Analysis[]): Analysis | undefined {
   return analyses.find((a) => a.status === "succeeded")

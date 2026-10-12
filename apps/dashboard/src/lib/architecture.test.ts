@@ -13,6 +13,7 @@ import {
   linkTo,
   lockLabel,
   sourceOf,
+  spansSources,
   stepIndex,
 } from "@/lib/architecture"
 
@@ -218,6 +219,14 @@ describe("latestBySource", () => {
       "web:3",
       "api:2",
     ])
+  })
+})
+
+describe("spansSources", () => {
+  it("is true only when more than one source appears", () => {
+    expect(spansSources([])).toBe(false)
+    expect(spansSources([{ source: "web" }, { source: "web" }])).toBe(false)
+    expect(spansSources([{ source: "web" }, { source: "api" }])).toBe(true)
   })
 })
 

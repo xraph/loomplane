@@ -105,6 +105,7 @@ import {
   resourceLabel,
   shortSHA,
   type SourceLink,
+  spansSources,
   stepIndex,
   stepLabel,
   steps,
@@ -485,12 +486,14 @@ export function ServicesTable({
   graph: Graph
   onSelect: (s: GraphSelection) => void
 }) {
+  const federated = (graph.sources ?? []).length > 1
   return (
     <Card className="py-0">
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>Service</TableHead>
+            {federated && <TableHead>Repository</TableHead>}
             <TableHead>Kind</TableHead>
             <TableHead className="hidden md:table-cell">Built with</TableHead>
             <TableHead className="hidden lg:table-cell">Needs</TableHead>
@@ -523,6 +526,11 @@ export function ServicesTable({
                     </code>
                   </div>
                 </TableCell>
+                {federated && (
+                  <TableCell className="font-mono text-xs">
+                    {s.source}
+                  </TableCell>
+                )}
                 <TableCell>
                   <span
                     className={cn(!s.deployable && "text-muted-foreground")}
@@ -669,12 +677,14 @@ export function AnalysisHistory({ analyses }: { analyses: Analysis[] }) {
       </Card>
     )
   }
+  const federated = spansSources(analyses)
   return (
     <Card className="py-0">
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>Started</TableHead>
+            {federated && <TableHead>Repository</TableHead>}
             <TableHead>Ref</TableHead>
             <TableHead>Commit</TableHead>
             <TableHead>Result</TableHead>
@@ -686,6 +696,9 @@ export function AnalysisHistory({ analyses }: { analyses: Analysis[] }) {
               <TableCell className="text-muted-foreground">
                 <time dateTime={a.createdAt}>{formatDate(a.createdAt)}</time>
               </TableCell>
+              {federated && (
+                <TableCell className="font-mono text-xs">{a.source}</TableCell>
+              )}
               <TableCell className="font-mono text-xs">
                 {a.ref || (
                   <span className="font-sans text-muted-foreground">
