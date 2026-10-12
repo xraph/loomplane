@@ -84,6 +84,7 @@ func Compute(in Input) *Result {
 		unready:   map[string]string{},
 		clouds:    map[string]bool{},
 		bindings:  map[string]*Binding{},
+		heldNew:   map[string]string{},
 	}
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
@@ -91,6 +92,7 @@ func Compute(in Input) *Result {
 	p.planResources()
 	p.planServices()
 	p.checkFindings()
+	p.impact()
 	p.planDeletes()
 	return p.finish()
 }
@@ -115,6 +117,9 @@ type planner struct {
 	// each of which needs a connection.
 	clouds   map[string]bool
 	bindings map[string]*Binding
+	// heldNew are the held services that run nowhere yet, by manifest
+	// name, with the alias of the repository that holds them.
+	heldNew map[string]string
 }
 
 func actionID(s Subject, name string) string { return string(s) + ":" + name }
@@ -307,6 +312,14 @@ func (p *planner) planServices() {
 		if !manifest.On(set.Enabled) {
 			continue
 		}
+		if p.in.Held[gs.Source] && p.bindings[actionID(ServiceSubject, name)] == nil {
+			p.heldNew[name] = gs.Source
+			p.warn(Finding{
+				Code: "held", Subject: ServiceSubject, Name: name, Path: base,
+				Message: fmt.Sprintf("%s is in %s, which this plan holds back, and nothing runs it in %s yet, so it isn't created.", name, gs.Source, p.in.Environment),
+			})
+			continue
+		}
 		kind := string(gs.Kind)
 		if s.Kind != "" {
 			kind = s.Kind
@@ -348,7 +361,39 @@ func (p *planner) planServices() {
 			p.link(name, a)
 		}
 	}
+	p.hold()
 	p.order()
+}
+
+// hold keeps each held service as it's deployed: a keep action carrying
+// the deployed configuration, so whatever needs it still gets its address
+// and nothing deletes it. A change the manifest would make waits for a
+// plan that moves its repository, with a warning saying so.
+func (p *planner) hold() {
+	for _, name := range p.in.Manifest.ServiceNames() {
+		a, gs := p.services[name], p.graphServices[name]
+		if a == nil || gs == nil || !p.in.Held[gs.Source] {
+			continue
+		}
+		b := p.bindings[a.ID]
+		if b == nil {
+			continue // planServices left those out
+		}
+		if a.Op != Keep {
+			p.warn(Finding{
+				Code: "held", Subject: ServiceSubject, Name: name, Path: "services." + name,
+				Message: fmt.Sprintf("%s is in %s, which this plan holds back, so this waits for a plan that moves %s: %s", name, gs.Source, gs.Source, a.Reason),
+			})
+		}
+		var cfg ServiceConfig
+		if json.Unmarshal(b.Config, &cfg) == nil {
+			a.Service = &cfg
+		}
+		a.Op, a.Changes, a.Provider, a.Region = Keep, nil, b.Provider, b.Region
+		// The manifest may name another provider, but the keep is of what runs.
+		a.Engine, a.Creates = b.Engine, p.creates(b)
+		a.Reason = fmt.Sprintf("Held: this plan doesn't move %s.", gs.Source)
+	}
 }
 
 // match finds the graph service a manifest service names: in the
@@ -530,6 +575,13 @@ func (p *planner) link(name string, a *Action) {
 		}
 		dep := p.services[need]
 		if dep == nil {
+			if alias, held := p.heldNew[need]; held {
+				p.problem(Finding{
+					Code: "need-held", Subject: ServiceSubject, Name: name, Path: base,
+					Message: fmt.Sprintf("%s needs %s, which is in %s. This plan holds %s back and nothing runs %s in %s yet, so add %s to the scope.", name, need, alias, alias, need, p.in.Environment, alias),
+				})
+				continue
+			}
 			if s, ok := m.Services[need]; ok && !manifest.On(s.For(p.in.Environment, m.Defaults).Enabled) {
 				p.problem(Finding{
 					Code: "need-off", Subject: ServiceSubject, Name: name, Path: base,
@@ -740,6 +792,38 @@ func (p *planner) checkFindings() {
 	}
 }
 
+// impact warns when a package this plan moves is built into services it
+// holds back. Those keep the version they declare, so nothing breaks now,
+// but the next plan that moves them picks the change up.
+func (p *planner) impact() {
+	if len(p.in.Held) == 0 {
+		return
+	}
+	g := p.in.Graph
+	source, label := map[string]string{}, map[string]string{}
+	for _, s := range g.Services {
+		source[s.ID], label[s.ID] = s.Source, s.Name
+	}
+	for _, pk := range g.Packages {
+		source[pk.ID], label[pk.ID] = pk.Source, pk.Name
+	}
+	users := map[string][]string{}
+	for _, e := range g.Edges {
+		from, to := source[e.From], source[e.To]
+		if e.Kind != graph.Uses || from == "" || to == "" || from == to || !p.in.Held[from] || p.in.Held[to] {
+			continue
+		}
+		users[e.To] = append(users[e.To], fmt.Sprintf("%s in %s", label[e.From], from))
+	}
+	for _, id := range slices.Sorted(maps.Keys(users)) {
+		list := slices.Compact(slices.Sorted(slices.Values(users[id])))
+		p.warn(Finding{
+			Code: "cross-repo-impact", Name: label[id],
+			Message: fmt.Sprintf("%s, from %s, moves in this plan and is built into %s, which it holds back. Those keep the version they declare until a plan moves them.", label[id], source[id], strings.Join(list, ", ")),
+		})
+	}
+}
+
 func unprovided(r graph.Resource, users []string) Finding {
 	who := "The repository"
 	if len(users) > 0 {
@@ -776,6 +860,13 @@ func (p *planner) planDeletes() {
 		if b.Subject == ServiceSubject && p.services[b.Name] != nil || b.Subject == ResourceSubject && p.resources[b.Name] != nil {
 			continue
 		}
+		if b.Subject == ServiceSubject {
+			var cfg ServiceConfig
+			if json.Unmarshal(b.Config, &cfg) == nil && p.in.Held[cfg.Repo] {
+				p.keepHeld(b, cfg.Repo)
+				continue
+			}
+		}
 		reason := fmt.Sprintf("The manifest no longer has %s.", b.Name)
 		if wanted, on := p.wanted(b); wanted {
 			if on {
@@ -799,6 +890,23 @@ func (p *planner) planDeletes() {
 			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
 		})
 	}
+}
+
+// keepHeld leaves a deployed service of a held repository running when
+// the manifest no longer plans it, saying why it isn't deleted. One the
+// manifest still wants on couldn't be planned, and a problem says why.
+func (p *planner) keepHeld(b *Binding, repo string) {
+	wanted, on := p.wanted(b)
+	var msg string
+	switch {
+	case !wanted:
+		msg = fmt.Sprintf("The manifest no longer has %s, but it's in %s, which this plan holds back, so it keeps running.", b.Name, repo)
+	case !on:
+		msg = fmt.Sprintf("%s is off in %s, but it's in %s, which this plan holds back, so it keeps running.", b.Name, p.in.Environment, repo)
+	default:
+		return
+	}
+	p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "services", Message: msg})
 }
 
 // wanted reports whether the manifest still has a binding's subject, and

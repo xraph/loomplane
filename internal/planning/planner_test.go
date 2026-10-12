@@ -378,16 +378,17 @@ func TestCompute_deterministic(t *testing.T) {
 }
 
 // federated is polyglot as "mono", beside a Next.js site in a repository
-// of its own that uses @acme/ui, which a third repository, "kit",
-// publishes.
+// of its own that uses @acme/kit, which a third repository, "kit",
+// publishes. Polyglot already publishes an @acme/ui, and a name two
+// repositories publish gets no edge, so kit's package has its own.
 func federated(t *testing.T) *graph.Graph {
 	t.Helper()
 	site := graph.Build(&pd.Report{Units: []pd.Unit{{
 		ID: "node:.", Ecosystem: pd.Node, Name: "site", Path: ".",
 		Entrypoints: []pd.Entrypoint{{Name: "site", Path: ".", Frameworks: []pd.Framework{{Name: "next", Kind: pd.Web, Confidence: pd.Likely}}}},
-		Requires:    []pd.Requirement{{Name: "@acme/ui", Version: "^1.0.0", Evidence: pd.Evidence{Path: "package.json", Line: 9}}},
+		Requires:    []pd.Requirement{{Name: "@acme/kit", Version: "^1.0.0", Evidence: pd.Evidence{Path: "package.json", Line: 9}}},
 	}}})
-	kit := graph.Build(&pd.Report{Units: []pd.Unit{{ID: "node:.", Ecosystem: pd.Node, Name: "@acme/ui", Path: "."}}})
+	kit := graph.Build(&pd.Report{Units: []pd.Unit{{ID: "node:.", Ecosystem: pd.Node, Name: "@acme/kit", Path: "."}}})
 	return graph.Compose([]graph.Part{
 		{Source: graph.SourceRef{Alias: "mono", Repository: "acme/mono", CommitSHA: strings.Repeat("a", 40)}, Graph: polyglot(t)},
 		{Source: graph.SourceRef{Alias: "site", Repository: "acme/site", CommitSHA: strings.Repeat("b", 40)}, Graph: site},
@@ -457,5 +458,71 @@ func TestCompute_matchesWithinARepository(t *testing.T) {
 		if p.Code == "service-not-found" && !strings.Contains(p.Message, "site@bbbbbbb") {
 			t.Fatalf("the message should name the commit: %s", p.Message)
 		}
+	}
+}
+
+const federatedWithoutSite = `version: 1
+defaults:
+  provider: cloud-run
+services:
+  api:
+    repo: mono
+    source: services/api
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+`
+
+func TestCompute_heldServicesStayAsDeployed(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+
+	// The site's repository is held, so a change to it waits.
+	changed := strings.Replace(federatedYAML, "    provider: vercel\n", "    provider: vercel\n    public: false\n", 1)
+	r := computeFed(t, changed, []string{"site"}, live...)
+	site := action(t, r, "service:site")
+	if site.Op != Keep || !strings.Contains(site.Reason, "Held") || !site.Service.Public {
+		t.Fatalf("site %+v", site)
+	}
+	if !slices.Contains(codes(r.Warnings), "held:site") {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+
+	// Gone from the manifest, a held service still isn't deleted.
+	r = computeFed(t, federatedWithoutSite, []string{"site"}, live...)
+	if slices.ContainsFunc(r.Actions, func(a Action) bool { return a.ID == "service:site" }) {
+		t.Fatalf("a held service was planned: %+v", r.Actions)
+	}
+	if !slices.Contains(codes(r.Warnings), "held:site") {
+		t.Fatalf("warnings %v", codes(r.Warnings))
+	}
+}
+
+func TestCompute_aServiceNeedingAHeldServiceThatRunsNowhereIsAProblem(t *testing.T) {
+	r := computeFed(t, federatedYAML, []string{"mono"})
+	if slices.ContainsFunc(r.Actions, func(a Action) bool { return a.ID == "service:api" }) {
+		t.Fatal("a held service that runs nowhere was created")
+	}
+	if !slices.Contains(codes(r.Warnings), "held:api") || !slices.Contains(codes(r.Problems), "need-held:site") {
+		t.Fatalf("warnings %v, problems %v", codes(r.Warnings), codes(r.Problems))
+	}
+}
+
+func TestCompute_movingAPackageNamesWhatItsHeldUsersAre(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	r := computeFed(t, federatedYAML, []string{"site"}, live...)
+	var impact *Finding
+	for i := range r.Warnings {
+		if r.Warnings[i].Code == "cross-repo-impact" {
+			impact = &r.Warnings[i]
+		}
+	}
+	if impact == nil || impact.Name != "@acme/kit" || !strings.Contains(impact.Message, "site in site") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	// Nothing held, nothing to warn about.
+	if slices.ContainsFunc(computeFed(t, federatedYAML, nil, live...).Warnings, func(f Finding) bool { return f.Code == "cross-repo-impact" }) {
+		t.Fatal("a plan that moves everything warned about impact")
 	}
 }
