@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest"
 
 import type { Action, Manifest, Provider } from "@/client/forge/loomplane/types"
-import { planStatus, steps, withIgnored, withResource } from "@/lib/plans"
+import {
+  deploymentStatus,
+  planStatus,
+  stepStatus,
+  steps,
+  withIgnored,
+  withResource,
+} from "@/lib/plans"
 
 const manifest: Manifest = {
   version: 1,
@@ -92,6 +99,25 @@ describe("planStatus", () => {
       "failed",
     ]) {
       expect(planStatus(s).label).not.toBe(s)
+    }
+  })
+})
+
+describe("deployment statuses", () => {
+  it("names every status the API sends", () => {
+    for (const s of ["running", "succeeded", "failed"]) {
+      expect(deploymentStatus(s).label).not.toBe(s)
+    }
+    for (const s of [
+      "pending",
+      "building",
+      "deploying",
+      "verifying",
+      "succeeded",
+      "failed",
+      "skipped",
+    ]) {
+      expect(stepStatus(s).label).not.toBe(s)
     }
   })
 })

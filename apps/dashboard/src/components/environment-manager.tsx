@@ -4,13 +4,14 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
+  useBindingsList,
   useEnvironmentsCreate,
   useEnvironmentsDelete,
   useEnvironmentsList,
   useVariablesResolve,
 } from "@/client/forge/loomplane/hooks"
 import type { Environment, Project } from "@/client/forge/loomplane/types"
-import { useInvalidate, useMutation } from "@/client/hooks"
+import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -248,10 +249,7 @@ export function EnvironmentCards({
                   Setting up
                 </span>
               ) : (
-                <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="h-1.5 w-3 rounded-full bg-warp" />
-                  Not deployed yet
-                </span>
+                <Deployed project={project} environment={env.name} />
               )}
             </CardContent>
           </Card>
@@ -353,5 +351,55 @@ function DeleteEnvironment({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+}
+
+/**
+ * Deployed lists what runs in an environment and where each service
+ * answers, from what the last deployments recorded.
+ */
+function Deployed({
+  project,
+  environment,
+}: {
+  project: Project
+  environment: string
+}) {
+  const bindings = useQuery(useBindingsList, {
+    path: { id: project.id },
+    query: { environment },
+  })
+  const services = (bindings.data?.bindings ?? []).filter(
+    (b) => b.subject === "service"
+  )
+  if (services.length === 0) {
+    return (
+      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="h-1.5 w-3 rounded-full bg-warp" />
+        {bindings.data ? "Not deployed yet" : "Checking"}
+      </span>
+    )
+  }
+  return (
+    <ul className="grid gap-1.5 text-xs">
+      {services.map((b) => (
+        <li key={b.id} className="flex min-w-0 items-center gap-2">
+          <span className="h-1.5 w-3 shrink-0 rounded-full bg-overdye" />
+          <span className="font-medium">{b.name}</span>
+          {b.url ? (
+            <a
+              href={b.url}
+              target="_blank"
+              rel="noreferrer"
+              className="truncate text-muted-foreground underline-offset-4 hover:underline"
+            >
+              {b.url.replace(/^https?:\/\//, "")}
+            </a>
+          ) : (
+            <span className="text-muted-foreground">on {b.provider}</span>
+          )}
+        </li>
+      ))}
+    </ul>
   )
 }

@@ -110,11 +110,21 @@ How it fits together:
 Steps:
 
 1. Cloud connections, in Vault, with the API and the Integrations card. Done.
-2. Connections on plans, and Cloud Run and Vercel marked available, so a plan using them is executable.
-3. Deployment records, the source artifact in Trove, and the workflow after approval.
-4. Cloud Build and the Cloud Run provider for Ctrl Plane.
-5. The Vercel adapter.
-6. Health checks, deployment progress in the dashboard, and the acceptance run on real accounts.
+2. Connections on plans, chosen per environment when there's more than one. Done.
+3. Deployment records, the source artifact in Trove, and the workflow after approval. Done.
+4. Cloud Build and the Cloud Run provider for Ctrl Plane. Done.
+5. The Vercel adapter. Done.
+6. Deployment progress in the dashboard: each step on the approved plan, recent deployments on the Deploy tab, and what runs in each environment on its card. Done.
+7. The acceptance run on real accounts: a Google Cloud project and a Vercel account. Waiting on credentials.
+
+Everything up to step 6 is tested against fakes that stand in for Google Cloud and Vercel over HTTP, including the full approval of a Next.js app on Vercel that finds its Go API on Cloud Run. The fakes check what a real cloud would refuse: tokens, file digests, missing files. They can't prove the real APIs agree, which is what step 7 is for.
+
+Left over, for after the acceptance run:
+
+1. Variables, secrets included, are set as plain environment variables on Cloud Run and as encrypted variables on Vercel. Secret Manager for Cloud Run comes with milestone 5's environment secrets.
+2. A Dockerfile is built from its own directory. One that expects the repository root needs a setting the manifest doesn't have yet.
+3. Services find each other by public URL. A service that isn't public gets no address its dependents can reach until private networking arrives in milestone 5.
+4. Ctrl Plane gaps worth fixing upstream: instances keep the provider's name rather than its registry key, providers get credentials only at construction, Deploy carries only images and variables, and nothing polls status after a call returns.
 
 ## Milestones 5 and 6
 
