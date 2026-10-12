@@ -43,6 +43,9 @@ func Draft(g *graph.Graph, reg *provider.Registry) *manifest.Manifest {
 			s.Provider = able[0].Name
 			clouds[able[0].Cloud]++
 		}
+		if len(g.Sources) > 1 {
+			s.Repo = gs.Source
+		}
 		m.Services[name] = s
 	}
 

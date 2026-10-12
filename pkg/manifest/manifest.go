@@ -63,6 +63,9 @@ type Defaults struct {
 
 // Service is something the application runs.
 type Service struct {
+	// Repo is the alias of the repository the service is in. A project
+	// with one repository can leave it out.
+	Repo string `json:"repo,omitempty" yaml:"repo,omitempty"`
 	// Source is where the service's code is, as repository analysis found
 	// it: a Go main package's directory, a Rust binary's source file, a
 	// Node package's directory, or a Dockerfile. When two ecosystems have a
@@ -149,6 +152,7 @@ var (
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
 	sourceRE  = regexp.MustCompile(`^(?:[a-z]+:)?[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
+	repoRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 )
 
 // Problem is one thing wrong with a manifest, at a path such as
@@ -320,6 +324,9 @@ func (m *Manifest) Validate() error {
 			add(path+".source", "is required: where the service's code is, such as services/api")
 		case !sourceRE.MatchString(s.Source) || strings.Contains(s.Source, "..") || strings.HasPrefix(s.Source, "/"):
 			add(path+".source", "%q isn't a path in the repository", s.Source)
+		}
+		if s.Repo != "" && !repoRE.MatchString(s.Repo) {
+			add(path+".repo", "%q isn't a repository alias", s.Repo)
 		}
 		if s.Kind != "" && !slices.Contains(serviceKinds, s.Kind) {
 			add(path+".kind", "%q isn't a service kind; use one of %s", s.Kind, strings.Join(serviceKinds, ", "))

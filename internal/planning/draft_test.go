@@ -2,6 +2,7 @@ package planning
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/graph"
@@ -9,6 +10,19 @@ import (
 	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
+
+func TestDraft_namesTheRepositoryWhenThereAreSeveral(t *testing.T) {
+	g := graph.Compose([]graph.Part{
+		{Source: graph.SourceRef{Alias: "mono", Repository: "acme/mono", CommitSHA: strings.Repeat("a", 40)}, Graph: polyglot(t)},
+		{Source: graph.SourceRef{Alias: "kit", Repository: "acme/kit", CommitSHA: strings.Repeat("b", 40)}, Graph: &graph.Graph{Version: graph.SchemaVersion}},
+	})
+	m := Draft(g, providers.Registry())
+	for name, s := range m.Services {
+		if s.Repo != "mono" || strings.HasPrefix(s.Source, "mono:") {
+			t.Fatalf("%s: %+v", name, s)
+		}
+	}
+}
 
 func TestDraft_ofThePolyglotExamplePlansWithNoProblems(t *testing.T) {
 	g := polyglot(t)

@@ -292,3 +292,15 @@ func TestParse_reportsEachYAMLErrorOnItsOwn(t *testing.T) {
 		}
 	}
 }
+
+func TestParse_repo(t *testing.T) {
+	m, err := Parse([]byte("version: 1\nservices:\n  site:\n    repo: web\n    source: apps/site\n"))
+	if err != nil || m.Services["site"].Repo != "web" {
+		t.Fatalf("Parse: %v, %+v", err, m)
+	}
+	_, err = Parse([]byte("version: 1\nservices:\n  site:\n    repo: Web\n    source: apps/site\n"))
+	var ps Problems
+	if !errors.As(err, &ps) || len(ps) != 1 || ps[0].Path != "services.site.repo" {
+		t.Fatalf("Parse with a bad repo: %v", err)
+	}
+}

@@ -114,6 +114,11 @@
       "unevaluatedProperties": false,
       "allOf": [{ "$ref": "#/$defs/settings" }],
       "properties": {
+        "repo": {
+          "description": "The alias of the repository the service is in. A project with one repository can leave it out.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+        },
         "source": {
           "description": "Where the service's code is, as repository analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's directory, or a Dockerfile. Prefix the ecosystem (go:, rust:, node:, container:) when two have a service at the same path.",
           "type": "string",
