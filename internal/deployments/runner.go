@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -155,8 +156,12 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	}
 	d := &Deployment{
 		ID: id.String(), OrgID: orgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID,
-		Environment: plan.Environment, PlanID: plan.ID, CommitSHA: plan.CommitSHA, Status: StatusRunning,
+		Environment: plan.Environment, PlanID: plan.ID, Status: StatusRunning,
 		StartedBy: plan.DecidedBy, StartedAt: r.now().UTC(),
+	}
+	// A later change fetches each repository; for now this is the first one the plan moves.
+	if i := slices.IndexFunc(plan.Sources, func(ps planning.PlanSource) bool { return ps.InScope }); i >= 0 {
+		d.CommitSHA = plan.Sources[i].CommitSHA
 	}
 	var order [][]string
 	for _, a := range plan.Actions {

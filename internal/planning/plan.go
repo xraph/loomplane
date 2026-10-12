@@ -36,14 +36,16 @@ const (
 
 // Errors the service and stores return.
 var (
-	ErrNotFound    = errors.New("plan not found")
-	ErrInvalid     = errors.New("invalid plan request")
-	ErrNoManifest  = errors.New("this project has no manifest yet; choose where its services run first")
-	ErrNoAnalysis  = errors.New("this project's repository hasn't been analyzed yet; analyze it first")
-	ErrNotReady    = errors.New("this plan isn't waiting for a decision")
-	ErrStale       = errors.New("the plan changed since you reviewed it; review it again")
-	ErrSuperseded  = errors.New("a newer plan for this environment replaced this one")
-	ErrUnavailable = errors.New("plans can't be decided right now; try again")
+	ErrNotFound      = errors.New("plan not found")
+	ErrInvalid       = errors.New("invalid plan request")
+	ErrNoManifest    = errors.New("this project has no manifest yet; choose where its services run first")
+	ErrNoAnalysis    = errors.New("this project's repository hasn't been analyzed yet; analyze it first")
+	ErrNotReady      = errors.New("this plan isn't waiting for a decision")
+	ErrStale         = errors.New("the plan changed since you reviewed it; review it again")
+	ErrSuperseded    = errors.New("a newer plan for this environment replaced this one")
+	ErrUnavailable   = errors.New("plans can't be decided right now; try again")
+	ErrNoSources     = errors.New("this project has no repositories; add one first")
+	ErrNeverDeployed = errors.New("a repository this plan holds back has never been deployed here")
 )
 
 // Op is what an action does.
@@ -189,8 +191,33 @@ type Result struct {
 	Connections map[string]string `json:"connections"`
 }
 
-// Plan is one plan for one environment of a project, pinned to the commit
-// and manifest revision it was made from.
+// PlanSource pins one repository of a plan to the analysis it was planned
+// from, copying what it needs to recompose the graph exactly later.
+type PlanSource struct {
+	SourceID   string `json:"source_id"`
+	Alias      string `json:"alias"`
+	Repository string `json:"repository"`
+	Root       string `json:"root"`
+	AnalysisID string `json:"analysis_id"`
+	CommitSHA  string `json:"commit_sha"`
+	// InScope says whether the plan moves this repository. One it holds
+	// stays at what's deployed.
+	InScope bool `json:"in_scope"`
+}
+
+// DeployedSource is the commit of one repository deployed in one
+// environment. A successful deployment writes it (milestone 4).
+type DeployedSource struct {
+	EnvironmentID string    `json:"environment_id"`
+	SourceID      string    `json:"source_id"`
+	AnalysisID    string    `json:"analysis_id"`
+	CommitSHA     string    `json:"commit_sha"`
+	PlanID        string    `json:"plan_id"`
+	DeployedAt    time.Time `json:"deployed_at"`
+}
+
+// Plan is one plan for one environment of a project, pinned to one commit
+// of each repository and the manifest revision it was made from.
 type Plan struct {
 	ID            string `json:"id" forge:"id"`
 	OrgID         string `json:"org_id"`
@@ -200,16 +227,15 @@ type Plan struct {
 	Status        string `json:"status"`
 	// Revision is a digest of everything the plan was made from and
 	// everything it would do. Approving names it.
-	Revision         string    `json:"revision"`
-	AnalysisID       string    `json:"analysis_id"`
-	CommitSHA        string    `json:"commit_sha"`
-	ManifestID       string    `json:"manifest_id"`
-	ManifestRevision int       `json:"manifest_revision"`
-	Actions          []Action  `json:"actions"`
-	Problems         []Finding `json:"problems"`
-	Warnings         []Finding `json:"warnings"`
-	Summary          Summary   `json:"summary"`
-	Executable       bool      `json:"executable"`
+	Revision         string       `json:"revision"`
+	Sources          []PlanSource `json:"sources"`
+	ManifestID       string       `json:"manifest_id"`
+	ManifestRevision int          `json:"manifest_revision"`
+	Actions          []Action     `json:"actions"`
+	Problems         []Finding    `json:"problems"`
+	Warnings         []Finding    `json:"warnings"`
+	Summary          Summary      `json:"summary"`
+	Executable       bool         `json:"executable"`
 	// Connections are the cloud connections the plan deploys with, by
 	// cloud, settled when it was planned.
 	Connections map[string]string `json:"connections"`
@@ -240,6 +266,9 @@ func (p *Plan) normalize() {
 			u := (*t).UTC()
 			*t = &u
 		}
+	}
+	if p.Sources == nil {
+		p.Sources = []PlanSource{}
 	}
 	if p.Actions == nil {
 		p.Actions = []Action{}
@@ -312,6 +341,10 @@ type Store interface {
 	ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error)
 	PutBinding(ctx context.Context, b *Binding) error
 	DeleteBinding(ctx context.Context, orgID, id string) error
+
+	// DeployedSources returns the commit of each repository deployed in an
+	// environment.
+	DeployedSources(ctx context.Context, orgID, environmentID string) ([]*DeployedSource, error)
 }
 
 // Digest returns a hex SHA-256 of v's JSON. Go's JSON is deterministic for

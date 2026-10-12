@@ -129,6 +129,9 @@ var _ orchestration.Planner = (*Service)(nil)
 type CreatePlanInput struct {
 	// Environment is the environment's name.
 	Environment string `json:"environment"`
+	// Scope names the repositories the plan moves. Empty means all of
+	// them; the rest stay at what's deployed.
+	Scope []string `json:"scope,omitempty"`
 }
 
 // DecideInput approves or rejects a plan.
@@ -139,8 +142,9 @@ type DecideInput struct {
 	Note     string `json:"note,omitempty"`
 }
 
-// Create plans an environment from the project's current manifest and its
-// latest analysis. It supersedes the environment's open plan, if any.
+// Create plans an environment from the project's current manifest, the
+// latest analysis of each repository it moves, and what's deployed of each
+// it holds. It supersedes the environment's open plan, if any.
 func (s *Service) Create(ctx context.Context, p security.Principal, projectID string, in CreatePlanInput) (*Plan, error) {
 	if err := s.authz.Require(ctx, p, security.DeploymentCreate, projectID); err != nil {
 		return nil, err
@@ -159,7 +163,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err != nil {
 		return nil, err
 	}
-	analysis, err := s.latestAnalysis(ctx, p.OrgID, projectID)
+	pinned, err := s.pin(ctx, p.OrgID, projectID, env, in.Scope)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +174,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	}
 	plan := &Plan{
 		ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
-		Status: StatusPlanning, AnalysisID: analysis.ID, CommitSHA: analysis.CommitSHA,
+		Status: StatusPlanning, Sources: pinned,
 		ManifestID: rev.ID, ManifestRevision: rev.Revision, CreatedBy: p.UserID, CreatedAt: s.now().UTC(),
 	}
 	plan.normalize()
@@ -196,7 +200,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 		s.audit.Record(ctx, projects.AuditEvent{
 			Action: "plan.create", Severity: "info", ProjectID: projectID, Principal: p,
 			Attributes: map[string]any{
-				"plan_id": plan.ID, "environment": env.Name, "commit_sha": plan.CommitSHA,
+				"plan_id": plan.ID, "environment": env.Name, "sources": lockDescription(pinned),
 				"manifest_revision": plan.ManifestRevision, "superseded": superseded,
 			},
 		})
@@ -220,25 +224,47 @@ func (s *Service) environment(ctx context.Context, orgID, projectID, name string
 	return nil, fmt.Errorf("%w: this project has no environment called %q", projects.ErrEnvironmentNotFound, name)
 }
 
-func (s *Service) latestAnalysis(ctx context.Context, orgID, projectID string) (*discovery.Analysis, error) {
-	// A plan still pins one analysis; planning from every source's
-	// analysis comes later, so this serves the first source that has one.
+// pin builds a plan's lockset from what's analyzed and what's deployed.
+func (s *Service) pin(ctx context.Context, orgID, projectID string, env *projects.Environment, scope []string) ([]PlanSource, error) {
 	sources, err := s.analyses.ListSources(ctx, orgID, projectID, false)
 	if err != nil {
 		return nil, err
 	}
+	latest := map[string]*discovery.Analysis{}
 	for _, src := range sources {
-		list, err := s.analyses.ListSourceAnalyses(ctx, orgID, src.ID, analysisLookback)
-		if err != nil {
-			return nil, err
+		list, lerr := s.analyses.ListSourceAnalyses(ctx, orgID, src.ID, analysisLookback)
+		if lerr != nil {
+			return nil, lerr
 		}
 		for _, a := range list {
 			if a.Status == discovery.StatusSucceeded {
-				return a, nil
+				latest[src.ID] = a
+				break
 			}
 		}
 	}
-	return nil, ErrNoAnalysis
+	rows, err := s.store.DeployedSources(ctx, orgID, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	deployed := map[string]*DeployedSource{}
+	for _, d := range rows {
+		deployed[d.SourceID] = d
+	}
+	return lockset(sources, latest, deployed, scope, env.Name)
+}
+
+// lockDescription is a lockset for the audit trail: "api@3f2c1a9 moves".
+func lockDescription(ps []PlanSource) []string {
+	out := make([]string, 0, len(ps))
+	for _, s := range ps {
+		state := "held"
+		if s.InScope {
+			state = "moves"
+		}
+		out = append(out, s.Alias+"@"+s.CommitSHA+" "+state)
+	}
+	return out
 }
 
 // settle waits a moment for the workflow to move a plan on, and returns it
@@ -377,8 +403,7 @@ func (s *Service) Providers() []*provider.Provider { return s.providers.List() }
 type revisionInput struct {
 	EnvironmentID string        `json:"environment_id"`
 	Environment   string        `json:"environment"`
-	AnalysisID    string        `json:"analysis_id"`
-	CommitSHA     string        `json:"commit_sha"`
+	Sources       []PlanSource  `json:"sources"`
 	Manifest      string        `json:"manifest"`
 	Deployed      []deployedRef `json:"deployed"`
 	Result        *Result       `json:"result"`
@@ -392,13 +417,25 @@ type deployedRef struct {
 	Config     string `json:"config"`
 }
 
-// compute plans a plan from its pinned commit and manifest, against what's
+// compute plans a plan from its pinned commits and manifest, against what's
 // deployed now, and returns the result with its revision.
 func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, error) {
-	g, err := s.analyses.Graph(ctx, plan.OrgID, plan.AnalysisID)
-	if err != nil {
-		return nil, "", fmt.Errorf("load the analysis: %w", err)
+	parts := make([]graph.Part, 0, len(plan.Sources))
+	held := map[string]bool{}
+	for _, ps := range plan.Sources {
+		g, err := s.analyses.Graph(ctx, plan.OrgID, ps.AnalysisID)
+		if err != nil {
+			return nil, "", fmt.Errorf("load the analysis of %s: %w", ps.Alias, err)
+		}
+		parts = append(parts, graph.Part{
+			Source: graph.SourceRef{Alias: ps.Alias, Repository: ps.Repository, Root: ps.Root, CommitSHA: ps.CommitSHA, AnalysisID: ps.AnalysisID},
+			Graph:  g,
+		})
+		if !ps.InScope {
+			held[ps.Alias] = true
+		}
 	}
+	g := graph.Compose(parts)
 	rev, err := s.manifests.Get(ctx, plan.OrgID, plan.ManifestID)
 	if err != nil {
 		return nil, "", fmt.Errorf("load the manifest: %w", err)
@@ -420,11 +457,11 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	}
 	result := Compute(Input{
 		Environment: plan.Environment, Graph: g, Manifest: rev.Manifest, Providers: s.providers, Bindings: bindings,
-		Connections: options, Chosen: chosen,
+		Connections: options, Chosen: chosen, Held: held,
 	})
 	in := revisionInput{
-		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, AnalysisID: plan.AnalysisID,
-		CommitSHA: plan.CommitSHA, Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
+		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
+		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
 	}
 	for _, b := range bindings {
 		in.Deployed = append(in.Deployed, deployedRef{

@@ -31,7 +31,7 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 
 const planColumns = `id, org_id, project_id, environment_id, environment, status, revision,
-	analysis_id, commit_sha, manifest_id, manifest_revision, result, executable, error,
+	manifest_id, manifest_revision, result, executable, error,
 	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note`
 
 // open lists the statuses of a plan that hasn't been settled.
@@ -41,7 +41,7 @@ func scanPlan(row pgx.Row) (*Plan, error) {
 	var p Plan
 	var result []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Environment, &p.Status, &p.Revision,
-		&p.AnalysisID, &p.CommitSHA, &p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
+		&p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
 		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote); err != nil {
 		return nil, err
 	}
@@ -81,16 +81,24 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 		return nil, err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status,
-		analysis_id, commit_sha, manifest_id, manifest_revision, created_by, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		manifest_id, manifest_revision, created_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
-		p.AnalysisID, p.CommitSHA, p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt)
+		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return nil, ErrConflict
 	}
 	if err != nil {
 		return nil, fmt.Errorf("insert plan: %w", err)
+	}
+	for _, ps := range p.Sources {
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_plan_sources
+			(plan_id, source_id, alias, repository, root, analysis_id, commit_sha, in_scope)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			p.ID, ps.SourceID, ps.Alias, ps.Repository, ps.Root, ps.AnalysisID, ps.CommitSHA, ps.InScope); err != nil {
+			return nil, fmt.Errorf("insert plan source %s: %w", ps.Alias, err)
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
@@ -131,6 +139,9 @@ func (s *PgStore) GetPlan(ctx context.Context, orgID, id string) (*Plan, error) 
 	if err != nil {
 		return nil, fmt.Errorf("get plan: %w", err)
 	}
+	if err := s.withSources(ctx, p); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -154,7 +165,58 @@ func (s *PgStore) ListPlans(ctx context.Context, orgID, projectID, environmentID
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list plans: %w", err)
 	}
+	if err := s.withSources(ctx, out...); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// withSources loads each plan's lockset in one query.
+func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	ids := make([]string, len(plans))
+	by := map[string]*Plan{}
+	for i, p := range plans {
+		ids[i], by[p.ID] = p.ID, p
+		p.Sources = []PlanSource{}
+	}
+	rows, err := s.db.Query(ctx, `SELECT plan_id, source_id, alias, repository, root, analysis_id, commit_sha, in_scope
+		FROM loomplane_plan_sources WHERE plan_id = ANY($1) ORDER BY plan_id, alias`, ids)
+	if err != nil {
+		return fmt.Errorf("load plan sources: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	for rows.Next() {
+		var planID string
+		var ps PlanSource
+		if err := rows.Scan(&planID, &ps.SourceID, &ps.Alias, &ps.Repository, &ps.Root, &ps.AnalysisID, &ps.CommitSHA, &ps.InScope); err != nil {
+			return fmt.Errorf("scan plan source: %w", err)
+		}
+		by[planID].Sources = append(by[planID].Sources, ps)
+	}
+	return rows.Err()
+}
+
+// DeployedSources implements Store.
+func (s *PgStore) DeployedSources(ctx context.Context, orgID, environmentID string) ([]*DeployedSource, error) {
+	rows, err := s.db.Query(ctx, `SELECT environment_id, source_id, analysis_id, commit_sha, plan_id, deployed_at
+		FROM loomplane_environment_sources WHERE org_id = $1 AND environment_id = $2 ORDER BY source_id`, orgID, environmentID)
+	if err != nil {
+		return nil, fmt.Errorf("list deployed sources: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := []*DeployedSource{}
+	for rows.Next() {
+		var d DeployedSource
+		if err := rows.Scan(&d.EnvironmentID, &d.SourceID, &d.AnalysisID, &d.CommitSHA, &d.PlanID, &d.DeployedAt); err != nil {
+			return nil, fmt.Errorf("scan deployed source: %w", err)
+		}
+		d.DeployedAt = d.DeployedAt.UTC()
+		out = append(out, &d)
+	}
+	return out, rows.Err()
 }
 
 // FinishPlanning implements Store.

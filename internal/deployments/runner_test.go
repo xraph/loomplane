@@ -213,7 +213,9 @@ func available(t *testing.T) *provider.Registry {
 func webAndAPI() *planning.Plan {
 	return &planning.Plan{
 		ID: "plan_1", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production",
-		Status: planning.StatusApproved, Executable: true, CommitSHA: strings.Repeat("a", 40),
+		Status: planning.StatusApproved, Executable: true,
+		Sources: []planning.PlanSource{{SourceID: "src_1", Alias: "mono", Repository: "acme/mono", AnalysisID: "anl_1",
+			CommitSHA: strings.Repeat("a", 40), InScope: true}},
 		Connections: map[string]string{"gcp": "conn_g", "vercel": "conn_v"},
 		Actions: []planning.Action{
 			{ID: "service:api", Op: planning.Create, Subject: planning.ServiceSubject, Name: "api", Provider: "cloud-run", Step: 1,

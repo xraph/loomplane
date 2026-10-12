@@ -189,7 +189,8 @@ func fail(err error) error {
 	case errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
-	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph):
+	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph),
+		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
 	case errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
