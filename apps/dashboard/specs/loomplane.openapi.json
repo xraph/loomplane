@@ -2763,6 +2763,10 @@
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
           },
+          "gateways": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "ignore": {
             "$ref": "#/components/schemas/Ignore"
           },
@@ -3494,6 +3498,28 @@
         "type": "object",
         "x-forge-envelope": "revisions"
       },
+      "Route": {
+        "type": "object",
+        "required": [
+          "path",
+          "to",
+          "env"
+        ],
+        "properties": {
+          "env": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "strip_prefix": {
+            "type": "boolean"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
       "Runs": {
         "type": "object",
         "required": [
@@ -3526,6 +3552,10 @@
             "properties": {
               "defaults": {
                 "$ref": "#/components/schemas/Defaults"
+              },
+              "gateways": {
+                "type": "object",
+                "additionalProperties": true
               },
               "ignore": {
                 "$ref": "#/components/schemas/Ignore"
@@ -3660,6 +3690,12 @@
           },
           "framework": {
             "type": "string"
+          },
+          "gateway": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Route"
+            }
           },
           "image": {
             "type": "string"

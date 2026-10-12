@@ -110,14 +110,14 @@ func (e *ECS) build(ctx context.Context, s *aws.Session, job *Job, state *ecsSta
 	if err != nil {
 		return "", err
 	}
-	image := repo + ":" + job.Deployment.CommitSHA[:12]
+	image := repo + ":" + job.SourceID[:12]
 	if state.BuildID == "" {
 		bucket := sourceBucket(s)
 		job.Progress(StepBuilding, "Uploading the source to CodeBuild")
 		if err := s.EnsureBucket(ctx, bucket); err != nil {
 			return "", err
 		}
-		object := "sources/" + job.Deployment.CommitSHA + ".zip"
+		object := "sources/" + job.SourceID + ".zip"
 		if err := uploadZip(ctx, s, job, bucket, object); err != nil {
 			return "", err
 		}

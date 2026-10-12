@@ -307,6 +307,7 @@ export interface InfrastructureStatus {
 
 export interface Manifest {
   defaults: Defaults;
+  gateways?: Record<string, any>;
   ignore: Ignore;
   resources?: Record<string, any>;
   services?: Record<string, any>;
@@ -507,6 +508,13 @@ export interface RevisionList {
   revisions: Revision[];
 }
 
+export interface Route {
+  env: string;
+  path: string;
+  stripPrefix?: boolean;
+  to: string;
+}
+
 export interface Runs {
   creates: string;
   execution: string;
@@ -516,6 +524,7 @@ export interface Runs {
 export interface SaveInputBody {
   manifest?: {
   defaults: Defaults;
+  gateways?: Record<string, any>;
   ignore: Ignore;
   resources?: Record<string, any>;
   services?: Record<string, any>;
@@ -553,6 +562,7 @@ export interface ServiceConfig {
   env?: EnvLink[];
   execution: string;
   framework?: string;
+  gateway?: Route[];
   image?: string;
   port?: number;
   provider: string;

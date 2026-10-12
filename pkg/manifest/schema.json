@@ -34,6 +34,13 @@
       "propertyNames": { "$ref": "#/$defs/name" },
       "additionalProperties": { "$ref": "#/$defs/resource" }
     },
+    "gateways": {
+      "description": "Public entry points that route requests to services by path, by name. Loomplane builds each one on Bastion and runs it like a service. A gateway can't share a service's or resource's name.",
+      "type": "object",
+      "maxProperties": 10,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/gateway" }
+    },
     "ignore": {
       "description": "What repository analysis found that the application doesn't use.",
       "type": "object",
@@ -166,6 +173,53 @@
               "enabled": { "type": "boolean" }
             }
           }
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "required": ["routes"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "region": { "$ref": "#/$defs/region" },
+        "routes": {
+          "description": "Paths and the services they go to. The longest path that matches a request wins, so / catches whatever the others don't.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/route" }
+        },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "$ref": "#/$defs/provider" },
+              "region": { "$ref": "#/$defs/region" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": ["path", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "A path prefix, such as /api. It matches /api and anything under /api/.",
+          "type": "string",
+          "pattern": "^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$"
+        },
+        "to": { "$ref": "#/$defs/name" },
+        "strip_prefix": {
+          "description": "Remove the path before the request reaches the service, so /api/users arrives as /users.",
+          "type": "boolean"
         }
       }
     }

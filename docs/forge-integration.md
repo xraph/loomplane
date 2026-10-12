@@ -206,14 +206,30 @@ Watch out for confy's quirks: an environment variable can't reach a snake_case k
 
 Tests: `internal/config`.
 
+## Trove
+
+`internal/artifacts` keeps each deployment's source, the commit's tarball, in a Trove bucket (`storage.url`: `file://` on disk, `mem://` in tests). Builders read it back from there, so every builder gets the same bytes.
+
+## Bastion
+
+Loomplane doesn't run Bastion itself. A `gateways:` entry in `loomplane.yaml` becomes a small Go program on Bastion (`internal/gateway`), generated with the routes baked in and built on the cloud's own builder like any service, so application traffic never passes through Loomplane. Each route's target arrives in a variable, the way any service finds what it needs. The program pins Bastion v1.1.1 on Forge v1.9.2, with its own `go.sum`; the embedded files are named `.txt` so Go doesn't treat them as part of this module, and a test builds the generated program with `-mod=readonly`.
+
+What we found wiring it, each worked around in the generated program:
+
+- `bastion.New` registers routes but never wires the proxy ("proxy handler not set"); `bastion/extension.New` does, at the cost of pulling in its Mongo, Postgres and SQLite stores.
+- The admin REST API has no authentication of its own. It's only registered when the dashboard is enabled, so the gateway disables the dashboard, OpenAPI aggregation and discovery.
+- Active health checks are on by default against `/_/health`. An app that doesn't serve that path gets its route taken down after three probes, so the gateway turns health checks off: each route has one target, already load balanced by its cloud.
+- Forge's router trims a trailing slash before Bastion sees the request, so `/docs/` reached the service as `/docs`, which many servers redirect back to `/docs/`. The gateway adds an `OnRequest` hook, after `Register` creates the hook engine, that restores the slash from `RequestURI`.
+
+FARP isn't used: a gateway's routes come from the manifest, not from live discovery.
+
 ## Evaluated, not wired yet
 
 | Library | When |
 |---|---|
 | Keysmith | Milestone 6, for CLI and automation API keys |
-| Trove | Milestone 4, for build artifacts, through Dispatch's artifact support |
 | Relay, Herald | When deployments exist to notify about |
-| Bastion, FARP | Milestone 5, gateway configuration on customer infrastructure |
+| FARP | Live API discovery, if gateways ever route by schema instead of by path |
 | Forge dashboard extension | Possibly, for an operator view of Dispatch and Ctrl Plane. The product dashboard is `apps/dashboard`. |
 
 ## The dashboard's client

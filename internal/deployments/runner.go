@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -61,6 +63,10 @@ type Job struct {
 	// Source opens the commit's tarball, as GitHub serves it: gzip, with
 	// one top-level directory.
 	Source func(ctx context.Context) (io.ReadCloser, int64, error)
+	// SourceID names what Source opens, at least 12 characters: the
+	// commit, or for a gateway, its generated source. Builds name their
+	// uploads and tag their images with it.
+	SourceID string
 	// Binding is what runs the action now, or nil.
 	Binding *planning.Binding
 	// Resume is what Checkpoint saved in an earlier attempt, such as a
@@ -364,6 +370,19 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			}
 			return r.sources.Open(ctx, d.Source)
 		},
+		SourceID: d.CommitSHA,
+	}
+	// A gateway is built from the source Loomplane generates for its
+	// routes, not from the repository.
+	if a.Service != nil && a.Service.Gateway != nil {
+		data, id, gerr := gateway.Source(a.Service.Gateway)
+		if gerr != nil {
+			return fmt.Errorf("generate the gateway: %w", gerr)
+		}
+		job.SourceID = id
+		job.Source = func(context.Context) (io.ReadCloser, int64, error) {
+			return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+		}
 	}
 	if a.Op == planning.Delete {
 		if current == nil {
@@ -403,8 +422,11 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 // each thing it needs. A variable someone set wins over an address
 // Loomplane would set, so you can point a service elsewhere.
 func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services, resources map[string]*planning.Binding) (env map[string]string, secret map[string]bool, err error) {
-	env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service)
-	if err != nil {
+	if a.Service.Gateway != nil {
+		// A gateway gets the addresses it routes to and nothing else: none
+		// of the project's variables, and so none of its secrets.
+		env, secret = map[string]string{}, map[string]bool{}
+	} else if env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service); err != nil {
 		return nil, nil, fmt.Errorf("resolve variables: %w", err)
 	}
 	for _, link := range a.Service.Env {

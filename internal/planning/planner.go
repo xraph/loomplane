@@ -93,6 +93,7 @@ func Compute(in Input) *Result {
 	}
 	p.planResources()
 	p.planServices()
+	p.planGateways()
 	p.checkFindings()
 	p.planDeletes()
 	return p.finish()
@@ -171,8 +172,12 @@ func (p *planner) checkHTTPS(chosen map[string]string) {
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
 		if a.Provider == ecsFargate && a.Service != nil && a.Service.Public && a.Service.Port > 0 {
+			path := "services." + name
+			if a.Service.Gateway != nil {
+				path = "gateways." + name
+			}
 			p.warn(Finding{
-				Code: "plain-http", Subject: ServiceSubject, Name: name, Path: "services." + name,
+				Code: "plain-http", Subject: ServiceSubject, Name: name, Path: path,
 				Message: fmt.Sprintf("%s will serve plain HTTP: %s has no certificate. Add an ACM certificate to the connection to serve HTTPS.", name, p.in.Connections[i].Name),
 			})
 		}
@@ -631,8 +636,10 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		}
 		return
 	}
-	// A service runs code, so a new commit is a change too.
-	newCode := a.Subject == ServiceSubject && b.CommitSHA != "" && p.in.CommitSHA != "" && b.CommitSHA != p.in.CommitSHA
+	// A service runs code, so a new commit is a change too. A gateway's
+	// code is Loomplane's, so its routes are what change it.
+	newCode := a.Subject == ServiceSubject && (a.Service == nil || a.Service.Gateway == nil) &&
+		b.CommitSHA != "" && p.in.CommitSHA != "" && b.CommitSHA != p.in.CommitSHA
 	if newCode {
 		a.Changes = append(a.Changes, Change{Field: "commit", From: short(b.CommitSHA), To: short(p.in.CommitSHA)})
 	}
@@ -831,6 +838,9 @@ func (p *planner) planDeletes() {
 func (p *planner) wanted(b *Binding) (wanted, on bool) {
 	m := p.in.Manifest
 	if b.Subject == ServiceSubject {
+		if g, ok := m.Gateways[b.Name]; ok {
+			return true, manifest.On(g.For(p.in.Environment, m.Defaults).Enabled)
+		}
 		s, ok := m.Services[b.Name]
 		return ok, ok && manifest.On(s.For(p.in.Environment, m.Defaults).Enabled)
 	}

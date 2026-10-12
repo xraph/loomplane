@@ -429,3 +429,62 @@ func TestCompute_deterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestCompute_gateways(t *testing.T) {
+	const onECS = `version: 1
+defaults: {provider: ecs-fargate}
+services:
+  api: {source: services/api, public: false}
+  web: {source: apps/web, provider: vercel}
+gateways:
+  edge:
+    routes:
+      - {path: /api, to: api, strip_prefix: true}
+      - {path: /, to: web}
+ignore: {resources: [postgres, redis]}
+`
+	r := compute(t, onECS, "production")
+	if len(r.Problems) > 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	edge := action(t, r, "service:edge")
+	api, web := action(t, r, "service:api"), action(t, r, "service:web")
+	if edge.Step <= max(api.Step, web.Step) || !edge.Service.Public || edge.Service.Image != "Dockerfile" {
+		t.Fatalf("edge %+v", edge)
+	}
+	// api is private, reached inside the environment; web by its URL.
+	if len(edge.Service.Env) != 2 || edge.Service.Env[0].Address != "http://api:8080" || edge.Service.Env[1].Address != "" {
+		t.Fatalf("edge's links %+v", edge.Service.Env)
+	}
+	if len(edge.Service.Gateway) != 2 || edge.Service.Gateway[0].Env != "API_URL" || !edge.Service.Gateway[0].StripPrefix {
+		t.Fatalf("edge's routes %+v", edge.Service.Gateway)
+	}
+
+	// A gateway's code is Loomplane's: a new commit alone doesn't change it.
+	live := deployed(t, r)
+	for _, b := range live {
+		b.CommitSHA = "aaaaaaaaaaaa"
+	}
+	next := Compute(Input{
+		Environment: "production", Graph: polyglot(t), Manifest: parse(t, onECS), Providers: providers.Registry(),
+		Bindings: live, Connections: connected, CommitSHA: "bbbbbbbbbbbb",
+	})
+	if a := action(t, next, "service:edge"); a.Op != Keep {
+		t.Errorf("edge on a new commit: %s %+v", a.Op, a.Changes)
+	}
+	if a := action(t, next, "service:api"); a.Op != Update {
+		t.Errorf("api on a new commit: %s", a.Op)
+	}
+
+	for _, tt := range []struct{ name, yaml, want string }{
+		{"on vercel", "version: 1\nservices:\n  web: {source: apps/web, provider: vercel}\ngateways:\n  edge: {provider: vercel, routes: [{path: /, to: web}]}", "gateway-unsupported:edge"},
+		{"private on cloud run", "version: 1\ndefaults: {provider: cloud-run}\nservices:\n  api: {source: services/api, public: false}\ngateways:\n  edge: {routes: [{path: /, to: api}]}\nignore: {resources: [postgres, redis]}", "gateway-cant-reach:edge"},
+		{"to a worker", "version: 1\ndefaults: {provider: ecs-fargate}\nservices:\n  w: {source: services/worker/cmd/worker}\ngateways:\n  edge: {routes: [{path: /, to: w}]}", "need-worker:edge"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codes(compute(t, tt.yaml, "production").Problems); !slices.Contains(got, tt.want) {
+				t.Fatalf("problems %v, want %s", got, tt.want)
+			}
+		})
+	}
+}

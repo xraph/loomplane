@@ -114,7 +114,7 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *cloudRunState, save func()) (string, error) {
 	a, cfg := job.Action, job.Action.Service
 	project := s.Key().ProjectID
-	image := gcp.ImageName(project, a.Region, imageRepository, imageName(job), job.Deployment.CommitSHA[:12])
+	image := gcp.ImageName(project, a.Region, imageRepository, imageName(job), job.SourceID[:12])
 	if state.BuildID == "" {
 		job.Progress(StepBuilding, "Uploading the source to Cloud Build")
 		bucket := project + "_loomplane"
@@ -125,7 +125,7 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 		if err != nil {
 			return "", err
 		}
-		object := "sources/" + job.Deployment.CommitSHA + ".tar.gz"
+		object := "sources/" + job.SourceID + ".tar.gz"
 		src, size, err := job.Source(ctx)
 		if err != nil {
 			return "", err

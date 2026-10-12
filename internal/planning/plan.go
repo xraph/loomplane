@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -122,6 +123,9 @@ type ServiceConfig struct {
 	// Env are the variables Loomplane sets so the service finds what it
 	// needs. The values exist only once those things are deployed.
 	Env []EnvLink `json:"env,omitempty"`
+	// Gateway are a gateway's routes. A service with routes is a gateway
+	// Loomplane generates and builds, not code from the repository.
+	Gateway []gateway.Route `json:"gateway,omitempty"`
 }
 
 // EnvLink is a variable a service gets with the address of something it

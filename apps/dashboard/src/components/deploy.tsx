@@ -1001,6 +1001,7 @@ function Steps({ actions }: { actions: Action[] }) {
 
 function ActionRow({ action: a }: { action: Action }) {
   const env = a.service?.env ?? []
+  const routes = a.service?.gateway ?? []
   return (
     <li className="grid gap-1.5 rounded-lg border px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -1026,6 +1027,18 @@ function ActionRow({ action: a }: { action: Action }) {
             </li>
           ))}
         </ul>
+      )}
+      {routes.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          A gateway Loomplane builds, routing{" "}
+          {routes.map((r, i) => (
+            <span key={r.path}>
+              {i > 0 && ", "}
+              <code className="font-mono">{r.path}</code> to {r.to}
+              {r.stripPrefix && " without the prefix"}
+            </span>
+          ))}
+        </p>
       )}
       {env.length > 0 && (
         <p className="text-xs text-muted-foreground">

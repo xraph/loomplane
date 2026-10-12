@@ -636,3 +636,107 @@ func TestDeploy_anECSServiceGetsItsRDSDatabase(t *testing.T) {
 		}
 	}
 }
+
+const gatewayOnECS = `version: 1
+defaults: {provider: ecs-fargate}
+services:
+  api:
+    source: go:services/api
+    public: false
+gateways:
+  edge:
+    routes:
+      - {path: /api, to: api, strip_prefix: true}
+ignore:
+  resources: [postgres, redis]
+`
+
+func TestDeploy_aGatewayRoutesToAPrivateService(t *testing.T) {
+	fake := newFakeAWS(t)
+	cloud := installFakeECS(t, fake)
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.AWSEndpoint = fake.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]any{"cloud": "aws", "name": "AWS", "credential": awsKey(awsKeyID), "settings": map[string]string{"region": "us-east-1"}}, nil)
+	c.must(http.StatusCreated, http.MethodPost, base+"/variables",
+		map[string]any{"key": "API_TOKEN", "value": "not-for-the-gateway", "secret": true, "environment": "production"}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": gatewayOnECS}, nil)
+
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	if plan.Status != "ready" || !plan.Executable || len(plan.Actions) != 2 || plan.Actions[1].ID != "service:edge" {
+		t.Fatalf("plan %+v", plan)
+	}
+	d := approveAndWait(t, c, plan)
+	if d.Status != "succeeded" {
+		t.Fatalf("deployment %+v", d)
+	}
+
+	cloud.mu.Lock()
+	defer cloud.mu.Unlock()
+	// The gateway's generated source went up beside the commit's, not
+	// over it, and builds from its own Dockerfile.
+	var gw string
+	for key := range cloud.uploads {
+		if strings.HasPrefix(key, "sources/gw") {
+			gw = key
+		}
+	}
+	if len(cloud.uploads) != 2 || gw == "" {
+		t.Fatalf("uploads %v", cloud.uploads)
+	}
+	if !slices.ContainsFunc(cloud.builds, func(b map[string]any) bool {
+		return strings.Contains(b["sourceLocationOverride"].(string), gw) && strings.Contains(b["buildspecOverride"].(string), "docker build -t ") &&
+			strings.Contains(b["buildspecOverride"].(string), "/loomplane/edge-")
+	}) {
+		t.Fatalf("no gateway build from %s: %+v", gw, cloud.builds)
+	}
+	// It reaches api inside the environment, and gets nothing else.
+	var edge map[string]any
+	for _, td := range cloud.tasks {
+		ctr := td["containerDefinitions"].([]any)[0].(map[string]any)
+		if strings.Contains(ctr["image"].(string), "/loomplane/edge-") {
+			edge = ctr
+		}
+	}
+	env := edge["environment"].([]any)
+	if len(env) != 1 || env[0].(map[string]any)["name"] != "API_URL" || env[0].(map[string]any)["value"] != "http://api:8080" || edge["secrets"] != nil {
+		t.Fatalf("edge's environment %+v, secrets %+v", env, edge["secrets"])
+	}
+	// The gateway is public, behind the load balancer; api isn't.
+	public := 0
+	for _, svc := range cloud.services {
+		if _, lb := svc["request"].(map[string]any)["loadBalancers"]; lb {
+			public++
+		}
+	}
+	if public != 1 {
+		t.Fatalf("%d services behind the load balancer", public)
+	}
+}

@@ -86,6 +86,11 @@ func TestParse_rejects(t *testing.T) {
 		{"bad name", "version: 1\nservices:\n  API: {source: x}", "services.API: the name must be"},
 		{"bad kind", "version: 1\nservices:\n  api: {source: x, kind: lambda}", "\"lambda\" isn't a service kind"},
 		{"unknown need", "version: 1\nservices:\n  api: {source: x, needs: [db]}", "\"db\" isn't a service or resource"},
+		{"gateway without routes", "version: 1\nservices:\n  web: {source: x}\ngateways:\n  edge: {routes: []}", "needs at least one route"},
+		{"gateway to nothing", "version: 1\nservices:\n  web: {source: x}\ngateways:\n  edge: {routes: [{path: /, to: api}]}", "\"api\" isn't a service"},
+		{"gateway path", "version: 1\nservices:\n  web: {source: x}\ngateways:\n  edge: {routes: [{path: api, to: web}]}", "isn't a path prefix"},
+		{"gateway path twice", "version: 1\nservices:\n  web: {source: x}\ngateways:\n  edge: {routes: [{path: /a, to: web}, {path: /a/, to: web}]}", "is routed twice"},
+		{"gateway named like a service", "version: 1\nservices:\n  web: {source: x}\ngateways:\n  web: {routes: [{path: /, to: web}]}", "they'd share an address"},
 		{"needs itself", "version: 1\nservices:\n  api: {source: x, needs: [api]}", "can't need itself"},
 		{"need twice", "version: 1\nservices:\n  a: {source: x, needs: [b, b]}\n  b: {source: y}", "\"b\" is listed twice"},
 		{"cycle", "version: 1\nservices:\n  a: {source: x, needs: [b]}\n  b: {source: y, needs: [a]}", "a → b → a"},
@@ -252,6 +257,8 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"size", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["size"]), Size{}},
 		{"resource", props(defs["resource"]), Resource{}},
 		{"resource settings", props(envOverride), ResourceSettings{}},
+		{"gateway", props(defs["gateway"]), Gateway{}},
+		{"route", props(defs["route"]), Route{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

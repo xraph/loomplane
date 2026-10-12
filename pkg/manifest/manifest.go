@@ -41,6 +41,8 @@ const (
 	MinMemory    = 128
 	MaxMemory    = 32768
 	MaxPort      = 65535
+	MaxGateways  = 10
+	MaxRoutes    = 50
 )
 
 // ErrInvalid wraps every validation failure.
@@ -52,6 +54,7 @@ type Manifest struct {
 	Defaults  Defaults            `json:"defaults,omitzero" yaml:"defaults,omitempty"`
 	Services  map[string]Service  `json:"services,omitempty" yaml:"services,omitempty"`
 	Resources map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Gateways  map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
 	Ignore    Ignore              `json:"ignore,omitzero" yaml:"ignore,omitempty"`
 }
 
@@ -124,6 +127,32 @@ type Resource struct {
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
 }
 
+// Gateway is one public address in front of several services, routing
+// each request by its path. Loomplane builds it and runs it on a target
+// like any service.
+type Gateway struct {
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
+	// Routes send paths to services. The longest path that matches wins,
+	// so "/" catches whatever the others don't.
+	Routes []Route `json:"routes" yaml:"routes"`
+	// Environments override the provider or region in one environment, or
+	// leave the gateway out of it.
+	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
+}
+
+// Route sends requests under a path to a service.
+type Route struct {
+	// Path is a prefix, such as /api. A request for /api or anything
+	// under /api/ matches it.
+	Path string `json:"path" yaml:"path"`
+	// To is the service, by its name in this manifest.
+	To string `json:"to" yaml:"to"`
+	// StripPrefix removes the path before the request reaches the
+	// service, so /api/users arrives as /users.
+	StripPrefix bool `json:"strip_prefix,omitempty" yaml:"strip_prefix,omitempty"`
+}
+
 // ResourceSettings are what an environment can override on a resource.
 type ResourceSettings struct {
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
@@ -148,6 +177,7 @@ var (
 	kindRE  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
+	routeRE   = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$`)
 	sourceRE  = regexp.MustCompile(`^(?:[a-z]+:)?[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 )
 
@@ -277,6 +307,10 @@ func (m *Manifest) Validate() error {
 	if len(m.Resources) > MaxResources {
 		add("resources", "has %d resources; the most is %d", len(m.Resources), MaxResources)
 	}
+	if len(m.Gateways) > MaxGateways {
+		add("gateways", "has %d gateways; the most is %d", len(m.Gateways), MaxGateways)
+	}
+	m.validateGateways(add)
 
 	for _, name := range m.ResourceNames() {
 		r := m.Resources[name]
@@ -436,6 +470,61 @@ func (m *Manifest) serviceCycle() []string {
 		}
 	}
 	return nil
+}
+
+func (m *Manifest) validateGateways(add func(string, string, ...any)) {
+	for _, name := range m.GatewayNames() {
+		g := m.Gateways[name]
+		path := "gateways." + name
+		if !nameRE.MatchString(name) {
+			add(path, "the name must be lower case letters, digits and hyphens, starting with a letter, at most 40 long")
+		}
+		_, isService := m.Services[name]
+		_, isResource := m.Resources[name]
+		if isService || isResource {
+			add(path, "a service or resource has the same name; they'd share an address")
+		}
+		checkToken(add, path+".provider", "provider", g.Provider)
+		checkToken(add, path+".region", "region", g.Region)
+		switch {
+		case len(g.Routes) == 0:
+			add(path+".routes", "needs at least one route, such as {path: /, to: web}")
+		case len(g.Routes) > MaxRoutes:
+			add(path+".routes", "has %d routes; the most is %d", len(g.Routes), MaxRoutes)
+		}
+		seen := map[string]bool{}
+		for i, r := range g.Routes {
+			rpath := fmt.Sprintf("%s.routes[%d]", path, i)
+			switch {
+			case !routeRE.MatchString(r.Path):
+				add(rpath+".path", "%q isn't a path prefix, such as /api", r.Path)
+			case seen[strings.TrimSuffix(r.Path, "/")]:
+				add(rpath+".path", "%q is routed twice", r.Path)
+			}
+			seen[strings.TrimSuffix(r.Path, "/")] = true
+			if _, ok := m.Services[r.To]; !ok {
+				add(rpath+".to", "%q isn't a service in this manifest", r.To)
+			}
+		}
+		for _, env := range sortedKeys(g.Environments) {
+			o := g.Environments[env]
+			epath := path + ".environments." + env
+			if !envRE.MatchString(env) {
+				add(epath, "isn't an environment name")
+			}
+			checkToken(add, epath+".provider", "provider", o.Provider)
+			checkToken(add, epath+".region", "region", o.Region)
+		}
+	}
+}
+
+// GatewayNames returns the gateways' names, sorted.
+func (m *Manifest) GatewayNames() []string { return sortedKeys(m.Gateways) }
+
+// For returns a gateway's settings in an environment, the way a
+// resource's are.
+func (g Gateway) For(env string, d Defaults) ResourceSettings {
+	return Resource{Provider: g.Provider, Region: g.Region, Environments: g.Environments}.For(env, d)
 }
 
 // ServiceNames returns the services' names, sorted.
