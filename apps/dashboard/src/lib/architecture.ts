@@ -226,6 +226,19 @@ export function latestBySource(analyses: Analysis[]): Map<string, Analysis> {
 }
 
 /**
+ * analysisKey is a string that changes when any source's newest analysis
+ * does, by id or by status, and stays put for older ones. The project
+ * graph is read from those analyses, so a change in the key means it is
+ * out of date, even when an analysis started and finished between two
+ * fetches and nothing was ever seen running.
+ */
+export function analysisKey(analyses: Analysis[]): string {
+  return [...latestBySource(analyses).values()]
+    .map((a) => `${a.source}:${a.id}:${a.status}`)
+    .join("|")
+}
+
+/**
  * lastRead says what a source's newest analysis did: still running, failed,
  * or which commit it read. It takes the project graph's state for the
  * source, which knows its newest analysis however long ago that was.

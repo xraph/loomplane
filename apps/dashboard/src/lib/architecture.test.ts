@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import type { Analysis, Graph } from "@/client/forge/loomplane/types"
 import {
+  analysisKey,
   clusters,
   connections,
   evidenceLabel,
@@ -220,6 +221,40 @@ describe("latestBySource", () => {
       "web:3",
       "api:2",
     ])
+  })
+})
+
+describe("analysisKey", () => {
+  const list = (...rows: [string, string, string][]) =>
+    rows.map(([id, source, status]) => ({ id, source, status })) as Analysis[]
+
+  it("is empty without analyses", () => {
+    expect(analysisKey([])).toBe("")
+  })
+
+  it("changes when a source's newest analysis is a new one", () => {
+    const before = list(["1", "web", "succeeded"])
+    const after = list(["2", "web", "queued"], ["1", "web", "succeeded"])
+    expect(analysisKey(after)).not.toBe(analysisKey(before))
+  })
+
+  it("changes when the newest analysis changes status", () => {
+    expect(analysisKey(list(["2", "web", "succeeded"]))).not.toBe(
+      analysisKey(list(["2", "web", "analyzing"]))
+    )
+  })
+
+  it("changes when another source gets its first analysis", () => {
+    expect(
+      analysisKey(list(["2", "api", "succeeded"], ["1", "web", "succeeded"]))
+    ).not.toBe(analysisKey(list(["1", "web", "succeeded"])))
+  })
+
+  it("doesn't change for an older analysis", () => {
+    const newest: [string, string, string] = ["3", "web", "succeeded"]
+    const one = list(newest, ["2", "web", "succeeded"])
+    const two = list(newest, ["2", "web", "failed"], ["1", "web", "succeeded"])
+    expect(analysisKey(two)).toBe(analysisKey(one))
   })
 })
 

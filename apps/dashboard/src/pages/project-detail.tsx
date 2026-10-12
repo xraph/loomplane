@@ -81,7 +81,12 @@ import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ecosystemLabel, resourceLabel, shortSHA } from "@/lib/architecture"
+import {
+  analysisKey,
+  ecosystemLabel,
+  resourceLabel,
+  shortSHA,
+} from "@/lib/architecture"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { projectStyle } from "@/lib/project-style"
@@ -162,6 +167,13 @@ function Loaded({ project }: { project: Project }) {
   const view = useQuery(useProjectsGraph, { path: { id: project.id } })
   useRefetchWhile(analyses.running, view.refetch)
   useRefetchAfter(analyses.running, view.refetch)
+  // An analysis can start and finish between two fetches of the list, so
+  // nothing is ever seen running. Any change to a repository's newest
+  // analysis means the graph is stale.
+  useRefetchOnChange(
+    analyses.loaded ? analysisKey(analyses.list) : undefined,
+    view.refetch
+  )
 
   return (
     <Body
@@ -181,6 +193,23 @@ function useRefetchAfter(active: boolean, refetch: () => Promise<unknown>) {
     if (was.current && !active) refetch().catch(() => undefined)
     was.current = active
   }, [active, refetch])
+}
+
+/**
+ * useRefetchOnChange refetches when key changes. The first key it sees,
+ * once there is one, is the baseline and refetches nothing.
+ */
+function useRefetchOnChange(
+  key: string | undefined,
+  refetch: () => Promise<unknown>
+) {
+  const last = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (key === undefined) return
+    const was = last.current
+    last.current = key
+    if (was !== undefined && was !== key) refetch().catch(() => undefined)
+  }, [key, refetch])
 }
 
 function Body({

@@ -21,6 +21,7 @@ import {
   useAnalysesCreate,
   useAnalysesList,
   useProjectsGet,
+  useProjectsGraph,
   useProjectsList,
   useSourcesCreate,
   useSourcesList,
@@ -149,6 +150,7 @@ export function AnalyzeActions({
   running: boolean
 }) {
   const start = useMutation(useAnalysesCreate)
+  const invalidate = useInvalidate()
   const sources = useQuery(useSourcesList, { path: { id: project.id } })
   // The API refuses a ref when a project has several sources, so the choice
   // is only offered for one.
@@ -163,6 +165,7 @@ export function AnalyzeActions({
         path: { id: project.id },
         body: target ? { ref: target } : {},
       })
+      invalidate(useProjectsGraph, { path: { id: project.id } })
       setChoosing(false)
       setRef("")
     } catch (err) {
@@ -406,6 +409,7 @@ export function NotAnalyzed({
   running: boolean
 }) {
   const repo = repositoriesLabel(project.repositories)
+  const many = project.repositories.length > 1
   return (
     <Empty className="border border-dashed">
       <EmptyHeader>
@@ -419,7 +423,9 @@ export function NotAnalyzed({
           {running
             ? `Loomplane is reading ${repo}. The services and resources it finds show up here.`
             : mayRun
-              ? `Analyze ${repo} and Loomplane maps the services and resources it finds here. Nothing in the repository is run.`
+              ? many
+                ? "Analyze the repositories and Loomplane maps the services and resources it finds here. Nothing in them is run."
+                : `Analyze ${repo} and Loomplane maps the services and resources it finds here. Nothing in the repository is run.`
               : "Someone with the developer role or above can analyze it."}
         </EmptyDescription>
       </EmptyHeader>
@@ -434,6 +440,7 @@ export function NotAnalyzed({
 
 function AnalyzeOnce({ project }: { project: Project }) {
   const start = useMutation(useAnalysesCreate)
+  const invalidate = useInvalidate()
   return (
     <Button
       className="rounded-full"
@@ -441,13 +448,18 @@ function AnalyzeOnce({ project }: { project: Project }) {
       onClick={() =>
         start
           .mutateAsync({ path: { id: project.id }, body: {} })
+          .then(() =>
+            invalidate(useProjectsGraph, { path: { id: project.id } })
+          )
           .catch((err: unknown) =>
             toast.error(messageOf(err, "The analysis didn't start."))
           )
       }
     >
       {start.isPending ? <Spinner /> : <ScanSearchIcon />}
-      Analyze the repository
+      {project.repositories.length > 1
+        ? "Analyze the repositories"
+        : "Analyze the repository"}
     </Button>
   )
 }

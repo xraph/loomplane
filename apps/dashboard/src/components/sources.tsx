@@ -97,6 +97,7 @@ export function SourcesCard({ project }: { project: Project }) {
   const sources = useQuery(useSourcesList, { path: { id: project.id } })
   const analyses = useAnalyses(project.id)
   const start = useMutation(useAnalysesCreate)
+  const invalidate = useInvalidate()
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<Source | null>(null)
   // The graph view knows each source's newest analysis however old it is;
@@ -117,6 +118,7 @@ export function SourcesCard({ project }: { project: Project }) {
         path: { id: project.id },
         body: alias ? { sources: [alias] } : {},
       })
+      .then(() => invalidate(useProjectsGraph, { path: { id: project.id } }))
       .catch((err: unknown) =>
         toast.error(messageOf(err, "The analysis didn't start."))
       )
