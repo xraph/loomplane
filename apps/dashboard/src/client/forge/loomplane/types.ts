@@ -26,6 +26,13 @@ export interface Action {
   subject: string;
 }
 
+export interface AddSourceInputBody {
+  alias?: string;
+  ref?: string;
+  repository: string;
+  root?: string;
+}
+
 export interface Analysis {
   commitSha: string;
   createdAt: string;
@@ -37,6 +44,8 @@ export interface Analysis {
   projectId: string;
   ref: string;
   repository: string;
+  source: string;
+  sourceId: string;
   startedAt?: string;
   status: string;
   summary: GraphSummary;
@@ -403,7 +412,7 @@ export interface Project {
   id: string;
   name: string;
   orgId: string;
-  repositoryUrl: string;
+  repositories: string[];
   slug: string;
   status: string;
   updatedAt: string;
@@ -569,8 +578,27 @@ export interface Size {
   memory: number;
 }
 
+export interface Source {
+  alias: string;
+  createdAt: string;
+  createdBy: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  ref: string;
+  removedAt?: string;
+  repository: string;
+  root: string;
+  updatedAt: string;
+}
+
+export interface SourceList {
+  sources: Source[];
+}
+
 export interface StartAnalysisInputBody {
   ref?: string;
+  sources?: string[];
 }
 
 export interface Step {
@@ -593,7 +621,11 @@ export interface UpdateProjectInputBody {
   description?: string;
   icon?: string;
   name?: string;
-  repositoryUrl?: string;
+}
+
+export interface UpdateSourceInputBody {
+  ref?: string;
+  root?: string;
 }
 
 export interface UpdateVariableInputBody {

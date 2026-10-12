@@ -754,7 +754,7 @@
         "tags": [
           "Projects"
         ],
-        "summary": "Change a project's name, description, repository, icon or color",
+        "summary": "Change a project's name, description, icon or color",
         "operationId": "projects.update",
         "parameters": [
           {
@@ -827,7 +827,7 @@
         "tags": [
           "Analyses"
         ],
-        "summary": "Analyze the project's repository: find its services, packages and the resources they need",
+        "summary": "Analyze the project's repositories, or the ones named",
         "operationId": "analyses.create",
         "parameters": [
           {
@@ -853,11 +853,11 @@
         },
         "responses": {
           "201": {
-            "description": "The queued analysis",
+            "description": "The queued analyses, one per source",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Analysis"
+                  "$ref": "#/components/schemas/AnalysisList"
                 }
               }
             }
@@ -1377,6 +1377,167 @@
         }
       }
     },
+    "/api/v1/projects/{id}/sources": {
+      "get": {
+        "tags": [
+          "Sources"
+        ],
+        "summary": "The repositories the project builds from, by alias",
+        "operationId": "sources.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Sources"
+        ],
+        "summary": "Attach a repository, or a directory of one, after checking Loomplane can read it",
+        "operationId": "sources.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddSourceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/sources/{alias}": {
+      "delete": {
+        "operationId": "sources.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "alias",
+            "in": "path",
+            "description": "Path parameter: alias",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Detach a source. Its alias stays taken, so old plans keep their meaning.",
+        "tags": [
+          "Sources"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "Source"
+        }
+      },
+      "patch": {
+        "tags": [
+          "Sources"
+        ],
+        "summary": "Change the directory or branch a source reads",
+        "operationId": "sources.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "alias",
+            "in": "path",
+            "description": "Path parameter: alias",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSourceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/variables": {
       "get": {
         "tags": [
@@ -1748,12 +1909,34 @@
           }
         }
       },
+      "AddSourceInputBody": {
+        "type": "object",
+        "required": [
+          "repository"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          }
+        }
+      },
       "Analysis": {
         "type": "object",
         "required": [
           "id",
           "org_id",
           "project_id",
+          "source_id",
+          "source",
           "status",
           "repository",
           "ref",
@@ -1794,6 +1977,12 @@
             "type": "string"
           },
           "repository": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
             "type": "string"
           },
           "started_at": {
@@ -3061,7 +3250,7 @@
           "description",
           "icon",
           "color",
-          "repository_url",
+          "repositories",
           "status",
           "created_by",
           "created_at",
@@ -3094,8 +3283,11 @@
           "org_id": {
             "type": "string"
           },
-          "repository_url": {
-            "type": "string"
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "slug": {
             "type": "string"
@@ -3671,11 +3863,85 @@
           }
         }
       },
+      "Source": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "alias",
+          "repository",
+          "root",
+          "ref",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "removed_at": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SourceList": {
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            }
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "type": "object",
+        "x-forge-envelope": "sources"
+      },
       "StartAnalysisInputBody": {
         "type": "object",
         "properties": {
           "ref": {
             "type": "string"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -3746,8 +4012,16 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "UpdateSourceInputBody": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
           },
-          "repository_url": {
+          "root": {
             "type": "string"
           }
         }

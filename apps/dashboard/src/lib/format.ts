@@ -9,6 +9,15 @@ export function formatDate(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : dateFormat.format(d)
 }
 
+/**
+ * repositoriesLabel names a project's repositories in the room one takes:
+ * the first, and how many more.
+ */
+export function repositoriesLabel(repos: string[]): string {
+  if (repos.length === 0) return ""
+  return repos.length === 1 ? repos[0] : `${repos[0]} +${repos.length - 1}`
+}
+
 /** repoLabel shortens a repository URL to host/org/repo. */
 export function repoLabel(url: string): string {
   return url

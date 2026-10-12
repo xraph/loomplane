@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest"
 
 import { messageOf, statusOf } from "@/client/errors"
 import { HTTPError } from "@/client/forge/loomplane/fetch"
-import { githubRepo, repoLabel, repositoryURL } from "@/lib/format"
+import {
+  githubRepo,
+  repoLabel,
+  repositoriesLabel,
+  repositoryURL,
+} from "@/lib/format"
 import { colorNames, iconNames, projectStyle } from "@/lib/project-style"
 import { slugify } from "@/lib/slug"
 
@@ -102,5 +107,15 @@ describe("projectStyle", () => {
       Array.from({ length: 40 }, (_, i) => projectStyle({ id: `p${i}` }).icon)
     )
     expect(icons.size).toBeGreaterThan(10)
+  })
+})
+
+describe("repositoriesLabel", () => {
+  it.each([
+    [[], ""],
+    [["acme/web"], "acme/web"],
+    [["acme/web", "acme/api", "acme/kit"], "acme/web +2"],
+  ])("repositoriesLabel(%j) is %j", (repos, want) => {
+    expect(repositoriesLabel(repos)).toBe(want)
   })
 })

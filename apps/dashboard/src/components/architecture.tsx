@@ -20,7 +20,9 @@ import { messageOf } from "@/client/errors"
 import {
   useAnalysesCreate,
   useAnalysesList,
-  useProjectsUpdate,
+  useProjectsGet,
+  useProjectsList,
+  useSourcesCreate,
 } from "@/client/forge/loomplane/hooks"
 import type {
   Analysis,
@@ -30,7 +32,12 @@ import type {
   Resource,
   Service,
 } from "@/client/forge/loomplane/types"
-import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
+import {
+  useInvalidate,
+  useMutation,
+  useQuery,
+  useRefetchWhile,
+} from "@/client/hooks"
 import {
   type GraphSelection,
   needsReview,
@@ -92,6 +99,7 @@ import {
   evidenceURL,
   isActive,
   kindLabel,
+  latestBySource,
   latestSucceeded,
   resourceLabel,
   shortSHA,
@@ -99,7 +107,7 @@ import {
   stepLabel,
   steps,
 } from "@/lib/architecture"
-import { formatDate, githubRepo, repositoryURL } from "@/lib/format"
+import { formatDate, githubRepo, repositoriesLabel } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 // After this long in the queue, the likeliest reason is that no worker is
@@ -108,14 +116,16 @@ const workerHintAfter = 30_000
 
 /**
  * useAnalyses is a project's analyses, newest first, watched while one
- * runs: the latest, whether it's running, and the newest that produced a
- * graph, which is the one the page shows.
+ * runs: the latest, whether any source's is running, and the newest that
+ * produced a graph, which is the one the page shows.
  */
 export function useAnalyses(projectID: string) {
   const analyses = useQuery(useAnalysesList, { path: { id: projectID } })
   const list = analyses.data?.analyses ?? []
   const latest = list[0]
-  const running = !!latest && isActive(latest.status)
+  const running = [...latestBySource(list).values()].some((a) =>
+    isActive(a.status)
+  )
   useRefetchWhile(running, analyses.refetch)
   return {
     list,
@@ -160,15 +170,17 @@ export function AnalyzeActions({
 
   return (
     <>
-      <Button
-        variant="outline"
-        className="rounded-full"
-        onClick={() => setChoosing(true)}
-        disabled={busy}
-      >
-        <GitBranchIcon />
-        Another branch
-      </Button>
+      {project.repositories.length === 1 && (
+        <Button
+          variant="outline"
+          className="rounded-full"
+          onClick={() => setChoosing(true)}
+          disabled={busy}
+        >
+          <GitBranchIcon />
+          Another branch
+        </Button>
+      )}
       <Button
         className="rounded-full"
         onClick={() => void run("")}
@@ -304,16 +316,20 @@ export function ConnectRepository({
   project: Project
   mayEdit: boolean
 }) {
-  const update = useMutation(useProjectsUpdate)
+  const add = useMutation(useSourcesCreate)
+  const invalidate = useInvalidate()
   const [repo, setRepo] = useState("")
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     try {
-      await update.mutateAsync({
+      await add.mutateAsync({
         path: { id: project.id },
-        body: { repositoryUrl: repositoryURL(repo) },
+        body: { repository: repo.trim() },
       })
+      // The project's own repositories changed; the page reads them from it.
+      invalidate(useProjectsGet, { path: { id: project.id } })
+      invalidate(useProjectsList)
       toast.success("Repository added", {
         description: "Analyze it to see the services Loomplane can deploy.",
       })
@@ -358,9 +374,9 @@ export function ConnectRepository({
                 <InputGroupButton
                   type="submit"
                   variant="default"
-                  disabled={update.isPending || !repo.trim()}
+                  disabled={add.isPending || !repo.trim()}
                 >
-                  {update.isPending && <Spinner />}
+                  {add.isPending && <Spinner />}
                   Add
                 </InputGroupButton>
               </InputGroupAddon>
@@ -382,7 +398,7 @@ export function NotAnalyzed({
   mayRun: boolean
   running: boolean
 }) {
-  const repo = githubRepo(project.repositoryUrl) || project.repositoryUrl
+  const repo = repositoriesLabel(project.repositories)
   return (
     <Empty className="border border-dashed">
       <EmptyHeader>

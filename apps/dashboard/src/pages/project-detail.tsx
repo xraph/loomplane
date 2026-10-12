@@ -47,6 +47,7 @@ import {
   ServiceGraph,
 } from "@/components/service-graph"
 import { SiteHeader } from "@/components/site-header"
+import { SourcesCard } from "@/components/sources"
 import { isReady } from "@/lib/projects"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -81,7 +82,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ecosystemLabel, resourceLabel, shortSHA } from "@/lib/architecture"
-import { formatDate, githubRepo, repoLabel } from "@/lib/format"
+import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
@@ -208,7 +209,6 @@ function Body({
   const mayEdit = can("project:update")
   const shown = analyses.shown
   const style = projectStyle(project)
-  const repo = githubRepo(project.repositoryUrl)
   const ecosystems = [...new Set(graph?.services.map((s) => s.ecosystem))]
   const toReview = graph?.resources.filter(needsReview) ?? []
 
@@ -245,29 +245,30 @@ function Body({
         }
         description={project.description || undefined}
         actions={
-          project.repositoryUrl && mayRun ? (
+          project.repositories.length > 0 && mayRun ? (
             <AnalyzeActions project={project} running={analyses.running} />
           ) : undefined
         }
       >
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          {project.repositoryUrl ? (
-            <Badge
-              variant="outline"
-              className="h-6 gap-1.5 font-normal"
-              render={
-                repo ? (
+          {project.repositories.length > 0 ? (
+            project.repositories.map((r) => (
+              <Badge
+                key={r}
+                variant="outline"
+                className="h-6 gap-1.5 font-normal"
+                render={
                   <a
-                    href={`https://github.com/${repo}`}
+                    href={`https://github.com/${r}`}
                     target="_blank"
                     rel="noreferrer"
                   />
-                ) : undefined
-              }
-            >
-              <FolderGit2Icon />
-              {repoLabel(project.repositoryUrl)}
-            </Badge>
+                }
+              >
+                <FolderGit2Icon />
+                {r}
+              </Badge>
+            ))
           ) : (
             <Badge variant="outline" className="h-6 gap-1.5 font-normal">
               <FolderGit2Icon />
@@ -367,6 +368,7 @@ function Body({
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
         <TabsContent value="graph" className="grid gap-3">
+          {project.repositories.length > 0 && <SourcesCard project={project} />}
           <Discovered
             project={project}
             analyses={analyses}
@@ -493,7 +495,7 @@ function Discovered({
   mayEdit: boolean
   children: (graph: Graph, analysis: Analysis) => ReactNode
 }) {
-  if (!project.repositoryUrl) {
+  if (project.repositories.length === 0) {
     return <ConnectRepository project={project} mayEdit={mayEdit} />
   }
   if (analyses.error) {
@@ -527,10 +529,10 @@ function Details({ project }: { project: Project }) {
   }
   const rows: [string, ReactNode][] = [
     [
-      "Repository",
-      project.repositoryUrl ? (
+      "Repositories",
+      project.repositories.length > 0 ? (
         <code className="font-mono text-xs">
-          {repoLabel(project.repositoryUrl)}
+          {project.repositories.join(", ")}
         </code>
       ) : (
         <span className="text-muted-foreground">None yet</span>

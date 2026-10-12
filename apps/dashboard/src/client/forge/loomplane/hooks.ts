@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { Analysis, AnalysisGraph, AnalysisList, BindingList, ConnectedRepositoryList, Connection, ConnectionList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Variable, VariableList } from './types';
+import type { Analysis, AnalysisGraph, AnalysisList, BindingList, ConnectedRepositoryList, Connection, ConnectionList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Source, SourceList, Variable, VariableList } from './types';
 
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
 export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
@@ -39,7 +39,7 @@ export const useProjectsGet = query<Project>(ops['projects.get']);
 export const useProjectsUpdate = mutation<Project, Project>(ops['projects.update']);
 export const useProjectsDelete = mutation(ops['projects.delete']);
 export const useAnalysesList = query<AnalysisList>(ops['analyses.list']);
-export const useAnalysesCreate = mutation<Analysis, Analysis>(ops['analyses.create']);
+export const useAnalysesCreate = mutation<AnalysisList, Analysis>(ops['analyses.create']);
 export const useBindingsList = query<BindingList>(ops['bindings.list']);
 export const useDeploymentsList = query<DeploymentList>(ops['deployments.list']);
 export const useEnvironmentsList = query<EnvironmentList>(ops['environments.list']);
@@ -53,6 +53,10 @@ export const useManifestsDraft = query<ManifestDraft>(ops['manifests.draft']);
 export const useManifestsHistory = query<RevisionList>(ops['manifests.history']);
 export const usePlansList = query<PlanList>(ops['plans.list']);
 export const usePlansCreate = mutation<Plan, Plan>(ops['plans.create']);
+export const useSourcesList = query<SourceList>(ops['sources.list']);
+export const useSourcesCreate = mutation<Source, Source>(ops['sources.create']);
+export const useSourcesUpdate = mutation<Source, Source>(ops['sources.update']);
+export const useSourcesDelete = mutation(ops['sources.delete']);
 export const useProjectVariablesList = query<VariableList>(ops['projectVariables.list']);
 export const useProjectVariablesCreate = mutation<Variable, Variable>(ops['projectVariables.create']);
 export const useVariablesResolve = query<Resolution>(ops['variables.resolve']);

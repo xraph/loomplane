@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/item"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
-import { formatDate, repoLabel } from "@/lib/format"
+import { formatDate, repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
@@ -54,7 +54,7 @@ export function Projects() {
   const shown = projects?.filter(
     (p) =>
       !q ||
-      [p.name, p.slug, p.description, p.repositoryUrl].some((v) =>
+      [p.name, p.slug, p.description, ...p.repositories].some((v) =>
         v.toLowerCase().includes(q)
       )
   )
@@ -198,7 +198,7 @@ function ProjectCard({ project: p }: { project: Project }) {
         <span className="flex min-w-0 items-center gap-1.5">
           <FolderGit2Icon className="size-3.5 shrink-0" />
           <span className="truncate font-mono">
-            {p.repositoryUrl ? repoLabel(p.repositoryUrl) : "No repository yet"}
+            {repositoriesLabel(p.repositories) || "No repository yet"}
           </span>
         </span>
         <time dateTime={p.createdAt} className="shrink-0">

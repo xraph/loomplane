@@ -171,6 +171,13 @@ export function connections(graph: Graph, serviceID: string): Connections {
   return out
 }
 
+/** latestBySource is each source's newest analysis, from a list newest first. */
+export function latestBySource(analyses: Analysis[]): Map<string, Analysis> {
+  const out = new Map<string, Analysis>()
+  for (const a of analyses) if (!out.has(a.source)) out.set(a.source, a)
+  return out
+}
+
 /** latestSucceeded is the newest analysis that produced a graph. */
 export function latestSucceeded(analyses: Analysis[]): Analysis | undefined {
   return analyses.find((a) => a.status === "succeeded")

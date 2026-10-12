@@ -7,6 +7,7 @@ import {
   evidenceURL,
   isActive,
   kindLabel,
+  latestBySource,
   latestSucceeded,
   stepIndex,
 } from "@/lib/architecture"
@@ -196,5 +197,20 @@ describe("latestSucceeded", () => {
         ?.id
     ).toBe("1")
     expect(latestSucceeded([a("1", "failed")])).toBeUndefined()
+  })
+})
+
+describe("latestBySource", () => {
+  it("keeps each source's newest analysis from a list newest first", () => {
+    const list = [
+      { id: "3", source: "web", status: "queued" },
+      { id: "2", source: "api", status: "succeeded" },
+      { id: "1", source: "web", status: "succeeded" },
+    ] as Analysis[]
+    const got = latestBySource(list)
+    expect([...got.entries()].map(([k, a]) => `${k}:${a.id}`)).toEqual([
+      "web:3",
+      "api:2",
+    ])
   })
 })

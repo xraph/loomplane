@@ -6,9 +6,9 @@ import { CODECS } from './codecs';
 export class RESTClient extends Client {
   public readonly analyses = {
     /**
-     * Analyze the project's repository: find its services, packages and the resources they need
+     * Analyze the project's repositories, or the ones named
      */
-    create: async (id: string, body: types.StartAnalysisInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Analysis> => {
+    create: async (id: string, body: types.StartAnalysisInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AnalysisList> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/analyses`;
       const config: RequestConfig = {
         method: 'POST',
@@ -17,10 +17,10 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["StartAnalysisInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Analysis"],
+        responseCodec: CODECS["AnalysisList"],
       };
 
-      return this.request<types.Analysis>(config);
+      return this.request<types.AnalysisList>(config);
     },
 
     /**
@@ -757,7 +757,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Change a project's name, description, repository, icon or color
+     * Change a project's name, description, icon or color
      */
     update: async (id: string, body: types.UpdateProjectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}`;
@@ -829,6 +829,77 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Session>(config);
+    },
+
+  };
+
+  public readonly sources = {
+    /**
+     * Attach a repository, or a directory of one, after checking Loomplane can read it
+     */
+    create: async (id: string, body: types.AddSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Source> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AddSourceInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Source"],
+      };
+
+      return this.request<types.Source>(config);
+    },
+
+    /**
+     * Detach a source. Its alias stays taken, so old plans keep their meaning.
+     */
+    delete: async (id: string, alias: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources/${encodeURIComponent(String(alias))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The repositories the project builds from, by alias
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SourceList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SourceList"],
+      };
+
+      return this.request<types.SourceList>(config);
+    },
+
+    /**
+     * Change the directory or branch a source reads
+     */
+    update: async (id: string, alias: string, body: types.UpdateSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Source> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources/${encodeURIComponent(String(alias))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["UpdateSourceInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Source"],
+      };
+
+      return this.request<types.Source>(config);
     },
 
   };

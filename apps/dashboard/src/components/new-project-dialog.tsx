@@ -122,7 +122,7 @@ function NewProjectForm({ done }: { done: () => void }) {
         description:
           !icon || !color
             ? `It got the ${projectIcons[style.icon].label.toLowerCase()} icon in ${projectColors[style.color].label.toLowerCase()} at random. Click the icon on the project page to change it.`
-            : created.repositoryUrl
+            : created.repositories[0]
               ? "Analyze it to see the services Loomplane can deploy."
               : "Add its repository to see what it would deploy.",
       })

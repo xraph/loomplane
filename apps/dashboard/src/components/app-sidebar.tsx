@@ -196,6 +196,7 @@ function Projects({ path, onNew }: { path: string; onNew?: () => void }) {
       })}
       menu={(p) => {
         const project = list.data?.projects.find((x) => x.id === p.id)
+        const repository = project?.repositories[0]
         return (
           <>
             <DropdownMenuItem
@@ -204,10 +205,12 @@ function Projects({ path, onNew }: { path: string; onNew?: () => void }) {
               <FolderGit2Icon />
               <span>Open project</span>
             </DropdownMenuItem>
-            {project?.repositoryUrl && (
+            {repository && (
               <DropdownMenuItem
                 onClick={() => {
-                  void navigator.clipboard?.writeText(project.repositoryUrl)
+                  void navigator.clipboard?.writeText(
+                    `https://github.com/${repository}`
+                  )
                   toast.success("Copied the repository URL")
                 }}
               >

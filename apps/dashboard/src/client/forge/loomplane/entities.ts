@@ -27,6 +27,8 @@ export const entities = {
   'ResolvedVariable': { fields: { 'overrides': 'Variable', 'variable': 'Variable' } },
   'Revision': { idField: 'id' },
   'RevisionList': { fields: { 'revisions': 'Revision' } },
+  'Source': { idField: 'id' },
+  'SourceList': { fields: { 'sources': 'Source' } },
   'Variable': { idField: 'id' },
   'VariableList': { fields: { 'variables': 'Variable' } },
 } as const satisfies Record<string, EntityMeta>;

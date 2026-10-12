@@ -24,7 +24,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
-import { repoLabel } from "@/lib/format"
+import { repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { useNavigate } from "@/lib/router"
@@ -107,7 +107,7 @@ export function CommandMenu({
                 return (
                   <CommandItem
                     key={p.id}
-                    value={`project ${p.name} ${p.slug} ${p.description} ${p.repositoryUrl}`}
+                    value={`project ${p.name} ${p.slug} ${p.description} ${p.repositories.join(" ")}`}
                     onSelect={run(
                       () =>
                         void navigate({
@@ -123,8 +123,7 @@ export function CommandMenu({
                     />
                     {p.name}
                     <span className="truncate text-muted-foreground">
-                      {p.description ||
-                        (p.repositoryUrl ? repoLabel(p.repositoryUrl) : "")}
+                      {p.description || repositoriesLabel(p.repositories)}
                     </span>
                   </CommandItem>
                 )

@@ -91,7 +91,7 @@ describe("requests", () => {
               name: "Engine",
               slug: "engine",
               description: "",
-              repository_url: "https://github.com/a/b",
+              repositories: ["a/b"],
               status: "ready",
               created_by: "ausr_1",
               created_at: "2026-10-12T03:10:26Z",
@@ -102,7 +102,7 @@ describe("requests", () => {
       )
     )
     const list = await useProjectsList().fetch()
-    expect(list.projects[0]?.repositoryUrl).toBe("https://github.com/a/b")
+    expect(list.projects[0]?.repositories).toEqual(["a/b"])
     expect(list.projects[0]?.orgId).toBe("aorg_1")
   })
 })
