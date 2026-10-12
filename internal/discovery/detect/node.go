@@ -343,6 +343,9 @@ func nodeUnit(repo discovery.Repo, r *discovery.Report, p *nodePackage, byName m
 			u.DependsOn = append(u.DependsOn, discovery.Dependency{Unit: discovery.UnitID(discovery.Node, target), Evidence: ev})
 			continue
 		}
+		if _, local := byName[dep]; !local {
+			u.Requires = append(u.Requires, discovery.Requirement{Name: dep, Version: all[dep], Evidence: ev})
+		}
 		if fw, ok := nodeFrameworks[dep]; ok {
 			u.Frameworks = addFramework(u.Frameworks, discovery.Framework{Name: fw.name, Kind: fw.kind, Confidence: discovery.Likely, Evidence: ev})
 		}

@@ -241,6 +241,12 @@ func rustUnit(repo discovery.Repo, c, ws *crate, byDir map[string]*crate) discov
 			}
 			continue
 		}
+		remote := spec
+		if inherits(spec) && ws != nil && ws.m.Workspace != nil {
+			remote = ws.m.Workspace.Dependencies[name]
+		}
+		version, git := cargoRemote(remote)
+		u.Requires = append(u.Requires, discovery.Requirement{Name: name, Version: version, Git: git, Evidence: ev})
 		if fw, ok := cargoFrameworks[name]; ok {
 			u.Frameworks = addFramework(u.Frameworks, discovery.Framework{Name: fw.name, Kind: fw.kind, Confidence: discovery.Likely, Evidence: ev})
 		}
@@ -382,6 +388,23 @@ func cargoSpec(spec any) (depPath string, features []string) {
 		}
 	}
 	return depPath, features
+}
+
+// cargoRemote reads where a non-path dependency comes from: a version, a
+// git repository, or both.
+func cargoRemote(spec any) (version, git string) {
+	switch s := spec.(type) {
+	case string:
+		return s, ""
+	case map[string]any:
+		if v, ok := s["version"].(string); ok {
+			version = v
+		}
+		if g, ok := s["git"].(string); ok {
+			git = g
+		}
+	}
+	return version, git
 }
 
 // inherits reports whether a dependency is `{ workspace = true }`.

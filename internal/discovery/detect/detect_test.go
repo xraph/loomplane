@@ -317,3 +317,33 @@ func TestGo_requirementsOutsideTheCheckoutAreKept(t *testing.T) {
 		t.Fatalf("requirement %+v", req)
 	}
 }
+
+func TestNode_requirementsOutsideTheCheckoutAreKept(t *testing.T) {
+	r := run(t, Node{}, map[string]string{
+		"package.json":              `{"name": "root", "private": true, "workspaces": ["packages/*"]}`,
+		"packages/ui/package.json":  `{"name": "@acme/ui"}`,
+		"packages/app/package.json": "{\n  \"name\": \"app\",\n  \"dependencies\": {\n    \"@acme/ui\": \"workspace:*\",\n    \"@acme/tokens\": \"^2.0.0\"\n  }\n}\n",
+	})
+	app := onlyUnit(t, r, "node:packages/app")
+	if len(app.Requires) != 1 || app.Requires[0].Name != "@acme/tokens" || app.Requires[0].Version != "^2.0.0" || app.Requires[0].Evidence.Line != 5 {
+		t.Fatalf("requires %+v", app.Requires)
+	}
+}
+
+func TestRust_requirementsOutsideTheCheckoutAreKept(t *testing.T) {
+	r := run(t, Rust{}, map[string]string{
+		"Cargo.toml":             "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\nkit = { git = \"https://github.com/acme/kit\" }\n",
+		"crates/app/Cargo.toml":  "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nkit = { workspace = true }\nserde = \"1\"\ncore = { path = \"../core\" }\n",
+		"crates/app/src/main.rs": "fn main() {}\n",
+		"crates/core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\n",
+		"crates/core/src/lib.rs": "",
+	})
+	app := onlyUnit(t, r, "rust:crates/app")
+	got := map[string]string{}
+	for _, req := range app.Requires {
+		got[req.Name] = req.Version + "|" + req.Git
+	}
+	if len(got) != 2 || got["kit"] != "|https://github.com/acme/kit" || got["serde"] != "1|" {
+		t.Fatalf("requires %+v", app.Requires)
+	}
+}
