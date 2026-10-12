@@ -952,6 +952,108 @@
         }
       }
     },
+    "/api/v1/projects/{id}/environments/{environment}/connections": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Which cloud connection the environment deploys to each cloud with, where someone chose",
+        "operationId": "environmentConnections.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "description": "Path parameter: environment",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The choices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentConnections"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/environments/{environment}/connections/{cloud}": {
+      "put": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Choose the connection the environment deploys to a cloud with, or clear the choice",
+        "operationId": "environmentConnections.choose",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "description": "Path parameter: environment",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cloud",
+            "in": "path",
+            "description": "Path parameter: cloud",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChooseConnectionInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The choices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentConnections"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/manifest": {
       "get": {
         "tags": [
@@ -1759,6 +1861,17 @@
           }
         }
       },
+      "ChooseConnectionInputBody": {
+        "type": "object",
+        "required": [
+          "connection_id"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          }
+        }
+      },
       "Commands": {
         "type": "object",
         "properties": {
@@ -2146,6 +2259,22 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "EnvironmentConnections": {
+        "type": "object",
+        "required": [
+          "environment",
+          "connections"
+        ],
+        "properties": {
+          "connections": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "environment": {
+            "type": "string"
           }
         }
       },
@@ -2600,6 +2729,7 @@
           "warnings",
           "summary",
           "executable",
+          "connections",
           "error",
           "created_by",
           "created_at",
@@ -2618,6 +2748,10 @@
           },
           "commit_sha": {
             "type": "string"
+          },
+          "connections": {
+            "type": "object",
+            "additionalProperties": true
           },
           "created_at": {
             "type": "string",

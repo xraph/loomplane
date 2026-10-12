@@ -272,20 +272,10 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	return c, cred, nil
 }
 
-// ForCloud returns the organization's connections to one cloud, for a
-// deployment choosing one. It checks no role, like Credential.
-func (s *Service) ForCloud(ctx context.Context, orgID, cloud string) ([]*Connection, error) {
-	all, err := s.store.ListConnections(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	var out []*Connection
-	for _, c := range all {
-		if c.Cloud == cloud {
-			out = append(out, c)
-		}
-	}
-	return out, nil
+// All returns the organization's connections, for planning to choose
+// from. It checks no role, like Credential.
+func (s *Service) All(ctx context.Context, orgID string) ([]*Connection, error) {
+	return s.store.ListConnections(ctx, orgID)
 }
 
 func (s *Service) record(ctx context.Context, action string, p security.Principal, c *Connection) {

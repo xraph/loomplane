@@ -55,6 +55,14 @@ func (BindingList) ForgeEnvelope() forge.EnvelopeDef {
 	return forge.EnvelopeDef{ItemsField: "bindings"}
 }
 
+// EnvironmentConnections is the body of the environment connection
+// routes: which connection the environment deploys to each cloud with,
+// where someone chose.
+type EnvironmentConnections struct {
+	Environment string            `json:"environment"`
+	Connections map[string]string `json:"connections"`
+}
+
 // ProviderList is the body of GET /api/v1/providers. It declares no
 // envelope: a provider is keyed by its name, and pkg/provider stays free
 // of the dashboard client's tags, so the catalog is cached as one value.
@@ -126,6 +134,17 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("Reject a ready plan"),
 			forge.WithRequestSchema(planning.DecideInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The plan", planning.Plan{}),
+		}},
+		{http.MethodGet, "/projects/:id/environments/:environment/connections", e.environmentConnections, []forge.RouteOption{
+			forge.WithName("environmentConnections.get"),
+			forge.WithSummary("Which cloud connection the environment deploys to each cloud with, where someone chose"),
+			forge.WithResponseSchema(http.StatusOK, "The choices", EnvironmentConnections{}),
+		}},
+		{http.MethodPut, "/projects/:id/environments/:environment/connections/:cloud", e.chooseConnection, []forge.RouteOption{
+			forge.WithName("environmentConnections.choose"),
+			forge.WithSummary("Choose the connection the environment deploys to a cloud with, or clear the choice"),
+			forge.WithRequestSchema(planning.ChooseConnectionInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The choices", EnvironmentConnections{}),
 		}},
 		{http.MethodGet, "/projects/:id/bindings", e.listBindings, []forge.RouteOption{
 			forge.WithName("bindings.list"),
@@ -329,4 +348,34 @@ func (e *Extension) listBindings(c forge.Context) error {
 		out.Bindings = append(out.Bindings, *b)
 	}
 	return c.JSON(http.StatusOK, out)
+}
+
+func (e *Extension) environmentConnections(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	env := c.Param("environment")
+	chosen, err := e.plans.EnvironmentConnections(c.Request().Context(), p, c.Param("id"), env)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, EnvironmentConnections{Environment: env, Connections: chosen})
+}
+
+func (e *Extension) chooseConnection(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in planning.ChooseConnectionInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"connection_id": "..."}`)
+	}
+	env := c.Param("environment")
+	chosen, err := e.plans.ChooseConnection(c.Request().Context(), p, c.Param("id"), env, c.Param("cloud"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, EnvironmentConnections{Environment: env, Connections: chosen})
 }

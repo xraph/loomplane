@@ -94,6 +94,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
+	if err := forge.ProvideValue(c, e.svc); err != nil {
+		return fmt.Errorf("provide the connection service: %w", err)
+	}
 	return e.routes(fapp.Router(), guard)
 }
 

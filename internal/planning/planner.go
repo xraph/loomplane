@@ -28,6 +28,29 @@ type Input struct {
 	Providers   *provider.Registry
 	// Bindings are what's deployed in the environment now.
 	Bindings []*Binding
+	// Connections are the organization's cloud connections, and Chosen
+	// the environment's choice of one per cloud. A plan needs a ready
+	// connection for every cloud it deploys to.
+	Connections []ConnectionOption
+	Chosen      map[string]string
+}
+
+// ConnectionOption is a cloud connection a plan could deploy with.
+type ConnectionOption struct {
+	ID    string
+	Name  string
+	Cloud string
+	Ready bool
+}
+
+// cloudTitles name the clouds connections are for, for people.
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel"}
+
+func cloudTitle(cloud string) string {
+	if t, ok := cloudTitles[cloud]; ok {
+		return t
+	}
+	return cloud
 }
 
 // Conventional variable names for the address of each resource kind. A
@@ -56,6 +79,7 @@ func Compute(in Input) *Result {
 		services:  map[string]*Action{},
 		matched:   map[string]bool{},
 		unready:   map[string]string{},
+		clouds:    map[string]bool{},
 		bindings:  map[string]*Binding{},
 	}
 	for _, b := range in.Bindings {
@@ -83,7 +107,10 @@ type planner struct {
 	// manifest name.
 	graphServices map[string]*graph.Service
 	// unready are providers without an adapter, with why.
-	unready  map[string]string
+	unready map[string]string
+	// clouds are the clouds of the available providers the plan uses,
+	// each of which needs a connection.
+	clouds   map[string]bool
 	bindings map[string]*Binding
 }
 
@@ -110,10 +137,67 @@ func (p *planner) lookup(subject Subject, name, path, chosen string, alternative
 		})
 		return nil
 	}
+	p.use(prov)
+	return prov
+}
+
+// use notes that the plan acts on prov: it needs an adapter, and a
+// connection to its cloud.
+func (p *planner) use(prov *provider.Provider) {
 	if !prov.Available {
 		p.unready[prov.Name] = prov.Title + ": " + prov.Note
+		return
 	}
-	return prov
+	p.clouds[prov.Cloud] = true
+}
+
+// connect settles which connection each cloud the plan uses deploys
+// with: the environment's choice, or else the organization's only ready
+// connection to it.
+func (p *planner) connect() map[string]string {
+	out := map[string]string{}
+	for _, cloud := range slices.Sorted(maps.Keys(p.clouds)) {
+		title := cloudTitle(cloud)
+		var ready []ConnectionOption
+		for _, c := range p.in.Connections {
+			if c.Cloud == cloud && c.Ready {
+				ready = append(ready, c)
+			}
+		}
+		if id := p.in.Chosen[cloud]; id != "" {
+			i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
+			switch {
+			case i < 0:
+				p.problem(Finding{
+					Code: "connection-gone", Path: "connections." + cloud,
+					Message: fmt.Sprintf("%s deploys to %s with a connection that's been removed. Choose another.", p.in.Environment, title),
+				})
+			case !p.in.Connections[i].Ready:
+				p.problem(Finding{
+					Code: "connection-not-ready", Name: p.in.Connections[i].Name, Path: "connections." + cloud,
+					Message: fmt.Sprintf("%s deploys to %s with %s, which isn't ready. Check it under Integrations.", p.in.Environment, title, p.in.Connections[i].Name),
+				})
+			default:
+				out[cloud] = id
+			}
+			continue
+		}
+		switch len(ready) {
+		case 0:
+			p.problem(Finding{
+				Code: "no-connection", Path: "connections." + cloud,
+				Message: fmt.Sprintf("Nothing is ready to deploy to %s. Connect an account under Integrations.", title),
+			})
+		case 1:
+			out[cloud] = ready[0].ID
+		default:
+			p.problem(Finding{
+				Code: "connection-ambiguous", Path: "connections." + cloud,
+				Message: fmt.Sprintf("Several %s connections are ready. Choose which one %s deploys with.", title, p.in.Environment),
+			})
+		}
+	}
+	return out
 }
 
 func couldUse(ps []*provider.Provider) string {
@@ -644,6 +728,9 @@ func (p *planner) planDeletes() {
 				Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
 			})
 		}
+		if prov, err := p.in.Providers.Get(b.Provider); err == nil {
+			p.use(prov)
+		}
 		p.actions = append(p.actions, &Action{
 			ID: id, Op: Delete, Subject: b.Subject, Name: b.Name, Provider: b.Provider, Region: b.Region,
 			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
@@ -696,7 +783,8 @@ func (p *planner) finish() *Result {
 		}
 		return a.ID < b.ID
 	})
-	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings}
+	connections := p.connect()
+	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings, Connections: connections}
 	for _, a := range p.actions {
 		r.Actions = append(r.Actions, *a)
 		switch a.Op {

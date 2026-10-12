@@ -344,6 +344,21 @@ export const ops = {
     provides: [],
     invalidates: ['Environment[]'],
   },
+  'environmentConnections.get': {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/environments/{environment}/connections',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['EnvironmentConnections'],
+  },
+  'environmentConnections.choose': {
+    method: 'PUT',
+    path: '/api/v1/projects/{id}/environments/{environment}/connections/{cloud}',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['ChooseConnectionInputBody'],
+    responseCodec: CODECS['EnvironmentConnections'],
+  },
   'manifests.current': {
     method: 'GET',
     path: '/api/v1/projects/{id}/manifest',

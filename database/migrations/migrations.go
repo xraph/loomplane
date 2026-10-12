@@ -34,6 +34,7 @@ func Group() *migrate.Group {
 		statements("20261012000004", "add_project_style", projectStyleUp, projectStyleDown),
 		statements("20261012000005", "create_planning", planningUp, planningDown),
 		statements("20261012000006", "create_cloud_connections", cloudConnectionsUp, cloudConnectionsDown),
+		statements("20261012000007", "create_environment_connections", environmentConnectionsUp, environmentConnectionsDown),
 	)
 	return g
 }
@@ -327,4 +328,23 @@ var cloudConnectionsUp = []string{
 
 var cloudConnectionsDown = []string{
 	`DROP TABLE IF EXISTS loomplane_cloud_connections`,
+}
+
+// Which connection an environment deploys to each cloud with, when the
+// organization has more than one. No foreign key to the connection: a
+// removed one stays named here, so the next plan says so instead of
+// quietly picking another account.
+var environmentConnectionsUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_environment_connections (
+		org_id         TEXT NOT NULL,
+		project_id     TEXT NOT NULL REFERENCES loomplane_projects (id) ON DELETE CASCADE,
+		environment_id TEXT NOT NULL REFERENCES loomplane_environments (id) ON DELETE CASCADE,
+		cloud          TEXT NOT NULL,
+		connection_id  TEXT NOT NULL,
+		PRIMARY KEY (environment_id, cloud)
+	)`,
+}
+
+var environmentConnectionsDown = []string{
+	`DROP TABLE IF EXISTS loomplane_environment_connections`,
 }

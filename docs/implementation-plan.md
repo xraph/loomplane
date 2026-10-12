@@ -95,13 +95,26 @@ Left over:
 
 ## Milestone 4: Real deployments
 
-1. Cloud connections, with credentials in Vault.
-2. Google Cloud Run as a Ctrl Plane provider. It runs long-running containers, which is the model Ctrl Plane's `Provider` interface describes.
-3. Vercel as a Loomplane capability adapter. A Vercel deployment is an immutable build behind a URL, not an instance you start and stop, so forcing it into Ctrl Plane's instance model would misreport its state.
-4. Builds in isolated workers, artifacts in Trove through Dispatch.
-5. The deployment workflow from architecture.md, with its progress and history in the dashboard.
+In progress. Done when a Next.js frontend deploys to Vercel and a Go backend to Cloud Run, from one monorepo, after someone approves the plan.
 
-Done when a Next.js frontend deploys to Vercel and a Go backend to Cloud Run, from one monorepo.
+How it fits together:
+
+- **Cloud connections** (done). An organization connects a Google Cloud project with a service account key, or a Vercel account with a token. Each is checked with its cloud before it's kept, and lives in Vault. A plan resolves which connection each target deploys with: the environment's choice if it has one, else the organization's only ready connection to that cloud. Several, with no choice, is a problem on the plan.
+- **Builds run on the providers' own builders.** Dispatch has no container rung yet (only in-process and subprocess), and the brief rules out running a repository's build in our processes. So the Go service is built by Google Cloud Build, from a Dockerfile when the repository has one and with Google's buildpacks when it doesn't, into Artifact Registry. Vercel builds the Next.js app itself. Nothing from the repository runs on a Loomplane machine.
+- **Sources are artifacts.** The approved commit's tarball is fetched once and stored in Trove through Dispatch's artifact plane. Both builders take it from there: uploaded to the project's Cloud Build bucket, or to Vercel file by file.
+- **Cloud Run goes through Ctrl Plane.** It's a long-running container, which is Ctrl Plane's model. Ctrl Plane takes credentials only when a provider is constructed, so each Google Cloud connection gets its own provider, registered under a unique key that is also its `Info().Name` (Ctrl Plane looks instances up by that name, not by registry key). The provider reads its key from Vault on every call, so a replaced or deleted connection takes effect at once. `Deploy` and `Provision` wait for the revision to be ready, because Ctrl Plane records success as soon as they return.
+- **Vercel is a Loomplane capability adapter**, as planned: a project, files, a deployment and its ready state, outside Ctrl Plane's instance model.
+- **The deployment workflow continues after approval**, as `deployment-v2`. It fetches the source, then for each step of the plan builds and deploys its actions, passing each service the addresses of what it needs and its resolved variables (the one path that reveals a secret). Then it checks each public service answers, writes the bindings, and records the deployment. Long steps heartbeat, and keep the provider's operation ID in their heartbeat so a retry picks the operation up instead of starting another.
+- **Progress** is a deployment record per approved plan, with one row per action, shown on the plan and on the Deploy tab.
+
+Steps:
+
+1. Cloud connections, in Vault, with the API and the Integrations card. Done.
+2. Connections on plans, and Cloud Run and Vercel marked available, so a plan using them is executable.
+3. Deployment records, the source artifact in Trove, and the workflow after approval.
+4. Cloud Build and the Cloud Run provider for Ctrl Plane.
+5. The Vercel adapter.
+6. Health checks, deployment progress in the dashboard, and the acceptance run on real accounts.
 
 ## Milestones 5 and 6
 

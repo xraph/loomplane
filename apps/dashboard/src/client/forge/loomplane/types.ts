@@ -84,6 +84,10 @@ export interface Change {
   to: string;
 }
 
+export interface ChooseConnectionInputBody {
+  connectionId: string;
+}
+
 export interface Commands {
   build?: string;
   dev?: string;
@@ -203,6 +207,11 @@ export interface Environment {
   orgId: string;
   projectId: string;
   updatedAt: string;
+}
+
+export interface EnvironmentConnections {
+  connections: Record<string, any>;
+  environment: string;
 }
 
 export interface EnvironmentList {
@@ -327,6 +336,7 @@ export interface Plan {
   actions: Action[];
   analysisId: string;
   commitSha: string;
+  connections: Record<string, any>;
   createdAt: string;
   createdBy: string;
   decidedAt?: string;

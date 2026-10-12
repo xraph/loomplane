@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
@@ -58,6 +60,12 @@ type Manifests interface {
 	Get(ctx context.Context, orgID, id string) (*manifests.Revision, error)
 }
 
+// Connections lists an organization's cloud connections.
+// *connections.Service is the real one.
+type Connections interface {
+	All(ctx context.Context, orgID string) ([]*connections.Connection, error)
+}
+
 // Workflow runs each plan's deployment workflow. *orchestration.Deployments
 // is the real one.
 type Workflow interface {
@@ -75,6 +83,7 @@ type Service struct {
 	analyses  Analyses
 	manifests Manifests
 	providers *provider.Registry
+	clouds    Connections
 	authz     Authorizer
 	workflow  Workflow
 	audit     projects.Auditor
@@ -90,8 +99,11 @@ type Deps struct {
 	Analyses  Analyses
 	Manifests Manifests
 	Providers *provider.Registry
-	Authz     Authorizer
-	Workflow  Workflow
+	// Connections are the organization's cloud accounts. Nil means none,
+	// so no plan that needs one is executable.
+	Connections Connections
+	Authz       Authorizer
+	Workflow    Workflow
 	// Audit may be nil.
 	Audit projects.Auditor
 	// Window is how long a ready plan waits for a decision.
@@ -108,7 +120,7 @@ func NewService(d Deps) *Service {
 	}
 	return &Service{
 		store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
-		providers: d.Providers, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
+		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, warn: warn,
 	}
 }
@@ -392,8 +404,17 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
+	options, err := s.connectionOptions(ctx, plan.OrgID)
+	if err != nil {
+		return nil, "", err
+	}
+	chosen, err := s.store.EnvironmentConnections(ctx, plan.OrgID, plan.EnvironmentID)
+	if err != nil {
+		return nil, "", err
+	}
 	result := Compute(Input{
 		Environment: plan.Environment, Graph: g, Manifest: rev.Manifest, Providers: s.providers, Bindings: bindings,
+		Connections: options, Chosen: chosen,
 	})
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, AnalysisID: plan.AnalysisID,
@@ -409,6 +430,21 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", err
 	}
 	return result, revision, nil
+}
+
+func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]ConnectionOption, error) {
+	if s.clouds == nil {
+		return nil, nil
+	}
+	all, err := s.clouds.All(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("list cloud connections: %w", err)
+	}
+	out := make([]ConnectionOption, 0, len(all))
+	for _, c := range all {
+		out = append(out, ConnectionOption{ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady})
+	}
+	return out, nil
 }
 
 // permanent reports whether planning can never succeed, so retrying is
@@ -574,4 +610,67 @@ func (s *Service) DraftManifest(ctx context.Context, p security.Principal, proje
 	return &ManifestDraft{
 		ProjectID: projectID, AnalysisID: analysis.ID, CommitSHA: analysis.CommitSHA, YAML: string(data), Manifest: m,
 	}, nil
+}
+
+// EnvironmentConnections returns which connection an environment deploys
+// to each cloud with, where someone chose.
+func (s *Service) EnvironmentConnections(ctx context.Context, p security.Principal, projectID, environment string) (map[string]string, error) {
+	if err := s.authz.Require(ctx, p, security.CloudAccountRead, projectID); err != nil {
+		return nil, err
+	}
+	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(environment))
+	if err != nil {
+		return nil, err
+	}
+	return s.store.EnvironmentConnections(ctx, p.OrgID, env.ID)
+}
+
+// ChooseConnectionInput chooses the connection an environment deploys to a
+// cloud with.
+type ChooseConnectionInput struct {
+	// ConnectionID is the connection, or empty to go back to the
+	// organization's only ready one.
+	ConnectionID string `json:"connection_id"`
+}
+
+// ChooseConnection sets which connection an environment deploys to a
+// cloud with. It's an admin's choice, like connecting the account.
+func (s *Service) ChooseConnection(ctx context.Context, p security.Principal, projectID, environment, cloud string, in ChooseConnectionInput) (map[string]string, error) {
+	if err := s.authz.Require(ctx, p, security.CloudAccountManage, projectID); err != nil {
+		return nil, err
+	}
+	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+		return nil, err
+	}
+	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(environment))
+	if err != nil {
+		return nil, err
+	}
+	id := strings.TrimSpace(in.ConnectionID)
+	if id != "" {
+		if s.clouds == nil {
+			return nil, fmt.Errorf("%w: no cloud connections here", ErrInvalid)
+		}
+		all, err := s.clouds.All(ctx, p.OrgID)
+		if err != nil {
+			return nil, err
+		}
+		i := slices.IndexFunc(all, func(c *connections.Connection) bool { return c.ID == id })
+		switch {
+		case i < 0:
+			return nil, fmt.Errorf("%w: this organization has no connection %s", connections.ErrNotFound, id)
+		case all[i].Cloud != cloud:
+			return nil, fmt.Errorf("%w: %s connects to %s, not %s", ErrInvalid, all[i].Name, all[i].Cloud, cloud)
+		}
+	}
+	if err := s.store.SetEnvironmentConnection(ctx, p.OrgID, projectID, env.ID, cloud, id); err != nil {
+		return nil, err
+	}
+	if s.audit != nil {
+		s.audit.Record(ctx, projects.AuditEvent{
+			Action: "environment.connection", Severity: "warning", ProjectID: projectID, Principal: p,
+			Attributes: map[string]any{"environment": env.Name, "cloud": cloud, "connection_id": id},
+		})
+	}
+	return s.store.EnvironmentConnections(ctx, p.OrgID, env.ID)
 }

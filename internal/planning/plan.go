@@ -176,6 +176,9 @@ type Result struct {
 	// Executable says whether Loomplane could carry the plan out: no
 	// problems, and an adapter for every provider it uses.
 	Executable bool `json:"executable"`
+	// Connections are the cloud connections the plan deploys with, by
+	// cloud.
+	Connections map[string]string `json:"connections"`
 }
 
 // Plan is one plan for one environment of a project, pinned to the commit
@@ -199,6 +202,9 @@ type Plan struct {
 	Warnings         []Finding `json:"warnings"`
 	Summary          Summary   `json:"summary"`
 	Executable       bool      `json:"executable"`
+	// Connections are the cloud connections the plan deploys with, by
+	// cloud, settled when it was planned.
+	Connections map[string]string `json:"connections"`
 	// Error says why planning failed, when it did.
 	Error     string     `json:"error"`
 	CreatedBy string     `json:"created_by"`
@@ -216,7 +222,7 @@ func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == St
 
 func (p *Plan) setResult(r *Result) {
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
-	p.Summary, p.Executable = r.Summary, r.Executable
+	p.Summary, p.Executable, p.Connections = r.Summary, r.Executable, r.Connections
 }
 
 func (p *Plan) normalize() {
@@ -235,6 +241,9 @@ func (p *Plan) normalize() {
 	}
 	if p.Warnings == nil {
 		p.Warnings = []Finding{}
+	}
+	if p.Connections == nil {
+		p.Connections = map[string]string{}
 	}
 }
 
@@ -281,6 +290,13 @@ type Store interface {
 	// Decide moves a ready plan to status. It returns false, with no error,
 	// when the plan isn't ready any more.
 	Decide(ctx context.Context, orgID, id, status, by, note string, now time.Time) (bool, error)
+
+	// EnvironmentConnections returns the environment's choice of
+	// connection, by cloud.
+	EnvironmentConnections(ctx context.Context, orgID, environmentID string) (map[string]string, error)
+	// SetEnvironmentConnection chooses the connection an environment
+	// deploys to a cloud with. An empty connectionID clears the choice.
+	SetEnvironmentConnection(ctx context.Context, orgID, projectID, environmentID, cloud, connectionID string) error
 
 	ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error)
 	PutBinding(ctx context.Context, b *Binding) error

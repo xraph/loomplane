@@ -201,6 +201,43 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly environmentConnections = {
+    /**
+     * Choose the connection the environment deploys to a cloud with, or clear the choice
+     */
+    choose: async (id: string, environment: string, cloud: string, body: types.ChooseConnectionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EnvironmentConnections> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/connections/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ChooseConnectionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EnvironmentConnections"],
+      };
+
+      return this.request<types.EnvironmentConnections>(config);
+    },
+
+    /**
+     * Which cloud connection the environment deploys to each cloud with, where someone chose
+     */
+    get: async (id: string, environment: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EnvironmentConnections> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/connections`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EnvironmentConnections"],
+      };
+
+      return this.request<types.EnvironmentConnections>(config);
+    },
+
+  };
+
   public readonly environments = {
     /**
      * Add an environment to a project

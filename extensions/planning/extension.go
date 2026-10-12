@@ -22,10 +22,12 @@ import (
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
 
+	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
@@ -64,7 +66,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, deployments *orchest
 // Dependencies implements forge.Extension. Discovery owns the analyses a
 // plan is made from.
 func (e *Extension) Dependencies() []string {
-	return []string{identity.Name, dispatchext.ExtensionName, projectsext.Name, discoveryext.Name}
+	return []string{identity.Name, dispatchext.ExtensionName, projectsext.Name, discoveryext.Name, connectionsext.Name}
 }
 
 // Register builds the services, binds the workflow and mounts the routes.
@@ -89,6 +91,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("planning needs the audit trail: %w", err)
 	}
+	clouds, err := forge.InjectType[*connections.Service](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the connections extension: %w", err)
+	}
 	if e.engineOf() == nil {
 		return errors.New("planning needs the dispatch extension to have registered")
 	}
@@ -100,7 +106,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.manifests = manifests.NewService(manifests.NewPgStore(pg), prj, authz, auditor)
 	e.plans = planning.NewService(planning.Deps{
 		Store: planning.NewPgStore(pg), Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
-		Providers: providers.Registry(), Authz: authz, Workflow: e.deployments, Audit: auditor,
+		Providers: providers.Registry(), Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
 		Window: e.cfg.Planning.ApprovalWindow,
 		Warn:   func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})
@@ -117,7 +123,7 @@ func (e *Extension) Start(context.Context) error {
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
-	case errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound),
+	case errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict),

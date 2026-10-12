@@ -8,6 +8,8 @@ import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useConnectionsList,
+  useEnvironmentConnectionsChoose,
   useManifestsCurrent,
   useManifestsDraft,
   useManifestsSave,
@@ -80,8 +82,10 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { resourceLabel, shortSHA } from "@/lib/architecture"
+import { cloudLabel } from "@/lib/clouds"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { Link } from "@/lib/router"
 import {
   changeCount,
   isOpen,
@@ -619,6 +623,7 @@ function PlanBody({
               .
             </>
           )}
+          <DeploysWith connections={plan.connections} />
           {plan.decidedAt && plan.status !== "superseded" && (
             <>
               Settled{" "}
@@ -652,6 +657,7 @@ function PlanBody({
               findings={plan.problems}
               tone="bad"
               project={project}
+              environment={plan.environment}
               analysis={evidenceFrom}
             />
           </Section>
@@ -662,6 +668,7 @@ function PlanBody({
               findings={plan.warnings}
               tone="warn"
               project={project}
+              environment={plan.environment}
               analysis={evidenceFrom}
             />
           </Section>
@@ -719,23 +726,42 @@ function Section({
 // A finding can rest on dozens of lines; the first few make the case.
 const evidenceShown = 3
 
+/** DeploysWith names the cloud connections a plan deploys with. */
+function DeploysWith({ connections }: { connections: Record<string, string> }) {
+  const list = useQuery(useConnectionsList)
+  const names = Object.entries(connections).map(([cloud, id]) => {
+    const c = list.data?.connections.find((x) => x.id === id)
+    return `${c?.name ?? "a removed connection"} (${cloudLabel(cloud)})`
+  })
+  if (names.length === 0) return null
+  return <>Deploys with {names.join(" and ")}. </>
+}
+
+// Findings about which cloud connection to deploy with carry the cloud
+// in their path, connections.<cloud>, which isn't a manifest path.
+const connectionPath = "connections."
+
 /**
  * Findings lists a plan's problems or warnings. A resource analysis found
- * that the manifest doesn't provision can be added or ignored from here.
+ * that the manifest doesn't provision can be added or ignored from here,
+ * and the connection an environment deploys with chosen.
  */
 function Findings({
   findings,
   tone,
   project,
+  environment,
   analysis,
 }: {
   findings: Finding[]
   tone: "bad" | "warn"
   project: Project
+  environment: string
   analysis?: Analysis
 }) {
   const { can } = useOrganization()
   const mayEdit = can("project:update")
+  const mayConnect = can("cloud_account:manage")
   return (
     <ul className="grid grid-cols-[minmax(0,1fr)] gap-3">
       {findings.map((f, i) => (
@@ -749,11 +775,28 @@ function Findings({
           />
           <div className="grid min-w-0 gap-1.5">
             <p className="text-sm">{f.message}</p>
-            {f.path && (
+            {f.path && !f.path.startsWith(connectionPath) && (
               <code className="font-mono text-xs text-muted-foreground">
                 {f.path}
               </code>
             )}
+            {f.code === "no-connection" && (
+              <Link
+                to="/integrations"
+                className="text-sm underline-offset-4 hover:underline"
+              >
+                Connect one under Integrations
+              </Link>
+            )}
+            {mayConnect &&
+              f.path?.startsWith(connectionPath) &&
+              f.code !== "no-connection" && (
+                <ConnectionPicker
+                  project={project}
+                  environment={environment}
+                  cloud={f.path.slice(connectionPath.length)}
+                />
+              )}
             {analysis && f.evidence && f.evidence.length > 0 && (
               <>
                 <EvidenceList
@@ -777,6 +820,70 @@ function Findings({
         </li>
       ))}
     </ul>
+  )
+}
+
+/**
+ * ConnectionPicker chooses which of the organization's ready connections
+ * an environment deploys to a cloud with. Planning again uses it.
+ */
+function ConnectionPicker({
+  project,
+  environment,
+  cloud,
+}: {
+  project: Project
+  environment: string
+  cloud: string
+}) {
+  const list = useQuery(useConnectionsList)
+  const choose = useMutation(useEnvironmentConnectionsChoose)
+  const ready =
+    list.data?.connections.filter(
+      (c) => c.cloud === cloud && c.status === "ready"
+    ) ?? []
+  if (ready.length === 0) return null
+
+  const pick = async (id: string | null) => {
+    if (!id) return
+    try {
+      await choose.mutateAsync({
+        path: { id: project.id, environment, cloud },
+        body: { connection_id: id },
+      })
+      const name = ready.find((c) => c.id === id)?.name ?? "it"
+      toast.success(
+        `${environment} deploys to ${cloudLabel(cloud)} with ${name}. Plan again to use it.`
+      )
+    } catch (err) {
+      toast.error(messageOf(err, "The connection wasn't chosen."))
+    }
+  }
+
+  return (
+    <div className="pt-1">
+      <Select
+        onValueChange={(v) => void pick(typeof v === "string" ? v : null)}
+      >
+        <SelectTrigger
+          size="sm"
+          className="w-fit min-w-48"
+          aria-label={`Connection for ${cloudLabel(cloud)}`}
+          disabled={choose.isPending}
+        >
+          <SelectValue
+            placeholder={`Choose a ${cloudLabel(cloud)} connection`}
+          />
+        </SelectTrigger>
+        <SelectContent>
+          {ready.map((c) => (
+            <SelectItem key={c.id} value={c.id}>
+              {c.name} · {c.account}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   )
 }
 

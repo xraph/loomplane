@@ -161,6 +161,7 @@ func (s *PgStore) ListPlans(ctx context.Context, orgID, projectID, environmentID
 func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
 	result, err := json.Marshal(Result{
 		Actions: p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
+		Connections: p.Connections,
 	})
 	if err != nil {
 		return false, fmt.Errorf("encode plan: %w", err)
@@ -257,6 +258,47 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 func (s *PgStore) DeleteBinding(ctx context.Context, orgID, id string) error {
 	if _, err := s.db.Exec(ctx, `DELETE FROM loomplane_bindings WHERE org_id = $1 AND id = $2`, orgID, id); err != nil {
 		return fmt.Errorf("delete binding: %w", err)
+	}
+	return nil
+}
+
+// EnvironmentConnections implements Store.
+func (s *PgStore) EnvironmentConnections(ctx context.Context, orgID, environmentID string) (map[string]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT cloud, connection_id FROM loomplane_environment_connections
+		WHERE org_id = $1 AND environment_id = $2`, orgID, environmentID)
+	if err != nil {
+		return nil, fmt.Errorf("list environment connections: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := map[string]string{}
+	for rows.Next() {
+		var cloud, id string
+		if err := rows.Scan(&cloud, &id); err != nil {
+			return nil, fmt.Errorf("scan environment connection: %w", err)
+		}
+		out[cloud] = id
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list environment connections: %w", err)
+	}
+	return out, nil
+}
+
+// SetEnvironmentConnection implements Store.
+func (s *PgStore) SetEnvironmentConnection(ctx context.Context, orgID, projectID, environmentID, cloud, connectionID string) error {
+	var err error
+	if connectionID == "" {
+		_, err = s.db.Exec(ctx, `DELETE FROM loomplane_environment_connections
+			WHERE org_id = $1 AND environment_id = $2 AND cloud = $3`, orgID, environmentID, cloud)
+	} else {
+		_, err = s.db.Exec(ctx, `INSERT INTO loomplane_environment_connections (org_id, project_id, environment_id, cloud, connection_id)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (environment_id, cloud) DO UPDATE SET connection_id = EXCLUDED.connection_id
+			WHERE loomplane_environment_connections.org_id = EXCLUDED.org_id`,
+			orgID, projectID, environmentID, cloud, connectionID)
+	}
+	if err != nil {
+		return fmt.Errorf("set environment connection: %w", err)
 	}
 	return nil
 }
