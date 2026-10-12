@@ -204,7 +204,8 @@ func affected(r driver.Result) (bool, error) {
 }
 
 const bindingColumns = `id, org_id, project_id, environment_id, subject, name, provider, region, engine,
-	external_id, config, url, plan_id, created_at, updated_at`
+	external_id, config, url, connection_id, revision, commit_sha, drift, drift_message, observed_at,
+	plan_id, created_at, updated_at`
 
 // ListBindings implements Store.
 func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error) {
@@ -216,20 +217,64 @@ func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string)
 	defer rows.Close() // read-only; Err below reports iteration failures
 	out := []*Binding{}
 	for rows.Next() {
-		var b Binding
-		var cfg []byte
-		if err := rows.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region,
-			&b.Engine, &b.ExternalID, &cfg, &b.URL, &b.PlanID, &b.CreatedAt, &b.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan binding: %w", err)
+		b, err := scanBinding(rows)
+		if err != nil {
+			return nil, err
 		}
-		b.Config = cfg
-		b.CreatedAt, b.UpdatedAt = b.CreatedAt.UTC(), b.UpdatedAt.UTC()
-		out = append(out, &b)
+		out = append(out, b)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list bindings: %w", err)
 	}
 	return out, nil
+}
+
+func scanBinding(row pgx.Row) (*Binding, error) {
+	var b Binding
+	var cfg []byte
+	if err := row.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region,
+		&b.Engine, &b.ExternalID, &cfg, &b.URL, &b.ConnectionID, &b.Revision, &b.CommitSHA, &b.Drift, &b.DriftMessage,
+		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt); err != nil {
+		return nil, fmt.Errorf("scan binding: %w", err)
+	}
+	b.Config = cfg
+	b.CreatedAt, b.UpdatedAt = b.CreatedAt.UTC(), b.UpdatedAt.UTC()
+	if b.ObservedAt != nil {
+		t := b.ObservedAt.UTC()
+		b.ObservedAt = &t
+	}
+	return &b, nil
+}
+
+// AllBindings implements Store.
+func (s *PgStore) AllBindings(ctx context.Context, after string, limit int) ([]*Binding, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+bindingColumns+` FROM loomplane_bindings
+		WHERE id > $1 ORDER BY id LIMIT $2`, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list bindings: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := []*Binding{}
+	for rows.Next() {
+		b, err := scanBinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list bindings: %w", err)
+	}
+	return out, nil
+}
+
+// RecordDrift implements Store.
+func (s *PgStore) RecordDrift(ctx context.Context, orgID, id, drift, message string, at time.Time) error {
+	if _, err := s.db.Exec(ctx, `UPDATE loomplane_bindings SET drift = $3, drift_message = $4, observed_at = $5
+		WHERE org_id = $1 AND id = $2`, orgID, id, drift, message, at); err != nil {
+		return fmt.Errorf("record drift: %w", err)
+	}
+	return nil
 }
 
 // PutBinding implements Store: it records what runs a service or resource
@@ -240,14 +285,17 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 		cfg = []byte("{}")
 	}
 	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		ON CONFLICT (environment_id, subject, name) DO UPDATE SET
 			provider = EXCLUDED.provider, region = EXCLUDED.region, engine = EXCLUDED.engine,
 			external_id = EXCLUDED.external_id, config = EXCLUDED.config, url = EXCLUDED.url,
+			connection_id = EXCLUDED.connection_id, revision = EXCLUDED.revision, commit_sha = EXCLUDED.commit_sha,
+			drift = EXCLUDED.drift, drift_message = EXCLUDED.drift_message, observed_at = EXCLUDED.observed_at,
 			plan_id = EXCLUDED.plan_id, updated_at = EXCLUDED.updated_at
 		WHERE loomplane_bindings.org_id = EXCLUDED.org_id`,
 		b.ID, b.OrgID, b.ProjectID, b.EnvironmentID, b.Subject, b.Name, b.Provider, b.Region, b.Engine,
-		b.ExternalID, cfg, b.URL, b.PlanID, b.CreatedAt, b.UpdatedAt)
+		b.ExternalID, cfg, b.URL, b.ConnectionID, b.Revision, b.CommitSHA, b.Drift, b.DriftMessage, b.ObservedAt,
+		b.PlanID, b.CreatedAt, b.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("put binding: %w", err)
 	}

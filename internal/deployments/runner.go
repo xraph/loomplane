@@ -29,6 +29,17 @@ type Executor interface {
 	// Remove deletes what runs an action. Something already gone is not
 	// an error.
 	Remove(ctx context.Context, job *Job, b *planning.Binding) error
+	// Observe reads what's live for a binding, without changing anything.
+	Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error)
+}
+
+// Observation is what's live for a binding.
+type Observation struct {
+	// Exists is false when it's been deleted.
+	Exists bool
+	// Revision is what's live: an image, or a Vercel deployment. Empty
+	// when the provider can't tell.
+	Revision string
 }
 
 // Job is one action to carry out, with everything its executor needs.
@@ -66,6 +77,9 @@ type Outcome struct {
 	URL        string
 	// Image is the container image a build produced.
 	Image string
+	// Revision is what went live, which a drift check compares with:
+	// the image, or a Vercel deployment.
+	Revision string
 }
 
 // Plans reads plans and bindings, and records what's deployed.
@@ -328,7 +342,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			return err
 		}
 	}
-	return r.bind(ctx, d, a, current, out)
+	return r.bind(ctx, d, a, current, out, connID)
 }
 
 // env is what a service gets: its resolved variables, then the address of
@@ -386,7 +400,7 @@ func (r *Runner) verify(ctx context.Context, url string) error {
 	}
 }
 
-func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, current *planning.Binding, out *Outcome) error {
+func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, current *planning.Binding, out *Outcome, connID string) error {
 	var cfg any = a.Service
 	if a.Subject == planning.ResourceSubject {
 		cfg = a.Resource
@@ -399,6 +413,7 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 	b := &planning.Binding{
 		OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Subject: a.Subject, Name: a.Name,
 		Provider: a.Provider, Region: a.Region, Engine: a.Engine, ExternalID: out.ExternalID, Config: raw, URL: out.URL,
+		ConnectionID: connID, Revision: out.Revision, CommitSHA: d.CommitSHA,
 		PlanID: d.PlanID, CreatedAt: now, UpdatedAt: now,
 	}
 	if current != nil {

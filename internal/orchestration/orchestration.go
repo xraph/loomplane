@@ -117,3 +117,26 @@ func (q *Enqueuer) AnalyzeRepository(ctx context.Context, orgID, analysisID stri
 	}
 	return nil
 }
+
+// JobDriftCheck checks everything deployed against what its provider has
+// live. Its cron entry runs it on the leader only.
+const JobDriftCheck = "loomplane.drift.check"
+
+// CronDriftCheck names the cron entry that enqueues JobDriftCheck.
+const CronDriftCheck = "loomplane.drift"
+
+// DriftPayload is the payload of JobDriftCheck. It has nothing in it: a
+// check covers every binding.
+type DriftPayload struct{}
+
+// DriftChecker does the work of JobDriftCheck.
+type DriftChecker interface {
+	Run(ctx context.Context) error
+}
+
+// DriftJob is JobDriftCheck's definition.
+func DriftJob(c DriftChecker) *job.Definition[DriftPayload] {
+	return job.NewDefinition(JobDriftCheck, func(ctx context.Context, _ DriftPayload) error {
+		return c.Run(ctx)
+	})
+}

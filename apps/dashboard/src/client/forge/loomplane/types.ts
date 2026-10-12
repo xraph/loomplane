@@ -52,18 +52,24 @@ export interface AnalysisList {
 }
 
 export interface Binding {
+  commitSha: string;
   config: string;
+  connectionId: string;
   createdAt: string;
+  drift: string;
+  driftMessage: string;
   engine: string;
   environmentId: string;
   externalId: string;
   id: string;
   name: string;
+  observedAt?: string;
   orgId: string;
   planId: string;
   projectId: string;
   provider: string;
   region: string;
+  revision: string;
   subject: string;
   updatedAt: string;
   url: string;

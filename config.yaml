@@ -69,6 +69,11 @@ planning:
   # expires. Between 1m and 2160h (90 days).
   approval_window: "${LOOMPLANE_PLANNING_APPROVAL_WINDOW:-168h}"
 
+# How often everything deployed is compared with what its cloud has live.
+# 0 turns the check off. It only records drift; the next plan fixes it.
+drift:
+  interval: "${LOOMPLANE_DRIFT_INTERVAL:-30m}"
+
 # Where artifacts go, such as each deployment's source. file:///path for a
 # directory; empty means .loomplane/storage under the working directory.
 storage:

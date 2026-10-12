@@ -28,6 +28,9 @@ type Input struct {
 	Providers   *provider.Registry
 	// Bindings are what's deployed in the environment now.
 	Bindings []*Binding
+	// CommitSHA is the commit the plan deploys. A service built from
+	// another commit is updated.
+	CommitSHA string
 	// Connections are the organization's cloud connections, and Chosen
 	// the environment's choice of one per cloud. A plan needs a ready
 	// connection for every cloud it deploys to.
@@ -546,6 +549,14 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		a.Reason = fmt.Sprintf("Nothing runs %s in %s yet.", a.Name, p.in.Environment)
 		return
 	}
+	// Something deleted outside Loomplane is planned as if it had never
+	// been deployed. Its binding stays, so a deployment replaces it, or
+	// removes it if the manifest no longer wants it.
+	if b.Drift == DriftMissing {
+		a.Op, a.Changes = Create, nil
+		a.Reason = fmt.Sprintf("%s was deleted outside Loomplane, so it's created again.", a.Name)
+		return
+	}
 	a.Op, a.Changes = "", changes(b.Config, cfg)
 	switch {
 	case b.Provider != providerName:
@@ -564,14 +575,35 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		}
 		return
 	}
+	// A service runs code, so a new commit is a change too.
+	newCode := a.Subject == ServiceSubject && b.CommitSHA != "" && p.in.CommitSHA != "" && b.CommitSHA != p.in.CommitSHA
+	if newCode {
+		a.Changes = append(a.Changes, Change{Field: "commit", From: short(b.CommitSHA), To: short(p.in.CommitSHA)})
+	}
 	switch {
-	case len(a.Changes) > 0:
+	case len(a.Changes) > 0 && !newCode:
 		a.Op = Update
 		a.Reason = fmt.Sprintf("%s's configuration changed.", a.Name)
+	case newCode && len(a.Changes) > 1:
+		a.Op = Update
+		a.Reason = fmt.Sprintf("%s has new code and a changed configuration.", a.Name)
+	case newCode:
+		a.Op = Update
+		a.Reason = fmt.Sprintf("%s has new code.", a.Name)
+	case b.Drift == DriftChanged:
+		a.Op = Update
+		a.Reason = fmt.Sprintf("%s was changed outside Loomplane (%s), so it's deployed as planned again.", a.Name, b.DriftMessage)
 	default:
 		a.Op = Keep
 		a.Reason = "Unchanged."
 	}
+}
+
+func short(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 // changes compares two configurations field by field, as JSON.

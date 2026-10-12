@@ -1885,17 +1885,34 @@
           "external_id",
           "config",
           "url",
+          "connection_id",
+          "revision",
+          "commit_sha",
+          "drift",
+          "drift_message",
           "plan_id",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
           "config": {
+            "type": "string"
+          },
+          "connection_id": {
             "type": "string"
           },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "drift": {
+            "type": "string"
+          },
+          "drift_message": {
+            "type": "string"
           },
           "engine": {
             "type": "string"
@@ -1913,6 +1930,9 @@
           "name": {
             "type": "string"
           },
+          "observed_at": {
+            "type": "string"
+          },
           "org_id": {
             "type": "string"
           },
@@ -1926,6 +1946,9 @@
             "type": "string"
           },
           "region": {
+            "type": "string"
+          },
+          "revision": {
             "type": "string"
           },
           "subject": {

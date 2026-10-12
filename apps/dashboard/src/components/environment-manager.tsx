@@ -383,9 +383,27 @@ function Deployed({
   return (
     <ul className="grid gap-1.5 text-xs">
       {services.map((b) => (
-        <li key={b.id} className="flex min-w-0 items-center gap-2">
-          <span className="h-1.5 w-3 shrink-0 rounded-full bg-overdye" />
+        <li
+          key={b.id}
+          className="flex min-w-0 items-center gap-2"
+          title={
+            b.drift ? `Changed outside Loomplane: ${b.driftMessage}` : undefined
+          }
+        >
+          <span
+            className={cn(
+              "h-1.5 w-3 shrink-0 rounded-full",
+              b.drift ? "bg-weld" : "bg-overdye"
+            )}
+          />
           <span className="font-medium">{b.name}</span>
+          {b.drift && (
+            <span className="text-weld-ink shrink-0">
+              {b.drift === "missing"
+                ? "deleted outside Loomplane"
+                : "changed outside Loomplane"}
+            </span>
+          )}
           {b.url ? (
             <a
               href={b.url}

@@ -19,7 +19,14 @@ type Project struct {
 	Name          string  `json:"name"`
 	Framework     *string `json:"framework"`
 	RootDirectory *string `json:"rootDirectory"`
+	Targets       map[string]struct {
+		ID string `json:"id"`
+	} `json:"targets,omitempty"`
 }
+
+// Production is the deployment the project's production domain serves,
+// or empty.
+func (p *Project) Production() string { return p.Targets["production"].ID }
 
 // ProjectSettings are the project settings Loomplane keeps in step with
 // the manifest. A nil framework lets Vercel detect it.

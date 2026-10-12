@@ -208,6 +208,10 @@ func (r *recorder) Apply(_ context.Context, job *Job) (*Outcome, error) {
 
 func (r *recorder) Remove(context.Context, *Job, *planning.Binding) error { return nil }
 
+func (r *recorder) Observe(context.Context, *connections.Connection, []byte, *planning.Binding) (*Observation, error) {
+	return &Observation{Exists: true}, nil
+}
+
 func available(t *testing.T) *provider.Registry {
 	t.Helper()
 	catalog := providers.Catalog()

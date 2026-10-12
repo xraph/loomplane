@@ -593,3 +593,123 @@ func TestDeploy_aFailedDeploymentIsRetriedFromWhereItStopped(t *testing.T) {
 		t.Fatalf("%d builds, want the failed one and the retry", builds)
 	}
 }
+
+type bindingBody struct {
+	Name         string `json:"name"`
+	Drift        string `json:"drift"`
+	DriftMessage string `json:"drift_message"`
+	ObservedAt   string `json:"observed_at"`
+	Revision     string `json:"revision"`
+	CommitSHA    string `json:"commit_sha"`
+}
+
+// waitDrift polls the environment's bindings until api's drift is want.
+func waitDrift(t *testing.T, c *client, base, want string) bindingBody {
+	const name = "api"
+	t.Helper()
+	deadline := time.Now().Add(readyTimeout)
+	for {
+		var list struct {
+			Bindings []bindingBody `json:"bindings"`
+		}
+		c.must(http.StatusOK, http.MethodGet, base+"/bindings?environment=production", nil, &list)
+		for _, b := range list.Bindings {
+			if b.Name == name && b.Drift == want && b.ObservedAt != "" {
+				return b
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never drifted to %q: %+v", name, want, list.Bindings)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func TestDeploy_driftIsFoundAndPlannedBack(t *testing.T) {
+	google := newFakeGoogle(t)
+	cloud := newFakeCloud(google.srv.URL)
+	google.deploy = cloud
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.GoogleEndpoint = google.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	cfg.Drift.Interval = time.Second
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": apiOnCloudRun}, nil)
+
+	plan := func() planBody {
+		var p planBody
+		c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &p)
+		waitPlanned(t, c, &p)
+		return p
+	}
+	if d := approveAndWait(t, c, plan()); d.Status != "succeeded" {
+		t.Fatalf("deployment %+v", d)
+	}
+	b := waitDrift(t, c, base, "")
+	if b.CommitSHA != exampleSHA || !strings.Contains(b.Revision, "/loomplane/api-") {
+		t.Fatalf("binding %+v", b)
+	}
+
+	// Someone deploys another image by hand.
+	cloud.mu.Lock()
+	for _, svc := range cloud.services {
+		svc["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)["image"] = "gcr.io/elsewhere/api:hotfix"
+	}
+	cloud.mu.Unlock()
+	b = waitDrift(t, c, base, "changed")
+	if !strings.Contains(b.DriftMessage, "gcr.io/elsewhere/api:hotfix is live") {
+		t.Fatalf("binding %+v", b)
+	}
+	if p := plan(); p.Actions[0].Op != "update" {
+		t.Fatalf("plan after a change %+v", p)
+	}
+
+	// Then someone deletes it.
+	cloud.mu.Lock()
+	for name := range cloud.services {
+		delete(cloud.services, name)
+	}
+	cloud.mu.Unlock()
+	waitDrift(t, c, base, "missing")
+	p := plan()
+	if p.Actions[0].Op != "create" {
+		t.Fatalf("plan after a deletion %+v", p)
+	}
+	// Approving it deploys api again, and the next check finds it as
+	// deployed.
+	if d := approveAndWait(t, c, p); d.Status != "succeeded" {
+		t.Fatalf("redeployment %+v", d)
+	}
+	cloud.mu.Lock()
+	services := len(cloud.services)
+	cloud.mu.Unlock()
+	if services != 1 {
+		t.Fatalf("%d services after redeploying", services)
+	}
+	waitDrift(t, c, base, "")
+}

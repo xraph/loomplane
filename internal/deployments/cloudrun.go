@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/cloudrun"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/progress"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
@@ -104,7 +105,7 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Outcome{ExternalID: ext, URL: url, Image: state.Image}, nil
+	return &Outcome{ExternalID: ext, URL: url, Image: state.Image, Revision: state.Image}, nil
 }
 
 // build runs the service's build on Cloud Build and returns its image.
@@ -371,4 +372,34 @@ func (c *CloudRun) Remove(ctx context.Context, job *Job, b *planning.Binding) er
 		return nil
 	}
 	return err
+}
+
+// Observe implements Executor: it reads the Cloud Run service straight
+// from Google, without going through Ctrl Plane, which only knows what it
+// was last told.
+func (c *CloudRun) Observe(ctx context.Context, _ *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+	iid, err := id.Parse(b.ExternalID)
+	if err != nil {
+		return nil, fmt.Errorf("the binding names no instance: %w", err)
+	}
+	key, err := gcp.ParseKey(credential)
+	if err != nil {
+		return nil, err
+	}
+	s, err := c.Google.Session(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := s.GetService(ctx, b.Region, cloudrun.ServiceName(iid))
+	if gcp.IsNotFound(err) {
+		return &Observation{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	obs := &Observation{Exists: true}
+	if len(svc.Template.Containers) > 0 {
+		obs.Revision = svc.Template.Containers[0].Image
+	}
+	return obs, nil
 }

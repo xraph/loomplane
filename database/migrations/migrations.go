@@ -38,6 +38,7 @@ func Group() *migrate.Group {
 		statements("20261012000008", "create_deployments", deploymentsUp, deploymentsDown),
 		statements("20261012000009", "add_binding_url", bindingURLUp, bindingURLDown),
 		statements("20261013000001", "add_deployment_retries", deploymentRetriesUp, deploymentRetriesDown),
+		statements("20261013000002", "add_binding_drift", bindingDriftUp, bindingDriftDown),
 	)
 	return g
 }
@@ -398,4 +399,25 @@ var deploymentRetriesUp = []string{
 
 var deploymentRetriesDown = []string{
 	`ALTER TABLE loomplane_deployments DROP COLUMN IF EXISTS retries`,
+}
+
+// What a binding's drift check needs and finds: the connection that
+// deployed it, the revision and commit that went live, and what the last
+// check saw.
+var bindingDriftUp = []string{
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS connection_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS revision TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS commit_sha TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS drift TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS drift_message TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS observed_at TIMESTAMPTZ`,
+}
+
+var bindingDriftDown = []string{
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS observed_at`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS drift_message`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS drift`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS commit_sha`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS revision`,
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS connection_id`,
 }

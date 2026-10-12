@@ -63,6 +63,7 @@ type Config struct {
 	Planning      PlanningConfig
 	Clouds        CloudsConfig
 	Storage       StorageConfig
+	Drift         DriftConfig
 	Worker        WorkerConfig
 }
 
@@ -171,6 +172,13 @@ type PlanningConfig struct {
 	ApprovalWindow time.Duration
 }
 
+// DriftConfig schedules the drift check.
+type DriftConfig struct {
+	// Interval is how often everything deployed is compared with what its
+	// provider has live. Zero turns the check off.
+	Interval time.Duration
+}
+
 // StorageConfig is where artifacts go, such as the source of each
 // deployment.
 type StorageConfig struct {
@@ -219,6 +227,7 @@ func Defaults() Config {
 		GitHub:   GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
 		Analysis: AnalysisConfig{Concurrency: 2},
 		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
+		Drift:    DriftConfig{Interval: 30 * time.Minute},
 		Worker:   WorkerConfig{HTTPAddr: ":8781"},
 	}
 }
@@ -294,6 +303,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
 	r.str(&c.Storage.URL, "storage.url")
+	r.duration(&c.Drift.Interval, "drift.interval")
 	r.str(&c.Clouds.GoogleEndpoint, "clouds.google_endpoint")
 	r.str(&c.Clouds.VercelEndpoint, "clouds.vercel_endpoint")
 
@@ -337,6 +347,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Orchestration.PollInterval <= 0 {
 		errs = append(errs, errors.New("orchestration.poll_interval must be positive"))
+	}
+	if c.Drift.Interval != 0 && c.Drift.Interval < time.Second {
+		errs = append(errs, fmt.Errorf("drift.interval must be 0, to turn it off, or at least 1s, got %s", c.Drift.Interval))
 	}
 	if c.Planning.ApprovalWindow < minApprovalWindow || c.Planning.ApprovalWindow > maxApprovalWindow {
 		errs = append(errs, fmt.Errorf("planning.approval_window must be between %s and %s, got %s",

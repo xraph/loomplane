@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/chronicle"
 	"github.com/xraph/ctrlplane/app"
 	cpext "github.com/xraph/ctrlplane/extension"
+	"github.com/xraph/dispatch/cron"
 	"github.com/xraph/dispatch/engine"
 	dispatchext "github.com/xraph/dispatch/extension"
 	"github.com/xraph/forge"
@@ -148,27 +149,43 @@ func (e *Extension) Register(fapp forge.App) error {
 	})
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
+	executors := map[string]deployments.Executor{
+		"cloud-run": &deployments.CloudRun{
+			Google:      gcp.New(e.cfg.Clouds.GoogleEndpoint),
+			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
+			Credentials: clouds,
+		},
+		"vercel": &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+	}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		Store: deployStore, Plans: planStore, Projects: prj, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
 		},
 		Providers: catalog,
-		Executors: map[string]deployments.Executor{
-			"cloud-run": &deployments.CloudRun{
-				Google:      gcp.New(e.cfg.Clouds.GoogleEndpoint),
-				Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
-				Credentials: clouds,
-			},
-			"vercel": &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
-		},
+		Executors: executors,
 	})
 	e.deployments.Bind(e.plans, runner, e.engineOf)
+	// Drift is checked on Dispatch's cron leader, so one replica checks.
+	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
+		Store: planStore, Credentials: clouds, Executors: executors,
+		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+	}))
 	return e.routes(fapp.Router(), guard)
 }
 
-// Start has nothing to start: Dispatch runs the workflow.
-func (e *Extension) Start(context.Context) error {
+// Start schedules the drift check. Dispatch runs the workflow and the
+// check; the schedule needs the database, which is migrated by now.
+func (e *Extension) Start(ctx context.Context) error {
+	if every := e.cfg.Drift.Interval; every > 0 {
+		def := &cron.Definition[orchestration.DriftPayload]{
+			Name: orchestration.CronDriftCheck, Schedule: "@every " + every.String(),
+			JobName: orchestration.JobDriftCheck, Queue: orchestration.Queue,
+		}
+		if err := engine.RegisterCron(ctx, e.engineOf(), def); err != nil {
+			return fmt.Errorf("schedule the drift check: %w", err)
+		}
+	}
 	e.MarkStarted()
 	return nil
 }

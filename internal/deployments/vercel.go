@@ -15,6 +15,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -115,7 +116,7 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Outcome{ExternalID: project.ID, URL: d.Address()}, nil
+	return &Outcome{ExternalID: project.ID, URL: d.Address(), Revision: d.ID}, nil
 }
 
 // deploy uploads the commit and starts a production deployment of it.
@@ -230,4 +231,21 @@ func (v *Vercel) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 		return nil
 	}
 	return v.Client.DeleteProject(ctx, token(job), b.ExternalID)
+}
+
+// Observe implements Executor: the project, and which deployment its
+// production domain serves.
+func (v *Vercel) Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+	tok := vercel.Token{Value: strings.TrimSpace(string(credential))}
+	if conn != nil {
+		tok.TeamID = conn.Details["team_id"]
+	}
+	p, err := v.Client.GetProject(ctx, tok, b.ExternalID)
+	if vercel.IsNotFound(err) {
+		return &Observation{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Observation{Exists: true, Revision: p.Production()}, nil
 }

@@ -384,6 +384,9 @@ type deployedRef struct {
 	Region     string `json:"region"`
 	ExternalID string `json:"external_id"`
 	Config     string `json:"config"`
+	CommitSHA  string `json:"commit_sha"`
+	Revision   string `json:"revision"`
+	Drift      string `json:"drift"`
 }
 
 // compute plans a plan from its pinned commit and manifest, against what's
@@ -414,7 +417,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	}
 	result := Compute(Input{
 		Environment: plan.Environment, Graph: g, Manifest: rev.Manifest, Providers: s.providers, Bindings: bindings,
-		Connections: options, Chosen: chosen,
+		Connections: options, Chosen: chosen, CommitSHA: plan.CommitSHA,
 	})
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, AnalysisID: plan.AnalysisID,
@@ -423,6 +426,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	for _, b := range bindings {
 		in.Deployed = append(in.Deployed, deployedRef{
 			ID: b.ID, Provider: b.Provider, Region: b.Region, ExternalID: b.ExternalID, Config: string(b.Config),
+			CommitSHA: b.CommitSHA, Revision: b.Revision, Drift: b.Drift,
 		})
 	}
 	revision, err := Digest(in)
