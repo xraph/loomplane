@@ -5,6 +5,7 @@ import {
   planStatus,
   scopeBody,
   steps,
+  toggleScope,
   withIgnored,
   withResource,
 } from "@/lib/plans"
@@ -70,6 +71,27 @@ describe("scopeBody", () => {
   })
   it("names the repositories that move otherwise", () => {
     expect(scopeBody(["api", "web"], ["web"])).toEqual({ scope: ["web"] })
+  })
+  // The API reads an empty scope as every repository, which is why the
+  // picker won't plan with none chosen.
+  it("names an empty scope when nothing moves", () => {
+    expect(scopeBody(["api", "web"], [])).toEqual({ scope: [] })
+  })
+  it("sends no scope for a project without repositories", () => {
+    expect(scopeBody([], [])).toEqual({})
+  })
+})
+
+describe("toggleScope", () => {
+  it("holds and moves a repository", () => {
+    expect(toggleScope(["api", "web"], ["api", "web"], "web")).toEqual(["api"])
+    expect(toggleScope(["api", "web", "db"], ["api"], "web")).toEqual([
+      "api",
+      "web",
+    ])
+  })
+  it("goes back to every repository once all of them move", () => {
+    expect(toggleScope(["api", "web"], ["api"], "web")).toBeNull()
   })
 })
 

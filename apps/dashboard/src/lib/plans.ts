@@ -78,6 +78,22 @@ export function scopeBody(
 }
 
 /**
+ * toggleScope moves or holds one repository in the scope picker. Once every
+ * repository moves again it returns null, the picker's "all of them", so a
+ * repository added later moves by default too.
+ */
+export function toggleScope(
+  all: string[],
+  chosen: string[],
+  alias: string
+): string[] | null {
+  const next = chosen.includes(alias)
+    ? chosen.filter((a) => a !== alias)
+    : [...chosen, alias]
+  return all.every((a) => next.includes(a)) ? null : next
+}
+
+/**
  * changeCount says how much a plan would change, leaving out what it
  * keeps as it is.
  */

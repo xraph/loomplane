@@ -102,6 +102,7 @@ import {
   planStatus,
   scopeBody,
   steps,
+  toggleScope,
   withIgnored,
   withResource,
 } from "@/lib/plans"
@@ -385,11 +386,7 @@ function PlansCard({
   const chosen = aliases.filter((a) => moving === null || moving.includes(a))
 
   const toggle = (alias: string) =>
-    setMoving(
-      chosen.includes(alias)
-        ? chosen.filter((a) => a !== alias)
-        : [...chosen, alias]
-    )
+    setMoving(toggleScope(aliases, chosen, alias))
 
   const plan = async () => {
     try {
