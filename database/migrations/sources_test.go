@@ -80,7 +80,12 @@ func TestSources_eachProjectsRepositoryBecomesItsFirstSource(t *testing.T) {
 			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/Storefront.git', 'ready', 'usr', now(), now()),
 			('proj_b', 'org', 'B', 'b', 'git@github.com:acme/go.git', 'ready', 'usr', now(), now()),
 			('proj_c', 'org', 'C', 'c', 'https://gitlab.com/acme/c', 'ready', 'usr', now(), now()),
-			('proj_d', 'org', 'D', 'd', '', 'ready', 'usr', now(), now())`,
+			('proj_d', 'org', 'D', 'd', '', 'ready', 'usr', now(), now()),
+			('proj_e', 'org', 'E', 'e', 'https://mygithub.com/o/r', 'ready', 'usr', now(), now()),
+			('proj_f', 'org', 'F', 'f', 'https://github.com:443/acme/port', 'ready', 'usr', now(), now()),
+			('proj_g', 'org', 'G', 'g', 'https://GitHub.com/acme/Upper', 'ready', 'usr', now(), now()),
+			('proj_h', 'org', 'H', 'h', 'https://gist.github.com/user/abc123', 'ready', 'usr', now(), now()),
+			('proj_i', 'org', 'I', 'i', 'https://gitlab.com/x/github.com/o/r', 'ready', 'usr', now(), now())`,
 		`INSERT INTO loomplane_analyses (id, org_id, project_id, status, repository, created_by, created_at) VALUES
 			('anl_a', 'org', 'proj_a', 'succeeded', 'acme/Storefront', 'usr', now())`,
 		`INSERT INTO loomplane_variables (id, org_id, project_id, service, key, created_by, updated_by, created_at, updated_at) VALUES
@@ -94,7 +99,12 @@ func TestSources_eachProjectsRepositoryBecomesItsFirstSource(t *testing.T) {
 
 	got := strs(t, conn, `SELECT project_id || ' ' || alias || ' ' || repository || ' [' || root || '] [' || ref || ']'
 		FROM loomplane_project_sources ORDER BY project_id`)
-	want := []string{"proj_a storefront acme/Storefront [] []", "proj_b go-src acme/go [] []"}
+	want := []string{
+		"proj_a storefront acme/Storefront [] []",
+		"proj_b go-src acme/go [] []",
+		"proj_f port acme/port [] []",
+		"proj_g upper acme/Upper [] []",
+	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sources %q, want %q", got, want)
 	}

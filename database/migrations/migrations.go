@@ -401,7 +401,9 @@ var bindingURLDown = []string{
 // The backfill turns each project's repository_url into its first source,
 // with the alias internal/discovery.AliasFor would pick, and qualifies the
 // service IDs its variables name with that alias. A URL that isn't on
-// GitHub gets no source: it could never be analyzed. repository_url stays,
+// GitHub gets no source: it could never be analyzed. The pattern is anchored
+// to the hosts repositories.ParseGitHubURL accepts, so a look-alike such as
+// mygithub.com or a gist doesn't slip through. repository_url stays,
 // unread, so a rollback still finds it; a later migration drops it. Each
 // UPDATE only touches a project with exactly one source, which keeps a
 // re-run from guessing between two.
@@ -429,7 +431,9 @@ var sourcesUp = []string{
 		ON loomplane_analyses (org_id, source_id, created_at DESC)`,
 	`WITH m AS (
 		SELECT id, org_id, created_by, created_at,
-			regexp_match(repository_url, 'github\.com[/:]([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+)') AS parts
+			regexp_match(trim(repository_url),
+				'^(?:(?:https?://)?(?:www\.)?github\.com(?::[0-9]+)?/|git@github\.com:)([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+)',
+				'i') AS parts
 		FROM loomplane_projects WHERE repository_url <> ''
 	), r AS (
 		SELECT id, org_id, created_by, created_at,
