@@ -63,6 +63,12 @@ analysis:
   work_dir: "${LOOMPLANE_ANALYSIS_WORK_DIR:-}"
   concurrency: 2
 
+# Deployment planning.
+planning:
+  # How long a plan waits for someone to approve or reject it before it
+  # expires. Between 1m and 2160h (90 days).
+  approval_window: "${LOOMPLANE_PLANNING_APPROVAL_WINDOW:-168h}"
+
 worker:
   # Where loomplane-worker serves its health checks, and nothing else.
   http_addr: "${LOOMPLANE_WORKER_HTTP_ADDR:-}"

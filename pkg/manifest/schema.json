@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loomplane.dev/schemas/loomplane.v1.json",
+  "title": "loomplane.yaml",
+  "description": "What an application deploys with Loomplane, where, and what it needs. Version 1.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "The manifest version. This schema is version 1.",
+      "const": 1
+    },
+    "defaults": {
+      "description": "Apply to every service and resource that doesn't set its own. The default region only comes with the default provider.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "region": { "$ref": "#/$defs/region" }
+      }
+    },
+    "services": {
+      "description": "What the application runs, by name.",
+      "type": "object",
+      "maxProperties": 100,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/service" }
+    },
+    "resources": {
+      "description": "Backing services the application needs, such as Postgres, by name. A resource can't share a service's name.",
+      "type": "object",
+      "maxProperties": 100,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/resource" }
+    },
+    "ignore": {
+      "description": "What repository analysis found that the application doesn't use.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resources": {
+          "description": "Resource kinds, such as mysql.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/kind" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,39}$"
+    },
+    "kind": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,39}$",
+      "examples": ["postgres", "mysql", "redis", "mongodb", "kafka", "rabbitmq", "nats", "object-storage", "search", "memcached", "clickhouse"]
+    },
+    "provider": {
+      "description": "Where it runs, by the provider's name in Loomplane's registry, such as cloud-run, ecs-fargate, vercel or render.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "region": {
+      "description": "The provider's region, such as us-central1 or eu-west-1.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "region": { "$ref": "#/$defs/region" },
+        "port": {
+          "description": "The port the service listens on. Without it, the one its Dockerfile exposes.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "scale": {
+          "description": "How many instances run.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "type": "integer", "minimum": 0 },
+            "max": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        },
+        "size": {
+          "description": "What each instance gets.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory"],
+          "properties": {
+            "cpu": { "description": "Virtual CPUs, such as 0.5 or 2.", "type": "number", "exclusiveMinimum": 0, "maximum": 8 },
+            "memory": { "description": "MiB.", "type": "integer", "minimum": 128, "maximum": 32768 }
+          }
+        },
+        "public": {
+          "description": "Whether the service gets an address on the internet. Without it, yes for anything serving HTTP and no for a worker.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "False leaves the service out.",
+          "type": "boolean"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["source"],
+      "unevaluatedProperties": false,
+      "allOf": [{ "$ref": "#/$defs/settings" }],
+      "properties": {
+        "source": {
+          "description": "Where the service's code is, as repository analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's directory, or a Dockerfile. Prefix the ecosystem (go:, rust:, node:, container:) when two have a service at the same path.",
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "description": "Corrects what analysis decided the service is.",
+          "enum": ["http-service", "web-app", "static-site", "worker"]
+        },
+        "needs": {
+          "description": "Resources and other services this one talks to. Each one it names gets the service its address, in a variable.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/name" }
+        },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": {
+            "unevaluatedProperties": false,
+            "allOf": [{ "$ref": "#/$defs/settings" }]
+          }
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/kind" },
+        "provider": { "$ref": "#/$defs/provider" },
+        "region": { "$ref": "#/$defs/region" },
+        "version": {
+          "description": "The engine's version, such as \"17\" for Postgres. Without it, the provider chooses.",
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$"
+        },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "$ref": "#/$defs/provider" },
+              "region": { "$ref": "#/$defs/region" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

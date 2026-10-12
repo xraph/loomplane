@@ -60,6 +60,7 @@ type Config struct {
 	Orchestration OrchestrationConfig
 	GitHub        GitHubConfig
 	Analysis      AnalysisConfig
+	Planning      PlanningConfig
 	Worker        WorkerConfig
 }
 
@@ -161,6 +162,21 @@ type OrchestrationConfig struct {
 	PollInterval time.Duration
 }
 
+// PlanningConfig tunes deployment planning.
+type PlanningConfig struct {
+	// ApprovalWindow is how long a plan waits for someone to approve or
+	// reject it. After that it expires, and you plan again.
+	ApprovalWindow time.Duration
+}
+
+// Bounds on the approval window: long enough to reach a person, short
+// enough that an approved plan still describes the world.
+const (
+	minApprovalWindow = time.Minute
+	maxApprovalWindow = 90 * 24 * time.Hour
+	approvalWindow    = 7 * 24 * time.Hour
+)
+
 // Defaults are the settings used when nothing overrides them.
 func Defaults() Config {
 	return Config{
@@ -181,6 +197,7 @@ func Defaults() Config {
 		},
 		GitHub:   GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
 		Analysis: AnalysisConfig{Concurrency: 2},
+		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
 		Worker:   WorkerConfig{HTTPAddr: ":8781"},
 	}
 }
@@ -254,6 +271,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Analysis.WorkDir, "analysis.work_dir")
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
+	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -295,6 +313,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Orchestration.PollInterval <= 0 {
 		errs = append(errs, errors.New("orchestration.poll_interval must be positive"))
+	}
+	if c.Planning.ApprovalWindow < minApprovalWindow || c.Planning.ApprovalWindow > maxApprovalWindow {
+		errs = append(errs, fmt.Errorf("planning.approval_window must be between %s and %s, got %s",
+			minApprovalWindow, maxApprovalWindow, c.Planning.ApprovalWindow))
 	}
 	if u, err := url.Parse(c.GitHub.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 		errs = append(errs, fmt.Errorf("github.api_url must be an absolute URL, got %q", c.GitHub.APIURL))

@@ -15,6 +15,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	cpext "github.com/xraph/ctrlplane/extension"
@@ -31,6 +32,7 @@ import (
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
+	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/extensions/web"
 	"github.com/xraph/loomplane/internal/config"
@@ -85,10 +87,16 @@ func Extensions(cfg config.Config) []forge.Extension {
 		groveext.WithDisableRoutes(),
 	)
 
+	// The deployment workflow runs here, beside the API, not in the
+	// worker: it reads and writes Loomplane's own records and never runs a
+	// repository's code. Its handlers go to Dispatch now; the planning
+	// extension binds them to the planner when it registers.
+	deployments := orchestration.NewDeployments()
 	jobs := dispatchext.New(
 		dispatchext.WithConcurrency(cfg.Orchestration.Concurrency),
 		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
 		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
+		dispatchext.WithDurableWorkflows(deployments.Options(owner(), cfg.Orchestration.Concurrency)),
 		// Dispatch's admin API needs a Forge auth registry and, for writes,
 		// its durable delivery audit. Loomplane exposes job state through
 		// its own API instead.
@@ -120,6 +128,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		projectsext.New(cfg, jobs.Engine),
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
+		planningext.New(cfg, jobs.Engine, deployments),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),
 	}
@@ -162,6 +171,16 @@ func WorkerExtensions(cfg config.Config) []forge.Extension {
 	)
 	jobs.SetDependencies([]string{groveext.ExtensionName})
 	return []forge.Extension{db, jobs, discoveryext.NewWorker(cfg, jobs.Engine)}
+}
+
+// owner names this process to Dispatch's durable runtime, which leases
+// each workflow task to one owner at a time.
+func owner() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "loomplane"
+	}
+	return fmt.Sprintf("%s:%d", host, os.Getpid())
 }
 
 // postgres opens the pool with Loomplane's settings. Connections are

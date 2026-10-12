@@ -32,6 +32,7 @@ func Group() *migrate.Group {
 		statements("20261012000002", "create_github_installations", githubUp, githubDown),
 		statements("20261012000003", "create_variables", variablesUp, variablesDown),
 		statements("20261012000004", "add_project_style", projectStyleUp, projectStyleDown),
+		statements("20261012000005", "create_planning", planningUp, planningDown),
 	)
 	return g
 }
@@ -226,4 +227,76 @@ var projectStyleUp = []string{
 var projectStyleDown = []string{
 	`ALTER TABLE loomplane_projects DROP COLUMN IF EXISTS color`,
 	`ALTER TABLE loomplane_projects DROP COLUMN IF EXISTS icon`,
+}
+
+// Planning keeps three things. A manifest revision is one saved version of
+// a project's loomplane.yaml; saving adds one and never edits one, so a
+// plan can name exactly what it was made from. A plan is pinned to the
+// analysis and manifest revision it was made from, with its result whole,
+// as JSON. The partial unique index allows one open plan per environment,
+// so of two started at once, one fails instead of both waiting for a
+// decision. A binding records what runs one service or resource in one
+// environment; deployments write them and the next plan reads them.
+var planningUp = []string{
+	`CREATE TABLE IF NOT EXISTS loomplane_manifests (
+		id         TEXT        PRIMARY KEY,
+		org_id     TEXT        NOT NULL,
+		project_id TEXT        NOT NULL REFERENCES loomplane_projects (id) ON DELETE CASCADE,
+		revision   INTEGER     NOT NULL,
+		body       TEXT        NOT NULL,
+		digest     TEXT        NOT NULL,
+		created_by TEXT        NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL,
+		CONSTRAINT loomplane_manifests_project_revision UNIQUE (project_id, revision)
+	)`,
+	`CREATE TABLE IF NOT EXISTS loomplane_plans (
+		id                TEXT        PRIMARY KEY,
+		org_id            TEXT        NOT NULL,
+		project_id        TEXT        NOT NULL REFERENCES loomplane_projects (id) ON DELETE CASCADE,
+		environment_id    TEXT        NOT NULL REFERENCES loomplane_environments (id) ON DELETE CASCADE,
+		environment       TEXT        NOT NULL,
+		status            TEXT        NOT NULL,
+		revision          TEXT        NOT NULL DEFAULT '',
+		analysis_id       TEXT        NOT NULL REFERENCES loomplane_analyses (id) ON DELETE CASCADE,
+		commit_sha        TEXT        NOT NULL DEFAULT '',
+		manifest_id       TEXT        NOT NULL REFERENCES loomplane_manifests (id) ON DELETE CASCADE,
+		manifest_revision INTEGER     NOT NULL,
+		result            JSONB,
+		executable        BOOLEAN     NOT NULL DEFAULT FALSE,
+		error             TEXT        NOT NULL DEFAULT '',
+		created_by        TEXT        NOT NULL,
+		created_at        TIMESTAMPTZ NOT NULL,
+		planned_at        TIMESTAMPTZ,
+		expires_at        TIMESTAMPTZ,
+		decided_by        TEXT        NOT NULL DEFAULT '',
+		decided_at        TIMESTAMPTZ,
+		decision_note     TEXT        NOT NULL DEFAULT ''
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS loomplane_plans_one_open
+		ON loomplane_plans (environment_id) WHERE status IN ('planning', 'ready')`,
+	`CREATE INDEX IF NOT EXISTS loomplane_plans_project_created
+		ON loomplane_plans (org_id, project_id, created_at DESC)`,
+	`CREATE TABLE IF NOT EXISTS loomplane_bindings (
+		id             TEXT        PRIMARY KEY,
+		org_id         TEXT        NOT NULL,
+		project_id     TEXT        NOT NULL REFERENCES loomplane_projects (id) ON DELETE CASCADE,
+		environment_id TEXT        NOT NULL REFERENCES loomplane_environments (id) ON DELETE CASCADE,
+		subject        TEXT        NOT NULL,
+		name           TEXT        NOT NULL,
+		provider       TEXT        NOT NULL,
+		region         TEXT        NOT NULL DEFAULT '',
+		engine         TEXT        NOT NULL,
+		external_id    TEXT        NOT NULL DEFAULT '',
+		config         JSONB       NOT NULL DEFAULT '{}',
+		plan_id        TEXT        NOT NULL DEFAULT '',
+		created_at     TIMESTAMPTZ NOT NULL,
+		updated_at     TIMESTAMPTZ NOT NULL,
+		CONSTRAINT loomplane_bindings_subject UNIQUE (environment_id, subject, name)
+	)`,
+}
+
+var planningDown = []string{
+	`DROP TABLE IF EXISTS loomplane_bindings`,
+	`DROP TABLE IF EXISTS loomplane_plans`,
+	`DROP TABLE IF EXISTS loomplane_manifests`,
 }

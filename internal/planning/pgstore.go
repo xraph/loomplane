@@ -1,0 +1,262 @@
+package planning
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/xraph/grove/driver"
+	"github.com/xraph/grove/drivers/pgdriver"
+)
+
+const pgUniqueViolation = "23505"
+
+// ErrConflict is a plan started while another for the same environment was
+// being created.
+var ErrConflict = errors.New("another plan for this environment was just started")
+
+// PgStore is the Postgres Store. The schema is migration group "loomplane"
+// (database/migrations).
+type PgStore struct {
+	db *pgdriver.PgDB
+}
+
+// NewPgStore returns a Store over db.
+func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
+
+var _ Store = (*PgStore)(nil)
+
+const planColumns = `id, org_id, project_id, environment_id, environment, status, revision,
+	analysis_id, commit_sha, manifest_id, manifest_revision, result, executable, error,
+	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note`
+
+// open lists the statuses of a plan that hasn't been settled.
+const open = `('planning', 'ready')`
+
+func scanPlan(row pgx.Row) (*Plan, error) {
+	var p Plan
+	var result []byte
+	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Environment, &p.Status, &p.Revision,
+		&p.AnalysisID, &p.CommitSHA, &p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
+		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote); err != nil {
+		return nil, err
+	}
+	if len(result) > 0 {
+		var r Result
+		if err := json.Unmarshal(result, &r); err != nil {
+			return nil, fmt.Errorf("decode plan: %w", err)
+		}
+		p.setResult(&r)
+	}
+	p.normalize()
+	return &p, nil
+}
+
+func rollback(tx driver.Tx, err error) error {
+	if err == nil {
+		return nil
+	}
+	if rerr := tx.Rollback(); rerr != nil && !errors.Is(rerr, pgx.ErrTxClosed) {
+		return errors.Join(err, fmt.Errorf("rollback: %w", rerr))
+	}
+	return err
+}
+
+// CreatePlan implements Store. It supersedes the environment's open plans
+// in the same transaction; a unique index allows one open plan per
+// environment, so of two plans started at once, one fails with
+// ErrConflict.
+func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	superseded, err = supersede(ctx, tx, p)
+	if err != nil {
+		return nil, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status,
+		analysis_id, commit_sha, manifest_id, manifest_revision, created_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
+		p.AnalysisID, p.CommitSHA, p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		return nil, ErrConflict
+	}
+	if err != nil {
+		return nil, fmt.Errorf("insert plan: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return superseded, nil
+}
+
+// supersede settles the environment's open plans and returns their IDs.
+func supersede(ctx context.Context, tx driver.Tx, p *Plan) ([]string, error) {
+	rows, err := tx.Query(ctx, `UPDATE loomplane_plans SET status = 'superseded', decided_at = $3
+		WHERE org_id = $1 AND environment_id = $2 AND status IN `+open+` RETURNING id`,
+		p.OrgID, p.EnvironmentID, p.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("supersede plans: %w", err)
+	}
+	defer rows.Close() // Err below reports iteration failures
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("supersede plans: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("supersede plans: %w", err)
+	}
+	return ids, nil
+}
+
+// GetPlan implements Store.
+func (s *PgStore) GetPlan(ctx context.Context, orgID, id string) (*Plan, error) {
+	p, err := scanPlan(s.db.QueryRow(ctx, `SELECT `+planColumns+` FROM loomplane_plans
+		WHERE org_id = $1 AND id = $2`, orgID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get plan: %w", err)
+	}
+	return p, nil
+}
+
+// ListPlans implements Store.
+func (s *PgStore) ListPlans(ctx context.Context, orgID, projectID, environmentID string, limit int) ([]*Plan, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+planColumns+` FROM loomplane_plans
+		WHERE org_id = $1 AND project_id = $2 AND ($3 = '' OR environment_id = $3)
+		ORDER BY created_at DESC, id DESC LIMIT $4`, orgID, projectID, environmentID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list plans: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := []*Plan{}
+	for rows.Next() {
+		p, err := scanPlan(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan plan: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list plans: %w", err)
+	}
+	return out, nil
+}
+
+// FinishPlanning implements Store.
+func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
+	result, err := json.Marshal(Result{
+		Actions: p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
+	})
+	if err != nil {
+		return false, fmt.Errorf("encode plan: %w", err)
+	}
+	tag, err := s.db.Exec(ctx, `UPDATE loomplane_plans
+		SET status = $3, revision = $4, result = $5, executable = $6, planned_at = $7, expires_at = $8
+		WHERE org_id = $1 AND id = $2 AND status = 'planning'`,
+		p.OrgID, p.ID, p.Status, p.Revision, result, p.Executable, p.PlannedAt, p.ExpiresAt)
+	if err != nil {
+		return false, fmt.Errorf("store plan: %w", err)
+	}
+	return affected(tag)
+}
+
+// FailPlanning implements Store.
+func (s *PgStore) FailPlanning(ctx context.Context, orgID, id, reason string, now time.Time) error {
+	if _, err := s.db.Exec(ctx, `UPDATE loomplane_plans SET status = 'failed', error = $3, planned_at = $4
+		WHERE org_id = $1 AND id = $2 AND status = 'planning'`, orgID, id, reason, now); err != nil {
+		return fmt.Errorf("fail plan: %w", err)
+	}
+	return nil
+}
+
+// Decide implements Store.
+func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string, now time.Time) (bool, error) {
+	tag, err := s.db.Exec(ctx, `UPDATE loomplane_plans SET status = $3, decided_by = $4, decision_note = $5, decided_at = $6
+		WHERE org_id = $1 AND id = $2 AND status = 'ready'`, orgID, id, status, by, note, now)
+	if err != nil {
+		return false, fmt.Errorf("decide plan: %w", err)
+	}
+	return affected(tag)
+}
+
+func affected(r driver.Result) (bool, error) {
+	n, err := r.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return n == 1, nil
+}
+
+const bindingColumns = `id, org_id, project_id, environment_id, subject, name, provider, region, engine,
+	external_id, config, plan_id, created_at, updated_at`
+
+// ListBindings implements Store.
+func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+bindingColumns+` FROM loomplane_bindings
+		WHERE org_id = $1 AND environment_id = $2 ORDER BY subject, name`, orgID, environmentID)
+	if err != nil {
+		return nil, fmt.Errorf("list bindings: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := []*Binding{}
+	for rows.Next() {
+		var b Binding
+		var cfg []byte
+		if err := rows.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region,
+			&b.Engine, &b.ExternalID, &cfg, &b.PlanID, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan binding: %w", err)
+		}
+		b.Config = cfg
+		b.CreatedAt, b.UpdatedAt = b.CreatedAt.UTC(), b.UpdatedAt.UTC()
+		out = append(out, &b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list bindings: %w", err)
+	}
+	return out, nil
+}
+
+// PutBinding implements Store: it records what runs a service or resource
+// in an environment, replacing what was recorded before.
+func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
+	cfg := []byte(b.Config)
+	if len(cfg) == 0 {
+		cfg = []byte("{}")
+	}
+	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		ON CONFLICT (environment_id, subject, name) DO UPDATE SET
+			provider = EXCLUDED.provider, region = EXCLUDED.region, engine = EXCLUDED.engine,
+			external_id = EXCLUDED.external_id, config = EXCLUDED.config, plan_id = EXCLUDED.plan_id,
+			updated_at = EXCLUDED.updated_at
+		WHERE loomplane_bindings.org_id = EXCLUDED.org_id`,
+		b.ID, b.OrgID, b.ProjectID, b.EnvironmentID, b.Subject, b.Name, b.Provider, b.Region, b.Engine,
+		b.ExternalID, cfg, b.PlanID, b.CreatedAt, b.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("put binding: %w", err)
+	}
+	return nil
+}
+
+// DeleteBinding implements Store.
+func (s *PgStore) DeleteBinding(ctx context.Context, orgID, id string) error {
+	if _, err := s.db.Exec(ctx, `DELETE FROM loomplane_bindings WHERE org_id = $1 AND id = $2`, orgID, id); err != nil {
+		return fmt.Errorf("delete binding: %w", err)
+	}
+	return nil
+}

@@ -1,0 +1,299 @@
+// Package planning turns an application graph, its manifest and the
+// provider catalog into a plan: the actions that would make an environment
+// match the manifest, in order, with who carries out each one. Planning
+// never touches a cloud. A plan is reviewed and approved before anything
+// acts on it, and approval names the plan's revision, so what gets approved
+// is exactly what was reviewed.
+package planning
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/xraph/loomplane/pkg/discovery"
+	"github.com/xraph/loomplane/pkg/manifest"
+	"github.com/xraph/loomplane/pkg/provider"
+)
+
+// Plan statuses. A plan starts planning, then is ready for a decision or
+// blocked by problems; a ready plan is approved, rejected, expires, or is
+// superseded by a newer plan for the same environment.
+const (
+	StatusPlanning   = "planning"
+	StatusReady      = "ready"
+	StatusBlocked    = "blocked"
+	StatusApproved   = "approved"
+	StatusRejected   = "rejected"
+	StatusExpired    = "expired"
+	StatusSuperseded = "superseded"
+	StatusFailed     = "failed"
+)
+
+// Errors the service and stores return.
+var (
+	ErrNotFound    = errors.New("plan not found")
+	ErrInvalid     = errors.New("invalid plan request")
+	ErrNoManifest  = errors.New("this project has no manifest yet; choose where its services run first")
+	ErrNoAnalysis  = errors.New("this project's repository hasn't been analyzed yet; analyze it first")
+	ErrNotReady    = errors.New("this plan isn't waiting for a decision")
+	ErrStale       = errors.New("the plan changed since you reviewed it; review it again")
+	ErrSuperseded  = errors.New("a newer plan for this environment replaced this one")
+	ErrUnavailable = errors.New("plans can't be decided right now; try again")
+)
+
+// Op is what an action does.
+type Op string
+
+// Ops.
+const (
+	Create  Op = "create"
+	Update  Op = "update"
+	Replace Op = "replace"
+	Delete  Op = "delete"
+	Keep    Op = "keep"
+)
+
+// Subject is what an action acts on.
+type Subject string
+
+// Subjects.
+const (
+	ServiceSubject  Subject = "service"
+	ResourceSubject Subject = "resource"
+)
+
+// Action is one step of a plan.
+type Action struct {
+	// ID is stable for a subject: "service:api", "resource:db".
+	ID       string          `json:"id"`
+	Op       Op              `json:"op"`
+	Subject  Subject         `json:"subject"`
+	Name     string          `json:"name"`
+	Provider string          `json:"provider"`
+	Region   string          `json:"region,omitempty"`
+	Engine   provider.Engine `json:"engine"`
+	// Creates names what the provider creates, such as "Cloud Run service".
+	Creates string `json:"creates"`
+	// Service is the desired service, for service actions other than
+	// deletes.
+	Service *ServiceConfig `json:"service,omitempty"`
+	// Resource is the desired resource, for resource actions other than
+	// deletes.
+	Resource *ResourceConfig `json:"resource,omitempty"`
+	// Changes are what an update or a replacement changes.
+	Changes []Change `json:"changes,omitempty"`
+	// Reason says why the action is in the plan, for people.
+	Reason string `json:"reason"`
+	// DependsOn are actions that must finish first.
+	DependsOn []string `json:"depends_on,omitempty"`
+	// Step orders actions: every action in a step can run at once, after
+	// the steps before it.
+	Step int `json:"step"`
+}
+
+// ServiceConfig is everything a deployment of a service is made from. A
+// binding keeps the one last applied, and the next plan compares against it.
+type ServiceConfig struct {
+	Provider  string             `json:"provider"`
+	Region    string             `json:"region,omitempty"`
+	Workload  provider.Workload  `json:"workload"`
+	Execution provider.Execution `json:"execution"`
+	// Source is the service's entrypoint in the repository.
+	Source    string              `json:"source"`
+	Ecosystem discovery.Ecosystem `json:"ecosystem"`
+	Framework string              `json:"framework,omitempty"`
+	// Image is the Dockerfile that builds it, if there is one.
+	Image string          `json:"image,omitempty"`
+	Build string          `json:"build,omitempty"`
+	Start string          `json:"start,omitempty"`
+	Port  int             `json:"port,omitempty"`
+	Scale *manifest.Scale `json:"scale,omitempty"`
+	Size  *manifest.Size  `json:"size,omitempty"`
+	// Public says whether it gets an address on the internet.
+	Public bool `json:"public"`
+	// Env are the variables Loomplane sets so the service finds what it
+	// needs. The values exist only once those things are deployed.
+	Env []EnvLink `json:"env,omitempty"`
+}
+
+// EnvLink is a variable a service gets with the address of something it
+// needs.
+type EnvLink struct {
+	Key string `json:"key"`
+	// From is the manifest name of the resource or service.
+	From    string  `json:"from"`
+	Subject Subject `json:"subject"`
+}
+
+// ResourceConfig is everything a resource is provisioned from.
+type ResourceConfig struct {
+	Provider string `json:"provider"`
+	Region   string `json:"region,omitempty"`
+	Kind     string `json:"kind"`
+	Version  string `json:"version,omitempty"`
+}
+
+// Change is one setting an update changes.
+type Change struct {
+	Field string `json:"field"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+}
+
+// Finding is a problem, which blocks a plan, or a warning, which doesn't.
+type Finding struct {
+	// Code says what kind of finding it is, for programs: the dashboard
+	// offers to confirm or ignore an "unconfirmed-resource".
+	Code    string  `json:"code"`
+	Subject Subject `json:"subject,omitempty"`
+	Name    string  `json:"name,omitempty"`
+	// Path is where in the manifest to fix it, such as services.api.provider.
+	Path     string               `json:"path,omitempty"`
+	Message  string               `json:"message"`
+	Evidence []discovery.Evidence `json:"evidence,omitempty"`
+}
+
+// Summary counts a plan's actions.
+type Summary struct {
+	Create  int `json:"create"`
+	Update  int `json:"update"`
+	Replace int `json:"replace"`
+	Delete  int `json:"delete"`
+	Keep    int `json:"keep"`
+}
+
+// Result is what the planner decides.
+type Result struct {
+	Actions  []Action  `json:"actions"`
+	Problems []Finding `json:"problems"`
+	Warnings []Finding `json:"warnings"`
+	Summary  Summary   `json:"summary"`
+	// Executable says whether Loomplane could carry the plan out: no
+	// problems, and an adapter for every provider it uses.
+	Executable bool `json:"executable"`
+}
+
+// Plan is one plan for one environment of a project, pinned to the commit
+// and manifest revision it was made from.
+type Plan struct {
+	ID            string `json:"id" forge:"id"`
+	OrgID         string `json:"org_id"`
+	ProjectID     string `json:"project_id"`
+	EnvironmentID string `json:"environment_id"`
+	Environment   string `json:"environment"`
+	Status        string `json:"status"`
+	// Revision is a digest of everything the plan was made from and
+	// everything it would do. Approving names it.
+	Revision         string    `json:"revision"`
+	AnalysisID       string    `json:"analysis_id"`
+	CommitSHA        string    `json:"commit_sha"`
+	ManifestID       string    `json:"manifest_id"`
+	ManifestRevision int       `json:"manifest_revision"`
+	Actions          []Action  `json:"actions"`
+	Problems         []Finding `json:"problems"`
+	Warnings         []Finding `json:"warnings"`
+	Summary          Summary   `json:"summary"`
+	Executable       bool      `json:"executable"`
+	// Error says why planning failed, when it did.
+	Error     string     `json:"error"`
+	CreatedBy string     `json:"created_by"`
+	CreatedAt time.Time  `json:"created_at"`
+	PlannedAt *time.Time `json:"planned_at"`
+	// ExpiresAt is when a ready plan stops waiting for a decision.
+	ExpiresAt    *time.Time `json:"expires_at"`
+	DecidedBy    string     `json:"decided_by"`
+	DecidedAt    *time.Time `json:"decided_at"`
+	DecisionNote string     `json:"decision_note"`
+}
+
+// Open reports whether the plan may still be decided or is still planning.
+func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == StatusReady }
+
+func (p *Plan) setResult(r *Result) {
+	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
+	p.Summary, p.Executable = r.Summary, r.Executable
+}
+
+func (p *Plan) normalize() {
+	p.CreatedAt = p.CreatedAt.UTC()
+	for _, t := range []**time.Time{&p.PlannedAt, &p.ExpiresAt, &p.DecidedAt} {
+		if *t != nil {
+			u := (*t).UTC()
+			*t = &u
+		}
+	}
+	if p.Actions == nil {
+		p.Actions = []Action{}
+	}
+	if p.Problems == nil {
+		p.Problems = []Finding{}
+	}
+	if p.Warnings == nil {
+		p.Warnings = []Finding{}
+	}
+}
+
+// Binding records what runs one service or resource of a project in one
+// environment: the map from Loomplane's names to the Ctrl Plane instance
+// or provider resource. Deployments write bindings; planning reads them to
+// know what exists.
+type Binding struct {
+	ID            string          `json:"id" forge:"id"`
+	OrgID         string          `json:"org_id"`
+	ProjectID     string          `json:"project_id"`
+	EnvironmentID string          `json:"environment_id"`
+	Subject       Subject         `json:"subject"`
+	Name          string          `json:"name"`
+	Provider      string          `json:"provider"`
+	Region        string          `json:"region"`
+	Engine        provider.Engine `json:"engine"`
+	// ExternalID is the Ctrl Plane instance's ID, or the provider's ID for
+	// a resource Loomplane manages itself.
+	ExternalID string `json:"external_id"`
+	// Config is the ServiceConfig or ResourceConfig last applied.
+	Config json.RawMessage `json:"config"`
+	// PlanID is the plan whose deployment last wrote the binding.
+	PlanID    string    `json:"plan_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Store persists plans and bindings, scoped to an organization: another
+// organization's read as not found.
+type Store interface {
+	// CreatePlan inserts p and supersedes every other open plan for its
+	// environment, returning their IDs.
+	CreatePlan(ctx context.Context, p *Plan) (superseded []string, err error)
+	GetPlan(ctx context.Context, orgID, id string) (*Plan, error)
+	// ListPlans returns a project's latest plans, newest first, in one
+	// environment or, with environmentID empty, in all of them.
+	ListPlans(ctx context.Context, orgID, projectID, environmentID string, limit int) ([]*Plan, error)
+	// FinishPlanning stores a planning result. It returns false, with no
+	// error, when the plan isn't planning any more.
+	FinishPlanning(ctx context.Context, p *Plan) (bool, error)
+	// FailPlanning finishes a planning plan as failed.
+	FailPlanning(ctx context.Context, orgID, id, reason string, now time.Time) error
+	// Decide moves a ready plan to status. It returns false, with no error,
+	// when the plan isn't ready any more.
+	Decide(ctx context.Context, orgID, id, status, by, note string, now time.Time) (bool, error)
+
+	ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error)
+	PutBinding(ctx context.Context, b *Binding) error
+	DeleteBinding(ctx context.Context, orgID, id string) error
+}
+
+// Digest returns a hex SHA-256 of v's JSON. Go's JSON is deterministic for
+// structs and sorts map keys, so equal values give equal digests.
+func Digest(v any) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("digest: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}

@@ -89,9 +89,10 @@ func start(t *testing.T, cfg config.Config) *running {
 	if err != nil {
 		t.Fatalf("build app: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
-	defer cancel()
-	if err := app.Start(ctx); err != nil {
+	// Started the way forge.App.Run starts it, on a context that outlives
+	// Start: Dispatch's durable worker runs on the context Start gets, so a
+	// timeout here would stop it the moment Start returned.
+	if err := app.Start(context.Background()); err != nil {
 		t.Fatalf("start app: %v", err)
 	}
 	return &running{t: t, srv: httptest.NewServer(app.Router().Handler()), app: app}
