@@ -33,7 +33,7 @@ Planning an environment pins a commit per source. Pass a scope to move only some
 POST /api/v1/projects/:id/plans  {"environment": "production", "scope": ["web"]}
 ```
 
-Every source outside the scope stays at the commit deployed to that environment, and its services get no actions at all.
+Every source outside the scope stays at the commit deployed to that environment, and its services stay exactly as they run now.
 
 ## What we have today
 
