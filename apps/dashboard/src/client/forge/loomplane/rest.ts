@@ -4,6 +4,75 @@ import * as types from './types';
 import { CODECS } from './codecs';
 
 export class RESTClient extends Client {
+  public readonly analyses = {
+    /**
+     * Analyze the project's repository: find its services, packages and the resources they need
+     */
+    create: async (id: string, body: types.StartAnalysisInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Analysis> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/analyses`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["StartAnalysisInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Analysis"],
+      };
+
+      return this.request<types.Analysis>(config);
+    },
+
+    /**
+     * One analysis
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Analysis> => {
+      let __path = `/api/v1/analyses/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Analysis"],
+      };
+
+      return this.request<types.Analysis>(config);
+    },
+
+    /**
+     * The application graph a succeeded analysis found, with the evidence for each finding
+     */
+    graph: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AnalysisGraph> => {
+      let __path = `/api/v1/analyses/${encodeURIComponent(String(id))}/graph`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AnalysisGraph"],
+      };
+
+      return this.request<types.AnalysisGraph>(config);
+    },
+
+    /**
+     * The project's latest analyses, newest first
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AnalysisList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/analyses`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AnalysisList"],
+      };
+
+      return this.request<types.AnalysisList>(config);
+    },
+
+  };
+
   public readonly environments = {
     /**
      * A project's environments
@@ -19,6 +88,75 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.EnvironmentList>(config);
+    },
+
+  };
+
+  public readonly github = {
+    /**
+     * Connect a GitHub App installation, from what GitHub's install redirect carried back
+     */
+    connect: async (body: types.ConnectGitHubInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitHubInstallation> => {
+      let __path = `/api/v1/github/installations`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ConnectGitHubInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitHubInstallation"],
+      };
+
+      return this.request<types.GitHubInstallation>(config);
+    },
+
+    /**
+     * Disconnect an installation. The App stays installed on GitHub.
+     */
+    disconnect: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/github/installations/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The repositories the organization's installations can read
+     */
+    repositories: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConnectedRepositoryList> => {
+      let __path = `/api/v1/github/repositories`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConnectedRepositoryList"],
+      };
+
+      return this.request<types.ConnectedRepositoryList>(config);
+    },
+
+    /**
+     * The organization's GitHub connection, and a link to connect another account
+     */
+    status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitHubStatus> => {
+      let __path = `/api/v1/github`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitHubStatus"],
+      };
+
+      return this.request<types.GitHubStatus>(config);
     },
 
   };

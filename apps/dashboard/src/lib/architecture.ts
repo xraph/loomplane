@@ -1,0 +1,177 @@
+// What a repository analysis found, made readable: labels for the API's
+// kinds, links from each piece of evidence to the line on GitHub, and the
+// packages and resources each service connects to.
+
+import type {
+  Analysis,
+  Evidence,
+  Graph,
+  Package,
+  Resource,
+} from "@/client/forge/loomplane/types"
+
+/** The statuses of an analysis that hasn't finished, in order. */
+export const steps = ["queued", "fetching", "analyzing"] as const
+
+/** isActive reports whether an analysis is still running. */
+export function isActive(status: string): boolean {
+  return (steps as readonly string[]).includes(status)
+}
+
+/** stepIndex is how far along a running analysis is, or -1. */
+export function stepIndex(status: string): number {
+  return (steps as readonly string[]).indexOf(status)
+}
+
+const stepLabels: Record<string, string> = {
+  queued: "Waiting for a worker",
+  fetching: "Downloading the commit",
+  analyzing: "Reading manifests and code",
+}
+
+/** stepLabel says what a running analysis is doing. */
+export function stepLabel(status: string): string {
+  return stepLabels[status] ?? status
+}
+
+const kindLabels: Record<string, string> = {
+  "http-service": "HTTP service",
+  "web-app": "Web app",
+  "static-site": "Static site",
+  worker: "Worker",
+  tool: "Command-line tool",
+  "native-app": "Native app",
+}
+
+/** kindLabel names a service kind for people. */
+export function kindLabel(kind: string): string {
+  return kindLabels[kind] ?? kind
+}
+
+const ecosystemLabels: Record<string, string> = {
+  go: "Go",
+  rust: "Rust",
+  node: "Node",
+  container: "Container",
+}
+
+/** ecosystemLabel names an ecosystem for people. */
+export function ecosystemLabel(ecosystem: string): string {
+  return ecosystemLabels[ecosystem] ?? ecosystem
+}
+
+const resourceLabels: Record<string, string> = {
+  postgres: "Postgres",
+  mysql: "MySQL",
+  redis: "Redis",
+  mongodb: "MongoDB",
+  rabbitmq: "RabbitMQ",
+  kafka: "Kafka",
+  nats: "NATS",
+  "object-storage": "Object storage",
+  search: "Search",
+  memcached: "Memcached",
+  clickhouse: "ClickHouse",
+  sqlserver: "SQL Server",
+}
+
+/** resourceLabel names a backing service for people. */
+export function resourceLabel(kind: string): string {
+  return resourceLabels[kind] ?? kind
+}
+
+/** shortSHA is the seven characters people recognize a commit by. */
+export function shortSHA(sha: string): string {
+  return sha.slice(0, 7)
+}
+
+/**
+ * evidenceURL links a finding to the line it was read from, at the exact
+ * commit analyzed, so the link still shows the same code later.
+ */
+export function evidenceURL(
+  repository: string,
+  sha: string,
+  ev: Evidence
+): string {
+  const path = ev.path.split("/").map(encodeURIComponent).join("/")
+  const line = ev.line ? `#L${ev.line}` : ""
+  return `https://github.com/${repository}/blob/${sha}/${path}${line}`
+}
+
+/** commitURL links to the commit an analysis read. */
+export function commitURL(repository: string, sha: string): string {
+  return `https://github.com/${repository}/commit/${sha}`
+}
+
+/** evidenceLabel is "path:line", or the path alone. */
+export function evidenceLabel(ev: Evidence): string {
+  return ev.line ? `${ev.path}:${ev.line}` : ev.path
+}
+
+export interface Need {
+  resource: Resource
+  confidence: string
+  /** via names the package the need comes through, when it isn't direct. */
+  via?: string
+}
+
+export interface Connections {
+  uses: Package[]
+  needs: Need[]
+}
+
+/**
+ * connections lists the packages a service builds with directly, and every
+ * resource it needs: its own, then those of the packages it uses, however
+ * deep, each marked with the package it comes through.
+ */
+export function connections(graph: Graph, serviceID: string): Connections {
+  const packages = new Map(graph.packages.map((p) => [p.id, p]))
+  const resources = new Map(graph.resources.map((r) => [r.id, r]))
+  const out: Connections = { uses: [], needs: [] }
+  const needed = new Set<string>()
+
+  const visit = (from: string, via?: string) => {
+    for (const e of graph.edges) {
+      if (e.from !== from || e.kind !== "needs") continue
+      const res = resources.get(e.to)
+      if (res && !needed.has(res.id)) {
+        needed.add(res.id)
+        out.needs.push(
+          via
+            ? { resource: res, confidence: e.confidence, via }
+            : { resource: res, confidence: e.confidence }
+        )
+      }
+    }
+  }
+
+  visit(serviceID)
+  const seen = new Set<string>()
+  const queue: string[] = []
+  for (const e of graph.edges) {
+    const pkg = packages.get(e.to)
+    if (e.from === serviceID && e.kind === "uses" && pkg) {
+      out.uses.push(pkg)
+      queue.push(pkg.id)
+    }
+  }
+  while (queue.length > 0) {
+    const id = queue.shift() as string
+    if (seen.has(id)) continue
+    seen.add(id)
+    visit(id, packages.get(id)?.name)
+    for (const e of graph.edges) {
+      if (e.from === id && e.kind === "uses" && packages.has(e.to)) {
+        queue.push(e.to)
+      }
+    }
+  }
+  return out
+}
+
+/** latestSucceeded is the newest analysis that produced a graph. */
+export function latestSucceeded(analyses: Analysis[]): Analysis | undefined {
+  return analyses.find((a) => a.status === "succeeded")
+}

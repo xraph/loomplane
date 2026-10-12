@@ -9,6 +9,61 @@ export enum ConnectionState {
   ERROR = 'error',
 }
 
+export interface Analysis {
+  commitSha: string;
+  createdAt: string;
+  createdBy: string;
+  error: string;
+  finishedAt?: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  ref: string;
+  repository: string;
+  startedAt?: string;
+  status: string;
+  summary: Summary;
+}
+
+export interface AnalysisGraph {
+  graph: Graph;
+  id: string;
+}
+
+export interface AnalysisList {
+  analyses: Analysis[];
+}
+
+export interface BuildSystem {
+  evidence: Evidence;
+  name: string;
+  path: string;
+}
+
+export interface Commands {
+  build?: string;
+  dev?: string;
+  start?: string;
+}
+
+export interface ConnectGitHubInputBody {
+  code: string;
+  installationId: number;
+  state: string;
+}
+
+export interface ConnectedRepository {
+  defaultBranch: string;
+  fullName: string;
+  installation: string;
+  private: boolean;
+  url: string;
+}
+
+export interface ConnectedRepositoryList {
+  repositories: ConnectedRepository[];
+}
+
 export interface CreateInvitationInputBody {
   email: string;
   role?: string;
@@ -26,6 +81,14 @@ export interface CreatedInvitation {
   invitation: OrgInvitation;
 }
 
+export interface Edge {
+  confidence: string;
+  evidence: Evidence[];
+  from: string;
+  kind: string;
+  to: string;
+}
+
 export interface Environment {
   createdAt: string;
   id: string;
@@ -40,10 +103,45 @@ export interface EnvironmentList {
   environments: Environment[];
 }
 
+export interface Evidence {
+  detail: string;
+  line?: number;
+  path: string;
+}
+
+export interface GitHubInstallation {
+  account: string;
+  accountType: string;
+  createdAt: string;
+  id: string;
+}
+
+export interface GitHubStatus {
+  configured: boolean;
+  installUrl?: string;
+  installations: GitHubInstallation[];
+}
+
+export interface Graph {
+  buildSystems: BuildSystem[];
+  edges: Edge[];
+  notes: Note[];
+  packages: Package[];
+  resources: Resource[];
+  services: Service[];
+  version: number;
+  workspaces: Workspace[];
+}
+
 export interface InfrastructureStatus {
   engine: string;
   providers: ProviderStatus[];
   store: string;
+}
+
+export interface Note {
+  message: string;
+  path?: string;
 }
 
 export interface OrgInvitation {
@@ -71,6 +169,15 @@ export interface OrgMember {
 
 export interface OrgMemberList {
   members: OrgMember[];
+}
+
+export interface Package {
+  ecosystem: string;
+  evidence: Evidence[];
+  id: string;
+  name: string;
+  path: string;
+  runtime?: string;
 }
 
 export interface Project {
@@ -103,16 +210,62 @@ export interface PublicConfig {
   publishableKey: string;
 }
 
+export interface Resource {
+  confidence: string;
+  evidence: Evidence[];
+  id: string;
+  kind: string;
+  needsConfirmation: boolean;
+}
+
+export interface Service {
+  commands: Commands;
+  confidence: string;
+  deployable: boolean;
+  ecosystem: string;
+  entrypoint: string;
+  evidence: Evidence[];
+  framework?: string;
+  id: string;
+  image?: string;
+  kind: string;
+  name: string;
+  path: string;
+  ports?: number[];
+  runtime?: string;
+  unit?: string;
+}
+
 export interface Session {
   orgId: string;
   permissions: string[];
   userId: string;
 }
 
+export interface StartAnalysisInputBody {
+  ref?: string;
+}
+
+export interface Summary {
+  deployable: number;
+  needsConfirmation: number;
+  packages: number;
+  resources: number;
+  services: number;
+}
+
 export interface UpdateProjectInputBody {
   description?: string;
   name?: string;
   repositoryUrl?: string;
+}
+
+export interface Workspace {
+  ecosystem: string;
+  evidence: Evidence[];
+  members: string[];
+  path: string;
+  tool: string;
 }
 
 export interface AuthConfig {

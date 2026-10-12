@@ -9,6 +9,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Environment, Project } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
+import { Architecture } from "@/components/architecture"
 import { SiteHeader } from "@/components/site-header"
 import { isReady, StatusBadge } from "@/components/status-badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -131,6 +132,8 @@ function Loaded({
         </CardContent>
       </Card>
 
+      <Architecture project={project} />
+
       <Card>
         <CardHeader>
           <CardTitle>Details</CardTitle>
@@ -144,7 +147,7 @@ function Loaded({
                 </code>
               ) : (
                 <span className="text-muted-foreground">
-                  Not connected. Repository import arrives with discovery.
+                  None yet. Add one under Architecture.
                 </span>
               )}
             </Fact>
@@ -204,7 +207,7 @@ function DeleteProject({ project }: { project: Project }) {
 
   const confirm = async () => {
     try {
-      // The delete invalidates project and environment lists for us.
+      // The delete invalidates the project list for us.
       await remove.mutateAsync({ path: { id: project.id } })
       toast.success(`Deleted ${project.name}`)
       void navigate({ to: "/", replace: true })

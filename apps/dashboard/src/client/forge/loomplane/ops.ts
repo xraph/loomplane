@@ -78,6 +78,57 @@ export const securitySchemes = {
 } as const;
 
 export const ops = {
+  'analyses.get': {
+    method: 'GET',
+    path: '/api/v1/analyses/{id}',
+    entity: 'Analysis',
+    rootType: 'Analysis',
+    provides: ['Analysis:{id}'],
+    invalidates: [],
+    responseCodec: CODECS['Analysis'],
+  },
+  'analyses.graph': {
+    method: 'GET',
+    path: '/api/v1/analyses/{id}/graph',
+    entity: 'AnalysisGraph',
+    rootType: 'AnalysisGraph',
+    provides: ['AnalysisGraph:{id}'],
+    invalidates: [],
+    responseCodec: CODECS['AnalysisGraph'],
+  },
+  'github.status': {
+    method: 'GET',
+    path: '/api/v1/github',
+    entity: 'GitHubInstallation',
+    rootType: 'GitHubStatus',
+    provides: ['GitHubInstallation:{id}', 'GitHubInstallation[]'],
+    invalidates: [],
+    responseCodec: CODECS['GitHubStatus'],
+  },
+  'github.connect': {
+    method: 'POST',
+    path: '/api/v1/github/installations',
+    entity: 'GitHubInstallation',
+    rootType: 'GitHubInstallation',
+    provides: ['GitHubInstallation:{id}'],
+    invalidates: ['GitHubInstallation[]'],
+    bodyCodec: CODECS['ConnectGitHubInputBody'],
+    responseCodec: CODECS['GitHubInstallation'],
+  },
+  'github.disconnect': {
+    method: 'DELETE',
+    path: '/api/v1/github/installations/{id}',
+    entity: 'GitHubInstallation',
+    provides: [],
+    invalidates: ['GitHubInstallation[]'],
+  },
+  'github.repositories': {
+    method: 'GET',
+    path: '/api/v1/github/repositories',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['ConnectedRepositoryList'],
+  },
   'infrastructure.get': {
     method: 'GET',
     path: '/api/v1/infrastructure',
@@ -156,6 +207,25 @@ export const ops = {
     provides: [],
     invalidates: ['Project[]'],
   },
+  'analyses.list': {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/analyses',
+    entity: 'Analysis',
+    rootType: 'AnalysisList',
+    provides: ['Analysis:{id}', 'Analysis[]'],
+    invalidates: [],
+    responseCodec: CODECS['AnalysisList'],
+  },
+  'analyses.create': {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/analyses',
+    entity: 'Analysis',
+    rootType: 'Analysis',
+    provides: ['Analysis:{id}'],
+    invalidates: ['Analysis[]'],
+    bodyCodec: CODECS['StartAnalysisInputBody'],
+    responseCodec: CODECS['Analysis'],
+  },
   'environments.list': {
     method: 'GET',
     path: '/api/v1/projects/{id}/environments',
@@ -182,8 +252,13 @@ export const ops = {
 } as const satisfies Record<string, OperationMeta>;
 
 export const entities = {
+  'Analysis': { idField: 'id' },
+  'AnalysisGraph': { idField: 'id' },
+  'AnalysisList': { fields: { 'analyses': 'Analysis' } },
   'Environment': { idField: 'id' },
   'EnvironmentList': { fields: { 'environments': 'Environment' } },
+  'GitHubInstallation': { idField: 'id' },
+  'GitHubStatus': { fields: { 'installations': 'GitHubInstallation' } },
   'OrgInvitation': { idField: 'id' },
   'OrgInvitationList': { fields: { 'invitations': 'OrgInvitation' } },
   'OrgMember': { idField: 'id' },

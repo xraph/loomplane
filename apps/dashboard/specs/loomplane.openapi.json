@@ -7,6 +7,173 @@
   },
   "servers": [],
   "paths": {
+    "/api/v1/analyses/{id}": {
+      "get": {
+        "tags": [
+          "Analyses"
+        ],
+        "summary": "One analysis",
+        "operationId": "analyses.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analysis",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Analysis"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analyses/{id}/graph": {
+      "get": {
+        "tags": [
+          "Analyses"
+        ],
+        "summary": "The application graph a succeeded analysis found, with the evidence for each finding",
+        "operationId": "analyses.graph",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The graph",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisGraph"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github": {
+      "get": {
+        "tags": [
+          "GitHub"
+        ],
+        "summary": "The organization's GitHub connection, and a link to connect another account",
+        "operationId": "github.status",
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/installations": {
+      "post": {
+        "tags": [
+          "GitHub"
+        ],
+        "summary": "Connect a GitHub App installation, from what GitHub's install redirect carried back",
+        "operationId": "github.connect",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectGitHubInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connected installation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubInstallation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/installations/{id}": {
+      "delete": {
+        "operationId": "github.disconnect",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Disconnect an installation. The App stays installed on GitHub.",
+        "tags": [
+          "GitHub"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "GitHubInstallation"
+        }
+      }
+    },
+    "/api/v1/github/repositories": {
+      "get": {
+        "tags": [
+          "GitHub"
+        ],
+        "summary": "The repositories the organization's installations can read",
+        "operationId": "github.repositories",
+        "responses": {
+          "200": {
+            "description": "Repositories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectedRepositoryList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/infrastructure": {
       "get": {
         "tags": [
@@ -258,6 +425,79 @@
         }
       }
     },
+    "/api/v1/projects/{id}/analyses": {
+      "get": {
+        "tags": [
+          "Analyses"
+        ],
+        "summary": "The project's latest analyses, newest first",
+        "operationId": "analyses.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Analyses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Analyses"
+        ],
+        "summary": "Analyze the project's repository: find its services, packages and the resources they need",
+        "operationId": "analyses.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartAnalysisInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The queued analysis",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Analysis"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/environments": {
       "get": {
         "tags": [
@@ -335,6 +575,189 @@
   },
   "components": {
     "schemas": {
+      "Analysis": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "status",
+          "repository",
+          "ref",
+          "commit_sha",
+          "error",
+          "summary",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        }
+      },
+      "AnalysisGraph": {
+        "type": "object",
+        "required": [
+          "id",
+          "graph"
+        ],
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/Graph"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          }
+        }
+      },
+      "AnalysisList": {
+        "properties": {
+          "analyses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Analysis"
+            }
+          }
+        },
+        "required": [
+          "analyses"
+        ],
+        "type": "object",
+        "x-forge-envelope": "analyses"
+      },
+      "BuildSystem": {
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "evidence"
+        ],
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/Evidence"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "Commands": {
+        "type": "object",
+        "properties": {
+          "build": {
+            "type": "string"
+          },
+          "dev": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          }
+        }
+      },
+      "ConnectGitHubInputBody": {
+        "type": "object",
+        "required": [
+          "installation_id",
+          "code",
+          "state"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "installation_id": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "ConnectedRepository": {
+        "type": "object",
+        "required": [
+          "full_name",
+          "private",
+          "default_branch",
+          "url",
+          "installation"
+        ],
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "full_name": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "string"
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "ConnectedRepositoryList": {
+        "type": "object",
+        "required": [
+          "repositories"
+        ],
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectedRepository"
+            }
+          }
+        }
+      },
       "CreateInvitationInputBody": {
         "type": "object",
         "required": [
@@ -381,6 +804,36 @@
           },
           "invitation": {
             "$ref": "#/components/schemas/OrgInvitation"
+          }
+        }
+      },
+      "Edge": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "kind",
+          "confidence",
+          "evidence"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "from": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
           }
         }
       },
@@ -437,6 +890,130 @@
         "type": "object",
         "x-forge-envelope": "environments"
       },
+      "Evidence": {
+        "type": "object",
+        "required": [
+          "path",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "GitHubInstallation": {
+        "type": "object",
+        "required": [
+          "id",
+          "account",
+          "account_type",
+          "created_at"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "account_type": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          }
+        }
+      },
+      "GitHubStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "installations"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "install_url": {
+            "type": "string"
+          },
+          "installations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GitHubInstallation"
+            }
+          }
+        }
+      },
+      "Graph": {
+        "type": "object",
+        "required": [
+          "version",
+          "services",
+          "packages",
+          "resources",
+          "edges",
+          "workspaces",
+          "build_systems",
+          "notes"
+        ],
+        "properties": {
+          "build_systems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BuildSystem"
+            }
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Edge"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Note"
+            }
+          },
+          "packages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Package"
+            }
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Resource"
+            }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Service"
+            }
+          },
+          "version": {
+            "type": "integer"
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Workspace"
+            }
+          }
+        }
+      },
       "InfrastructureStatus": {
         "type": "object",
         "required": [
@@ -455,6 +1032,20 @@
             }
           },
           "store": {
+            "type": "string"
+          }
+        }
+      },
+      "Note": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "path": {
             "type": "string"
           }
         }
@@ -559,6 +1150,39 @@
         ],
         "type": "object",
         "x-forge-envelope": "members"
+      },
+      "Package": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "ecosystem",
+          "path",
+          "evidence"
+        ],
+        "properties": {
+          "ecosystem": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "runtime": {
+            "type": "string"
+          }
+        }
       },
       "Project": {
         "type": "object",
@@ -670,6 +1294,104 @@
           }
         }
       },
+      "Resource": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "confidence",
+          "needs_confirmation",
+          "evidence"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "needs_confirmation": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Service": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "deployable",
+          "ecosystem",
+          "path",
+          "entrypoint",
+          "commands",
+          "confidence",
+          "evidence"
+        ],
+        "properties": {
+          "commands": {
+            "$ref": "#/components/schemas/Commands"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "deployable": {
+            "type": "boolean"
+          },
+          "ecosystem": {
+            "type": "string"
+          },
+          "entrypoint": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "framework": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "runtime": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
       "Session": {
         "type": "object",
         "required": [
@@ -692,6 +1414,41 @@
           }
         }
       },
+      "StartAnalysisInputBody": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          }
+        }
+      },
+      "Summary": {
+        "type": "object",
+        "required": [
+          "services",
+          "deployable",
+          "packages",
+          "resources",
+          "needs_confirmation"
+        ],
+        "properties": {
+          "deployable": {
+            "type": "integer"
+          },
+          "needs_confirmation": {
+            "type": "integer"
+          },
+          "packages": {
+            "type": "integer"
+          },
+          "resources": {
+            "type": "integer"
+          },
+          "services": {
+            "type": "integer"
+          }
+        }
+      },
       "UpdateProjectInputBody": {
         "type": "object",
         "properties": {
@@ -702,6 +1459,39 @@
             "type": "string"
           },
           "repository_url": {
+            "type": "string"
+          }
+        }
+      },
+      "Workspace": {
+        "type": "object",
+        "required": [
+          "ecosystem",
+          "tool",
+          "path",
+          "members",
+          "evidence"
+        ],
+        "properties": {
+          "ecosystem": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "path": {
+            "type": "string"
+          },
+          "tool": {
             "type": "string"
           }
         }

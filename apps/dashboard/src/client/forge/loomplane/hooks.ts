@@ -10,8 +10,14 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { EnvironmentList, InfrastructureStatus, OrgInvitationList, OrgMemberList, Project, ProjectList, PublicConfig, Session } from './types';
+import type { Analysis, AnalysisGraph, AnalysisList, ConnectedRepositoryList, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, OrgInvitationList, OrgMemberList, Project, ProjectList, PublicConfig, Session } from './types';
 
+export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
+export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
+export const useGithubStatus = query<GitHubStatus>(ops['github.status']);
+export const useGithubConnect = mutation<GitHubInstallation, GitHubInstallation>(ops['github.connect']);
+export const useGithubDisconnect = mutation(ops['github.disconnect']);
+export const useGithubRepositories = query<ConnectedRepositoryList>(ops['github.repositories']);
 export const useInfrastructureGet = query<InfrastructureStatus>(ops['infrastructure.get']);
 export const useInvitationsList = query<OrgInvitationList>(ops['invitations.list']);
 export const useInvitationsCreate = mutation(ops['invitations.create']);
@@ -21,6 +27,8 @@ export const useProjectsCreate = mutation<Project, Project>(ops['projects.create
 export const useProjectsGet = query<Project>(ops['projects.get']);
 export const useProjectsUpdate = mutation<Project, Project>(ops['projects.update']);
 export const useProjectsDelete = mutation(ops['projects.delete']);
+export const useAnalysesList = query<AnalysisList>(ops['analyses.list']);
+export const useAnalysesCreate = mutation<Analysis, Analysis>(ops['analyses.create']);
 export const useEnvironmentsList = query<EnvironmentList>(ops['environments.list']);
 export const usePublicConfigGet = query<PublicConfig>(ops['publicConfig.get']);
 export const useSessionGet = query<Session>(ops['session.get']);

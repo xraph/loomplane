@@ -14,8 +14,10 @@ import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
 import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
+import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
+import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -42,6 +44,11 @@ const SignUpRoute = SignUpRouteImport.update({
   path: "/sign-up",
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
+  id: "/integrations/",
+  path: "/integrations/",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
   id: "/invitations/accept",
   path: "/invitations/accept",
@@ -50,6 +57,11 @@ const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
 const ProjectsIdRoute = ProjectsIdRouteImport.update({
   id: "/projects/$id",
   path: "/projects/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IntegrationsGithubSetupRoute = IntegrationsGithubSetupRouteImport.update({
+  id: "/integrations/github/setup",
+  path: "/integrations/github/setup",
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -61,6 +73,8 @@ export interface FileRoutesByFullPath {
   "/sign-up": typeof SignUpRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/integrations/": typeof IntegrationsIndexRoute
+  "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
@@ -70,6 +84,8 @@ export interface FileRoutesByTo {
   "/sign-up": typeof SignUpRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/integrations": typeof IntegrationsIndexRoute
+  "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -80,6 +96,8 @@ export interface FileRoutesById {
   "/sign-up": typeof SignUpRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/integrations/": typeof IntegrationsIndexRoute
+  "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +109,8 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/integrations/"
+    | "/integrations/github/setup"
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
@@ -100,6 +120,8 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/integrations"
+    | "/integrations/github/setup"
   id:
     | "__root__"
     | "/"
@@ -109,6 +131,8 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/integrations/"
+    | "/integrations/github/setup"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -119,6 +143,8 @@ export interface RootRouteChildren {
   SignUpRoute: typeof SignUpRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
+  IntegrationsIndexRoute: typeof IntegrationsIndexRoute
+  IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
 }
 
 declare module "@tanstack/react-router" {
@@ -158,6 +184,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SignUpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/integrations/": {
+      id: "/integrations/"
+      path: "/integrations"
+      fullPath: "/integrations/"
+      preLoaderRoute: typeof IntegrationsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/invitations/accept": {
       id: "/invitations/accept"
       path: "/invitations/accept"
@@ -172,6 +205,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ProjectsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/integrations/github/setup": {
+      id: "/integrations/github/setup"
+      path: "/integrations/github/setup"
+      fullPath: "/integrations/github/setup"
+      preLoaderRoute: typeof IntegrationsGithubSetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -183,6 +223,8 @@ const rootRouteChildren: RootRouteChildren = {
   SignUpRoute: SignUpRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   ProjectsIdRoute: ProjectsIdRoute,
+  IntegrationsIndexRoute: IntegrationsIndexRoute,
+  IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

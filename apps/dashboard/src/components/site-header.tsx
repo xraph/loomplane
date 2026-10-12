@@ -13,7 +13,10 @@ import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Link } from "@/lib/router"
 
-export type Crumb = { label: string; to?: "/" | "/infrastructure" | "/members" }
+export type Crumb = {
+  label: string
+  to?: "/" | "/infrastructure" | "/members" | "/integrations"
+}
 
 /** SiteHeader is the bar above every page: the sidebar toggle and where you are. */
 export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {

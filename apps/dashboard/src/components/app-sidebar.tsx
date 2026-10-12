@@ -1,5 +1,5 @@
 import { OrgSwitcher, UserButton } from "@authsome/ui-components"
-import { FolderGit2Icon, ServerIcon, UsersIcon } from "lucide-react"
+import { FolderGit2Icon, PlugIcon, ServerIcon, UsersIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
@@ -37,6 +37,12 @@ const nav = [
     label: "Members",
     icon: UsersIcon,
     active: (p: string) => p.startsWith("/members"),
+  },
+  {
+    to: "/integrations",
+    label: "Integrations",
+    icon: PlugIcon,
+    active: (p: string) => p.startsWith("/integrations"),
   },
 ] as const
 
