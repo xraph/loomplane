@@ -221,7 +221,7 @@ type DeployedSource struct {
 // repositories in an environment, named for people: a scope picker locks
 // on every repository without one, since a plan can't hold it.
 type DeployedRepository struct {
-	SourceID   string    `json:"source_id" forge:"id"`
+	SourceID   string    `json:"source_id"`
 	Alias      string    `json:"alias"`
 	Repository string    `json:"repository"`
 	CommitSHA  string    `json:"commit_sha"`

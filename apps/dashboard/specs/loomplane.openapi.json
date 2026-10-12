@@ -2589,8 +2589,7 @@
             "type": "string"
           },
           "source_id": {
-            "type": "string",
-            "x-forge-id": true
+            "type": "string"
           }
         }
       },
