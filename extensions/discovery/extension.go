@@ -33,6 +33,7 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/telemetry"
 )
 
 // Name is the API extension's name.
@@ -248,6 +249,7 @@ func (w *Worker) Register(fapp forge.App) error {
 	}
 	runner := discovery.NewRunner(discovery.NewPgStore(pg), repositories.NewGitHub(w.cfg.GitHub.APIURL),
 		conns, w.cfg.Analysis.WorkDir, orchestration.AnalysisRetries+1)
+	runner.Telemetry = telemetry.New(fapp.Metrics())
 	engine.Register(eng, orchestration.AnalysisJob(loggedRunner{runner: runner, log: w.Logger()}))
 	return nil
 }

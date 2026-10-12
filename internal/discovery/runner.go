@@ -10,6 +10,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/repositories"
+	"github.com/xraph/loomplane/internal/telemetry"
 )
 
 // Fetcher reads a repository at one commit. *repositories.GitHub is the
@@ -37,6 +38,8 @@ type Runner struct {
 	// transient failure becomes its result.
 	maxAttempts int
 	now         func() time.Time
+	// Telemetry counts analyses. It may be nil.
+	Telemetry *telemetry.Recorder
 }
 
 // NewRunner returns a Runner. tokens may be nil, for public repositories
@@ -63,14 +66,17 @@ func (r *Runner) Run(ctx context.Context, orgID, analysisID string) error {
 	if err != nil {
 		return err
 	}
+	started := r.now()
 	err = r.analyze(ctx, a)
 	if err == nil {
+		r.Telemetry.AnalysisFinished(StatusSucceeded, r.now().Sub(started))
 		return nil
 	}
 	if permanent(err) || attempt >= r.maxAttempts {
 		if ferr := r.store.Fail(context.WithoutCancel(ctx), orgID, analysisID, reason(err), r.now().UTC()); ferr != nil {
 			return errors.Join(err, ferr)
 		}
+		r.Telemetry.AnalysisFinished(StatusFailed, r.now().Sub(started))
 		return nil
 	}
 	return err

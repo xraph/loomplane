@@ -13,6 +13,7 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/telemetry"
 )
 
 const maxName = 60
@@ -41,6 +42,8 @@ type Service struct {
 	audit    Auditor
 	now      func() time.Time
 	warn     func(msg string, err error)
+	// Telemetry counts credential checks. It may be nil.
+	Telemetry *telemetry.Recorder
 }
 
 // NewService returns a Service. checkers maps each cloud to its checker;
@@ -81,17 +84,23 @@ func (s *Service) checker(cloud string) (Checker, error) {
 // check asks the cloud about a credential. A credential the cloud refused
 // is ErrInvalid, with the cloud's reason; a cloud it couldn't reach is
 // ErrUnavailable.
-func (s *Service) check(ctx context.Context, c Checker, credential []byte, settings map[string]string) (Check, error) {
+func (s *Service) check(ctx context.Context, cloud string, c Checker, credential []byte, settings map[string]string) (Check, error) {
 	if _, err := c.Parse(credential, settings); err != nil {
 		return Check{}, err
 	}
 	res, err := c.Check(ctx, credential, settings)
 	switch {
+	case err == nil && len(res.Missing) > 0:
+		s.Telemetry.ConnectionChecked(cloud, StatusIncomplete)
+		return res, nil
 	case err == nil:
+		s.Telemetry.ConnectionChecked(cloud, StatusReady)
 		return res, nil
 	case rejected(err):
+		s.Telemetry.ConnectionChecked(cloud, "rejected")
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	default:
+		s.Telemetry.ConnectionChecked(cloud, "unavailable")
 		return Check{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 }
@@ -122,7 +131,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 		return nil, fmt.Errorf("%w: give it a name of at most %d characters", ErrInvalid, maxName)
 	}
 	cred := []byte(strings.TrimSpace(in.Credential))
-	res, err := s.check(ctx, checker, cred, in.Settings)
+	res, err := s.check(ctx, cloud, checker, cred, in.Settings)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +194,7 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		return nil, err
 	}
 	now := s.now().UTC()
-	res, err := s.check(ctx, checker, cred, c.Details)
+	res, err := s.check(ctx, c.Cloud, checker, cred, c.Details)
 	switch {
 	case errors.Is(err, ErrInvalid):
 		c.Status, c.Message, c.CheckedAt, c.UpdatedAt = StatusFailed, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "), &now, now
@@ -221,7 +230,7 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 		settings = c.Details
 	}
 	cred := []byte(strings.TrimSpace(in.Credential))
-	res, err := s.check(ctx, checker, cred, settings)
+	res, err := s.check(ctx, c.Cloud, checker, cred, settings)
 	if err != nil {
 		return nil, err
 	}

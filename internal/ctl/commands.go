@@ -16,6 +16,7 @@ var jsonFlag = cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
 
 func (a *App) commands() []cli.Command {
 	return []cli.Command{
+		a.mcpCommand(),
 		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,
 			cli.WithUsage("loomctl login --url https://loomplane.example.com --key lp_live_..."),
 			cli.WithFlags(

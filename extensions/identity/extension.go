@@ -53,6 +53,7 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/httpx"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/telemetry"
 )
 
 // Name is the extension's name, for other extensions' Dependencies.
@@ -78,14 +79,15 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg config.Config
 
-	store  *authpg.Store
-	orgs   *organization.Plugin
-	warden *warden.Engine
-	authz  *security.Authorizer
-	audit  *chronicle.Chronicle
-	engine *authsome.Engine
-	keys   *apikeys.Service
-	router forge.Router
+	store     *authpg.Store
+	orgs      *organization.Plugin
+	warden    *warden.Engine
+	authz     *security.Authorizer
+	audit     *chronicle.Chronicle
+	engine    *authsome.Engine
+	keys      *apikeys.Service
+	telemetry *telemetry.Recorder
+	router    forge.Router
 }
 
 // New returns the identity extension.
@@ -127,6 +129,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("keysmith: %w", err)
 	}
+	e.telemetry = telemetry.New(fapp.Metrics())
 	e.keys = apikeys.New(smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
 	if e.engine, err = e.buildEngine(); err != nil {
 		return err

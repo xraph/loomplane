@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -150,6 +151,7 @@ type Runner struct {
 	providers   *provider.Registry
 	executors   map[string]Executor
 	resources   ResourceSecrets
+	telemetry   *telemetry.Recorder
 	http        *http.Client
 	now         func() time.Time
 	// verifyWait is how long a deployed service has to answer.
@@ -169,13 +171,15 @@ type RunnerDeps struct {
 	// Resources keeps provisioned resources' credentials. It may be nil
 	// when nothing is provisioned.
 	Resources ResourceSecrets
+	// Telemetry records how deployments go. It may be nil.
+	Telemetry *telemetry.Recorder
 }
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
 		store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -369,6 +373,7 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	}
 	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress); err != nil {
 		finished := r.now().UTC()
+		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))
 		step.Status, step.Message, step.FinishedAt = StepFailed, err.Error(), &finished
 		if uerr := r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step); uerr != nil {
 			err = errors.Join(err, uerr)
@@ -376,6 +381,7 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		return err
 	}
 	finished := r.now().UTC()
+	r.telemetry.StepFinished(action.Provider, string(action.Op), StepSucceeded, finished.Sub(now))
 	step.Status, step.FinishedAt = StepSucceeded, &finished
 	step.Message = doneMessage(step)
 	return r.store.UpdateStep(ctx, orgID, d.ID, *step)
@@ -640,6 +646,7 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if err := r.store.Finish(ctx, orgID, d.ID, status, reason, now); err != nil {
 		return err
 	}
+	r.telemetry.DeploymentFinished(status, now.Sub(d.StartedAt))
 	// A deployment that already failed stays failed, so a late success
 	// for it records nothing.
 	if reason != "" || d.Status == StatusFailed {

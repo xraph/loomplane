@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/ctrlplane/app"
@@ -52,6 +53,7 @@ import (
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
 
@@ -144,6 +146,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	pg := pgdriver.Unwrap(db)
 	log := e.Logger()
 	catalog := providers.Registry()
+	metrics := telemetry.New(fapp.Metrics())
 	auditor := projectsext.NewAuditor(audit, e.cfg.Identity.AppID, log)
 	prj := projects.NewPgStore(pg)
 	planStore := planning.NewPgStore(pg)
@@ -151,8 +154,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.plans = planning.NewService(planning.Deps{
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
-		Window: e.cfg.Planning.ApprovalWindow,
-		Warn:   func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
+		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
@@ -202,11 +205,12 @@ func (e *Extension) Register(fapp forge.App) error {
 		Providers: catalog,
 		Executors: executors,
 		Resources: resourceSecrets,
+		Telemetry: metrics,
 	})
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
-		Store: planStore, Credentials: clouds, Executors: executors,
+		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}))
 	return e.routes(fapp.Router(), guard)
@@ -274,4 +278,25 @@ func fail(err error) error {
 		return forge.NewHTTPError(status, err.Error())
 	}
 	return err
+}
+
+// pluginTimeout bounds asking each provider plugin whether it's there.
+const pluginTimeout = 3 * time.Second
+
+// Health reports a provider plugin that doesn't answer: deployments to
+// it would fail until it's back.
+func (e *Extension) Health(ctx context.Context) error {
+	plugs, err := e.plugins.Plugins()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, p := range plugs {
+		pctx, cancel := context.WithTimeout(ctx, pluginTimeout)
+		if _, derr := p.Describe(pctx); derr != nil {
+			errs = append(errs, fmt.Errorf("provider plugin %s doesn't answer: %w", p.Name(), derr))
+		}
+		cancel()
+	}
+	return errors.Join(errs...)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/telemetry"
 )
 
 // Name is the extension's name.
@@ -110,6 +111,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
+	e.svc.Telemetry = telemetry.New(fapp.Metrics())
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide the connection service: %w", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/telemetry"
 )
 
 // driftPage is how many bindings a check reads at a time.
@@ -28,7 +29,9 @@ type DriftChecker struct {
 	Executors   map[string]Executor
 	// Warn logs a binding that couldn't be checked. It may be nil.
 	Warn func(msg string, err error)
-	now  func() time.Time
+	// Telemetry counts what drifted. It may be nil.
+	Telemetry *telemetry.Recorder
+	now       func() time.Time
 }
 
 // DriftReport counts what a check did.
@@ -64,6 +67,7 @@ func (c *DriftChecker) Check(ctx context.Context) (DriftReport, error) {
 			rep.Checked++
 			if drift != "" {
 				rep.Drifted++
+				c.Telemetry.Drift(b.Provider, drift)
 			}
 			if err := c.Store.RecordDrift(ctx, b.OrgID, b.ID, drift, msg, now().UTC()); err != nil {
 				return rep, err

@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -88,6 +89,7 @@ type Service struct {
 	window    time.Duration
 	now       func() time.Time
 	warn      func(msg string, err error)
+	telemetry *telemetry.Recorder
 }
 
 // Deps are what a Service needs.
@@ -108,6 +110,8 @@ type Deps struct {
 	Window time.Duration
 	// Warn logs a failure that doesn't fail the request. It may be nil.
 	Warn func(msg string, err error)
+	// Telemetry counts plans and decisions. It may be nil.
+	Telemetry *telemetry.Recorder
 }
 
 // NewService returns a Service.
@@ -119,7 +123,7 @@ func NewService(d Deps) *Service {
 	return &Service{
 		store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
-		window: d.Window, now: time.Now, warn: warn,
+		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry,
 	}
 }
 
@@ -565,6 +569,7 @@ func (s *Service) Plan(ctx context.Context, orgID, planID string) (string, error
 		if ferr := s.store.FailPlanning(ctx, orgID, planID, err.Error(), s.now().UTC()); ferr != nil {
 			return "", ferr
 		}
+		s.telemetry.Planned(StatusFailed)
 		return StatusFailed, nil
 	}
 	if err != nil {
@@ -587,6 +592,7 @@ func (s *Service) Plan(ctx context.Context, orgID, planID string) (string, error
 	if !ok {
 		return s.status(ctx, orgID, planID)
 	}
+	s.telemetry.Planned(plan.Status)
 	return plan.Status, nil
 }
 
@@ -645,6 +651,7 @@ func (s *Service) settleAs(ctx context.Context, plan *Plan, status, by, note str
 	if !ok {
 		return s.status(ctx, plan.OrgID, plan.ID)
 	}
+	s.telemetry.Decided(status)
 	return status, nil
 }
 
