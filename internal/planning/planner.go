@@ -423,6 +423,9 @@ func (p *planner) keep(name, alias string, b *Binding) {
 	if alias == "" {
 		reason = "Held: nothing records which repository it's from, and this plan holds some back."
 	}
+	if from := p.deployedRepo(b); from != "" && alias != "" && from != alias {
+		reason = "Held: " + movedIntoHeld(name, from, alias)
+	}
 	a := p.kept(b, reason)
 	p.held[name] = alias
 	p.services[name] = a
@@ -489,9 +492,11 @@ func heldLabel(name, alias string) string {
 // turn, as far down as the links go.
 func (p *planner) retain() {
 	var queue []holder
+	roots := map[string]bool{}
 	for _, name := range p.in.Manifest.ServiceNames() {
 		if alias, held := p.held[name]; held {
 			queue = append(queue, holder{root: heldLabel(name, alias), env: p.services[name].Service.Env})
+			roots[actionID(ServiceSubject, name)] = true
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(p.bindings)) {
@@ -505,20 +510,22 @@ func (p *planner) retain() {
 		}
 		if alias, held := p.heldRepo(cfg); held {
 			queue = append(queue, holder{root: heldLabel(b.Name, alias), env: cfg.Env})
+			roots[id] = true
 		}
 	}
 	// Every user of what's kept is collected before anything is planned,
 	// so each warning names them all. A service is followed once, since
-	// links between services kept this way can go round.
+	// links between services kept this way can go round, and a root has
+	// been followed already: it's kept, and it's nobody's to retain.
 	users := map[string][]string{}
-	followed := map[string]bool{}
+	followed := maps.Clone(roots)
 	for len(queue) > 0 {
 		h := queue[0]
 		queue = queue[1:]
 		for _, e := range h.env {
 			id := actionID(e.Subject, e.From)
 			b := p.bindings[id]
-			if p.planned(e.Subject, e.From) != nil || b == nil {
+			if p.planned(e.Subject, e.From) != nil || b == nil || roots[id] {
 				continue
 			}
 			if who := h.String(); !slices.Contains(users[id], who) {
@@ -536,7 +543,12 @@ func (p *planner) retain() {
 	}
 	for _, id := range slices.Sorted(maps.Keys(users)) {
 		b, who := p.bindings[id], strings.Join(users[id], " and ")
-		a := p.kept(b, fmt.Sprintf("Kept: %s, which this plan holds back, still uses it.", who))
+		// Several held services use it, so the verb agrees with them all.
+		uses := "uses"
+		if len(users[id]) > 1 {
+			uses = "use"
+		}
+		a := p.kept(b, fmt.Sprintf("Kept: %s, which this plan holds back, still %s it.", who, uses))
 		a.Step = 1
 		if b.Subject == ServiceSubject {
 			a.Step = 2
@@ -550,9 +562,9 @@ func (p *planner) retain() {
 		var msg string
 		switch wanted, on := p.wanted(b); {
 		case !wanted:
-			msg = fmt.Sprintf("%s is gone from the manifest, but %s, which this plan holds back, still uses it, so it keeps running.", b.Name, who)
+			msg = fmt.Sprintf("%s is gone from the manifest, but %s, which this plan holds back, still %s it, so it keeps running.", b.Name, who, uses)
 		case !on:
-			msg = fmt.Sprintf("%s is off in %s, but %s, which this plan holds back, still uses it, so it keeps running.", b.Name, p.in.Environment, who)
+			msg = fmt.Sprintf("%s is off in %s, but %s, which this plan holds back, still %s it, so it keeps running.", b.Name, p.in.Environment, who, uses)
 		default:
 			continue // it couldn't be planned, and a problem says why
 		}
@@ -624,6 +636,11 @@ func (p *planner) waits(name string) {
 		return
 	}
 	msg := fmt.Sprintf("%s is in %s, which this plan holds back, so its manifest changes wait for a plan that moves %s.", name, alias, alias)
+	if from := p.deployedRepo(p.bindings[actionID(ServiceSubject, name)]); from != "" && alias != "" && from != alias {
+		// It was deployed from a repository this plan moves, and the
+		// manifest now puts it in one that the plan holds back.
+		msg = movedIntoHeld(name, from, alias)
+	}
 	if alias == "" {
 		msg = fmt.Sprintf("Nothing records which repository %s was deployed from, and this plan holds some back, so its manifest changes wait for a plan that moves every repository.", name)
 	}
@@ -1181,6 +1198,25 @@ func (p *planner) heldRepo(cfg ServiceConfig) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// deployedRepo is the repository a binding's service was deployed from,
+// empty when it doesn't say.
+func (p *planner) deployedRepo(b *Binding) string {
+	if b == nil {
+		return ""
+	}
+	var cfg ServiceConfig
+	if json.Unmarshal(b.Config, &cfg) != nil {
+		return ""
+	}
+	return cfg.Repo
+}
+
+// movedIntoHeld says why a service deployed from one repository stays
+// as it is when the manifest moves it to a repository this plan holds.
+func movedIntoHeld(name, from, to string) string {
+	return fmt.Sprintf("%s runs from %s, but the manifest moves it to %s, which this plan holds back, so it stays as deployed and doesn't pick up %s's new commit until a plan moves %s.", name, from, to, from, to)
 }
 
 // heldBinding reports whether what a binding deployed is held, by the

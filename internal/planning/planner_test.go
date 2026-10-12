@@ -933,3 +933,99 @@ func TestCompute_aServiceDeployedFromAHeldRepositoryStaysHeldWhenItsRepoMoves(t 
 		t.Fatalf("warnings %+v", r.Warnings)
 	}
 }
+
+func TestCompute_severalHeldUsersOfSomethingAgreeWithIt(t *testing.T) {
+	// api and site both need db, and both are held, in different repositories.
+	both := strings.Replace(federatedYAML, "needs: [api]", "needs: [api, db]", 1)
+	live := deployed(t, computeFed(t, both, nil))
+	yaml := strings.Replace(federatedYAML, "    needs: [db]\n", "", 1)
+	yaml = strings.Replace(yaml, "resources:\n  db:\n    kind: postgres\n    provider: cloud-sql\n", "", 1)
+	if r := computeFed(t, yaml, nil, live...); action(t, r, "resource:db").Op != Delete {
+		t.Fatal("the test needs db deleted when nothing is held")
+	}
+
+	r := computeFed(t, yaml, []string{"mono", "site"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	db := action(t, r, "resource:db")
+	if db.Op != Keep || !strings.Contains(db.Reason, "api in mono and site in site, which this plan holds back, still use it.") {
+		t.Fatalf("db %+v", db)
+	}
+	held := warning(r, "held", "db")
+	if held == nil || !strings.Contains(held.Message, "api in mono and site in site, which this plan holds back, still use it, so") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+
+	// One user still takes the singular.
+	r = computeFed(t, yaml, []string{"mono"}, live...)
+	if db := action(t, r, "resource:db"); !strings.Contains(db.Reason, "api in mono, which this plan holds back, still uses it.") {
+		t.Fatalf("db %+v", db)
+	}
+}
+
+func TestCompute_aHeldCycleOfRemovedServicesNamesNoServiceAsItsOwnUser(t *testing.T) {
+	// api and site use each other once deployed.
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	for _, b := range live {
+		if b.Subject != ServiceSubject || b.Name != "api" {
+			continue
+		}
+		var cfg ServiceConfig
+		if err := json.Unmarshal(b.Config, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg.Env = append(cfg.Env, EnvLink{Key: "SITE_URL", From: "site", Subject: ServiceSubject})
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Config = data
+	}
+	// Both are gone from the manifest, and mono is held.
+	r := computeFed(t, "version: 1\n", []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	for _, a := range r.Actions {
+		if a.Op == Delete {
+			t.Fatalf("deleted %s, which a held service still runs on or with: %+v", a.ID, a)
+		}
+	}
+	for _, id := range []string{"service:site", "resource:db"} {
+		if a := action(t, r, id); a.Op != Keep {
+			t.Fatalf("%s %+v", id, a)
+		}
+	}
+	site := warning(r, "held", "site")
+	if site == nil || !strings.Contains(site.Message, "api in mono, which this plan holds back, still uses it") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	for _, f := range r.Warnings {
+		if f.Name == "api" && (strings.Contains(f.Message, "through") || strings.Contains(f.Message, "api in mono")) {
+			t.Fatalf("api is named as its own user: %+v", f)
+		}
+	}
+	// api is held already, so nothing retains it for itself.
+	for _, a := range r.Actions {
+		if a.ID == "service:api" {
+			t.Fatalf("api was planned as %+v", a)
+		}
+	}
+}
+
+func TestCompute_aServiceMovedIntoAHeldRepositoryStaysWhereItWasDeployed(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	// site runs from site, and the manifest now puts it in mono, held.
+	moved := strings.Replace(federatedYAML, "repo: site", "repo: mono", 1)
+	r := computeFed(t, moved, []string{"mono"}, live...)
+	want := "site runs from site, but the manifest moves it to mono, which this plan holds back, so it stays as deployed and doesn't pick up site's new commit until a plan moves mono."
+	site := action(t, r, "service:site")
+	if site.Op != Keep || !strings.Contains(site.Reason, want) {
+		t.Fatalf("site %+v", site)
+	}
+	held := warning(r, "held", "site")
+	if held == nil || !strings.Contains(held.Message, want) || strings.Contains(held.Message, "site is in mono") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}
