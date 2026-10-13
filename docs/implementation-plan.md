@@ -24,7 +24,7 @@ Done. You can run all of it with `make stack`, or the pieces with `make up` and 
 
 Left over, none of it blocking Milestone 2:
 
-1. The `@forge-go/client-*` packages move to 1.12.8 once pnpm's 24-hour release-age rule allows it.
+1. The `@forge-go/client-*` packages move to 1.12.8 once pnpm's 24-hour release-age rule allows it. Done.
 2. The license, which Rex is choosing.
 3. Upstream: a tagged authsome release so the pin can leave `main`; the authsome fixes listed in forge-integration.md (double-written JSON, the 500 on a taken slug, the SDK's organization list shape, the missing audit category, invitations without an expiry); dependency declarations on grove in the Dispatch and Ctrl Plane extensions; forgemux mounting `/`; the generator's pointer-slice type; a tag for the forge CLI so CI can pin something better than a commit.
 

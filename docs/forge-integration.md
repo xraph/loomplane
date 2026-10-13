@@ -30,7 +30,7 @@ The dashboard (`apps/dashboard`) pins:
 | React, Vite, Tailwind, TypeScript | 19.3, 8.3, 4, 6.0 |
 | pnpm | 11.5.0, declared in `packageManager` |
 
-pnpm 11 refuses any package published in the last 24 hours, and the dashboard keeps that policy on. That's why the Forge client sits at 1.12.7, whose code is identical to 1.12.8 (only the version number differs): 1.12.8 was less than a day old when the lockfile was made. Move it up once it has aged. The `packageManager` field makes any pnpm switch to 11.5.0, so everyone resolves under the same policy.
+pnpm 11 refuses any package published in the last 24 hours, and the dashboard keeps that policy on. The Forge client sat at 1.12.7 for a day because of it, since 1.12.8 was too new when the lockfile was made; it's on 1.12.8 now. Expect the same wait whenever you take a Forge release on the day it ships. The `packageManager` field makes any pnpm switch to 11.5.0, so everyone resolves under the same policy.
 
 There are no `replace` directives. tap builds against local checkouts of Forge and authsome; at the time of writing both of those checkouts sit exactly on the commits pinned above, so Loomplane gets the same code from the module proxy.
 
