@@ -1,4 +1,4 @@
-.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run \
+.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli \
 	image test test-go test-dashboard test-integration lint lint-go lint-dashboard \
 	gen-client check-client setup clean
 
@@ -71,6 +71,20 @@ lint: lint-go lint-dashboard ## Lint Go and the dashboard
 
 lint-go: ## golangci-lint, integration tests included
 	golangci-lint run --build-tags=integration ./...
+
+vuln: ## Check Loomplane and its dependencies for known vulnerabilities it reaches
+	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+FUZZTIME ?= 30s
+
+fuzz: ## Fuzz the parsers that read what users and repositories send, FUZZTIME each (30s)
+	@grep -rl --include='*_test.go' '^func Fuzz' internal pkg examples | while read -r f; do \
+		d=$$(dirname "$$f"); \
+		for t in $$(grep -o '^func Fuzz[A-Za-z]*' "$$f" | sed 's/func //'); do \
+			echo "fuzz $$t in ./$$d"; \
+			go test -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME) "./$$d" || exit 1; \
+		done; \
+	done
 
 lint-dashboard: ## Type-check and lint the dashboard
 	pnpm --dir $(DASHBOARD_DIR) typecheck

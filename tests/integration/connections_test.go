@@ -196,7 +196,7 @@ func TestConnections_aCredentialIsCheckedStoredAndNeverReturned(t *testing.T) {
 
 	// Nothing the API sends carries a credential back.
 	for _, path := range []string{"/api/v1/connections", "/api/v1/connections/" + gc.ID, "/api/v1/connections/" + vc.ID} {
-		body := c.raw(http.MethodGet, path)
+		body := c.raw(path)
 		if strings.Contains(body, "PRIVATE KEY") || strings.Contains(body, vercelToken) {
 			t.Fatalf("GET %s leaked a credential: %s", path, body)
 		}

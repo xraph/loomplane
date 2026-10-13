@@ -157,7 +157,7 @@ func TestConnections_anAWSKeyIsCheckedWithSTSAndIAM(t *testing.T) {
 		conn.Details["access_key"] != "…MPLE" || !slices.Equal(conn.Missing, []string{"iam:CreateRole", "rds:CreateDBInstance"}) {
 		t.Fatalf("aws connection %+v", conn)
 	}
-	if body := c.raw(http.MethodGet, "/api/v1/connections"); strings.Contains(body, awsSecret) || strings.Contains(body, awsKeyID) {
+	if body := c.raw("/api/v1/connections"); strings.Contains(body, awsSecret) || strings.Contains(body, awsKeyID) {
 		t.Fatalf("the key leaked: %s", body)
 	}
 	fake.mu.Lock()

@@ -12,13 +12,16 @@ internal/platform ◄──────────── internal/config (typed
       │
       ▼
 forge.App (central migrations)
+  ├─ loomplane-schema-guard     refuses a database a newer Loomplane migrated
   ├─ grove                      Postgres pool, one migration pass
-  ├─ loomplane-identity         authsome engine, Warden, Chronicle, the guard
-  ├─ dispatch                   job engine, queue "loomplane"
+  ├─ loomplane-identity         authsome, Warden, Chronicle, Keysmith; the guard
+  ├─ dispatch                   jobs, cron and the durable deployment workflow
   ├─ ctrlplane                  lifecycle engine, routes off
   ├─ loomplane-projects         /api/v1/projects, the initialize job
   ├─ loomplane-discovery        /api/v1/.../analyses, /api/v1/github; queues analyses
   ├─ loomplane-environments     /api/v1/variables and each project's; secrets in Vault
+  ├─ loomplane-connections      cloud connections, their checkers, credentials in Vault
+  ├─ loomplane-planning         manifests, plans, deployments, executors, drift
   ├─ loomplane-infrastructure   Ctrl Plane's identity bridge, /api/v1/infrastructure
   └─ loomplane-web              apps/dashboard/dist on every other path
 
@@ -26,9 +29,12 @@ cmd/loomplane-worker          same config, no HTTP API, no migrations
       │
       ▼
 forge.App
+  ├─ loomplane-schema-guard
   ├─ grove                      the same Postgres
   ├─ dispatch                   queue "loomplane-analysis" only
   └─ loomplane-discovery-worker the analysis job: fetch, read, store the graph
+
+cmd/loomctl                   the CLI and MCP server, over the API with a key
 ```
 
 The API never runs an analysis. It queues one on `loomplane-analysis`, a queue only the worker works, so code nobody vetted is read in a process that holds no sessions and serves nothing but health checks. Start `loomplane` first: it owns the schema, and the worker doesn't migrate.
@@ -36,7 +42,7 @@ The API never runs an analysis. It queues one on `loomplane-analysis`, a queue o
 Starting goes in three passes, which is what `forge.WithCentralMigrations` buys:
 
 1. Forge registers every extension in dependency order. Nothing reads or writes the database yet. Engines get built, routes get registered, and the grove extension collects every migration group.
-2. One pass applies every pending migration: Loomplane's own, then authsome, Warden, Chronicle, Dispatch and Ctrl Plane. Each library's self-migration is off, so nothing else touches the schema.
+2. One pass applies every pending migration: Loomplane's own, then authsome, Warden, Chronicle, Dispatch, Ctrl Plane, Vault and Keysmith. Each library's self-migration is off, so nothing else touches the schema.
 3. Forge starts every extension in the same order. authsome's engine starts and its routes mount, Dispatch starts working its queue, Ctrl Plane starts its workers. Then Forge binds HTTP.
 
 A job can't arrive before its handler exists: handlers register in pass 1, and Dispatch only takes work in pass 3.
@@ -54,7 +60,7 @@ The dashboard is a separate build (`apps/dashboard`) that the same process serve
                  ▼
   ┌──────────── Forge router ─────────────────────────────────────┐
   │ /authsome/*   authsome API (own router, FirstJSON filter)      │
-  │ /api/v1/*     guard: authsome session chain → Principal        │
+  │ /api/v1/*     guard: API key or authsome session → Principal   │
   │ /*            the built dashboard                              │
   └───────────────┬───────────────────────────────────────────────┘
                   ▼
@@ -89,21 +95,22 @@ Each kind of state has one owner, and only the owner writes it.
 | Analyses, each reading one source at one commit and storing that repository's graph | Loomplane | `loomplane_analyses` |
 | The commit of each source that is deployed to each environment | Loomplane | `loomplane_environment_sources` |
 | GitHub App installations each organization connected | Loomplane | `loomplane_github_installations` |
-| Job queue, cron, workflow history | Dispatch | `dispatch_*` |
-| Instances, deployments, releases, domains | Ctrl Plane | `cp_*` |
+| Manifest revisions (`loomplane.yaml`) | Loomplane | `loomplane_manifests` |
+| Plans, each with its lockset, and the decision on each | Loomplane | `loomplane_plans`, `loomplane_plan_sources` |
+| Deployments and their steps | Loomplane | `loomplane_deployments` |
+| What runs each service and resource in each environment, and its drift | Loomplane | `loomplane_bindings` |
+| Cloud connections, and the one each environment uses | Loomplane | `loomplane_cloud_connections`, `loomplane_environment_connections` |
+| Cloud credentials, and the passwords of databases Loomplane provisions | Vault | `vault_secrets` |
+| API keys, as hashes | Keysmith | `keysmith_*` |
+| Each deployment's sources, one tarball per repository it moves | Trove | files under `storage.url` |
+| Job queue, cron, workflow history and progress | Dispatch | `dispatch_*` |
+| The lifecycle of long-running services on Cloud Run and ECS | Ctrl Plane | `cp_*` |
 
 A project builds from one or more sources. A source is a GitHub repository, an optional directory inside it, a tracked branch and an alias. The alias is part of every service ID (`svc:api:go:cmd/server`), so it never changes and is never reused, even after the source is removed. An analysis reads one source at one commit and stores that repository's graph on its own.
 
 Nothing stores the project's graph. It's composed when something asks for it, from the newest successful analysis of each source: IDs are qualified by alias, a source's directory filters what it contributes, resources of the same kind merge, and a dependency that one repository declares on a package another provides becomes an edge between them. A plan pins a lockset, which is one analysis and commit per source, and composes from those, so it always sees the graph it was made from. A scope picks the sources a plan moves. The rest stay at the commits `loomplane_environment_sources` says are deployed, and their services are kept as they run.
 
-Coming with deployments:
-
-| State | Owner |
-|---|---|
-| The manifest (`loomplane.yaml`) | Loomplane |
-| Approved plans, each with its lockset, and the map from each Loomplane service to the Ctrl Plane instance or provider resource that runs it | Loomplane |
-| Progress of each deployment workflow | Dispatch's durable runtime |
-| The lifecycle state of what's deployed | Ctrl Plane, for providers it manages; Loomplane's capability adapter, for providers Ctrl Plane can't model (Vercel) |
+Vercel deployments, databases and gateways aren't Ctrl Plane instances: Ctrl Plane models long-running instances and nothing else, so Loomplane's own executors carry those out, and a binding records what they made either way.
 
 Projects belong to an organization by its authsome ID, with no foreign key into authsome's tables, because Loomplane never writes those.
 
@@ -111,7 +118,7 @@ Projects belong to an organization by its authsome ID, with no foreign key into 
 
 Two controllers mutating the same resource fight. So each resource type gets exactly one reconciliation authority:
 
-- Ctrl Plane reconciles the instances it manages. Its instance drift correction is a stub today, so until that's filled in upstream, Loomplane's drift detection (milestone 5) reads provider status through Ctrl Plane and reports, without writing.
+- Ctrl Plane reconciles the instances it manages. Its instance drift correction is a stub upstream, so Loomplane's drift check reads what's live through each target's executor and records it, without writing. The next plan, approved like any other, puts things back.
 - Loomplane reconciles its own records against the approved plan, through Dispatch cron jobs.
 - Dispatch owns workflow progress and retries. A workflow step asks Ctrl Plane to act; it never edits Ctrl Plane's records.
 
@@ -124,14 +131,17 @@ A failed provider call surfaces as a failed Dispatch activity with the provider'
  ───────────────────────┼───────────────────────────────────┼──────────────
  browser, CLI, agents ──┼─► guard ──► service ──► Warden    │
                         │      │                            │
-                        │      └─► authsome (sessions)      │
+                        │      ├─► authsome (sessions)      │
+                        │      └─► Keysmith (API keys)      │
                         │                                   │
-                        │ secret_key ─HKDF─► token keyring  │
-                        │ (future) Vault ─► provider APIs ──┼─► Vercel, GCP, AWS, Render
+                        │ secret_key ─HKDF─► Vault keys     │
+                        │ Vault ─► cloud APIs ──────────────┼─► Vercel, GCP, AWS
+                        │ source ─► cloud builders ─────────┼─► Cloud Build, CodeBuild,
+                        │                                   │   Vercel (your accounts)
+                        │ plugin token ─► provider plugins ─┼─► your infrastructure
                         │                                   │
  analysis worker ───────┼── a tarball per source, read only ◄┼── GitHub (a token for
                         │                                   │   one repo, one hour)
- build workers ◄────────┼── (future) source, never creds    │
 ```
 
 Who you are comes from your authsome session. The dashboard holds it in the SDK's local storage, and sends it as a bearer token; authsome also sets an HttpOnly, SameSite=Lax cookie that Loomplane's guard accepts. Every route under `/api/v1` except `/public-config` sits behind the guard.
@@ -144,20 +154,22 @@ Ctrl Plane and Dispatch don't expose their own HTTP APIs. Ctrl Plane's auth prov
 
 Repository analysis reads code, and never runs it: no build scripts, no package managers, nothing from the repository. A checkout is one repository's tarball at one commit, extracted with hard limits (size, file count, regular files only, no paths outside the checkout, no dependency or build output directories) into a directory the worker deletes afterwards. For a private repository, the worker mints a GitHub App installation token limited to that one repository and to reading it, and stores it nowhere. An organization's analyses only ever use installations that organization connected, and connecting one requires GitHub to confirm the person connecting can see it ([github-app.md](github-app.md)).
 
-Secrets: `secret_key` never leaves the process. Every key Loomplane needs is derived from it with HKDF under a label of its own: authsome's token encryption, the GitHub install state's signature, and Vault's encryption of variable secrets. A secret variable's value goes straight into Vault, AES-256-GCM encrypted and versioned, and the API never returns it; a check constraint keeps it out of `loomplane_variables` entirely. Vault's secrets carry no tenant, so Loomplane builds every Vault key from its own organization and variable IDs, never from a caller's input. Deleting a project or an environment cascades its variables in Postgres, and a sweep then removes their secrets from Vault. Cloud provider credentials will live in Vault too (milestone 4), referenced by ID, never in `loomplane.yaml` or logs, and never handed to build workers. Repository builds will run in isolated workers that get the source and nothing else. A Dispatch worker only decides what runs where; it doesn't sandbox anything, so the isolation has to come from the worker's own container. Loomplane's own API keys (Keysmith, milestone 6) are a different thing from cloud credentials and are never stored together.
+Secrets: `secret_key` never leaves the process. Every key Loomplane needs is derived from it with HKDF under a label of its own: authsome's token encryption, the GitHub install state's signature, and Vault's encryption of variable secrets. A secret variable's value goes straight into Vault, AES-256-GCM encrypted and versioned, and the API never returns it; a check constraint keeps it out of `loomplane_variables` entirely. Vault's secrets carry no tenant, so Loomplane builds every Vault key from its own organization and variable IDs, never from a caller's input. Deleting a project or an environment cascades its variables in Postgres, and a sweep then removes their secrets from Vault. Cloud credentials live in Vault too, referenced by connection ID, never in `loomplane.yaml`, logs or anything a build sees. Builds run on the clouds' own builders, in your accounts, so nothing from a repository runs on a Loomplane machine at all. A service's secrets go to its cloud's secret store and reach it by reference, readable by its runtime identity only, and never pass through Ctrl Plane, which stores what it's given as plain JSON. Loomplane's own API keys are Keysmith's, stored as hashes, and a different thing from cloud credentials. [security.md](security.md) has the whole picture.
 
-## Deployment, as it will run
+## How a deployment runs
 
-The deployment workflow is a Dispatch durable workflow. Each step is an activity, so it's retried, and a crash resumes from the last completed step. Activities pass their idempotency key to provider APIs.
+A deployment is a Dispatch durable workflow, running beside the API. Each step is an activity, so it's retried, and a crash resumes from the last completed step. Long steps heartbeat and checkpoint the cloud's operation ID, so a retry waits on the build or database already under way instead of starting another.
 
 | Step | Where it runs |
 |---|---|
-| Validate the plan's lockset, one commit for each source; load and validate `loomplane.yaml` | Loomplane activities |
-| Resolve service dependencies; check cloud connections and provider capabilities | Loomplane activities, credentials from Vault |
-| Generate the plan | Loomplane's planner |
-| Wait for approval | a durable signal, with a durable timer as the deadline |
-| Check the approved plan's revision still matches | Loomplane activity |
-| Provision dependencies; fetch one tarball for each source the plan moves; build artifacts | isolated build workers; artifacts in Trove through Dispatch |
-| Deploy each service | Ctrl Plane, or a Loomplane capability adapter for providers Ctrl Plane can't model |
-| Configure endpoints and connections; verify health | Ctrl Plane network and health, plus Loomplane checks |
-| Record the result, including the commit now deployed for each source that moved, or end in an explicit failure | Loomplane records; Dispatch keeps the history |
+| Pin the lockset, one analysis and commit for each source; load the manifest revision; compute the plan from the graph those compose | Loomplane's planner, which never touches a cloud |
+| Wait for a decision | a durable signal, with a durable timer as the deadline |
+| Plan again, and check the revision still matches what was approved | Loomplane; a mismatch ends it as stale |
+| Store one tarball for each source the plan moves, at its pinned commit | Trove, so every builder gets the same bytes |
+| Provision resources | Loomplane's executors: Cloud SQL, RDS, or a provider plugin |
+| Build each service from its own source's tarball | Cloud Build, CodeBuild or Vercel, in your accounts |
+| Deploy each service, its secrets in the cloud's secret store | Ctrl Plane for Cloud Run and ECS; Loomplane's adapters for Vercel and gateways; a plugin for its own targets |
+| Check each public service answers; record what runs it | Loomplane, as bindings |
+| Finish, recording the commit now deployed for each source that moved, or fail with the step and its reason | a failed deployment can be retried from that step |
+
+Steps run in order, each after everything it needs, so a service gets the address of the database and services it needs when it deploys.

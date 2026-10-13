@@ -96,7 +96,7 @@ Left over:
 
 ## Milestone 4: Real deployments
 
-In progress. Done when a Next.js frontend deploys to Vercel and a Go backend to Cloud Run, from one monorepo, after someone approves the plan.
+Done, apart from the acceptance run on real accounts. Done when a Next.js frontend deploys to Vercel and a Go backend to Cloud Run, from one monorepo, after someone approves the plan.
 
 How it fits together:
 
@@ -122,16 +122,16 @@ Everything up to step 6 is tested against fakes that stand in for Google Cloud a
 
 Left over, for after the acceptance run:
 
-1. Variables, secrets included, are set as plain environment variables on Cloud Run and as encrypted variables on Vercel. Secret Manager for Cloud Run comes with milestone 5's environment secrets.
+1. Variables, secrets included, were set as plain environment variables on Cloud Run. Milestone 5 moved secrets to Secret Manager.
 2. A Dockerfile is built from its own directory. One that expects the repository root needs a setting the manifest doesn't have yet.
-3. Services find each other by public URL. A service that isn't public gets no address its dependents can reach until private networking arrives in milestone 5.
+3. Services found each other by public URL. Milestone 5 added private addresses on ECS and private Cloud Run services; a private service on another cloud stays unreachable, and the plan says so.
 4. Ctrl Plane gaps worth fixing upstream: instances keep the provider's name rather than its registry key, providers get credentials only at construction, Deploy carries only images and variables, and nothing polls status after a call returns.
 
 ## Milestone 5: Extended orchestration
 
 Done, apart from the acceptance run on real accounts. Done when a polyglot application deploys across several providers and Loomplane keeps one consistent record of what runs where.
 
-Done so far:
+What it covers:
 
 1. Recovery from partial failure. A failed deployment can be retried from the step that failed, with the plan that was approved; steps that succeeded stay as they are.
 2. Drift detection. A Dispatch job on the cron leader compares every binding with what its cloud has live and records anything gone or changed. It only reads. The next plan creates or updates it back, and only an approved plan changes anything, so there's one authority. Bindings also record the commit each service was built from, and a plan compares it with the commit it pins for that service's own repository, so new code in one repository is a change a plan picks up and a held repository's services stay as they are.
@@ -145,6 +145,24 @@ Done so far:
 
 Left over: the acceptance run on real Google Cloud and AWS accounts, with milestone 4's; private links between clouds, which would need a VPN; and Memorystore, ElastiCache, Cloud Storage and the other catalog entries that still have no adapter.
 
-## Milestone 6
+## Milestone 6: Operational maturity
 
-The CLI on Keysmith keys, a provider SDK, backups, upgrades, and MCP for agents.
+Done. Done when Loomplane runs as a complete, independent, self-hosted platform.
+
+1. API keys, on Keysmith. A key acts as the member who made it, in one organization, with their role, and can be limited to reading; it loses its rights when its maker does. Keys expire within a year, are managed from a session only, and are shown once.
+2. `loomctl`, the CLI, on those keys and `pkg/client`, a typed Go client for the API: analyze, manifests, variables, plans, approvals that name the revision they showed, deployments followed step by step, retries, status and drift. CI uses `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`.
+3. The provider SDK. A provider plugin is a small HTTP service built with `pkg/provider/sdk`, or in any language that speaks the protocol; Loomplane adds it to the catalog when it starts and drives it like a built-in target, its cloud included. `examples/provider-plugin` is a working one, and [providers.md](providers.md) the guide.
+4. Backups and restores: `loomplane backup` copies every table in one snapshot, and `loomplane restore` migrates an empty database and loads it in one transaction.
+5. Upgrades: `loomplane migrations` and `migrate`, and Loomplane refuses to start against a database a newer Loomplane migrated, except in development, where branches share a database.
+6. Observability: Loomplane's own metrics on `/_/metrics`, for deployments, steps, plans, decisions, drift, analyses, API keys and credential checks, by provider and outcome; and provider plugins on `/_/health`.
+7. AI agents: `loomctl mcp` serves Loomplane's tools over MCP. Deploying is off unless you pass `--allow-deploy`, and a read-only key reads only.
+8. Security testing: an authorization matrix over every route, fuzzers for each parser of untrusted input, govulncheck in CI, and the Go toolchain pinned to a release with every standard library fix. It found and fixed a deployments list that answered 200 for another organization's project, and a repacker that would have kept `../` entry names.
+9. Documentation: the README, [manifest.md](manifest.md), [operations.md](operations.md), [security.md](security.md), [agents.md](agents.md) and [providers.md](providers.md), and the architecture guide brought up to date.
+
+Left over:
+
+1. The acceptance runs on real accounts, for milestones 4 and 5: a Google Cloud project, a Vercel account and an AWS account. Everything is tested against fakes that check what the real APIs would refuse, which isn't the same as the real APIs agreeing.
+2. A license for Loomplane, and answers to the dependency license questions in [forge-integration.md](forge-integration.md#licenses).
+3. Render, Memorystore, Cloud Storage, ElastiCache and S3 are in the catalog without adapters.
+4. Private links between clouds, which would need a VPN between them.
+5. The dashboard has no screen for backups or metrics; those are commands and Prometheus.

@@ -174,7 +174,9 @@ type Task struct {
 	Env           map[string]string
 	Secrets       map[string]string // variable to Secrets Manager ARN
 	ExecutionRole string
-	LogGroup      string
+	// TaskRole is the role the application runs as. Empty means none.
+	TaskRole string
+	LogGroup string
 }
 
 // RegisterTask registers a task definition revision and returns its ARN.
@@ -198,11 +200,15 @@ func (s *Session) RegisterTask(ctx context.Context, t Task) (string, error) {
 	for _, k := range slices.Sorted(maps.Keys(t.Secrets)) {
 		c.Secrets = append(c.Secrets, ecstypes.Secret{Name: sdk.String(k), ValueFrom: sdk.String(t.Secrets[k])})
 	}
-	out, err := ecs.NewFromConfig(s.cfg).RegisterTaskDefinition(ctx, &ecs.RegisterTaskDefinitionInput{
+	in := &ecs.RegisterTaskDefinitionInput{
 		Family: sdk.String(t.Family), RequiresCompatibilities: []ecstypes.Compatibility{ecstypes.CompatibilityFargate},
 		NetworkMode: ecstypes.NetworkModeAwsvpc, Cpu: sdk.String(strconv.Itoa(t.CPU)), Memory: sdk.String(strconv.Itoa(t.MemoryMB)),
 		ExecutionRoleArn: sdk.String(t.ExecutionRole), ContainerDefinitions: []ecstypes.ContainerDefinition{c},
-	})
+	}
+	if t.TaskRole != "" {
+		in.TaskRoleArn = sdk.String(t.TaskRole)
+	}
+	out, err := ecs.NewFromConfig(s.cfg).RegisterTaskDefinition(ctx, in)
 	if err != nil {
 		return "", fmt.Errorf("register the task: %w", err)
 	}

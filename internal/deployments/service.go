@@ -23,6 +23,11 @@ type Retrier interface {
 	Retry(ctx context.Context, orgID, deploymentID, retryID string, steps [][]string) error
 }
 
+// Projects looks projects up.
+type Projects interface {
+	GetProject(ctx context.Context, orgID, id string) (*projects.Project, error)
+}
+
 // Auditor records retries. projects' Auditor is the real one.
 type Auditor interface {
 	Record(ctx context.Context, e projects.AuditEvent)
@@ -36,6 +41,9 @@ type Service struct {
 	retry Retrier
 	audit Auditor
 	now   func() time.Time
+	// Projects checks a project is the caller's organization's before its
+	// deployments are listed. It may be nil, in tests.
+	Projects Projects
 }
 
 // NewService returns a Service. audit may be nil.
@@ -84,6 +92,13 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*
 func (s *Service) List(ctx context.Context, p security.Principal, projectID string) ([]*Deployment, error) {
 	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
 		return nil, err
+	}
+	// Another organization's project is not found, not an empty list: the
+	// answer mustn't differ by whether the project exists.
+	if s.Projects != nil {
+		if _, err := s.Projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+			return nil, err
+		}
 	}
 	return s.store.ListDeployments(ctx, p.OrgID, projectID, listLimit)
 }

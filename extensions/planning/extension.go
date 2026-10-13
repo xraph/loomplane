@@ -159,15 +159,18 @@ func (e *Extension) Register(fapp forge.App) error {
 	})
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
+	e.deploys.Projects = prj
 	executors := map[string]deployments.Executor{
 		"cloud-run": &deployments.CloudRun{
 			Google:      gcp.New(e.cfg.Clouds.GoogleEndpoint),
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
-		"vercel":    &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
-		"cloud-sql": &deployments.CloudSQL{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
-		"rds":       &deployments.RDS{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
+		"vercel":      &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		"cloud-sql":   &deployments.CloudSQL{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
+		"rds":         &deployments.RDS{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
+		"s3":          &deployments.S3{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
+		"elasticache": &deployments.ElastiCache{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
 		"ecs-fargate": &deployments.ECS{
 			AWS:         aws.New(e.cfg.Clouds.AWSEndpoint),
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
