@@ -117,6 +117,18 @@ func (a *App) InstallURL(state string) string {
 	return a.webURL + "/apps/" + url.PathEscape(a.slug) + "/installations/new?state=" + url.QueryEscape(state)
 }
 
+// AccountURLs are an installation's account picture and the page on
+// GitHub where its owner chooses which repositories the App can read: an
+// organization's settings for an organization, the person's own for a
+// user.
+func (a *App) AccountURLs(account, accountType string, id int64) (avatar, manage string) {
+	installation := "/settings/installations/" + strconv.FormatInt(id, 10)
+	if accountType == "Organization" {
+		installation = "/organizations/" + url.PathEscape(account) + installation
+	}
+	return a.webURL + "/" + url.PathEscape(account) + ".png", a.webURL + installation
+}
+
 // jwt is the App's own credential, signed with its private key (RS256).
 func (a *App) jwt() (string, error) {
 	now := a.now()

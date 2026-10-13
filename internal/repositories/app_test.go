@@ -319,6 +319,9 @@ func TestConnections_connect(t *testing.T) {
 	if inst.ID != "42" || inst.Account != "Acme" || inst.AccountType != "Organization" {
 		t.Fatalf("installation %+v", inst)
 	}
+	if inst.AvatarURL != srv.URL+"/Acme.png" || inst.ManageURL != srv.URL+"/organizations/Acme/settings/installations/42" {
+		t.Fatalf("an organization's links: %+v", inst)
+	}
 
 	st, err := f.conns.Status(ctx, dev)
 	if err != nil || !st.Configured || len(st.Installations) != 1 || st.InstallURL != "" {
@@ -381,5 +384,19 @@ func TestConnections_withoutAnApp(t *testing.T) {
 	}
 	if tok, err := f.conns.Token(ctx, "aorg_a", Repository{"acme", "mono"}); err != nil || tok != "" {
 		t.Fatalf("token %q, %v", tok, err)
+	}
+}
+
+func TestAccountURLs(t *testing.T) {
+	a := &App{webURL: "https://github.com"}
+	avatar, manage := a.AccountURLs("xraph", "Organization", 7)
+	if avatar != "https://github.com/xraph.png" || manage != "https://github.com/organizations/xraph/settings/installations/7" {
+		t.Fatalf("an organization's: %q, %q", avatar, manage)
+	}
+	// A person manages the installations on their own account in their own
+	// settings, which have no name in the path.
+	avatar, manage = a.AccountURLs("rex", "User", 8)
+	if avatar != "https://github.com/rex.png" || manage != "https://github.com/settings/installations/8" {
+		t.Fatalf("a person's: %q, %q", avatar, manage)
 	}
 }

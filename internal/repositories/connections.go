@@ -30,6 +30,7 @@ type GitHubApp interface {
 	VerifyInstaller(ctx context.Context, code string, id int64) error
 	RepositoryToken(ctx context.Context, installationID int64, repo string) (string, error)
 	Repositories(ctx context.Context, installationID int64) ([]InstalledRepository, error)
+	AccountURLs(account, accountType string, id int64) (avatar, manage string)
 }
 
 // Auditor records connection changes. Recording must not fail the change.
@@ -61,10 +62,14 @@ type Store interface {
 type GitHubInstallation struct {
 	// ID is the installation's GitHub ID, as a string so it's a stable key
 	// in the dashboard's cache.
-	ID          string    `json:"id" forge:"id"`
-	Account     string    `json:"account"`
-	AccountType string    `json:"account_type"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string `json:"id" forge:"id"`
+	Account     string `json:"account"`
+	AccountType string `json:"account_type"`
+	// AvatarURL is the account's picture, and ManageURL the page on GitHub
+	// where its owner chooses which repositories the App can read.
+	AvatarURL string    `json:"avatar_url"`
+	ManageURL string    `json:"manage_url"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // GitHubStatus is the organization's GitHub connection.
@@ -117,7 +122,7 @@ func (c *Connections) Status(ctx context.Context, p security.Principal) (*GitHub
 		return nil, err
 	}
 	for _, r := range recs {
-		st.Installations = append(st.Installations, view(r))
+		st.Installations = append(st.Installations, c.view(r))
 	}
 	may, err := c.authz.Allowed(ctx, p, security.RepositoryConnect)
 	if err != nil {
@@ -171,7 +176,7 @@ func (c *Connections) Connect(ctx context.Context, p security.Principal, in Conn
 	if c.audit != nil {
 		c.audit.Record(ctx, "github.connect", p, inst)
 	}
-	v := view(rec)
+	v := c.view(rec)
 	return &v, nil
 }
 
@@ -255,8 +260,10 @@ func (c *Connections) Token(ctx context.Context, orgID string, repo Repository) 
 	return "", nil
 }
 
-func view(r *InstallationRecord) GitHubInstallation {
+func (c *Connections) view(r *InstallationRecord) GitHubInstallation {
+	avatar, manage := c.app.AccountURLs(r.Account, r.AccountType, r.ID)
 	return GitHubInstallation{
-		ID: strconv.FormatInt(r.ID, 10), Account: r.Account, AccountType: r.AccountType, CreatedAt: r.CreatedAt.UTC(),
+		ID: strconv.FormatInt(r.ID, 10), Account: r.Account, AccountType: r.AccountType,
+		AvatarURL: avatar, ManageURL: manage, CreatedAt: r.CreatedAt.UTC(),
 	}
 }

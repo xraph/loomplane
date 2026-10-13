@@ -376,8 +376,10 @@ export interface Finding {
 export interface GitHubInstallation {
   account: string;
   accountType: string;
+  avatarUrl: string;
   createdAt: string;
   id: string;
+  manageUrl: string;
 }
 
 export interface GitHubStatus {

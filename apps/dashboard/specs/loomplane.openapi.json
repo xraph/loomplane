@@ -3386,6 +3386,8 @@
           "id",
           "account",
           "account_type",
+          "avatar_url",
+          "manage_url",
           "created_at"
         ],
         "properties": {
@@ -3395,6 +3397,9 @@
           "account_type": {
             "type": "string"
           },
+          "avatar_url": {
+            "type": "string"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -3402,6 +3407,9 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "manage_url": {
+            "type": "string"
           }
         }
       },
