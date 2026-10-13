@@ -208,7 +208,7 @@ Tests: `internal/config`.
 
 ## Trove
 
-`internal/artifacts` keeps each deployment's source, the commit's tarball, in a Trove bucket (`storage.url`: `file://` on disk, `mem://` in tests). Builders read it back from there, so every builder gets the same bytes.
+`internal/artifacts` keeps each deployment's sources, one tarball per repository it moves at the commit its plan pins, in a Trove bucket (`storage.url`: `file://` on disk, `mem://` in tests). Builders read it back from there, so every builder gets the same bytes.
 
 ## Bastion
 

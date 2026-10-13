@@ -62,8 +62,9 @@ type Job struct {
 	// through Ctrl Plane, which stores what it's given.
 	Secrets map[string]bool
 	// Source opens the tarball of the repository the service is built
-	// from, at the plan's commit, as GitHub serves it: gzip, with one
-	// top-level directory.
+	// from, at the commit its plan pins for that repository, as GitHub
+	// serves it: gzip, with one top-level directory. A gateway's is the
+	// program Loomplane generates for it.
 	Source func(ctx context.Context) (io.ReadCloser, int64, error)
 	// CommitSHA is the commit of the repository the service is built
 	// from. It's empty for a resource or a gateway.

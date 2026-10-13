@@ -96,8 +96,10 @@ type Job struct {
 	// Name is the service's or resource's name in the manifest.
 	Name   string `json:"name"`
 	Region string `json:"region,omitempty"`
-	// Commit is the commit of the repository the service is built
-	// from. It's empty for a resource or a gateway.
+	// Commit is the commit the plan pins for the service's own
+	// repository, the one Source holds. In a project of several
+	// repositories each service has its own. It's empty for a resource
+	// or a gateway.
 	Commit     string     `json:"commit"`
 	Credential Credential `json:"credential"`
 	// Account is the connection's account and details.
@@ -179,8 +181,10 @@ type Observation struct {
 	Revision string `json:"revision,omitempty"`
 }
 
-// Source opens the commit's source: a gzipped tarball with one top-level
-// directory, as GitHub serves it. Only a service's Apply has one.
+// Source opens the service's source: its own repository at the commit the
+// plan pins for it (Commit), as a gzipped tarball with one top-level
+// directory, the way GitHub serves it. A gateway's is the program
+// Loomplane generates for it. Only a service's Apply has one.
 func (j *Job) Source() (io.ReadCloser, error) {
 	if j.source == nil {
 		return nil, errors.New("this job has no source")
