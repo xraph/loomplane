@@ -1196,6 +1196,46 @@ func TestCompute_aGatewayIsNeverHeld(t *testing.T) {
 	}
 }
 
+func TestCompute_aHeldServiceUsingAGatewayThatsStillOnLeavesItToTheGateway(t *testing.T) {
+	live := deployed(t, computeFed(t, edgeYAML, nil))
+	// api was deployed with edge's address. needs can't name a gateway, so
+	// the link is written into api's binding.
+	for _, b := range live {
+		if b.Subject != ServiceSubject || b.Name != "api" {
+			continue
+		}
+		var cfg ServiceConfig
+		if err := json.Unmarshal(b.Config, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg.Env = append(cfg.Env, EnvLink{Key: "EDGE_URL", From: "edge", Subject: ServiceSubject})
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Config = data
+	}
+
+	r := computeFed(t, edgeYAML, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	var edges []Action
+	for _, a := range r.Actions {
+		if a.ID == "service:edge" {
+			edges = append(edges, a)
+		}
+	}
+	if len(edges) != 1 || edges[0].Service == nil || len(edges[0].Service.Gateway) != 2 || strings.Contains(edges[0].Reason, "Kept") {
+		t.Fatalf("edge actions %+v", edges)
+	}
+	// The deployed edge is the gateway the manifest has, so nothing
+	// replaces it.
+	if w := warning(r, "held", "edge"); w != nil {
+		t.Fatalf("warning %+v", w)
+	}
+}
+
 func TestCompute_aGatewayRouteToAHeldServiceThatRunsNowhereIsAProblem(t *testing.T) {
 	// Nothing is deployed, and the plan holds site, so site isn't created
 	// and edge has nothing to send / to.
