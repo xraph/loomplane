@@ -17,8 +17,6 @@ import {
 
 const manifest: Manifest = {
   version: 1,
-  defaults: {},
-  ignore: {},
   services: {
     api: { source: "services/api", provider: "cloud-run" },
     web: { source: "apps/web", provider: "vercel" },
@@ -141,9 +139,9 @@ describe("chosenScope", () => {
 })
 
 describe("withIgnored", () => {
-  it("adds a kind once", () => {
+  it("adds a kind once, to a manifest that ignores nothing yet", () => {
     const once = withIgnored(manifest, "mysql")
-    expect(once.ignore.resources).toEqual(["mysql"])
+    expect(once.ignore?.resources).toEqual(["mysql"])
     expect(withIgnored(once, "mysql")).toBe(once)
   })
 })

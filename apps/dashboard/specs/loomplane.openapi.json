@@ -3564,9 +3564,7 @@
       "Manifest": {
         "type": "object",
         "required": [
-          "version",
-          "defaults",
-          "ignore"
+          "version"
         ],
         "properties": {
           "defaults": {
@@ -3581,6 +3579,10 @@
           },
           "ignore": {
             "$ref": "#/components/schemas/Ignore"
+          },
+          "links": {
+            "type": "object",
+            "additionalProperties": true
           },
           "resources": {
             "type": "object",
@@ -4497,9 +4499,7 @@
           "manifest": {
             "type": "object",
             "required": [
-              "version",
-              "defaults",
-              "ignore"
+              "version"
             ],
             "properties": {
               "defaults": {
@@ -4514,6 +4514,10 @@
               },
               "ignore": {
                 "$ref": "#/components/schemas/Ignore"
+              },
+              "links": {
+                "type": "object",
+                "additionalProperties": true
               },
               "resources": {
                 "type": "object",
@@ -4676,8 +4680,14 @@
           "image": {
             "type": "string"
           },
+          "internal": {
+            "type": "boolean"
+          },
           "port": {
             "type": "integer"
+          },
+          "private_egress": {
+            "type": "boolean"
           },
           "provider": {
             "type": "string"

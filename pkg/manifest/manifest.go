@@ -55,14 +55,14 @@ var ErrInvalid = errors.New("invalid manifest")
 // Manifest is one version of an application's loomplane.yaml.
 type Manifest struct {
 	Version   int                 `json:"version" yaml:"version"`
-	Defaults  Defaults            `json:"defaults,omitzero" yaml:"defaults,omitempty"`
+	Defaults  Defaults            `json:"defaults,omitzero" yaml:"defaults,omitempty" optional:"true"`
 	Services  map[string]Service  `json:"services,omitempty" yaml:"services,omitempty"`
 	Resources map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
 	Gateways  map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
 	// Links join two clouds' private networks, so services on one reach
 	// what's private on the other.
 	Links  map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
-	Ignore Ignore          `json:"ignore,omitzero" yaml:"ignore,omitempty"`
+	Ignore Ignore          `json:"ignore,omitzero" yaml:"ignore,omitempty" optional:"true"`
 	Held   Held            `json:"held,omitzero" yaml:"held,omitempty" optional:"true"`
 }
 
