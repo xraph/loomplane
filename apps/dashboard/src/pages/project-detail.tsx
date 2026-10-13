@@ -276,7 +276,7 @@ function Body({
               color={style.color}
               onChange={mayEdit ? restyle : undefined}
             />
-            <span className="min-w-0 truncate">{project.name}</span>
+            <span className="min-w-0 wrap-break-word">{project.name}</span>
           </span>
         }
         description={project.description || undefined}

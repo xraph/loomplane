@@ -37,7 +37,7 @@ export function PageHeading({
 }) {
   return (
     <header className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-      <div className="grid min-w-0 gap-2">
+      <div className="grid min-w-0 grid-cols-1 gap-2">
         {eyebrow}
         <h1 className="text-[28px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-[32px]">
           {title}
