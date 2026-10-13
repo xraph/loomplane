@@ -6,6 +6,20 @@ It costs money while it runs. Most of it is the few minutes services and databas
 
 ## Running it
 
+### Verify the dashboard flow on Vercel
+
+You can also test the managed deployment controls through a running Loomplane dashboard, using the Vercel account you connect under Integrations. Keep the token in that form. You don't need to export it for this flow.
+
+1. Create a separate test project from a public web app or static site and analyze it. `aurorascharff/astro-demo` at commit `71eae662d03453c3b8333f59de368783828395d0` is a static Astro sample with no backing resources.
+2. Save the draft in the Deploy tab, select Vercel for the service, and check the cloud account shown for the environment. With several ready Vercel accounts, select the one you set aside for testing.
+3. Create a plan. Check the source commit and manifest revision, confirm that its only creation is the test service, then approve it.
+4. Wait for the deployment to succeed. Open the served URL, navigate to another route and exercise a client control. The Astro sample's Islands page has a Svelte counter you can increment.
+5. Turn the test service off in Deployment targets and save the placement. Plan again, review its deletion, and approve cleanup. Check that cleanup succeeds, the environment has no service binding, and the old URL no longer serves the app.
+
+The October 13, 2026 browser run completed this sequence with the Astro sample, including the interactive counter and Vercel project removal. This verifies Vercel's static-site path. The other targets still need their own cloud acceptance runs.
+
+### Run the acceptance harness
+
 You'll need the compose Postgres (`make up`), a public GitHub repository Loomplane can analyze, and a `loomplane.yaml` for it. Then set the accounts you want to test and run it:
 
 ```bash

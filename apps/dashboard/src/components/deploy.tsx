@@ -122,6 +122,8 @@ import {
 } from "@/lib/plans"
 import { cn } from "@/lib/utils"
 import { ManifestHistory } from "@/components/manifest-history"
+import { DeploymentTargets } from "@/components/deployment-targets"
+import { useDeploymentWrites } from "@/lib/deployment-writes"
 
 export function DeployTab({
   project,
@@ -134,12 +136,27 @@ export function DeployTab({
   analysis?: Analysis
 }) {
   const [planID, setPlanID] = useState<string | null>(null)
+  const [selectedEnvironment, setEnvironment] = useState("")
+  const { busy, onPendingChange } = useDeploymentWrites(project.id)
+  const environment = environments.some((e) => e.name === selectedEnvironment)
+    ? selectedEnvironment
+    : (environments[0]?.name ?? "")
   return (
     <div className="grid gap-6">
-      <ManifestCard project={project} analysis={analysis} />
+      <ManifestCard
+        project={project}
+        analysis={analysis}
+        environments={environments}
+        environment={environment}
+        onEnvironment={setEnvironment}
+        onPendingChange={onPendingChange}
+      />
       <PlansCard
         project={project}
         environments={environments}
+        environment={environment}
+        onEnvironment={setEnvironment}
+        busy={busy}
         onOpen={setPlanID}
       />
       <DeploymentsCard project={project} onOpen={setPlanID} />
@@ -162,20 +179,48 @@ export function DeployTab({
 function ManifestCard({
   project,
   analysis,
+  environments,
+  environment,
+  onEnvironment,
+  onPendingChange,
 }: {
   project: Project
   analysis?: Analysis
+  environments: Environment[]
+  environment: string
+  onEnvironment: (value: string) => void
+  onPendingChange: (pending: boolean) => void
 }) {
   const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
   if (current.data) {
     return (
-      <ManifestEditor
-        key={current.data.id}
-        project={project}
-        yaml={current.data.yaml}
-        revision={current.data.revision}
-        savedAt={current.data.createdAt}
-      />
+      <>
+        {current.data.manifest && environment && (
+          <DeploymentTargets
+            projectId={project.id}
+            manifest={current.data.manifest}
+            environments={environments}
+            environment={environment}
+            onEnvironment={onEnvironment}
+            onPendingChange={onPendingChange}
+          />
+        )}
+        <details className="rounded-xl border p-3">
+          <summary className="cursor-pointer text-sm font-medium">
+            Edit loomplane.yaml · Revision {current.data.revision}
+          </summary>
+          <div className="pt-3">
+            <ManifestEditor
+              key={project.id}
+              project={project}
+              yaml={current.data.yaml}
+              revision={current.data.revision}
+              savedAt={current.data.createdAt}
+              onPendingChange={onPendingChange}
+            />
+          </div>
+        </details>
+      </>
     )
   }
   if (current.status === "error" && statusOf(current.error) === 404) {
@@ -195,7 +240,9 @@ function ManifestCard({
         </Empty>
       )
     }
-    return <DraftedManifest project={project} />
+    return (
+      <DraftedManifest project={project} onPendingChange={onPendingChange} />
+    )
   }
   if (current.status === "error") {
     return (
@@ -209,7 +256,13 @@ function ManifestCard({
   return <Skeleton className="h-80 w-full rounded-xl" />
 }
 
-function DraftedManifest({ project }: { project: Project }) {
+function DraftedManifest({
+  project,
+  onPendingChange,
+}: {
+  project: Project
+  onPendingChange: (pending: boolean) => void
+}) {
   const draft = useQuery(useManifestsDraft, { path: { id: project.id } })
   if (draft.status === "error") {
     return (
@@ -226,6 +279,7 @@ function DraftedManifest({ project }: { project: Project }) {
       project={project}
       yaml={draft.data.yaml}
       draftedFrom={lockLabel(draft.data.sources)}
+      onPendingChange={onPendingChange}
     />
   )
 }
@@ -234,12 +288,13 @@ function DraftedManifest({ project }: { project: Project }) {
  * ManifestEditor edits loomplane.yaml as text. A save that doesn't parse
  * comes back with every problem and where it is.
  */
-function ManifestEditor({
+export function ManifestEditor({
   project,
   yaml,
   revision,
   savedAt,
   draftedFrom,
+  onPendingChange,
 }: {
   project: Project
   yaml: string
@@ -247,22 +302,37 @@ function ManifestEditor({
   savedAt?: string
   /** draftedFrom names the commits a draft was made from; set for a draft. */
   draftedFrom?: string
+  onPendingChange?: (pending: boolean) => void
 }) {
   const { can } = useOrganization()
   const mayEdit = can("project:update")
   const save = useMutation(useManifestsSave)
   const invalidate = useInvalidate()
   const [text, setText] = useState(yaml)
+  const [lastYAML, setLastYAML] = useState(yaml)
+  const [conflict, setConflict] = useState(false)
   const [problems, setProblems] = useState<string[]>([])
+  // A placement save can refresh this editor while it has local changes.
+  // Adopt the new YAML only when there's no draft to preserve.
+  if (lastYAML !== yaml) {
+    setLastYAML(yaml)
+    if (text === lastYAML || text === yaml) {
+      setText(yaml)
+      setConflict(false)
+    } else {
+      setConflict(true)
+    }
+  }
   const dirty = text !== yaml
   const drafted = draftedFrom !== undefined
 
   const submit = async () => {
     setProblems([])
+    onPendingChange?.(true)
     try {
       const rev = await save.mutateAsync({
         path: { id: project.id },
-        body: { yaml: text },
+        body: { yaml: text, baseRevision: revision ?? 0 },
       })
       invalidate(useManifestsCurrent)
       toast.success(
@@ -271,9 +341,12 @@ function ManifestEditor({
           : `Saved revision ${rev.revision}`
       )
     } catch (err) {
+      if (statusOf(err) === 409) invalidate(useManifestsCurrent)
       setProblems(
         manifestProblems(messageOf(err, "The manifest wasn't saved."))
       )
+    } finally {
+      onPendingChange?.(false)
     }
   }
 
@@ -307,6 +380,15 @@ function ManifestEditor({
         </CardAction>
       </CardHeader>
       <CardContent className="grid gap-3">
+        {conflict && (
+          <Alert>
+            <AlertDescription>
+              A newer manifest revision was saved. Your unsaved YAML is
+              preserved. Copy your changes, then undo to load the latest
+              revision before saving.
+            </AlertDescription>
+          </Alert>
+        )}
         <Textarea
           aria-label="Manifest"
           value={text}
@@ -345,6 +427,7 @@ function ManifestEditor({
                 className="rounded-full"
                 onClick={() => {
                   setText(yaml)
+                  setConflict(false)
                   setProblems([])
                 }}
               >
@@ -354,7 +437,7 @@ function ManifestEditor({
             )}
             <Button
               className="rounded-full"
-              disabled={(!dirty && !drafted) || save.isPending}
+              disabled={(!dirty && !drafted) || save.isPending || conflict}
               onClick={() => void submit()}
             >
               {save.isPending && <Spinner />}
@@ -383,10 +466,16 @@ function manifestProblems(message: string): string[] {
 function PlansCard({
   project,
   environments,
+  environment,
+  onEnvironment,
+  busy,
   onOpen,
 }: {
   project: Project
   environments: Environment[]
+  environment: string
+  onEnvironment: (value: string) => void
+  busy: boolean
   onOpen: (id: string) => void
 }) {
   const { can } = useOrganization()
@@ -409,6 +498,9 @@ function PlansCard({
           <PlanControls
             project={project}
             environments={environments}
+            environment={environment}
+            onEnvironment={onEnvironment}
+            busy={busy}
             onPlanned={(id) => {
               void plans.refetch()
               onOpen(id)
@@ -491,15 +583,20 @@ function PlansCard({
 function PlanControls({
   project,
   environments,
+  environment,
+  onEnvironment,
+  busy,
   onPlanned,
 }: {
   project: Project
   environments: Environment[]
+  environment: string
+  onEnvironment: (value: string) => void
+  busy: boolean
   onPlanned: (id: string) => void
 }) {
   const create = useMutation(usePlansCreate)
   const sources = useQuery(useSourcesList, { path: { id: project.id } })
-  const [environment, setEnvironment] = useState(environments[0]?.name ?? "")
   const deployed = useQuery(useDeployedList, {
     path: { id: project.id, environment },
   })
@@ -563,7 +660,7 @@ function PlanControls({
         ))}
       <Select
         value={environment}
-        onValueChange={(v) => setEnvironment(v ?? environment)}
+        onValueChange={(v) => onEnvironment(v ?? environment)}
       >
         <SelectTrigger size="sm" aria-label="Environment" className="min-w-32">
           <SelectValue />
@@ -581,6 +678,7 @@ function PlanControls({
         className="rounded-full"
         disabled={
           !environment ||
+          busy ||
           create.isPending ||
           (aliases.length > 0 && chosen.length === 0)
         }

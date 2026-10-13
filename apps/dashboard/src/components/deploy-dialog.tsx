@@ -7,6 +7,7 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import { QueryError } from "@/components/query-error"
+import { DeploymentAccounts } from "@/components/deployment-targets"
 import {
   useDeployedList,
   useEnvironmentsList,
@@ -55,6 +56,7 @@ import { chosenScope, lockedOn, scopeBody, toggleScope } from "@/lib/plans"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
+import { useDeploymentWrites } from "@/lib/deployment-writes"
 
 export type DeployPreset = { project?: string; environment?: string }
 
@@ -251,6 +253,7 @@ function Choices({
   const create = useMutation(usePlansCreate)
   const sources = useQuery(useSourcesList, { path: { id: project.id } })
   const [environment, setEnvironment] = useState(initial)
+  const { busy, onPendingChange } = useDeploymentWrites(project.id)
   const deployed = useQuery(useDeployedList, {
     path: { id: project.id, environment },
   })
@@ -326,6 +329,11 @@ function Choices({
           ))}
         </ToggleGroup>
       </Field>
+      <DeploymentAccounts
+        projectId={project.id}
+        environment={environment}
+        onPendingChange={onPendingChange}
+      />
       {aliases.length > 1 && (
         <Field>
           <FieldLabel>Repositories that move</FieldLabel>
@@ -375,6 +383,7 @@ function Choices({
           type="submit"
           disabled={
             create.isPending ||
+            busy ||
             !sources.data ||
             !deployed.data ||
             sources.status === "error" ||

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -12,6 +13,217 @@ import (
 // Edits change a manifest's YAML in place, through its node tree, so the
 // comments and order someone wrote survive: a save from a parsed
 // manifest would drop them.
+
+// Placement changes where an existing service, resource or gateway runs.
+// A nil field leaves its value alone; an empty string restores inheritance.
+type Placement struct {
+	Section     string  `json:"section"`
+	Name        string  `json:"name"`
+	Environment string  `json:"environment,omitempty"`
+	Provider    *string `json:"provider,omitempty"`
+	Region      *string `json:"region,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
+}
+
+// WithPlacement edits only placement fields, preserving source, needs and
+// configuration for every other environment.
+func WithPlacement(doc []byte, p Placement) ([]byte, error) {
+	if _, err := Parse(doc); err != nil {
+		return nil, err
+	}
+	if !slices.Contains([]string{"services", "resources", "gateways"}, p.Section) ||
+		(p.Provider == nil && p.Region == nil && p.Enabled == nil) {
+		return nil, fmt.Errorf("%w: name a service, resource or gateway and its placement changes", ErrInvalid)
+	}
+	if p.Environment == "" && p.Section != "services" && p.Enabled != nil {
+		return nil, fmt.Errorf("%w: enabled on %s needs an environment", ErrInvalid, p.Section)
+	}
+	if p.Environment != "" && !envRE.MatchString(p.Environment) {
+		return nil, fmt.Errorf("%w: %s isn't an environment name", ErrInvalid, p.Environment)
+	}
+	_, file, err := mapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	budget := MaxSize
+	file, err = detachedPlacementNode(file, 0, &budget)
+	if err != nil {
+		return nil, err
+	}
+	root := file.Content[0]
+	section := child(root, p.Section)
+	if section == nil {
+		return nil, fmt.Errorf("%w: %s doesn't exist", ErrInvalid, p.Section)
+	}
+	if err := placementMapping(section); err != nil {
+		return nil, err
+	}
+	target := child(section, p.Name)
+	if target == nil {
+		return nil, fmt.Errorf("%w: %s.%s doesn't exist", ErrInvalid, p.Section, p.Name)
+	}
+	if err := placementMapping(target); err != nil {
+		return nil, err
+	}
+	if p.Environment != "" {
+		envs := child(target, "environments")
+		if envs == nil {
+			envs = &yaml.Node{Kind: yaml.MappingNode}
+			target.Content = append(target.Content, scalar("environments"), envs)
+		}
+		if err := placementMapping(envs); err != nil {
+			return nil, err
+		}
+		target = child(envs, p.Environment)
+		if target == nil {
+			target = &yaml.Node{Kind: yaml.MappingNode}
+			envs.Content = append(envs.Content, scalar(p.Environment), target)
+		}
+		if err := placementMapping(target); err != nil {
+			return nil, err
+		}
+	}
+	for _, field := range []struct {
+		key   string
+		value *string
+	}{{"provider", p.Provider}, {"region", p.Region}} {
+		if field.value != nil {
+			setPlacementField(target, field.key, scalar(*field.value), *field.value == "")
+		}
+	}
+	if p.Enabled != nil {
+		value := &yaml.Node{}
+		if err := value.Encode(*p.Enabled); err != nil {
+			return nil, err
+		}
+		setPlacementField(target, "enabled", value, false)
+	}
+	return encode(file)
+}
+
+// Detach aliases before editing so shared settings in another environment
+// keep their original values. Empty YAML mappings often parse as null.
+func placementMapping(n *yaml.Node) error {
+	if n.Kind == yaml.AliasNode {
+		budget := MaxSize
+		clone, err := detachedPlacementNode(n, 0, &budget)
+		if err != nil {
+			return err
+		}
+		*n = *clone
+	}
+	if n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
+		n.Kind, n.Tag, n.Value, n.Content = yaml.MappingNode, "!!map", "", nil
+	}
+	if n.Kind != yaml.MappingNode {
+		return fmt.Errorf("%w: placement settings must be a mapping", ErrInvalid)
+	}
+	return nil
+}
+
+func detachedPlacementNode(n *yaml.Node, depth int, budget *int) (*yaml.Node, error) {
+	if n == nil || depth > 64 || *budget <= 0 {
+		return nil, fmt.Errorf("%w: placement alias is too deeply nested", ErrInvalid)
+	}
+	*budget--
+	if n.Kind == yaml.AliasNode {
+		clone, err := detachedPlacementNode(n.Alias, depth+1, budget)
+		if err != nil {
+			return nil, err
+		}
+		if n.HeadComment != "" {
+			clone.HeadComment = n.HeadComment
+		}
+		if n.LineComment != "" {
+			clone.LineComment = n.LineComment
+		}
+		if n.FootComment != "" {
+			clone.FootComment = n.FootComment
+		}
+		return clone, nil
+	}
+	clone := *n
+	clone.Anchor, clone.Alias = "", nil
+	clone.Content = make([]*yaml.Node, 0, len(n.Content))
+	for _, child := range n.Content {
+		c, err := detachedPlacementNode(child, depth+1, budget)
+		if err != nil {
+			return nil, err
+		}
+		clone.Content = append(clone.Content, c)
+	}
+	if clone.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(clone.Content); i += 2 {
+			if clone.Content[i].Tag == "!!merge" {
+				retainPlacementComments(&clone, clone.Content[i], clone.Content[i+1])
+			}
+		}
+		clone.Content = explicitPlacementFields(clone.Content)
+	}
+	return &clone, nil
+}
+
+// YAML merge sequences give earlier mappings precedence, while explicit
+// fields always win. Materialize them so clearing a field really clears it.
+func explicitPlacementFields(content []*yaml.Node) []*yaml.Node {
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(content); i += 2 {
+		if content[i].Tag != "!!merge" {
+			seen[content[i].Value] = true
+		}
+	}
+	out := make([]*yaml.Node, 0, len(content))
+	for i := 0; i+1 < len(content); i += 2 {
+		key, value := content[i], content[i+1]
+		if key.Tag != "!!merge" {
+			out = append(out, key, value)
+			continue
+		}
+		mappings := []*yaml.Node{value}
+		if value.Kind == yaml.SequenceNode {
+			mappings = value.Content
+		}
+		for _, mapping := range mappings {
+			for j := 0; j+1 < len(mapping.Content); j += 2 {
+				k, v := mapping.Content[j], mapping.Content[j+1]
+				if seen[k.Value] {
+					continue
+				}
+				seen[k.Value] = true
+				out = append(out, k, v)
+			}
+		}
+	}
+	return out
+}
+
+func setPlacementField(target *yaml.Node, key string, value *yaml.Node, remove bool) {
+	for i := 0; i+1 < len(target.Content); i += 2 {
+		if target.Content[i].Value != key {
+			continue
+		}
+		if remove {
+			retainPlacementComments(target, target.Content[i], target.Content[i+1])
+			target.Content = append(target.Content[:i], target.Content[i+2:]...)
+		} else {
+			value.HeadComment, value.LineComment, value.FootComment = target.Content[i+1].HeadComment, target.Content[i+1].LineComment, target.Content[i+1].FootComment
+			target.Content[i+1] = value
+		}
+		return
+	}
+	if !remove {
+		target.Content = append(target.Content, scalar(key), value)
+	}
+}
+
+func retainPlacementComments(target *yaml.Node, nodes ...*yaml.Node) {
+	comments := make([]string, 0, 1+3*len(nodes))
+	comments = append(comments, target.HeadComment)
+	for _, n := range nodes {
+		comments = append(comments, n.HeadComment, n.LineComment, n.FootComment)
+	}
+	target.HeadComment = strings.TrimSpace(strings.Join(comments, "\n"))
+}
 
 // WithResource adds a resource to a manifest's YAML. It refuses a name a
 // service or resource already has.

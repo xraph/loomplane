@@ -467,6 +467,7 @@ function Body({
         </TabsContent>
         <TabsContent value="deploy">
           <DeployTab
+            key={project.id}
             project={project}
             environments={environments ?? []}
             analysis={analyses.shown}

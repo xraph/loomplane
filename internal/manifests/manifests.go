@@ -32,9 +32,10 @@ var (
 
 // Revision is one saved version of a project's manifest.
 type Revision struct {
-	ID        string `json:"id" forge:"id"`
-	OrgID     string `json:"org_id"`
-	ProjectID string `json:"project_id"`
+	expectedRevision *int
+	ID               string `json:"id" forge:"id"`
+	OrgID            string `json:"org_id"`
+	ProjectID        string `json:"project_id"`
 	// Revision counts from 1 within the project.
 	Revision int `json:"revision"`
 	// YAML is the manifest as it was saved, comments and all.
@@ -88,15 +89,20 @@ func NewService(store Store, prj Projects, authz Authorizer, audit projects.Audi
 // SaveInput is a new manifest, as YAML. A form that builds a manifest
 // sends Manifest instead, and the service writes the YAML.
 type SaveInput struct {
-	YAML     string             `json:"yaml,omitempty"`
-	Manifest *manifest.Manifest `json:"manifest,omitempty"`
+	// BaseRevision makes a save conditional on the revision you read.
+	// Zero expects no saved manifest; nil allows an unconditional save.
+	BaseRevision *int               `json:"base_revision,omitempty"`
+	YAML         string             `json:"yaml,omitempty"`
+	Manifest     *manifest.Manifest `json:"manifest,omitempty"`
 }
 
 // EditInput is one change to the current manifest, made to its YAML so
-// the comments in it survive: add a resource, or ignore a resource kind.
+// the comments in it survive: add a resource, ignore a resource kind or
+// change an existing entry's placement.
 type EditInput struct {
-	AddResource *NewResource `json:"add_resource,omitempty"`
-	Ignore      string       `json:"ignore,omitempty"`
+	AddResource *NewResource        `json:"add_resource,omitempty"`
+	Ignore      string              `json:"ignore,omitempty"`
+	Placement   *manifest.Placement `json:"placement,omitempty"`
 }
 
 // NewResource is a resource to add to the manifest.
@@ -120,21 +126,29 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 		return nil, false, err
 	}
 	var out []byte
+	edits := 0
+	for _, present := range []bool{in.AddResource != nil, in.Ignore != "", in.Placement != nil} {
+		if present {
+			edits++
+		}
+	}
 	switch {
-	case in.AddResource != nil && in.Ignore != "":
+	case edits > 1:
 		return nil, false, fmt.Errorf("%w: make one edit at a time", ErrInvalid)
 	case in.AddResource != nil:
 		r := in.AddResource
 		out, err = manifest.WithResource([]byte(cur.YAML), strings.TrimSpace(r.Name), manifest.Resource{Kind: r.Kind, Provider: r.Provider})
 	case in.Ignore != "":
 		out, err = manifest.WithIgnored([]byte(cur.YAML), strings.TrimSpace(in.Ignore))
+	case in.Placement != nil:
+		out, err = manifest.WithPlacement([]byte(cur.YAML), *in.Placement)
 	default:
-		return nil, false, fmt.Errorf("%w: say what to change: add_resource or ignore", ErrInvalid)
+		return nil, false, fmt.Errorf("%w: say what to change: add_resource, ignore or placement", ErrInvalid)
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	return s.Save(ctx, p, projectID, SaveInput{YAML: string(out)})
+	return s.Save(ctx, p, projectID, SaveInput{YAML: string(out), BaseRevision: &cur.Revision})
 }
 
 // Current returns the project's manifest.
@@ -178,6 +192,16 @@ func (s *Service) Save(ctx context.Context, p security.Principal, projectID stri
 		return nil, false, err
 	}
 	cur, err := s.store.CurrentRevision(ctx, p.OrgID, projectID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, false, err
+	}
+	base := 0
+	if cur != nil {
+		base = cur.Revision
+	}
+	if in.BaseRevision != nil && base != *in.BaseRevision {
+		return nil, false, ErrConflict
+	}
 	switch {
 	case err == nil && cur.Digest == digest && cur.YAML == text:
 		return cur, false, nil
@@ -189,7 +213,8 @@ func (s *Service) Save(ctx context.Context, p security.Principal, projectID stri
 		return nil, false, fmt.Errorf("generate manifest id: %w", err)
 	}
 	r := &Revision{
-		ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, YAML: text, Manifest: m, Digest: digest,
+		expectedRevision: in.BaseRevision,
+		ID:               id.String(), OrgID: p.OrgID, ProjectID: projectID, YAML: text, Manifest: m, Digest: digest,
 		CreatedBy: p.UserID, CreatedAt: s.now().UTC(),
 	}
 	if err := s.store.CreateRevision(ctx, r); err != nil {

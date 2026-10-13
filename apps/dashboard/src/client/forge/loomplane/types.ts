@@ -329,6 +329,14 @@ export interface EditInputBody {
   provider?: string;
 };
   ignore?: string;
+  placement?: {
+  enabled?: boolean;
+  environment?: string;
+  name: string;
+  provider?: string;
+  region?: string;
+  section: string;
+};
 }
 
 export interface EnvLink {
@@ -680,6 +688,7 @@ export interface Runs {
 }
 
 export interface SaveInputBody {
+  baseRevision?: number;
   manifest?: {
   defaults?: Defaults;
   gateways?: Record<string, any>;

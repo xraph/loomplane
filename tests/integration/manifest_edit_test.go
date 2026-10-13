@@ -63,4 +63,27 @@ func TestManifest_editsFromAPlanKeepTheComments(t *testing.T) {
 	c.must(http.StatusUnprocessableEntity, http.MethodPost, base+"/manifest/edits",
 		map[string]any{"add_resource": map[string]string{"name": "api", "kind": "redis"}}, nil)
 	c.must(http.StatusUnprocessableEntity, http.MethodPost, base+"/manifest/edits", map[string]any{}, nil)
+
+	c.must(http.StatusCreated, http.MethodPost, base+"/manifest/edits", map[string]any{"placement": map[string]any{
+		"section": "services", "name": "api", "environment": "preview", "provider": "ecs-fargate", "region": "us-east-1", "enabled": false,
+	}}, &rev)
+	for _, want := range []string{"# its module", "provider: cloud-run", "preview:", "provider: ecs-fargate", "enabled: false"} {
+		if !strings.Contains(rev.YAML, want) {
+			t.Errorf("placement edit lost %q: %s", want, rev.YAML)
+		}
+	}
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, base+"/manifest/edits", map[string]any{"placement": map[string]string{
+		"section": "services", "name": "missing", "provider": "vercel",
+	}}, nil)
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, base+"/manifest/edits", map[string]any{"ignore": "redis", "placement": map[string]string{
+		"section": "services", "name": "api", "provider": "vercel",
+	}}, nil)
+
+	// A raw editor that read revision 1 must not overwrite later placement edits.
+	c.must(http.StatusConflict, http.MethodPut, base+"/manifest", map[string]any{"yaml": yaml, "base_revision": 1}, nil)
+	var latest revision
+	c.must(http.StatusOK, http.MethodGet, base+"/manifest", nil, &latest)
+	if latest.Revision != rev.Revision || latest.YAML != rev.YAML {
+		t.Fatal("a stale raw save overwrote the latest placement")
+	}
 }

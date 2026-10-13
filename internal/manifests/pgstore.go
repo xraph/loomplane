@@ -49,8 +49,12 @@ func (s *PgStore) CreateRevision(ctx context.Context, r *Revision) error {
 	err := s.db.QueryRow(ctx, `INSERT INTO loomplane_manifests (`+revisionColumns+`)
 		SELECT $1, $2, $3, COALESCE(MAX(revision), 0) + 1, $4, $5, $6, $7
 		FROM loomplane_manifests WHERE project_id = $3
+		HAVING $8::integer IS NULL OR COALESCE(MAX(revision), 0) = $8::integer
 		RETURNING revision`,
-		r.ID, r.OrgID, r.ProjectID, r.YAML, r.Digest, r.CreatedBy, r.CreatedAt).Scan(&r.Revision)
+		r.ID, r.OrgID, r.ProjectID, r.YAML, r.Digest, r.CreatedBy, r.CreatedAt, r.expectedRevision).Scan(&r.Revision)
+	if errors.Is(err, pgx.ErrNoRows) && r.expectedRevision != nil {
+		return ErrConflict
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return ErrConflict

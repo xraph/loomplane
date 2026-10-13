@@ -4,6 +4,16 @@
 
 Nothing in it is Forge, or Go. Point a YAML language server at `pkg/manifest/schema.json` (its `$id` is `https://loomplane.dev/schemas/loomplane.v1.json`) and you get completion and checks as you type.
 
+## Choose managed deployment targets
+
+Open your project's Deploy tab and save the drafted manifest. The Deployment targets panel lets you select a provider, region and enabled status for each service, resource and gateway in the selected environment. Only available providers that support the workload or resource are offered. Vercel runs web apps and static sites; workers need a target such as ECS on Fargate or Render.
+
+Save each placement. These edits create manifest revisions and preserve your YAML comments, source paths, dependencies and other environment settings. Changing provider clears the environment's region override. You can leave the region empty to inherit the provider's placement rules, or enter a region and review any warnings in the plan. Expand Edit loomplane.yaml for settings outside the placement controls.
+
+Choose the cloud accounts below the placements, or in the New deployment dialog. Each environment uses one connection per cloud, shared by its services and resources. With one ready account, Loomplane selects it automatically. With several, you choose. Account choices are saved on the server and used by dashboard, CLI and API plans.
+
+Create a plan. Review its destinations, changes and findings before approving it. Saving a placement or selecting an account doesn't provision anything; approval starts the deployment. Turning an existing service off can produce a deletion in the next plan, so review that change too. Existing servers and Kubernetes clusters need a compatible provider plugin.
+
 ```yaml
 version: 1
 

@@ -3235,6 +3235,33 @@
           },
           "ignore": {
             "type": "string"
+          },
+          "placement": {
+            "type": "object",
+            "required": [
+              "section",
+              "name"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "section": {
+                "type": "string"
+              }
+            }
           }
         }
       },
@@ -4504,6 +4531,9 @@
       "SaveInputBody": {
         "type": "object",
         "properties": {
+          "base_revision": {
+            "type": "integer"
+          },
           "manifest": {
             "type": "object",
             "required": [
