@@ -15,6 +15,9 @@ export function AuthLayout({
   return (
     <main className="auth-layout">
       <h1 className="sr-only">{title}</h1>
+      <div className="auth-watermark" aria-hidden="true">
+        <WovenThreads />
+      </div>
       <section className="auth-access" aria-label="Account access">
         <header className="auth-toolbar">
           <ModeToggle />
@@ -22,30 +25,6 @@ export function AuthLayout({
         <div className="auth-content">{children}</div>
         <footer className="auth-footer">Loomplane by Xraph</footer>
       </section>
-
-      <aside className="auth-story" aria-labelledby="auth-story-title">
-        <div className="auth-story-heading">
-          <h2 id="auth-story-title">
-            Your infrastructure,
-            <br />
-            woven together.
-          </h2>
-          <p>A home for your projects and environments.</p>
-        </div>
-
-        <div className="auth-story-art" aria-hidden="true">
-          <WovenThreads />
-        </div>
-
-        <div className="auth-story-footer">
-          <span className="auth-story-line" aria-hidden="true" />
-          <p>
-            Bring your team together.
-            <br />
-            Give every project a place to grow.
-          </p>
-        </div>
-      </aside>
     </main>
   )
 }
@@ -62,14 +41,6 @@ function WovenThreads() {
       aria-hidden="true"
     >
       <defs>
-        <pattern
-          id="auth-weave-grid"
-          width="32"
-          height="32"
-          patternUnits="userSpaceOnUse"
-        >
-          <path d="M32 0H0V32" stroke="currentColor" strokeOpacity="0.06" />
-        </pattern>
         <mask id="auth-weave-under">
           <rect width="640" height="480" fill="white" />
           {threads.flatMap((row) =>
@@ -107,7 +78,6 @@ function WovenThreads() {
         </mask>
       </defs>
 
-      <rect width="640" height="480" fill="url(#auth-weave-grid)" />
       <g
         stroke="var(--auth-thread-paper)"
         strokeWidth="7"

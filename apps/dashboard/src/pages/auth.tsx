@@ -35,7 +35,7 @@ export function AuthPage({
           description="Sign in to your projects and environments."
           signUpUrl="/sign-up"
           logo={<BrandLogo />}
-          align="left"
+          align="center"
           variant="borderless"
           className="auth-card"
           onSuccess={() => {
@@ -52,7 +52,7 @@ export function AuthPage({
         <SignUpForm
           signInUrl="/sign-in"
           logo={<BrandLogo />}
-          align="left"
+          align="center"
           variant="borderless"
           className="auth-card"
           onSuccess={() => {
