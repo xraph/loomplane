@@ -108,6 +108,12 @@ func AliasFor(name string) string {
 	return s
 }
 
+// branchRef tidies a branch someone typed, so a source stores the name
+// GitHub's push events compare with: "refs/heads/main" is kept as "main".
+func branchRef(ref string) string {
+	return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/")
+}
+
 // CleanRoot tidies a directory someone typed: no leading or trailing
 // slash, and "" for the whole repository. A directory that climbs out of
 // the repository is refused.

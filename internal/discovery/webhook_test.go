@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/security"
 )
 
 func TestService_startFromPushAnalyzesTheSourcesTrackedBranch(t *testing.T) {
@@ -151,5 +153,40 @@ func TestWebhooks_oneSourceFailingDoesntStopTheRest(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "analyze api of proj_b: queue down") {
 		t.Fatalf("error %v", err)
+	}
+}
+
+func TestWebhooks_aRefStoredAsAFullBranchNameStillMatches(t *testing.T) {
+	var started []string
+	w := &Webhooks{
+		Sources: func(context.Context, string) ([]*Source, error) {
+			return []*Source{
+				{ID: "src_full", OrgID: "org_a", Alias: "mono", Repository: "acme/mono", Ref: "refs/heads/main"},
+				{ID: "src_other", OrgID: "org_a", Alias: "rel", Repository: "acme/mono", Ref: "refs/heads/release"},
+			}, nil
+		},
+		Start: func(_ context.Context, src *Source) (*Analysis, error) {
+			started = append(started, src.ID)
+			return &Analysis{}, nil
+		},
+	}
+	if n, err := w.Handle(context.Background(), "push", push("refs/heads/main", 0, false)); err != nil || n != 1 ||
+		!slices.Equal(started, []string{"src_full"}) {
+		t.Fatalf("started %d %v, %v", n, started, err)
+	}
+}
+
+func TestSources_aBranchIsSavedWithoutRefsHeads(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	web, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "web", Ref: " refs/heads/main "})
+	if err != nil || web.Ref != "main" {
+		t.Fatalf("AddSource: %v, %+v", err, web)
+	}
+	ref := "refs/heads/release"
+	web, err = f.svc.UpdateSource(ctx, dev, "proj_bare", "web", UpdateSourceInput{Ref: &ref})
+	if err != nil || web.Ref != "release" {
+		t.Fatalf("UpdateSource: %v, %+v", err, web)
 	}
 }

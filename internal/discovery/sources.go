@@ -118,7 +118,7 @@ func (s *Service) addSource(ctx context.Context, p security.Principal, projectID
 	if err != nil {
 		return nil, err
 	}
-	ref := strings.TrimSpace(in.Ref)
+	ref := branchRef(in.Ref)
 	if ref != "" && !repositories.ValidRef(ref) {
 		return nil, fmt.Errorf("%w: %q isn't a branch, tag or commit name", ErrInvalidSource, ref)
 	}
@@ -209,7 +209,7 @@ func (s *Service) UpdateSource(ctx context.Context, p security.Principal, projec
 		fields = append(fields, "root")
 	}
 	if in.Ref != nil {
-		ref := strings.TrimSpace(*in.Ref)
+		ref := branchRef(*in.Ref)
 		if ref != "" && !repositories.ValidRef(ref) {
 			return nil, fmt.Errorf("%w: %q isn't a branch, tag or commit name", ErrInvalidSource, ref)
 		}

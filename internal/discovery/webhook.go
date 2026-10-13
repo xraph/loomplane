@@ -103,7 +103,10 @@ func (w *Webhooks) Handle(ctx context.Context, event string, body []byte) (int, 
 		}
 		// A source tracks the default branch when it names none. One that
 		// tracks another branch didn't move.
-		if !strings.EqualFold(src.Repository, repo.FullName) || (src.Ref != "" && src.Ref != repo.DefaultBranch) {
+		// A ref saved before sources were tidied may still read
+		// "refs/heads/main".
+		ref := branchRef(src.Ref)
+		if !strings.EqualFold(src.Repository, repo.FullName) || (ref != "" && ref != repo.DefaultBranch) {
 			continue
 		}
 		switch _, err := w.Start(ctx, src); {
