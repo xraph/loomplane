@@ -39,9 +39,16 @@ type ShapeProps = {
 /** Weekly deploys as dot columns; the hovered or latest week is gold. */
 export function DotBarChart({
   data,
+  floor = "quiet",
   className,
 }: {
   data: { label: string; value: number }[]
+  /**
+   * Where the bars start: "quiet" just below the quietest week, which makes
+   * busy weeks stand out when every week is busy; "zero" for small counts,
+   * where a quiet week should look quiet.
+   */
+  floor?: "quiet" | "zero"
   className?: string
 }) {
   const [hover, setHover] = useState<number | null>(null)
@@ -71,8 +78,13 @@ export function DotBarChart({
           interval={0}
           fontSize={11}
         />
-        {/* Starting below the quietest week makes busy weeks stand out. */}
-        <YAxis hide domain={["dataMin - 18", "dataMax"]} />
+        {/* See floor: below the quietest week, or from zero. */}
+        <YAxis
+          hide
+          domain={
+            floor === "zero" ? [0, "dataMax"] : ["dataMin - 18", "dataMax"]
+          }
+        />
         <ChartTooltip
           cursor={false}
           content={<ChartTooltipContent hideIndicator />}

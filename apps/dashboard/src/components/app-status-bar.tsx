@@ -9,6 +9,7 @@ import { useQuery } from "@/client/hooks"
 import { useShell } from "@/components/shell"
 import { StatusBar, StatusItem, StatusLight } from "@/components/status-bar"
 import { Link } from "@/lib/router"
+import { useRuns } from "@/lib/use-runs"
 
 export function AppStatusBar() {
   const { openCommand, openShortcuts } = useShell()
@@ -19,6 +20,9 @@ export function AppStatusBar() {
   const clouds = all.length
   const unready = all.filter((c) => c.status !== "ready").length
   const installs = github.data?.installations.length ?? 0
+  const { runs } = useRuns()
+  const deploying = runs.filter((r) => r.status === "running").length
+  const waiting = runs.filter((r) => r.status === "waiting").length
 
   return (
     <StatusBar onShortcuts={openShortcuts} onCommand={openCommand}>
@@ -40,7 +44,7 @@ export function AppStatusBar() {
         <StatusItem
           hint={
             clouds === 0
-              ? "Connect Google Cloud or Vercel under Integrations to deploy"
+              ? "Connect Google Cloud, AWS, Vercel or Render under Integrations to deploy"
               : unready > 0
                 ? `${unready} of them ${unready === 1 ? "needs" : "need"} attention under Integrations`
                 : all.map((c) => c.name).join(", ")
@@ -59,6 +63,25 @@ export function AppStatusBar() {
           </Link>
         </StatusItem>
       )}
+      <StatusItem
+        hint={
+          waiting
+            ? `${waiting} ${waiting === 1 ? "plan waits" : "plans wait"} for approval`
+            : "Plans and deployments running right now"
+        }
+        className="hidden sm:flex"
+      >
+        <Link
+          to="/deployments"
+          search={deploying || waiting ? { status: "live" } : {}}
+          className="flex items-center gap-1.5"
+        >
+          <StatusLight tone={deploying || waiting ? "warn" : "idle"} />
+          {deploying === 0 && waiting === 0
+            ? "Nothing deploying"
+            : `${deploying} deploying${waiting ? `, ${waiting} waiting` : ""}`}
+        </Link>
+      </StatusItem>
       {github.data && (
         <StatusItem
           hint={

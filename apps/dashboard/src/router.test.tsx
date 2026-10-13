@@ -18,6 +18,22 @@ vi.mock("@/pages/projects", async () => {
   }
 })
 vi.mock("@/pages/members", () => ({ Members: () => <h1>Members</h1> }))
+vi.mock("@/pages/overview", () => ({ Overview: () => <h1>Overview</h1> }))
+vi.mock("@/pages/deployments", () => ({
+  runFilters: [
+    { value: "all" },
+    { value: "live" },
+    { value: "waiting" },
+    { value: "failed" },
+    { value: "succeeded" },
+  ],
+  Deployments: ({ status }: { status: string }) => (
+    <h1>Deployments {status}</h1>
+  ),
+}))
+vi.mock("@/pages/deployment", () => ({
+  DeploymentPage: ({ id }: { id: string }) => <h1>Deployment {id}</h1>,
+}))
 vi.mock("@/pages/project-detail", () => ({
   ProjectDetail: ({ id }: { id: string }) => <h1>Project {id}</h1>,
 }))
@@ -61,9 +77,37 @@ describe("dashboard routes", () => {
     ).toBeInTheDocument()
   })
 
+  it("opens the overview at the root", async () => {
+    await open("/")
+    expect(
+      await screen.findByRole("heading", { name: "Overview" })
+    ).toBeInTheDocument()
+  })
+
+  it("filters deployments by a known status", async () => {
+    await open("/deployments?status=waiting")
+    expect(
+      await screen.findByRole("heading", { name: "Deployments waiting" })
+    ).toBeInTheDocument()
+  })
+
+  it("shows every deployment for an unknown status", async () => {
+    await open("/deployments?status=bogus")
+    expect(
+      await screen.findByRole("heading", { name: "Deployments all" })
+    ).toBeInTheDocument()
+  })
+
+  it("opens a deployment by its plan ID", async () => {
+    await open("/deployments/plan_123")
+    expect(
+      await screen.findByRole("heading", { name: "Deployment plan_123" })
+    ).toBeInTheDocument()
+  })
+
   it("navigates with links and browser back and forward", async () => {
     const user = userEvent.setup()
-    const { history } = await open("/")
+    const { history } = await open("/projects")
     await user.click(await screen.findByRole("link", { name: "Open members" }))
     expect(
       await screen.findByRole("heading", { name: "Members" })

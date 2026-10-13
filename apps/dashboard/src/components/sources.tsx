@@ -3,7 +3,6 @@
 // that adds another.
 import {
   GitBranchIcon,
-  LockIcon,
   PlusIcon,
   ScanSearchIcon,
   Trash2Icon,
@@ -14,8 +13,6 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import {
   useAnalysesCreate,
-  useGithubRepositories,
-  useGithubStatus,
   useProjectsGet,
   useProjectsGraph,
   useProjectsList,
@@ -26,6 +23,7 @@ import {
 import type { Project, Source } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { useAnalyses } from "@/components/architecture"
+import { RepositoryPicker } from "@/components/repository-picker"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -65,12 +63,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { isActive, lastRead } from "@/lib/architecture"
-import { githubRepo } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
-
-// Enough suggestions to find a repository by its first letters, few enough
-// that the dialog doesn't grow a scrollbar.
-const maxSuggestions = 5
 
 /**
  * refreshRepositories re-reads the project after its sources change: the
@@ -293,8 +286,6 @@ export function AddSourceDialog({
 }) {
   const add = useMutation(useSourcesCreate)
   const invalidate = useInvalidate()
-  const github = useQuery(useGithubStatus)
-  const connected = (github.data?.installations.length ?? 0) > 0
   const [repository, setRepository] = useState("")
   const [alias, setAlias] = useState("")
   const [root, setRoot] = useState("")
@@ -341,20 +332,13 @@ export function AddSourceDialog({
           <FieldGroup className="py-4">
             <Field>
               <FieldLabel htmlFor="source-repository">Repository</FieldLabel>
-              <Input
+              <RepositoryPicker
                 id="source-repository"
                 value={repository}
-                onChange={(e) =>
-                  setRepository(githubRepo(e.target.value) || e.target.value)
-                }
+                onChange={setRepository}
                 placeholder="acme/storefront"
-                className="font-mono"
-                spellCheck={false}
                 required
               />
-              {connected && (
-                <Suggestions typed={repository} onPick={setRepository} />
-              )}
             </Field>
             <Field>
               <FieldLabel htmlFor="source-alias">Alias</FieldLabel>
@@ -402,39 +386,5 @@ export function AddSourceDialog({
         </form>
       </DialogContent>
     </Dialog>
-  )
-}
-
-/** Suggestions offers the repositories the GitHub connection can read. */
-function Suggestions({
-  typed,
-  onPick,
-}: {
-  typed: string
-  onPick: (fullName: string) => void
-}) {
-  const repos = useQuery(useGithubRepositories)
-  const query = typed.trim().toLowerCase()
-  const matches = (repos.data?.repositories ?? [])
-    .filter((r) => r.fullName.toLowerCase() !== query)
-    .filter((r) => !query || r.fullName.toLowerCase().includes(query))
-    .slice(0, maxSuggestions)
-  if (matches.length === 0) return null
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {matches.map((r) => (
-        <Button
-          key={r.fullName}
-          type="button"
-          variant="outline"
-          size="xs"
-          className="rounded-full font-mono font-normal"
-          onClick={() => onPick(r.fullName)}
-        >
-          {r.private && <LockIcon className="text-muted-foreground" />}
-          {r.fullName}
-        </Button>
-      ))}
-    </div>
   )
 }

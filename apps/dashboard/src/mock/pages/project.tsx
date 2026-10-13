@@ -119,7 +119,7 @@ import {
   type Variable,
   variables as seedVariables,
 } from "@/mock/data"
-import { money, relative } from "@/mock/format"
+import { money, relative } from "@/lib/format"
 import { to } from "@/mock/router"
 import { useShell } from "@/mock/shell"
 import { type DeploymentView, useStore } from "@/mock/store"

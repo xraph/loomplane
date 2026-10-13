@@ -2,12 +2,16 @@
 // navigation, every project with its icon and color, and the account menu.
 // It collapses to icons (⌘B) and the projects stay visible when it does.
 import { useAuth } from "@authsome/ui-react"
+import { useRouterState } from "@tanstack/react-router"
 import {
   ActivityIcon,
   CopyIcon,
   FolderGit2Icon,
   KeyboardIcon,
+  LayoutDashboardIcon,
   LayoutGridIcon,
+  PlusIcon,
+  RocketIcon,
   ServerIcon,
   Settings2Icon,
 } from "lucide-react"
@@ -44,6 +48,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
   SidebarRail,
@@ -51,20 +56,70 @@ import {
 import { useOrganization } from "@/lib/organization"
 import { projectStyle } from "@/lib/project-style"
 import { Link, usePath } from "@/lib/router"
+import { isLive, type Run } from "@/lib/runs"
+import { useRuns } from "@/lib/use-runs"
 
 const settingsPaths = ["/members", "/variables", "/integrations", "/api-keys"]
 
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
   const { can } = useOrganization()
-  const { openNewProject } = useShell()
+  const { openDeploy, openNewProject } = useShell()
+  const { runs } = useRuns()
+  const status = useRouterState({
+    select: (s) =>
+      s.location.pathname === "/deployments"
+        ? ((s.location.search as { status?: string }).status ?? "all")
+        : "",
+  })
+  const live = runs.filter(isLive).length
+  const waiting = runs.filter((r) => r.status === "waiting").length
+  const failed = runs.filter(
+    (r) => r.status === "failed" || r.status === "blocked"
+  ).length
 
   const nav: NavItem[] = [
     {
-      title: "Projects",
-      icon: <LayoutGridIcon />,
+      title: "Overview",
+      icon: <LayoutDashboardIcon />,
       link: <Link to="/" />,
       isActive: path === "/",
+    },
+    {
+      title: "Deployments",
+      icon: <RocketIcon />,
+      isActive: path.startsWith("/deployments"),
+      items: [
+        {
+          title: "All deployments",
+          link: <Link to="/deployments" />,
+          isActive: status === "all",
+        },
+        {
+          title: "In flight",
+          link: <Link to="/deployments" search={{ status: "live" }} />,
+          isActive: status === "live",
+          badge: live || undefined,
+        },
+        {
+          title: "Needs approval",
+          link: <Link to="/deployments" search={{ status: "waiting" }} />,
+          isActive: status === "waiting",
+          badge: waiting || undefined,
+        },
+        {
+          title: "Failed",
+          link: <Link to="/deployments" search={{ status: "failed" }} />,
+          isActive: status === "failed",
+          badge: failed || undefined,
+        },
+      ],
+    },
+    {
+      title: "Projects",
+      icon: <LayoutGridIcon />,
+      link: <Link to="/projects" />,
+      isActive: path === "/projects",
     },
     {
       title: "Infrastructure",
@@ -109,13 +164,28 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
 
   return (
     <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader>
+      <SidebarHeader className="gap-3">
         <Organizations />
+        {can("deployment:create") && (
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="New deployment"
+                onClick={() => openDeploy()}
+                className="justify-center border bg-background font-medium shadow-xs group-data-[collapsible=icon]:justify-start hover:bg-background hover:shadow-sm"
+              >
+                <PlusIcon />
+                <span>New deployment</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        )}
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={nav} />
         <Projects
           path={path}
+          runs={runs}
           onNew={can("project:create") ? openNewProject : undefined}
         />
       </SidebarContent>
@@ -173,7 +243,36 @@ function Organizations() {
   )
 }
 
-function Projects({ path, onNew }: { path: string; onNew?: () => void }) {
+// The dot on a project's tile: only for what needs a look.
+function attentionFor(latest?: Run): Attention | undefined {
+  if (!latest) return undefined
+  if (latest.status === "running") {
+    return {
+      tone: "moving",
+      note: latest.deployment ? "deploying" : "planning",
+    }
+  }
+  if (latest.status === "waiting") {
+    return { tone: "waiting", note: "waiting for approval" }
+  }
+  if (latest.status === "failed") {
+    return { tone: "failed", note: "last deploy failed" }
+  }
+  if (latest.status === "blocked") {
+    return { tone: "failed", note: "plan blocked" }
+  }
+  return undefined
+}
+
+function Projects({
+  path,
+  runs,
+  onNew,
+}: {
+  path: string
+  runs: Run[]
+  onNew?: () => void
+}) {
   const list = useQuery(useProjectsList)
   if (!list.data) {
     return (
@@ -194,7 +293,7 @@ function Projects({ path, onNew }: { path: string; onNew?: () => void }) {
       projects={list.data.projects.map((p) => {
         const style = projectStyle(p)
         const attention: Attention | undefined = isReady(p.status)
-          ? undefined
+          ? attentionFor(runs.find((r) => r.projectId === p.id))
           : { tone: "moving", note: "setting up" }
         return {
           id: p.id,

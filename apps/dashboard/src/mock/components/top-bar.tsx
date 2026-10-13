@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/popover"
 import { EnvBadge } from "@/mock/components/bits"
 import { LoomThread } from "@/mock/components/loom"
-import { duration } from "@/mock/format"
+import { duration } from "@/lib/format"
 import { to } from "@/mock/router"
 import { useShell } from "@/mock/shell"
 import { isLive, useStore } from "@/mock/store"

@@ -4,6 +4,9 @@ import {
   BracesIcon,
   FolderGit2Icon,
   FolderPlusIcon,
+  LayoutDashboardIcon,
+  RocketIcon,
+  ShieldCheckIcon,
   KeyboardIcon,
   MoonIcon,
   PlugIcon,
@@ -22,6 +25,7 @@ import {
   useSourcesList,
 } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { EnvBadge, RunDot } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { useTheme } from "@/components/theme-provider"
 import {
@@ -39,6 +43,61 @@ import { repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { useNavigate, usePath } from "@/lib/router"
+import { commitLabel, type Run } from "@/lib/runs"
+import { useRuns } from "@/lib/use-runs"
+
+// The newest few runs are worth jumping to; the rest are on Deployments.
+const recentShown = 6
+
+/**
+ * RunGroups offers the plans waiting on someone and the latest runs. Only
+ * mounted while the menu is open.
+ */
+function RunGroups({ go }: { go: (r: Run) => void }) {
+  const { can } = useOrganization()
+  const { runs } = useRuns()
+  const waiting = runs.filter((r) => r.status === "waiting")
+  return (
+    <>
+      {waiting.length > 0 && can("deployment:approve") && (
+        <CommandGroup heading="Needs you">
+          {waiting.map((r) => (
+            <CommandItem
+              key={r.id}
+              value={`approve review plan ${r.project?.name ?? ""} ${r.environment} ${r.id}`}
+              onSelect={() => go(r)}
+            >
+              <ShieldCheckIcon />
+              Review the plan for {r.project?.name ?? "a project"} to{" "}
+              {r.environment}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      )}
+      {runs.length > 0 && (
+        <CommandGroup heading="Recent deployments">
+          {runs.slice(0, recentShown).map((r) => (
+            <CommandItem
+              key={r.id}
+              value={`deployment ${r.id} ${r.deployment?.id ?? ""} ${r.project?.name ?? ""} ${r.environment} ${commitLabel(r)}`}
+              onSelect={() => go(r)}
+            >
+              <RunDot status={r.status} />
+              <span className="font-medium">
+                {r.project?.name ?? "A deleted project"}
+              </span>
+              <EnvBadge env={r.environment} />
+              <span className="truncate text-muted-foreground">{r.phase}</span>
+              <CommandShortcut className="font-mono">
+                {commitLabel(r)}
+              </CommandShortcut>
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      )}
+    </>
+  )
+}
 
 /**
  * RepositoryActions offers to analyze the repositories of the project the
@@ -82,7 +141,7 @@ export function CommandMenu({
 }) {
   const navigate = useNavigate()
   const { can } = useOrganization()
-  const { openNewProject, openShortcuts } = useShell()
+  const { openDeploy, openNewProject, openShortcuts } = useShell()
   const { theme, setTheme } = useTheme()
   const list = useQuery(useProjectsList)
   const projects = list.data?.projects ?? []
@@ -127,10 +186,32 @@ export function CommandMenu({
         <CommandInput placeholder="Search projects, pages and actions" />
         <CommandList>
           <CommandEmpty>Nothing matches. Try a project name.</CommandEmpty>
+          <RunGroups
+            go={(r) => {
+              onOpenChange(false)
+              void navigate({ to: "/deployments/$id", params: { id: r.id } })
+            }}
+          />
           <CommandGroup heading="Go to">
             <CommandItem
-              value="projects home"
+              value="overview home"
               onSelect={run(() => void navigate({ to: "/" }))}
+            >
+              <LayoutDashboardIcon />
+              Overview
+              <CommandShortcut>G O</CommandShortcut>
+            </CommandItem>
+            <CommandItem
+              value="deployments plans runs"
+              onSelect={run(() => void navigate({ to: "/deployments" }))}
+            >
+              <RocketIcon />
+              Deployments
+              <CommandShortcut>G D</CommandShortcut>
+            </CommandItem>
+            <CommandItem
+              value="projects"
+              onSelect={run(() => void navigate({ to: "/projects" }))}
             >
               <FolderGit2Icon />
               Projects
@@ -150,6 +231,7 @@ export function CommandMenu({
             >
               <ActivityIcon />
               Activity
+              <CommandShortcut>G A</CommandShortcut>
             </CommandItem>
             <CommandItem
               value="variables secrets organization"
@@ -209,6 +291,16 @@ export function CommandMenu({
             <RepositoryActions projectID={projectID} onAnalyze={analyze} />
           )}
           <CommandGroup heading="Actions">
+            {can("deployment:create") && (
+              <CommandItem
+                value="new deployment deploy plan"
+                onSelect={run(() => openDeploy())}
+              >
+                <RocketIcon />
+                New deployment
+                <CommandShortcut>N</CommandShortcut>
+              </CommandItem>
+            )}
             {can("project:create") && (
               <CommandItem
                 value="new project create repository"
@@ -216,7 +308,6 @@ export function CommandMenu({
               >
                 <FolderPlusIcon />
                 New project
-                <CommandShortcut>N</CommandShortcut>
               </CommandItem>
             )}
             <CommandItem

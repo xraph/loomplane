@@ -86,13 +86,13 @@ import {
   DotRingChart,
   DottedLineChart,
   GlowBarChart,
-} from "@/mock/components/dots"
+} from "@/components/dots"
 import { LoomThread } from "@/mock/components/loom"
 import { Page, PageHeading } from "@/components/page"
 import { TopBar } from "@/mock/components/top-bar"
 import { me, organization, person, providers } from "@/mock/data"
 import { ProjectIcon } from "@/lib/project-style"
-import { duration, money, relative } from "@/mock/format"
+import { duration, money, relative } from "@/lib/format"
 import {
   buildMinutes,
   commitToLive,

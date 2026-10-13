@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { stepGroups } from "@/mock/data"
-import { duration } from "@/mock/format"
+import { duration } from "@/lib/format"
 import type { StepState, StepView } from "@/mock/store"
 
 const stateLabel: Record<StepState, string> = {

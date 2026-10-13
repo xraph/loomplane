@@ -1,5 +1,6 @@
-// What every page can reach for: the command menu, the new project dialog
-// and the shortcut sheet, plus the keyboard handling that opens them.
+// What every page can reach for: the command menu, the new deployment and
+// new project dialogs and the shortcut sheet, plus the keyboard handling
+// that opens them.
 import {
   createContext,
   type ReactNode,
@@ -12,6 +13,7 @@ import {
 } from "react"
 
 import { CommandMenu } from "@/components/command-menu"
+import { DeployDialog, type DeployPreset } from "@/components/deploy-dialog"
 import { NewProjectDialog } from "@/components/new-project-dialog"
 import {
   type ShortcutGroup,
@@ -22,6 +24,7 @@ import { useNavigate } from "@/lib/router"
 
 type Shell = {
   openCommand: () => void
+  openDeploy: (preset?: DeployPreset) => void
   openNewProject: () => void
   openShortcuts: () => void
 }
@@ -38,8 +41,11 @@ export function useShell(): Shell {
 const sequenceWindow = 1200
 
 const goTo = {
-  p: "/",
+  o: "/",
+  d: "/deployments",
+  p: "/projects",
   i: "/infrastructure",
+  a: "/activity",
   v: "/variables",
   m: "/members",
 } as const
@@ -56,14 +62,19 @@ function isEditable(target: EventTarget | null) {
 export function ShellProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const { can } = useOrganization()
-  const mayCreate = can("project:create")
+  const mayDeploy = can("deployment:create")
   const [command, setCommand] = useState(false)
+  const [deploy, setDeploy] = useState<DeployPreset | null>(null)
   const [newProject, setNewProject] = useState(false)
   const [shortcuts, setShortcuts] = useState(false)
   const pendingG = useRef(0)
 
   const openCommand = useCallback(() => setCommand(true), [])
   const openNewProject = useCallback(() => setNewProject(true), [])
+  const openDeploy = useCallback(
+    (preset?: DeployPreset) => setDeploy(preset ?? {}),
+    []
+  )
   const openShortcuts = useCallback(() => setShortcuts(true), [])
 
   useEffect(() => {
@@ -94,9 +105,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       if (e.key === "?") {
         e.preventDefault()
         setShortcuts(true)
-      } else if (key === "n" && mayCreate) {
+      } else if (key === "n" && mayDeploy) {
         e.preventDefault()
-        setNewProject(true)
+        setDeploy({})
       } else if (key === "/") {
         const search =
           document.querySelector<HTMLInputElement>("[data-page-search]")
@@ -108,11 +119,11 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     }
     window.addEventListener("keydown", onKey, { capture: true })
     return () => window.removeEventListener("keydown", onKey, { capture: true })
-  }, [navigate, mayCreate])
+  }, [navigate, mayDeploy])
 
   const value = useMemo(
-    () => ({ openCommand, openNewProject, openShortcuts }),
-    [openCommand, openNewProject, openShortcuts]
+    () => ({ openCommand, openDeploy, openNewProject, openShortcuts }),
+    [openCommand, openDeploy, openNewProject, openShortcuts]
   )
 
   const groups: ShortcutGroup[] = [
@@ -120,8 +131,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       title: "Anywhere",
       keys: [
         [["⌘", "K"], "Open the command menu"],
-        ...(mayCreate
-          ? ([[["N"], "New project"]] as [string[], string][])
+        ...(mayDeploy
+          ? ([[["N"], "New deployment"]] as [string[], string][])
           : []),
         [["/"], "Search the current page"],
         [["⌘", "B"], "Collapse the sidebar"],
@@ -132,8 +143,11 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     {
       title: "Go to",
       keys: [
+        [["G", "O"], "Overview"],
+        [["G", "D"], "Deployments"],
         [["G", "P"], "Projects"],
         [["G", "I"], "Infrastructure"],
+        [["G", "A"], "Activity"],
         [["G", "V"], "Variables"],
         [["G", "M"], "Members"],
       ],
@@ -144,6 +158,12 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     <ShellContext.Provider value={value}>
       {children}
       <CommandMenu open={command} onOpenChange={setCommand} />
+      <DeployDialog
+        preset={deploy}
+        onOpenChange={(open) => {
+          if (!open) setDeploy(null)
+        }}
+      />
       <NewProjectDialog open={newProject} onOpenChange={setNewProject} />
       <ShortcutsDialog
         groups={groups}

@@ -96,7 +96,7 @@ import {
   services,
   spendSeries,
 } from "@/mock/data"
-import { money } from "@/mock/format"
+import { money } from "@/lib/format"
 
 import { to } from "@/mock/router"
 

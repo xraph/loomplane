@@ -53,7 +53,7 @@ import { Page, PageHeading } from "@/components/page"
 import { TopBar } from "@/mock/components/top-bar"
 import { type Env, organization, person, type Project } from "@/mock/data"
 import { ProjectIcon } from "@/lib/project-style"
-import { dateTime, duration, relative } from "@/mock/format"
+import { dateTime, duration, relative } from "@/lib/format"
 import { navigate, to, useQuery } from "@/mock/router"
 import { type DeploymentView, isLive, useStore } from "@/mock/store"
 

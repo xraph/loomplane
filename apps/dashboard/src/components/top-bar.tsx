@@ -24,6 +24,7 @@ import {
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { cn } from "@/lib/utils"
 
 /** A crumb links when it has a link element to render, such as a router Link. */
 export type TopBarCrumb = { label: ReactNode; link?: ReactElement }
@@ -52,12 +53,25 @@ export function TopBar({
         <BreadcrumbList className="flex-nowrap">
           {crumbs.map((c, i) => (
             <Fragment key={i}>
-              {i > 0 && <BreadcrumbSeparator />}
-              <BreadcrumbItem className="min-w-0">
+              {i > 0 && <BreadcrumbSeparator className="hidden md:block" />}
+              {/* Every crumb but the last can shrink to an ellipsis, and on
+                  narrow screens only the last shows, so the bar stays one
+                  line. */}
+              <BreadcrumbItem
+                className={cn(
+                  "min-w-0",
+                  i < crumbs.length - 1 && "hidden max-w-48 md:inline-flex"
+                )}
+              >
                 {c.link ? (
-                  <BreadcrumbLink render={c.link}>{c.label}</BreadcrumbLink>
+                  <BreadcrumbLink
+                    render={c.link}
+                    className="truncate whitespace-nowrap"
+                  >
+                    {c.label}
+                  </BreadcrumbLink>
                 ) : (
-                  <BreadcrumbPage className="truncate">
+                  <BreadcrumbPage className="truncate whitespace-nowrap">
                     {c.label}
                   </BreadcrumbPage>
                 )}

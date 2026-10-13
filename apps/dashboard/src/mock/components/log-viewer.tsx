@@ -17,7 +17,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 import { CopyButton, segmented } from "@/mock/components/bits"
 import { steps } from "@/mock/data"
-import { clock } from "@/mock/format"
+import { clock } from "@/lib/format"
 import type { LogLevel, LogLine } from "@/mock/logs"
 
 const levels: LogLevel[] = ["info", "warn", "error"]

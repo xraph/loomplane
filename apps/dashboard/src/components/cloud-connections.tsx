@@ -1,7 +1,13 @@
-// The organization's cloud connections: the Google Cloud projects and
-// AWS, Vercel and Render accounts it deploys to. Credentials go in once and never come
-// back; the API checks each with its cloud before keeping it.
-import { CloudIcon, RefreshCwIcon, Trash2Icon, UploadIcon } from "lucide-react"
+// The organization's cloud connections: a tile for each cloud Loomplane
+// deploys to, with the accounts connected there. Credentials go in once and
+// never come back; the API checks each with its cloud before keeping it.
+import {
+  CloudIcon,
+  EllipsisIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  UploadIcon,
+} from "lucide-react"
 import { type FormEvent, useRef, useState } from "react"
 import { toast } from "sonner"
 
@@ -16,6 +22,8 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Connection } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { CloudGlyph } from "@/components/cloud-glyph"
+import { MetricCard } from "@/components/metric-card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -26,17 +34,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -45,6 +44,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Field,
   FieldDescription,
@@ -64,58 +70,110 @@ import {
   rolesFor,
 } from "@/lib/clouds"
 import { formatDate } from "@/lib/format"
+import { cloudCatalogue, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
 
-export function CloudConnections() {
+export function CloudConnections({ className }: { className?: string }) {
   const { can } = useOrganization()
   const mayManage = can("cloud_account:manage")
   const list = useQuery(useConnectionsList)
-  const [adding, setAdding] = useState(false)
+  const forms = useQuery(useConnectionCloudsList)
   const connections = list.data?.connections ?? []
+  const tiles = cloudCatalogue(forms.data?.clouds, connections)
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Clouds</CardTitle>
-        <CardDescription>
-          The Google Cloud projects and AWS, Vercel and Render accounts
-          Loomplane deploys to. Each credential is checked with its cloud before
-          it&apos;s kept, stored encrypted, and never shown again.
-        </CardDescription>
-        {mayManage && (
-          <CardAction>
-            <Button className="rounded-full" onClick={() => setAdding(true)}>
-              <CloudIcon />
-              Connect a cloud
-            </Button>
-          </CardAction>
-        )}
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        {list.status === "error" && (
-          <Alert variant="destructive">
-            <AlertDescription>
-              {messageOf(list.error, "Cloud connections couldn't be loaded.")}
-            </AlertDescription>
-          </Alert>
-        )}
-        {!list.data && list.status !== "error" && (
-          <Skeleton className="h-24 w-full" />
-        )}
-        {list.data && connections.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            {mayManage
-              ? "No clouds connected yet. Connect Google Cloud, AWS or Render for services and databases, and Vercel for web apps."
-              : "No clouds connected yet. An admin can connect one."}
+    <MetricCard icon={CloudIcon} title="Clouds" className={className}>
+      <p className="-mt-1 max-w-3xl text-sm text-muted-foreground">
+        Where Loomplane deploys. Each credential is checked with its cloud
+        before it&apos;s kept, stored encrypted, and never shown again.
+      </p>
+      {list.status === "error" && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            {messageOf(list.error, "Cloud connections couldn't be loaded.")}
+          </AlertDescription>
+        </Alert>
+      )}
+      {!list.data && list.status !== "error" ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-32 rounded-xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          {tiles.map((t) => (
+            <CloudTile
+              key={t.cloud}
+              cloud={t.cloud}
+              title={t.title}
+              connections={connections.filter((c) => c.cloud === t.cloud)}
+              mayManage={mayManage}
+            />
+          ))}
+        </div>
+      )}
+    </MetricCard>
+  )
+}
+
+function CloudTile({
+  cloud,
+  title,
+  connections,
+  mayManage,
+}: {
+  cloud: string
+  title: string
+  connections: Connection[]
+  mayManage: boolean
+}) {
+  const [connecting, setConnecting] = useState(false)
+  return (
+    <section
+      aria-label={title}
+      className="flex flex-col gap-4 rounded-xl border bg-background/50 p-4"
+    >
+      <div className="flex items-start gap-3">
+        <CloudGlyph cloud={cloud} className="size-9 rounded-lg text-[11px]" />
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <h3 className="font-medium">{title}</h3>
+          <p className="text-xs text-muted-foreground">
+            {cloudPurposes[cloud] ?? "Added by a provider plugin"}
           </p>
+        </div>
+        {mayManage && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-full"
+            onClick={() => setConnecting(true)}
+          >
+            <PlusIcon />
+            {connections.length > 0 ? "Add" : "Connect"}
+          </Button>
         )}
-        {connections.map((c) => (
-          <ConnectionRow key={c.id} connection={c} mayManage={mayManage} />
-        ))}
-      </CardContent>
-      <ConnectDialog open={adding} onOpenChange={setAdding} />
-    </Card>
+      </div>
+      {connections.length === 0 ? (
+        <p className="mt-auto border-t border-dashed pt-3 text-xs text-muted-foreground">
+          {mayManage
+            ? "Not connected."
+            : "Not connected. An admin can connect it."}
+        </p>
+      ) : (
+        <ul className="mt-auto grid gap-3 border-t pt-3">
+          {connections.map((c) => (
+            <ConnectionRow key={c.id} connection={c} mayManage={mayManage} />
+          ))}
+        </ul>
+      )}
+      <ConnectDialog
+        open={connecting}
+        onOpenChange={setConnecting}
+        cloud={cloud}
+      />
+    </section>
   )
 }
 
@@ -134,6 +192,7 @@ function ConnectionRow({
 }) {
   const check = useMutation(useConnectionsCheck)
   const [replacing, setReplacing] = useState(false)
+  const [removing, setRemoving] = useState(false)
   const roles = rolesFor(c.missing)
   const email = c.details.service_account as string | undefined
 
@@ -151,68 +210,70 @@ function ConnectionRow({
   }
 
   return (
-    <div className="grid gap-3 rounded-lg border px-4 py-3">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+    <li className="grid gap-2">
+      <div className="flex items-center gap-3">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            c.status === "ready" && "bg-overdye",
+            c.status === "incomplete" && "bg-weld",
+            c.status === "failed" && "bg-destructive"
+          )}
+        />
         <div className="grid min-w-0 flex-1 gap-0.5">
-          <span className="flex items-center gap-2 font-medium">
-            {c.name}
-            <span className="inline-flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "inline-block h-1.5 w-3 rounded-full",
-                  c.status === "ready" && "bg-overdye",
-                  c.status === "incomplete" && "bg-weld",
-                  c.status === "failed" && "bg-destructive"
-                )}
-              />
-              {statusLabels[c.status] ?? c.status}
-            </span>
-          </span>
-          <span className="truncate text-sm text-muted-foreground">
-            {cloudLabel(c.cloud)}
+          <span className="truncate text-sm font-medium">{c.name}</span>
+          <span className="truncate text-xs text-muted-foreground">
+            {statusLabels[c.status] ?? c.status}
             {c.account && (
               <>
                 {" · "}
-                <code className="font-mono text-xs">{c.account}</code>
+                <code className="font-mono">{c.account}</code>
               </>
             )}
-            {email && (
+            {c.checkedAt && (
               <>
-                {" · "}
-                <code className="font-mono text-xs">{email}</code>
+                {" · checked "}
+                <time dateTime={c.checkedAt}>{formatDate(c.checkedAt)}</time>
               </>
             )}
           </span>
         </div>
-        {c.checkedAt && (
-          <span className="text-xs text-muted-foreground">
-            Checked{" "}
-            <time dateTime={c.checkedAt}>{formatDate(c.checkedAt)}</time>
-          </span>
-        )}
+        {check.isPending && <Spinner className="text-muted-foreground" />}
         {mayManage && (
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="rounded-full"
-              disabled={check.isPending}
-              onClick={() => void recheck()}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="rounded-full text-muted-foreground"
+                  aria-label={`${c.name} options`}
+                />
+              }
             >
-              {check.isPending ? <Spinner /> : <RefreshCwIcon />}
-              Check again
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="rounded-full"
-              onClick={() => setReplacing(true)}
-            >
-              Replace
-            </Button>
-            <Remove connection={c} />
-          </div>
+              <EllipsisIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem
+                disabled={check.isPending}
+                onClick={() => void recheck()}
+              >
+                <RefreshCwIcon />
+                Check again
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setReplacing(true)}>
+                Replace credential
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => setRemoving(true)}
+              >
+                Remove
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
       {c.status === "incomplete" && c.cloud === "aws" && (
@@ -261,14 +322,22 @@ function ConnectionRow({
         onOpenChange={setReplacing}
         replacing={c}
       />
-    </div>
+      <RemoveDialog connection={c} open={removing} onOpenChange={setRemoving} />
+    </li>
   )
 }
 
-function Remove({ connection: c }: { connection: Connection }) {
+function RemoveDialog({
+  connection: c,
+  open,
+  onOpenChange,
+}: {
+  connection: Connection
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   const remove = useMutation(useConnectionsDelete)
   const invalidate = useInvalidate()
-  const [open, setOpen] = useState(false)
 
   const confirm = async () => {
     try {
@@ -276,25 +345,14 @@ function Remove({ connection: c }: { connection: Connection }) {
       invalidate(useConnectionsList)
       toast.success(`Removed ${c.name}`)
     } catch (err) {
-      setOpen(false)
+      onOpenChange(false)
       toast.error(messageOf(err, "The connection wasn't removed."))
     }
   }
 
+  // Controlled: Base UI's AlertDialogAction doesn't close the dialog.
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="rounded-full text-muted-foreground"
-            aria-label={`Remove ${c.name}`}
-          />
-        }
-      >
-        <Trash2Icon />
-      </AlertDialogTrigger>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Remove {c.name}?</AlertDialogTitle>
@@ -321,23 +379,25 @@ function Remove({ connection: c }: { connection: Connection }) {
 }
 
 /**
- * ConnectDialog connects a cloud, or with replacing set, swaps an existing
- * connection's credential for a new one.
+ * ConnectDialog connects a cloud, starting on cloud, or with replacing set,
+ * swaps an existing connection's credential for a new one.
  */
-function ConnectDialog({
+export function ConnectDialog({
   open,
   onOpenChange,
+  cloud: initial = "gcp",
   replacing,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  cloud?: string
   replacing?: Connection
 }) {
   const create = useMutation(useConnectionsCreate)
   const replace = useMutation(useConnectionsReplace)
   const invalidate = useInvalidate()
   const file = useRef<HTMLInputElement>(null)
-  const [cloud, setCloud] = useState<string>(replacing?.cloud ?? "gcp")
+  const [cloud, setCloud] = useState<string>(replacing?.cloud ?? initial)
   // Clouds a provider plugin adds, with the form each one describes.
   const available = useQuery(useConnectionCloudsList)
   const extras = (available.data?.clouds ?? []).filter((c) => !c.builtin)

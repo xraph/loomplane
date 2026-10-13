@@ -17,8 +17,11 @@ import { Route as MembersRouteImport } from "./routes/members"
 import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
 import { Route as VariablesRouteImport } from "./routes/variables"
+import { Route as DeploymentsIndexRouteImport } from "./routes/deployments.index"
+import { Route as DeploymentsIdRouteImport } from "./routes/deployments.$id"
 import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
+import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
 
@@ -62,6 +65,16 @@ const VariablesRoute = VariablesRouteImport.update({
   path: "/variables",
   getParentRoute: () => rootRouteImport,
 } as any)
+const DeploymentsIndexRoute = DeploymentsIndexRouteImport.update({
+  id: "/deployments/",
+  path: "/deployments/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeploymentsIdRoute = DeploymentsIdRouteImport.update({
+  id: "/deployments/$id",
+  path: "/deployments/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
   id: "/integrations/",
   path: "/integrations/",
@@ -70,6 +83,11 @@ const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
 const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
   id: "/invitations/accept",
   path: "/invitations/accept",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
+  id: "/projects/",
+  path: "/projects/",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdRoute = ProjectsIdRouteImport.update({
@@ -92,9 +110,12 @@ export interface FileRoutesByFullPath {
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
+  "/deployments/$id": typeof DeploymentsIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/deployments/": typeof DeploymentsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
+  "/projects/": typeof ProjectsIndexRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRoutesByTo {
@@ -106,9 +127,12 @@ export interface FileRoutesByTo {
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
+  "/deployments/$id": typeof DeploymentsIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/deployments": typeof DeploymentsIndexRoute
   "/integrations": typeof IntegrationsIndexRoute
+  "/projects": typeof ProjectsIndexRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRoutesById {
@@ -121,9 +145,12 @@ export interface FileRoutesById {
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
+  "/deployments/$id": typeof DeploymentsIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/deployments/": typeof DeploymentsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
+  "/projects/": typeof ProjectsIndexRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRouteTypes {
@@ -137,9 +164,12 @@ export interface FileRouteTypes {
     | "/sign-in"
     | "/sign-up"
     | "/variables"
+    | "/deployments/$id"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/deployments/"
     | "/integrations/"
+    | "/projects/"
     | "/integrations/github/setup"
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -151,9 +181,12 @@ export interface FileRouteTypes {
     | "/sign-in"
     | "/sign-up"
     | "/variables"
+    | "/deployments/$id"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/deployments"
     | "/integrations"
+    | "/projects"
     | "/integrations/github/setup"
   id:
     | "__root__"
@@ -165,9 +198,12 @@ export interface FileRouteTypes {
     | "/sign-in"
     | "/sign-up"
     | "/variables"
+    | "/deployments/$id"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/deployments/"
     | "/integrations/"
+    | "/projects/"
     | "/integrations/github/setup"
   fileRoutesById: FileRoutesById
 }
@@ -180,9 +216,12 @@ export interface RootRouteChildren {
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   VariablesRoute: typeof VariablesRoute
+  DeploymentsIdRoute: typeof DeploymentsIdRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
+  DeploymentsIndexRoute: typeof DeploymentsIndexRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
+  ProjectsIndexRoute: typeof ProjectsIndexRoute
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
 }
 
@@ -244,6 +283,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof VariablesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/deployments/": {
+      id: "/deployments/"
+      path: "/deployments"
+      fullPath: "/deployments/"
+      preLoaderRoute: typeof DeploymentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/deployments/$id": {
+      id: "/deployments/$id"
+      path: "/deployments/$id"
+      fullPath: "/deployments/$id"
+      preLoaderRoute: typeof DeploymentsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/integrations/": {
       id: "/integrations/"
       path: "/integrations"
@@ -256,6 +309,13 @@ declare module "@tanstack/react-router" {
       path: "/invitations/accept"
       fullPath: "/invitations/accept"
       preLoaderRoute: typeof InvitationsAcceptRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/projects/": {
+      id: "/projects/"
+      path: "/projects"
+      fullPath: "/projects/"
+      preLoaderRoute: typeof ProjectsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/projects/$id": {
@@ -284,9 +344,12 @@ const rootRouteChildren: RootRouteChildren = {
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   VariablesRoute: VariablesRoute,
+  DeploymentsIdRoute: DeploymentsIdRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   ProjectsIdRoute: ProjectsIdRoute,
+  DeploymentsIndexRoute: DeploymentsIndexRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,
+  ProjectsIndexRoute: ProjectsIndexRoute,
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
 }
 export const routeTree = rootRouteImport

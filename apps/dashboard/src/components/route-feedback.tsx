@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 
 export function PageLoading() {
@@ -26,7 +26,9 @@ export function PageNotFound() {
           Check the address, or go back to your projects.
         </p>
       </div>
-      <Button render={<Link to="/" />}>Back to projects</Button>
+      <Link to="/projects" className={buttonVariants()}>
+        Back to projects
+      </Link>
     </div>
   )
 }

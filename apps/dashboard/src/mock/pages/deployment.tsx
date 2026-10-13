@@ -86,7 +86,7 @@ import {
   services,
   stepGroups,
 } from "@/mock/data"
-import { dateTime, duration, relative, signedMoney } from "@/mock/format"
+import { dateTime, duration, relative, signedMoney } from "@/lib/format"
 import { logs } from "@/mock/logs"
 import { navigate, to } from "@/mock/router"
 import { type DeploymentView, type StepView, useStore } from "@/mock/store"

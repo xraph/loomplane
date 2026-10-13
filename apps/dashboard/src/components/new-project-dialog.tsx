@@ -1,13 +1,12 @@
 // New project: its repositories, a name, and an icon and color to know it
 // by. Leaving the icon or color unpicked is fine; the server picks at
 // random.
-import { DicesIcon, LockIcon, PlusIcon, ShuffleIcon, XIcon } from "lucide-react"
+import { DicesIcon, PlusIcon, ShuffleIcon, XIcon } from "lucide-react"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
-  useGithubRepositories,
   useGithubStatus,
   useProjectsCreate,
 } from "@/client/forge/loomplane/hooks"
@@ -35,13 +34,8 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-  InputGroupText,
-} from "@/components/ui/input-group"
+import { RepositoryPicker } from "@/components/repository-picker"
+import { InputGroupAddon, InputGroupButton } from "@/components/ui/input-group"
 import {
   Item,
   ItemActions,
@@ -65,10 +59,6 @@ import {
 } from "@/lib/project-style"
 import { useNavigate } from "@/lib/router"
 import { slugify } from "@/lib/slug"
-
-// Enough suggestions to find a repository by its first letters, few enough
-// that the dialog doesn't grow a scrollbar.
-const maxSuggestions = 5
 
 // maxRepositories is how many a project can start with, as the API allows.
 // More can be added once it exists.
@@ -100,28 +90,42 @@ function planAliases(rows: RepoRow[]): { alias: string; problem: string }[] {
 export function NewProjectDialog({
   open,
   onOpenChange,
+  repository,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** The repository the project starts with, as owner/name. */
+  repository?: string
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl">
-        {/* Mounted only while open, so every opening starts empty. */}
-        {open && <NewProjectForm done={() => onOpenChange(false)} />}
+        {/* Mounted only while open, so every opening starts afresh. */}
+        {open && (
+          <NewProjectForm
+            repository={repository}
+            done={() => onOpenChange(false)}
+          />
+        )}
       </DialogContent>
     </Dialog>
   )
 }
 
-function NewProjectForm({ done }: { done: () => void }) {
+function NewProjectForm({
+  repository = "",
+  done,
+}: {
+  repository?: string
+  done: () => void
+}) {
   const navigate = useNavigate()
   const create = useMutation(useProjectsCreate)
   const github = useQuery(useGithubStatus)
   const connected = (github.data?.installations.length ?? 0) > 0
-  const [rows, setRows] = useState<RepoRow[]>([{ key: 0, repo: "", alias: "" }])
-  // active is the row suggestions fill: the one last focused.
-  const [active, setActive] = useState(0)
+  const [rows, setRows] = useState<RepoRow[]>([
+    { key: 0, repo: repository, alias: "" },
+  ])
   const [typedName, setTypedName] = useState<string | null>(null)
   const [description, setDescription] = useState("")
   const [icon, setIcon] = useState<ProjectIconName | null>(null)
@@ -136,7 +140,6 @@ function NewProjectForm({ done }: { done: () => void }) {
   const several = rows.length > 1
   const aliases = planAliases(rows)
   const clash = aliases.some((a) => a.problem)
-  const chosen = rows.map((r) => r.repo.trim().toLowerCase()).filter(Boolean)
 
   const setRow = (i: number, change: Partial<RepoRow>) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...change } : r)))
@@ -145,11 +148,9 @@ function NewProjectForm({ done }: { done: () => void }) {
       ...rs,
       { key: Math.max(...rs.map((r) => r.key)) + 1, repo: "", alias: "" },
     ])
-    setActive(rows.length)
   }
   const removeRow = (i: number) => {
     setRows((rs) => rs.filter((_, j) => j !== i))
-    setActive(0)
   }
 
   const submit = async (e: FormEvent) => {
@@ -247,45 +248,35 @@ function NewProjectForm({ done }: { done: () => void }) {
           {rows.map((r, i) => (
             <div key={r.key} className="grid gap-1.5">
               <div className="flex gap-2">
-                <InputGroup className="flex-1">
-                  <InputGroupAddon>
-                    <InputGroupText>github.com/</InputGroupText>
-                  </InputGroupAddon>
-                  <InputGroupInput
-                    id={`np-repo-${i}`}
-                    autoFocus={i === rows.length - 1}
-                    placeholder={i === 0 ? "acme/storefront" : "acme/api"}
-                    aria-label={several ? `Repository ${i + 1}` : undefined}
-                    value={r.repo}
-                    onFocus={() => setActive(i)}
-                    onChange={(e) => {
-                      // A pasted URL becomes owner/name, which is what fits here.
-                      const v = e.target.value
-                      setRow(i, { repo: githubRepo(v) || v.trim() })
-                    }}
-                    className="font-mono text-sm"
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                  {several && (
-                    <InputGroupAddon align="inline-end">
-                      <InputGroupButton
-                        size="icon-xs"
-                        aria-label={`Remove ${r.repo.trim() || `repository ${i + 1}`}`}
-                        onClick={() => removeRow(i)}
-                      >
-                        <XIcon />
-                      </InputGroupButton>
-                    </InputGroupAddon>
-                  )}
-                </InputGroup>
+                <RepositoryPicker
+                  id={`np-repo-${i}`}
+                  className="flex-1"
+                  autoFocus={i === rows.length - 1}
+                  placeholder={i === 0 ? "acme/storefront" : "acme/api"}
+                  aria-label={several ? `Repository ${i + 1}` : undefined}
+                  value={r.repo}
+                  onChange={(repo) => setRow(i, { repo })}
+                  exclude={rows.filter((_, j) => j !== i).map((o) => o.repo)}
+                  end={
+                    several && (
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton
+                          size="icon-xs"
+                          aria-label={`Remove ${r.repo.trim() || `repository ${i + 1}`}`}
+                          onClick={() => removeRow(i)}
+                        >
+                          <XIcon />
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    )
+                  }
+                />
                 {several && (
                   <Input
                     aria-label={`Alias for ${r.repo.trim() || `repository ${i + 1}`}`}
                     aria-invalid={!!aliases[i].problem}
                     value={r.alias}
                     placeholder={aliases[i].alias || "alias"}
-                    onFocus={() => setActive(i)}
                     onChange={(e) =>
                       setRow(i, { alias: e.target.value.toLowerCase() })
                     }
@@ -297,13 +288,6 @@ function NewProjectForm({ done }: { done: () => void }) {
               </div>
               {aliases[i].problem && (
                 <FieldError>{aliases[i].problem}</FieldError>
-              )}
-              {connected && active === i && (
-                <Suggestions
-                  typed={r.repo}
-                  exclude={chosen}
-                  onPick={(fullName) => setRow(i, { repo: fullName })}
-                />
               )}
             </div>
           ))}
@@ -393,44 +377,5 @@ function NewProjectForm({ done }: { done: () => void }) {
         </Button>
       </DialogFooter>
     </form>
-  )
-}
-
-/**
- * Suggestions offers the repositories the GitHub connection can read, but
- * none already chosen.
- */
-function Suggestions({
-  typed,
-  exclude,
-  onPick,
-}: {
-  typed: string
-  exclude: string[]
-  onPick: (fullName: string) => void
-}) {
-  const repos = useQuery(useGithubRepositories)
-  const query = typed.trim().toLowerCase()
-  const matches = (repos.data?.repositories ?? [])
-    .filter((r) => !exclude.includes(r.fullName.toLowerCase()))
-    .filter((r) => !query || r.fullName.toLowerCase().includes(query))
-    .slice(0, maxSuggestions)
-  if (matches.length === 0) return null
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {matches.map((r) => (
-        <Button
-          key={r.fullName}
-          type="button"
-          variant="outline"
-          size="xs"
-          className="rounded-full font-mono font-normal"
-          onClick={() => onPick(r.fullName)}
-        >
-          {r.private && <LockIcon className="text-muted-foreground" />}
-          {r.fullName}
-        </Button>
-      ))}
-    </div>
   )
 }

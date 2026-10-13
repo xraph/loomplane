@@ -56,12 +56,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { RunDot, Thread } from "@/components/runs"
+import { Item, ItemContent } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { relative } from "@/lib/format"
+import { Link } from "@/lib/router"
+import { isLive, type Run, runStatusText } from "@/lib/runs"
+import { useNow } from "@/lib/use-runs"
 import { cn } from "@/lib/utils"
 import { environmentKinds, kindFor } from "@/lib/variables"
 
@@ -109,7 +115,7 @@ export function AddEnvironment({ project }: { project: Project }) {
       <Button
         variant="outline"
         onClick={() => setOpen(true)}
-        className="h-auto min-h-28 flex-col gap-2 rounded-xl border-dashed bg-transparent text-muted-foreground shadow-none hover:bg-muted/40"
+        className="h-auto min-h-10 flex-row gap-2 rounded-xl border-dashed bg-transparent text-muted-foreground shadow-none hover:bg-muted/40 md:min-h-24 md:flex-col"
       >
         <PlusIcon />
         Add environment
@@ -201,13 +207,17 @@ export function EnvironmentCards({
   environments,
   loading,
   mayManage,
+  runs = [],
 }: {
   project: Project
   environments: Environment[]
   /** Stands in the defaults every project starts with while the list loads. */
   loading: boolean
   mayManage: boolean
+  /** The project's runs, newest first; each card shows its environment's latest. */
+  runs?: Run[]
 }) {
+  const now = useNow(30_000)
   const cards = loading
     ? defaultEnvironments.map((name) => ({ id: name, name, kind: name }))
     : environments
@@ -215,7 +225,7 @@ export function EnvironmentCards({
   return (
     <div
       className={cn(
-        "grid gap-4",
+        "grid gap-3",
         count > 1 && "md:grid-cols-2",
         count > 2 && "xl:grid-cols-3"
       )}
@@ -223,7 +233,7 @@ export function EnvironmentCards({
       {cards.map((env) => {
         const real = environments.find((e) => e.id === env.id)
         return (
-          <Card key={env.id} className="min-w-0">
+          <Card key={env.id} size="sm" className="min-w-0">
             <CardHeader>
               <CardTitle className="capitalize">{env.name}</CardTitle>
               {env.kind !== env.name && (
@@ -249,7 +259,13 @@ export function EnvironmentCards({
                   Setting up
                 </span>
               ) : (
-                <Deployed project={project} environment={env.name} />
+                <div className="grid gap-3">
+                  <LatestRun
+                    run={runs.find((r) => r.environment === env.name)}
+                    now={now}
+                  />
+                  <Deployed project={project} environment={env.name} />
+                </div>
               )}
             </CardContent>
           </Card>
@@ -358,6 +374,29 @@ function DeleteEnvironment({
  * Deployed lists what runs in an environment and where each service
  * answers, from what the last deployments recorded.
  */
+/** LatestRun is an environment's newest deployment as a thread. */
+function LatestRun({ run, now }: { run?: Run; now: number }) {
+  if (!run) return null
+  return (
+    <Item
+      size="sm"
+      className="-mx-3 flex-col items-stretch gap-2 py-2"
+      render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+    >
+      <Thread steps={run.thread} size="sm" />
+      <ItemContent className="flex-row items-center gap-2 text-xs">
+        <RunDot status={run.status} />
+        <span className="truncate">{run.phase}</span>
+        <span className="ml-auto shrink-0 text-muted-foreground">
+          {isLive(run)
+            ? runStatusText[run.status]
+            : relative(Date.parse(run.finishedAt ?? run.createdAt), now)}
+        </span>
+      </ItemContent>
+    </Item>
+  )
+}
+
 function Deployed({
   project,
   environment,

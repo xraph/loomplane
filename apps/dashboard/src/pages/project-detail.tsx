@@ -3,6 +3,7 @@ import {
   FolderGit2Icon,
   GitBranchIcon,
   GitCommitHorizontalIcon,
+  RocketIcon,
   SparklesIcon,
 } from "lucide-react"
 import { type ReactNode, useEffect, useRef, useState } from "react"
@@ -46,9 +47,11 @@ import {
   needsReview,
   ServiceGraph,
 } from "@/components/service-graph"
+import { useShell } from "@/components/shell"
 import { SiteHeader } from "@/components/site-header"
 import { SourcesCard } from "@/components/sources"
 import { isReady } from "@/lib/projects"
+import { useRuns } from "@/lib/use-runs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -107,7 +110,7 @@ export function ProjectDetail({ id }: { id: string }) {
     <>
       <SiteHeader
         crumbs={[
-          { label: "Projects", to: "/" },
+          { label: "Projects", to: "/projects" },
           { label: project.data?.name ?? "Project" },
         ]}
       />
@@ -123,7 +126,7 @@ export function ProjectDetail({ id }: { id: string }) {
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
-                <Link to="/" className={buttonVariants()}>
+                <Link to="/projects" className={buttonVariants()}>
                   Back to projects
                 </Link>
               </EmptyContent>
@@ -226,6 +229,9 @@ function Body({
   viewError?: unknown
 }) {
   const { can } = useOrganization()
+  const { openDeploy } = useShell()
+  const { runs } = useRuns()
+  const ownRuns = runs.filter((r) => r.projectId === project.id)
   const update = useMutation(useProjectsUpdate)
   const [selected, setSelected] = useState<GraphSelection | null>(null)
   const mayRun = can("analysis:run")
@@ -275,9 +281,20 @@ function Body({
         }
         description={project.description || undefined}
         actions={
-          project.repositories.length > 0 && mayRun ? (
-            <AnalyzeActions project={project} running={analyses.running} />
-          ) : undefined
+          <>
+            {project.repositories.length > 0 && mayRun && (
+              <AnalyzeActions project={project} running={analyses.running} />
+            )}
+            {can("deployment:create") && isReady(project.status) && (
+              <Button
+                className="rounded-full"
+                onClick={() => openDeploy({ project: project.id })}
+              >
+                <RocketIcon />
+                Deploy
+              </Button>
+            )}
+          </>
         }
       >
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -339,6 +356,7 @@ function Body({
         environments={environments ?? []}
         loading={!environments}
         mayManage={can("environment:manage")}
+        runs={ownRuns}
       />
 
       {analyses.latest && <AnalysisBanner analysis={analyses.latest} />}
@@ -638,7 +656,7 @@ function DeleteProject({ project }: { project: Project }) {
       // The delete invalidates the project list for us.
       await remove.mutateAsync({ path: { id: project.id } })
       toast.success(`Deleted ${project.name}`)
-      void navigate({ to: "/", replace: true })
+      void navigate({ to: "/projects", replace: true })
     } catch (err) {
       setOpen(false)
       toast.error(messageOf(err, "The project wasn't deleted."))

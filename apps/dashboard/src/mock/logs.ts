@@ -9,7 +9,7 @@ import {
   services,
   type Service,
 } from "@/mock/data"
-import { duration } from "@/mock/format"
+import { duration } from "@/lib/format"
 import type { DeploymentView, StepView } from "@/mock/store"
 
 export type LogLevel = "info" | "warn" | "error"
