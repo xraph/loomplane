@@ -119,9 +119,16 @@ func (b *builder) addPackage(u discovery.Unit) {
 func service(u discovery.Unit, ep discovery.Entrypoint) Service {
 	kind, conf := Worker, discovery.Possible
 	var framework string
-	for _, k := range kindOrder {
+	for i, k := range kindOrder {
 		if fw := pick(ep.Frameworks, k.fw, discovery.Likely); fw != nil {
 			kind, framework, conf = k.kind, fw.Name, fw.Confidence
+			// A framework that would have made it something else, had it
+			// been likely, leaves the kind in doubt.
+			for _, before := range kindOrder[:i] {
+				if pick(ep.Frameworks, before.fw, discovery.Possible) != nil {
+					conf = discovery.Possible
+				}
+			}
 			break
 		}
 	}

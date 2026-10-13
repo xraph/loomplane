@@ -158,3 +158,17 @@ func TestService_Local(t *testing.T) {
 		}
 	}
 }
+
+func TestBuild_aKindInDoubtIsPossible(t *testing.T) {
+	r := &pd.Report{Units: []pd.Unit{{
+		ID: "go:.", Ecosystem: pd.Go, Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "ctl", Path: "cmd/ctl", Frameworks: []pd.Framework{
+			{Name: "cobra", Kind: pd.CLI, Confidence: pd.Likely},
+			{Name: "gin", Kind: pd.HTTP, Confidence: pd.Possible},
+		}}},
+	}}}
+	svc := Build(r).Services[0]
+	if svc.Kind != Tool || svc.Confidence != pd.Possible || svc.Framework != "cobra" {
+		t.Fatalf("service %+v", svc)
+	}
+}

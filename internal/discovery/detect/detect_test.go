@@ -347,3 +347,100 @@ func TestRust_requirementsOutsideTheCheckoutAreKept(t *testing.T) {
 		t.Fatalf("requires %+v", app.Requires)
 	}
 }
+
+func frameworkOf(t *testing.T, u discovery.Unit, ep, name string) *discovery.Framework {
+	t.Helper()
+	for _, e := range u.Entrypoints {
+		if e.Path != ep {
+			continue
+		}
+		for i := range e.Frameworks {
+			if e.Frameworks[i].Name == name {
+				return &e.Frameworks[i]
+			}
+		}
+		return nil
+	}
+	t.Fatalf("no entrypoint %s in %+v", ep, u.Entrypoints)
+	return nil
+}
+
+func TestGo_aServerInACommentOrStringIsntOne(t *testing.T) {
+	r := run(t, Go{}, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.26\n",
+		"main.go": "package main\n\n// Run it like this:\n//\n//\thttp.ListenAndServe(\":80\", h)\n" +
+			"/*\nhttp.Server{}\n*/\nvar pattern = `http.ListenAndServe(`\n\nfunc main() {}\n",
+	})
+	if fw := frameworkOf(t, onlyUnit(t, r, "go:."), ".", "net/http"); fw != nil {
+		t.Fatalf("found a server in a comment: %+v", fw)
+	}
+	r = run(t, Go{}, map[string]string{
+		"go.mod":  "module example.com/m\n\ngo 1.26\n",
+		"main.go": "package main\n\nimport \"net/http\"\n\nfunc main() {\n\tsrv := &http.Server{Addr: \":80\"}\n\t_ = srv\n}\n",
+	})
+	if fw := frameworkOf(t, onlyUnit(t, r, "go:."), ".", "net/http"); fw == nil || fw.Evidence.Line != 6 {
+		t.Fatalf("http.Server literal: %+v", fw)
+	}
+}
+
+func TestGo_aCommandSharingTheServersCodeIsATool(t *testing.T) {
+	files := map[string]string{
+		"go.mod":                    "module example.com/m\n\ngo 1.26\n",
+		"internal/server/server.go": "package server\n\nimport \"github.com/gin-gonic/gin\"\n\nvar _ = gin.New\n",
+		"cmd/api/main.go":           "package main\n\nimport _ \"example.com/m/internal/server\"\n\nfunc main() {}\n",
+		// The CLI imports the server's package for its types.
+		"cmd/ctl/main.go": "package main\n\nimport (\n\t_ \"github.com/spf13/cobra\"\n\t_ \"example.com/m/internal/server\"\n)\n\nfunc main() {}\n",
+	}
+	u := onlyUnit(t, run(t, Go{}, files), "go:.")
+	if fw := frameworkOf(t, u, "cmd/api", "gin"); fw == nil || fw.Confidence != discovery.Likely {
+		t.Fatalf("the server: %+v", fw)
+	}
+	if fw := frameworkOf(t, u, "cmd/ctl", "gin"); fw == nil || fw.Confidence != discovery.Possible {
+		t.Fatalf("the CLI: %+v", fw)
+	}
+
+	// On its own, the same command is a server with a serve subcommand.
+	delete(files, "cmd/api/main.go")
+	u = onlyUnit(t, run(t, Go{}, files), "go:.")
+	if fw := frameworkOf(t, u, "cmd/ctl", "gin"); fw == nil || fw.Confidence != discovery.Likely {
+		t.Fatalf("a lone command: %+v", fw)
+	}
+}
+
+func TestGo_forgeCLIIsACLI(t *testing.T) {
+	r := run(t, Go{}, map[string]string{
+		"go.mod":  "module example.com/m\n\ngo 1.26\n",
+		"main.go": "package main\n\nimport _ \"github.com/xraph/forge/cli\"\n\nfunc main() {}\n",
+	})
+	u := onlyUnit(t, r, "go:.")
+	if fw := frameworkOf(t, u, ".", "forge/cli"); fw == nil || fw.Kind != discovery.CLI {
+		t.Fatalf("forge/cli: %+v", fw)
+	}
+	if fw := frameworkOf(t, u, ".", "forge"); fw != nil {
+		t.Fatalf("forge/cli read as forge's server: %+v", fw)
+	}
+}
+
+func TestRust_aCLIBesideAServerThatSharesItsLibraryIsATool(t *testing.T) {
+	files := map[string]string{
+		"Cargo.toml":       "[package]\nname = \"shop\"\nedition = \"2021\"\n\n[dependencies]\naxum = \"0.8\"\nclap = \"4\"\n",
+		"src/lib.rs":       "pub fn router() -> axum::Router { axum::Router::new() }\npub fn migrate() {}\n",
+		"src/main.rs":      "fn main() {\n    let _ = shop::router();\n}\n",
+		"src/bin/admin.rs": "use clap::Parser;\n\nfn main() {\n    shop::migrate();\n}\n",
+	}
+	u := onlyUnit(t, run(t, Rust{}, files), "rust:.")
+	if fw := frameworkOf(t, u, "src/main.rs", "axum"); fw == nil || fw.Confidence != discovery.Likely {
+		t.Fatalf("the server: %+v", fw)
+	}
+	if fw := frameworkOf(t, u, "src/bin/admin.rs", "axum"); fw == nil || fw.Confidence != discovery.Possible {
+		t.Fatalf("the admin tool: %+v", fw)
+	}
+
+	// One binary parsing flags and then serving is a server.
+	delete(files, "src/bin/admin.rs")
+	files["src/main.rs"] = "use clap::Parser;\n\nfn main() {\n    let _ = shop::router();\n}\n"
+	u = onlyUnit(t, run(t, Rust{}, files), "rust:.")
+	if fw := frameworkOf(t, u, "src/main.rs", "axum"); fw == nil || fw.Confidence != discovery.Likely {
+		t.Fatalf("a lone binary: %+v", fw)
+	}
+}

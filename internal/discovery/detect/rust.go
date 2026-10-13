@@ -274,19 +274,24 @@ func rustUnit(repo discovery.Repo, c, ws *crate, byDir map[string]*crate) discov
 	// app_lib::run()). One that does neither (a backfill tool beside an
 	// axum server) only possibly uses it.
 	lib := rustLibName(repo, c)
-	for _, bin := range rustBins(repo, c) {
+	bins := rustBins(repo, c)
+	via := make([]map[string]rustUse, 0, len(bins))
+	for _, bin := range bins {
 		src, _ := read(repo, bin.Path)
 		libLine := 0
 		if lib != "" {
 			libLine = lineOf(src, regexp.MustCompile(`\b`+regexp.QuoteMeta(lib)+`::`), 1)
 		}
+		uses := map[string]rustUse{}
 		for _, fw := range u.Frameworks {
 			use := regexp.MustCompile(`\b` + regexp.QuoteMeta(strings.ReplaceAll(cargoCrateOf(fw.Name), "-", "_")) + `::`)
 			switch l := lineOf(src, use, 1); {
 			case l > 0:
 				fw.Evidence = evidence(src, bin.Path, l)
+				uses[fw.Name] = rustNamed
 			case libLine > 0:
 				fw.Evidence = evidence(src, bin.Path, libLine)
+				uses[fw.Name] = rustThroughLib
 			default:
 				fw.Confidence = discovery.Possible
 			}
@@ -294,8 +299,54 @@ func rustUnit(repo discovery.Repo, c, ws *crate, byDir map[string]*crate) discov
 		}
 		bin.Resources = u.Resources
 		u.Entrypoints = append(u.Entrypoints, bin)
+		via = append(via, uses)
 	}
+	rustSharedServers(u.Entrypoints, via)
 	return u
+}
+
+// rustUse is how a binary reaches a framework: by naming its crate, or by
+// calling the crate's own library, which names it.
+type rustUse int
+
+const (
+	rustNamed rustUse = iota + 1
+	rustThroughLib
+)
+
+// rustSharedServers lowers to possible a server framework a binary
+// reaches only through its crate's library when the binary names a CLI
+// crate itself and another binary reaches the same server. That's an admin
+// tool beside a server that shares its library (clap in src/bin/admin.rs,
+// axum in lib.rs), not a second server. A crate with one binary keeps it:
+// main.rs parsing flags with clap and then calling lib::serve is a server.
+func rustSharedServers(bins []discovery.Entrypoint, via []map[string]rustUse) {
+	server := func(k discovery.FrameworkKind) bool {
+		return k == discovery.HTTP || k == discovery.GRPC || k == discovery.Web
+	}
+	for i := range bins {
+		cli := false
+		for _, fw := range bins[i].Frameworks {
+			if fw.Kind == discovery.CLI && via[i][fw.Name] == rustNamed {
+				cli = true
+			}
+		}
+		if !cli {
+			continue
+		}
+		for j := range bins[i].Frameworks {
+			fw := &bins[i].Frameworks[j]
+			if !server(fw.Kind) || via[i][fw.Name] != rustThroughLib {
+				continue
+			}
+			for k := range bins {
+				if k != i && via[k][fw.Name] != 0 {
+					fw.Confidence = discovery.Possible
+					break
+				}
+			}
+		}
+	}
 }
 
 // rustLibName is the name a crate's library is used by in Rust code, or ""

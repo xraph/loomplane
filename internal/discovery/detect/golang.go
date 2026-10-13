@@ -54,11 +54,54 @@ type goPackage struct {
 // net/http alone proves nothing: clients import it too.
 var goServeCall = regexp.MustCompile(`\.ListenAndServe(TLS)?\(|http\.Server\{|http\.Serve\(`)
 
+// goServeLine is the line of the first call that starts a net/http
+// server, or 0. It reads the syntax tree, so a server shown in a comment
+// or quoted in a string doesn't count; the pattern only decides whether
+// the file is worth parsing.
+func goServeLine(fset *token.FileSet, name string, data []byte) int {
+	if !goServeCall.Match(data) {
+		return 0
+	}
+	file, err := parser.ParseFile(fset, name, data, parser.SkipObjectResolution)
+	if err != nil {
+		return 0
+	}
+	line := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		if line > 0 {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				id, isPkg := sel.X.(*ast.Ident)
+				switch sel.Sel.Name {
+				case "ListenAndServe", "ListenAndServeTLS":
+					line = fset.Position(x.Pos()).Line
+				case "Serve", "ServeTLS":
+					if isPkg && id.Name == "http" {
+						line = fset.Position(x.Pos()).Line
+					}
+				}
+			}
+		case *ast.CompositeLit:
+			if sel, ok := x.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Server" {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "http" {
+					line = fset.Position(x.Pos()).Line
+				}
+			}
+		}
+		return line == 0
+	})
+	return line
+}
+
 // goFrameworks maps import path prefixes to frameworks.
 var goFrameworks = []struct {
 	prefix, name string
 	kind         discovery.FrameworkKind
 }{
+	{"github.com/xraph/forge/cli", "forge/cli", discovery.CLI},
 	{"github.com/xraph/forge", "forge", discovery.HTTP},
 	{"github.com/gin-gonic/gin", "gin", discovery.HTTP},
 	{"github.com/labstack/echo", "echo", discovery.HTTP},
@@ -103,6 +146,20 @@ var goResources = []struct{ prefix, kind string }{
 	{"cloud.google.com/go/storage", "object-storage"},
 	{"github.com/elastic/go-elasticsearch", "search"},
 	{"github.com/opensearch-project/opensearch-go", "search"},
+}
+
+// goFramework is the framework an import path is from: the one with the
+// longest matching prefix, so forge/cli is a CLI, not forge's server.
+func goFramework(ip string) (fw struct {
+	prefix, name string
+	kind         discovery.FrameworkKind
+}, ok bool) {
+	for _, f := range goFrameworks {
+		if hasPathPrefix(ip, f.prefix) && len(f.prefix) > len(fw.prefix) {
+			fw, ok = f, true
+		}
+	}
+	return fw, ok
 }
 
 func hasPathPrefix(p, prefix string) bool {
@@ -254,7 +311,7 @@ func goPackages(ctx context.Context, repo discovery.Repo, r *discovery.Report, m
 			p.imports = append(p.imports, goImport{path: ip, ev: discovery.Evidence{Path: f, Line: line, Detail: "import " + strconv.Quote(ip)}})
 		}
 		if p.serverEv == nil {
-			if l := lineOf(data, goServeCall, 1); l > 0 {
+			if l := goServeLine(fset, f, data); l > 0 {
 				ev := evidence(data, f, l)
 				p.serverEv = &ev
 			}
@@ -343,9 +400,13 @@ func goUnit(m *goModule, mods []*goModule, pkgs map[string]*goPackage) discovery
 		}
 	}
 	sort.Slice(mains, func(i, j int) bool { return mains[i].dir < mains[j].dir })
+	reach := make([]goReach, 0, len(mains))
 	for _, p := range mains {
-		u.Entrypoints = append(u.Entrypoints, goEntrypoint(p, mods, pkgs))
+		ep, r := goEntrypoint(p, mods, pkgs)
+		u.Entrypoints = append(u.Entrypoints, ep)
+		reach = append(reach, r)
 	}
+	goSharedServers(u.Entrypoints, reach)
 	sortResources(u.Resources)
 	return u
 }
@@ -409,39 +470,50 @@ func goRequires(m *goModule, mods []*goModule) []discovery.Requirement {
 	return out
 }
 
+// goReach is what a main package reaches: for each framework, the
+// package it was found in and how many imports away that is, and every
+// package of the repository it imports, directly or not.
+type goReach struct {
+	origin   map[string]string
+	depth    map[string]int
+	packages map[string]bool
+}
+
 // goEntrypoint walks everything the main package imports inside this
 // repository, and reports the frameworks and drivers it reaches.
-func goEntrypoint(p *goPackage, mods []*goModule, pkgs map[string]*goPackage) discovery.Entrypoint {
+func goEntrypoint(p *goPackage, mods []*goModule, pkgs map[string]*goPackage) (discovery.Entrypoint, goReach) {
 	name := path.Base(p.dir)
 	if p.dir == p.module.dir || name == "." {
 		name = path.Base(p.module.path)
 	}
 	ep := discovery.Entrypoint{Name: name, Path: p.dir, Evidence: []discovery.Evidence{p.mainEv}}
+	reach := goReach{origin: map[string]string{}, depth: map[string]int{}, packages: map[string]bool{p.dir: true}}
+	found := func(fw discovery.Framework, pkg string, depth int) {
+		if _, ok := reach.origin[fw.Name]; !ok {
+			reach.origin[fw.Name], reach.depth[fw.Name] = pkg, depth
+		}
+		ep.Frameworks = addFramework(ep.Frameworks, fw)
+	}
 
-	seen := map[string]bool{p.dir: true}
+	depth := map[string]int{p.dir: 0}
 	queue := []*goPackage{p}
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
 		if cur.serverEv != nil {
-			ep.Frameworks = addFramework(ep.Frameworks, discovery.Framework{
-				Name: "net/http", Kind: discovery.HTTP, Confidence: discovery.Likely, Evidence: *cur.serverEv,
-			})
+			found(discovery.Framework{Name: "net/http", Kind: discovery.HTTP, Confidence: discovery.Likely, Evidence: *cur.serverEv}, cur.dir, depth[cur.dir])
 		}
 		for _, imp := range cur.imports {
 			if d := resolve(imp.path, mods); d != "" {
-				if next := pkgs[d]; next != nil && !seen[d] {
-					seen[d] = true
+				if next := pkgs[d]; next != nil && !reach.packages[d] {
+					reach.packages[d] = true
+					depth[d] = depth[cur.dir] + 1
 					queue = append(queue, next)
 				}
 				continue
 			}
-			for _, fw := range goFrameworks {
-				if hasPathPrefix(imp.path, fw.prefix) {
-					ep.Frameworks = addFramework(ep.Frameworks, discovery.Framework{
-						Name: fw.name, Kind: fw.kind, Confidence: discovery.Likely, Evidence: imp.ev,
-					})
-				}
+			if fw, ok := goFramework(imp.path); ok {
+				found(discovery.Framework{Name: fw.name, Kind: fw.kind, Confidence: discovery.Likely, Evidence: imp.ev}, cur.dir, depth[cur.dir])
 			}
 			if res, ok := goResource(imp); ok {
 				ep.Resources = addResource(ep.Resources, res)
@@ -450,7 +522,50 @@ func goEntrypoint(p *goPackage, mods []*goModule, pkgs map[string]*goPackage) di
 	}
 	sortFrameworks(ep.Frameworks)
 	sortResources(ep.Resources)
-	return ep
+	return ep, reach
+}
+
+// goSharedServers lowers to possible the server frameworks a command
+// reaches only through another command's code. Classification follows
+// imports, so a CLI that imports the server's packages (for their types,
+// say) would read as a server too. A command is taken for a tool when its
+// CLI framework is no further from its main than any server framework,
+// and each of those servers is found in a package another command also
+// reaches. A server whose framework its own main imports is never
+// lowered, since nothing else imports a main package, and a single
+// command with a serve subcommand has no sibling to share with.
+func goSharedServers(eps []discovery.Entrypoint, reach []goReach) {
+	server := func(k discovery.FrameworkKind) bool {
+		return k == discovery.HTTP || k == discovery.GRPC || k == discovery.Web
+	}
+	for i := range eps {
+		cli, nearest := -1, -1
+		for _, fw := range eps[i].Frameworks {
+			d := reach[i].depth[fw.Name]
+			switch {
+			case fw.Kind == discovery.CLI && (cli < 0 || d < cli):
+				cli = d
+			case server(fw.Kind) && (nearest < 0 || d < nearest):
+				nearest = d
+			}
+		}
+		if cli < 0 || nearest < 0 || cli > nearest {
+			continue
+		}
+		for j := range eps[i].Frameworks {
+			fw := &eps[i].Frameworks[j]
+			if !server(fw.Kind) {
+				continue
+			}
+			origin := reach[i].origin[fw.Name]
+			for k := range reach {
+				if k != i && reach[k].packages[origin] {
+					fw.Confidence = discovery.Possible
+					break
+				}
+			}
+		}
+	}
 }
 
 func goResource(imp goImport) (discovery.ResourceUse, bool) {
