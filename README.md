@@ -23,7 +23,7 @@
 
 <p align="center"><sub>Concept artwork inspired by the dashboard's woven environments.</sub></p>
 
-Loomplane takes a Go, Rust, TypeScript or JavaScript monorepo from source to running services across clouds. You give it a repository. It reads the code (never runs it) to find the services and the databases they need, drafts a `loomplane.yaml`, and plans what deploying it would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it: a Next.js app to Vercel, a Go API to Cloud Run, a worker to ECS on Fargate, Postgres on Cloud SQL or RDS, wired to each other with secrets kept in each cloud's secret store. Then it keeps checking that what runs is what it deployed.
+Loomplane takes a Go, Rust, TypeScript or JavaScript monorepo, or an application split across several repositories, from source to running services across clouds. You give it the repositories. It reads the code (never runs it) to find the services and the databases they need, drafts a `loomplane.yaml`, and plans what deploying it would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it: a Next.js app to Vercel, a Go API to Cloud Run, a worker to ECS on Fargate, Postgres on Cloud SQL or RDS, wired to each other with secrets kept in each cloud's secret store. Then it keeps checking that what runs is what it deployed.
 
 Your applications don't need Forge, or Go. Everything runs in your own clouds, on your own accounts.
 
