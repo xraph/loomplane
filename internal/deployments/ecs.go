@@ -340,7 +340,7 @@ func expose(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, lbG
 	return tg, l.ARN, listenerURL(lb.DNS, l), nil
 }
 
-// targetGroup is the target group a public service runs behind: the one
+// targetGroup is the target group a service runs behind: the one
 // its instance has already, which ECS can't swap on a running service,
 // whatever it's named, or for a new instance, one named after the
 // instance's slug. A replacement in the same account then gets its own,
@@ -351,6 +351,48 @@ func targetGroup(inst *instance.Instance, name string) (arn, group string) {
 		return inst.Labels[ecs.LabelTargetGroup], ""
 	}
 	return "", shortName(strings.ToLower(name))
+}
+
+// LinkedRange is the other cloud's network a link reaches AWS from:
+// Google Cloud's default network, in auto mode.
+const LinkedRange = "10.128.0.0/9"
+
+// internalGroup is the security group of an environment's internal load
+// balancer, which a link lets the other cloud into.
+func internalGroup(ctx context.Context, s *aws.Session, vpc, env string) (string, error) {
+	return s.EnsureSecurityGroup(ctx, vpc, "loomplane-"+env+"-ilb", "Loomplane internal load balancer for "+env)
+}
+
+// exposeInternally puts a private service behind the environment's
+// internal load balancer, which has only private addresses: a service on
+// the other cloud reaches it over a link. Its name resolves anywhere, to
+// those addresses.
+func exposeInternally(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, taskGroup, envName, tg, tgName string) (_, listener, url string, err error) {
+	group, err := internalGroup(ctx, s, net.VPC, envName)
+	if err != nil {
+		return "", "", "", err
+	}
+	if aerr := s.AllowFromGroup(ctx, taskGroup, group); aerr != nil {
+		return "", "", "", aerr
+	}
+	if aerr := s.AllowFromCIDR(ctx, group, LinkedRange); aerr != nil {
+		return "", "", "", aerr
+	}
+	lb, err := s.EnsureInternalLoadBalancer(ctx, shortName(envName+"-in"), net.Subnets, group)
+	if err != nil {
+		return "", "", "", err
+	}
+	port := int32(job.Action.Service.Port) //nolint:gosec // G115: a port, validated by the manifest
+	if tg == "" {
+		if tg, err = s.EnsureTargetGroup(ctx, tgName, net.VPC, port); err != nil {
+			return "", "", "", err
+		}
+	}
+	l, err := s.EnsureListener(ctx, lb.ARN, tg, "")
+	if err != nil {
+		return "", "", "", err
+	}
+	return tg, l.ARN, listenerURL(lb.DNS, l), nil
 }
 
 // run sets up the environment's network and load balancer, the service's
@@ -414,10 +456,20 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 	if err != nil {
 		return "", "", err
 	}
-	if cfg.Public && cfg.Port > 0 {
+	switch {
+	case cfg.Public && cfg.Port > 0:
 		job.Progress(StepDeploying, "Setting up the load balancer")
 		tg, group := targetGroup(inst, name)
 		tg, listener, lbURL, xerr := expose(ctx, s, job, net, lbGroup, envName, tg, group)
+		if xerr != nil {
+			return "", "", xerr
+		}
+		labels[ecs.LabelTargetGroup], labels[ecs.LabelListener] = tg, listener
+		url = lbURL
+	case cfg.Internal && cfg.Port > 0:
+		job.Progress(StepDeploying, "Setting up the internal load balancer")
+		tg, group := targetGroup(inst, name)
+		tg, listener, lbURL, xerr := exposeInternally(ctx, s, job, net, taskGroup, envName, tg, group)
 		if xerr != nil {
 			return "", "", xerr
 		}

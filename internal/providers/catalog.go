@@ -90,6 +90,13 @@ func Catalog() []provider.Provider {
 			Available: true,
 		},
 		{
+			Name: "cross-cloud-vpn", Title: "Cross-cloud VPN", Cloud: "gcp",
+			Description: "Links an environment's Google Cloud network to its AWS VPC with an HA VPN: four IPsec tunnels with BGP, so Cloud Run services reach private services and databases on AWS.",
+			Model:       provider.Managed,
+			Provisions:  []provider.Provisions{{Kind: "private-link", Creates: "HA VPN between Google Cloud and AWS"}},
+			Regions:     gcpRegions, Available: true,
+		},
+		{
 			Name: "cloud-sql", Title: "Google Cloud SQL", Cloud: "gcp",
 			Description: "Managed Postgres and MySQL on Google Cloud.",
 			Model:       provider.Managed,

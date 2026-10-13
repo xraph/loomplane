@@ -83,6 +83,10 @@ func TestParse_rejects(t *testing.T) {
 		{"source missing", "version: 1\nservices:\n  api: {provider: vercel}", "services.api.source: is required"},
 		{"source escapes", "version: 1\nservices:\n  api: {source: ../other}", "isn't a path in the repository"},
 		{"absolute source", "version: 1\nservices:\n  api: {source: /etc}", "isn't a path in the repository"},
+		{"link to one cloud", "version: 1\nlinks:\n  vpn: {between: [gcp, gcp]}", "links.vpn.between: names two different clouds"},
+		{"link to an unknown pair", "version: 1\nlinks:\n  vpn: {between: [gcp, azure]}", "can't link azure and gcp"},
+		{"two links for one pair", "version: 1\nlinks:\n  a: {between: [gcp, aws]}\n  b: {between: [aws, gcp]}", "a already links aws and gcp"},
+		{"link named like a service", "version: 1\nservices:\n  vpn: {source: x}\nlinks:\n  vpn: {between: [gcp, aws]}", "links.vpn: a service, resource or gateway has the same name"},
 		{"context escapes", "version: 1\nservices:\n  api: {source: x, build: {context: a/../..}}", "services.api.build.context: \"a/../..\" isn't a directory"},
 		{"absolute context", "version: 1\nservices:\n  api: {source: x, build: {context: /srv}}", "isn't a directory in the repository"},
 		{"unknown build field", "version: 1\nservices:\n  api: {source: x, build: {target: prod}}", "target"},
@@ -265,6 +269,8 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"resource", props(defs["resource"]), Resource{}},
 		{"resource settings", props(envOverride), ResourceSettings{}},
 		{"gateway", props(defs["gateway"]), Gateway{}},
+		{"link", props(defs["link"]), Link{}},
+		{"link settings", props(defs["link"].(map[string]any)["properties"].(map[string]any)["environments"].(map[string]any)["additionalProperties"]), LinkSettings{}},
 		{"route", props(defs["route"]), Route{}},
 	}
 	for _, tt := range tests {

@@ -2435,3 +2435,68 @@ func TestCompute_aMissingResourceOnAnotherConnectionIsCreatedAgain(t *testing.T)
 		t.Fatalf("db %s: %s", db.Op, db.Reason)
 	}
 }
+
+func TestCompute_aLinkLetsCloudRunReachPrivateThingsOnAWS(t *testing.T) {
+	const crossed = `version: 1
+services:
+  gateway:
+    source: apps/gateway
+    provider: cloud-run
+    needs: [api, db]
+  api:
+    source: services/api
+    provider: ecs-fargate
+    public: false
+resources:
+  db:
+    kind: postgres
+    provider: rds
+ignore: {resources: [redis]}
+`
+	// Without a link, neither is reachable from Cloud Run.
+	r := compute(t, crossed, "production")
+	got := codes(r.Problems)
+	if !slices.Contains(got, "private-across-clouds:gateway") || !slices.Contains(got, "unreachable-resource:gateway") {
+		t.Fatalf("problems without a link %v", got)
+	}
+
+	r = compute(t, crossed+"links:\n  vpn:\n    between: [gcp, aws]\n", "production")
+	if len(r.Problems) != 0 || !r.Executable {
+		t.Fatalf("problems with a link %v", codes(r.Problems))
+	}
+	link := action(t, r, "resource:vpn")
+	if link.Provider != "cross-cloud-vpn" || link.Resource.Kind != "private-link" || link.Step != 1 || link.Region == "" {
+		t.Fatalf("link %+v", link)
+	}
+	gw, api := action(t, r, "service:gateway"), action(t, r, "service:api")
+	if !gw.Service.PrivateEgress || !slices.Contains(gw.DependsOn, "resource:vpn") || len(gw.Service.Env) != 2 {
+		t.Fatalf("gateway %+v", gw.Service)
+	}
+	if !api.Service.Internal || api.Service.Public {
+		t.Fatalf("api %+v", api.Service)
+	}
+	// The link is wanted, so the next plan keeps it.
+	again := compute(t, crossed+"links:\n  vpn:\n    between: [gcp, aws]\n", "production", deployed(t, r)...)
+	if a := action(t, again, "resource:vpn"); a.Op != Keep {
+		t.Fatalf("second plan's link %+v", a)
+	}
+}
+
+func TestCompute_aLinkDoesntLetAWSReachPrivateCloudRun(t *testing.T) {
+	r := compute(t, `version: 1
+services:
+  worker:
+    source: services/worker/cmd/worker
+    provider: ecs-fargate
+    needs: [api]
+  api:
+    source: services/api
+    provider: cloud-run
+    public: false
+links:
+  vpn: {between: [aws, gcp]}
+`, "production")
+	if !slices.Contains(codes(r.Problems), "private-across-clouds:worker") {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+}

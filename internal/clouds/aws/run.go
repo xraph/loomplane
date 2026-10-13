@@ -29,6 +29,16 @@ type LoadBalancer struct {
 // across subnets, if there isn't one by that name, and waits until it's
 // active.
 func (s *Session) EnsureLoadBalancer(ctx context.Context, name string, subnets []string, group string) (*LoadBalancer, error) {
+	return s.ensureLoadBalancer(ctx, name, subnets, group, elbtypes.LoadBalancerSchemeEnumInternetFacing)
+}
+
+// EnsureInternalLoadBalancer is EnsureLoadBalancer for a load balancer
+// with private addresses only: what the other cloud reaches over a link.
+func (s *Session) EnsureInternalLoadBalancer(ctx context.Context, name string, subnets []string, group string) (*LoadBalancer, error) {
+	return s.ensureLoadBalancer(ctx, name, subnets, group, elbtypes.LoadBalancerSchemeEnumInternal)
+}
+
+func (s *Session) ensureLoadBalancer(ctx context.Context, name string, subnets []string, group string, scheme elbtypes.LoadBalancerSchemeEnum) (*LoadBalancer, error) {
 	cli := elb.NewFromConfig(s.cfg)
 	found, err := cli.DescribeLoadBalancers(ctx, &elb.DescribeLoadBalancersInput{Names: []string{name}})
 	var lb elbtypes.LoadBalancer
@@ -38,7 +48,7 @@ func (s *Session) EnsureLoadBalancer(ctx context.Context, name string, subnets [
 	case err == nil || IsNotFound(err):
 		out, cerr := cli.CreateLoadBalancer(ctx, &elb.CreateLoadBalancerInput{
 			Name: sdk.String(name), Subnets: subnets, SecurityGroups: []string{group},
-			Scheme: elbtypes.LoadBalancerSchemeEnumInternetFacing, Type: elbtypes.LoadBalancerTypeEnumApplication,
+			Scheme: scheme, Type: elbtypes.LoadBalancerTypeEnumApplication,
 		})
 		if cerr != nil {
 			return nil, fmt.Errorf("create load balancer %s: %w", name, cerr)
