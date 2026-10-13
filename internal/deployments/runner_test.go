@@ -1275,7 +1275,21 @@ func TestRunner_aServiceDeletedOnAnotherConnectionIsCreatedAgain(t *testing.T) {
 	if b := plans.bindings["service:api"]; b.ExternalID != "ext-new" || b.ConnectionID == "conn_old" {
 		t.Fatalf("binding %+v", b)
 	}
-	if got := log.list(); len(got) == 0 || got[0] != "apply cloud-run" {
+	if got := log.list(); !slices.Equal(got, []string{"apply cloud-run", "remove cloud-run ext-old"}) {
+		t.Fatalf("events %v", got)
+	}
+
+	// The same Create over a binding that isn't missing wasn't planned as
+	// a move, so the runner refuses it.
+	log2 := &moveLog{}
+	exec2 := &placed{provider: "cloud-run", log: log2, url: answering(t, http.StatusOK), externalID: "ext-new"}
+	live := onCloudRun()
+	live.ConnectionID = "conn_old"
+	r2, _, _, _ := moveRunner(t, plan, live, map[string]Executor{"cloud-run": exec2})
+	if _, err := runAll(t, r2, plan); err != nil {
+		t.Fatal(err)
+	}
+	if got := log2.list(); len(got) != 0 {
 		t.Fatalf("events %v", got)
 	}
 }

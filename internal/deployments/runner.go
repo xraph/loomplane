@@ -537,7 +537,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return nil
 	}
 	moving := moves(current, a, connID)
-	if moving && a.Op != planning.Replace && a.Op != planning.Create && current.Provider == a.Provider && current.Region == a.Region {
+	if moving && a.Op != planning.Replace && (a.Op != planning.Create || current.Drift != planning.DriftMissing) && current.Provider == a.Provider && current.Region == a.Region {
 		// Only the planner moves something to another connection, since
 		// only it deploys again what uses it, or refuses when something
 		// held does. A plan made before the binding said where it runs,
