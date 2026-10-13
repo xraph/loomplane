@@ -1324,6 +1324,15 @@ function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
                   {s.message}
                 </p>
               )}
+              {s.warnings?.map((w, i) => (
+                <p key={i} className="flex gap-2 text-xs wrap-anywhere">
+                  <span
+                    aria-hidden="true"
+                    className="mt-1 size-1.5 shrink-0 rounded-full bg-weld"
+                  />
+                  {w}
+                </p>
+              ))}
               {s.url && s.status === "succeeded" && (
                 <a
                   href={s.url}

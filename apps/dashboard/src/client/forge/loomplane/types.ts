@@ -813,6 +813,7 @@ export interface Step {
   status: string;
   subject: string;
   url: string;
+  warnings?: string[];
 }
 
 export interface UpdateProjectInputBody {
