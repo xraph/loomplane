@@ -1288,6 +1288,72 @@ func TestCompute_driftOnAHeldServiceNothingNeedsIsAWarning(t *testing.T) {
 	}
 }
 
+func TestCompute_driftOnAHeldServiceTheManifestDroppedIsReported(t *testing.T) {
+	first := deployed(t, computeFed(t, federatedYAML, nil))
+	// The manifest drops api, and site no longer needs it, but api is in
+	// mono, which the plan holds, so nothing deletes it.
+	noAPI := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
+	noAPI = strings.Replace(noAPI, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
+
+	for _, tt := range []struct{ name, drift, message, want, held string }{
+		{
+			"missing", DriftMissing, "",
+			"api was deleted outside Loomplane and the manifest no longer has it, so it stays gone, and a plan that moves mono clears what's left of it.",
+			"The manifest no longer has api, but it's in mono, which this plan holds back, so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone.",
+		},
+		{
+			"changed", DriftChanged, "another revision is live",
+			"api was changed outside Loomplane (another revision is live), and mono, which it comes from, is held, so it stays that way until a plan that moves mono removes it, as the manifest no longer has it.",
+			"The manifest no longer has api, but it's in mono, which this plan holds back, so it keeps running.",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := computeFed(t, noAPI, []string{"mono"}, drifted(first, "api", tt.drift, tt.message)...)
+			if len(r.Problems) != 0 {
+				t.Fatalf("problems %v", codes(r.Problems))
+			}
+			for _, a := range r.Actions {
+				if a.ID == "service:api" && a.Op == Delete {
+					t.Fatalf("deleted api, which mono holds: %+v", a)
+				}
+			}
+			if w := warning(r, "held-drifted", "api"); w == nil || w.Message != tt.want {
+				t.Fatalf("warnings %+v", r.Warnings)
+			}
+			if w := warning(r, "held", "api"); w == nil || w.Message != tt.held {
+				t.Fatalf("warnings %+v", r.Warnings)
+			}
+		})
+	}
+}
+
+func TestCompute_aHeldServiceTheManifestDroppedThatsDeletedAndNeededIsAProblem(t *testing.T) {
+	live := drifted(deployed(t, computeFed(t, federatedYAML, nil)), "api", DriftMissing, "")
+	// The manifest drops api, and site's entry no longer needs it, but the
+	// plan holds site too, so site runs on with the link to api it was
+	// deployed with.
+	noAPI := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
+	noAPI = strings.Replace(noAPI, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
+
+	r := computeFed(t, noAPI, []string{"mono", "site"}, live...)
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-missing:api"}) {
+		t.Fatalf("problems %v", got)
+	}
+	want := "api was deleted outside Loomplane and the manifest no longer has it, so no plan brings it back, yet something in this plan still uses it. Put it back in the manifest and add mono to the scope, or stop using it."
+	if r.Problems[0].Message != want || r.Problems[0].Path != "services.api" {
+		t.Fatalf("problem %+v", r.Problems[0])
+	}
+
+	// What a dropped held service still uses is needed the same way: api
+	// runs on, and db, kept for it, was deleted.
+	onlySite := "version: 1\nservices:\n  site:\n    repo: site\n    source: .\n    provider: vercel\n"
+	live = drifted(deployed(t, computeFed(t, federatedYAML, nil)), "db", DriftMissing, "")
+	r = computeFed(t, onlySite, []string{"mono"}, live...)
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-missing:db"}) || !strings.Contains(r.Problems[0].Message, "this plan keeps it for mono") {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+}
+
 func TestCompute_buildContext(t *testing.T) {
 	// The api's Dockerfile builds from its own directory, which the plan
 	// leaves unsaid, so bindings from before build contexts don't change.
