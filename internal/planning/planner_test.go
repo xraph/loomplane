@@ -1961,6 +1961,100 @@ func TestCompute_aHeldServiceUsingAServiceCreatedAgainKeepsTheOldAddress(t *test
 	}
 }
 
+// onConnection is live as the runner records it: each binding names the
+// connection that deployed it.
+func onConnection(live []*Binding, id string) []*Binding {
+	out := make([]*Binding, 0, len(live))
+	for _, b := range live {
+		c := *b
+		c.ConnectionID = id
+		out = append(out, &c)
+	}
+	return out
+}
+
+func TestCompute_aHeldServiceUsingAServiceCreatedAgainAtTheSameAddress(t *testing.T) {
+	// api, on Cloud Run, was deleted outside Loomplane, so it's created
+	// again with the name, region and connection it had, and site, held,
+	// was deployed with its address.
+	first := onConnection(deployed(t, computeFed(t, federatedYAML, nil)), "conn_gcp")
+	live := drifted(first, "api", DriftMissing, "")
+	warn := federatedYAML + "held: {same_address: warn}\n"
+	block := federatedYAML + "held: {same_address: block}\n"
+	problem := "site in site, which this plan holds back, uses api's address, and this plan creates api again, so site keeps the old one's address, which this plan stops tracking. Add site to the scope."
+
+	// Unset, or block, it's a problem as ever.
+	for _, yaml := range []string{federatedYAML, block} {
+		r := computeFed(t, yaml, []string{"site"}, live...)
+		if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) || r.Problems[0].Message != problem {
+			t.Fatalf("problems %+v", r.Problems)
+		}
+		if w := warning(r, "held-address", "site"); w != nil {
+			t.Fatalf("warning %+v", w)
+		}
+	}
+
+	// warn makes it a warning, since Cloud Run names the service the same.
+	r := computeFed(t, warn, []string{"site"}, live...)
+	if api := action(t, r, "service:api"); api.Op != Create || api.Provider != "cloud-run" {
+		t.Fatalf("api %+v", api)
+	}
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	w := warning(r, "held-address", "site")
+	want := "site in site, which this plan holds back, uses api's address, and this plan creates api again on Cloud Run with the name, region and connection it had, so it should get the same address, and site should still reach it. Add site to the scope if it doesn't."
+	if w == nil || w.Message != want || w.Path != "services.site" || w.Subject != ServiceSubject {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+
+	// Anything the planner can't be sure gives the same address is still
+	// a problem with warn.
+	elsewhere := func(yaml, field, value string) string {
+		return strings.Replace(yaml, "    source: services/api\n", "    source: services/api\n    "+field+": "+value+"\n", 1)
+	}
+	cases := []struct {
+		name string
+		yaml string
+		live []*Binding
+		op   Op
+	}{
+		{"another provider", elsewhere(warn, "provider", "ecs-fargate"), live, Create},
+		{"another region", elsewhere(warn, "region", "europe-west1"), live, Create},
+		{"a replacement", elsewhere(warn, "region", "europe-west1"), first, Replace},
+		{"another connection", warn, onConnection(live, "conn_old"), Create},
+		{"no connection recorded", warn, onConnection(live, ""), Create},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			r := computeFed(t, tt.yaml, []string{"site"}, tt.live...)
+			if api := action(t, r, "service:api"); api.Op != tt.op {
+				t.Fatalf("api %+v", api)
+			}
+			if !slices.Contains(codes(r.Problems), "held-address:site") {
+				t.Fatalf("problems %v", codes(r.Problems))
+			}
+			if w := warning(r, "held-address", "site"); w != nil {
+				t.Fatalf("warning %+v", w)
+			}
+		})
+	}
+
+	// A Cloud Run service the binding names no instance for gets a new
+	// name, so a new address.
+	noInstance := make([]*Binding, 0, len(live))
+	for _, b := range live {
+		c := *b
+		if c.Name == "api" {
+			c.ExternalID = ""
+		}
+		noInstance = append(noInstance, &c)
+	}
+	if r := computeFed(t, warn, []string{"site"}, noInstance...); !slices.Contains(codes(r.Problems), "held-address:site") {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+}
+
 // federatedOnECS is federatedYAML with both services on ECS, where site reaches
 // api by a fixed address inside the environment's network.
 const federatedOnECS = `version: 1

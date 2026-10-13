@@ -56,6 +56,7 @@ type Manifest struct {
 	Resources map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
 	Gateways  map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
 	Ignore    Ignore              `json:"ignore,omitzero" yaml:"ignore,omitempty"`
+	Held      Held                `json:"held,omitzero" yaml:"held,omitempty"`
 }
 
 // Defaults apply to every service and resource that doesn't set its own.
@@ -179,6 +180,29 @@ type Ignore struct {
 	// Resources are resource kinds, such as "mysql".
 	Resources []string `json:"resources,omitempty" yaml:"resources,omitempty"`
 }
+
+// Held is how a plan that holds some repositories back treats their
+// services, which keep running with the links they were deployed with.
+type Held struct {
+	// SameAddress is what a plan does when a held service uses something
+	// it creates again over what was deleted outside Loomplane, at an
+	// address the planner can tell won't change: SameAddressBlock, the
+	// default, refuses the plan until the held repository is in scope, and
+	// SameAddressWarn lets it through with a warning.
+	SameAddress string `json:"same_address,omitempty" yaml:"same_address,omitempty"`
+}
+
+// What Held.SameAddress may say.
+const (
+	SameAddressBlock = "block"
+	SameAddressWarn  = "warn"
+)
+
+var sameAddressChoices = []string{SameAddressBlock, SameAddressWarn}
+
+// WarnSameAddress reports whether a held service using something created
+// again at the same address is a warning rather than a problem.
+func (h Held) WarnSameAddress() bool { return h.SameAddress == SameAddressWarn }
 
 // Service kinds a manifest may name, as repository analysis names them.
 var serviceKinds = []string{"http-service", "web-app", "static-site", "worker"}
@@ -411,6 +435,9 @@ func (m *Manifest) Validate() error {
 		if !kindRE.MatchString(kind) {
 			add(fmt.Sprintf("ignore.resources[%d]", i), "%q isn't a resource kind", kind)
 		}
+	}
+	if a := m.Held.SameAddress; a != "" && !slices.Contains(sameAddressChoices, a) {
+		add("held.same_address", "%q isn't a choice; use %s", a, strings.Join(sameAddressChoices, " or "))
 	}
 	if len(ps) > 0 {
 		return ps

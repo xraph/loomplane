@@ -365,6 +365,10 @@ export interface GraphSummary {
   services: number;
 }
 
+export interface Held {
+  sameAddress?: string;
+}
+
 export interface Ignore {
   resources?: string[];
 }
@@ -378,6 +382,7 @@ export interface InfrastructureStatus {
 export interface Manifest {
   defaults: Defaults;
   gateways?: Record<string, any>;
+  held: Held;
   ignore: Ignore;
   resources?: Record<string, any>;
   services?: Record<string, any>;
@@ -625,6 +630,7 @@ export interface SaveInputBody {
   manifest?: {
   defaults: Defaults;
   gateways?: Record<string, any>;
+  held: Held;
   ignore: Ignore;
   resources?: Record<string, any>;
   services?: Record<string, any>;

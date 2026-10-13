@@ -540,6 +540,50 @@ func (p *planner) readdressed(dep *Action, e EnvLink, target string) (string, bo
 	return how, true
 }
 
+// sameAddress reports whether dep, created again over its binding, comes
+// back at the address it had, as far as the plan can tell. Only Cloud Run
+// says so. The executor deploys to the Ctrl Plane instance the binding
+// names, through the provider for the connection and region, and Cloud
+// Run names the service after that instance, so the same instance, region
+// and connection, which is the Google Cloud project, give the same URL.
+// Anything else, a replacement included, which moves provider or region,
+// gets an address of its own.
+func (p *planner) sameAddress(dep *Action) bool {
+	b := p.bindings[dep.ID]
+	switch {
+	case dep.Op != Create, b == nil, dep.Subject != ServiceSubject:
+		return false
+	case dep.Provider != cloudRun, b.Provider != cloudRun, b.Name != dep.Name:
+		return false
+	case b.Region == "", b.Region != dep.Region, b.ExternalID == "", b.ConnectionID == "":
+		return false
+	}
+	prov, err := p.in.Providers.Get(cloudRun)
+	return err == nil && b.ConnectionID == p.connectionFor(prov.Cloud)
+}
+
+// connectionFor is the connection the plan deploys to cloud with, as
+// connect decides, or empty where connect reports a problem instead.
+func (p *planner) connectionFor(cloud string) string {
+	if id := p.in.Chosen[cloud]; id != "" {
+		i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
+		if i < 0 || !p.in.Connections[i].Ready {
+			return ""
+		}
+		return id
+	}
+	var ready []string
+	for _, c := range p.in.Connections {
+		if c.Cloud == cloud && c.Ready {
+			ready = append(ready, c.ID)
+		}
+	}
+	if len(ready) != 1 {
+		return ""
+	}
+	return ready[0]
+}
+
 // fixedAddress is the address link and route give a service on target
 // that uses dep, when both run on ECS, inside the environment's network.
 // Anywhere else it's empty: dep is reached at an address of its own.
@@ -557,7 +601,9 @@ func fixedAddress(dep *Action, target string) string {
 // again, gets an address of its own, but none of those is deployed
 // again, so each keeps the old one's address. A deployment removes what it
 // replaces once the replacement is up, and what's created again is gone
-// already, so that's a problem. It
+// already, so that's a problem. A manifest with held.same_address: warn
+// makes it a warning instead when what's created again comes back at the
+// same address, as sameAddress decides. It
 // runs after planGateways, since a gateway that takes the name of what a
 // held service used can replace it too. What was deleted outside
 // Loomplane runs nowhere, so it uses nothing. Each one it reports is noted
@@ -618,6 +664,14 @@ func (p *planner) heldAddresses() {
 			}
 			seen = append(seen, dep.ID)
 			p.addressed[dep.ID] = append(p.addressed[dep.ID], u.name)
+			if p.in.Manifest != nil && p.in.Manifest.Held.WarnSameAddress() && p.sameAddress(dep) {
+				p.warn(Finding{
+					Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
+					Message: fmt.Sprintf("%s, uses %s's address, and this plan creates %s again on Cloud Run with the name, region and connection it had, so it should get the same address, and %s should still reach it. %s if it doesn't.",
+						who, e.From, dep.Name, u.name, strings.TrimSuffix(scope, ".")),
+				})
+				continue
+			}
 			// A deployment removes what it replaces once the new one is up.
 			// What's created again was deleted outside Loomplane.
 			fate := "which this plan stops tracking"

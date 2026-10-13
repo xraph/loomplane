@@ -52,6 +52,17 @@
           "items": { "$ref": "#/$defs/kind" }
         }
       }
+    },
+    "held": {
+      "description": "How a plan that holds some repositories back treats their services, which keep running with the links they were deployed with.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "same_address": {
+          "description": "What a plan does when a held service uses a Cloud Run service it creates again, after it was deleted outside Loomplane, with the name, region and connection it had, so at the same address. block, the default, refuses the plan until the held repository is in scope. warn lets it through with a warning. Anything that gets a new address is refused either way.",
+          "enum": ["block", "warn"]
+        }
+      }
     }
   },
   "$defs": {

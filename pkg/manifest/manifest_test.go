@@ -107,6 +107,8 @@ func TestParse_rejects(t *testing.T) {
 		{"bad environment", "version: 1\nservices:\n  api:\n    source: x\n    environments:\n      Prod: {}", "environments.Prod: isn't an environment name"},
 		{"bad ignore", "version: 1\nignore: {resources: [My SQL]}", "ignore.resources[0]"},
 		{"bad version", "version: 1\nresources:\n  db: {kind: mysql, version: 8 4}", "isn't a version"},
+		{"bad held same_address", "version: 1\nheld: {same_address: allow}", "held.same_address: \"allow\" isn't a choice; use block or warn"},
+		{"unknown held field", "version: 1\nheld: {address: warn}", "field address not found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -254,6 +256,7 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"manifest", props(schema), Manifest{}},
 		{"defaults", props(schema["properties"].(map[string]any)["defaults"]), Defaults{}},
 		{"ignore", props(schema["properties"].(map[string]any)["ignore"]), Ignore{}},
+		{"held", props(schema["properties"].(map[string]any)["held"]), Held{}},
 		{"service", append(props(defs["service"]), props(defs["settings"])...), Service{}},
 		{"build", props(defs["service"].(map[string]any)["properties"].(map[string]any)["build"]), Build{}},
 		{"settings", props(defs["settings"]), Settings{}},
@@ -313,5 +316,43 @@ func TestParse_repo(t *testing.T) {
 	var ps Problems
 	if !errors.As(err, &ps) || len(ps) != 1 || ps[0].Path != "services.site.repo" {
 		t.Fatalf("Parse with a bad repo: %v", err)
+	}
+}
+
+func TestParse_held(t *testing.T) {
+	tests := []struct {
+		yaml string
+		warn bool
+	}{
+		{"version: 1\n", false},
+		{"version: 1\nheld: {}\n", false},
+		{"version: 1\nheld: {same_address: block}\n", false},
+		{"version: 1\nheld: {same_address: warn}\n", true},
+	}
+	for _, tt := range tests {
+		m, err := Parse([]byte(tt.yaml))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tt.yaml, err)
+		}
+		if got := m.Held.WarnSameAddress(); got != tt.warn {
+			t.Errorf("Parse(%q): WarnSameAddress = %v, want %v", tt.yaml, got, tt.warn)
+		}
+	}
+	_, err := Parse([]byte("version: 1\nheld: {same_address: Warn}\n"))
+	var ps Problems
+	if !errors.As(err, &ps) || len(ps) != 1 || ps[0].Path != "held.same_address" {
+		t.Fatalf("Parse with a bad same_address: %v", err)
+	}
+	// It round-trips, and an unset one writes nothing.
+	m, err := Parse([]byte("version: 1\nheld: {same_address: warn}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Marshal(m)
+	if err != nil || !strings.Contains(string(out), "held:\n  same_address: warn\n") {
+		t.Fatalf("Marshal: %v\n%s", err, out)
+	}
+	if out, _ := Marshal(&Manifest{Version: 1}); strings.Contains(string(out), "held") {
+		t.Fatalf("Marshal wrote an unset held:\n%s", out)
 	}
 }

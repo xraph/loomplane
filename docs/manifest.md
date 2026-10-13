@@ -120,6 +120,15 @@ A gateway gets the addresses it routes to and none of the project's variables. O
 
 `resources` lists kinds analysis found that the application doesn't use, so plans stop asking about them.
 
+## held
+
+`same_address` is what a scoped plan does when a held service uses a service that was deleted outside Loomplane and that the plan creates again. The held service isn't deployed again, so it keeps the old address. With `block`, the default, that's a problem until you add the held repository to the scope. With `warn` it's a warning instead, but only when the planner can tell the address won't change: a Cloud Run service created again with the name, region and connection it had, which Cloud Run gives the same URL. Anything else, including a replacement, is still a problem.
+
+```yaml
+held:
+  same_address: warn
+```
+
 ## Targets
 
 | Provider | Cloud | Runs | Provisions |

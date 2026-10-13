@@ -19,6 +19,7 @@ const manifest: Manifest = {
   version: 1,
   defaults: {},
   ignore: {},
+  held: {},
   services: {
     api: { source: "services/api", provider: "cloud-run" },
     web: { source: "apps/web", provider: "vercel" },

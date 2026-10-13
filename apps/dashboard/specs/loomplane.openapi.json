@@ -3348,6 +3348,14 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/graph.Summary"
       },
+      "Held": {
+        "type": "object",
+        "properties": {
+          "same_address": {
+            "type": "string"
+          }
+        }
+      },
       "Ignore": {
         "type": "object",
         "properties": {
@@ -3386,7 +3394,8 @@
         "required": [
           "version",
           "defaults",
-          "ignore"
+          "ignore",
+          "held"
         ],
         "properties": {
           "defaults": {
@@ -3395,6 +3404,9 @@
           "gateways": {
             "type": "object",
             "additionalProperties": true
+          },
+          "held": {
+            "$ref": "#/components/schemas/Held"
           },
           "ignore": {
             "$ref": "#/components/schemas/Ignore"
@@ -4285,7 +4297,8 @@
             "required": [
               "version",
               "defaults",
-              "ignore"
+              "ignore",
+              "held"
             ],
             "properties": {
               "defaults": {
@@ -4294,6 +4307,9 @@
               "gateways": {
                 "type": "object",
                 "additionalProperties": true
+              },
+              "held": {
+                "$ref": "#/components/schemas/Held"
               },
               "ignore": {
                 "$ref": "#/components/schemas/Ignore"
