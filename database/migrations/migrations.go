@@ -44,6 +44,7 @@ func Group() *migrate.Group {
 		statements("20261014000002", "create_plan_sources", planSourcesUp, planSourcesDown),
 		statements("20261014000003", "add_deployment_sources", deploymentSourcesUp, deploymentSourcesDown),
 		statements("20261014000004", "backfill_environment_sources", environmentSourcesBackfillUp, environmentSourcesBackfillDown),
+		statements("20261014000005", "index_source_repositories_by_name", sourceRepositoryIndexUp, sourceRepositoryIndexDown),
 	)
 	return g
 }
@@ -586,3 +587,18 @@ var environmentSourcesBackfillUp = []string{
 // Nothing to undo: the backfilled rows can't be told apart from ones a
 // deployment wrote, and create_plan_sources' down drops the table anyway.
 var environmentSourcesBackfillDown = []string{}
+
+// A push webhook finds the sources of a repository across organizations.
+// GitHub names it in its own case and a source keeps the case it was
+// added with, so the lookup compares lowercased, and the index does too.
+var sourceRepositoryIndexUp = []string{
+	`CREATE INDEX IF NOT EXISTS loomplane_project_sources_repository_lower
+		ON loomplane_project_sources (lower(repository)) WHERE removed_at IS NULL`,
+	`DROP INDEX IF EXISTS loomplane_project_sources_repository`,
+}
+
+var sourceRepositoryIndexDown = []string{
+	`CREATE INDEX IF NOT EXISTS loomplane_project_sources_repository
+		ON loomplane_project_sources (repository)`,
+	`DROP INDEX IF EXISTS loomplane_project_sources_repository_lower`,
+}

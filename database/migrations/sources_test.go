@@ -254,3 +254,23 @@ func TestEnvironmentSourcesBackfill_eachEnvironmentKeepsItsNewestSucceededDeploy
 		t.Fatalf("environment sources %q", got)
 	}
 }
+
+func TestSourceRepositoryIndex_findsARepositoryWhateverItsCase(t *testing.T) {
+	conn := scratch(t)
+	exec(t, conn, projectsUp...)
+	exec(t, conn, analysesUp...)
+	exec(t, conn, variablesUp...)
+	exec(t, conn, projectStyleUp...)
+	exec(t, conn, sourcesUp...)
+	exec(t, conn, sourceRepositoryIndexUp...)
+	exec(t, conn, sourceRepositoryIndexUp...)
+	indexes := `SELECT indexname FROM pg_indexes WHERE tablename = 'loomplane_project_sources'
+		AND indexname LIKE 'loomplane_project_sources_repository%' ORDER BY indexname`
+	if got := strs(t, conn, indexes); !slices.Equal(got, []string{"loomplane_project_sources_repository_lower"}) {
+		t.Fatalf("indexes %q", got)
+	}
+	exec(t, conn, sourceRepositoryIndexDown...)
+	if got := strs(t, conn, indexes); !slices.Equal(got, []string{"loomplane_project_sources_repository"}) {
+		t.Fatalf("indexes after down %q", got)
+	}
+}
