@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-federated-sources-design.md`. Read it before starting; this plan argues from it.
 
+**Revised 2026-10-13:** a project can start with several repositories. Task 5 now adds discovery's `AttachRepository`, which takes a `projects.RepositoryInput`, along with the Go client's and loomctl's `--repo`, and Task 7's new-project dialog takes a row per repository. The code below matches `main` as of `31ccf7a`.
+
 ## Global Constraints
 
 - Aliases match `^[a-z][a-z0-9-]{0,31}$`. `go`, `rust`, `node` and `container` are reserved. An alias never changes and is never reused, even after its source is removed.
@@ -574,7 +576,7 @@ git commit -m "feat: give projects a table of sources and attach each one's repo
 - Produces:
   - Store methods `CreateSource(ctx, *Source) error`, `GetSource(ctx, orgID, projectID, alias string) (*Source, error)`, `ListSources(ctx, orgID, projectID string, withRemoved bool) ([]*Source, error)`, `UpdateSource(ctx, *Source) error`, `RemoveSource(ctx, orgID, projectID, alias string, now time.Time) error`.
   - `type Access interface { Check(ctx, orgID string, repo repositories.Repository, ref string) error }` and `GitHubAccess{Tokens TokenSource; Fetcher Fetcher}`.
-  - `(*Service).SetAccess(Access)`, `AddSource(ctx, p, projectID string, AddSourceInput) (*Source, error)`, `Sources(ctx, p, projectID) ([]*Source, error)`, `UpdateSource(ctx, p, projectID, alias string, UpdateSourceInput) (*Source, error)`, `RemoveSource(ctx, p, projectID, alias string) error`, `AttachRepository(ctx, p, *projects.Project, url string) (string, error)`.
+  - `(*Service).SetAccess(Access)`, `AddSource(ctx, p, projectID string, AddSourceInput) (*Source, error)`, `Sources(ctx, p, projectID) ([]*Source, error)`, `UpdateSource(ctx, p, projectID, alias string, UpdateSourceInput) (*Source, error)`, `RemoveSource(ctx, p, projectID, alias string) error`. Task 5 adds `AttachRepository`, since it takes Task 5's `projects.RepositoryInput`.
   - `AddSourceInput{Repository, Alias, Root, Ref string}`, `UpdateSourceInput{Root, Ref *string}`.
 
 - [ ] **Step 1: Give the test store sources, and write the failing tests**
@@ -880,17 +882,6 @@ func (s *Service) AddSource(ctx context.Context, p security.Principal, projectID
 		return nil, err
 	}
 	return s.addSource(ctx, p, projectID, in)
-}
-
-// AttachRepository attaches the repository a new project was created with,
-// as its first source. It implements projects.Attacher; the project's
-// creation already checked the caller.
-func (s *Service) AttachRepository(ctx context.Context, p security.Principal, proj *projects.Project, url string) (string, error) {
-	src, err := s.addSource(ctx, p, proj.ID, AddSourceInput{Repository: url})
-	if err != nil {
-		return "", err
-	}
-	return src.Repository, nil
 }
 
 func (s *Service) addSource(ctx context.Context, p security.Principal, projectID string, in AddSourceInput) (*Source, error) {
@@ -1443,34 +1434,51 @@ git commit -m "feat: analyze each of a project's sources on its own"
 
 **Files:**
 - Modify: `internal/projects/project.go`, `internal/projects/service.go`, `internal/projects/pgstore.go`
+- Modify: `internal/discovery/sources.go` (`AttachRepository`)
 - Modify: `extensions/projects/extension.go` (`fail`)
-- Test: `internal/projects/service_test.go`
+- Modify: `pkg/client/client.go` (`NewProject.Repositories`), `internal/ctl/commands.go` (`--repo` repeats)
+- Test: `internal/projects/service_test.go`, `internal/discovery/service_test.go`, `internal/ctl/commands_test.go`
 
 **Interfaces:**
+- Consumes: Task 3's `addSource` and its errors.
 - Produces:
   - `Project.Repositories []string` (`json:"repositories"`); `Project.RepositoryURL` is gone.
-  - `UpdateProjectInput.RepositoryURL` is gone. `CreateProjectInput.RepositoryURL` stays.
-  - `type Attacher interface { AttachRepository(ctx context.Context, p security.Principal, proj *Project, repositoryURL string) (string, error) }` and `(*Service).SetAttacher(Attacher)`.
+  - `UpdateProjectInput.RepositoryURL` is gone. `CreateProjectInput.RepositoryURL` stays, and `CreateProjectInput.Repositories []RepositoryInput` (`json:"repositories"`) joins it, up to `maxRepositories` (10) in all.
+  - `RepositoryInput{Repository, Alias, Root, Ref string}`, what adding a source takes.
+  - `type Attacher interface { AttachRepository(ctx context.Context, p security.Principal, proj *Project, in RepositoryInput) (repository, alias string, err error) }` and `(*Service).SetAttacher(Attacher)`.
+  - discovery's `(*Service).AttachRepository`, which implements it.
   - `ErrRepository`.
+  - `client.NewProject.Repositories []client.NewRepository`, and loomctl's `projects create --repo`, repeatable, with `alias=repository` to name one.
 
 - [ ] **Step 1: Write the failing tests**
 
 In `internal/projects/service_test.go`, add:
 
 ```go
-// attachRecorder stands in for discovery: it attaches every repository as
-// ada/engine, or fails with err.
+// attachRecorder stands in for discovery: it attaches "owner/name" or a
+// URL ending in it as owner/name, aliased by its name or the alias it's
+// given, or fails with err, or with failOn for that repository.
 type attachRecorder struct {
-	urls []string
-	err  error
+	urls   []string
+	err    error
+	failOn map[string]error
 }
 
-func (a *attachRecorder) AttachRepository(_ context.Context, _ security.Principal, proj *Project, url string) (string, error) {
+func (a *attachRecorder) AttachRepository(_ context.Context, _ security.Principal, proj *Project, in RepositoryInput) (repository, alias string, err error) {
 	if a.err != nil {
-		return "", a.err
+		return "", "", a.err
 	}
-	a.urls = append(a.urls, proj.ID+" "+url)
-	return "ada/engine", nil
+	if err := a.failOn[in.Repository]; err != nil {
+		return "", "", err
+	}
+	a.urls = append(a.urls, proj.ID+" "+in.Repository)
+	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(in.Repository, "git@github.com:"), ".git"), "/")
+	repository = strings.Join(parts[len(parts)-2:], "/")
+	alias = in.Alias
+	if alias == "" {
+		alias = parts[len(parts)-1]
+	}
+	return repository, alias, nil
 }
 ```
 
@@ -1489,18 +1497,29 @@ func TestService_createRemovesTheProjectWhenItsRepositoryCantBeAttached(t *testi
 	ctx := context.Background()
 	f := newFixture(t)
 	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
-	f.attach.err = errors.New("Loomplane can't read that repository")
-
-	_, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine", RepositoryURL: "https://github.com/ada/private"})
-	if !errors.Is(err, ErrRepository) {
-		t.Fatalf("Create: %v", err)
+	// The attacher says which of its errors are about the repository.
+	tests := []struct {
+		name       string
+		err        error
+		repository bool
+	}{
+		{"the repository", fmt.Errorf("%w: Loomplane can't read that repository", ErrRepository), true},
+		{"anything else", errors.New("db down"), false},
 	}
-	list, err := f.svc.List(ctx, dev)
-	if err != nil || len(list) != 0 {
-		t.Fatalf("a half-made project was left behind: %v, %+v", err, list)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f.attach.err = tt.err
+			_, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine", RepositoryURL: "https://github.com/ada/private"})
+			if !errors.Is(err, tt.err) || errors.Is(err, ErrRepository) != tt.repository {
+				t.Fatalf("Create: %v", err)
+			}
+			list, err := f.svc.List(ctx, dev)
+			if err != nil || len(list) != 0 {
+				t.Fatalf("a half-made project was left behind: %v, %+v", err, list)
+			}
+		})
 	}
 }
-
 func TestService_aRepositoryNeedsAnAttacher(t *testing.T) {
 	f := newFixture(t)
 	f.svc.SetAttacher(nil)
@@ -1509,14 +1528,129 @@ func TestService_aRepositoryNeedsAnAttacher(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 }
+func TestService_createWithSeveralRepositories(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{
+		Name: "Shop", RepositoryURL: "https://github.com/acme/web",
+		Repositories: []RepositoryInput{
+			{Repository: "acme/api"},
+			{Repository: "   "},
+			{Repository: "other/api", Alias: "billing", Root: "svc", Ref: "main"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Attached in the order sent, the single URL first, a blank one left
+	// out, and listed by alias, as the store reads them.
+	if want := []string{p.ID + " https://github.com/acme/web", p.ID + " acme/api", p.ID + " other/api"}; !slices.Equal(f.attach.urls, want) {
+		t.Fatalf("attached %v, want %v", f.attach.urls, want)
+	}
+	if want := []string{"acme/api", "other/api", "acme/web"}; !slices.Equal(p.Repositories, want) {
+		t.Fatalf("repositories %v, want %v", p.Repositories, want)
+	}
+}
+
+func TestService_aRepositoryThatFailsTakesTheProjectBackOut(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	f.attach.failOn = map[string]error{"acme/private": fmt.Errorf("%w: Loomplane can't read it", ErrRepository)}
+
+	_, err := f.svc.Create(ctx, dev, CreateProjectInput{
+		Name:         "Shop",
+		Repositories: []RepositoryInput{{Repository: "acme/web"}, {Repository: "acme/private"}},
+	})
+	if !errors.Is(err, ErrRepository) || !strings.HasPrefix(err.Error(), "acme/private: ") {
+		t.Fatalf("Create: %v, want a repository error naming acme/private", err)
+	}
+	if list, lerr := f.svc.List(ctx, dev); lerr != nil || len(list) != 0 {
+		t.Fatalf("a half-made project was left behind: %v, %+v", lerr, list)
+	}
+}
+
+func TestService_aProjectStartsWithAtMostTenRepositories(t *testing.T) {
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	repos := make([]RepositoryInput, maxRepositories+1)
+	for i := range repos {
+		repos[i] = RepositoryInput{Repository: fmt.Sprintf("acme/r%d", i)}
+	}
+	if _, err := f.svc.Create(context.Background(), dev, CreateProjectInput{Name: "Shop", Repositories: repos}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(f.attach.urls) != 0 {
+		t.Fatalf("attached %v before refusing", f.attach.urls)
+	}
+}
 ```
 
 Adjust the `f.principal` call and `List` signature to match the helpers in the file if they differ.
 
+In `internal/discovery/service_test.go`, add:
+
+```go
+func TestSources_attachingANewProjectsRepositorySaysWhatsWrongWithIt(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	proj := &projects.Project{ID: "proj_bare", OrgID: org}
+	f.source(t, "proj_bare", "platform", "acme/mono", "")
+	tests := []struct {
+		name, url string
+		want      error
+	}{
+		{"not GitHub", "https://gitlab.com/acme/site", ErrInvalidSource},
+		{"alias taken", "acme/platform", ErrAliasTaken},
+		{"overlapping root", "acme/mono", ErrRootsOverlap},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := f.svc.AttachRepository(ctx, dev, proj, projects.RepositoryInput{Repository: tt.url})
+			if !errors.Is(err, tt.want) || !errors.Is(err, projects.ErrRepository) {
+				t.Fatalf("AttachRepository: %v, want %v as a repository error", err, tt.want)
+			}
+		})
+	}
+	f.access.err = repositories.ErrNotFound
+	_, _, err := f.svc.AttachRepository(ctx, dev, proj, projects.RepositoryInput{Repository: "acme/private"})
+	if !errors.Is(err, ErrSourceInaccessible) || !errors.Is(err, projects.ErrRepository) {
+		t.Fatalf("a repository Loomplane can't read: %v", err)
+	}
+	// Anything else isn't the repository's fault, so it isn't one.
+	f.access.err = errors.New("github is down")
+	_, _, err = f.svc.AttachRepository(ctx, dev, proj, projects.RepositoryInput{Repository: "acme/other"})
+	if err == nil || errors.Is(err, projects.ErrRepository) {
+		t.Fatalf("an outage: %v", err)
+	}
+}
+
+func TestSources_twoOfANewProjectsRepositoriesWantingOneAlias(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	proj := &projects.Project{ID: "proj_bare", OrgID: org}
+	if _, alias, err := f.svc.AttachRepository(ctx, dev, proj, projects.RepositoryInput{Repository: "acme/api"}); err != nil || alias != "api" {
+		t.Fatalf("the first: %q %v", alias, err)
+	}
+	_, _, err := f.svc.AttachRepository(ctx, dev, proj, projects.RepositoryInput{Repository: "other/api"})
+	if !errors.Is(err, ErrAliasTaken) || !errors.Is(err, projects.ErrRepository) ||
+		!strings.Contains(err.Error(), "another of its repositories already has the alias api") {
+		t.Fatalf("the second: %v", err)
+	}
+	if _, alias, err := f.svc.AttachRepository(ctx, dev, proj, projects.RepositoryInput{Repository: "other/api", Alias: "other-api"}); err != nil || alias != "other-api" {
+		t.Fatalf("with an alias of its own: %q %v", alias, err)
+	}
+}
+```
+
 - [ ] **Step 2: Run the tests to see them fail**
 
-Run: `go test ./internal/projects/`
-Expected: FAIL to compile (`SetAttacher`, `Repositories` and `ErrRepository` undefined).
+Run: `go test ./internal/projects/ ./internal/discovery/`
+Expected: FAIL to compile (`SetAttacher`, `Repositories`, `RepositoryInput`, `ErrRepository` and `AttachRepository` undefined).
 
 - [ ] **Step 3: Change the model and the service**
 
@@ -1538,22 +1672,82 @@ Add to the errors:
 In `service.go`:
 
 ```go
-// Attacher attaches the repository a new project was created with, as its
-// first source, and returns its "owner/name". discovery's Service is the
-// real one; projects can't import it, since it imports projects.
+// Attacher attaches a repository a new project was created with as one of
+// its sources, and returns its "owner/name" and the alias it got.
+// discovery's Service is the real one; projects can't import it, since it
+// imports projects. An error that's about the repository itself wraps
+// ErrRepository; Create passes every error on as it is.
 type Attacher interface {
-	AttachRepository(ctx context.Context, p security.Principal, proj *Project, repositoryURL string) (string, error)
+	AttachRepository(ctx context.Context, p security.Principal, proj *Project, in RepositoryInput) (repository, alias string, err error)
 }
 
 // SetAttacher sets the Attacher. Call it while the app registers.
 func (s *Service) SetAttacher(a Attacher) { s.attacher = a }
 ```
 
-Add `attacher Attacher` to the `Service` struct. Change the `CreateProjectInput.RepositoryURL` comment to "is attached as the project's first source". Delete `RepositoryURL` from `UpdateProjectInput` and its branch in `Update`. Update the `Update` doc comment and the `projects.update` route summary in `extensions/projects/routes.go` to drop "repository". In `build`, keep validating the URL but stop putting it on the `Project`. In `Create`:
+Add the limit to the constants:
 
 ```go
-	repo := strings.TrimSpace(in.RepositoryURL)
-	if repo != "" && s.attacher == nil {
+	// maxRepositories is how many repositories a project can start with.
+	// Each is read from GitHub before it's attached, one after another,
+	// so creating the project stays quick enough to wait on. More can be
+	// added afterwards.
+	maxRepositories = 10
+```
+
+Give `CreateProjectInput` its list, after `RepositoryURL`, and add `RepositoryInput` and the helper that reads both:
+
+```go
+	// RepositoryURL is attached as the project's first source.
+	RepositoryURL string `json:"repository_url,omitempty"`
+	// Repositories are attached as its sources, after RepositoryURL, in
+	// order. A project can start with up to ten.
+	Repositories []RepositoryInput `json:"repositories,omitempty"`
+
+// RepositoryInput is a repository a new project starts with, as one of its
+// sources: what adding a source to a project takes.
+type RepositoryInput struct {
+	// Repository is an https GitHub URL, an SSH address or "owner/name".
+	Repository string `json:"repository"`
+	// Alias names the source. Empty picks one from the repository's name.
+	Alias string `json:"alias,omitempty"`
+	// Root is the directory the project builds from. Empty means the
+	// whole repository.
+	Root string `json:"root,omitempty"`
+	// Ref is the branch analyses read. Empty means the default branch.
+	Ref string `json:"ref,omitempty"`
+}
+
+// repositories are what a project starts with: RepositoryURL, then
+// Repositories. A blank one is left out.
+func (in CreateProjectInput) repositories() []RepositoryInput {
+	var out []RepositoryInput
+	if repo := strings.TrimSpace(in.RepositoryURL); repo != "" {
+		out = append(out, RepositoryInput{Repository: repo})
+	}
+	for _, r := range in.Repositories {
+		r.Repository = strings.TrimSpace(r.Repository)
+		if r.Repository != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+```
+
+Add `attacher Attacher` to the `Service` struct. Delete `RepositoryURL` from `UpdateProjectInput` and its branch in `Update`. Update the `Update` doc comment and the `projects.update` route summary in `extensions/projects/routes.go` to drop "repository". In `build`, keep validating the URL but stop putting it on the `Project`, and refuse too many repositories before anything is created:
+
+```go
+	if n := len(in.repositories()); n > maxRepositories {
+		return nil, fmt.Errorf("%w: a project can start with at most %d repositories; add the rest once it's created", ErrInvalid, maxRepositories)
+	}
+```
+
+In `Create`:
+
+```go
+	repos := in.repositories()
+	if len(repos) > 0 && s.attacher == nil {
 		return nil, fmt.Errorf("%w: this Loomplane can't attach repositories", ErrInvalid)
 	}
 ```
@@ -1561,18 +1755,91 @@ Add `attacher Attacher` to the `Service` struct. Change the `CreateProjectInput.
 Put that before `s.build`. Then, between `s.store.CreateProject` and `s.init.InitializeProject`:
 
 ```go
-	if repo != "" {
-		full, err := s.attacher.AttachRepository(ctx, p, proj, repo)
-		if err != nil {
-			// A project that can't read its own repository is worse than
-			// none, so take it back out.
-			if derr := s.store.DeleteProject(context.WithoutCancel(ctx), proj.OrgID, proj.ID); derr != nil {
-				err = errors.Join(err, fmt.Errorf("remove the project again: %w", derr))
-			}
-			return nil, fmt.Errorf("%w: %w", ErrRepository, err)
+	if err := s.attach(ctx, p, proj, repos); err != nil {
+		// A project that can't read its own repositories is worse than
+		// none, so take it back out, with any it attached.
+		if derr := s.store.DeleteProject(context.WithoutCancel(ctx), proj.OrgID, proj.ID); derr != nil {
+			err = errors.Join(err, fmt.Errorf("remove the project again: %w", derr))
 		}
-		proj.Repositories = []string{full}
+		return nil, err
 	}
+```
+
+And the method it calls:
+
+```go
+// attach attaches each repository a new project starts with, and lists
+// them on it by alias, the order the store reads them in. With several,
+// an error names the one that failed.
+func (s *Service) attach(ctx context.Context, p security.Principal, proj *Project, repos []RepositoryInput) error {
+	type attached struct{ repository, alias string }
+	var done []attached
+	for _, r := range repos {
+		full, alias, err := s.attacher.AttachRepository(ctx, p, proj, r)
+		if err != nil {
+			if len(repos) > 1 {
+				err = fmt.Errorf("%s: %w", r.Repository, err)
+			}
+			return err
+		}
+		done = append(done, attached{full, alias})
+	}
+	slices.SortFunc(done, func(a, b attached) int { return strings.Compare(a.alias, b.alias) })
+	for _, a := range done {
+		proj.Repositories = append(proj.Repositories, a.repository)
+	}
+	return nil
+}
+```
+
+In `internal/discovery/sources.go`, after `AddSource`, add the real attacher. It says which of its errors are the repository's fault, so the person creating the project is told, and an alias clash gets a message that fits a project that doesn't exist yet:
+
+```go
+// AttachRepository attaches a repository a new project was created with,
+// as one of its sources. It implements projects.Attacher; the project's
+// creation already checked the caller. What's wrong with the repository
+// itself comes back as projects.ErrRepository, so the person creating the
+// project is told; anything else, such as a database error, stays as it is.
+func (s *Service) AttachRepository(ctx context.Context, p security.Principal, proj *projects.Project, in projects.RepositoryInput) (repository, alias string, err error) {
+	src, err := s.addSource(ctx, p, proj.ID, AddSourceInput{Repository: in.Repository, Alias: in.Alias, Root: in.Root, Ref: in.Ref})
+	if errors.Is(err, ErrAliasTaken) {
+		// A new project has used no alias but the ones it's attaching, so
+		// two of them clashed, and "never reused" means nothing yet.
+		return "", "", aliasClashError{alias: aliasOf(in)}
+	}
+	if err != nil {
+		for _, target := range []error{ErrInvalidSource, ErrAliasReserved, ErrRootsOverlap, ErrSourceInaccessible} {
+			if errors.Is(err, target) {
+				return "", "", fmt.Errorf("%w: %w", projects.ErrRepository, err)
+			}
+		}
+		return "", "", err
+	}
+	return src.Repository, src.Alias, nil
+}
+
+// aliasClashError is two of a new project's repositories wanting one alias. It
+// is ErrAliasTaken, and a repository error, with a message that fits a
+// project that's only being created.
+type aliasClashError struct{ alias string }
+
+func (e aliasClashError) Error() string {
+	return projects.ErrRepository.Error() + ": another of its repositories already has the alias " + e.alias + "; give one of them another"
+}
+
+func (e aliasClashError) Unwrap() []error { return []error{projects.ErrRepository, ErrAliasTaken} }
+
+// aliasOf is the alias a repository gets: the one it names, or one from
+// its name.
+func aliasOf(in projects.RepositoryInput) string {
+	if alias := strings.TrimSpace(in.Alias); alias != "" {
+		return alias
+	}
+	if repo, err := ParseRepository(in.Repository); err == nil {
+		return AliasFor(repo.Name)
+	}
+	return ""
+}
 ```
 
 In `pgstore.go`, `normalize` fills a nil `Repositories` with `[]string{}`.
@@ -1623,11 +1890,141 @@ In `extensions/projects/extension.go`'s `fail`, before the `ErrInvalid` case:
 Run: `go test ./internal/projects/ ./internal/discovery/`
 Expected: PASS. Integration tests that read `repository_url` from a response fail until Task 6 updates them; that's expected.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Let the Go client and loomctl send several**
+
+In `pkg/client/client.go`, give `NewProject` the list:
+
+```go
+// NewProject is a project to create.
+type NewProject struct {
+	Name string `json:"name"`
+	// RepositoryURL is attached as the project's first repository.
+	RepositoryURL string `json:"repository_url,omitempty"`
+	// Repositories are attached after it, in order, up to ten in all.
+	Repositories []NewRepository `json:"repositories,omitempty"`
+	Description  string          `json:"description,omitempty"`
+}
+
+// NewRepository is a repository a new project starts with.
+type NewRepository struct {
+	// Repository is a GitHub URL or "owner/name".
+	Repository string `json:"repository"`
+	// Alias names it in the project. Empty picks one from its name.
+	Alias string `json:"alias,omitempty"`
+	// Root is the directory the project builds from, and Ref the branch
+	// analyses read. Empty means the whole repository and its default
+	// branch.
+	Root string `json:"root,omitempty"`
+	Ref  string `json:"ref,omitempty"`
+}
+```
+
+In `internal/ctl/commands.go`, make `--repo` a slice flag on `projects create`:
+
+```go
+			cli.WithSubcommand(cli.NewCommand("create", "Create a project, from its repositories", a.createProject,
+				cli.WithUsage("projects create <name> --repo acme/web --repo billing=other/web"),
+				cli.WithFlags(
+					cli.NewStringSliceFlag("repo", "", "A repository, as owner/name or a URL; repeat it for each, and write alias=repository to name one", nil),
+					jsonFlag)))),
+```
+
+Forge's help prints the program's name before a usage, so no usage starts with `loomctl`. Read the flags with:
+
+```go
+// newRepositories reads each --repo: a repository as owner/name or a URL,
+// or alias=repository to name it. A GitHub address never has an "=", so
+// the first one splits them.
+func newRepositories(flags []string) ([]client.NewRepository, error) {
+	var out []client.NewRepository
+	for _, f := range flags {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		var r client.NewRepository
+		if alias, repo, ok := strings.Cut(f, "="); ok {
+			r.Alias, r.Repository = strings.TrimSpace(alias), strings.TrimSpace(repo)
+			if r.Alias == "" || r.Repository == "" {
+				return nil, fmt.Errorf("--repo %s: write alias=repository, with both", f)
+			}
+		} else {
+			r.Repository = f
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+```
+
+and send `client.NewProject{Name: name, Repositories: repos}` from `createProject`. Test it in `internal/ctl/commands_test.go`:
+
+```go
+func TestNewRepositories(t *testing.T) {
+	got, err := newRepositories([]string{
+		"acme/web", " ", "billing=other/web", "https://github.com/acme/api", "mono = git@github.com:acme/mono.git",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []client.NewRepository{
+		{Repository: "acme/web"},
+		{Alias: "billing", Repository: "other/web"},
+		{Repository: "https://github.com/acme/api"},
+		{Alias: "mono", Repository: "git@github.com:acme/mono.git"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for _, bad := range []string{"=acme/web", "billing="} {
+		if _, err := newRepositories([]string{bad}); err == nil {
+			t.Fatalf("%q was taken", bad)
+		}
+	}
+	if got, err := newRepositories(nil); err != nil || got != nil {
+		t.Fatalf("no --repo gave %+v, %v", got, err)
+	}
+}
+
+func TestCreateProject_sendsEachRepo(t *testing.T) {
+	var got struct {
+		Name         string                 `json:"name"`
+		Repositories []client.NewRepository `json:"repositories"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/projects" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"proj_1","name":"Shop","slug":"shop"}`))
+	}))
+	t.Cleanup(srv.Close)
+	env := map[string]string{EnvURL: srv.URL, EnvKey: "lp_test_key"}
+	var out bytes.Buffer
+	app := New(Options{Out: &out, Getenv: func(k string) string { return env[k] }, ConfigPath: t.TempDir() + "/none.json"})
+
+	if err := app.Run([]string{"projects", "create", "Shop", "--repo", "acme/web", "--repo", "billing=other/web,acme/api"}); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	want := []client.NewRepository{{Repository: "acme/web"}, {Alias: "billing", Repository: "other/web"}, {Repository: "acme/api"}}
+	if got.Name != "Shop" || !slices.Equal(got.Repositories, want) {
+		t.Fatalf("sent %+v", got)
+	}
+}
+```
+
+Run: `go test ./internal/ctl/`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add internal/projects/ extensions/projects/
-git commit -m "feat: list a project's repositories and attach the first when it's created"
+git add internal/projects/ internal/discovery/ extensions/projects/ pkg/client/ internal/ctl/
+git commit -m "feat: list a project's repositories and attach them when it's created"
 ```
 
 ### Task 6: The sources API
@@ -2025,6 +2422,7 @@ git commit -m "feat: serve a project's sources and analyze them together or one 
 - Modify: `apps/dashboard/src/lib/format.ts`, `apps/dashboard/src/lib/architecture.ts`, `apps/dashboard/src/lib/lib.test.ts`, `apps/dashboard/src/lib/architecture.test.ts`
 - Create: `apps/dashboard/src/components/sources.tsx`
 - Modify: `apps/dashboard/src/components/architecture.tsx`, `apps/dashboard/src/pages/project-detail.tsx`, `apps/dashboard/src/pages/projects.tsx`, `apps/dashboard/src/components/app-sidebar.tsx`, `apps/dashboard/src/components/command-menu.tsx`, `apps/dashboard/src/components/new-project-dialog.tsx`, `apps/dashboard/src/client/runtime.test.ts`
+- Create: `apps/dashboard/src/lib/alias.ts`; Test: `apps/dashboard/src/lib/lib.test.ts`
 
 **Interfaces:**
 - Consumes: Task 6's routes, as the generated hooks `useSourcesList`, `useSourcesCreate`, `useSourcesUpdate`, `useSourcesDelete` and types `Source`, `SourceList`. Check the names in `client/forge/loomplane/hooks.ts` after regenerating.
@@ -2503,7 +2901,8 @@ Run `pnpm --dir apps/dashboard typecheck` and fix each error:
 - `pages/projects.tsx`: the search includes `...p.repositories`, and the tile shows `repositoriesLabel(p.repositories) || "No repository yet"`.
 - `components/app-sidebar.tsx`: copy `https://github.com/${project.repositories[0]}` when there is one.
 - `components/command-menu.tsx`: search on `p.repositories.join(" ")` and label with `repositoriesLabel(p.repositories)`.
-- `components/new-project-dialog.tsx`: keep sending `repositoryUrl`. Read `created.repositories[0]` in place of `created.repositoryUrl`.
+- `components/new-project-dialog.tsx`: send `repositories`, one per row, in place of `repositoryUrl`, and read `created.repositories` in place of `created.repositoryUrl`. The field becomes a row per repository with "Add another repository" under it, up to 10, and a remove button on each row once there are two. With two or more, each row gets an alias input whose placeholder is `aliasFor` of the repository's name, and a row whose alias another row already has, or that `aliasProblem` refuses, shows a `FieldError` and disables Create. Suggestions fill the row last focused and leave out repositories already chosen. The name still follows the first row.
+- Create `lib/alias.ts`: `aliasFor(name)`, which mirrors `AliasFor`, and `aliasProblem(alias)`, which mirrors `ValidAlias`. In `lib/lib.test.ts`, test `aliasFor` against `TestAliasFor`'s cases, so the dialog's preview can't drift from what the API picks.
 
 - [ ] **Step 7: Run the dashboard checks**
 
