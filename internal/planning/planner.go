@@ -104,6 +104,7 @@ func Compute(in Input) *Result {
 		taken:     map[string]string{},
 		replaced:  map[string][]holder{},
 		addressed: map[string][]string{},
+		removing:  map[string]bool{},
 	}
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
@@ -164,6 +165,10 @@ type planner struct {
 	// addressed are the services heldAddresses reported as keeping the
 	// address of what this plan replaces, by the replaced action's ID.
 	addressed map[string][]string
+	// removing are the clouds of what earlier moves left to remove, which
+	// a deployment may need a connection to even when nothing else in the
+	// plan uses them.
+	removing map[string]bool
 }
 
 func actionID(s Subject, name string) string { return string(s) + ":" + name }
@@ -1653,7 +1658,10 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 	}
 	// Something deleted outside Loomplane is planned as if it had never
 	// been deployed. Its binding stays, so a deployment replaces it, or
-	// removes it if the manifest no longer wants it.
+	// removes it if the manifest no longer wants it. That holds for a
+	// resource another connection provisioned too: it has no data left
+	// to leave behind, so it's created again through this one, and the
+	// runner allows that, with no connection-moved problem.
 	if b.Drift == DriftMissing {
 		a.Op, a.Changes = Create, nil
 		a.Reason = fmt.Sprintf("%s was deleted outside Loomplane, so it's created again.", a.Name)
@@ -1713,8 +1721,10 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 // A binding from before bindings recorded their connection names none,
 // and could have been deployed through either, so it isn't counted as
 // moved. For Cloud Run and ECS the runner finds out as it deploys, since
-// a Ctrl Plane instance's provider names its connection, and moves it
-// then. Where connect reports a problem, there's nothing to compare with.
+// a Ctrl Plane instance's provider names its connection: it records the
+// connection on the binding and fails the step without deploying, so the
+// next plan replaces it here, with whatever uses it. Where connect reports
+// a problem, there's nothing to compare with.
 func (p *planner) connectionMoves(a *Action, b *Binding, providerName string) {
 	prov, err := p.in.Providers.Get(providerName)
 	if err != nil || b.ConnectionID == "" {
@@ -1996,7 +2006,8 @@ func (p *planner) planDeletes() {
 // stillReplaced warns about what an action ran as before it moved and
 // still needs removing, such as an old one whose removal failed. A
 // deployment of the action removes it, before anything else when the
-// action is deleted, and after it's deployed otherwise.
+// action is deleted, and after it's deployed otherwise. Its cloud is
+// noted in removing, so the plan pins a connection to it.
 func (p *planner) stillReplaced() {
 	for _, id := range slices.Sorted(maps.Keys(p.bindings)) {
 		b := p.bindings[id]
@@ -2012,9 +2023,12 @@ func (p *planner) stillReplaced() {
 		}
 		then := fmt.Sprintf("This plan keeps %s as it is, so it won't. Retry the deployment that moved %s, or deploy a change to it, and that removes it.", b.Name, b.Name)
 		if i := slices.IndexFunc(p.actions, func(a *Action) bool { return a.ID == id }); i >= 0 && p.actions[i].Op != Keep {
-			then = "This plan's deployment removes it."
+			then = "This plan's deployment removes it, and warns if it can't."
 		}
 		for _, old := range b.Replaced {
+			if prov, err := p.in.Providers.Get(old.Provider); err == nil && prov.Available {
+				p.removing[prov.Cloud] = true
+			}
 			on := old.Provider
 			if old.Region != "" {
 				on += " in " + old.Region
@@ -2187,6 +2201,18 @@ func (p *planner) finish() *Result {
 		return a.ID < b.ID
 	})
 	connections := p.connect()
+	// A cloud only what's left to remove needs gets the connection it
+	// would deploy with, when there's one, so the runner can reach an old
+	// one whose binding names no connection. When there isn't one, that's
+	// no problem for this plan, which deploys nothing there: the runner
+	// warns instead.
+	for cloud := range p.removing {
+		if _, ok := connections[cloud]; !ok {
+			if id := p.connectionFor(cloud); id != "" {
+				connections[cloud] = id
+			}
+		}
+	}
 	p.checkHTTPS(connections)
 	p.checkRegions(connections)
 	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings, Connections: connections}

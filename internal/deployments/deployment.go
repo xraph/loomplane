@@ -92,7 +92,10 @@ type Step struct {
 	// URL is where a deployed service answers.
 	URL string `json:"url"`
 	// Image is what a container step deployed.
-	Image      string     `json:"image"`
+	Image string `json:"image"`
+	// Warnings are what went wrong without failing the step, such as an
+	// old one an earlier move left that couldn't be removed this time.
+	Warnings   []string   `json:"warnings,omitempty"`
 	StartedAt  *time.Time `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at"`
 	// Replaced is what the action ran as before it moved, from when the

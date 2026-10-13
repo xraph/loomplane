@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/xraph/ctrlplane"
 	"github.com/xraph/ctrlplane/deploy"
 	"github.com/xraph/ctrlplane/id"
 	"github.com/xraph/ctrlplane/instance"
@@ -316,18 +317,18 @@ func tasksGroup(ctx context.Context, s *aws.Session, vpc, env string) (string, e
 }
 
 // expose puts a public service behind the environment's load balancer:
-// its own target group, and a listener that forwards to it. Both are
-// named after the instance's slug, so a replacement in the same account
-// gets its own, and removing the old instance, which removes its target
-// group and listener, leaves the new one's alone.
-func expose(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, lbGroup, envName, slug string) (tg, listener, url string, err error) {
+// its own target group, and a listener that forwards to it. tg is the
+// target group the instance has already, or empty for one named group.
+func expose(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, lbGroup, envName, tg, group string) (_, listener, url string, err error) {
 	lb, err := s.EnsureLoadBalancer(ctx, shortName(envName), net.Subnets, lbGroup)
 	if err != nil {
 		return "", "", "", err
 	}
 	port := int32(job.Action.Service.Port) //nolint:gosec // G115: a port, validated by the manifest
-	if tg, err = s.EnsureTargetGroup(ctx, shortName(slug), net.VPC, port); err != nil {
-		return "", "", "", err
+	if tg == "" {
+		if tg, err = s.EnsureTargetGroup(ctx, group, net.VPC, port); err != nil {
+			return "", "", "", err
+		}
 	}
 	l, err := s.EnsureListener(ctx, lb.ARN, tg, job.Connection.Details["certificate_arn"])
 	if err != nil {
@@ -337,6 +338,19 @@ func expose(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, lbG
 		return "", "", "", aerr
 	}
 	return tg, l.ARN, listenerURL(lb.DNS, l), nil
+}
+
+// targetGroup is the target group a public service runs behind: the one
+// its instance has already, which ECS can't swap on a running service,
+// whatever it's named, or for a new instance, one named after the
+// instance's slug. A replacement in the same account then gets its own,
+// and removing the old instance, which removes its target group and
+// listener, leaves the new one's alone.
+func targetGroup(inst *instance.Instance, name string) (arn, group string) {
+	if inst != nil && inst.Labels[ecs.LabelTargetGroup] != "" {
+		return inst.Labels[ecs.LabelTargetGroup], ""
+	}
+	return "", shortName(strings.ToLower(name))
 }
 
 // run sets up the environment's network and load balancer, the service's
@@ -400,10 +414,10 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 	if err != nil {
 		return "", "", err
 	}
-	slug := strings.ToLower(name)
 	if cfg.Public && cfg.Port > 0 {
 		job.Progress(StepDeploying, "Setting up the load balancer")
-		tg, listener, lbURL, xerr := expose(ctx, s, job, net, lbGroup, envName, slug)
+		tg, group := targetGroup(inst, name)
+		tg, listener, lbURL, xerr := expose(ctx, s, job, net, lbGroup, envName, tg, group)
 		if xerr != nil {
 			return "", "", xerr
 		}
@@ -500,7 +514,8 @@ func (e *ECS) provider(job *Job) string {
 }
 
 // Remove implements Executor: Ctrl Plane deletes the instance, and the
-// provider the ECS service, its listener and target group.
+// provider the ECS service, its listener and target group. An instance
+// that's gone already is removed.
 func (e *ECS) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 	if b.ExternalID == "" {
 		return nil
@@ -510,7 +525,11 @@ func (e *ECS) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 		return fmt.Errorf("the binding names no instance: %w", err)
 	}
 	e.provider(job)
-	return e.Ctrl.Instances.Delete(infrastructure.WithPrincipal(ctx, principal(job)), iid)
+	err = e.Ctrl.Instances.Delete(infrastructure.WithPrincipal(ctx, principal(job)), iid)
+	if errors.Is(err, ctrlplane.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 // Locate implements Locator: the ECS service Ctrl Plane named after the

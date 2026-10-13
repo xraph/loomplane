@@ -2282,8 +2282,23 @@ func TestCompute_whatAMoveLeftRunningIsAWarning(t *testing.T) {
 		}
 	}
 	r = computeOn(t, connected, nil, live...)
-	if w := warning(r, "still-replaced", "api"); w == nil || !strings.HasSuffix(w.Message, "This plan's deployment removes it.") {
+	if w := warning(r, "still-replaced", "api"); w == nil || !strings.HasSuffix(w.Message, "This plan's deployment removes it, and warns if it can't.") {
 		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	// Nothing else in the plan is on AWS, but the deployment may need the
+	// connection to reach the old one.
+	if r.Connections["aws"] != "conn_aws" || len(r.Problems) != 0 {
+		t.Fatalf("connections %v, problems %v", r.Connections, codes(r.Problems))
+	}
+	// With no AWS connection, the plan still goes ahead.
+	var noAWS []ConnectionOption
+	for _, c := range connected {
+		if c.Cloud != "aws" {
+			noAWS = append(noAWS, c)
+		}
+	}
+	if r := computeOn(t, noAWS, nil, live...); !r.Executable || r.Connections["aws"] != "" {
+		t.Fatalf("without aws: problems %v, connections %v", codes(r.Problems), r.Connections)
 	}
 }
 
@@ -2406,5 +2421,17 @@ func TestCompute_renderServicesReachEachOtherPrivately(t *testing.T) {
 	gw := action(t, r, "service:gw")
 	if len(gw.Service.Env) != 1 || gw.Service.Env[0].Key != "API_URL" || gw.Service.Env[0].Address != "" || gw.Engine != provider.Loomplane {
 		t.Fatalf("gw %+v", gw)
+	}
+}
+
+func TestCompute_aMissingResourceOnAnotherConnectionIsCreatedAgain(t *testing.T) {
+	old := append(slices.Clone(connected), ConnectionOption{ID: "conn_old", Name: "Old", Cloud: "gcp", Ready: true})
+	live := drifted(deployedThrough(t, map[string]string{"db": "conn_old"}), "db", DriftMissing, "")
+	r := computeOn(t, old, nil, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	if db := action(t, r, "resource:db"); db.Op != Create {
+		t.Fatalf("db %s: %s", db.Op, db.Reason)
 	}
 }

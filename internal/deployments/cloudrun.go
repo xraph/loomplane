@@ -421,11 +421,12 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 // provider, region or connection, isn't this one: the runner removes it
 // once this one is up. A bound instance under another provider key, as a
 // binding from before bindings recorded their connection can have, can't
-// be updated through this connection either, so it's replaced the same
-// way: job.Replaces names it, with the connection and region its key
-// names, and the runner removes it through them once this one is up. An
-// instance any of those leaves holding the slug keeps it, and this one
-// takes the next free name.
+// be updated through this connection, and replacing it here would give it
+// a new address that nothing the plan keeps or holds would get. So it
+// creates nothing, and fails with an ElsewhereError naming the connection
+// and region its key names, which the runner records on the binding. The
+// next plan then sees the move and replaces it properly. An instance that
+// only holds the slug keeps it, and this one takes the next free name.
 func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (inst *instance.Instance, name string, err error) {
 	if job.Binding != nil && job.Binding.ExternalID != "" {
 		iid, perr := id.Parse(job.Binding.ExternalID)
@@ -439,28 +440,41 @@ func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) 
 		case inst != nil && inst.ProviderName == key:
 			return inst, cmp.Or(inst.Name, instanceName(job)), nil
 		case inst != nil:
-			job.Progress(StepDeploying, "Starting "+job.Action.Name+" again through this connection, since it ran through another")
-			job.Replaces, job.Binding = deployedThrough(job.Binding, inst.ProviderName), nil
+			conn, region := keyPlace(inst.ProviderName)
+			return nil, "", &ElsewhereError{Name: job.Action.Name, Instance: inst.ID.String(), ConnectionID: conn, Region: region, Key: inst.ProviderName}
 		}
 	}
 	return freeInstance(ctx, ctrl, job, key)
 }
 
-// deployedThrough is b as the provider key that deployed its instance
-// places it: with that key's connection and region, which reach it. A key
-// it can't read leaves b as it is.
-func deployedThrough(b *planning.Binding, providerKey string) *planning.Binding {
-	out := *b
+// ElsewhereError is a bound instance another connection deployed, which
+// the connection a plan deploys with can't update. ConnectionID and Region
+// are the ones its provider key names, empty when the key can't be read.
+type ElsewhereError struct {
+	Name, Instance, ConnectionID, Region, Key string
+}
+
+func (e *ElsewhereError) Error() string {
+	if e.ConnectionID == "" {
+		return fmt.Sprintf("%s runs as Ctrl Plane instance %s under provider %s, which this plan's connection can't update, so nothing was deployed", e.Name, e.Instance, e.Key)
+	}
+	return fmt.Sprintf("%s runs as Ctrl Plane instance %s through connection %s, not the one this plan deploys with, so nothing was deployed. Loomplane has recorded that on its binding: plan again, and the plan replaces %s through this connection, deploys again what uses it, and removes the old one once the new one is up",
+		e.Name, e.Instance, e.ConnectionID, e.Name)
+}
+
+// keyPlace reads the connection and region a Cloud Run or ECS provider
+// key names, or nothing from a key it doesn't know.
+func keyPlace(providerKey string) (connectionID, region string) {
 	for _, prefix := range []string{cloudrun.KeyPrefix, ecs.KeyPrefix} {
 		rest, ok := strings.CutPrefix(providerKey, prefix)
 		if !ok {
 			continue
 		}
 		if i := strings.LastIndex(rest, "."); i > 0 && i < len(rest)-1 {
-			out.ConnectionID, out.Region = rest[:i], rest[i+1:]
+			return rest[:i], rest[i+1:]
 		}
 	}
-	return &out
+	return "", ""
 }
 
 // freeInstance finds an instance by the action's name, the way an earlier

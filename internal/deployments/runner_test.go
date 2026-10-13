@@ -1057,53 +1057,81 @@ func TestRunner_deletingAnActionRemovesWhatAMoveLeftFirst(t *testing.T) {
 	}
 }
 
-func TestRunner_anExecutorThatFindsAnotherConnectionMovesIt(t *testing.T) {
+// A binding from before bindings recorded their connection, whose
+// instance another connection deployed, isn't moved by the deployment:
+// the plan kept what uses it. The step fails, and the binding gets the
+// connection, so the next plan replaces it properly.
+func TestRunner_aServiceAnotherConnectionDeployedIsLeftForTheNextPlan(t *testing.T) {
 	log := &moveLog{}
-	exec := &placed{provider: "cloud-run", log: log, url: answering(t, http.StatusOK), removeErr: []error{errors.New("google is down")}}
-	// As Cloud Run does with a binding from before bindings recorded their
-	// connection, whose instance another connection deployed.
-	exec.onApply = func(job *Job) {
-		if job.Binding != nil {
-			old := *job.Binding
-			old.ConnectionID = "conn_old"
-			job.Replaces, job.Binding = &old, nil
-		}
-	}
+	exec := &placed{provider: "cloud-run", log: log, url: answering(t, http.StatusOK),
+		applyErr: &ElsewhereError{Name: "api", Instance: "ext-old", ConnectionID: "conn_old", Region: "us-central1", Key: "cloud-run.conn_old.us-central1"}}
 	plan := apiMoves()
 	plan.Actions[0].Op, plan.Actions[0].Provider, plan.Actions[0].Region = planning.Update, "cloud-run", "us-central1"
 	plan.Actions[0].Service.Provider = "cloud-run"
 	was := onCloudRun()
 	was.ConnectionID = ""
 	r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{"cloud-run": exec})
-	ctx := t.Context()
-	id := startMove(t, r, plan)
 
-	if err := r.Run(ctx, "org_1", id, "service:api", nil, func([]byte) error { return nil }); err == nil {
-		t.Fatal("removing the old one didn't fail")
-	}
-	b := plans.bindings["service:api"]
-	if b.ExternalID != "ext-cloud-run" || b.ConnectionID != "conn_g" || len(b.Replaced) != 1 || b.Replaced[0].ConnectionID != "conn_old" {
-		t.Fatalf("binding %+v", b)
-	}
-	if rm := exec.removes[0]; rm.Connection.ID != "conn_old" {
-		t.Fatalf("removed through %s", rm.Connection.ID)
-	}
-	// A retry only removes it.
-	if ferr := r.Finish(ctx, "org_1", id, "failed"); ferr != nil {
-		t.Fatal(ferr)
-	}
-	if ok, rerr := store.Reopen(ctx, "org_1", id); !ok || rerr != nil {
-		t.Fatalf("reopen: %v %v", ok, rerr)
-	}
-	if err := r.Run(ctx, "org_1", id, "service:api", nil, func([]byte) error { return nil }); err != nil {
+	id, err := runAll(t, r, plan)
+	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"apply cloud-run", "remove cloud-run ext-old", "remove cloud-run ext-old"}
-	if got := log.list(); !slices.Equal(got, want) {
-		t.Fatalf("events %v, want %v", got, want)
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	if d.Status != StatusFailed || !strings.Contains(d.Error, "plan again") {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
 	}
-	if b := plans.bindings["service:api"]; len(b.Replaced) != 0 {
-		t.Fatalf("still replaced %+v", b.Replaced)
+	b := plans.bindings["service:api"]
+	if b.ConnectionID != "conn_old" || b.ExternalID != "ext-old" || b.Region != "us-central1" || len(b.Replaced) != 0 {
+		t.Fatalf("binding %+v", b)
+	}
+	if got := log.list(); !slices.Equal(got, []string{"apply cloud-run"}) {
+		t.Fatalf("events %v", got)
+	}
+}
+
+// What an earlier move left is the plan's to warn about. Failing to
+// remove it on a later deployment doesn't fail that deployment, so a
+// permanent failure, such as a revoked permission, can't block every
+// deployment of the action from then on.
+func TestRunner_aLaterDeploymentThatCantRemoveWhatAMoveLeftWarns(t *testing.T) {
+	log := &moveLog{}
+	oldExec := &placed{provider: "cloud-run", log: log, removeErr: []error{errors.New("permission denied"), errors.New("permission denied")}}
+	newExec := &placed{provider: "vercel", log: log, url: answering(t, http.StatusOK)}
+	plan := apiMoves()
+	plan.Actions[0].Op = planning.Update
+	bound := &planning.Binding{
+		ID: "bind_api", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject,
+		Name: "api", Provider: "vercel", ExternalID: "ext-vercel", ConnectionID: "conn_v",
+		Replaced: []planning.Binding{*onCloudRun()},
+	}
+	r, store, plans, _ := moveRunner(t, plan, bound, map[string]Executor{"cloud-run": oldExec, "vercel": newExec})
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	s := d.Step("service:api")
+	if d.Status != StatusSucceeded || s.Status != StepSucceeded || len(s.Warnings) != 1 || !strings.Contains(s.Warnings[0], "permission denied") {
+		t.Fatalf("deployment %s: %s, step %+v", d.Status, d.Error, s)
+	}
+	if b := plans.bindings["service:api"]; len(b.Replaced) != 1 || b.Replaced[0].ExternalID != "ext-old" {
+		t.Fatalf("binding %+v", b)
+	}
+
+	// Deleting the action can't leave it untracked, so that fails.
+	del := apiMoves()
+	del.ID, del.Actions[0].Op, del.Actions[0].Service = "plan_2", planning.Delete, nil
+	plans.plan = del
+	second, err := runAll(t, r, del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", second); d.Status != StatusFailed || !strings.Contains(d.Error, "permission denied") {
+		t.Fatalf("deleting: %s: %s", d.Status, d.Error)
+	}
+	if _, ok := plans.bindings["service:api"]; !ok {
+		t.Fatal("the binding went with something still to remove")
 	}
 }
 
@@ -1155,6 +1183,28 @@ func TestRunner_aResourceOnAnotherConnectionIsntProvisionedAgain(t *testing.T) {
 		t.Fatalf("deployment %s: %s", d.Status, d.Error)
 	}
 	if b := plans.bindings["resource:db"]; b.ConnectionID != "conn_old" || b.ExternalID != "conn_old:us-central1:lp-db" {
+		t.Fatalf("binding %+v", b)
+	}
+}
+
+// A resource deleted outside Loomplane has no data to leave behind, so
+// one another connection provisioned is created again through this one,
+// as the planner plans it.
+func TestRunner_aMissingResourceOnAnotherConnectionIsCreatedAgain(t *testing.T) {
+	sql := &projectSQL{have: map[string]bool{}}
+	plan, was := dbMoves()
+	plan.Actions[0].Op, plan.Actions[0].Region, plan.Actions[0].Resource.Region = planning.Create, "us-central1", "us-central1"
+	was.ConnectionID, was.ExternalID, was.Drift = "conn_old", "conn_old:us-central1:lp-db", planning.DriftMissing
+	r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{"cloud-sql": sql})
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if b := plans.bindings["resource:db"]; b.ConnectionID != "conn_g" || b.ExternalID != "conn_g:us-central1:lp-db" {
 		t.Fatalf("binding %+v", b)
 	}
 }

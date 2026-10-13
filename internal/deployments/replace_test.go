@@ -14,6 +14,7 @@ import (
 	"github.com/xraph/ctrlplane"
 	"github.com/xraph/ctrlplane/id"
 	"github.com/xraph/ctrlplane/instance"
+	cpprovider "github.com/xraph/ctrlplane/provider"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/cloudrun"
@@ -54,9 +55,6 @@ type placed struct {
 	// onRemove runs as Remove starts, so a test can see what's bound
 	// at that point.
 	onRemove func()
-	// onApply runs as Apply starts, as an executor that finds what it
-	// deploys to does.
-	onApply func(job *Job)
 
 	mu      sync.Mutex
 	applies []*Job
@@ -68,9 +66,6 @@ func (p *placed) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	p.applies = append(p.applies, job)
 	p.mu.Unlock()
 	p.log.add("apply " + p.provider)
-	if p.onApply != nil {
-		p.onApply(job)
-	}
 	if p.applyErr != nil {
 		return nil, p.applyErr
 	}
@@ -311,6 +306,8 @@ type fakeInstances struct {
 	instance.Service
 	byID    map[id.ID]*instance.Instance
 	deleted []id.ID
+	// deleteErr is what Delete answers with, when set.
+	deleteErr error
 }
 
 func (f *fakeInstances) Get(_ context.Context, iid id.ID) (*instance.Instance, error) {
@@ -330,6 +327,9 @@ func (f *fakeInstances) GetBySlug(_ context.Context, slug string) (*instance.Ins
 }
 
 func (f *fakeInstances) Delete(_ context.Context, iid id.ID) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, iid)
 	delete(f.byID, iid)
 	return nil
@@ -377,9 +377,10 @@ func TestCurrentInstance_aReplacementTakesANameOfItsOwn(t *testing.T) {
 // Cloud Run and ECS share currentInstance, so neither deletes an instance
 // before the one that takes its place has started. A bound one under
 // another provider key, as a binding from before bindings recorded their
-// connection can have, is replaced through the connection and region its
-// key names.
-func TestCurrentInstance_aBoundOneOnAnotherConnectionIsReplaced(t *testing.T) {
+// connection can have, isn't moved here either: that would change its
+// address under whatever the plan keeps. currentInstance creates nothing
+// and says which connection and region its key names.
+func TestCurrentInstance_aBoundOneOnAnotherConnectionIsLeftForThePlan(t *testing.T) {
 	job := &Job{
 		Deployment: &Deployment{ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
 		Action:     planning.Action{Name: "api"}, Progress: func(string, string) {},
@@ -391,20 +392,17 @@ func TestCurrentInstance_aBoundOneOnAnotherConnectionIsReplaced(t *testing.T) {
 		other := ctrlInstance(instanceSlug(job), c.old)
 		instances := &fakeInstances{byID: map[id.ID]*instance.Instance{other.ID: other}}
 		ctrl := CtrlPlane{Instances: instances}
-		job.Binding = &planning.Binding{ID: "bind_api", Provider: "cloud-run", ExternalID: other.ID.String()}
-		job.Replaces = nil
+		bound := &planning.Binding{ID: "bind_api", Provider: "cloud-run", ExternalID: other.ID.String()}
+		job.Binding, job.Replaces = bound, nil
 
-		inst, name, err := currentInstance(t.Context(), ctrl, job, c.now)
-		if err != nil || inst != nil || name != instanceName(job)+"-2" {
-			t.Fatalf("%s: got %v %q %v, want a new instance named %s-2", c.old, inst, name, err, instanceName(job))
+		inst, _, err := currentInstance(t.Context(), ctrl, job, c.now)
+		var elsewhere *ElsewhereError
+		if inst != nil || !errors.As(err, &elsewhere) || elsewhere.ConnectionID != "conn_old" || elsewhere.Region != c.region ||
+			!strings.Contains(err.Error(), "plan again") {
+			t.Fatalf("%s: got %v, %v", c.old, inst, err)
 		}
-		if len(instances.deleted) > 0 {
-			t.Fatalf("%s: deleted the instance on another connection", c.old)
-		}
-		r := job.Replaces
-		if job.Binding != nil || r == nil || r.ID != "bind_api" || r.ExternalID != other.ID.String() ||
-			r.ConnectionID != "conn_old" || r.Region != c.region {
-			t.Fatalf("%s: binding %+v, replacing %+v", c.old, job.Binding, r)
+		if len(instances.deleted) > 0 || job.Replaces != nil || job.Binding != bound {
+			t.Fatalf("%s: deleted %v, binding %+v, replacing %+v", c.old, instances.deleted, job.Binding, job.Replaces)
 		}
 	}
 }
@@ -439,43 +437,54 @@ func TestCurrentInstance_oneThatOnlyHoldsTheNameIsLeftAlone(t *testing.T) {
 	}
 }
 
-func TestDeployedThrough(t *testing.T) {
-	b := &planning.Binding{ExternalID: "inst_1", ConnectionID: "", Region: "us-central1"}
-	if got := deployedThrough(b, cloudrun.Key("conn_typeid_01h", "europe-west1")); got.ConnectionID != "conn_typeid_01h" || got.Region != "europe-west1" {
-		t.Fatalf("cloud run: %+v", got)
+func TestKeyPlace(t *testing.T) {
+	if conn, region := keyPlace(cloudrun.Key("conn_typeid_01h", "europe-west1")); conn != "conn_typeid_01h" || region != "europe-west1" {
+		t.Fatalf("cloud run: %s %s", conn, region)
 	}
-	if got := deployedThrough(b, ecs.Key("conn_a", "eu-west-1")); got.ConnectionID != "conn_a" || got.Region != "eu-west-1" {
-		t.Fatalf("ecs: %+v", got)
+	if conn, region := keyPlace(ecs.Key("conn_a", "eu-west-1")); conn != "conn_a" || region != "eu-west-1" {
+		t.Fatalf("ecs: %s %s", conn, region)
 	}
-	// A key it can't read leaves the binding as it is.
-	if got := deployedThrough(b, "something-else"); got.ConnectionID != "" || got.Region != "us-central1" || got == b {
-		t.Fatalf("unknown key: %+v", got)
+	if conn, region := keyPlace("something-else"); conn != "" || region != "" {
+		t.Fatalf("unknown key: %s %s", conn, region)
 	}
 }
 
-func TestCloudSQLInstance(t *testing.T) {
+// An ECS service a move created as name-2, before target groups were
+// named after the instance, runs behind the target group named after the
+// first name. ECS can't change a running service's target group, so an
+// update keeps the one it has.
+func TestTargetGroup_anInstanceKeepsTheOneItHas(t *testing.T) {
+	inst := ctrlInstance("api-production-jhp41-2", ecs.Key("conn_a", "us-east-1"))
+	inst.Name = "api-production-jhp41-2"
+	inst.Labels = map[string]string{ecs.LabelTargetGroup: "arn:tg/" + shortName("api-production-jhp41"), ecs.LabelListener: "arn:listener/1"}
+	if arn, group := targetGroup(inst, inst.Name); arn != "arn:tg/"+shortName("api-production-jhp41") || group != "" {
+		t.Fatalf("an existing instance got %q %q", arn, group)
+	}
+	// A new one, or one from before it was exposed, gets one named after
+	// its own slug.
+	if arn, group := targetGroup(nil, "api-production-jhp41-2"); arn != "" || group != shortName("api-production-jhp41-2") {
+		t.Fatalf("a new instance got %q %q", arn, group)
+	}
+	if arn, group := targetGroup(ctrlInstance("api-production-jhp41", "k"), "Api-Production-jhp41"); arn != "" || group != shortName("api-production-jhp41") {
+		t.Fatalf("an instance without one got %q %q", arn, group)
+	}
+}
+
+// Something already gone isn't an error, so a removal Ctrl Plane no longer
+// knows finishes.
+func TestECSRemove_anInstanceThatsGoneIsRemoved(t *testing.T) {
+	instances := &fakeInstances{byID: map[id.ID]*instance.Instance{}, deleteErr: ctrlplane.ErrNotFound}
+	e := &ECS{Ctrl: CtrlPlane{Providers: cpprovider.NewRegistry(), Instances: instances}}
 	job := &Job{
-		Deployment: &Deployment{ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
-		Action:     planning.Action{Name: "db", Resource: &planning.ResourceConfig{Region: "europe-west1"}},
+		Deployment: &Deployment{OrgID: "org_1", ProjectID: "proj_1", Environment: "production"},
+		Connection: &connections.Connection{ID: "conn_a", Details: map[string]string{"region": "us-east-1"}},
 	}
-	if got, want := cloudSQLInstance(job), SQLInstanceName(job)+"-europe-west1"; got != want {
-		t.Fatalf("a new instance is %q, want %q", got, want)
+	if err := e.Remove(t.Context(), job, &planning.Binding{ExternalID: id.New(id.PrefixInstance).String()}); err != nil {
+		t.Fatal(err)
 	}
-	// One already bound keeps its name, from before names had a region.
-	job.Binding = &planning.Binding{ExternalID: "example.com:acme:us-central1:lp-db-production-jhp41"}
-	if got := cloudSQLInstance(job); got != "lp-db-production-jhp41" {
-		t.Fatalf("a bound instance is %q", got)
-	}
-	// One bound in the same region keeps its name too.
-	job.Binding.Region = "europe-west1"
-	if got := cloudSQLInstance(job); got != "lp-db-production-jhp41" {
-		t.Fatalf("a bound instance in its region is %q", got)
-	}
-	// One bound in another region can't be this one, since a region
-	// can't change in place, so this one gets a name of its own.
-	job.Binding.Region = "us-central1"
-	if got, want := cloudSQLInstance(job), SQLInstanceName(job)+"-europe-west1"; got != want {
-		t.Fatalf("with a binding in another region, %q, want %q", got, want)
+	instances.deleteErr = errors.New("aws is down")
+	if err := e.Remove(t.Context(), job, &planning.Binding{ExternalID: id.New(id.PrefixInstance).String()}); err == nil {
+		t.Fatal("another error was swallowed")
 	}
 }
 
