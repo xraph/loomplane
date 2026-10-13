@@ -291,3 +291,47 @@ func TestSourceRepositoryIndex_findsARepositoryWhateverItsCase(t *testing.T) {
 		t.Fatalf("indexes after down %q", got)
 	}
 }
+
+func TestSupersededColumns_dropAndComeBackFilled(t *testing.T) {
+	conn := scratch(t)
+	for _, up := range [][]string{projectsUp, analysesUp, githubUp, variablesUp, projectStyleUp, planningUp,
+		cloudConnectionsUp, environmentConnectionsUp, deploymentsUp, bindingURLUp, deploymentRetriesUp, bindingDriftUp} {
+		exec(t, conn, up...)
+	}
+	exec(t, conn,
+		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
+			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/mono', 'ready', 'usr', now(), now())`,
+		`INSERT INTO loomplane_environments (id, org_id, project_id, name, kind, created_at, updated_at) VALUES
+			('env_a', 'org', 'proj_a', 'production', 'production', now(), now())`,
+		`INSERT INTO loomplane_analyses (id, org_id, project_id, status, repository, commit_sha, created_by, created_at) VALUES
+			('anl_a', 'org', 'proj_a', 'succeeded', 'acme/mono', 'abc', 'usr', now())`,
+		`INSERT INTO loomplane_manifests (id, org_id, project_id, revision, body, digest, created_by, created_at) VALUES
+			('man_a', 'org', 'proj_a', 1, 'version: 1', 'd', 'usr', now())`,
+		`INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status, analysis_id, commit_sha,
+			manifest_id, manifest_revision, created_by, created_at) VALUES
+			('plan_a', 'org', 'proj_a', 'env_a', 'production', 'approved', 'anl_a', 'abc', 'man_a', 1, 'usr', now())`,
+		`INSERT INTO loomplane_deployments (id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status,
+			source, started_by, started_at) VALUES
+			('dep_a', 'org', 'proj_a', 'env_a', 'production', 'plan_a', 'abc', 'succeeded', 'k', 'usr', now())`,
+	)
+	for _, up := range [][]string{sourcesUp, planSourcesUp, deploymentSourcesUp, environmentSourcesBackfillUp, sourceRepositoryIndexUp} {
+		exec(t, conn, up...)
+	}
+
+	exec(t, conn, supersededUp...)
+	exec(t, conn, supersededUp...)
+	left := strs(t, conn, `SELECT table_name || '.' || column_name FROM information_schema.columns
+		WHERE (table_name, column_name) IN (('loomplane_projects', 'repository_url'), ('loomplane_plans', 'analysis_id'),
+			('loomplane_plans', 'commit_sha'), ('loomplane_deployments', 'source'))`)
+	if len(left) != 0 {
+		t.Fatalf("still there: %q", left)
+	}
+
+	exec(t, conn, supersededDown...)
+	got := strs(t, conn, `SELECT p.repository_url || ' ' || pl.analysis_id || ' ' || pl.commit_sha || ' ' || d.source
+		FROM loomplane_projects p, loomplane_plans pl, loomplane_deployments d`)
+	if !slices.Equal(got, []string{"https://github.com/acme/mono anl_a abc k"}) {
+		t.Fatalf("back down %q", got)
+	}
+	exec(t, conn, supersededUp...)
+}
