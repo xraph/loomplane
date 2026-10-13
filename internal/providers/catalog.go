@@ -110,7 +110,9 @@ func Catalog() []provider.Provider {
 			Model:       provider.Managed,
 			Provisions:  []provider.Provisions{{Kind: "redis", Creates: "Memorystore for Redis instance"}},
 			Regions:     gcpRegions,
-			Note:        milestone5,
+			// Provisioned by Loomplane on the default network; Cloud Run
+			// services that need it get Direct VPC egress (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "cloud-storage", Title: "Google Cloud Storage", Cloud: "gcp",
@@ -118,7 +120,9 @@ func Catalog() []provider.Provider {
 			Model:       provider.Managed,
 			Provisions:  []provider.Provisions{{Kind: "object-storage", Creates: "Cloud Storage bucket"}},
 			Regions:     gcpRegions,
-			Note:        milestone5,
+			// A private bucket the project's runtime account reaches
+			// (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "rds", Title: "Amazon RDS", Cloud: "aws",

@@ -44,6 +44,9 @@ const (
 	// by connection name, comma separated. Cloud Run mounts their sockets
 	// at /cloudsql.
 	LabelCloudSQL = "loomplane-cloudsql"
+	// LabelVPC names the VPC network a service's private traffic goes
+	// through, for a service that reaches Memorystore.
+	LabelVPC = "loomplane-vpc"
 )
 
 // KeyPrefix starts every Cloud Run provider's registry key.
@@ -190,6 +193,14 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 		Labels:   map[string]string{"managed-by": "loomplane"},
 		Ingress:  "INGRESS_TRAFFIC_ALL",
 		Template: gcp.RunTemplate{Containers: []gcp.RunContainer{container}, Volumes: volumes},
+	}
+	// Private addresses only go through the network; everything else
+	// leaves the way it always does.
+	if network := labels[LabelVPC]; network != "" {
+		run.Template.VPCAccess = &gcp.RunVPCAccess{
+			NetworkInterfaces: []gcp.RunNetworkInterface{{Network: network, Subnetwork: network}},
+			Egress:            "PRIVATE_RANGES_ONLY",
+		}
 	}
 	minScale, _ := strconv.Atoi(labels[LabelMinScale]) //nolint:errcheck // absent or malformed means Cloud Run's default
 	maxScale, _ := strconv.Atoi(labels[LabelMaxScale]) //nolint:errcheck // likewise

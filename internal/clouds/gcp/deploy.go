@@ -210,6 +210,21 @@ type RunTemplate struct {
 	Scaling    *RunScaling       `json:"scaling,omitempty"`
 	Containers []RunContainer    `json:"containers"`
 	Volumes    []RunVolume       `json:"volumes,omitempty"`
+	VPCAccess  *RunVPCAccess     `json:"vpcAccess,omitempty"`
+}
+
+// RunVPCAccess sends a revision's traffic to private addresses through a
+// VPC network: Direct VPC egress, which reaches Memorystore.
+type RunVPCAccess struct {
+	NetworkInterfaces []RunNetworkInterface `json:"networkInterfaces"`
+	Egress            string                `json:"egress"`
+}
+
+// RunNetworkInterface is the network and subnet a revision's traffic
+// leaves through.
+type RunNetworkInterface struct {
+	Network    string `json:"network"`
+	Subnetwork string `json:"subnetwork"`
 }
 
 // RunVolume is a volume a revision mounts: here, the Cloud SQL

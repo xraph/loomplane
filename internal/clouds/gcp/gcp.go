@@ -55,8 +55,18 @@ var Permissions = []string{
 	"secretmanager.secrets.create",
 	"secretmanager.secrets.setIamPolicy",
 	"secretmanager.versions.add",
+	"redis.instances.create",
+	"redis.instances.delete",
+	"redis.instances.get",
+	"redis.instances.getAuthString",
 	"storage.buckets.create",
+	"storage.buckets.delete",
+	"storage.buckets.get",
+	"storage.buckets.getIamPolicy",
+	"storage.buckets.setIamPolicy",
 	"storage.objects.create",
+	"storage.objects.delete",
+	"storage.objects.list",
 }
 
 // Errors.

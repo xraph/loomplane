@@ -141,6 +141,13 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 	}
 	t.Logf("draft:\n%s", draft.YAML)
 
+	// docs goes to Render, which has no adapter yet, so the plan can be
+	// reviewed and approved without deploying anything.
+	saved := strings.Replace(draft.YAML, "source: node:apps/docs\n    provider: vercel", "source: node:apps/docs\n    provider: render", 1)
+	if saved == draft.YAML {
+		t.Fatalf("docs isn't on Vercel in the draft:\n%s", draft.YAML)
+	}
+
 	// A manifest that doesn't parse is refused, with where it's wrong.
 	c.must(http.StatusUnprocessableEntity, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 2\n"}, nil)
 
@@ -148,12 +155,12 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 		ID       string `json:"id"`
 		Revision int    `json:"revision"`
 	}
-	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": draft.YAML}, &rev)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": saved}, &rev)
 	if rev.Revision != 1 {
 		t.Fatalf("first revision %+v", rev)
 	}
 	// Saving the same thing again adds nothing to the history.
-	c.must(http.StatusOK, http.MethodPut, base+"/manifest", map[string]string{"yaml": draft.YAML}, &rev)
+	c.must(http.StatusOK, http.MethodPut, base+"/manifest", map[string]string{"yaml": saved}, &rev)
 	if rev.Revision != 1 {
 		t.Fatalf("resaved revision %+v", rev)
 	}
@@ -180,8 +187,7 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 		map[string]any{"cloud": "aws", "name": "AWS", "credential": awsKey(awsKeyID), "settings": map[string]string{"region": "us-east-1"}}, nil)
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 	waitPlanned(t, c, &plan)
-	// Ready for review, but not executable: Memorystore has no adapter
-	// yet.
+	// Ready for review, but not executable: Render has no adapter yet.
 	if plan.Status != "ready" || plan.Revision == "" || len(plan.Actions) == 0 || plan.Executable {
 		t.Fatalf("plan %+v", plan)
 	}

@@ -276,8 +276,12 @@ func spec(job *Job, image string, secrets map[string]string) (s cpprovider.Servi
 	maps.Copy(labels, secrets)
 	var instances []string
 	for _, b := range job.Attach {
-		if b.Provider == "cloud-sql" && b.ExternalID != "" {
+		switch {
+		case b.Provider == "cloud-sql" && b.ExternalID != "":
 			instances = append(instances, b.ExternalID)
+		case b.Provider == "memorystore":
+			// Memorystore has a private address on the default network.
+			labels[cloudrun.LabelVPC] = "default"
 		}
 	}
 	if len(instances) > 0 {

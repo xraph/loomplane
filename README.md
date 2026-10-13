@@ -70,7 +70,7 @@ loomctl approve <plan-id>
 | Repository discovery | Go, Rust and Node monorepos, Dockerfiles and Compose files, read into services, packages and resources with the evidence for each. |
 | `loomplane.yaml` | A versioned manifest, drafted from the analysis: services, resources, gateways, and overrides per environment. |
 | Plans | Every action a deployment would take, in order, with problems that block it. Approval names the revision you reviewed; a plan whose world changed comes back stale. |
-| Targets | Vercel, Cloud Run, ECS on Fargate, Cloud SQL and RDS. Builds run on Cloud Build, CodeBuild and Vercel, in your accounts. |
+| Targets | Vercel, Cloud Run and ECS on Fargate for services; Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage and S3 for databases, caches and buckets. Builds run on Cloud Build, CodeBuild and Vercel, in your accounts. |
 | Networking | Services find each other through variables. ECS services reach each other privately; private Cloud Run services only take calls from the project's own. |
 | Gateways | One public address routing paths to services, built on Bastion and run on your infrastructure. |
 | Secrets | Variables in layers (organization, project, service, by environment), secrets in Vault and then in each cloud's secret store, never shown again. |

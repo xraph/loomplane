@@ -1,6 +1,6 @@
 # Writing a provider
 
-A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel, ECS on Fargate, Cloud SQL and RDS. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
+A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel and ECS on Fargate for services, and Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage and S3 for resources. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
 
 A plugin is a small HTTP service. Loomplane reads its description when it starts and puts it in the catalog beside the built-in targets, so manifests can name it, plans check against what it says it runs, and deployments, retries and drift checks drive it like any other. It runs on your infrastructure, so the credential it deploys with never leaves it, apart from the copy Loomplane keeps in Vault.
 

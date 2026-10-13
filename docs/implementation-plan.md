@@ -142,7 +142,7 @@ What it covers:
 8. Secure endpoints between services. On ECS, each environment's services join a Cloud Map namespace through Service Connect, and a service that needs another on ECS gets `http://name:port`, so traffic between them stays in the VPC whether or not the one it needs is public; the environment's tasks group lets in itself for that. On Cloud Run, a private service lets in only the project's runtime account, which every service Loomplane deploys there runs as, and the plan warns that callers have to send a Google ID token. Setting who may call a service now replaces the policy, so a service that stops being public stops being public. A private service needed from another cloud, or on a target with no private network, is a problem on the plan: there's no way to reach it, so Loomplane won't wire an address that can't work. A private link between clouds would need a VPN between them, which is out of scope for now.
 9. Gateways. A `gateways:` entry routes paths to services through one public address. Bastion has no image of its own, so Loomplane generates a small program on it with the routes baked in, builds it on Cloud Build or CodeBuild like any service, and runs it on Cloud Run or ECS; traffic never passes through Loomplane. It has no admin API, gets the addresses it routes to and none of the project's variables, and isn't rebuilt for a new commit, only for new routes. On ECS it reaches private services inside the environment; elsewhere a route to a private service is a problem on the plan, since a gateway can't present Cloud Run's ID token. [forge-integration.md](forge-integration.md) lists what we found wiring Bastion.
 
-Left over: the acceptance run on real Google Cloud and AWS accounts, with milestone 4's; private links between clouds, which would need a VPN; and Memorystore, ElastiCache, Cloud Storage and the other catalog entries that still have no adapter.
+Left over: the acceptance run on real Google Cloud and AWS accounts, with milestone 4's, and private links between clouds, which would need a VPN. Memorystore, Cloud Storage, ElastiCache and S3 got their adapters after milestone 6.
 
 ## Milestone 6: Operational maturity
 
@@ -162,6 +162,6 @@ Left over:
 
 1. The acceptance runs on real accounts, for milestones 4 and 5: a Google Cloud project, a Vercel account and an AWS account. Everything is tested against fakes that check what the real APIs would refuse, which isn't the same as the real APIs agreeing.
 2. A license for Loomplane, and answers to the dependency license questions in [forge-integration.md](forge-integration.md#licenses).
-3. Render, Memorystore, Cloud Storage, ElastiCache and S3 are in the catalog without adapters.
+3. Render is in the catalog without an adapter. Memorystore, Cloud Storage, ElastiCache and S3 have theirs; Render builds from its own GitHub connection, which Loomplane can't hand it.
 4. Private links between clouds, which would need a VPN between them.
 5. The dashboard has no screen for backups or metrics; those are commands and Prometheus.
