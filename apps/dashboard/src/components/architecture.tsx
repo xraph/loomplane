@@ -536,7 +536,7 @@ export function ServicesTable({
                       {s.name}
                     </button>
                     <code className="font-mono text-xs text-muted-foreground">
-                      {s.path}
+                      {s.entrypoint}
                     </code>
                   </div>
                 </TableCell>
@@ -895,7 +895,8 @@ export function ServiceDetail({
       <SheetHeader className="border-b">
         <SheetTitle>{s.name}</SheetTitle>
         <SheetDescription>
-          {kindLabel(s.kind)} at <code className="font-mono">{s.path}</code>
+          {kindLabel(s.kind)} at{" "}
+          <code className="font-mono">{s.entrypoint}</code>
           {s.deployable ? "" : ", which Loomplane doesn't deploy"}.
         </SheetDescription>
       </SheetHeader>

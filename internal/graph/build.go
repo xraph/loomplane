@@ -22,6 +22,7 @@ var kindOrder = []struct {
 	{discovery.Static, StaticSite},
 	{discovery.HTTP, HTTPService},
 	{discovery.GRPC, HTTPService},
+	{discovery.Worker, Worker},
 	{discovery.CLI, Tool},
 }
 
@@ -119,7 +120,16 @@ func (b *builder) addPackage(u discovery.Unit) {
 func service(u discovery.Unit, ep discovery.Entrypoint) Service {
 	kind, conf := Worker, discovery.Possible
 	var framework string
+	for _, k := range kindOrder {
+		if fw := pick(ep.Frameworks, k.fw, discovery.Certain); fw != nil {
+			kind, framework, conf = k.kind, fw.Name, fw.Confidence
+			break
+		}
+	}
 	for i, k := range kindOrder {
+		if conf == discovery.Certain {
+			break
+		}
 		if fw := pick(ep.Frameworks, k.fw, discovery.Likely); fw != nil {
 			kind, framework, conf = k.kind, fw.Name, fw.Confidence
 			// A framework that would have made it something else, had it

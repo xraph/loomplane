@@ -3,6 +3,7 @@ package detect
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path"
 	"sort"
 	"strconv"
@@ -39,6 +40,10 @@ func (Docker) Detect(ctx context.Context, repo discovery.Repo, r *discovery.Repo
 			note(r, n)
 			continue
 		}
+		if dockerTemplateInputs(repo, dir(f), data) {
+			r.Notes = append(r.Notes, discovery.Note{Path: f, Message: "Container template has generated source inputs, so it is not an application image."})
+			continue
+		}
 		img := discovery.Image{Path: f, Context: dir(f)}
 		for _, in := range instructions(data) {
 			instr, rest, _ := strings.Cut(in.text, " ")
@@ -68,6 +73,42 @@ func (Docker) Detect(ctx context.Context, repo discovery.Repo, r *discovery.Repo
 		r.Images = append(r.Images, img)
 	}
 	return nil
+}
+
+func dockerTemplateInputs(repo discovery.Repo, contextDir string, data []byte) bool {
+	for _, instruction := range instructions(data) {
+		kind, rest, _ := strings.Cut(instruction.text, " ")
+		if !strings.EqualFold(kind, "COPY") && !strings.EqualFold(kind, "ADD") {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if strings.Contains(rest, "--from") {
+			continue
+		}
+		for len(fields) > 0 && strings.HasPrefix(fields[0], "--") {
+			fields = fields[1:]
+		}
+		if len(fields) > 0 && strings.HasPrefix(fields[0], "[") {
+			if json.Unmarshal([]byte(strings.Join(fields, " ")), &fields) != nil {
+				continue
+			}
+		}
+		if len(fields) < 2 {
+			continue
+		}
+		for _, source := range fields[:len(fields)-1] {
+			file := join(contextDir, source)
+			if repo.Has(file) || repo.Has(source) {
+				continue
+			}
+			for _, suffix := range []string{".txt", ".tmpl", ".tpl", ".template"} {
+				if repo.Has(file + suffix) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 type instruction struct {

@@ -84,6 +84,8 @@ const (
 	Static FrameworkKind = "static"
 	// CLI frameworks build command-line tools.
 	CLI FrameworkKind = "cli"
+	// Worker frameworks run background jobs or long-running consumers.
+	Worker FrameworkKind = "worker"
 	// Native frameworks build mobile or desktop apps, which Loomplane
 	// doesn't deploy.
 	Native FrameworkKind = "native"

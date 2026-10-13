@@ -160,8 +160,12 @@ type Summary struct {
 	NeedsConfirmation int `json:"needs_confirmation"`
 }
 
-// Summarize counts g.
+// Summarize counts the selected application. A raw repository graph uses
+// the default scope; a composed graph already has its source selections.
 func (g *Graph) Summarize() Summary {
+	if len(g.Sources) == 0 {
+		g = rooted(g, "")
+	}
 	s := Summary{Services: len(g.Services), Packages: len(g.Packages), Resources: len(g.Resources)}
 	for _, svc := range g.Services {
 		if svc.Deployable {

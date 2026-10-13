@@ -241,24 +241,23 @@ func taggedRequires(reqs []discovery.Requirement, alias string) []discovery.Requ
 	return out
 }
 
-// rooted keeps the part of g under root: the services whose entrypoint is
-// there, the packages there, everything those reach through edges however
-// deep (a web app under apps/web still builds with packages/ui), and the
-// resources whose evidence is there.
+// rooted selects the application under root and its reachable dependencies.
+// The raw graph stays intact so a selected app can use libraries elsewhere.
 func rooted(g *Graph, root string) *Graph {
-	if root == "" {
-		return g
+	inScope := func(name string) bool { return root == "" || root == "." || under(name, root) }
+	selected := func(name string, evidence []discovery.Evidence) bool {
+		return inScope(name) && (discovery.ScopeExclusion(name, root) == "" || discovery.ExplicitTarget(evidence))
 	}
 	keep := map[string]bool{}
 	var queue []string
 	for _, s := range g.Services {
-		if under(s.Entrypoint, root) {
+		if selected(s.Entrypoint, s.Evidence) {
 			keep[s.ID] = true
 			queue = append(queue, s.ID)
 		}
 	}
 	for _, p := range g.Packages {
-		if under(p.Path, root) && !keep[p.ID] {
+		if selected(p.Path, p.Evidence) && !keep[p.ID] {
 			keep[p.ID] = true
 			queue = append(queue, p.ID)
 		}
@@ -274,18 +273,55 @@ func rooted(g *Graph, root string) *Graph {
 		}
 	}
 	out := *g
+	out.Notes = slices.Clone(g.Notes)
+	noteExclusion := func(id, name string) {
+		if reason := discovery.ScopeExclusion(name, root); !keep[id] && inScope(name) && reason != "" {
+			out.Notes = append(out.Notes, discovery.Note{Path: name, Message: fmt.Sprintf("%s is excluded from the application: %s. Select its source root or declare a Forge build target to include it.", name, reason)})
+		}
+	}
+	for _, s := range g.Services {
+		noteExclusion(s.ID, s.Entrypoint)
+	}
+	for _, p := range g.Packages {
+		noteExclusion(p.ID, p.Path)
+	}
 	out.Services = slices.DeleteFunc(slices.Clone(g.Services), func(s Service) bool { return !keep[s.ID] })
 	out.Packages = slices.DeleteFunc(slices.Clone(g.Packages), func(p Package) bool { return !keep[p.ID] })
 	out.Edges = slices.DeleteFunc(slices.Clone(g.Edges), func(e Edge) bool { return !keep[e.From] || !keep[e.To] })
 	out.Resources = nil
 	for _, r := range g.Resources {
-		if kept, ok := restedResource(r, out.Edges, root, keep[r.ID]); ok {
+		if kept, ok := restedResource(r, out.Edges, g.Edges, root, keep[r.ID]); ok {
 			out.Resources = append(out.Resources, kept)
 		}
 	}
 	if out.Resources == nil {
 		out.Resources = []Resource{}
 	}
+	type location struct {
+		eco  discovery.Ecosystem
+		name string
+	}
+	locations := make([]location, 0, len(out.Services)+len(out.Packages))
+	for _, s := range out.Services {
+		locations = append(locations, location{s.Ecosystem, s.Path})
+	}
+	for _, p := range out.Packages {
+		locations = append(locations, location{p.Ecosystem, p.Path})
+	}
+	governs := func(name string, eco discovery.Ecosystem) bool {
+		return slices.ContainsFunc(locations, func(loc location) bool {
+			return (eco == "" || eco == loc.eco) && within(loc.name, name)
+		})
+	}
+	out.Workspaces = []discovery.Workspace{}
+	for _, ws := range g.Workspaces {
+		empty := len(ws.Members) == 0
+		ws.Members = slices.DeleteFunc(slices.Clone(ws.Members), func(name string) bool { return !governs(name, ws.Ecosystem) })
+		if len(ws.Members) > 0 || empty && governs(ws.Path, ws.Ecosystem) {
+			out.Workspaces = append(out.Workspaces, ws)
+		}
+	}
+	out.BuildSystems = slices.DeleteFunc(slices.Clone(g.BuildSystems), func(bs discovery.BuildSystem) bool { return !governs(bs.Path, "") })
 	return &out
 }
 
@@ -296,7 +332,16 @@ func rooted(g *Graph, root string) *Graph {
 // the strongest confidence among them and all of their evidence. One kept
 // only because some of its evidence is under the root keeps just that
 // evidence. ok is false when nothing of the resource is left.
-func restedResource(r Resource, kept []Edge, root string, reached bool) (res Resource, ok bool) {
+func restedResource(r Resource, kept, original []Edge, root string, reached bool) (res Resource, ok bool) {
+	inScope := func(ev discovery.Evidence) bool {
+		return (root == "" || root == "." || under(ev.Path, root)) && discovery.ScopeExclusion(ev.Path, root) == ""
+	}
+	droppedUse := slices.ContainsFunc(original, func(e Edge) bool {
+		return e.To == r.ID && e.Kind == Needs && !slices.ContainsFunc(kept, func(k Edge) bool { return k.From == e.From && k.To == e.To && k.Kind == e.Kind })
+	})
+	if reached && !droppedUse && (root == "" || root == ".") && !slices.ContainsFunc(r.Evidence, func(ev discovery.Evidence) bool { return !inScope(ev) }) {
+		return r, true
+	}
 	if reached {
 		var rebuilt *Resource
 		for _, e := range kept {
@@ -321,7 +366,15 @@ func restedResource(r Resource, kept []Edge, root string, reached bool) (res Res
 		return r, true
 	}
 	res = r
-	res.Evidence = slices.DeleteFunc(slices.Clone(r.Evidence), func(ev discovery.Evidence) bool { return !under(ev.Path, root) })
+	res.Evidence = slices.DeleteFunc(slices.Clone(r.Evidence), func(ev discovery.Evidence) bool {
+		return !inScope(ev) || slices.ContainsFunc(original, func(e Edge) bool {
+			return e.To == r.ID && e.Kind == Needs && slices.Contains(e.Evidence, ev)
+		})
+	})
+	if len(res.Evidence) != len(r.Evidence) {
+		res.Confidence = discovery.Possible
+		res.NeedsConfirmation = true
+	}
 	return res, len(res.Evidence) > 0
 }
 

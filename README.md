@@ -67,7 +67,7 @@ loomctl approve <plan-id>
 
 | | |
 |---|---|
-| Repository discovery | Go, Rust, Node, Python and JVM (Maven and Gradle) monorepos, Dockerfiles and Compose files, read into services, packages and resources with the evidence for each. |
+| Repository discovery | Go, Rust, Node, Python and JVM (Maven and Gradle) monorepos, Dockerfiles and Compose files, with Forge layouts, app roles and scoped backend configuration. [Discovery rules](docs/repository-discovery.md) cover examples and development helpers. |
 | `loomplane.yaml` | A versioned manifest, drafted from the analysis: services, resources, gateways, and overrides per environment. |
 | Plans | Every action a deployment would take, in order, with problems that block it. Approval names the revision you reviewed; a plan whose world changed comes back stale. |
 | Targets | Vercel, Cloud Run, ECS on Fargate and Render for services; Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage, S3, and Render's Postgres and Key Value for databases, caches and buckets. Builds run on Cloud Build, CodeBuild, Vercel and Render, in your accounts. |

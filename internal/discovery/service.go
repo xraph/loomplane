@@ -217,7 +217,11 @@ func (s *Service) List(ctx context.Context, p security.Principal, projectID stri
 	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
 		return nil, err
 	}
-	return s.store.ListAnalyses(ctx, p.OrgID, projectID, listLimit)
+	list, err := s.store.ListAnalyses(ctx, p.OrgID, projectID, listLimit)
+	if err != nil {
+		return nil, err
+	}
+	return s.analysisSummaries(ctx, p.OrgID, projectID, list)
 }
 
 // Get returns one analysis.
@@ -225,7 +229,44 @@ func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*An
 	if err := s.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
 		return nil, err
 	}
-	return s.store.GetAnalysis(ctx, p.OrgID, id)
+	a, err := s.store.GetAnalysis(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.analysisSummaries(ctx, p.OrgID, a.ProjectID, []*Analysis{a})
+	if err != nil {
+		return nil, err
+	}
+	return list[0], nil
+}
+
+// analysisSummaries projects successful runs through their current source
+// roots. Stored analyses and their full repository graphs stay unchanged.
+func (s *Service) analysisSummaries(ctx context.Context, orgID, projectID string, list []*Analysis) ([]*Analysis, error) {
+	var sources map[string]*Source
+	out := make([]*Analysis, 0, len(list))
+	for _, a := range list {
+		if a.Status != StatusSucceeded {
+			out = append(out, analysisView(a, nil, nil))
+			continue
+		}
+		if sources == nil {
+			all, err := s.store.ListSources(ctx, orgID, projectID, true)
+			if err != nil {
+				return nil, err
+			}
+			sources = make(map[string]*Source, len(all))
+			for _, src := range all {
+				sources[src.ID] = src
+			}
+		}
+		g, err := s.store.Graph(ctx, orgID, a.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, analysisView(a, sources[a.SourceID], g))
+	}
+	return out, nil
 }
 
 // Graph returns the application graph a succeeded analysis found.

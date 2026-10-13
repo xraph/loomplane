@@ -21,7 +21,7 @@ const maxManifestBytes = 1 << 20
 
 // All returns every detector, in the order they run.
 func All() []discovery.Detector {
-	return []discovery.Detector{Go{}, Rust{}, Node{}, Python{}, JVM{}, Docker{}, Compose{}}
+	return []discovery.Detector{Go{}, Forge{}, Rust{}, Node{}, Python{}, JVM{}, Docker{}, Compose{}}
 }
 
 // read returns a file's contents, or a note saying why it couldn't.
@@ -168,8 +168,11 @@ func owner(name string, dirs []string) string {
 // addResource adds a resource use unless one of the same kind and file is
 // already there.
 func addResource(list []discovery.ResourceUse, r discovery.ResourceUse) []discovery.ResourceUse {
-	for _, x := range list {
+	for i, x := range list {
 		if x.Kind == r.Kind && x.Evidence.Path == r.Evidence.Path {
+			if r.Confidence.Rank() > x.Confidence.Rank() {
+				list[i] = r
+			}
 			return list
 		}
 	}

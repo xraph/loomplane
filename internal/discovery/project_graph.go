@@ -22,6 +22,22 @@ type SourceState struct {
 	Shown  *Analysis `json:"shown,omitempty"`
 }
 
+func analysisView(a *Analysis, src *Source, g *graph.Graph) *Analysis {
+	out := *a
+	if a.Status != StatusSucceeded || g == nil {
+		return &out
+	}
+	ref := graph.SourceRef{Alias: "repository", Repository: a.Repository, CommitSHA: a.CommitSHA, AnalysisID: a.ID}
+	if src != nil {
+		ref.Root = src.Root
+		if src.Alias != "" {
+			ref.Alias = src.Alias
+		}
+	}
+	out.Summary = graph.Compose([]graph.Part{{Source: ref, Graph: g}}).Summarize()
+	return &out
+}
+
 // ProjectGraph composes the newest successful analysis of each of a
 // project's live sources into its application graph. Nothing stores the
 // result, so it can't go stale.
@@ -40,7 +56,7 @@ func ProjectGraph(ctx context.Context, g Graphs, orgID, projectID string) (*grap
 		st := SourceState{Source: *src}
 		part := graph.Part{Source: graph.SourceRef{Alias: src.Alias, Repository: src.Repository, Root: src.Root}}
 		if len(list) > 0 {
-			st.Latest = list[0]
+			st.Latest = analysisView(list[0], nil, nil)
 		}
 		for _, a := range list {
 			if a.Status != StatusSucceeded {
@@ -50,7 +66,10 @@ func ProjectGraph(ctx context.Context, g Graphs, orgID, projectID string) (*grap
 			if err != nil {
 				return nil, nil, err
 			}
-			st.Shown = a
+			st.Shown = analysisView(a, src, gr)
+			if st.Latest.ID == a.ID {
+				st.Latest = st.Shown
+			}
 			part.Source.CommitSHA, part.Source.AnalysisID, part.Graph = a.CommitSHA, a.ID, gr
 			break
 		}

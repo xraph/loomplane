@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"strings"
 	"testing"
 
 	pd "github.com/xraph/loomplane/pkg/discovery"
@@ -23,6 +24,8 @@ func TestService_kindFollowsTheStrongestLikelyFramework(t *testing.T) {
 		{"grpc", []pd.Framework{fw("grpc", pd.GRPC, pd.Likely)}, HTTPService, "grpc", true},
 		{"server with cli flags", []pd.Framework{fw("cobra", pd.CLI, pd.Likely), fw("forge", pd.HTTP, pd.Likely)}, HTTPService, "forge", true},
 		{"cli", []pd.Framework{fw("cobra", pd.CLI, pd.Likely)}, Tool, "cobra", false},
+		{"declared cli with http imports", []pd.Framework{fw("gin", pd.HTTP, pd.Likely), fw("forge", pd.CLI, pd.Certain)}, Tool, "forge", false},
+		{"declared worker with health server", []pd.Framework{fw("http", pd.HTTP, pd.Likely), fw("forge", pd.FrameworkKind("worker"), pd.Certain)}, Worker, "forge", true},
 		{"web app with custom server", []pd.Framework{fw("express", pd.HTTP, pd.Likely), fw("next", pd.Web, pd.Likely)}, WebApp, "next", true},
 		{"static", []pd.Framework{fw("vite", pd.Static, pd.Likely)}, StaticSite, "vite", true},
 		{"native", []pd.Framework{fw("expo", pd.Native, pd.Likely)}, NativeApp, "expo", false},
@@ -34,6 +37,9 @@ func TestService_kindFollowsTheStrongestLikelyFramework(t *testing.T) {
 			svc := service(u, pd.Entrypoint{Name: "x", Path: ".", Frameworks: tt.frameworks})
 			if svc.Kind != tt.want || svc.Framework != tt.wantFw || svc.Deployable != tt.deployable {
 				t.Fatalf("service %+v, want %s/%s", svc, tt.want, tt.wantFw)
+			}
+			if strings.HasPrefix(tt.name, "declared ") && svc.Confidence != pd.Certain {
+				t.Fatalf("declared framework lost certainty: %+v", svc)
 			}
 		})
 	}

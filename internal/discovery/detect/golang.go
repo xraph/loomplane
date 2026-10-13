@@ -37,17 +37,20 @@ type goModule struct {
 }
 
 type goImport struct {
-	path string
-	ev   discovery.Evidence
+	path  string
+	ev    discovery.Evidence
+	alias string
 }
 
 type goPackage struct {
-	dir      string
-	module   *goModule
-	isMain   bool
-	mainEv   discovery.Evidence
-	imports  []goImport
-	serverEv *discovery.Evidence
+	dir          string
+	module       *goModule
+	isMain       bool
+	mainEv       discovery.Evidence
+	imports      []goImport
+	serverEv     *discovery.Evidence
+	functions    map[string][]goBody
+	initializers []goBody
 }
 
 // goServeCall matches a net/http server being started. An import of
@@ -155,6 +158,9 @@ func goFramework(ip string) (fw struct {
 	kind         discovery.FrameworkKind
 }, ok bool) {
 	for _, f := range goFrameworks {
+		if f.name == "forge" && ip != f.prefix {
+			continue
+		}
 		if hasPathPrefix(ip, f.prefix) && len(f.prefix) > len(fw.prefix) {
 			fw, ok = f, true
 		}
@@ -179,7 +185,13 @@ func (Go) Detect(ctx context.Context, repo discovery.Repo, r *discovery.Report) 
 		return err
 	}
 	for _, m := range mods {
-		r.Units = append(r.Units, goUnit(m, mods, pkgs))
+		u, reach := goUnit(m, mods, pkgs)
+		for i := range u.Entrypoints {
+			if err := applyForgeConfig(ctx, repo, r, &u.Entrypoints[i], u.Entrypoints[i].Path, reach[i].registered); err != nil {
+				return err
+			}
+		}
+		r.Units = append(r.Units, u)
 	}
 	return nil
 }
@@ -289,7 +301,7 @@ func goPackages(ctx context.Context, repo discovery.Repo, r *discovery.Report, m
 		if len(data) > maxGoFileBytes {
 			continue
 		}
-		file, err := parser.ParseFile(fset, f, data, parser.ImportsOnly|parser.ParseComments)
+		file, err := parser.ParseFile(fset, f, data, parser.ParseComments)
 		if err != nil {
 			note(r, &discovery.Note{Path: f, Message: "Go syntax error"})
 			continue
@@ -299,7 +311,7 @@ func goPackages(ctx context.Context, repo discovery.Repo, r *discovery.Report, m
 		}
 		p := pkgs[dir(f)]
 		if p == nil {
-			p = &goPackage{dir: dir(f), module: byDir[modDir]}
+			p = &goPackage{dir: dir(f), module: byDir[modDir], functions: map[string][]goBody{}}
 			pkgs[p.dir] = p
 		}
 		for _, imp := range file.Imports {
@@ -308,8 +320,13 @@ func goPackages(ctx context.Context, repo discovery.Repo, r *discovery.Report, m
 				continue
 			}
 			line := fset.Position(imp.Pos()).Line
-			p.imports = append(p.imports, goImport{path: ip, ev: discovery.Evidence{Path: f, Line: line, Detail: "import " + strconv.Quote(ip)}})
+			alias := ""
+			if imp.Name != nil {
+				alias = imp.Name.Name
+			}
+			p.imports = append(p.imports, goImport{path: ip, alias: alias, ev: discovery.Evidence{Path: f, Line: line, Detail: "import " + strconv.Quote(ip)}})
 		}
+		goBodies(fset, f, data, file, p)
 		if p.serverEv == nil {
 			if l := goServeLine(fset, f, data); l > 0 {
 				ev := evidence(data, f, l)
@@ -371,7 +388,7 @@ func resolve(ip string, mods []*goModule) string {
 	return join(best.dir, strings.TrimPrefix(strings.TrimPrefix(ip, best.path), "/"))
 }
 
-func goUnit(m *goModule, mods []*goModule, pkgs map[string]*goPackage) discovery.Unit {
+func goUnit(m *goModule, mods []*goModule, pkgs map[string]*goPackage) (discovery.Unit, []goReach) {
 	u := discovery.Unit{
 		ID:        discovery.UnitID(discovery.Go, m.dir),
 		Ecosystem: discovery.Go,
@@ -408,7 +425,7 @@ func goUnit(m *goModule, mods []*goModule, pkgs map[string]*goPackage) discovery
 	}
 	goSharedServers(u.Entrypoints, reach)
 	sortResources(u.Resources)
-	return u
+	return u, reach
 }
 
 func goDependencies(m *goModule, mods []*goModule) []discovery.Dependency {
@@ -474,55 +491,16 @@ func goRequires(m *goModule, mods []*goModule) []discovery.Requirement {
 // package it was found in and how many imports away that is, and every
 // package of the repository it imports, directly or not.
 type goReach struct {
-	origin   map[string]string
-	depth    map[string]int
-	packages map[string]bool
+	origin     map[string]string
+	depth      map[string]int
+	packages   map[string]bool
+	registered map[string]bool
 }
 
 // goEntrypoint walks everything the main package imports inside this
 // repository, and reports the frameworks and drivers it reaches.
 func goEntrypoint(p *goPackage, mods []*goModule, pkgs map[string]*goPackage) (discovery.Entrypoint, goReach) {
-	name := path.Base(p.dir)
-	if p.dir == p.module.dir || name == "." {
-		name = path.Base(p.module.path)
-	}
-	ep := discovery.Entrypoint{Name: name, Path: p.dir, Evidence: []discovery.Evidence{p.mainEv}}
-	reach := goReach{origin: map[string]string{}, depth: map[string]int{}, packages: map[string]bool{p.dir: true}}
-	found := func(fw discovery.Framework, pkg string, depth int) {
-		if _, ok := reach.origin[fw.Name]; !ok {
-			reach.origin[fw.Name], reach.depth[fw.Name] = pkg, depth
-		}
-		ep.Frameworks = addFramework(ep.Frameworks, fw)
-	}
-
-	depth := map[string]int{p.dir: 0}
-	queue := []*goPackage{p}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if cur.serverEv != nil {
-			found(discovery.Framework{Name: "net/http", Kind: discovery.HTTP, Confidence: discovery.Likely, Evidence: *cur.serverEv}, cur.dir, depth[cur.dir])
-		}
-		for _, imp := range cur.imports {
-			if d := resolve(imp.path, mods); d != "" {
-				if next := pkgs[d]; next != nil && !reach.packages[d] {
-					reach.packages[d] = true
-					depth[d] = depth[cur.dir] + 1
-					queue = append(queue, next)
-				}
-				continue
-			}
-			if fw, ok := goFramework(imp.path); ok {
-				found(discovery.Framework{Name: fw.name, Kind: fw.kind, Confidence: discovery.Likely, Evidence: imp.ev}, cur.dir, depth[cur.dir])
-			}
-			if res, ok := goResource(imp); ok {
-				ep.Resources = addResource(ep.Resources, res)
-			}
-		}
-	}
-	sortFrameworks(ep.Frameworks)
-	sortResources(ep.Resources)
-	return ep, reach
+	return goReachEntrypoint(p, mods, pkgs)
 }
 
 // goSharedServers lowers to possible the server frameworks a command
