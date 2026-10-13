@@ -1,5 +1,5 @@
 .PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli \
-	image test test-go test-dashboard test-integration lint lint-go lint-dashboard \
+	image test test-go test-dashboard test-integration acceptance lint lint-go lint-dashboard \
 	gen-client check-client setup clean
 
 .DEFAULT_GOAL := help
@@ -66,6 +66,10 @@ test-dashboard: ## Run the dashboard's unit tests
 
 test-integration: ## Boot the whole app against the compose Postgres (make up first)
 	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags=integration -count=1 ./tests/integration/
+
+acceptance: ## Deploy to real clouds and take it down again; costs money (docs/acceptance.md)
+	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags='integration acceptance' -count=1 -timeout=180m -v \
+		-run TestAcceptance ./tests/integration/
 
 lint: lint-go lint-dashboard ## Lint Go and the dashboard
 
