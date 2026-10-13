@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -22,6 +23,9 @@ func TestOps_aBackupRestoresIntoAnEmptyDatabase(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	// Attaching the repository checks GitHub can read it.
+	cfg.GitHub.APIURL = fakeGitHubRepos(t, map[string][]byte{"acme/mono": exampleTarball(t)}).URL
+	cfg.Analysis.WorkDir = t.TempDir()
 	r := start(t, cfg)
 
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
@@ -86,11 +90,12 @@ func TestOps_aBackupRestoresIntoAnEmptyDatabase(t *testing.T) {
 	again.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
 	var projects struct {
 		Projects []struct {
-			ID string `json:"id"`
+			ID           string   `json:"id"`
+			Repositories []string `json:"repositories"`
 		} `json:"projects"`
 	}
 	again.must(http.StatusOK, http.MethodGet, "/api/v1/projects", nil, &projects)
-	if len(projects.Projects) != 1 || projects.Projects[0].ID != proj.ID {
+	if len(projects.Projects) != 1 || projects.Projects[0].ID != proj.ID || !slices.Equal(projects.Projects[0].Repositories, []string{"acme/mono"}) {
 		t.Fatalf("restored projects %+v", projects)
 	}
 	var vars struct {
