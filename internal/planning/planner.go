@@ -761,6 +761,10 @@ func heldLabel(name, alias string) string {
 func (p *planner) retain() {
 	var queue []holder
 	roots := map[string]bool{}
+	// taken are the held services the manifest dropped whose name a
+	// gateway on here takes, with the repository that holds each, so one
+	// warning can name them with whatever held service used them.
+	taken := map[string]string{}
 	for _, name := range p.in.Manifest.ServiceNames() {
 		if alias, held := p.held[name]; held {
 			queue = append(queue, holder{root: heldLabel(name, alias), alias: alias, env: p.services[name].Service.Env})
@@ -785,10 +789,7 @@ func (p *planner) retain() {
 			// A gateway the manifest has on here takes its name, and
 			// planGateways plans the gateway in its place, so it doesn't
 			// run on, and nothing it uses is kept for it.
-			p.warn(Finding{
-				Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "gateways." + b.Name,
-				Message: fmt.Sprintf("%s is a gateway in the manifest now, so it replaces %s, which this plan holds back.", b.Name, heldLabel(b.Name, alias)),
-			})
+			taken[id] = alias
 		case held:
 			queue = append(queue, holder{root: heldLabel(b.Name, alias), alias: alias, env: cfg.Env})
 			roots[id] = true
@@ -837,16 +838,32 @@ func (p *planner) retain() {
 			}
 		}
 	}
-	for _, id := range slices.Sorted(maps.Keys(replaced)) {
+	// One warning per name a gateway takes, naming the held service it
+	// replaces and every held service that used it.
+	ids := slices.Collect(maps.Keys(replaced))
+	for id := range taken {
+		if replaced[id] == nil {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
 		b, who := p.bindings[id], strings.Join(replaced[id], " and ")
 		was := "was"
 		if len(replaced[id]) > 1 {
 			was = "were"
 		}
-		p.warn(Finding{
-			Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "gateways." + b.Name,
-			Message: fmt.Sprintf("%s is a gateway in the manifest now, so it replaces the %s that %s, which this plan holds back, %s deployed to use.", b.Name, b.Name, who, was),
-		})
+		alias, dropped := taken[id]
+		var msg string
+		switch {
+		case dropped && who == "":
+			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces %s, which this plan holds back.", b.Name, heldLabel(b.Name, alias))
+		case dropped:
+			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces %s, which this plan holds back. %s, which this plan holds back too, %s deployed to use the %s it replaces.", b.Name, heldLabel(b.Name, alias), who, was, b.Name)
+		default:
+			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces the %s that %s, which this plan holds back, %s deployed to use.", b.Name, b.Name, who, was)
+		}
+		p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "gateways." + b.Name, Message: msg})
 	}
 	for _, id := range slices.Sorted(maps.Keys(users)) {
 		b, who := p.bindings[id], strings.Join(users[id], " and ")

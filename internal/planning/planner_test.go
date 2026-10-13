@@ -1632,6 +1632,33 @@ func TestCompute_aGatewayTakingADroppedHeldServicesNameIsPlannedOnce(t *testing.
 	}
 }
 
+func TestCompute_aGatewayReplacingADroppedHeldServiceAnotherUsedWarnsOnce(t *testing.T) {
+	// web, in mono beside api, needs api.
+	first := strings.Replace(federatedYAML, "resources:\n", "  web:\n    repo: mono\n    source: apps/web\n    provider: vercel\n    needs: [api]\n"+"resources:\n", 1)
+	live := deployed(t, computeFed(t, first, nil))
+	// The manifest drops api and has a gateway called api that's on here,
+	// while web, held, runs on with the link to api it was deployed with.
+	yaml := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
+	yaml = strings.Replace(yaml, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
+	yaml = strings.Replace(yaml, "resources:\n", "  web:\n    repo: mono\n    source: apps/web\n    provider: vercel\n"+"resources:\n", 1)
+	yaml += "gateways:\n  api:\n    routes:\n      - {path: /, to: site}\n"
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	var held []string
+	for _, w := range r.Warnings {
+		if w.Code == "held" && w.Name == "api" {
+			held = append(held, w.Message)
+		}
+	}
+	want := "api is a gateway in the manifest now, so it replaces api in mono, which this plan holds back. web in mono, which this plan holds back too, was deployed to use the api it replaces."
+	if !slices.Equal(held, []string{want}) {
+		t.Fatalf("held warnings %q", held)
+	}
+}
+
 func TestCompute_aHeldServiceDeletedOutsideLoomplaneIsNeededByWhatsCreatedAgain(t *testing.T) {
 	// site, which the plan moves, was deleted too, so it's created again,
 	// and it still needs api, which the plan holds and can't rebuild.
