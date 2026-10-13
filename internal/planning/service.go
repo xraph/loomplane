@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -540,6 +541,7 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 		out = append(out, ConnectionOption{
 			ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
 			HTTPS: c.Details["certificate_arn"] != "", Region: c.Details["region"],
+			Details: maps.Clone(c.Details),
 		})
 	}
 	return out, nil

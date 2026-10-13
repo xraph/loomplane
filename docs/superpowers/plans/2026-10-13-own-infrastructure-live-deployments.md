@@ -47,11 +47,11 @@ type Endpoint struct {
 // Placement gains Target *string and build/endpoint edits used by the form.
 ```
 
-- [ ] Write parsing/inheritance/edit tests. Parse a server target, a Kubernetes environment override, builder/registry references and a digest-pinned image; reject invalid IDs, host ports, paths and unpinned image references. For an environment provider change, inherited target/endpoint values from the previous provider must clear.
-- [ ] Run `go test ./pkg/manifest -run 'Infrastructure|Target|Build' -count=1`. Expected: the new manifest is refused for unknown fields, or inheritance/edit assertions fail.
-- [ ] Add typed fields, validation, schema definitions and comment-preserving edits. Preserve default behavior when fields are absent.
-- [ ] Run `go test ./pkg/manifest -count=1`. Expected: all cases pass, including existing alias/merge edits.
-- [ ] Format, lint, run `make test`, inspect/stage owned files and commit `feat: add owned infrastructure manifest settings`.
+- [x] Write parsing/inheritance/edit tests. Parse a server target, a Kubernetes environment override, builder/registry references and a digest-pinned image; reject invalid IDs, host ports, paths and unpinned image references. For an environment provider change, inherited target/endpoint values from the previous provider must clear.
+- [x] Run `go test ./pkg/manifest -run 'Infrastructure|Target|Build' -count=1`. Expected: the new manifest is refused for unknown fields, or inheritance/edit assertions fail.
+- [x] Add typed fields, validation, schema definitions and comment-preserving edits. Preserve default behavior when fields are absent.
+- [x] Run `go test ./pkg/manifest -count=1`. Expected: all cases pass, including existing alias/merge edits.
+- [x] Format, lint, run `make test`, inspect/stage owned files and commit `feat: add owned infrastructure manifest settings`.
 
 ## Task 2: Per-action connection pinning and planner validation
 
@@ -59,7 +59,7 @@ Files: modify `internal/planning/plan.go`, `planner.go`, `service.go`, `internal
 
 Consumes Task 1 fields. Produces `Action.ConnectionID`, `ServiceConfig.Target`, `ServiceConfig.Endpoint`, `ServiceConfig.HealthPath` and `ServiceConfig.BuildTarget`, plus a serializable build configuration holding builder/registry/image and reviewed connection settings. `ConnectionOption.Details` supplies safe checked settings. Action/configuration references are covered by the plan digest.
 
-- [ ] Write a real Compute regression with two services and two ready server connections. Required result:
+- [x] Write a real Compute regression with two services and two ready server connections. Required result:
 
 ```go
 got := Compute(Input{Environment: "production", Graph: graphFixture,
@@ -68,10 +68,10 @@ if len(got.Problems) != 0 || got.Actions[0].ConnectionID != "conn_a" ||
     got.Actions[1].ConnectionID != "conn_b" { t.Fatalf("targets: %+v", got) }
 ```
 
-- [ ] Add cases for a missing/wrong-cloud/not-ready target, wrong builder role, missing Kubernetes registry, host-port collision, disconnected private dependency, unsupported server scale and public cluster service without ingress. Hold a deployed source while another source changes target; only the moving source may be replaced.
-- [ ] Run `go test ./internal/planning -run 'Target|Infrastructure' -count=1`. Expected: unresolved fields or target validation failures.
-- [ ] Resolve explicit targets independently of managed environment defaults, snapshot placement settings, compare target/build/endpoint changes and route runner calls through each action's connection. Preserve fallback for older actions and original credentials for deletes/replacements. Keep new providers unavailable until their checkers/executors are wired.
-- [ ] Run `go test ./internal/planning ./internal/deployments -count=1`, then format/lint/full tests and commit `feat: pin deployment targets per service`.
+- [x] Add cases for a missing/wrong-cloud/not-ready target, wrong builder role, missing Kubernetes registry, host-port collision, disconnected private dependency, unsupported server scale and public cluster service without ingress. Hold a deployed source while another source changes target; only the moving source may be replaced.
+- [x] Run `go test ./internal/planning -run 'Target|Infrastructure' -count=1`. Expected: unresolved fields or target validation failures.
+- [x] Resolve explicit targets independently of managed environment defaults, snapshot placement settings, compare target/build/endpoint changes and route runner calls through each action's connection. Preserve fallback for older actions and original credentials for deletes/replacements. Keep new providers unavailable until their checkers/executors are wired.
+- [x] Run `go test ./internal/planning ./internal/deployments -count=1`, then format/lint/full tests and commit `feat: pin deployment targets per service`.
 
 ## Task 3: SSH, Kubernetes and registry connections
 

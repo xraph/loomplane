@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -448,7 +449,10 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if deleting && current == nil {
 		return nil
 	}
-	connID := plan.Connections[prov.Cloud]
+	connID := a.ConnectionID
+	if connID == "" {
+		connID = plan.Connections[prov.Cloud]
+	}
 	if deleting && current.ConnectionID != "" {
 		// What's deleted goes through the connection that deployed it,
 		// which needn't be the one the environment deploys with now. Only
@@ -469,6 +473,14 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	unreachable := deleting && errors.Is(err, connections.ErrNotFound)
 	if err != nil && !unreachable {
 		return err
+	}
+	if !deleting && a.ConnectionID != "" {
+		if conn.Cloud != prov.Cloud || conn.Status != connections.StatusReady {
+			return fmt.Errorf("the reviewed target for %s is not a ready %s connection; check it and plan again", a.Name, prov.Cloud)
+		}
+		if a.Service != nil && !reflect.DeepEqual(a.Service.TargetSettings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
+			return fmt.Errorf("the target settings for %s changed since this plan was reviewed; plan again", a.Name)
+		}
 	}
 	job := &Job{
 		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,

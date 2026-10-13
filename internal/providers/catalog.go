@@ -162,6 +162,29 @@ func Catalog() []provider.Provider {
 			// their role (internal/deployments).
 			Available: true,
 		},
+		{
+			Name: "server", Title: "Existing server", Cloud: "server",
+			Description: "Runs a service container on the Docker daemon of the SSH server you choose.",
+			Model:       provider.Instance, Scaling: true,
+			Runs: containerWorkloads("Docker container"),
+			Note: "The server connection and executor are being wired up.",
+		},
+		{
+			Name: "kubernetes", Title: "Kubernetes", Cloud: "kubernetes",
+			Description: "Runs service containers in the namespace of the cluster you choose.",
+			Model:       provider.Instance, Scaling: true,
+			Runs: containerWorkloads("Kubernetes Deployment"),
+			Note: "The cluster connection and executor are being wired up.",
+		},
+	}
+}
+
+func containerWorkloads(creates string) []provider.Runs {
+	return []provider.Runs{
+		{Workload: provider.HTTPService, Execution: provider.Container, Creates: creates},
+		{Workload: provider.WebApp, Execution: provider.Container, Creates: creates},
+		{Workload: provider.StaticSite, Execution: provider.Container, Creates: creates},
+		{Workload: provider.Worker, Execution: provider.Container, Creates: creates},
 	}
 }
 

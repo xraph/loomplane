@@ -28,6 +28,7 @@ export interface APIKeyList {
 
 export interface Action {
   changes?: Change[];
+  connectionId?: string;
   creates: string;
   dependsOn?: string[];
   engine: string;
@@ -138,6 +139,14 @@ export interface BuildSystem {
   name: string;
   path: string;
   source?: string;
+}
+
+export interface BuildTarget {
+  builder?: string;
+  builderSettings?: Record<string, any>;
+  image?: string;
+  registry?: string;
+  registrySettings?: Record<string, any>;
 }
 
 export interface Change {
@@ -749,13 +758,16 @@ export interface Service {
 
 export interface ServiceConfig {
   build?: string;
+  buildTarget?: BuildTarget;
   commitSha?: string;
   context?: string;
   ecosystem: string;
+  endpoint?: Endpoint;
   env?: EnvLink[];
   execution: string;
   framework?: string;
   gateway?: Route[];
+  healthPath?: string;
   image?: string;
   internal?: boolean;
   port?: number;
@@ -769,6 +781,8 @@ export interface ServiceConfig {
   size?: Size;
   source: string;
   start?: string;
+  target?: string;
+  targetSettings?: Record<string, any>;
   workload: string;
 }
 

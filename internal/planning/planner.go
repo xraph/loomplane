@@ -51,6 +51,8 @@ type ConnectionOption struct {
 	// Region is the region the connection works in, for a cloud whose
 	// connection names one, as AWS's does.
 	Region string
+	// Details are checked, non-secret placement and capability settings.
+	Details map[string]string
 }
 
 // connectionRegions are the clouds whose connection decides the region.
@@ -60,7 +62,7 @@ type ConnectionOption struct {
 var connectionRegions = map[string]bool{"aws": true}
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {
@@ -113,6 +115,7 @@ func Compute(in Input) *Result {
 	p.planLinks()
 	p.planServices()
 	p.planGateways()
+	p.checkTargetPlacements()
 	p.readdress()
 	p.heldAddresses()
 	p.gatewayHeld()
@@ -209,7 +212,9 @@ func (p *planner) use(prov *provider.Provider) {
 		p.unready[prov.Name] = prov.Title + ": " + prov.Note
 		return
 	}
-	p.clouds[prov.Cloud] = true
+	if !OwnedCloud(prov.Cloud) {
+		p.clouds[prov.Cloud] = true
+	}
 }
 
 // checkHTTPS warns about public services on ECS when the AWS connection
@@ -543,12 +548,14 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 		return nil
 	}
 	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
-	p.buildContext(name, base, s.Build, gs, cfg)
+	p.buildContext(name, base, set.Build, gs, cfg)
+	p.configureTarget(name, base, prov, set, cfg)
 	p.checkRender(name, base, cfg)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
-		Service: cfg,
+		Service:      cfg,
+		ConnectionID: cfg.Target,
 	}
 }
 
@@ -1373,7 +1380,11 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 		Service: gs.ID, Source: gs.Entrypoint, Repo: gs.Source, CommitSHA: p.commit(gs.Source),
 		Ecosystem: gs.Ecosystem, Framework: gs.Framework, Image: gs.Image,
 		Build: gs.Commands.Build, Start: gs.Commands.Start,
-		Public: runs.Workload != provider.Worker,
+		Public:     runs.Workload != provider.Worker,
+		HealthPath: set.HealthPath,
+	}
+	if cfg.HealthPath == "" && cfg.Framework == "forge" {
+		cfg.HealthPath = "/_/health"
 	}
 	if set.Public != nil {
 		cfg.Public = *set.Public
@@ -1522,6 +1533,12 @@ func (p *planner) link(name string, a *Action) {
 		}
 		link := EnvLink{Key: key, From: need, Subject: ServiceSubject}
 		switch {
+		case !dep.Service.Public && OwnedCloud(p.cloud(dep.Provider)):
+			if !sameTargetNetwork(a.Service, dep.Service, p.cloud(a.Provider), p.cloud(dep.Provider)) {
+				p.problem(Finding{Code: "private-across-targets", Subject: ServiceSubject, Name: name, Path: base,
+					Message: fmt.Sprintf("%s needs private service %s on another server or cluster namespace. Choose the same target or configure an externally reachable address through variables.", name, need)})
+				continue
+			}
 		case dep.Provider == ecsFargate && a.Provider == ecsFargate:
 			// Both run in the environment's network, so traffic between
 			// them stays in it, public or not.
@@ -1746,7 +1763,10 @@ func (p *planner) connectionMoves(a *Action, b *Binding, providerName string) {
 	if err != nil || b.ConnectionID == "" {
 		return
 	}
-	now := p.connectionFor(prov.Cloud)
+	now := a.ConnectionID
+	if now == "" {
+		now = p.connectionFor(prov.Cloud)
+	}
 	if now == "" || now == b.ConnectionID {
 		return
 	}

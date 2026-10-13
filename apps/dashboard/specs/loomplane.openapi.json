@@ -2213,6 +2213,9 @@
               "$ref": "#/components/schemas/Change"
             }
           },
+          "connection_id": {
+            "type": "string"
+          },
           "creates": {
             "type": "string"
           },
@@ -2592,6 +2595,28 @@
           },
           "source": {
             "type": "string"
+          }
+        }
+      },
+      "BuildTarget": {
+        "type": "object",
+        "properties": {
+          "builder": {
+            "type": "string"
+          },
+          "builder_settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "image": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "registry_settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
@@ -4734,6 +4759,9 @@
           "build": {
             "type": "string"
           },
+          "build_target": {
+            "$ref": "#/components/schemas/BuildTarget"
+          },
           "commit_sha": {
             "type": "string"
           },
@@ -4742,6 +4770,9 @@
           },
           "ecosystem": {
             "type": "string"
+          },
+          "endpoint": {
+            "$ref": "#/components/schemas/Endpoint"
           },
           "env": {
             "type": "array",
@@ -4760,6 +4791,9 @@
             "items": {
               "$ref": "#/components/schemas/Route"
             }
+          },
+          "health_path": {
+            "type": "string"
           },
           "image": {
             "type": "string"
@@ -4799,6 +4833,13 @@
           },
           "start": {
             "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "target_settings": {
+            "type": "object",
+            "additionalProperties": true
           },
           "workload": {
             "type": "string"

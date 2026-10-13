@@ -75,13 +75,15 @@ const (
 // Action is one step of a plan.
 type Action struct {
 	// ID is stable for a subject: "service:api", "resource:db".
-	ID       string          `json:"id"`
-	Op       Op              `json:"op"`
-	Subject  Subject         `json:"subject"`
-	Name     string          `json:"name"`
-	Provider string          `json:"provider"`
-	Region   string          `json:"region,omitempty"`
-	Engine   provider.Engine `json:"engine"`
+	ID       string  `json:"id"`
+	Op       Op      `json:"op"`
+	Subject  Subject `json:"subject"`
+	Name     string  `json:"name"`
+	Provider string  `json:"provider"`
+	// ConnectionID pins an owned target independently of cloud defaults.
+	ConnectionID string          `json:"connection_id,omitempty"`
+	Region       string          `json:"region,omitempty"`
+	Engine       provider.Engine `json:"engine"`
 	// Creates names what the provider creates, such as "Cloud Run service".
 	Creates string `json:"creates"`
 	// Service is the desired service, for service actions other than
@@ -104,10 +106,15 @@ type Action struct {
 // ServiceConfig is everything a deployment of a service is made from. A
 // binding keeps the one last applied, and the next plan compares against it.
 type ServiceConfig struct {
-	Provider  string             `json:"provider"`
-	Region    string             `json:"region,omitempty"`
-	Workload  provider.Workload  `json:"workload"`
-	Execution provider.Execution `json:"execution"`
+	Provider       string             `json:"provider"`
+	Region         string             `json:"region,omitempty"`
+	Target         string             `json:"target,omitempty"`
+	TargetSettings map[string]string  `json:"target_settings,omitempty"`
+	Endpoint       *manifest.Endpoint `json:"endpoint,omitempty"`
+	HealthPath     string             `json:"health_path,omitempty"`
+	BuildTarget    *BuildTarget       `json:"build_target,omitempty"`
+	Workload       provider.Workload  `json:"workload"`
+	Execution      provider.Execution `json:"execution"`
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`
@@ -144,6 +151,15 @@ type ServiceConfig struct {
 	// Gateway are a gateway's routes. A service with routes is a gateway
 	// Loomplane generates and builds, not code from the repository.
 	Gateway []gateway.Route `json:"gateway,omitempty"`
+}
+
+// BuildTarget pins the builder, registry and image reviewed in a plan.
+type BuildTarget struct {
+	Builder          string            `json:"builder,omitempty"`
+	Registry         string            `json:"registry,omitempty"`
+	Image            string            `json:"image,omitempty"`
+	BuilderSettings  map[string]string `json:"builder_settings,omitempty"`
+	RegistrySettings map[string]string `json:"registry_settings,omitempty"`
 }
 
 // ContextDir is the directory the service's Dockerfile builds from.
