@@ -25,7 +25,7 @@ Done. You can run all of it with `make stack`, or the pieces with `make up` and 
 Left over, none of it blocking Milestone 2:
 
 1. The `@forge-go/client-*` packages move to 1.12.8 once pnpm's 24-hour release-age rule allows it. Done.
-2. The license, which Rex is choosing.
+2. The license. Done: the GNU Affero General Public License, version 3.
 3. Upstream: a tagged authsome release so the pin can leave `main`; the authsome fixes listed in forge-integration.md (double-written JSON, the 500 on a taken slug, the SDK's organization list shape, the missing audit category, invitations without an expiry); dependency declarations on grove in the Dispatch and Ctrl Plane extensions; forgemux mounting `/`; the generator's pointer-slice type; a tag for the forge CLI so CI can pin something better than a commit.
 
 ## Milestone 2: Repository discovery
@@ -162,7 +162,7 @@ Done. Done when Loomplane runs as a complete, independent, self-hosted platform.
 Left over:
 
 1. The acceptance runs on real accounts, for milestones 4 and 5: a Google Cloud project, a Vercel account and an AWS account. Everything is tested against fakes that check what the real APIs would refuse, which isn't the same as the real APIs agreeing.
-2. A license for Loomplane, and answers to the dependency license questions in [forge-integration.md](forge-integration.md#licenses).
+2. A license for Loomplane. Done: the GNU Affero General Public License, version 3. The dependency license questions in [forge-integration.md](forge-integration.md#licenses) are the libraries' own, and go with the upstream work.
 3. Render had no adapter. Done: a Render connection is an API key, and the adapter runs web services, private services, background workers and static sites, and provisions Postgres and Key Value. Render builds from the repository through its own GitHub connection, which you give access in Render once; Loomplane deploys the approved commit through it. Like the other adapters, it's tested against a fake that answers the way Render's API does, and the acceptance run will show whether the real one agrees. Targets can also be paused in the configuration now (`providers.paused`), which keeps their plans for review only.
 4. Private links between clouds, which would need a VPN between them.
 5. The dashboard had no screen for metrics. Done: Activity shows the organization's deployments, how often they succeed and how long they take, plan decisions, analyses and drift over 7, 30 or 90 days, counted from Loomplane's own records (`GET /api/v1/activity`). Backups stay a command, `loomplane backup`, since a backup holds every organization's data and doesn't belong behind one organization's page.

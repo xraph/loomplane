@@ -221,4 +221,6 @@ Keep a change focused. Domain behavior belongs in `internal/`, Forge wiring in `
 
 ## License and distribution
 
-This checkout has no license file yet. Several pinned dependencies have license or distribution questions, recorded in [docs/forge-integration.md](docs/forge-integration.md#licenses). Review them before you redistribute Loomplane.
+Loomplane is free software under the GNU Affero General Public License, version 3 ([LICENSE](LICENSE)). You can run it, change it and share it. If you run a changed Loomplane as a service other people use, you have to offer them the source of your changes too.
+
+Some of the libraries it's built on had their own license questions, recorded in [docs/forge-integration.md](docs/forge-integration.md#licenses).
