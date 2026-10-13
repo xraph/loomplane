@@ -1747,14 +1747,76 @@ func TestCompute_aHeldServiceUsingAReplacedServiceKeepsTheOldAddress(t *testing.
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "site in site, which this plan holds back, uses api's address, and this plan replaces api, so site keeps the old address until a plan moves site. Replacing api removes the old one, so site would reach nothing. Add site to the scope."
+	want := "site in site, which this plan holds back, uses api's address, and this plan replaces api, so site keeps the old one's address, which this plan stops tracking. Add site to the scope."
 	if p := r.Problems[0]; p.Message != want || p.Path != "services.site" || p.Subject != ServiceSubject {
 		t.Fatalf("problem %+v", p)
 	}
 
 	// Moving site too gives it the new address.
-	if r := computeFed(t, moved, nil, live...); len(r.Problems) != 0 {
+	r = computeFed(t, moved, nil, live...)
+	if len(r.Problems) != 0 {
 		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	if site := action(t, r, "service:site"); site.Op != Update {
+		t.Fatalf("site %+v", site)
+	}
+}
+
+func TestCompute_whatUsesAReplacedDependencyIsDeployedAgain(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+
+	// api moves region, so it's replaced, and site, unchanged, needs its
+	// new address, so it's deployed again after it.
+	moved := strings.Replace(federatedYAML, "    source: services/api\n", "    source: services/api\n    region: europe-west1\n", 1)
+	r := computeFed(t, moved, nil, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	api, site := action(t, r, "service:api"), action(t, r, "service:site")
+	if api.Op != Replace {
+		t.Fatalf("api %+v", api)
+	}
+	if site.Op != Update || site.Reason != "api moves, so site gets its new address." || site.Step <= api.Step {
+		t.Fatalf("site %+v, api at step %d", site, api.Step)
+	}
+
+	// A resource replaced gives what uses it a new address too.
+	moved = strings.Replace(federatedYAML, "    provider: cloud-sql\n", "    provider: cloud-sql\n    region: europe-west1\n", 1)
+	r = computeFed(t, moved, nil, live...)
+	db, api := action(t, r, "resource:db"), action(t, r, "service:api")
+	if db.Op != Replace || api.Op != Update || api.Reason != "db moves, so api gets its new address." || api.Step <= db.Step {
+		t.Fatalf("db %+v, api %+v", db, api)
+	}
+	if site := action(t, r, "service:site"); site.Op != Keep {
+		t.Fatalf("site %+v", site)
+	}
+
+	// api deleted outside Loomplane is created again, at a new address.
+	r = computeFed(t, federatedYAML, nil, drifted(live, "api", DriftMissing, "")...)
+	if site := action(t, r, "service:site"); action(t, r, "service:api").Op != Create || site.Op != Update {
+		t.Fatalf("site %+v", site)
+	}
+
+	// Nothing moves, nothing is deployed again.
+	if r := computeFed(t, federatedYAML, nil, live...); r.Summary != (Summary{Keep: 3}) {
+		t.Fatalf("summary %+v", r.Summary)
+	}
+}
+
+func TestCompute_aGatewayRoutingToAReplacedServiceIsDeployedAgain(t *testing.T) {
+	live := deployed(t, computeFed(t, edgeYAML, nil))
+	moved := strings.Replace(edgeYAML, "    source: services/api\n", "    source: services/api\n    region: europe-west1\n", 1)
+
+	r := computeFed(t, moved, nil, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	api, edge := action(t, r, "service:api"), action(t, r, "service:edge")
+	if api.Op != Replace {
+		t.Fatalf("api %+v", api)
+	}
+	if edge.Op != Update || edge.Reason != "api moves, so edge gets its new address." || edge.Step <= api.Step {
+		t.Fatalf("edge %+v, api at step %d", edge, api.Step)
 	}
 }
 
@@ -1785,9 +1847,13 @@ services:
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:api"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "api in mono, which this plan holds back, uses site's address, and this plan replaces site, so api keeps the old address until a plan moves mono. Replacing site removes the old one, so api would reach nothing. Add mono to the scope."
+	want := "api in mono, which this plan holds back, uses site's address, and this plan replaces site, so api keeps the old one's address, which this plan stops tracking. Add mono to the scope."
 	if r.Problems[0].Message != want {
 		t.Fatalf("problem %+v", r.Problems[0])
+	}
+	// The problem says what api keeps, so no held warning says it again.
+	if w := warning(r, "held", "site"); w != nil {
+		t.Fatalf("warning %+v", w)
 	}
 }
 
@@ -1826,7 +1892,7 @@ resources:
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "site, which this plan keeps for mono, which it holds back, uses db's address, and this plan replaces db, so site keeps the old address until a plan moves mono. Replacing db removes the old one, so site would reach nothing. Add mono to the scope."
+	want := "site, which this plan keeps for mono, which it holds back, uses db's address, and this plan replaces db, so site keeps the old one's address, which this plan stops tracking. Add mono to the scope."
 	if r.Problems[0].Message != want {
 		t.Fatalf("problem %+v", r.Problems[0])
 	}
@@ -1853,7 +1919,7 @@ func TestCompute_aDroppedHeldServiceUsingAReplacedResourceKeepsTheOldAddress(t *
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:api"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "api in mono, which this plan holds back, uses db's address, and this plan replaces db, so api keeps the old address until a plan moves mono. Replacing db removes the old one, so api would reach nothing. Add mono to the scope."
+	want := "api in mono, which this plan holds back, uses db's address, and this plan replaces db, so api keeps the old one's address, which this plan stops tracking. Add mono to the scope."
 	if p := r.Problems[0]; p.Message != want || p.Path != "services.api" {
 		t.Fatalf("problem %+v", p)
 	}

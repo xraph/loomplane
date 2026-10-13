@@ -91,6 +91,9 @@ func Compute(in Input) *Result {
 		held:      map[string]string{},
 		retained:  map[string]*Action{},
 		keptFor:   map[string][]string{},
+		taken:     map[string]string{},
+		replaced:  map[string][]holder{},
+		addressed: map[string][]string{},
 	}
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
@@ -98,7 +101,9 @@ func Compute(in Input) *Result {
 	p.planResources()
 	p.planServices()
 	p.planGateways()
+	p.readdress()
 	p.heldAddresses()
+	p.gatewayHeld()
 	p.heldDrift()
 	p.checkFindings()
 	p.impact()
@@ -138,6 +143,16 @@ type planner struct {
 	// keptFor are the aliases of the held repositories each retained
 	// action is kept for, by action ID.
 	keptFor map[string][]string
+	// taken are the held services the manifest dropped whose name a
+	// gateway on here takes, by action ID, with the repository that holds
+	// each.
+	taken map[string]string
+	// replaced are what held services were deployed to use whose name a
+	// gateway on here takes, by action ID, with who used them.
+	replaced map[string][]holder
+	// addressed are the services heldAddresses reported as keeping the
+	// address of what this plan replaces, by the replaced action's ID.
+	addressed map[string][]string
 }
 
 func actionID(s Subject, name string) string { return string(s) + ":" + name }
@@ -469,15 +484,50 @@ func (p *planner) keep(name, alias string, b *Binding) {
 	p.actions = append(p.actions, a)
 }
 
+// readdress deploys again what this plan moves and leaves unchanged but
+// uses something that gets a new address: what it replaces, or creates
+// again over a binding. A service's variables name what it uses, not the
+// address, so its configuration doesn't change, and diff would keep it
+// with the old address. It runs once every service and gateway has its
+// action. Each one already depends on what it uses, so it runs after it.
+// A held service, or one kept for it, isn't deployed again, and
+// heldAddresses says what that means.
+func (p *planner) readdress() {
+	for _, name := range slices.Sorted(maps.Keys(p.services)) {
+		a := p.services[name]
+		if _, held := p.held[name]; held || a.Op != Keep || a.Service == nil {
+			continue
+		}
+		var moved []string
+		for _, e := range a.Service.Env {
+			dep := p.planned(e.Subject, e.From)
+			if dep == nil || slices.Contains(moved, dep.Name) {
+				continue
+			}
+			if dep.Op == Replace || (dep.Op == Create && p.bindings[dep.ID] != nil) {
+				moved = append(moved, dep.Name)
+			}
+		}
+		switch len(moved) {
+		case 0:
+		case 1:
+			a.Op, a.Reason = Update, fmt.Sprintf("%s moves, so %s gets its new address.", moved[0], name)
+		default:
+			a.Op, a.Reason = Update, fmt.Sprintf("%s move, so %s gets their new addresses.", strings.Join(moved, " and "), name)
+		}
+	}
+}
+
 // heldAddresses reports what keeps running with the links it was deployed
 // with, when one points at something this plan replaces: held services,
 // the services retained for them, and held services the manifest dropped.
 // A replacement gets an address of its own, but none of those is deployed
-// again, so each keeps the old one. A replace removes what it replaces
-// once the new one is up, in the same plan, so the old address reaches
-// nothing, which is a problem. It runs after planGateways, since a gateway
-// that takes the name of what a held service used can replace it too.
-// What was deleted outside Loomplane runs nowhere, so it uses nothing.
+// again, so each keeps the old one's address. This plan stops tracking
+// the old one once its binding is the replacement's, so that's a problem. It
+// runs after planGateways, since a gateway that takes the name of what a
+// held service used can replace it too. What was deleted outside
+// Loomplane runs nowhere, so it uses nothing. Each one it reports is noted
+// in addressed, so gatewayHeld doesn't say it again.
 func (p *planner) heldAddresses() {
 	type user struct {
 		name    string
@@ -520,10 +570,6 @@ func (p *planner) heldAddresses() {
 		default:
 			who = fmt.Sprintf("%s, which this plan keeps for %s, which it holds back", u.name, repos)
 		}
-		moves := repos
-		if unknown {
-			moves = "every repository"
-		}
 		var seen []string
 		for _, e := range u.env {
 			dep := p.planned(e.Subject, e.From)
@@ -531,12 +577,57 @@ func (p *planner) heldAddresses() {
 				continue
 			}
 			seen = append(seen, dep.ID)
+			p.addressed[dep.ID] = append(p.addressed[dep.ID], u.name)
 			p.problem(Finding{
 				Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
-				Message: fmt.Sprintf("%s, uses %s's address, and this plan replaces %s, so %s keeps the old address until a plan moves %s. Replacing %s removes the old one, so %s would reach nothing. %s",
-					who, e.From, e.From, u.name, moves, e.From, u.name, scope),
+				Message: fmt.Sprintf("%s, uses %s's address, and this plan replaces %s, so %s keeps the old one's address, which this plan stops tracking. %s",
+					who, e.From, e.From, u.name, scope),
 			})
 		}
+	}
+}
+
+// gatewayHeld warns about each name a gateway on here takes from what a
+// held repository deployed: once per name, naming the held service the
+// manifest dropped that it replaces and every held service that used it.
+// It runs after heldAddresses, and leaves out a user it reported already,
+// since that problem says more.
+func (p *planner) gatewayHeld() {
+	var ids []string
+	for id := range p.replaced {
+		ids = append(ids, id)
+	}
+	for id := range p.taken {
+		if p.replaced[id] == nil {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		var users []string
+		for _, h := range p.replaced[id] {
+			if !slices.Contains(p.addressed[id], h.user()) {
+				users = append(users, h.String())
+			}
+		}
+		b, who := p.bindings[id], strings.Join(users, " and ")
+		was := "was"
+		if len(users) > 1 {
+			was = "were"
+		}
+		alias, dropped := p.taken[id]
+		var msg string
+		switch {
+		case dropped && who == "":
+			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces %s, which this plan holds back.", b.Name, heldLabel(b.Name, alias))
+		case dropped:
+			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces %s, which this plan holds back. %s, which this plan holds back too, %s deployed to use the %s it replaces.", b.Name, heldLabel(b.Name, alias), who, was, b.Name)
+		case who == "":
+			continue
+		default:
+			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces the %s that %s, which this plan holds back, %s deployed to use.", b.Name, b.Name, who, was)
+		}
+		p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "gateways." + b.Name, Message: msg})
 	}
 }
 
@@ -764,10 +855,21 @@ func (p *planner) kept(b *Binding, reason string) *Action {
 // it that does the using, when that isn't the root itself.
 type holder struct {
 	root, via string
+	// name is the root's service name.
+	name string
 	// alias is the held repository the root comes from, empty when its
 	// binding doesn't say.
 	alias string
 	env   []EnvLink
+}
+
+// user is the service whose links these are: the one kept for the root,
+// or the root itself.
+func (h holder) user() string {
+	if h.via == "" {
+		return h.name
+	}
+	return h.via
 }
 
 func (h holder) String() string {
@@ -798,13 +900,9 @@ func heldLabel(name, alias string) string {
 func (p *planner) retain() {
 	var queue []holder
 	roots := map[string]bool{}
-	// taken are the held services the manifest dropped whose name a
-	// gateway on here takes, with the repository that holds each, so one
-	// warning can name them with whatever held service used them.
-	taken := map[string]string{}
 	for _, name := range p.in.Manifest.ServiceNames() {
 		if alias, held := p.held[name]; held {
-			queue = append(queue, holder{root: heldLabel(name, alias), alias: alias, env: p.services[name].Service.Env})
+			queue = append(queue, holder{root: heldLabel(name, alias), name: name, alias: alias, env: p.services[name].Service.Env})
 			roots[actionID(ServiceSubject, name)] = true
 		}
 	}
@@ -826,9 +924,9 @@ func (p *planner) retain() {
 			// A gateway the manifest has on here takes its name, and
 			// planGateways plans the gateway in its place, so it doesn't
 			// run on, and nothing it uses is kept for it.
-			taken[id] = alias
+			p.taken[id] = alias
 		case held:
-			queue = append(queue, holder{root: heldLabel(b.Name, alias), alias: alias, env: cfg.Env})
+			queue = append(queue, holder{root: heldLabel(b.Name, alias), name: b.Name, alias: alias, env: cfg.Env})
 			roots[id] = true
 		}
 	}
@@ -837,9 +935,6 @@ func (p *planner) retain() {
 	// links between services kept this way can go round, and a root has
 	// been followed already: it's kept, and it's nobody's to retain.
 	users := map[string][]string{}
-	// replaced are the services a held service was deployed to use whose
-	// name a gateway the manifest has on here takes, with who used them.
-	replaced := map[string][]string{}
 	followed := maps.Clone(roots)
 	for len(queue) > 0 {
 		h := queue[0]
@@ -854,8 +949,8 @@ func (p *planner) retain() {
 			// was deployed by its name, so that isn't kept: the held
 			// service's link reaches the gateway instead.
 			if e.Subject == ServiceSubject && p.gatewayOn(e.From) {
-				if who := h.String(); !p.isGateway(b) && !slices.Contains(replaced[id], who) {
-					replaced[id] = append(replaced[id], who)
+				if !p.isGateway(b) && !slices.ContainsFunc(p.replaced[id], func(r holder) bool { return r.String() == h.String() }) {
+					p.replaced[id] = append(p.replaced[id], h)
 				}
 				continue
 			}
@@ -871,36 +966,9 @@ func (p *planner) retain() {
 			followed[id] = true
 			var cfg ServiceConfig
 			if json.Unmarshal(b.Config, &cfg) == nil {
-				queue = append(queue, holder{root: h.root, via: b.Name, alias: h.alias, env: cfg.Env})
+				queue = append(queue, holder{root: h.root, via: b.Name, name: h.name, alias: h.alias, env: cfg.Env})
 			}
 		}
-	}
-	// One warning per name a gateway takes, naming the held service it
-	// replaces and every held service that used it.
-	ids := slices.Collect(maps.Keys(replaced))
-	for id := range taken {
-		if replaced[id] == nil {
-			ids = append(ids, id)
-		}
-	}
-	slices.Sort(ids)
-	for _, id := range ids {
-		b, who := p.bindings[id], strings.Join(replaced[id], " and ")
-		was := "was"
-		if len(replaced[id]) > 1 {
-			was = "were"
-		}
-		alias, dropped := taken[id]
-		var msg string
-		switch {
-		case dropped && who == "":
-			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces %s, which this plan holds back.", b.Name, heldLabel(b.Name, alias))
-		case dropped:
-			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces %s, which this plan holds back. %s, which this plan holds back too, %s deployed to use the %s it replaces.", b.Name, heldLabel(b.Name, alias), who, was, b.Name)
-		default:
-			msg = fmt.Sprintf("%s is a gateway in the manifest now, so it replaces the %s that %s, which this plan holds back, %s deployed to use.", b.Name, b.Name, who, was)
-		}
-		p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "gateways." + b.Name, Message: msg})
 	}
 	for _, id := range slices.Sorted(maps.Keys(users)) {
 		b, who := p.bindings[id], strings.Join(users[id], " and ")
