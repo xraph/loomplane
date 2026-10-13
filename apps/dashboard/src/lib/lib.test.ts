@@ -10,6 +10,7 @@ import {
 } from "@/lib/format"
 import { colorNames, iconNames, projectStyle } from "@/lib/project-style"
 import { slugify } from "@/lib/slug"
+import { aliasFor, aliasProblem } from "@/lib/alias"
 
 describe("slugify", () => {
   // The same cases as TestSlugify in internal/projects: the dashboard's
@@ -24,6 +25,33 @@ describe("slugify", () => {
     ["Service 2 (EU) / Frontend", "service-2-eu-frontend"],
   ])("slugify(%j) is %j", (name, want) => {
     expect(slugify(name)).toBe(want)
+  })
+})
+
+describe("aliasFor", () => {
+  // The same cases as TestAliasFor in internal/discovery: the dialog's
+  // preview must match the alias the API will choose.
+  it.each([
+    ["storefront", "storefront"],
+    ["Storefront.git", "storefront"],
+    ["my_cool.Repo", "my-cool-repo"],
+    ["go", "go-src"],
+    ["node", "node-src"],
+    ["123-api", "r-123-api"],
+    ["---", "repo"],
+    ["a".repeat(40), "a".repeat(32)],
+    ["Repo.GIT", "repo-git"],
+  ])("aliasFor(%j) is %j", (name, want) => {
+    expect(aliasFor(name)).toBe(want)
+    expect(aliasProblem(aliasFor(name))).toBe("")
+  })
+
+  it("refuses what the API refuses", () => {
+    expect(aliasProblem("go")).not.toBe("")
+    expect(aliasProblem("1api")).not.toBe("")
+    expect(aliasProblem("Api")).not.toBe("")
+    expect(aliasProblem("a".repeat(33))).not.toBe("")
+    expect(aliasProblem("billing-api")).toBe("")
   })
 })
 

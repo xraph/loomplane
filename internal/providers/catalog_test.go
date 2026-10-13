@@ -52,10 +52,10 @@ func TestProvider_engine(t *testing.T) {
 	}{
 		// Containers on an instance target are Ctrl Plane's to manage.
 		{"cloud-run", provider.HTTPService, provider.CtrlPlane},
-		{"render", provider.Worker, provider.CtrlPlane},
-		// A Vercel deployment is an immutable build, and a static site on
-		// Render has no instance either: Loomplane's adapter manages both.
+		// Vercel and Render build from the source themselves, so
+		// Loomplane's adapters manage what they run.
 		{"vercel", provider.WebApp, provider.Loomplane},
+		{"render", provider.Worker, provider.Loomplane},
 		{"render", provider.StaticSite, provider.Loomplane},
 	}
 	for _, tt := range tests {
@@ -103,5 +103,15 @@ func TestRegistry_rejects(t *testing.T) {
 	}
 	if _, err := provider.NewRegistry(ok, ok); err == nil {
 		t.Error("registered a name twice")
+	}
+}
+
+func TestRegistry_aPausedTargetIsForReviewOnly(t *testing.T) {
+	p, err := Registry("render").Get("render")
+	if err != nil || p.Available || p.Note != PausedNote {
+		t.Fatalf("paused render %+v, %v", p, err)
+	}
+	if p, _ := Registry().Get("render"); !p.Available {
+		t.Fatal("render is paused without being named")
 	}
 }

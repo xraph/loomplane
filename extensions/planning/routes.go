@@ -2,10 +2,12 @@ package planning
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/planning"
@@ -18,6 +20,13 @@ type PlanQuery struct {
 	// Environment is an environment's name. Without it, every
 	// environment's plans.
 	Environment string `query:"environment,omitempty"`
+}
+
+// ActivityQuery is the query of GET /api/v1/activity.
+type ActivityQuery struct {
+	// Days is how many days back, today included: 30 without it, and at
+	// most 90.
+	Days int `query:"days,omitempty"`
 }
 
 // BindingQuery is the query of GET /api/v1/projects/:id/bindings.
@@ -207,10 +216,18 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithResponseSchema(http.StatusOK, "Bindings", BindingList{}),
 		}},
 	}
+	activityRoutes := []route{
+		{http.MethodGet, "/activity", e.getActivity, []forge.RouteOption{
+			forge.WithName("activity.get"),
+			forge.WithSummary("What the organization's Loomplane has done lately: deployments, plans, analyses and drift"),
+			forge.WithQuerySchema(ActivityQuery{}),
+			forge.WithResponseSchema(http.StatusOK, "Activity", activity.ActivitySummary{}),
+		}},
+	}
 	groups := []struct {
 		tag    string
 		routes []route
-	}{{"Manifests", manifestRoutes}, {"Plans", planRoutes}}
+	}{{"Manifests", manifestRoutes}, {"Plans", planRoutes}, {"Activity", activityRoutes}}
 	for _, grp := range groups {
 		g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags(grp.tag))
 		for _, rt := range grp.routes {
@@ -467,6 +484,24 @@ func (e *Extension) chooseConnection(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, EnvironmentConnections{Environment: env, Connections: chosen})
+}
+
+func (e *Extension) getActivity(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	days := 30
+	if raw := c.Request().URL.Query().Get("days"); raw != "" {
+		if days, err = strconv.Atoi(raw); err != nil {
+			return forge.NewHTTPError(http.StatusUnprocessableEntity, "days is a number of days")
+		}
+	}
+	out, err := e.activity.Summary(c.Request().Context(), p, days)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, out)
 }
 
 func (e *Extension) listDeployments(c forge.Context) error {

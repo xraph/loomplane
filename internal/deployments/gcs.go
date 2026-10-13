@@ -24,17 +24,27 @@ var _ Executor = (*CloudStorage)(nil)
 
 const gcsRevision = "gcs"
 
-// gcsBucket is a resource's bucket: lower case, at most 63 long, unique
-// across Google Cloud by a hash of the project and environment.
+// gcsBucket is a resource's bucket: the one its binding names, or a new
+// one's name, lower case, at most 63 long, unique across Google Cloud by
+// a hash of the project and environment. A new one's name has its region
+// in it. A bucket's location can't change and its name is global, so a
+// move creates another bucket, and it needs a name the old one doesn't
+// hold.
 func gcsBucket(project string, job *Job) string {
+	if b := job.Binding; b != nil && b.ExternalID != "" {
+		return b.ExternalID
+	}
 	sum := sha256.Sum256([]byte(project + "\x00" + job.Deployment.ProjectID + "\x00" + job.Deployment.Environment))
-	key := hex.EncodeToString(sum[:])[:10]
-	room := 63 - len("lp-") - len(key) - 1
+	suffix := "-" + hex.EncodeToString(sum[:])[:10]
+	if region := strings.ToLower(job.Action.Resource.Region); region != "" {
+		suffix = "-" + region + suffix
+	}
+	room := 63 - len("lp-") - len(suffix)
 	name := job.Action.Name
 	if len(name) > room {
 		name = name[:room]
 	}
-	return "lp-" + name + "-" + key
+	return "lp-" + name + suffix
 }
 
 func (c *CloudStorage) session(ctx context.Context, cred []byte) (*gcp.Session, error) {

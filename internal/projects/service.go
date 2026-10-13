@@ -20,6 +20,11 @@ const (
 	maxNameLength        = 64
 	maxSlugLength        = 48
 	maxDescriptionLength = 500
+	// maxRepositories is how many repositories a project can start with.
+	// Each is read from GitHub before it's attached, one after another,
+	// so creating the project stays quick enough to wait on. More can be
+	// added afterwards.
+	maxRepositories = 10
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -69,13 +74,13 @@ type Service struct {
 	now      func() time.Time
 }
 
-// Attacher attaches the repository a new project was created with, as its
-// first source, and returns its "owner/name". discovery's Service is the
-// real one; projects can't import it, since it imports projects. An error
-// that's about the repository itself wraps ErrRepository; Create passes
-// every error on as it is.
+// Attacher attaches a repository a new project was created with as one of
+// its sources, and returns its "owner/name" and the alias it got.
+// discovery's Service is the real one; projects can't import it, since it
+// imports projects. An error that's about the repository itself wraps
+// ErrRepository; Create passes every error on as it is.
 type Attacher interface {
-	AttachRepository(ctx context.Context, p security.Principal, proj *Project, repositoryURL string) (string, error)
+	AttachRepository(ctx context.Context, p security.Principal, proj *Project, in RepositoryInput) (repository, alias string, err error)
 }
 
 // SetAttacher sets the Attacher. Call it while the app registers.
@@ -103,10 +108,43 @@ type CreateProjectInput struct {
 	Description string `json:"description,omitempty"`
 	// RepositoryURL is attached as the project's first source.
 	RepositoryURL string `json:"repository_url,omitempty"`
+	// Repositories are attached as its sources, after RepositoryURL, in
+	// order. A project can start with up to ten.
+	Repositories []RepositoryInput `json:"repositories,omitempty"`
 	// Icon and Color are names from style.go. Leaving either out picks
 	// one at random, so a new project's tile is never blank.
 	Icon  string `json:"icon,omitempty"`
 	Color string `json:"color,omitempty"`
+}
+
+// RepositoryInput is a repository a new project starts with, as one of its
+// sources: what adding a source to a project takes.
+type RepositoryInput struct {
+	// Repository is an https GitHub URL, an SSH address or "owner/name".
+	Repository string `json:"repository"`
+	// Alias names the source. Empty picks one from the repository's name.
+	Alias string `json:"alias,omitempty"`
+	// Root is the directory the project builds from. Empty means the
+	// whole repository.
+	Root string `json:"root,omitempty"`
+	// Ref is the branch analyses read. Empty means the default branch.
+	Ref string `json:"ref,omitempty"`
+}
+
+// repositories are what a project starts with: RepositoryURL, then
+// Repositories. A blank one is left out.
+func (in CreateProjectInput) repositories() []RepositoryInput {
+	var out []RepositoryInput
+	if repo := strings.TrimSpace(in.RepositoryURL); repo != "" {
+		out = append(out, RepositoryInput{Repository: repo})
+	}
+	for _, r := range in.Repositories {
+		r.Repository = strings.TrimSpace(r.Repository)
+		if r.Repository != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // UpdateProjectInput changes a project. A nil field is left alone. The slug never
@@ -126,8 +164,8 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	if err := s.authz.Require(ctx, p, security.ProjectCreate, ""); err != nil {
 		return nil, err
 	}
-	repo := strings.TrimSpace(in.RepositoryURL)
-	if repo != "" && s.attacher == nil {
+	repos := in.repositories()
+	if len(repos) > 0 && s.attacher == nil {
 		return nil, fmt.Errorf("%w: this Loomplane can't attach repositories", ErrInvalid)
 	}
 	proj, err := s.build(p, in)
@@ -141,17 +179,13 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	if err := s.store.CreateProject(ctx, proj, envs); err != nil {
 		return nil, err
 	}
-	if repo != "" {
-		full, err := s.attacher.AttachRepository(ctx, p, proj, repo)
-		if err != nil {
-			// A project that can't read its own repository is worse than
-			// none, so take it back out.
-			if derr := s.store.DeleteProject(context.WithoutCancel(ctx), proj.OrgID, proj.ID); derr != nil {
-				err = errors.Join(err, fmt.Errorf("remove the project again: %w", derr))
-			}
-			return nil, err
+	if err := s.attach(ctx, p, proj, repos); err != nil {
+		// A project that can't read its own repositories is worse than
+		// none, so take it back out, with any it attached.
+		if derr := s.store.DeleteProject(context.WithoutCancel(ctx), proj.OrgID, proj.ID); derr != nil {
+			err = errors.Join(err, fmt.Errorf("remove the project again: %w", derr))
 		}
-		proj.Repositories = []string{full}
+		return nil, err
 	}
 	if err := s.init.InitializeProject(ctx, proj.OrgID, proj.ID); err != nil {
 		// Without its job the project would stay initializing forever, so
@@ -164,6 +198,29 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	s.record(ctx, AuditEvent{Action: "project.create", Severity: "info", ProjectID: proj.ID, Principal: p,
 		Attributes: map[string]any{"slug": proj.Slug}})
 	return proj, nil
+}
+
+// attach attaches each repository a new project starts with, and lists
+// them on it by alias, the order the store reads them in. With several,
+// an error names the one that failed.
+func (s *Service) attach(ctx context.Context, p security.Principal, proj *Project, repos []RepositoryInput) error {
+	type attached struct{ repository, alias string }
+	var done []attached
+	for _, r := range repos {
+		full, alias, err := s.attacher.AttachRepository(ctx, p, proj, r)
+		if err != nil {
+			if len(repos) > 1 {
+				err = fmt.Errorf("%s: %w", r.Repository, err)
+			}
+			return err
+		}
+		done = append(done, attached{full, alias})
+	}
+	slices.SortFunc(done, func(a, b attached) int { return strings.Compare(a.alias, b.alias) })
+	for _, a := range done {
+		proj.Repositories = append(proj.Repositories, a.repository)
+	}
+	return nil
 }
 
 func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, error) {
@@ -184,6 +241,9 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	}
 	if err := validateRepositoryURL(strings.TrimSpace(in.RepositoryURL)); err != nil {
 		return nil, err
+	}
+	if n := len(in.repositories()); n > maxRepositories {
+		return nil, fmt.Errorf("%w: a project can start with at most %d repositories; add the rest once it's created", ErrInvalid, maxRepositories)
 	}
 	icon := pickStyle(strings.TrimSpace(in.Icon), icons)
 	if err := validateIcon(icon); err != nil {

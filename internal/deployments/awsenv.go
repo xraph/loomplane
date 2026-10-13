@@ -31,14 +31,24 @@ func tasksRole(s *aws.Session, job *Job) (name, policy string) {
 	return name, policy
 }
 
-// bucketName is a resource's S3 bucket: lower case, at most 63 long, and
-// ending in its environment's key.
+// bucketName is a resource's S3 bucket: the one its binding names, or a
+// new one's name, lower case, at most 63 long, with the session's region
+// in it, and ending in its environment's key, which the tasks role grants.
+// Bucket names are global, and creating one the account already has
+// elsewhere answers with that one, so a move to a connection in another
+// region needs a name the old bucket doesn't hold.
 func bucketName(s *aws.Session, job *Job) string {
-	key := awsEnvKey(s, job)
-	room := 63 - len("lp-") - len(key) - 1
+	if b := job.Binding; b != nil && b.ExternalID != "" {
+		return b.ExternalID
+	}
+	suffix := "-" + awsEnvKey(s, job)
+	if region := s.Region(); region != "" {
+		suffix = "-" + region + suffix
+	}
+	room := 63 - len("lp-") - len(suffix)
 	name := job.Action.Name
 	if len(name) > room {
 		name = name[:room]
 	}
-	return "lp-" + name + "-" + key
+	return "lp-" + name + suffix
 }

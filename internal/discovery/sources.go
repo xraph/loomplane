@@ -83,22 +83,50 @@ func (s *Service) AddSource(ctx context.Context, p security.Principal, projectID
 	return s.addSource(ctx, p, projectID, in)
 }
 
-// AttachRepository attaches the repository a new project was created with,
-// as its first source. It implements projects.Attacher; the project's
+// AttachRepository attaches a repository a new project was created with,
+// as one of its sources. It implements projects.Attacher; the project's
 // creation already checked the caller. What's wrong with the repository
 // itself comes back as projects.ErrRepository, so the person creating the
 // project is told; anything else, such as a database error, stays as it is.
-func (s *Service) AttachRepository(ctx context.Context, p security.Principal, proj *projects.Project, url string) (string, error) {
-	src, err := s.addSource(ctx, p, proj.ID, AddSourceInput{Repository: url})
+func (s *Service) AttachRepository(ctx context.Context, p security.Principal, proj *projects.Project, in projects.RepositoryInput) (repository, alias string, err error) {
+	src, err := s.addSource(ctx, p, proj.ID, AddSourceInput{Repository: in.Repository, Alias: in.Alias, Root: in.Root, Ref: in.Ref})
+	if errors.Is(err, ErrAliasTaken) {
+		// A new project has used no alias but the ones it's attaching, so
+		// two of them clashed, and "never reused" means nothing yet.
+		return "", "", aliasClashError{alias: aliasOf(in)}
+	}
 	if err != nil {
-		for _, target := range []error{ErrInvalidSource, ErrAliasTaken, ErrAliasReserved, ErrRootsOverlap, ErrSourceInaccessible} {
+		for _, target := range []error{ErrInvalidSource, ErrAliasReserved, ErrRootsOverlap, ErrSourceInaccessible} {
 			if errors.Is(err, target) {
-				return "", fmt.Errorf("%w: %w", projects.ErrRepository, err)
+				return "", "", fmt.Errorf("%w: %w", projects.ErrRepository, err)
 			}
 		}
-		return "", err
+		return "", "", err
 	}
-	return src.Repository, nil
+	return src.Repository, src.Alias, nil
+}
+
+// aliasClashError is two of a new project's repositories wanting one alias. It
+// is ErrAliasTaken, and a repository error, with a message that fits a
+// project that's only being created.
+type aliasClashError struct{ alias string }
+
+func (e aliasClashError) Error() string {
+	return projects.ErrRepository.Error() + ": another of its repositories already has the alias " + e.alias + "; give one of them another"
+}
+
+func (e aliasClashError) Unwrap() []error { return []error{projects.ErrRepository, ErrAliasTaken} }
+
+// aliasOf is the alias a repository gets: the one it names, or one from
+// its name.
+func aliasOf(in projects.RepositoryInput) string {
+	if alias := strings.TrimSpace(in.Alias); alias != "" {
+		return alias
+	}
+	if repo, err := ParseRepository(in.Repository); err == nil {
+		return AliasFor(repo.Name)
+	}
+	return ""
 }
 
 func (s *Service) addSource(ctx context.Context, p security.Principal, projectID string, in AddSourceInput) (*Source, error) {

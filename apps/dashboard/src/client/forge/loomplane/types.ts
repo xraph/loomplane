@@ -43,6 +43,22 @@ export interface Action {
   subject: string;
 }
 
+export interface ActivityDay {
+  date: string;
+  failed: number;
+  succeeded: number;
+}
+
+export interface ActivitySummary {
+  analyses: AnalysisCounts;
+  daily: ActivityDay[];
+  days: number;
+  deployments: DeploymentCounts;
+  drift: DriftCounts;
+  plans: PlanCounts;
+  since: string;
+}
+
 export interface AddSourceInputBody {
   alias?: string;
   ref?: string;
@@ -66,6 +82,11 @@ export interface Analysis {
   startedAt?: string;
   status: string;
   summary: GraphSummary;
+}
+
+export interface AnalysisCounts {
+  failed: number;
+  succeeded: number;
 }
 
 export interface AnalysisGraph {
@@ -206,6 +227,12 @@ export interface CreateProjectInputBody {
   description?: string;
   icon?: string;
   name: string;
+  repositories?: {
+  alias?: string;
+  ref?: string;
+  repository: string;
+  root?: string;
+}[];
   repositoryUrl?: string;
   slug?: string;
 }
@@ -269,8 +296,22 @@ export interface Deployment {
   steps: Step[];
 }
 
+export interface DeploymentCounts {
+  failed: number;
+  medianSeconds: number;
+  retried: number;
+  running: number;
+  succeeded: number;
+}
+
 export interface DeploymentList {
   deployments: Deployment[];
+}
+
+export interface DriftCounts {
+  changed: number;
+  deployed: number;
+  missing: number;
 }
 
 export interface Edge {
@@ -471,6 +512,15 @@ export interface Plan {
   status: string;
   summary: PlanningSummary;
   warnings: Finding[];
+}
+
+export interface PlanCounts {
+  approved: number;
+  expired: number;
+  failed: number;
+  rejected: number;
+  superseded: number;
+  waiting: number;
 }
 
 export interface PlanList {

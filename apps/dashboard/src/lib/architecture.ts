@@ -53,6 +53,8 @@ const ecosystemLabels: Record<string, string> = {
   go: "Go",
   rust: "Rust",
   node: "Node",
+  python: "Python",
+  jvm: "JVM",
   container: "Container",
 }
 

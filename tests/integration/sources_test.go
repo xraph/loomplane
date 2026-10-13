@@ -156,6 +156,7 @@ func TestPlanning_aScopedPlanHoldsWhatsDeployed(t *testing.T) {
 		"acme/site": tarball(t, "acme-site-fedcba9", siteFiles),
 	}).URL
 	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Providers.Paused = []string{"render"}
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
@@ -169,8 +170,8 @@ func TestPlanning_aScopedPlanHoldsWhatsDeployed(t *testing.T) {
 	base := "/api/v1/projects/" + proj.ID
 	c.must(http.StatusCreated, http.MethodPost, base+"/sources", map[string]string{"repository": "acme/site", "alias": "site"}, nil)
 	analyzeAll(t, cfg, c, proj.ID)
-	// Render has no adapter yet, so the plans need no cloud connection and
-	// stay ready for review: what this test reads is what they pin.
+	// Render is paused, so the plans need no cloud connection and stay
+	// ready for review: what this test reads is what they pin.
 	manifest := "version: 1\ndefaults:\n  provider: render\nservices:\n  api:\n    repo: mono\n    source: services/api\n  site:\n    repo: site\n    source: .\n"
 	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": manifest}, nil)
 

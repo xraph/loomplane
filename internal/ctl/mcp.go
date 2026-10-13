@@ -25,7 +25,7 @@ func (a *App) mcpCommand() cli.Command {
 		s := NewMCPServer(c, a.opts.Version, MCPOptions{AllowDeploy: ctx.Bool("allow-deploy")})
 		return s.Run(ctx.Context(), &mcp.StdioTransport{})
 	},
-		cli.WithUsage("loomctl mcp [--allow-deploy]; set LOOMPLANE_URL and LOOMPLANE_API_KEY in the agent's MCP config"),
+		cli.WithUsage("mcp [--allow-deploy]; set LOOMPLANE_URL and LOOMPLANE_API_KEY in the agent's MCP config"),
 		cli.WithFlag(cli.NewBoolFlag("allow-deploy", "", "Offer the tools that approve plans and retry deployments, which change your clouds", false)),
 	)
 }

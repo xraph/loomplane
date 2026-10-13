@@ -122,3 +122,18 @@ func TestLoad_requiresConfigFile(t *testing.T) {
 		t.Fatal("Load succeeded without config.yaml")
 	}
 }
+
+func TestFromSource_pausedTargetsAsAListOrAString(t *testing.T) {
+	for _, v := range []any{"render, cloud-run", []any{"render", "cloud-run"}} {
+		c, err := FromSource(mapGetter{"database.url": testDSN, "providers.paused": v})
+		if err != nil {
+			t.Fatalf("FromSource: %v", err)
+		}
+		if len(c.Providers.Paused) != 2 || c.Providers.Paused[0] != "render" || c.Providers.Paused[1] != "cloud-run" {
+			t.Fatalf("paused from %#v: %q", v, c.Providers.Paused)
+		}
+	}
+	if _, err := FromSource(mapGetter{"database.url": testDSN, "providers.paused": 3}); err == nil {
+		t.Fatal("a number named targets")
+	}
+}

@@ -172,3 +172,18 @@ func TestBuild_aKindInDoubtIsPossible(t *testing.T) {
 		t.Fatalf("service %+v", svc)
 	}
 }
+
+func TestBuild_anEntrypointsOwnCommandsWin(t *testing.T) {
+	r := &pd.Report{Units: []pd.Unit{{
+		ID: "python:shop", Ecosystem: pd.Python, Path: "shop", Commands: pd.Commands{Start: "gunicorn shop.wsgi"},
+		Entrypoints: []pd.Entrypoint{
+			{Name: "shop", Path: "shop", Frameworks: []pd.Framework{fw("django", pd.HTTP, pd.Likely)}},
+			{Name: "worker", Path: "shop/Procfile/worker", Commands: &pd.Commands{Start: "celery -A shop worker"}},
+		},
+	}}}
+	g := Build(r)
+	if len(g.Services) != 2 || g.Services[0].Commands.Start != "gunicorn shop.wsgi" ||
+		g.Services[1].Commands.Start != "celery -A shop worker" || g.Services[1].Kind != Worker || g.Services[1].Path != "shop" {
+		t.Fatalf("services %+v", g.Services)
+	}
+}

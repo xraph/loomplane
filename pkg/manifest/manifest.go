@@ -72,8 +72,9 @@ type Service struct {
 	Repo string `json:"repo,omitempty" yaml:"repo,omitempty"`
 	// Source is where the service's code is, as repository analysis found
 	// it: a Go main package's directory, a Rust binary's source file, a
-	// Node package's directory, or a Dockerfile. When two ecosystems have a
-	// service at the same path, prefix the ecosystem: "go:services/api".
+	// Node package's, Python project's or JVM module's directory, or a
+	// Dockerfile. When two ecosystems have a service at the same path,
+	// prefix the ecosystem: "go:services/api".
 	Source string `json:"source" yaml:"source"`
 	// Kind corrects what analysis decided the service is: http-service,
 	// web-app, static-site or worker. Empty keeps what analysis found.

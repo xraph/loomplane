@@ -259,7 +259,10 @@ func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Read
 			return nil, ErrNotEmpty
 		}
 	}
-	if merr := Migrate(ctx, dsn, groups); merr != nil {
+	// The rows fit the schema the backup was taken at, which may be older
+	// than this Loomplane's. Migrate to that schema, load them, and then
+	// run what's newer over them, as an upgrade would.
+	if merr := Migrate(ctx, dsn, upTo(groups, m.Migrations)); merr != nil {
 		return nil, merr
 	}
 
@@ -298,7 +301,33 @@ func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Read
 	if err := resetSequences(ctx, tx); err != nil {
 		return nil, err
 	}
-	return m, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if err := Migrate(ctx, dsn, groups); err != nil {
+		return nil, fmt.Errorf("the backup is loaded, but bringing it up to this Loomplane's schema failed: %w", err)
+	}
+	return m, nil
+}
+
+// upTo is groups with only the migrations named, as group:version: the
+// schema a backup was taken at.
+func upTo(groups []*migrate.Group, applied []string) []*migrate.Group {
+	in := make(map[string]bool, len(applied))
+	for _, a := range applied {
+		in[a] = true
+	}
+	out := make([]*migrate.Group, 0, len(groups))
+	for _, g := range groups {
+		sub := migrate.NewGroup(g.Name(), migrate.DependsOn(g.DependsOnGroups()...))
+		for _, mg := range g.Migrations() {
+			if in[g.Name()+":"+mg.Version] {
+				sub.MustRegister(mg)
+			}
+		}
+		out = append(out, sub)
+	}
+	return out
 }
 
 // resetSequences moves each sequence past the highest value its column

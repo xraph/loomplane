@@ -68,7 +68,7 @@ func TestPlugin_aProviderPluginDeploysLikeABuiltInTarget(t *testing.T) {
 		} `json:"clouds"`
 	}
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/connection-clouds", nil, &clouds)
-	if n := len(clouds.Clouds); n != 4 || clouds.Clouds[3].Cloud != "static-host" || clouds.Clouds[3].Builtin || clouds.Clouds[3].Credential != "Access token" {
+	if n := len(clouds.Clouds); n != 5 || clouds.Clouds[4].Cloud != "static-host" || clouds.Clouds[4].Builtin || clouds.Clouds[4].Credential != "Access token" {
 		t.Fatalf("clouds %+v", clouds.Clouds)
 	}
 	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/connections",

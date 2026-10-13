@@ -194,9 +194,19 @@ func TestCompute_fresh(t *testing.T) {
 		}
 	}
 	// A target with no adapter yet can be planned, for review only.
-	render := compute(t, "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api}\nignore: {resources: [postgres, redis]}\n", "production")
-	if render.Executable || !slices.Contains(codes(render.Warnings), "provider-unavailable:render") {
-		t.Errorf("render: executable %v, warnings %v", render.Executable, codes(render.Warnings))
+	reg := providers.Registry()
+	if err := reg.Register(provider.Provider{
+		Name: "later", Title: "Later", Cloud: "later", Model: provider.Instance, Note: "Its adapter comes later.",
+		Runs: []provider.Runs{{Workload: provider.HTTPService, Execution: provider.Container, Creates: "thing"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	later := Compute(Input{
+		Environment: "production", Graph: polyglot(t), Providers: reg, Connections: connected,
+		Manifest: parse(t, "version: 1\ndefaults: {provider: later}\nservices:\n  api: {source: services/api}\nignore: {resources: [postgres, redis]}\n"),
+	})
+	if later.Executable || !slices.Contains(codes(later.Warnings), "provider-unavailable:later") {
+		t.Errorf("later: executable %v, warnings %v", later.Executable, codes(later.Warnings))
 	}
 	// web uses Postgres per analysis but only needs api: worth saying.
 	if !slices.Contains(got, "unlinked-resource:web") {
@@ -228,7 +238,8 @@ func TestCompute_problems(t *testing.T) {
 		{"needs a worker", "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api, needs: [w]}\n  w: {source: services/worker/cmd/worker}", "need-worker:api"},
 		{"needs something off", "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api, needs: [db]}\nresources:\n  db:\n    kind: postgres\n    environments: {production: {enabled: false}}", "need-off:api"},
 		{"private across clouds", "version: 1\nservices:\n  web: {source: apps/web, provider: vercel, needs: [api]}\n  api: {source: services/api, provider: ecs-fargate, public: false}", "private-across-clouds:web"},
-		{"private with no network", "version: 1\ndefaults: {provider: render}\nservices:\n  gw: {source: apps/gateway, needs: [api]}\n  api: {source: services/api, public: false}", "private-unreachable:gw"},
+		{"private with no network", "version: 1\ndefaults: {provider: vercel}\nservices:\n  web: {source: apps/web, needs: [docs]}\n  docs: {source: apps/docs, public: false}", "private-unreachable:web"},
+		{"render without a dockerfile", "version: 1\nservices:\n  ingest: {source: crates/ingest/src/main.rs, provider: render}", "render-needs-dockerfile:ingest"},
 		{"tool kind", "version: 1\nservices:\n  api: {source: services/api, provider: render, kind: worker}\n  w: {source: services/worker/cmd/worker, provider: cloud-run, kind: http-service}", ""},
 	}
 	for _, tt := range tests {
@@ -2273,5 +2284,127 @@ func TestCompute_whatAMoveLeftRunningIsAWarning(t *testing.T) {
 	r = computeOn(t, connected, nil, live...)
 	if w := warning(r, "still-replaced", "api"); w == nil || !strings.HasSuffix(w.Message, "This plan's deployment removes it.") {
 		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}
+
+func TestCompute_pythonStartAssumed(t *testing.T) {
+	g := *polyglot(t)
+	g.Services = append(slices.Clone(g.Services), graph.Service{
+		ID: "svc:python:services/ml", Name: "ml", Kind: graph.HTTPService, Deployable: true,
+		Ecosystem: pd.Python, Path: "services/ml", Entrypoint: "services/ml", Confidence: pd.Likely,
+	})
+	in := func(start string) *Result {
+		g.Services[len(g.Services)-1].Commands.Start = start
+		return Compute(Input{
+			Environment: "production", Graph: &g, Providers: providers.Registry(), Connections: connected,
+			Manifest: parse(t, "version: 1\ndefaults:\n  provider: cloud-run\nservices:\n  ml:\n    source: services/ml\n    port: 8080\n"),
+		})
+	}
+	if r := in(""); !slices.Contains(codes(r.Warnings), "start-assumed:ml") {
+		t.Fatalf("no start command and no warning: %v", codes(r.Warnings))
+	}
+	if r := in("gunicorn shop.wsgi"); slices.Contains(codes(r.Warnings), "start-assumed:ml") {
+		t.Fatalf("a Procfile's start, and still a warning: %v", codes(r.Warnings))
+	}
+}
+
+// federatedOnAWS is federatedYAML with everything on AWS.
+const federatedOnAWS = `version: 1
+defaults:
+  provider: ecs-fargate
+services:
+  api:
+    repo: mono
+    source: services/api
+    needs: [db]
+  site:
+    repo: site
+    source: .
+    needs: [api]
+resources:
+  db:
+    kind: postgres
+    provider: rds
+`
+
+func TestCompute_onAWSTheConnectionDecidesTheRegion(t *testing.T) {
+	ireland := ConnectionOption{ID: "conn_ie", Name: "Dublin", Cloud: "aws", Ready: true, Region: "eu-west-1"}
+	oregon := ConnectionOption{ID: "conn_or", Name: "Oregon", Cloud: "aws", Ready: true, Region: "us-west-2"}
+	plan := func(yaml string, chosen string, bindings ...*Binding) *Result {
+		return Compute(Input{
+			Environment: "production", Graph: federated(t), Manifest: parse(t, yaml),
+			Providers: providers.Registry(), Bindings: bindings,
+			Connections: []ConnectionOption{ireland, oregon}, Chosen: map[string]string{"aws": chosen},
+		})
+	}
+	inOregon := func(yaml, name string) string {
+		return strings.Replace(yaml, "  "+name+":\n", "  "+name+":\n    region: us-west-2\n", 1)
+	}
+
+	// With no region named, everything goes where the connection is.
+	first := plan(federatedOnAWS, "conn_ie")
+	if len(first.Problems) != 0 || !first.Executable {
+		t.Fatalf("problems %v", codes(first.Problems))
+	}
+	for _, a := range first.Actions {
+		if a.Region != "eu-west-1" {
+			t.Fatalf("%s is in %q, not the connection's region", a.ID, a.Region)
+		}
+	}
+
+	// Naming another region is a problem, since the deployment would
+	// put it in the connection's anyway.
+	r := plan(inOregon(federatedOnAWS, "db"), "conn_ie")
+	if got := codes(r.Problems); !slices.Equal(got, []string{"connection-region:db"}) || r.Executable {
+		t.Fatalf("problems %v", got)
+	}
+	want := "db can't be in us-west-2: on AWS, Loomplane deploys to the connection's region, and Dublin is in eu-west-1. Set resources.db.region to eu-west-1, or choose an AWS connection in us-west-2 for production."
+	if p := r.Problems[0]; p.Message != want || p.Path != "resources.db.region" || p.Subject != ResourceSubject {
+		t.Fatalf("problem %+v", p)
+	}
+
+	// So is moving what's deployed to another region with the same
+	// connection: the deployment would keep the one it was to replace.
+	live := deployed(t, first)
+	for _, b := range live {
+		b.ConnectionID = "conn_ie"
+	}
+	r = plan(inOregon(federatedOnAWS, "api"), "conn_ie", live...)
+	if api := action(t, r, "service:api"); api.Op != Replace {
+		t.Fatalf("api %+v", api)
+	}
+	if got := codes(r.Problems); !slices.Equal(got, []string{"connection-region:api"}) || r.Problems[0].Path != "services.api.region" {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+
+	// With a connection in the new region, the move is real.
+	moved := plan(inOregon(inOregon(inOregon(federatedOnAWS, "api"), "site"), "db"), "conn_or", live...)
+	if len(moved.Problems) != 0 {
+		t.Fatalf("problems %v", codes(moved.Problems))
+	}
+	if moved.Summary.Replace != 3 {
+		t.Fatalf("summary %+v", moved.Summary)
+	}
+	// And so is the region no one named, since it's the connection's.
+	if unnamed := plan(federatedOnAWS, "conn_or", live...); len(unnamed.Problems) != 0 || unnamed.Summary.Replace != 3 {
+		t.Fatalf("summary %+v, problems %v", unnamed.Summary, codes(unnamed.Problems))
+	}
+
+	// What's kept isn't deployed, so it stays where it is.
+	before := deployed(t, plan(inOregon(federatedOnAWS, "db"), "conn_or"))
+	r = plan(inOregon(federatedOnAWS, "db"), "conn_ie", before...)
+	if db := action(t, r, "resource:db"); db.Op != Keep || slices.Contains(codes(r.Problems), "connection-region:db") {
+		t.Fatalf("db %+v, problems %v", db, codes(r.Problems))
+	}
+}
+
+func TestCompute_renderServicesReachEachOtherPrivately(t *testing.T) {
+	r := compute(t, "version: 1\ndefaults: {provider: render}\nservices:\n  gw: {source: apps/gateway, needs: [api]}\n  api: {source: services/api, public: false}\nignore: {resources: [postgres, redis]}\n", "production")
+	if len(r.Problems) != 0 || !r.Executable {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	gw := action(t, r, "service:gw")
+	if len(gw.Service.Env) != 1 || gw.Service.Env[0].Key != "API_URL" || gw.Service.Env[0].Address != "" || gw.Engine != provider.Loomplane {
+		t.Fatalf("gw %+v", gw)
 	}
 }

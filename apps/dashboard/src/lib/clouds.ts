@@ -17,6 +17,11 @@ export const clouds = {
     credential: "Access key",
     account: "Account",
   },
+  render: {
+    label: "Render",
+    credential: "API key",
+    account: "Workspace",
+  },
 } as const
 
 export type Cloud = keyof typeof clouds

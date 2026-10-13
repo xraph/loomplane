@@ -25,7 +25,7 @@ Done. You can run all of it with `make stack`, or the pieces with `make up` and 
 Left over, none of it blocking Milestone 2:
 
 1. The `@forge-go/client-*` packages move to 1.12.8 once pnpm's 24-hour release-age rule allows it. Done.
-2. The license, which Rex is choosing.
+2. The license. Done: the GNU Affero General Public License, version 3.
 3. Upstream: a tagged authsome release so the pin can leave `main`; the authsome fixes listed in forge-integration.md (double-written JSON, the 500 on a taken slug, the SDK's organization list shape, the missing audit category, invitations without an expiry); dependency declarations on grove in the Dispatch and Ctrl Plane extensions; forgemux mounting `/`; the generator's pointer-slice type; a tag for the forge CLI so CI can pin something better than a commit.
 
 ## Milestone 2: Repository discovery
@@ -53,9 +53,9 @@ Left over:
 
 1. Re-analyzing on push, which needs GitHub webhooks. Done after milestone 6: a push to a repository's default branch re-analyzes every source tracking it (one that names no branch, or names that one), in the organizations that connected the installation it came through. Sources are indexed by repository, so a push to `owner/name` maps to the sources that track it with one lookup.
 2. A repository picker when creating a project. Done with the dashboard redesign: the new project dialog lists what the GitHub App can read, and a URL still works for a public repository.
-3. Detection limits: Python, Java and the rest are found through their Dockerfiles only. A Go command that imports the server's packages reads as a server, because classification follows imports. A Rust crate with both clap and axum is ambiguous.
+3. Detection limits. Done after milestone 6: Python (pyproject.toml, requirements.txt, Pipfile, uv workspaces) and the JVM (Maven, and Gradle with version catalogs) have detectors of their own. A Go command that shares a server's packages, or a Rust binary that names clap and reaches axum only through its crate's library beside a server that shares it, reads as a tool, flagged for you to confirm. Each process in a Python project's Procfile is a service of its own, and so is a Celery app beside a web app, each built from the project with its own start command. Gradle builds are read without running them, through plain and map-notation dependencies, version catalogs, subprojects and allprojects blocks, and convention plugins in buildSrc or build-logic; a script that works its dependencies out in a loop or a condition can't be read without running it, which analysis never does, so those dependencies need declaring plainly or confirming in the manifest.
 4. The GitHub App flow has only been run against a fake GitHub that checks the App's JWT signature. Try it against a real App before relying on it.
-5. A cleanup migration. It drops `loomplane_projects.repository_url`, `loomplane_plans.analysis_id` and `commit_sha`, and `loomplane_deployments.source`. Sources and plan locksets replaced all four, and nothing reads them now. They stay so a rollback to the previous release can still read what was there before the upgrade. That's all it can read, though: projects, plans and deployments made after the upgrade leave those columns empty.
+5. A cleanup migration. Done: `drop_superseded_columns` drops `loomplane_projects.repository_url`, `loomplane_plans.analysis_id` and `commit_sha`, and `loomplane_deployments.source`, which sources and plan locksets replaced. They were kept for a rollback, but no release ever had them without sources beside them, and its down migration puts them back filled from what replaced them. Restore now loads a backup at the schema it was taken at and migrates it up from there, so a backup from before the drop still restores.
 
 ## Environments and variables
 
@@ -66,7 +66,7 @@ Added after milestone 2, because deployments need configuration to deploy with.
 - Secret variables are encrypted in Vault and write-only: the API never returns their value, and the audit trail records keys, never values. Owners and admins set organization-wide variables; developers set their projects'.
 - In the dashboard: environments on each project page, a Variables card that resolves an environment for the project or one service and lets you set, edit or override at that layer, and an organization-wide Variables page.
 
-Left over: nothing reads the resolved variables yet. Deployments (milestone 4) will, and they'll be the only path that reveals a secret. A variable can't move to another layer or environment once set; delete it and set it again. Environments can't be renamed, because organization-wide variables name them.
+Left over: deployments read the resolved variables since milestone 4, and they're the only path that reveals a secret. A variable can't move to another layer or environment once set; delete it and set it again. Environments can't be renamed, because organization-wide variables name them.
 
 ## Milestone 3: Planning
 
@@ -90,7 +90,7 @@ Where it differs from the plan above, and why:
 
 Left over:
 
-1. Nothing happens after approval yet. Milestone 4 adds provisioning, builds and deploys to the same workflow, behind a new `DeploymentBuild`.
+1. Nothing happened after approval. Milestone 4 added provisioning, builds and deploys to the same workflow.
 2. Adding or ignoring a resource from a plan saved the manifest from its parsed form, so comments in the YAML didn't survive it. Done after milestone 6: the API edits the YAML's node tree (`POST /projects/:id/manifest/edits`), so your comments and order stay where you put them.
 3. There was no diff between manifest revisions. Done after milestone 6: History on the Deploy tab lists every revision and what each changed from the one before.
 
@@ -162,7 +162,7 @@ Done. Done when Loomplane runs as a complete, independent, self-hosted platform.
 Left over:
 
 1. The acceptance runs on real accounts, for milestones 4 and 5: a Google Cloud project, a Vercel account and an AWS account. Everything is tested against fakes that check what the real APIs would refuse, which isn't the same as the real APIs agreeing.
-2. A license for Loomplane, and answers to the dependency license questions in [forge-integration.md](forge-integration.md#licenses).
-3. Render is in the catalog without an adapter. Memorystore, Cloud Storage, ElastiCache and S3 have theirs; Render builds from its own GitHub connection, which Loomplane can't hand it.
+2. A license for Loomplane. Done: the GNU Affero General Public License, version 3. The dependency license questions in [forge-integration.md](forge-integration.md#licenses) are the libraries' own, and go with the upstream work.
+3. Render had no adapter. Done: a Render connection is an API key, and the adapter runs web services, private services, background workers and static sites, and provisions Postgres and Key Value. Render builds from the repository through its own GitHub connection, which you give access in Render once; Loomplane deploys the approved commit through it. Like the other adapters, it's tested against a fake that answers the way Render's API does, and the acceptance run will show whether the real one agrees. Targets can also be paused in the configuration now (`providers.paused`), which keeps their plans for review only.
 4. Private links between clouds, which would need a VPN between them.
-5. The dashboard has no screen for backups or metrics; those are commands and Prometheus.
+5. The dashboard had no screen for metrics. Done: Activity shows the organization's deployments, how often they succeed and how long they take, plan decisions, analyses and drift over 7, 30 or 90 days, counted from Loomplane's own records (`GET /api/v1/activity`). Backups stay a command, `loomplane backup`, since a backup holds every organization's data and doesn't belong behind one organization's page.

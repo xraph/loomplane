@@ -62,7 +62,8 @@ var aliasPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 // svc:go:go:cmd/api read two ways.
 var reservedAliases = map[string]bool{
 	string(discovery.Go): true, string(discovery.Rust): true,
-	string(discovery.Node): true, string(discovery.Container): true,
+	string(discovery.Node): true, string(discovery.Python): true,
+	string(discovery.JVM): true, string(discovery.Container): true,
 }
 
 // ValidAlias reports why alias can't name a source, or nil.

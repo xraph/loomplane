@@ -23,7 +23,7 @@
 
 <p align="center"><sub>Concept artwork inspired by the dashboard's woven environments.</sub></p>
 
-Loomplane takes a Go, Rust, TypeScript or JavaScript monorepo, or an application split across several repositories, from source to running services across clouds. You give it the repositories. It reads the code (never runs it) to find the services and the databases they need, drafts a `loomplane.yaml`, and plans what deploying it would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it: a Next.js app to Vercel, a Go API to Cloud Run, a worker to ECS on Fargate, Postgres on Cloud SQL or RDS, wired to each other with secrets kept in each cloud's secret store. Then it keeps checking that what runs is what it deployed.
+Loomplane takes a Go, Rust, TypeScript, JavaScript, Python or JVM monorepo, or an application split across several repositories, from source to running services across clouds. You give it the repositories. It reads the code (never runs it) to find the services and the databases they need, drafts a `loomplane.yaml`, and plans what deploying it would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it: a Next.js app to Vercel, a Go API to Cloud Run, a worker to ECS on Fargate, Postgres on Cloud SQL or RDS, wired to each other with secrets kept in each cloud's secret store. Then it keeps checking that what runs is what it deployed.
 
 Your applications don't need Forge, or Go. Everything runs in your own clouds, on your own accounts.
 
@@ -49,7 +49,7 @@ For hot reload while you work on Loomplane itself, `make dev` serves the dashboa
 1. **New project**, with a GitHub URL. Any public monorepo works; private ones go through a GitHub App ([docs/github-app.md](docs/github-app.md)).
 2. **Analyze**. You get the services it builds, the packages they share and the databases they need, each linked to the line it came from.
 3. Open **Deploy**. Loomplane drafts a `loomplane.yaml`; edit it, and save it. [docs/manifest.md](docs/manifest.md) has every field.
-4. Under **Integrations**, connect the clouds it names: a Google Cloud service account key, a Vercel token, an AWS access key. Each is checked with its cloud before it's kept, and Loomplane says which permissions are missing.
+4. Under **Integrations**, connect the clouds it names: a Google Cloud service account key, a Vercel token, an AWS access key, a Render API key. Each is checked with its cloud before it's kept, and Loomplane says which permissions are missing.
 5. **Plan** an environment. You see every action, step by step, with anything in the way and anything worth knowing.
 6. An admin approves it. You watch each step build, deploy and answer, and the environment shows what runs where.
 
@@ -67,10 +67,10 @@ loomctl approve <plan-id>
 
 | | |
 |---|---|
-| Repository discovery | Go, Rust and Node monorepos, Dockerfiles and Compose files, read into services, packages and resources with the evidence for each. |
+| Repository discovery | Go, Rust, Node, Python and JVM (Maven and Gradle) monorepos, Dockerfiles and Compose files, read into services, packages and resources with the evidence for each. |
 | `loomplane.yaml` | A versioned manifest, drafted from the analysis: services, resources, gateways, and overrides per environment. |
 | Plans | Every action a deployment would take, in order, with problems that block it. Approval names the revision you reviewed; a plan whose world changed comes back stale. |
-| Targets | Vercel, Cloud Run and ECS on Fargate for services; Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage and S3 for databases, caches and buckets. Builds run on Cloud Build, CodeBuild and Vercel, in your accounts. |
+| Targets | Vercel, Cloud Run, ECS on Fargate and Render for services; Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage, S3, and Render's Postgres and Key Value for databases, caches and buckets. Builds run on Cloud Build, CodeBuild, Vercel and Render, in your accounts. |
 | Networking | Services find each other through variables. ECS services reach each other privately; private Cloud Run services only take calls from the project's own. |
 | Gateways | One public address routing paths to services, built on Bastion and run on your infrastructure. |
 | Secrets | Variables in layers (organization, project, service, by environment), secrets in Vault and then in each cloud's secret store, never shown again. |
@@ -177,7 +177,7 @@ loomplane/
 │   └── loomctl/              The command-line client and MCP server
 ├── internal/
 │   ├── apikeys/              API keys on Keysmith
-│   ├── clouds/               Google Cloud, AWS and Vercel clients, and Ctrl Plane providers
+│   ├── clouds/               Google Cloud, AWS, Vercel and Render clients, and Ctrl Plane providers
 │   ├── connections/          Cloud connections, credentials in Vault
 │   ├── ctl/                  loomctl
 │   ├── deployments/          The runner, one executor per target, drift
@@ -221,4 +221,6 @@ Keep a change focused. Domain behavior belongs in `internal/`, Forge wiring in `
 
 ## License and distribution
 
-This checkout has no license file yet. Several pinned dependencies have license or distribution questions, recorded in [docs/forge-integration.md](docs/forge-integration.md#licenses). Review them before you redistribute Loomplane.
+Loomplane is free software under the GNU Affero General Public License, version 3 ([LICENSE](LICENSE)). You can run it, change it and share it. If you run a changed Loomplane as a service other people use, you have to offer them the source of your changes too.
+
+Some of the libraries it's built on had their own license questions, recorded in [docs/forge-integration.md](docs/forge-integration.md#licenses).

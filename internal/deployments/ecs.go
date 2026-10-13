@@ -175,10 +175,16 @@ func buildspec(s *aws.Session, cfg *planning.ServiceConfig, image string) string
 		install = []string{"curl -sSL https://github.com/buildpacks/pack/releases/download/" + packVersion + "/pack-" + packVersion +
 			"-linux.tgz | tar -C /usr/local/bin -xz pack"}
 		args := "pack build " + image + " --builder " + googleBuilder + " --publish"
-		if cfg.Ecosystem == "go" {
+		switch {
+		case cfg.Ecosystem == "go":
 			args += " --env GOOGLE_BUILDABLE=./" + cfg.Source + ` --path "$CODEBUILD_SRC_DIR"`
-		} else {
+		case cfg.Ecosystem == "jvm" && cfg.Source != ".":
+			args += " --env GOOGLE_BUILDABLE=" + cfg.Source + ` --path "$CODEBUILD_SRC_DIR"`
+		default:
 			args += ` --path "$CODEBUILD_SRC_DIR/` + cfg.Source + `"`
+		}
+		if cfg.Ecosystem == "python" && cfg.Start != "" {
+			args += " --env " + shellQuote("GOOGLE_ENTRYPOINT="+cfg.Start)
 		}
 		build = []string{args}
 	}
@@ -197,6 +203,9 @@ func buildspec(s *aws.Session, cfg *planning.ServiceConfig, image string) string
 	}
 	return b.String()
 }
+
+// shellQuote makes s one word for the shell, whatever it holds.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // quote makes a command a YAML string, whatever it holds.
 func quote(s string) string {

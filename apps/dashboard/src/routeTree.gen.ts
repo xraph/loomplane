@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
+import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
@@ -24,6 +25,11 @@ import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integratio
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ActivityRoute = ActivityRouteImport.update({
+  id: "/activity",
+  path: "/activity",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiKeysRoute = ApiKeysRouteImport.update({
@@ -79,6 +85,7 @@ const IntegrationsGithubSetupRoute = IntegrationsGithubSetupRouteImport.update({
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
+  "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -92,6 +99,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
+  "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -106,6 +114,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
+  "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -121,6 +130,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | "/"
+    | "/activity"
     | "/api-keys"
     | "/infrastructure"
     | "/members"
@@ -134,6 +144,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
+    | "/activity"
     | "/api-keys"
     | "/infrastructure"
     | "/members"
@@ -147,6 +158,7 @@ export interface FileRouteTypes {
   id:
     | "__root__"
     | "/"
+    | "/activity"
     | "/api-keys"
     | "/infrastructure"
     | "/members"
@@ -161,6 +173,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
@@ -180,6 +193,13 @@ declare module "@tanstack/react-router" {
       path: "/"
       fullPath: "/"
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/activity": {
+      id: "/activity"
+      path: "/activity"
+      fullPath: "/activity"
+      preLoaderRoute: typeof ActivityRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/api-keys": {
@@ -257,6 +277,7 @@ declare module "@tanstack/react-router" {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,

@@ -24,6 +24,12 @@ func TestBuildFor(t *testing.T) {
 			dockerBuilder, "acme-mono-1", []string{"build", "-t", img, "-f", "services/api/Dockerfile", "."}},
 		{"go without one uses the buildpack on its main package", planning.ServiceConfig{Ecosystem: "go", Source: "services/api"},
 			packBuilder, "", []string{"build", img, "--builder", googleBuilder, "--publish", "--env", "GOOGLE_BUILDABLE=./services/api", "--path", "acme-mono-1"}},
+		{"a jvm module builds from the root of its build", planning.ServiceConfig{Ecosystem: "jvm", Source: "services/api"},
+			packBuilder, "", []string{"build", img, "--builder", googleBuilder, "--publish", "--env", "GOOGLE_BUILDABLE=services/api", "--path", "acme-mono-1"}},
+		{"python without one builds its project", planning.ServiceConfig{Ecosystem: "python", Source: "services/api"},
+			packBuilder, "", []string{"build", img, "--builder", googleBuilder, "--publish", "--path", "acme-mono-1/services/api"}},
+		{"a python process says how it starts", planning.ServiceConfig{Ecosystem: "python", Source: "services/api", Start: "celery -A shop worker"},
+			packBuilder, "", []string{"build", img, "--builder", googleBuilder, "--publish", "--env", "GOOGLE_ENTRYPOINT=celery -A shop worker", "--path", "acme-mono-1/services/api"}},
 		{"node without one builds its package", planning.ServiceConfig{Ecosystem: "node", Source: "apps/gateway"},
 			packBuilder, "", []string{"build", img, "--builder", googleBuilder, "--publish", "--path", "acme-mono-1/apps/gateway"}},
 	}

@@ -36,9 +36,11 @@ import (
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
+	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/artifacts"
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
@@ -71,6 +73,7 @@ type Extension struct {
 	manifests   *manifests.Service
 	plans       *planning.Service
 	deploys     *deployments.Service
+	activity    *activity.Service
 	artifacts   *artifacts.Store
 }
 
@@ -145,7 +148,7 @@ func (e *Extension) Register(fapp forge.App) error {
 
 	pg := pgdriver.Unwrap(db)
 	log := e.Logger()
-	catalog := providers.Registry()
+	catalog := providers.Registry(e.cfg.Providers.Paused...)
 	metrics := telemetry.New(fapp.Metrics())
 	auditor := projectsext.NewAuditor(audit, e.cfg.Identity.AppID, log)
 	prj := projects.NewPgStore(pg)
@@ -160,6 +163,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
 	e.deploys.Projects = prj
+	e.activity = activity.NewService(pg, authz)
 	executors := map[string]deployments.Executor{
 		"cloud-run": &deployments.CloudRun{
 			Google:      gcp.New(e.cfg.Clouds.GoogleEndpoint),
@@ -167,6 +171,7 @@ func (e *Extension) Register(fapp forge.App) error {
 			Credentials: clouds,
 		},
 		"vercel":        &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		"render":        &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
 		"cloud-sql":     &deployments.CloudSQL{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
 		"cloud-storage": &deployments.CloudStorage{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
 		"memorystore":   &deployments.Memorystore{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
@@ -184,11 +189,24 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
+	paused := map[string]bool{}
+	for _, name := range e.cfg.Providers.Paused {
+		paused[name] = true
+	}
 	for _, p := range plugs {
-		if rerr := catalog.Register(p.Description.Provider); rerr != nil {
+		desc := p.Description.Provider
+		if paused[desc.Name] {
+			providers.Pause(&desc)
+		}
+		if rerr := catalog.Register(desc); rerr != nil {
 			return fmt.Errorf("provider plugin %s: %w", p.Name(), rerr)
 		}
 		executors[p.Name()] = &deployments.Plugin{Client: p.Client, Every: e.cfg.Orchestration.PollInterval}
+	}
+	for name := range paused {
+		if _, gerr := catalog.Get(name); gerr != nil {
+			return fmt.Errorf("providers.paused names %q, which isn't a target this Loomplane has", name)
+		}
 	}
 	// Resource credentials, such as a database's password, get a Vault
 	// key of their own, derived from secret_key.

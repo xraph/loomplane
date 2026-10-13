@@ -579,9 +579,9 @@ export function ServicesTable({
       </Table>
       {graph.services.length === 0 && (
         <p className="border-t px-4 py-8 text-center text-sm text-muted-foreground">
-          No services found. Loomplane reads Go, Rust and Node manifests,
-          Dockerfiles and Compose files; this commit has none it recognizes as
-          something that runs.
+          No services found. Loomplane reads Go, Rust, Node, Python and JVM
+          manifests, Dockerfiles and Compose files; this commit has none it
+          recognizes as something that runs.
         </p>
       )}
     </Card>

@@ -18,7 +18,7 @@ func (a *App) commands() []cli.Command {
 	return []cli.Command{
 		a.mcpCommand(),
 		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,
-			cli.WithUsage("loomctl login --url https://loomplane.example.com --key lp_live_..."),
+			cli.WithUsage("login --url https://loomplane.example.com --key lp_live_..."),
 			cli.WithFlags(
 				cli.NewStringFlag("url", "", "Loomplane's address", ""),
 				cli.NewStringFlag("key", "", "An API key from Settings, API keys; - reads it from standard input", ""),
@@ -27,54 +27,56 @@ func (a *App) commands() []cli.Command {
 		cli.NewCommand("whoami", "Who the key acts as, and what it may do", a.whoami, cli.WithFlag(jsonFlag)),
 		cli.NewCommand("projects", "List the organization's projects", a.projects,
 			cli.WithFlag(jsonFlag),
-			cli.WithSubcommand(cli.NewCommand("create", "Create a project, from a first repository", a.createProject,
-				cli.WithUsage("loomctl projects create <name> --repo https://github.com/acme/mono"),
-				cli.WithFlags(cli.NewStringFlag("repo", "", "The repository's URL", ""), jsonFlag)))),
+			cli.WithSubcommand(cli.NewCommand("create", "Create a project, from its repositories", a.createProject,
+				cli.WithUsage("projects create <name> --repo acme/web --repo billing=other/web"),
+				cli.WithFlags(
+					cli.NewStringSliceFlag("repo", "", "A repository, as owner/name or a URL; repeat it for each, and write alias=repository to name one", nil),
+					jsonFlag)))),
 		cli.NewCommand("analyze", "Read a project's repositories and find their services", a.analyze,
-			cli.WithUsage("loomctl analyze <project> [--source web] [--ref main]"),
+			cli.WithUsage("analyze <project> [--source web] [--ref main]"),
 			cli.WithFlags(
 				cli.NewStringSliceFlag("source", "s", "A repository to analyze, by alias; every one if none", nil),
 				cli.NewStringFlag("ref", "", "A branch, tag or commit, for one repository; its tracked branch if empty", ""),
 				cli.NewBoolFlag("no-wait", "", "Start it and return", false), jsonFlag)),
 		cli.NewCommand("manifest", "Print a project's loomplane.yaml", a.manifest,
-			cli.WithUsage("loomctl manifest <project> [--draft]"),
+			cli.WithUsage("manifest <project> [--draft]"),
 			cli.WithFlag(cli.NewBoolFlag("draft", "", "Print a draft from the latest analysis instead", false)),
 			cli.WithSubcommand(cli.NewCommand("save", "Save a new revision of a project's loomplane.yaml", a.saveManifest,
-				cli.WithUsage("loomctl manifest save <project> -f loomplane.yaml"),
+				cli.WithUsage("manifest save <project> -f loomplane.yaml"),
 				cli.WithFlag(cli.NewStringFlag("file", "f", "The file; - reads standard input", "loomplane.yaml"))))),
 		cli.NewCommand("plan", "Plan a project's manifest for an environment", a.plan,
-			cli.WithUsage("loomctl plan <project> --env production [--scope web]"),
+			cli.WithUsage("plan <project> --env production [--scope web]"),
 			cli.WithFlags(
 				cli.NewStringFlag("env", "e", "The environment", "production"),
 				cli.NewStringSliceFlag("scope", "", "A repository the plan moves, by alias; every one if none, and the rest stay as deployed", nil),
 				cli.NewBoolFlag("no-wait", "", "Start planning and return", false), jsonFlag)),
-		cli.NewCommand("plans", "List a project's plans", a.plans, cli.WithUsage("loomctl plans <project>"), cli.WithFlag(jsonFlag)),
+		cli.NewCommand("plans", "List a project's plans", a.plans, cli.WithUsage("plans <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("show", "Show a plan: what it would do, and anything in the way", a.show,
-			cli.WithUsage("loomctl show <plan-id>"), cli.WithFlag(jsonFlag)),
+			cli.WithUsage("show <plan-id>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("approve", "Approve a plan, which deploys it", a.approve,
-			cli.WithUsage("loomctl approve <plan-id> [--yes] [--note ...]"),
+			cli.WithUsage("approve <plan-id> [--yes] [--note ...]"),
 			cli.WithFlags(
 				cli.NewStringFlag("note", "", "Why, for the record", ""),
 				cli.NewBoolFlag("yes", "y", "Don't ask first", false),
 				cli.NewBoolFlag("no-wait", "", "Approve and return without following the deployment", false))),
 		cli.NewCommand("reject", "Reject a plan", a.reject,
-			cli.WithUsage("loomctl reject <plan-id> [--note ...]"),
+			cli.WithUsage("reject <plan-id> [--note ...]"),
 			cli.WithFlag(cli.NewStringFlag("note", "", "Why, for the record", ""))),
 		cli.NewCommand("deployments", "List a project's deployments", a.deployments,
-			cli.WithUsage("loomctl deployments <project>"), cli.WithFlag(jsonFlag)),
+			cli.WithUsage("deployments <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("deployment", "Show a deployment, step by step", a.deployment,
-			cli.WithUsage("loomctl deployment <deployment-id> [--watch]"),
+			cli.WithUsage("deployment <deployment-id> [--watch]"),
 			cli.WithFlags(cli.NewBoolFlag("watch", "w", "Follow it until it finishes", false), jsonFlag)),
 		cli.NewCommand("retry", "Retry a failed deployment from the step that failed", a.retry,
-			cli.WithUsage("loomctl retry <deployment-id> [--no-wait]"),
+			cli.WithUsage("retry <deployment-id> [--no-wait]"),
 			cli.WithFlag(cli.NewBoolFlag("no-wait", "", "Retry and return", false))),
 		cli.NewCommand("status", "What runs each of a project's services and resources, and any drift", a.status,
-			cli.WithUsage("loomctl status <project>"), cli.WithFlag(jsonFlag)),
+			cli.WithUsage("status <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("vars", "List a project's variables; secrets show no value", a.vars,
-			cli.WithUsage("loomctl vars <project>"),
+			cli.WithUsage("vars <project>"),
 			cli.WithFlag(jsonFlag),
 			cli.WithSubcommand(cli.NewCommand("set", "Set a project variable", a.setVar,
-				cli.WithUsage("loomctl vars set <project> KEY=VALUE [--env production] [--secret]; KEY=- reads the value from standard input"),
+				cli.WithUsage("vars set <project> KEY=VALUE [--env production] [--secret]; KEY=- reads the value from standard input"),
 				cli.WithFlags(
 					cli.NewStringFlag("env", "e", "One environment; every one if empty", ""),
 					cli.NewStringFlag("service", "s", "One service's graph ID; every service if empty", ""),
@@ -159,6 +161,30 @@ func (a *App) projects(ctx cli.CommandContext) error {
 	return nil
 }
 
+// newRepositories reads each --repo: a repository as owner/name or a URL,
+// or alias=repository to name it. A GitHub address never has an "=", so
+// the first one splits them.
+func newRepositories(flags []string) ([]client.NewRepository, error) {
+	var out []client.NewRepository
+	for _, f := range flags {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		var r client.NewRepository
+		if alias, repo, ok := strings.Cut(f, "="); ok {
+			r.Alias, r.Repository = strings.TrimSpace(alias), strings.TrimSpace(repo)
+			if r.Alias == "" || r.Repository == "" {
+				return nil, fmt.Errorf("--repo %s: write alias=repository, with both", f)
+			}
+		} else {
+			r.Repository = f
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 func (a *App) createProject(ctx cli.CommandContext) error {
 	c, err := a.client()
 	if err != nil {
@@ -168,7 +194,11 @@ func (a *App) createProject(ctx cli.CommandContext) error {
 	if name == "" {
 		return errors.New("name the project")
 	}
-	p, err := c.CreateProject(ctxOf(ctx), client.NewProject{Name: name, RepositoryURL: ctx.String("repo")})
+	repos, err := newRepositories(ctx.StringSlice("repo"))
+	if err != nil {
+		return err
+	}
+	p, err := c.CreateProject(ctxOf(ctx), client.NewProject{Name: name, Repositories: repos})
 	if err != nil {
 		return err
 	}

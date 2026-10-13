@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/xraph/ctrlplane/id"
 	"github.com/xraph/ctrlplane/instance"
 
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/cloudrun"
 	"github.com/xraph/loomplane/internal/clouds/ecs"
 	"github.com/xraph/loomplane/internal/connections"
@@ -490,5 +492,74 @@ func TestLocate(t *testing.T) {
 	v := &planning.Binding{Provider: "vercel", ExternalID: "prj_1"}
 	if got := locate(&placed{}, v); got != "prj_1 on vercel" {
 		t.Fatalf("anything else: %q", got)
+	}
+}
+
+func TestGCSBucket(t *testing.T) {
+	job := &Job{
+		Deployment: &Deployment{ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
+		Action:     planning.Action{Name: "files", Resource: &planning.ResourceConfig{Kind: "object-storage", Region: "us-central1"}},
+	}
+	here := gcsBucket("acme", job)
+	if !strings.HasPrefix(here, "lp-files-us-central1-") || len(here) != len("lp-files-us-central1-")+10 {
+		t.Fatalf("a new bucket is %q", here)
+	}
+	// A move needs a name the bucket it replaces doesn't hold.
+	job.Action.Resource.Region = "europe-west1"
+	there := gcsBucket("acme", job)
+	if there == here || !strings.HasPrefix(there, "lp-files-europe-west1-") {
+		t.Fatalf("moved to europe-west1, the bucket is %q", there)
+	}
+	if strings.TrimPrefix(there, "lp-files-europe-west1-") != strings.TrimPrefix(here, "lp-files-us-central1-") {
+		t.Fatalf("the region changed the hash: %q, %q", here, there)
+	}
+	if other := gcsBucket("other", job); other == there {
+		t.Fatalf("two Google projects share %q", other)
+	}
+
+	// A long name is cut so the whole fits, region and hash included.
+	job.Action.Name = strings.Repeat("a", 63)
+	job.Action.Resource.Region = "northamerica-northeast1"
+	if long := gcsBucket("acme", job); len(long) != 63 || !strings.Contains(long, "-northamerica-northeast1-") {
+		t.Fatalf("a long name is %q (%d)", long, len(long))
+	}
+
+	// One already bound keeps its name, from before names had a region.
+	job.Binding = &planning.Binding{ExternalID: "lp-files-0123456789"}
+	if got := gcsBucket("acme", job); got != "lp-files-0123456789" {
+		t.Fatalf("a bound bucket is %q", got)
+	}
+}
+
+func TestBucketName(t *testing.T) {
+	key := &aws.Key{AccessKeyID: "AKIAEXAMPLE0000", SecretAccessKey: "x"}
+	east := aws.New("").Session(key, "us-east-1", "123456789012")
+	west := aws.New("").Session(key, "eu-west-1", "123456789012")
+	job := &Job{
+		Deployment: &Deployment{ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
+		Action:     planning.Action{Name: "files", Resource: &planning.ResourceConfig{Kind: "object-storage"}},
+	}
+	here, there := bucketName(east, job), bucketName(west, job)
+	if !strings.HasPrefix(here, "lp-files-us-east-1-") || !strings.HasPrefix(there, "lp-files-eu-west-1-") {
+		t.Fatalf("new buckets are %q and %q", here, there)
+	}
+	// The environment's tasks reach a bucket in either region.
+	_, policy := tasksRole(east, job)
+	for _, b := range []string{here, there} {
+		pattern := "lp-*-" + awsEnvKey(east, job)
+		if ok, _ := path.Match(pattern, b); !ok || !strings.Contains(policy, "arn:aws:s3:::"+pattern) {
+			t.Fatalf("the tasks role doesn't grant %q: %s", b, policy)
+		}
+	}
+
+	job.Action.Name = strings.Repeat("a", 63)
+	if long := bucketName(west, job); len(long) != 63 || !strings.Contains(long, "-eu-west-1-") {
+		t.Fatalf("a long name is %q (%d)", long, len(long))
+	}
+
+	// One already bound keeps its name, from before names had a region.
+	job.Binding = &planning.Binding{ExternalID: "lp-files-0123456789"}
+	if got := bucketName(west, job); got != "lp-files-0123456789" {
+		t.Fatalf("a bound bucket is %q", got)
 	}
 }
