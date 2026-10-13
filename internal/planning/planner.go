@@ -48,7 +48,16 @@ type ConnectionOption struct {
 	// HTTPS says whether the connection serves public services over
 	// HTTPS where that takes a certificate of its own, as ECS does.
 	HTTPS bool
+	// Region is the region the connection works in, for a cloud whose
+	// connection names one, as AWS's does.
+	Region string
 }
+
+// connectionRegions are the clouds whose connection decides the region.
+// An AWS connection names one, and everything Loomplane runs or
+// provisions with it is there, down to the network ECS tasks reach their
+// databases on, so a resource or service can't be anywhere else.
+var connectionRegions = map[string]bool{"aws": true}
 
 // cloudTitles name the clouds connections are for, for people.
 var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render"}
@@ -268,6 +277,66 @@ func (p *planner) connect() map[string]string {
 	return out
 }
 
+// connection is the connection a cloud deploys with, as connect settles
+// it, if it settles one. connect says why when it doesn't.
+func (p *planner) connection(cloud string) (ConnectionOption, bool) {
+	if id := p.in.Chosen[cloud]; id != "" {
+		i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
+		if i < 0 || !p.in.Connections[i].Ready {
+			return ConnectionOption{}, false
+		}
+		return p.in.Connections[i], true
+	}
+	var ready []ConnectionOption
+	for _, c := range p.in.Connections {
+		if c.Cloud == cloud && c.Ready {
+			ready = append(ready, c)
+		}
+	}
+	if len(ready) != 1 {
+		return ConnectionOption{}, false
+	}
+	return ready[0], true
+}
+
+// checkRegions reports what a plan would deploy, on a cloud whose
+// connection decides the region, to a region its connection isn't in.
+// The deployment would put it in the connection's region anyway, and a
+// move between regions would keep the one it was meant to replace.
+// What's kept isn't deployed, so it can stay where it is.
+func (p *planner) checkRegions(chosen map[string]string) {
+	for _, a := range p.actions {
+		if a.Region == "" || (a.Op != Create && a.Op != Update && a.Op != Replace) {
+			continue
+		}
+		prov, err := p.in.Providers.Get(a.Provider)
+		if err != nil || !connectionRegions[prov.Cloud] {
+			continue
+		}
+		i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == chosen[prov.Cloud] })
+		if i < 0 {
+			continue
+		}
+		c := p.in.Connections[i]
+		if c.Region == "" || c.Region == a.Region {
+			continue
+		}
+		path := "resources." + a.Name + ".region"
+		if a.Subject == ServiceSubject {
+			path = "services." + a.Name + ".region"
+			if a.Service != nil && a.Service.Gateway != nil {
+				path = "gateways." + a.Name + ".region"
+			}
+		}
+		title := cloudTitle(prov.Cloud)
+		p.problem(Finding{
+			Code: "connection-region", Subject: a.Subject, Name: a.Name, Path: path,
+			Message: fmt.Sprintf("%s can't be in %s: on %s, Loomplane deploys to the connection's region, and %s is in %s. Set %s to %s, or choose an %s connection in %s for %s.",
+				a.Name, a.Region, title, c.Name, c.Region, path, c.Region, title, a.Region, p.in.Environment),
+		})
+	}
+}
+
 func couldUse(ps []*provider.Provider) string {
 	if len(ps) == 0 {
 		return "No provider Loomplane knows can."
@@ -291,6 +360,10 @@ func (p *planner) place(subject Subject, name, path string, prov *provider.Provi
 		return ""
 	}
 	if region == "" {
+		// On a cloud whose connection decides the region, that's the one.
+		if c, ok := p.connection(prov.Cloud); ok && connectionRegions[prov.Cloud] && c.Region != "" {
+			return c.Region
+		}
 		return prov.DefaultRegion()
 	}
 	if !prov.HasRegion(region) {
@@ -1931,6 +2004,7 @@ func (p *planner) finish() *Result {
 	})
 	connections := p.connect()
 	p.checkHTTPS(connections)
+	p.checkRegions(connections)
 	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings, Connections: connections}
 	for _, a := range p.actions {
 		r.Actions = append(r.Actions, *a)

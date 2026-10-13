@@ -2061,3 +2061,93 @@ func TestCompute_pythonStartAssumed(t *testing.T) {
 		t.Fatalf("a Procfile's start, and still a warning: %v", codes(r.Warnings))
 	}
 }
+
+// federatedOnAWS is federatedYAML with everything on AWS.
+const federatedOnAWS = `version: 1
+defaults:
+  provider: ecs-fargate
+services:
+  api:
+    repo: mono
+    source: services/api
+    needs: [db]
+  site:
+    repo: site
+    source: .
+    needs: [api]
+resources:
+  db:
+    kind: postgres
+    provider: rds
+`
+
+func TestCompute_onAWSTheConnectionDecidesTheRegion(t *testing.T) {
+	ireland := ConnectionOption{ID: "conn_ie", Name: "Dublin", Cloud: "aws", Ready: true, Region: "eu-west-1"}
+	oregon := ConnectionOption{ID: "conn_or", Name: "Oregon", Cloud: "aws", Ready: true, Region: "us-west-2"}
+	plan := func(yaml string, chosen string, bindings ...*Binding) *Result {
+		return Compute(Input{
+			Environment: "production", Graph: federated(t), Manifest: parse(t, yaml),
+			Providers: providers.Registry(), Bindings: bindings,
+			Connections: []ConnectionOption{ireland, oregon}, Chosen: map[string]string{"aws": chosen},
+		})
+	}
+	inOregon := func(yaml, name string) string {
+		return strings.Replace(yaml, "  "+name+":\n", "  "+name+":\n    region: us-west-2\n", 1)
+	}
+
+	// With no region named, everything goes where the connection is.
+	first := plan(federatedOnAWS, "conn_ie")
+	if len(first.Problems) != 0 || !first.Executable {
+		t.Fatalf("problems %v", codes(first.Problems))
+	}
+	for _, a := range first.Actions {
+		if a.Region != "eu-west-1" {
+			t.Fatalf("%s is in %q, not the connection's region", a.ID, a.Region)
+		}
+	}
+
+	// Naming another region is a problem, since the deployment would
+	// put it in the connection's anyway.
+	r := plan(inOregon(federatedOnAWS, "db"), "conn_ie")
+	if got := codes(r.Problems); !slices.Equal(got, []string{"connection-region:db"}) || r.Executable {
+		t.Fatalf("problems %v", got)
+	}
+	want := "db can't be in us-west-2: on AWS, Loomplane deploys to the connection's region, and Dublin is in eu-west-1. Set resources.db.region to eu-west-1, or choose an AWS connection in us-west-2 for production."
+	if p := r.Problems[0]; p.Message != want || p.Path != "resources.db.region" || p.Subject != ResourceSubject {
+		t.Fatalf("problem %+v", p)
+	}
+
+	// So is moving what's deployed to another region with the same
+	// connection: the deployment would keep the one it was to replace.
+	live := deployed(t, first)
+	for _, b := range live {
+		b.ConnectionID = "conn_ie"
+	}
+	r = plan(inOregon(federatedOnAWS, "api"), "conn_ie", live...)
+	if api := action(t, r, "service:api"); api.Op != Replace {
+		t.Fatalf("api %+v", api)
+	}
+	if got := codes(r.Problems); !slices.Equal(got, []string{"connection-region:api"}) || r.Problems[0].Path != "services.api.region" {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+
+	// With a connection in the new region, the move is real.
+	moved := plan(inOregon(inOregon(inOregon(federatedOnAWS, "api"), "site"), "db"), "conn_or", live...)
+	if len(moved.Problems) != 0 {
+		t.Fatalf("problems %v", codes(moved.Problems))
+	}
+	if moved.Summary.Replace != 3 {
+		t.Fatalf("summary %+v", moved.Summary)
+	}
+	// And so is the region no one named, since it's the connection's.
+	if unnamed := plan(federatedOnAWS, "conn_or", live...); len(unnamed.Problems) != 0 || unnamed.Summary.Replace != 3 {
+		t.Fatalf("summary %+v, problems %v", unnamed.Summary, codes(unnamed.Problems))
+	}
+
+	// What's kept isn't deployed, so it stays where it is.
+	before := deployed(t, plan(inOregon(federatedOnAWS, "db"), "conn_or"))
+	r = plan(inOregon(federatedOnAWS, "db"), "conn_ie", before...)
+	if db := action(t, r, "resource:db"); db.Op != Keep || slices.Contains(codes(r.Problems), "connection-region:db") {
+		t.Fatalf("db %+v, problems %v", db, codes(r.Problems))
+	}
+}
