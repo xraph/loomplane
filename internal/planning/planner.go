@@ -744,7 +744,17 @@ func (p *planner) retain() {
 			// the manifest, and planDeletes removes one the manifest dropped.
 			continue
 		}
-		if alias, held := p.heldRepo(cfg); held {
+		alias, held := p.heldRepo(cfg)
+		switch {
+		case held && p.gatewayOn(b.Name):
+			// A gateway the manifest has on here takes its name, and
+			// planGateways plans the gateway in its place, so it doesn't
+			// run on, and nothing it uses is kept for it.
+			p.warn(Finding{
+				Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "gateways." + b.Name,
+				Message: fmt.Sprintf("%s is a gateway in the manifest now, so it replaces %s, which this plan holds back.", b.Name, heldLabel(b.Name, alias)),
+			})
+		case held:
 			queue = append(queue, holder{root: heldLabel(b.Name, alias), alias: alias, env: cfg.Env})
 			roots[id] = true
 		}
@@ -754,6 +764,9 @@ func (p *planner) retain() {
 	// links between services kept this way can go round, and a root has
 	// been followed already: it's kept, and it's nobody's to retain.
 	users := map[string][]string{}
+	// replaced are the services a held service was deployed to use whose
+	// name a gateway the manifest has on here takes, with who used them.
+	replaced := map[string][]string{}
 	followed := maps.Clone(roots)
 	for len(queue) > 0 {
 		h := queue[0]
@@ -762,6 +775,15 @@ func (p *planner) retain() {
 			id := actionID(e.Subject, e.From)
 			b := p.bindings[id]
 			if p.planned(e.Subject, e.From) != nil || b == nil || roots[id] {
+				continue
+			}
+			// planGateways plans a gateway that's on here in place of what
+			// was deployed by its name, so that isn't kept: the held
+			// service's link reaches the gateway instead.
+			if e.Subject == ServiceSubject && p.gatewayOn(e.From) {
+				if who := h.String(); !p.isGateway(b) && !slices.Contains(replaced[id], who) {
+					replaced[id] = append(replaced[id], who)
+				}
 				continue
 			}
 			if who := h.String(); !slices.Contains(users[id], who) {
@@ -779,6 +801,17 @@ func (p *planner) retain() {
 				queue = append(queue, holder{root: h.root, via: b.Name, alias: h.alias, env: cfg.Env})
 			}
 		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(replaced)) {
+		b, who := p.bindings[id], strings.Join(replaced[id], " and ")
+		was := "was"
+		if len(replaced[id]) > 1 {
+			was = "were"
+		}
+		p.warn(Finding{
+			Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "gateways." + b.Name,
+			Message: fmt.Sprintf("%s is a gateway in the manifest now, so it replaces the %s that %s, which this plan holds back, %s deployed to use.", b.Name, b.Name, who, was),
+		})
 	}
 	for _, id := range slices.Sorted(maps.Keys(users)) {
 		b, who := p.bindings[id], strings.Join(users[id], " and ")
@@ -1602,6 +1635,21 @@ func stillThere(b *Binding) string {
 		return ", so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone."
 	}
 	return ", so it keeps running."
+}
+
+// gatewayOn reports whether the manifest has a gateway by this name that's
+// on here, which planGateways plans in place of anything deployed by the
+// name.
+func (p *planner) gatewayOn(name string) bool {
+	m := p.in.Manifest
+	g, ok := m.Gateways[name]
+	return ok && manifest.On(g.For(p.in.Environment, m.Defaults).Enabled)
+}
+
+// isGateway reports whether a binding deployed a gateway.
+func (p *planner) isGateway(b *Binding) bool {
+	var cfg ServiceConfig
+	return b.Subject == ServiceSubject && json.Unmarshal(b.Config, &cfg) == nil && cfg.Gateway != nil
 }
 
 // wantedAsDeployed is wanted for what a binding deployed. A gateway the

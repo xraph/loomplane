@@ -1550,6 +1550,120 @@ resources:
 	}
 }
 
+func TestCompute_aGatewayTakingARetainedServicesNameIsPlannedOnce(t *testing.T) {
+	// api, in mono, needs site, in site, which needs db.
+	first := `version: 1
+defaults:
+  provider: cloud-run
+services:
+  api:
+    repo: mono
+    source: services/api
+    needs: [site]
+  site:
+    repo: site
+    source: .
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+`
+	live := deployed(t, computeFed(t, first, nil))
+	// The manifest drops the service site and db, and has a gateway called
+	// site that's on here, so the gateway takes the place of what api, held,
+	// was deployed to use.
+	yaml := "version: 1\ndefaults:\n  provider: cloud-run\nservices:\n  api:\n    repo: mono\n    source: services/api\n" +
+		"gateways:\n  site:\n    routes:\n      - {path: /, to: api}\n"
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	var sites []Action
+	for _, a := range r.Actions {
+		if a.ID == "service:site" {
+			sites = append(sites, a)
+		}
+	}
+	if len(sites) != 1 || sites[0].Op == Keep || sites[0].Service == nil || len(sites[0].Service.Gateway) != 1 {
+		t.Fatalf("site actions %+v", sites)
+	}
+	want := "site is a gateway in the manifest now, so it replaces the site that api in mono, which this plan holds back, was deployed to use."
+	if w := warning(r, "held", "site"); w == nil || w.Message != want {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	// Nothing that runs on uses the site that needed db any more.
+	if db := action(t, r, "resource:db"); db.Op != Delete {
+		t.Fatalf("db %+v", db)
+	}
+}
+
+func TestCompute_aGatewayTakingADroppedHeldServicesNameIsPlannedOnce(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	// The manifest drops api, which is in mono, and has a gateway called
+	// api that's on here, so the gateway takes its place.
+	yaml := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
+	yaml = strings.Replace(yaml, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
+	yaml += "gateways:\n  api:\n    routes:\n      - {path: /, to: site}\n"
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	var apis []Action
+	for _, a := range r.Actions {
+		if a.ID == "service:api" {
+			apis = append(apis, a)
+		}
+	}
+	if len(apis) != 1 || apis[0].Op == Keep || apis[0].Op == Delete || apis[0].Service == nil || len(apis[0].Service.Gateway) != 1 {
+		t.Fatalf("api actions %+v", apis)
+	}
+	var held []string
+	for _, w := range r.Warnings {
+		if w.Code == "held" && w.Name == "api" {
+			held = append(held, w.Message)
+		}
+	}
+	want := "api is a gateway in the manifest now, so it replaces api in mono, which this plan holds back."
+	if !slices.Equal(held, []string{want}) {
+		t.Fatalf("held warnings %q", held)
+	}
+}
+
+func TestCompute_aHeldServiceDeletedOutsideLoomplaneIsNeededByWhatsCreatedAgain(t *testing.T) {
+	// site, which the plan moves, was deleted too, so it's created again,
+	// and it still needs api, which the plan holds and can't rebuild.
+	first := deployed(t, computeFed(t, federatedYAML, nil))
+	live := drifted(drifted(first, "api", DriftMissing, ""), "site", DriftMissing, "")
+
+	r := computeFed(t, federatedYAML, []string{"mono"}, live...)
+	if site := action(t, r, "service:site"); site.Op != Create {
+		t.Fatalf("site %+v", site)
+	}
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-missing:api"}) {
+		t.Fatalf("problems %v", got)
+	}
+}
+
+func TestCompute_aHeldServiceThatsOffDeletedAndNeededIsAProblem(t *testing.T) {
+	// api is off here, and site, held too, runs on with the link to api it
+	// was deployed with.
+	off := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
+	off = strings.Replace(off, "    needs: [db]\n", "    needs: [db]\n    environments:\n      production:\n        enabled: false\n", 1)
+	live := drifted(deployed(t, computeFed(t, federatedYAML, nil)), "api", DriftMissing, "")
+
+	r := computeFed(t, off, []string{"mono", "site"}, live...)
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-missing:api"}) {
+		t.Fatalf("problems %v", got)
+	}
+	want := "api was deleted outside Loomplane, and mono, which it comes from, is held, so this plan can't bring it back. It's off in production, so turn it on and add mono to the scope."
+	if r.Problems[0].Message != want {
+		t.Fatalf("problem %+v", r.Problems[0])
+	}
+}
+
 func TestCompute_buildContext(t *testing.T) {
 	// The api's Dockerfile builds from its own directory, which the plan
 	// leaves unsaid, so bindings from before build contexts don't change.
