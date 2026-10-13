@@ -1791,6 +1791,80 @@ services:
 	}
 }
 
+func TestCompute_aServiceRetainedForAHeldServiceUsingAReplacedResourceKeepsTheOldAddress(t *testing.T) {
+	// api, in mono, needs site, in site, which needs db.
+	first := `version: 1
+defaults:
+  provider: cloud-run
+services:
+  api:
+    repo: mono
+    source: services/api
+    needs: [site]
+  site:
+    repo: site
+    source: .
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+`
+	live := deployed(t, computeFed(t, first, nil))
+	// The manifest drops site, which is kept for api, held, and moves db
+	// to another region, so db is replaced under site.
+	yaml := "version: 1\ndefaults:\n  provider: cloud-run\nservices:\n  api:\n    repo: mono\n    source: services/api\n" +
+		"resources:\n  db:\n    kind: postgres\n    provider: cloud-sql\n    region: europe-west1\n"
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if db := action(t, r, "resource:db"); db.Op != Replace {
+		t.Fatalf("db %+v", db)
+	}
+	if site := action(t, r, "service:site"); site.Op != Keep || !strings.HasPrefix(site.Reason, "Kept") {
+		t.Fatalf("site %+v", site)
+	}
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) {
+		t.Fatalf("problems %v", got)
+	}
+	want := "site, which this plan keeps for mono, which it holds back, uses db's address, and this plan replaces db, so site keeps the old address until a plan moves mono. Replacing db removes the old one, so site would reach nothing. Add mono to the scope."
+	if r.Problems[0].Message != want {
+		t.Fatalf("problem %+v", r.Problems[0])
+	}
+
+	// site deleted outside Loomplane reaches nothing anyway.
+	r = computeFed(t, yaml, []string{"mono"}, drifted(live, "site", DriftMissing, "")...)
+	if slices.Contains(codes(r.Problems), "held-address:site") {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+}
+
+func TestCompute_aDroppedHeldServiceUsingAReplacedResourceKeepsTheOldAddress(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	// The manifest drops api, in mono, held, which runs on with db's
+	// address, and moves db to another region, so db is replaced.
+	yaml := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
+	yaml = strings.Replace(yaml, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
+	yaml = strings.Replace(yaml, "    provider: cloud-sql\n", "    provider: cloud-sql\n    region: europe-west1\n", 1)
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if db := action(t, r, "resource:db"); db.Op != Replace {
+		t.Fatalf("db %+v", db)
+	}
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:api"}) {
+		t.Fatalf("problems %v", got)
+	}
+	want := "api in mono, which this plan holds back, uses db's address, and this plan replaces db, so api keeps the old address until a plan moves mono. Replacing db removes the old one, so api would reach nothing. Add mono to the scope."
+	if p := r.Problems[0]; p.Message != want || p.Path != "services.api" {
+		t.Fatalf("problem %+v", p)
+	}
+
+	// api deleted outside Loomplane reaches nothing anyway.
+	r = computeFed(t, yaml, []string{"mono"}, drifted(live, "api", DriftMissing, "")...)
+	if slices.Contains(codes(r.Problems), "held-address:api") {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+}
+
 func TestCompute_buildContext(t *testing.T) {
 	// The api's Dockerfile builds from its own directory, which the plan
 	// leaves unsaid, so bindings from before build contexts don't change.

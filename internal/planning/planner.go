@@ -469,35 +469,72 @@ func (p *planner) keep(name, alias string, b *Binding) {
 	p.actions = append(p.actions, a)
 }
 
-// heldAddresses reports a held service deployed with the address of
-// something this plan replaces. A replacement gets an address of its own,
-// but the held service isn't deployed again, so it keeps the old one. A
-// replace removes what it replaces once the new one is up, in the same
-// plan, so the old address reaches nothing, which is a problem. It runs
-// after planGateways, since a gateway that takes the name of what a held
-// service used can replace it too. A held service deleted outside
-// Loomplane runs nowhere, so it uses nothing.
+// heldAddresses reports what keeps running with the links it was deployed
+// with, when one points at something this plan replaces: held services,
+// the services retained for them, and held services the manifest dropped.
+// A replacement gets an address of its own, but none of those is deployed
+// again, so each keeps the old one. A replace removes what it replaces
+// once the new one is up, in the same plan, so the old address reaches
+// nothing, which is a problem. It runs after planGateways, since a gateway
+// that takes the name of what a held service used can replace it too.
+// What was deleted outside Loomplane runs nowhere, so it uses nothing.
 func (p *planner) heldAddresses() {
-	for _, name := range slices.Sorted(maps.Keys(p.held)) {
-		a, alias := p.services[name], p.held[name]
-		if b := p.bindings[a.ID]; b != nil && b.Drift == DriftMissing {
+	type user struct {
+		name    string
+		aliases []string
+		// kept is true for a service retained for a held service rather
+		// than held itself.
+		kept bool
+		env  []EnvLink
+	}
+	var users []user
+	for name, alias := range p.held {
+		users = append(users, user{name: name, aliases: []string{alias}, env: p.services[name].Service.Env})
+	}
+	for id, a := range p.retained {
+		if a.Service != nil {
+			users = append(users, user{name: a.Name, aliases: p.keptFor[id], kept: true, env: a.Service.Env})
+		}
+	}
+	for _, b := range p.bindings {
+		if alias, ok := p.droppedHeld(b); ok {
+			var cfg ServiceConfig
+			if json.Unmarshal(b.Config, &cfg) == nil {
+				users = append(users, user{name: b.Name, aliases: []string{alias}, env: cfg.Env})
+			}
+		}
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].name < users[j].name })
+	for _, u := range users {
+		if b := p.bindings[actionID(ServiceSubject, u.name)]; b != nil && b.Drift == DriftMissing {
 			continue
 		}
+		repos, scope := heldScope(u.aliases)
+		unknown := len(u.aliases) == 0 || slices.Contains(u.aliases, "")
+		var who string
+		switch {
+		case !u.kept:
+			who = heldLabel(u.name, u.aliases[0]) + ", which this plan holds back"
+		case unknown:
+			who = u.name + ", which this plan keeps for a repository it holds back"
+		default:
+			who = fmt.Sprintf("%s, which this plan keeps for %s, which it holds back", u.name, repos)
+		}
+		moves := repos
+		if unknown {
+			moves = "every repository"
+		}
 		var seen []string
-		for _, e := range a.Service.Env {
+		for _, e := range u.env {
 			dep := p.planned(e.Subject, e.From)
 			if dep == nil || dep.Op != Replace || slices.Contains(seen, dep.ID) {
 				continue
 			}
 			seen = append(seen, dep.ID)
-			moves, scope := alias, fmt.Sprintf("Add %s to the scope.", alias)
-			if alias == "" {
-				moves, scope = "every repository", "Plan every repository."
-			}
 			p.problem(Finding{
-				Code: "held-address", Subject: ServiceSubject, Name: name, Path: "services." + name,
-				Message: fmt.Sprintf("%s, which this plan holds back, uses %s's address, and this plan replaces %s, so %s keeps the old address until a plan moves %s. Replacing %s removes the old one, so %s would reach nothing. %s",
-					heldLabel(name, alias), e.From, e.From, name, moves, e.From, name, scope),
+				Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
+				Message: fmt.Sprintf("%s, uses %s's address, and this plan replaces %s, so %s keeps the old address until a plan moves %s. Replacing %s removes the old one, so %s would reach nothing. %s",
+					who, e.From, e.From, u.name, moves, e.From, u.name, scope),
 			})
 		}
 	}
