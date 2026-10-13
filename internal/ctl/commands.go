@@ -27,9 +27,11 @@ func (a *App) commands() []cli.Command {
 		cli.NewCommand("whoami", "Who the key acts as, and what it may do", a.whoami, cli.WithFlag(jsonFlag)),
 		cli.NewCommand("projects", "List the organization's projects", a.projects,
 			cli.WithFlag(jsonFlag),
-			cli.WithSubcommand(cli.NewCommand("create", "Create a project, from a first repository", a.createProject,
-				cli.WithUsage("loomctl projects create <name> --repo https://github.com/acme/mono"),
-				cli.WithFlags(cli.NewStringFlag("repo", "", "The repository's URL", ""), jsonFlag)))),
+			cli.WithSubcommand(cli.NewCommand("create", "Create a project, from its repositories", a.createProject,
+				cli.WithUsage("loomctl projects create <name> --repo acme/web --repo billing=other/web"),
+				cli.WithFlags(
+					cli.NewStringSliceFlag("repo", "", "A repository, as owner/name or a URL; repeat it for each, and write alias=repository to name one", nil),
+					jsonFlag)))),
 		cli.NewCommand("analyze", "Read a project's repositories and find their services", a.analyze,
 			cli.WithUsage("loomctl analyze <project> [--source web] [--ref main]"),
 			cli.WithFlags(
@@ -159,6 +161,30 @@ func (a *App) projects(ctx cli.CommandContext) error {
 	return nil
 }
 
+// newRepositories reads each --repo: a repository as owner/name or a URL,
+// or alias=repository to name it. A GitHub address never has an "=", so
+// the first one splits them.
+func newRepositories(flags []string) ([]client.NewRepository, error) {
+	var out []client.NewRepository
+	for _, f := range flags {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		var r client.NewRepository
+		if alias, repo, ok := strings.Cut(f, "="); ok {
+			r.Alias, r.Repository = strings.TrimSpace(alias), strings.TrimSpace(repo)
+			if r.Alias == "" || r.Repository == "" {
+				return nil, fmt.Errorf("--repo %s: write alias=repository, with both", f)
+			}
+		} else {
+			r.Repository = f
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 func (a *App) createProject(ctx cli.CommandContext) error {
 	c, err := a.client()
 	if err != nil {
@@ -168,7 +194,11 @@ func (a *App) createProject(ctx cli.CommandContext) error {
 	if name == "" {
 		return errors.New("name the project")
 	}
-	p, err := c.CreateProject(ctxOf(ctx), client.NewProject{Name: name, RepositoryURL: ctx.String("repo")})
+	repos, err := newRepositories(ctx.StringSlice("repo"))
+	if err != nil {
+		return err
+	}
+	p, err := c.CreateProject(ctxOf(ctx), client.NewProject{Name: name, Repositories: repos})
 	if err != nil {
 		return err
 	}
