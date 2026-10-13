@@ -126,6 +126,13 @@ export interface BindingList {
   bindings: Binding[];
 }
 
+export interface Build {
+  builder?: string;
+  context?: string;
+  image?: string;
+  registry?: string;
+}
+
 export interface BuildSystem {
   evidence: Evidence;
   name: string;
@@ -330,13 +337,24 @@ export interface EditInputBody {
 };
   ignore?: string;
   placement?: {
+  build?: Build;
   enabled?: boolean;
+  endpoint?: Endpoint;
   environment?: string;
+  healthPath?: string;
   name: string;
   provider?: string;
   region?: string;
   section: string;
+  target?: string;
 };
+}
+
+export interface Endpoint {
+  hostPort?: number;
+  hostname?: string;
+  ingressClass?: string;
+  tlsSecret?: string;
 }
 
 export interface EnvLink {

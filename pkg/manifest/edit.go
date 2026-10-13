@@ -17,12 +17,16 @@ import (
 // Placement changes where an existing service, resource or gateway runs.
 // A nil field leaves its value alone; an empty string restores inheritance.
 type Placement struct {
-	Section     string  `json:"section"`
-	Name        string  `json:"name"`
-	Environment string  `json:"environment,omitempty"`
-	Provider    *string `json:"provider,omitempty"`
-	Region      *string `json:"region,omitempty"`
-	Enabled     *bool   `json:"enabled,omitempty"`
+	Section     string    `json:"section"`
+	Name        string    `json:"name"`
+	Environment string    `json:"environment,omitempty"`
+	Provider    *string   `json:"provider,omitempty"`
+	Region      *string   `json:"region,omitempty"`
+	Target      *string   `json:"target,omitempty"`
+	HealthPath  *string   `json:"health_path,omitempty"`
+	Endpoint    *Endpoint `json:"endpoint,omitempty"`
+	Build       *Build    `json:"build,omitempty"`
+	Enabled     *bool     `json:"enabled,omitempty"`
 }
 
 // WithPlacement edits only placement fields, preserving source, needs and
@@ -32,8 +36,11 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		return nil, err
 	}
 	if !slices.Contains([]string{"services", "resources", "gateways"}, p.Section) ||
-		(p.Provider == nil && p.Region == nil && p.Enabled == nil) {
+		(p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil) {
 		return nil, fmt.Errorf("%w: name a service, resource or gateway and its placement changes", ErrInvalid)
+	}
+	if p.Section != "services" && (p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil) {
+		return nil, fmt.Errorf("%w: target, endpoint, health_path and build edits need a service", ErrInvalid)
 	}
 	if p.Environment == "" && p.Section != "services" && p.Enabled != nil {
 		return nil, fmt.Errorf("%w: enabled on %s needs an environment", ErrInvalid, p.Section)
@@ -86,10 +93,24 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 	for _, field := range []struct {
 		key   string
 		value *string
-	}{{"provider", p.Provider}, {"region", p.Region}} {
+	}{{"provider", p.Provider}, {"region", p.Region}, {"target", p.Target}, {"health_path", p.HealthPath}} {
 		if field.value != nil {
 			setPlacementField(target, field.key, scalar(*field.value), *field.value == "")
 		}
+	}
+	if p.Endpoint != nil {
+		value := &yaml.Node{}
+		if err := value.Encode(p.Endpoint); err != nil {
+			return nil, err
+		}
+		setPlacementField(target, "endpoint", value, *p.Endpoint == (Endpoint{}))
+	}
+	if p.Build != nil {
+		value := &yaml.Node{}
+		if err := value.Encode(p.Build); err != nil {
+			return nil, err
+		}
+		setPlacementField(target, "build", value, *p.Build == (Build{}))
 	}
 	if p.Enabled != nil {
 		value := &yaml.Node{}

@@ -2556,6 +2556,23 @@
         "type": "object",
         "x-forge-envelope": "bindings"
       },
+      "Build": {
+        "type": "object",
+        "properties": {
+          "builder": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          }
+        }
+      },
       "BuildSystem": {
         "type": "object",
         "required": [
@@ -3243,10 +3260,19 @@
               "name"
             ],
             "properties": {
+              "build": {
+                "$ref": "#/components/schemas/Build"
+              },
               "enabled": {
                 "type": "boolean"
               },
+              "endpoint": {
+                "$ref": "#/components/schemas/Endpoint"
+              },
               "environment": {
+                "type": "string"
+              },
+              "health_path": {
                 "type": "string"
               },
               "name": {
@@ -3260,8 +3286,28 @@
               },
               "section": {
                 "type": "string"
+              },
+              "target": {
+                "type": "string"
               }
             }
+          }
+        }
+      },
+      "Endpoint": {
+        "type": "object",
+        "properties": {
+          "host_port": {
+            "type": "integer"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "ingress_class": {
+            "type": "string"
+          },
+          "tls_secret": {
+            "type": "string"
           }
         }
       },

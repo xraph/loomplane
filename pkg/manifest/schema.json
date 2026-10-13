@@ -92,11 +92,45 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
     },
+    "connection": {
+      "description": "A connection ID from this organization's infrastructure inventory.",
+      "type": "string",
+      "pattern": "^conn_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "hostname": { "type": "string", "maxLength": 253, "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$" },
+        "ingress_class": { "type": "string", "maxLength": 253, "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$" },
+        "tls_secret": { "type": "string", "maxLength": 63, "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$" }
+      }
+    },
+    "build": {
+      "description": "Build the approved source on a connected builder, or use a digest-pinned image.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "description": "The build directory from the repository root. Use . for the root itself.",
+          "type": "string",
+          "pattern": "^(?:\\.|(?!\\.\\.?(?:/|$))[A-Za-z0-9._@+-]+(?:/(?!\\.\\.?(?:/|$))[A-Za-z0-9._@+-]+)*)$"
+        },
+        "builder": { "$ref": "#/$defs/connection" },
+        "registry": { "$ref": "#/$defs/connection" },
+        "image": { "type": "string", "maxLength": 512, "pattern": "^[a-z0-9][a-z0-9.:/_-]*@sha256:[a-f0-9]{64}$" }
+      }
+    },
     "settings": {
       "type": "object",
       "properties": {
         "provider": { "$ref": "#/$defs/provider" },
         "region": { "$ref": "#/$defs/region" },
+        "target": { "$ref": "#/$defs/connection" },
+        "endpoint": { "$ref": "#/$defs/endpoint" },
+        "health_path": { "type": "string", "maxLength": 512, "pattern": "^/(?!/)[A-Za-z0-9/._~%+-]*$" },
+        "build": { "$ref": "#/$defs/build" },
         "port": {
           "description": "The port the service listens on. Without it, the one its Dockerfile exposes.",
           "type": "integer",
@@ -152,18 +186,6 @@
         "kind": {
           "description": "Corrects what analysis decided the service is.",
           "enum": ["http-service", "web-app", "static-site", "worker"]
-        },
-        "build": {
-          "description": "How the service's Dockerfile is built.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "context": {
-              "description": "The directory the build runs in, from the repository's root: . for the root itself. Empty uses what analysis found, which is the Dockerfile's own directory unless a Compose file says another.",
-              "type": "string",
-              "pattern": "^(?:\\.|(?!\\.\\.?(?:/|$))[A-Za-z0-9._@+-]+(?:/(?!\\.\\.?(?:/|$))[A-Za-z0-9._@+-]+)*)$"
-            }
-          }
         },
         "needs": {
           "description": "Resources and other services this one talks to. Each one it names gets the service its address, in a variable.",

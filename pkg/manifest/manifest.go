@@ -130,9 +130,7 @@ type Service struct {
 	Source string `json:"source" yaml:"source"`
 	// Kind corrects what analysis decided the service is: http-service,
 	// web-app, static-site or worker. Empty keeps what analysis found.
-	Kind string `json:"kind,omitempty" yaml:"kind,omitempty"`
-	// Build changes how the service's Dockerfile is built.
-	Build    *Build `json:"build,omitempty" yaml:"build,omitempty"`
+	Kind     string `json:"kind,omitempty" yaml:"kind,omitempty"`
 	Settings `json:",inline" yaml:",inline"`
 	// Needs names the resources and other services this one talks to.
 	// Each one it names gets the service its address, in a variable.
@@ -147,12 +145,24 @@ type Build struct {
 	// root: "." for the root itself. Empty uses what analysis found, which
 	// is the Dockerfile's own directory unless a Compose file says another.
 	Context string `json:"context,omitempty" yaml:"context,omitempty"`
+	// Builder and Registry name checked connections for a remote image build.
+	Builder  string `json:"builder,omitempty" yaml:"builder,omitempty"`
+	Registry string `json:"registry,omitempty" yaml:"registry,omitempty"`
+	// Image skips the source build and must be pinned by its sha256 digest.
+	Image string `json:"image,omitempty" yaml:"image,omitempty"`
 }
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
+	// Target names the server or cluster connection for this service.
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+	// Endpoint configures public access on owned infrastructure.
+	Endpoint *Endpoint `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+	// HealthPath is the HTTP readiness path, such as /_/health for Forge.
+	HealthPath string `json:"health_path,omitempty" yaml:"health_path,omitempty"`
+	Build      *Build `json:"build,omitempty" yaml:"build,omitempty"`
 	// Port is the port the service listens on. Empty uses what analysis
 	// found in its Dockerfile.
 	Port  int    `json:"port,omitempty" yaml:"port,omitempty"`
@@ -454,9 +464,6 @@ func (m *Manifest) Validate() error {
 		if s.Kind != "" && !slices.Contains(serviceKinds, s.Kind) {
 			add(path+".kind", "%q isn't a service kind; use one of %s", s.Kind, strings.Join(serviceKinds, ", "))
 		}
-		if s.Build != nil && s.Build.Context != "" && !isDir(s.Build.Context) {
-			add(path+".build.context", "%q isn't a directory in the repository; use . for its root", s.Build.Context)
-		}
 		checkSettings(add, path, s.Settings)
 		seen := map[string]bool{}
 		for i, need := range s.Needs {
@@ -508,6 +515,7 @@ func checkToken(add func(string, string, ...any), path, what, value string) {
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
 	checkToken(add, path+".provider", "provider", s.Provider)
 	checkToken(add, path+".region", "region", s.Region)
+	checkInfrastructure(add, path, s)
 	if s.Port < 0 || s.Port > MaxPort {
 		add(path+".port", "must be between 1 and %d", MaxPort)
 	}
@@ -706,7 +714,25 @@ func (s Service) For(env string, d Defaults) Settings {
 	if !ok {
 		return out
 	}
+	if o.Provider != "" && o.Provider != out.Provider {
+		out.Target, out.Endpoint = "", nil
+	}
+	if o.Target != "" && o.Target != out.Target {
+		out.Endpoint = nil
+	}
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
+	if o.Target != "" {
+		out.Target = o.Target
+	}
+	if o.Endpoint != nil {
+		out.Endpoint = o.Endpoint
+	}
+	if o.HealthPath != "" {
+		out.HealthPath = o.HealthPath
+	}
+	if o.Build != nil {
+		out.Build = o.Build
+	}
 	if o.Port != 0 {
 		out.Port = o.Port
 	}
