@@ -1664,6 +1664,66 @@ func TestCompute_aHeldServiceThatsOffDeletedAndNeededIsAProblem(t *testing.T) {
 	}
 }
 
+func TestCompute_aHeldServiceUsingAReplacedServiceKeepsTheOldAddress(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	// api, which the plan moves, moves region, so it's replaced, and site,
+	// held, was deployed with the old api's address.
+	moved := strings.Replace(federatedYAML, "    source: services/api\n", "    source: services/api\n    region: europe-west1\n", 1)
+
+	r := computeFed(t, moved, []string{"site"}, live...)
+	if api := action(t, r, "service:api"); api.Op != Replace {
+		t.Fatalf("api %+v", api)
+	}
+	if site := action(t, r, "service:site"); site.Op != Keep {
+		t.Fatalf("site %+v", site)
+	}
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) {
+		t.Fatalf("problems %v", got)
+	}
+	want := "site in site, which this plan holds back, uses api's address, and this plan replaces api, so site keeps the old address until a plan moves site. Replacing api removes the old one, so site would reach nothing. Add site to the scope."
+	if p := r.Problems[0]; p.Message != want || p.Path != "services.site" || p.Subject != ServiceSubject {
+		t.Fatalf("problem %+v", p)
+	}
+
+	// Moving site too gives it the new address.
+	if r := computeFed(t, moved, nil, live...); len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+}
+
+func TestCompute_aHeldServiceUsingAReplacedGatewayKeepsTheOldAddress(t *testing.T) {
+	// api, in mono, needs site, in site.
+	first := `version: 1
+defaults:
+  provider: cloud-run
+services:
+  api:
+    repo: mono
+    source: services/api
+    needs: [site]
+  site:
+    repo: site
+    source: .
+`
+	live := deployed(t, computeFed(t, first, nil))
+	// A gateway called site on ECS takes the name of the site on Cloud Run
+	// that api, held, was deployed to use, so it replaces it.
+	yaml := "version: 1\ndefaults:\n  provider: cloud-run\nservices:\n  api:\n    repo: mono\n    source: services/api\n" +
+		"gateways:\n  site:\n    provider: ecs-fargate\n    routes:\n      - {path: /, to: api}\n"
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if site := action(t, r, "service:site"); site.Op != Replace || len(site.Service.Gateway) != 1 {
+		t.Fatalf("site %+v", site)
+	}
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:api"}) {
+		t.Fatalf("problems %v", got)
+	}
+	want := "api in mono, which this plan holds back, uses site's address, and this plan replaces site, so api keeps the old address until a plan moves mono. Replacing site removes the old one, so api would reach nothing. Add mono to the scope."
+	if r.Problems[0].Message != want {
+		t.Fatalf("problem %+v", r.Problems[0])
+	}
+}
+
 func TestCompute_buildContext(t *testing.T) {
 	// The api's Dockerfile builds from its own directory, which the plan
 	// leaves unsaid, so bindings from before build contexts don't change.

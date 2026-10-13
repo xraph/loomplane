@@ -98,6 +98,7 @@ func Compute(in Input) *Result {
 	p.planResources()
 	p.planServices()
 	p.planGateways()
+	p.heldAddresses()
 	p.heldDrift()
 	p.checkFindings()
 	p.impact()
@@ -466,6 +467,40 @@ func (p *planner) keep(name, alias string, b *Binding) {
 	p.held[name] = alias
 	p.services[name] = a
 	p.actions = append(p.actions, a)
+}
+
+// heldAddresses reports a held service deployed with the address of
+// something this plan replaces. A replacement gets an address of its own,
+// but the held service isn't deployed again, so it keeps the old one. A
+// replace removes what it replaces once the new one is up, in the same
+// plan, so the old address reaches nothing, which is a problem. It runs
+// after planGateways, since a gateway that takes the name of what a held
+// service used can replace it too. A held service deleted outside
+// Loomplane runs nowhere, so it uses nothing.
+func (p *planner) heldAddresses() {
+	for _, name := range slices.Sorted(maps.Keys(p.held)) {
+		a, alias := p.services[name], p.held[name]
+		if b := p.bindings[a.ID]; b != nil && b.Drift == DriftMissing {
+			continue
+		}
+		var seen []string
+		for _, e := range a.Service.Env {
+			dep := p.planned(e.Subject, e.From)
+			if dep == nil || dep.Op != Replace || slices.Contains(seen, dep.ID) {
+				continue
+			}
+			seen = append(seen, dep.ID)
+			moves, scope := alias, fmt.Sprintf("Add %s to the scope.", alias)
+			if alias == "" {
+				moves, scope = "every repository", "Plan every repository."
+			}
+			p.problem(Finding{
+				Code: "held-address", Subject: ServiceSubject, Name: name, Path: "services." + name,
+				Message: fmt.Sprintf("%s, which this plan holds back, uses %s's address, and this plan replaces %s, so %s keeps the old address until a plan moves %s. Replacing %s removes the old one, so %s would reach nothing. %s",
+					heldLabel(name, alias), e.From, e.From, name, moves, e.From, name, scope),
+			})
+		}
+	}
 }
 
 // heldDrift reports drift on what the plan keeps as deployed because it
