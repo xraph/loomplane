@@ -1931,6 +1931,80 @@ func TestCompute_aDroppedHeldServiceUsingAReplacedResourceKeepsTheOldAddress(t *
 	}
 }
 
+func TestCompute_aHeldServiceUsingAServiceCreatedAgainKeepsTheOldAddress(t *testing.T) {
+	// api was deleted outside Loomplane, so it's created again at a new
+	// address, and site, held, was deployed with the old one.
+	live := drifted(deployed(t, computeFed(t, federatedYAML, nil)), "api", DriftMissing, "")
+
+	r := computeFed(t, federatedYAML, []string{"site"}, live...)
+	if api := action(t, r, "service:api"); api.Op != Create {
+		t.Fatalf("api %+v", api)
+	}
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) {
+		t.Fatalf("problems %v", got)
+	}
+	want := "site in site, which this plan holds back, uses api's address, and this plan creates api again, so site keeps the old one's address, which this plan stops tracking. Add site to the scope."
+	if r.Problems[0].Message != want {
+		t.Fatalf("problem %+v", r.Problems[0])
+	}
+}
+
+// federatedOnECS is federatedYAML with both services on ECS, where site reaches
+// api by a fixed address inside the environment's network.
+const federatedOnECS = `version: 1
+defaults:
+  provider: ecs-fargate
+services:
+  api:
+    repo: mono
+    source: services/api
+  site:
+    repo: site
+    source: .
+    needs: [api]
+ignore: {resources: [postgres, redis]}
+`
+
+func TestCompute_aFixedAddressThatAMoveLeavesAloneIsntRedeployed(t *testing.T) {
+	first := computeFed(t, federatedOnECS, nil)
+	if len(first.Problems) != 0 {
+		t.Fatalf("problems %v", codes(first.Problems))
+	}
+	if env := action(t, first, "service:site").Service.Env; len(env) != 1 || env[0].Address != "http://api:8080" {
+		t.Fatalf("the test needs site to reach api at a fixed address: %+v", env)
+	}
+	live := deployed(t, first)
+	region := strings.Replace(federatedOnECS, "    source: services/api\n", "    source: services/api\n    region: us-west-2\n", 1)
+	cloudRun := strings.Replace(federatedOnECS, "    source: services/api\n", "    source: services/api\n    provider: cloud-run\n", 1)
+
+	// api moves region, and site still reaches it at http://api:8080.
+	r := computeFed(t, region, nil, live...)
+	if api := action(t, r, "service:api"); api.Op != Replace {
+		t.Fatalf("api %+v", api)
+	}
+	if site := action(t, r, "service:site"); site.Op != Keep {
+		t.Fatalf("site %+v", site)
+	}
+	// Nor is site, held, left with an old address.
+	if held := computeFed(t, region, []string{"site"}, live...); len(held.Problems) != 0 {
+		t.Fatalf("problems %v", codes(held.Problems))
+	}
+	if held := computeFed(t, federatedOnECS, []string{"site"}, drifted(live, "api", DriftMissing, "")...); len(held.Problems) != 0 {
+		t.Fatalf("problems %v", codes(held.Problems))
+	}
+
+	// On Cloud Run, api has an address of its own, so the fixed one is
+	// dead.
+	r = computeFed(t, cloudRun, nil, live...)
+	if site := action(t, r, "service:site"); site.Op != Update {
+		t.Fatalf("site %+v", site)
+	}
+	r = computeFed(t, cloudRun, []string{"site"}, live...)
+	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) {
+		t.Fatalf("problems %v", got)
+	}
+}
+
 func TestCompute_buildContext(t *testing.T) {
 	// The api's Dockerfile builds from its own directory, which the plan
 	// leaves unsaid, so bindings from before build contexts don't change.

@@ -504,7 +504,7 @@ func (p *planner) readdress() {
 			if dep == nil || slices.Contains(moved, dep.Name) {
 				continue
 			}
-			if dep.Op == Replace || (dep.Op == Create && p.bindings[dep.ID] != nil) {
+			if _, ok := p.readdressed(dep, e, a.Provider); ok {
 				moved = append(moved, dep.Name)
 			}
 		}
@@ -518,10 +518,43 @@ func (p *planner) readdress() {
 	}
 }
 
+// readdressed reports whether this plan gives dep a new address for a
+// link to it from a service on target, and says how, for messages: it
+// replaces dep, or creates it again over a binding. A link with a fixed
+// address dep still answers at as planned, as one service on ECS reaches
+// another, gets nothing new. A move off ECS leaves that address dead, so
+// it still counts.
+func (p *planner) readdressed(dep *Action, e EnvLink, target string) (string, bool) {
+	var how string
+	switch {
+	case dep.Op == Replace:
+		how = "replaces " + dep.Name
+	case dep.Op == Create && p.bindings[dep.ID] != nil:
+		how = "creates " + dep.Name + " again"
+	default:
+		return "", false
+	}
+	if e.Address != "" && e.Address == fixedAddress(dep, target) {
+		return "", false
+	}
+	return how, true
+}
+
+// fixedAddress is the address link and route give a service on target
+// that uses dep, when both run on ECS, inside the environment's network.
+// Anywhere else it's empty: dep is reached at an address of its own.
+func fixedAddress(dep *Action, target string) string {
+	if dep.Service == nil || dep.Provider != ecsFargate || target != ecsFargate {
+		return ""
+	}
+	return fmt.Sprintf("http://%s:%d", dep.Name, dep.Service.Port)
+}
+
 // heldAddresses reports what keeps running with the links it was deployed
-// with, when one points at something this plan replaces: held services,
-// the services retained for them, and held services the manifest dropped.
-// A replacement gets an address of its own, but none of those is deployed
+// with, when one points at something this plan gives a new address, as
+// readdressed decides: held services, the services retained for them, and
+// held services the manifest dropped. A replacement, or what's created
+// again, gets an address of its own, but none of those is deployed
 // again, so each keeps the old one's address. This plan stops tracking
 // the old one once its binding is the replacement's, so that's a problem. It
 // runs after planGateways, since a gateway that takes the name of what a
@@ -530,8 +563,9 @@ func (p *planner) readdress() {
 // in addressed, so gatewayHeld doesn't say it again.
 func (p *planner) heldAddresses() {
 	type user struct {
-		name    string
-		aliases []string
+		name     string
+		provider string
+		aliases  []string
 		// kept is true for a service retained for a held service rather
 		// than held itself.
 		kept bool
@@ -539,18 +573,19 @@ func (p *planner) heldAddresses() {
 	}
 	var users []user
 	for name, alias := range p.held {
-		users = append(users, user{name: name, aliases: []string{alias}, env: p.services[name].Service.Env})
+		a := p.services[name]
+		users = append(users, user{name: name, provider: a.Provider, aliases: []string{alias}, env: a.Service.Env})
 	}
 	for id, a := range p.retained {
 		if a.Service != nil {
-			users = append(users, user{name: a.Name, aliases: p.keptFor[id], kept: true, env: a.Service.Env})
+			users = append(users, user{name: a.Name, provider: a.Provider, aliases: p.keptFor[id], kept: true, env: a.Service.Env})
 		}
 	}
 	for _, b := range p.bindings {
 		if alias, ok := p.droppedHeld(b); ok {
 			var cfg ServiceConfig
 			if json.Unmarshal(b.Config, &cfg) == nil {
-				users = append(users, user{name: b.Name, aliases: []string{alias}, env: cfg.Env})
+				users = append(users, user{name: b.Name, provider: b.Provider, aliases: []string{alias}, env: cfg.Env})
 			}
 		}
 	}
@@ -573,15 +608,19 @@ func (p *planner) heldAddresses() {
 		var seen []string
 		for _, e := range u.env {
 			dep := p.planned(e.Subject, e.From)
-			if dep == nil || dep.Op != Replace || slices.Contains(seen, dep.ID) {
+			if dep == nil || slices.Contains(seen, dep.ID) {
+				continue
+			}
+			how, ok := p.readdressed(dep, e, u.provider)
+			if !ok {
 				continue
 			}
 			seen = append(seen, dep.ID)
 			p.addressed[dep.ID] = append(p.addressed[dep.ID], u.name)
 			p.problem(Finding{
 				Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
-				Message: fmt.Sprintf("%s, uses %s's address, and this plan replaces %s, so %s keeps the old one's address, which this plan stops tracking. %s",
-					who, e.From, e.From, u.name, scope),
+				Message: fmt.Sprintf("%s, uses %s's address, and this plan %s, so %s keeps the old one's address, which this plan stops tracking. %s",
+					who, e.From, how, u.name, scope),
 			})
 		}
 	}
