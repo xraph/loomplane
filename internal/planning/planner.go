@@ -485,10 +485,9 @@ func (p *planner) heldDrift() {
 		// kept is true for what's kept for a held service rather than
 		// held itself.
 		kept bool
-		// gone says how the manifest dropped a held service it no longer
-		// plans here, and restore how to plan it again. Both are empty
-		// for anything the manifest still plans.
-		gone, restore string
+		// dropped is true for a held service the manifest no longer has,
+		// which nothing plans but planDeletes leaves running.
+		dropped bool
 	}
 	items := make([]heldItem, 0, len(p.held)+len(p.retained))
 	for name, alias := range p.held {
@@ -498,8 +497,8 @@ func (p *planner) heldDrift() {
 		items = append(items, heldItem{id: id, aliases: p.keptFor[id], kept: true})
 	}
 	for id, b := range p.bindings {
-		if alias, gone, restore, ok := p.droppedHeld(b); ok {
-			items = append(items, heldItem{id: id, aliases: []string{alias}, gone: gone, restore: restore})
+		if alias, ok := p.droppedHeld(b); ok {
+			items = append(items, heldItem{id: id, aliases: []string{alias}, dropped: true})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].id < items[j].id })
@@ -518,8 +517,8 @@ func (p *planner) heldDrift() {
 			path = "resources." + b.Name
 		}
 		f := Finding{Subject: b.Subject, Name: b.Name, Path: path}
-		if it.gone != "" {
-			p.droppedDrift(f, b, it.aliases, it.gone, it.restore)
+		if it.dropped {
+			p.droppedDrift(f, b, it.aliases)
 			continue
 		}
 		switch {
@@ -528,8 +527,15 @@ func (p *planner) heldDrift() {
 			f.Message = fmt.Sprintf("%s was deleted outside Loomplane, and %s, so this plan can't bring it back. %s", b.Name, from, scope)
 			p.problem(f)
 			continue
+		// What's kept for a held service is what the manifest no longer
+		// plans, so a plan that moves the repository removes it rather than
+		// bringing it back.
+		case b.Drift == DriftMissing && it.kept:
+			f.Message = fmt.Sprintf("%s was deleted outside Loomplane, and %s, so it stays gone, and %s clears what's left of it.", b.Name, from, heldClearer(it.aliases))
 		case b.Drift == DriftMissing:
 			f.Message = fmt.Sprintf("%s was deleted outside Loomplane, and %s, so it stays gone until a plan that moves %s brings it back.", b.Name, from, repos)
+		case it.kept:
+			f.Message = fmt.Sprintf("%s was changed outside Loomplane (%s), and %s, so it stays that way until %s removes it.", b.Name, b.DriftMessage, from, heldClearer(it.aliases))
 		default:
 			f.Message = fmt.Sprintf("%s was changed outside Loomplane (%s), and %s, so it stays that way until a plan that moves %s deploys it as planned again.", b.Name, b.DriftMessage, from, repos)
 		}
@@ -538,51 +544,52 @@ func (p *planner) heldDrift() {
 	}
 }
 
-// droppedDrift reports drift on a held service the manifest dropped, or
-// turned off here, which is the drift heldDrift reports for any held
-// service, except that a plan that moves its repository removes it rather
-// than bringing it back.
-func (p *planner) droppedDrift(f Finding, b *Binding, aliases []string, gone, restore string) {
-	repos, _ := heldScope(aliases)
+// droppedDrift reports drift on a held service the manifest no longer
+// has, which is the drift heldDrift reports for any held service, except
+// that a plan that moves its repository removes it rather than bringing
+// it back.
+func (p *planner) droppedDrift(f Finding, b *Binding, aliases []string) {
 	move := "plan every repository"
-	if len(aliases) > 0 && !slices.Contains(aliases, "") {
+	if repos, _ := heldScope(aliases); len(aliases) > 0 && !slices.Contains(aliases, "") {
 		move = fmt.Sprintf("add %s to the scope", repos)
 	}
 	switch {
 	case b.Drift == DriftMissing && p.needed(actionID(b.Subject, b.Name)):
 		f.Code = "held-missing"
-		f.Message = fmt.Sprintf("%s was deleted outside Loomplane and %s, so no plan brings it back, yet something in this plan still uses it. %s and %s, or stop using it.", b.Name, gone, restore, move)
+		f.Message = fmt.Sprintf("%s was deleted outside Loomplane and the manifest no longer has it, so this plan doesn't bring it back, yet something in this plan still uses it. Put it back in the manifest and %s, or stop using it.", b.Name, move)
 		p.problem(f)
 		return
 	case b.Drift == DriftMissing:
-		f.Message = fmt.Sprintf("%s was deleted outside Loomplane and %s, so it stays gone, and a plan that moves %s clears what's left of it.", b.Name, gone, repos)
+		f.Message = fmt.Sprintf("%s was deleted outside Loomplane and the manifest no longer has it, so it stays gone, and %s clears what's left of it.", b.Name, heldClearer(aliases))
 	default:
-		f.Message = fmt.Sprintf("%s was changed outside Loomplane (%s), and %s, which it comes from, is held, so it stays that way until a plan that moves %s removes it, as %s.", b.Name, b.DriftMessage, repos, repos, gone)
+		f.Message = fmt.Sprintf("%s was changed outside Loomplane (%s) and the manifest no longer has it, so it stays that way until %s removes it.", b.Name, b.DriftMessage, heldClearer(aliases))
 	}
 	f.Code = "held-drifted"
 	p.warn(f)
 }
 
+// heldClearer names the plan that removes what a held repository keeps
+// running after the manifest dropped it: one that moves the repository,
+// or only a plan of every repository when a binding doesn't say which one
+// it's from.
+func heldClearer(aliases []string) string {
+	if len(aliases) == 0 || slices.Contains(aliases, "") {
+		return "only a plan of every repository"
+	}
+	return "a plan that moves " + strings.Join(aliases, " and ")
+}
+
 // droppedHeld reports whether a binding is a deployed service of a held
-// repository that the manifest no longer plans here, which planDeletes
-// leaves running through keepHeld. gone says how the manifest dropped it,
-// and restore how to plan it again. One the manifest still wants on
-// couldn't be planned, and a problem says why, so it isn't one.
-func (p *planner) droppedHeld(b *Binding) (alias, gone, restore string, ok bool) {
+// repository that the manifest no longer has, which planDeletes leaves
+// running through keepHeld, and the alias of that repository. A service
+// the manifest still has is always planned, since planServices keeps a
+// held one as deployed whether or not it's on, so only a dropped one is
+// left. A gateway the manifest has by the same name isn't this service.
+func (p *planner) droppedHeld(b *Binding) (string, bool) {
 	if b.Subject != ServiceSubject || p.planned(b.Subject, b.Name) != nil || p.retained[actionID(b.Subject, b.Name)] != nil {
-		return "", "", "", false
+		return "", false
 	}
-	alias, held := p.heldBinding(b)
-	if !held {
-		return "", "", "", false
-	}
-	switch wanted, on := p.wanted(b); {
-	case !wanted:
-		return alias, "the manifest no longer has it", "Put it back in the manifest", true
-	case !on:
-		return alias, fmt.Sprintf("it's off in %s", p.in.Environment), fmt.Sprintf("Turn it on in %s", p.in.Environment), true
-	}
-	return "", "", "", false
+	return p.heldBinding(b)
 }
 
 // heldScope names held repositories for a message, and says what fixes
@@ -609,10 +616,11 @@ func (p *planner) needed(id string) bool {
 		}
 	}
 	for bid, b := range p.bindings {
-		if bid == id {
+		// One deleted outside Loomplane runs nowhere, so it uses nothing.
+		if bid == id || b.Drift == DriftMissing {
 			continue
 		}
-		if _, _, _, ok := p.droppedHeld(b); !ok {
+		if _, ok := p.droppedHeld(b); !ok {
 			continue
 		}
 		var cfg ServiceConfig
@@ -1539,25 +1547,16 @@ func (p *planner) heldBinding(b *Binding) (string, bool) {
 }
 
 // keepHeld leaves a deployed service of a held repository running when
-// the manifest no longer plans it, saying why it isn't deleted. One the
-// manifest still wants on couldn't be planned, and a problem says why.
-// An empty repo is a binding that doesn't say which repository it's from.
+// the manifest no longer has it, saying why it isn't deleted. As
+// droppedHeld says, a service the manifest still has is always planned,
+// and a gateway it has by the same name isn't this service. An empty repo
+// is a binding that doesn't say which repository it's from.
 func (p *planner) keepHeld(b *Binding, repo string) {
-	wanted, on := p.wanted(b)
 	in := fmt.Sprintf("it's in %s, which this plan holds back", repo)
 	if repo == "" {
 		in = "it was deployed before Loomplane recorded which repository a service is from, and this plan holds some back"
 	}
-	var msg string
-	switch {
-	case !wanted:
-		msg = fmt.Sprintf("The manifest no longer has %s, but %s", b.Name, in)
-	case !on:
-		msg = fmt.Sprintf("%s is off in %s, but %s", b.Name, p.in.Environment, in)
-	default:
-		return
-	}
-	msg += stillThere(b)
+	msg := fmt.Sprintf("The manifest no longer has %s, but %s", b.Name, in) + stillThere(b)
 	if repo == "" {
 		msg += " Plan every repository to remove it."
 	}

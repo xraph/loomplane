@@ -1303,7 +1303,7 @@ func TestCompute_driftOnAHeldServiceTheManifestDroppedIsReported(t *testing.T) {
 		},
 		{
 			"changed", DriftChanged, "another revision is live",
-			"api was changed outside Loomplane (another revision is live), and mono, which it comes from, is held, so it stays that way until a plan that moves mono removes it, as the manifest no longer has it.",
+			"api was changed outside Loomplane (another revision is live) and the manifest no longer has it, so it stays that way until a plan that moves mono removes it.",
 			"The manifest no longer has api, but it's in mono, which this plan holds back, so it keeps running.",
 		},
 	} {
@@ -1339,7 +1339,7 @@ func TestCompute_aHeldServiceTheManifestDroppedThatsDeletedAndNeededIsAProblem(t
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-missing:api"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "api was deleted outside Loomplane and the manifest no longer has it, so no plan brings it back, yet something in this plan still uses it. Put it back in the manifest and add mono to the scope, or stop using it."
+	want := "api was deleted outside Loomplane and the manifest no longer has it, so this plan doesn't bring it back, yet something in this plan still uses it. Put it back in the manifest and add mono to the scope, or stop using it."
 	if r.Problems[0].Message != want || r.Problems[0].Path != "services.api" {
 		t.Fatalf("problem %+v", r.Problems[0])
 	}
@@ -1376,10 +1376,10 @@ func TestCompute_aRetainedSubjectDeletedOutsideLoomplaneStaysGone(t *testing.T) 
 	}
 }
 
-func TestCompute_driftOnAHeldServiceOffUnderAGatewaysNameIsReported(t *testing.T) {
+func TestCompute_driftOnAHeldServiceUnderAGatewaysNameIsReported(t *testing.T) {
 	// The manifest drops the service api and has a gateway called api that's
-	// off here, so it still wants api, but not on. The api deployed from
-	// mono, which the plan holds, is what planDeletes leaves running.
+	// off here. That gateway isn't the api deployed from mono, which the
+	// plan holds, so to that api the manifest no longer has it.
 	live := drifted(deployed(t, computeFed(t, federatedYAML, nil)), "api", DriftMissing, "")
 	yaml := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
 	yaml = strings.Replace(yaml, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
@@ -1389,12 +1389,68 @@ func TestCompute_driftOnAHeldServiceOffUnderAGatewaysNameIsReported(t *testing.T
 	if len(r.Problems) != 0 {
 		t.Fatalf("problems %v", codes(r.Problems))
 	}
-	want := "api was deleted outside Loomplane and it's off in production, so it stays gone, and a plan that moves mono clears what's left of it."
+	want := "api was deleted outside Loomplane and the manifest no longer has it, so it stays gone, and a plan that moves mono clears what's left of it."
 	if w := warning(r, "held-drifted", "api"); w == nil || w.Message != want {
 		t.Fatalf("warnings %+v", r.Warnings)
 	}
-	want = "api is off in production, but it's in mono, which this plan holds back, so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone."
+	want = "The manifest no longer has api, but it's in mono, which this plan holds back, so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone."
 	if w := warning(r, "held", "api"); w == nil || w.Message != want {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}
+
+func TestCompute_whatADeletedDroppedHeldServiceUsedIsntNeeded(t *testing.T) {
+	first := deployed(t, computeFed(t, federatedYAML, nil))
+	// The manifest drops api and db, and mono is held, so db is kept for
+	// api. Both were deleted outside Loomplane, so nothing that runs needs
+	// db, and its drift is a warning, not a problem.
+	onlySite := "version: 1\nservices:\n  site:\n    repo: site\n    source: .\n    provider: vercel\n"
+	live := drifted(drifted(first, "api", DriftMissing, ""), "db", DriftMissing, "")
+
+	r := computeFed(t, onlySite, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	want := "db was deleted outside Loomplane, and this plan keeps it for mono, which it holds back, so it stays gone, and a plan that moves mono clears what's left of it."
+	if w := warning(r, "held-drifted", "db"); w == nil || w.Message != want {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	want = "db was changed outside Loomplane (another revision is live), and this plan keeps it for mono, which it holds back, so it stays that way until a plan that moves mono removes it."
+	r = computeFed(t, onlySite, []string{"mono"}, drifted(first, "db", DriftChanged, "another revision is live")...)
+	if w := warning(r, "held-drifted", "db"); w == nil || w.Message != want {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}
+
+func TestCompute_driftOnADroppedServiceOfAnUnknownRepositoryNamesEveryRepository(t *testing.T) {
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	// site's binding was written before services knew their repository.
+	for _, b := range live {
+		if b.Subject != ServiceSubject || b.Name != "site" {
+			continue
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(b.Config, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		delete(cfg, "repo")
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Config = data
+	}
+
+	r := computeFed(t, federatedWithoutSite, []string{"mono"}, drifted(live, "site", DriftMissing, "")...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	want := "site was deleted outside Loomplane and the manifest no longer has it, so it stays gone, and only a plan of every repository clears what's left of it."
+	if w := warning(r, "held-drifted", "site"); w == nil || w.Message != want {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	want = "The manifest no longer has site, but it was deployed before Loomplane recorded which repository a service is from, and this plan holds some back, so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone. Plan every repository to remove it."
+	if w := warning(r, "held", "site"); w == nil || w.Message != want {
 		t.Fatalf("warnings %+v", r.Warnings)
 	}
 }
