@@ -1354,6 +1354,51 @@ func TestCompute_aHeldServiceTheManifestDroppedThatsDeletedAndNeededIsAProblem(t
 	}
 }
 
+func TestCompute_aRetainedSubjectDeletedOutsideLoomplaneStaysGone(t *testing.T) {
+	first := deployed(t, computeFed(t, federatedYAML, nil))
+	// The manifest drops api and db, but api is in mono, which the plan
+	// holds, so db is kept for it.
+	onlySite := "version: 1\nservices:\n  site:\n    repo: site\n    source: .\n    provider: vercel\n"
+
+	for _, tt := range []struct{ name, drift, want string }{
+		{"missing", DriftMissing, "db is gone from the manifest, but api in mono, which this plan holds back, still uses it, so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone."},
+		{"no drift", "", "db is gone from the manifest, but api in mono, which this plan holds back, still uses it, so it keeps running."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := computeFed(t, onlySite, []string{"mono"}, drifted(first, "db", tt.drift, "")...)
+			if db := action(t, r, "resource:db"); db.Op != Keep {
+				t.Fatalf("db %+v", db)
+			}
+			if w := warning(r, "held", "db"); w == nil || w.Message != tt.want {
+				t.Fatalf("warnings %+v", r.Warnings)
+			}
+		})
+	}
+}
+
+func TestCompute_driftOnAHeldServiceOffUnderAGatewaysNameIsReported(t *testing.T) {
+	// The manifest drops the service api and has a gateway called api that's
+	// off here, so it still wants api, but not on. The api deployed from
+	// mono, which the plan holds, is what planDeletes leaves running.
+	live := drifted(deployed(t, computeFed(t, federatedYAML, nil)), "api", DriftMissing, "")
+	yaml := strings.Replace(federatedYAML, "    needs: [api]\n", "", 1)
+	yaml = strings.Replace(yaml, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
+	yaml += "gateways:\n  api:\n    routes:\n      - {path: /, to: site}\n    environments:\n      production:\n        enabled: false\n"
+
+	r := computeFed(t, yaml, []string{"mono"}, live...)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	want := "api was deleted outside Loomplane and it's off in production, so it stays gone, and a plan that moves mono clears what's left of it."
+	if w := warning(r, "held-drifted", "api"); w == nil || w.Message != want {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	want = "api is off in production, but it's in mono, which this plan holds back, so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone."
+	if w := warning(r, "held", "api"); w == nil || w.Message != want {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}
+
 func TestCompute_buildContext(t *testing.T) {
 	// The api's Dockerfile builds from its own directory, which the plan
 	// leaves unsaid, so bindings from before build contexts don't change.

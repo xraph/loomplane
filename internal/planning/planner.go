@@ -762,12 +762,13 @@ func (p *planner) retain() {
 		var msg string
 		switch wanted, on := p.wanted(b); {
 		case !wanted:
-			msg = fmt.Sprintf("%s is gone from the manifest, but %s, which this plan holds back, still %s it, so it keeps running.", b.Name, who, uses)
+			msg = fmt.Sprintf("%s is gone from the manifest, but %s, which this plan holds back, still %s it", b.Name, who, uses)
 		case !on:
-			msg = fmt.Sprintf("%s is off in %s, but %s, which this plan holds back, still %s it, so it keeps running.", b.Name, p.in.Environment, who, uses)
+			msg = fmt.Sprintf("%s is off in %s, but %s, which this plan holds back, still %s it", b.Name, p.in.Environment, who, uses)
 		default:
 			continue // it couldn't be planned, and a problem says why
 		}
+		msg += stillThere(b)
 		p.warn(Finding{Code: "held", Subject: b.Subject, Name: b.Name, Path: path, Message: msg})
 	}
 }
@@ -1556,16 +1557,21 @@ func (p *planner) keepHeld(b *Binding, repo string) {
 	default:
 		return
 	}
-	// One deleted outside Loomplane runs nowhere, and heldDrift says so.
-	if b.Drift == DriftMissing {
-		msg += ", so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone."
-	} else {
-		msg += ", so it keeps running."
-	}
+	msg += stillThere(b)
 	if repo == "" {
 		msg += " Plan every repository to remove it."
 	}
 	p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: b.Name, Path: "services", Message: msg})
+}
+
+// stillThere ends a held warning on what a scoped plan leaves alone: it
+// keeps running, unless it was deleted outside Loomplane, in which case it
+// stays gone, and heldDrift says what that means for the plan.
+func stillThere(b *Binding) string {
+	if b.Drift == DriftMissing {
+		return ", so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone."
+	}
+	return ", so it keeps running."
 }
 
 // wanted reports whether the manifest still has a binding's subject, and
