@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -536,12 +537,14 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return nil
 	}
 	moving := moves(current, a, connID)
-	if moving && a.Op != planning.Replace && current.Provider == a.Provider && current.Region == a.Region {
+	if moving && a.Op != planning.Replace && a.Op != planning.Create && current.Provider == a.Provider && current.Region == a.Region {
 		// Only the planner moves something to another connection, since
 		// only it deploys again what uses it, or refuses when something
 		// held does. A plan made before the binding said where it runs,
 		// as a retry after an executor recorded that would carry out,
-		// didn't plan the move, so it doesn't make it.
+		// didn't plan the move, so it doesn't make it. A Create over a
+		// binding is planned: what it replaced was deleted outside
+		// Loomplane, and the planner readdresses what uses it.
 		return fmt.Errorf("%s runs through connection %s, not %s, which this plan deploys with, and this plan doesn't replace it, so nothing was deployed. Plan again, and the new plan replaces %s through this connection and deploys again what uses it",
 			a.Name, current.ConnectionID, connID, a.Name)
 	}
@@ -636,7 +639,11 @@ func (r *Runner) deployedElsewhere(ctx context.Context, current *planning.Bindin
 	case current == nil || e.ConnectionID == "":
 		return e
 	case current.ConnectionID == e.ConnectionID:
-		e.Recorded = true
+		// The binding has it right, and the key's region is what differs:
+		// the connection's region changed since it was deployed. Planning
+		// again wouldn't change anything.
+		e.Region = cmp.Or(e.Region, current.Region)
+		e.SameConnection = true
 		return e
 	}
 	b := *current

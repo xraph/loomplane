@@ -478,7 +478,7 @@ func boundInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (*
 // next plan sees the move.
 type ElsewhereError struct {
 	Name, Instance, ConnectionID, Region, Key string
-	Recorded                                  bool
+	Recorded, SameConnection                  bool
 }
 
 func (e *ElsewhereError) Error() string {
@@ -486,6 +486,9 @@ func (e *ElsewhereError) Error() string {
 	switch {
 	case e.ConnectionID == "":
 		return fmt.Sprintf("%s under provider %s, which names no connection Loomplane can read, so nothing was deployed. Choose the connection that deployed it for this environment, then deploy again", at, e.Key)
+	case e.SameConnection:
+		return fmt.Sprintf("%s through this connection, but in region %s, under provider %s, so nothing was deployed. The connection's region has changed since, and Loomplane doesn't move a service between regions of one connection on its own. Set the connection's region back to %s to keep %s where it is",
+			at, e.Region, e.Key, e.Region, e.Name)
 	case e.Recorded:
 		return fmt.Sprintf("%s through connection %s, not the one this plan deploys with, so nothing was deployed. Loomplane has recorded that on its binding: plan again, and the plan replaces %s through this connection, deploys again what uses it, and removes the old one once the new one is up",
 			at, e.ConnectionID, e.Name)

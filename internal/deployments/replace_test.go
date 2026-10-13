@@ -618,6 +618,11 @@ func TestElsewhereError_saysWhatWasRecorded(t *testing.T) {
 	if msg := e.Error(); !strings.Contains(msg, "has recorded that on its binding: plan again") {
 		t.Fatalf("recorded: %s", msg)
 	}
+	e.Recorded, e.SameConnection, e.Region = false, true, "us-central1"
+	if msg := e.Error(); !strings.Contains(msg, "region us-central1") || strings.Contains(msg, "plan again") {
+		t.Fatalf("same connection: %s", msg)
+	}
+	e.SameConnection = false
 	e.ConnectionID = ""
 	if msg := e.Error(); !strings.Contains(msg, "Choose the connection that deployed it") || strings.Contains(msg, "recorded") {
 		t.Fatalf("unreadable key: %s", msg)

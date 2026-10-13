@@ -1251,3 +1251,31 @@ func TestRunner_aRetryAfterTheConnectionIsRecordedMovesNothing(t *testing.T) {
 		t.Fatalf("binding %+v", b)
 	}
 }
+
+// A Create over a binding on another connection is planned: what the
+// binding named was deleted outside Loomplane, and the planner deploys
+// again what uses it. So the runner creates it through this connection
+// and clears out the old one, which is already gone.
+func TestRunner_aServiceDeletedOnAnotherConnectionIsCreatedAgain(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-run", log: log, url: answering(t, http.StatusOK), externalID: "ext-new"}
+	plan := apiMoves()
+	plan.Actions[0].Op, plan.Actions[0].Provider, plan.Actions[0].Region = planning.Create, "cloud-run", "us-central1"
+	plan.Actions[0].Service.Provider = "cloud-run"
+	was := onCloudRun()
+	was.ConnectionID, was.Drift = "conn_old", planning.DriftMissing
+	r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{"cloud-run": exec})
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if b := plans.bindings["service:api"]; b.ExternalID != "ext-new" || b.ConnectionID == "conn_old" {
+		t.Fatalf("binding %+v", b)
+	}
+	if got := log.list(); len(got) == 0 || got[0] != "apply cloud-run" {
+		t.Fatalf("events %v", got)
+	}
+}
