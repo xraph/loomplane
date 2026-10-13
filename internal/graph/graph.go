@@ -19,7 +19,8 @@ const SchemaVersion = 2
 type ServiceKind string
 
 const (
-	// HTTPService serves HTTP or gRPC: a Go, Rust or Node server.
+	// HTTPService serves HTTP or gRPC: a Go, Rust, Node, Python or JVM
+	// server.
 	HTTPService ServiceKind = "http-service"
 	// WebApp is a server-rendered web app: Next.js, Remix, SvelteKit.
 	WebApp ServiceKind = "web-app"

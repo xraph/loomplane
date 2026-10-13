@@ -33,3 +33,34 @@ func FuzzAnalyze(f *testing.F) {
 		}
 	})
 }
+
+// FuzzAnalyzePythonAndJVM does the same for Python's and the JVM's
+// manifests: pyproject.toml, requirements.txt, Pipfile, pom.xml, Gradle
+// build and settings scripts, and version catalogs.
+func FuzzAnalyzePythonAndJVM(f *testing.F) {
+	f.Add("[project]\nname = \"api\"\ndependencies = [\"fastapi[std]>=0.1 ; python_version>'3'\"]\n", "flask==3\n-e ../lib\n",
+		"<project><artifactId>a</artifactId><modules><module>b</module></modules></project>",
+		"plugins { application }\ndependencies { implementation(libs.x) }\n", "include(\":b\", 'c')\n", "[libraries]\nx = \"g:a:1\"\n")
+	f.Add("[tool.uv.workspace]\nmembers = [\"**\"]\n", "git+https://x#egg=y\n--index-url u\n", "<project", "implementation project(':')\n", "include", "[libraries]\nx = {group=\"g\"}\n")
+	f.Fuzz(func(t *testing.T, pyproject, requirements, pomXML, gradle, settings, catalog string) {
+		fsys := fstest.MapFS{
+			"pyproject.toml":              {Data: []byte(pyproject)},
+			"svc/pyproject.toml":          {Data: []byte(pyproject)},
+			"svc/requirements.txt":        {Data: []byte(requirements)},
+			"svc/Pipfile":                 {Data: []byte(pyproject)},
+			"svc/Procfile":                {Data: []byte("web: " + requirements)},
+			"pom.xml":                     {Data: []byte(pomXML)},
+			"b/pom.xml":                   {Data: []byte(pomXML)},
+			"g/build.gradle.kts":          {Data: []byte(gradle)},
+			"g/settings.gradle":           {Data: []byte(settings)},
+			"g/gradle/libs.versions.toml": {Data: []byte(catalog)},
+			"g/src/main/kotlin/Main.kt":   {Data: []byte("fun main() {}\n")},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = Analyze(ctx, fsys)
+		if ctx.Err() != nil {
+			t.Fatal("analysis took more than five seconds on a small repository")
+		}
+	})
+}

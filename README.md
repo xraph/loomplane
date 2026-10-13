@@ -23,7 +23,7 @@
 
 <p align="center"><sub>Concept artwork inspired by the dashboard's woven environments.</sub></p>
 
-Loomplane takes a Go, Rust, TypeScript or JavaScript monorepo, or an application split across several repositories, from source to running services across clouds. You give it the repositories. It reads the code (never runs it) to find the services and the databases they need, drafts a `loomplane.yaml`, and plans what deploying it would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it: a Next.js app to Vercel, a Go API to Cloud Run, a worker to ECS on Fargate, Postgres on Cloud SQL or RDS, wired to each other with secrets kept in each cloud's secret store. Then it keeps checking that what runs is what it deployed.
+Loomplane takes a Go, Rust, TypeScript, JavaScript, Python or JVM monorepo, or an application split across several repositories, from source to running services across clouds. You give it the repositories. It reads the code (never runs it) to find the services and the databases they need, drafts a `loomplane.yaml`, and plans what deploying it would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it: a Next.js app to Vercel, a Go API to Cloud Run, a worker to ECS on Fargate, Postgres on Cloud SQL or RDS, wired to each other with secrets kept in each cloud's secret store. Then it keeps checking that what runs is what it deployed.
 
 Your applications don't need Forge, or Go. Everything runs in your own clouds, on your own accounts.
 
@@ -67,7 +67,7 @@ loomctl approve <plan-id>
 
 | | |
 |---|---|
-| Repository discovery | Go, Rust and Node monorepos, Dockerfiles and Compose files, read into services, packages and resources with the evidence for each. |
+| Repository discovery | Go, Rust, Node, Python and JVM (Maven and Gradle) monorepos, Dockerfiles and Compose files, read into services, packages and resources with the evidence for each. |
 | `loomplane.yaml` | A versioned manifest, drafted from the analysis: services, resources, gateways, and overrides per environment. |
 | Plans | Every action a deployment would take, in order, with problems that block it. Approval names the revision you reviewed; a plan whose world changed comes back stale. |
 | Targets | Vercel, Cloud Run and ECS on Fargate for services; Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage and S3 for databases, caches and buckets. Builds run on Cloud Build, CodeBuild and Vercel, in your accounts. |

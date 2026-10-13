@@ -444,3 +444,143 @@ func TestRust_aCLIBesideAServerThatSharesItsLibraryIsATool(t *testing.T) {
 		t.Fatalf("a lone binary: %+v", fw)
 	}
 }
+
+func TestPython_projectsFrameworksAndResources(t *testing.T) {
+	r := run(t, Python{}, map[string]string{
+		// A uv workspace: an API, a worker, and a library both use.
+		"pyproject.toml": "[tool.uv.workspace]\nmembers = [\"services/*\", \"libs/*\"]\n",
+		"services/api/pyproject.toml": "[project]\nname = \"shop-api\"\nrequires-python = \">=3.12\"\n" +
+			"dependencies = [\n  \"fastapi[standard]>=0.115\",\n  \"asyncpg\",\n  \"shop_core\",\n]\n\n" +
+			"[tool.uv.sources]\nshop-core = { workspace = true }\n",
+		"services/api/Procfile":            "web: uvicorn shop_api.main:app --host 0.0.0.0 --port $PORT\n",
+		"services/worker/requirements.txt": "# the queue\ncelery[redis]==5.4.0  # pinned\nredis>=5\n-e ../../libs/core\n--index-url https://example.com\n",
+		"libs/core/pyproject.toml":         "[project]\nname = \"shop-core\"\ndependencies = [\"pydantic>=2\"]\n",
+		// Poetry, with Django and a CLI.
+		"admin/pyproject.toml": "[tool.poetry]\nname = \"admin\"\n\n[tool.poetry.dependencies]\npython = \"^3.11\"\nDjango = \"^5.0\"\npsycopg2-binary = \"*\"\n",
+		"admin/manage.py":      "#!/usr/bin/env python\n",
+	})
+	if len(r.Workspaces) != 1 || r.Workspaces[0].Tool != "uv" || len(r.Workspaces[0].Members) != 3 {
+		t.Fatalf("workspaces %+v", r.Workspaces)
+	}
+
+	api := onlyUnit(t, r, "python:services/api")
+	if api.Name != "shop-api" || api.Runtime != "python >=3.12" || len(api.Entrypoints) != 1 ||
+		api.Commands.Start != "uvicorn shop_api.main:app --host 0.0.0.0 --port $PORT" {
+		t.Fatalf("api %+v", api)
+	}
+	if fw := frameworkOf(t, api, "services/api", "fastapi"); fw == nil || fw.Kind != discovery.HTTP || fw.Evidence.Line != 5 {
+		t.Fatalf("fastapi %+v", fw)
+	}
+	if len(api.Resources) != 1 || api.Resources[0].Kind != "postgres" {
+		t.Fatalf("api resources %+v", api.Resources)
+	}
+	if len(api.DependsOn) != 1 || api.DependsOn[0].Unit != "python:libs/core" {
+		t.Fatalf("api depends on %+v", api.DependsOn)
+	}
+
+	worker := onlyUnit(t, r, "python:services/worker")
+	if len(worker.Entrypoints) != 1 || len(worker.Entrypoints[0].Frameworks) != 0 {
+		t.Fatalf("a celery project runs, as a worker: %+v", worker)
+	}
+	if len(worker.Resources) != 1 || worker.Resources[0].Kind != "redis" || worker.Resources[0].Evidence.Line != 3 {
+		t.Fatalf("worker resources %+v", worker.Resources)
+	}
+	if len(worker.DependsOn) != 1 || worker.DependsOn[0].Unit != "python:libs/core" {
+		t.Fatalf("an editable install is a local dependency: %+v", worker.DependsOn)
+	}
+	if req := worker.Requires[0]; req.Name != "celery" || req.Version != "==5.4.0" {
+		t.Fatalf("worker requires %+v", worker.Requires)
+	}
+
+	if core := onlyUnit(t, r, "python:libs/core"); len(core.Entrypoints) != 0 {
+		t.Fatalf("a library runs nothing: %+v", core.Entrypoints)
+	}
+	admin := onlyUnit(t, r, "python:admin")
+	if admin.Runtime != "python ^3.11" || frameworkOf(t, admin, "admin", "django") == nil || admin.Resources[0].Kind != "postgres" {
+		t.Fatalf("admin %+v", admin)
+	}
+	for _, u := range r.Units {
+		if u.Path == "." {
+			t.Fatalf("a virtual workspace root isn't a project: %+v", u)
+		}
+	}
+}
+
+func TestJVM_mavenModules(t *testing.T) {
+	r := run(t, JVM{}, map[string]string{
+		"pom.xml": `<project><groupId>com.acme</groupId><artifactId>shop</artifactId><packaging>pom</packaging>
+<modules><module>api</module><module>common</module></modules></project>`,
+		"api/pom.xml": `<project>
+  <parent><groupId>com.acme</groupId><artifactId>shop</artifactId></parent>
+  <artifactId>api</artifactId>
+  <properties><java.version>21</java.version></properties>
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>common</artifactId></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build>
+</project>`,
+		"api/src/main/java/com/acme/Api.java":      "package com.acme;\n\n@SpringBootApplication\npublic class Api {}\n",
+		"common/pom.xml":                           `<project><parent><groupId>com.acme</groupId></parent><artifactId>common</artifactId></project>`,
+		"common/src/main/java/com/acme/Money.java": "package com.acme;\n\npublic record Money(long cents) {}\n",
+	})
+	if len(r.Workspaces) != 1 || r.Workspaces[0].Tool != "maven" || len(r.Workspaces[0].Members) != 2 {
+		t.Fatalf("workspaces %+v", r.Workspaces)
+	}
+	if len(r.Units) != 2 {
+		t.Fatalf("the parent only gathers modules: %+v", r.Units)
+	}
+	api := onlyUnit(t, r, "jvm:api")
+	if api.Runtime != "java 21" || len(api.Entrypoints) != 1 || len(api.Entrypoints[0].Evidence) != 2 {
+		t.Fatalf("api %+v", api)
+	}
+	if fw := frameworkOf(t, api, "api", "spring-boot"); fw == nil || fw.Kind != discovery.HTTP || fw.Evidence.Line != 6 {
+		t.Fatalf("spring boot %+v", fw)
+	}
+	if len(api.Resources) != 1 || api.Resources[0].Kind != "postgres" {
+		t.Fatalf("api resources %+v", api.Resources)
+	}
+	if len(api.DependsOn) != 1 || api.DependsOn[0].Unit != "jvm:common" || len(api.Requires) != 2 {
+		t.Fatalf("api depends on %+v, requires %+v", api.DependsOn, api.Requires)
+	}
+	if common := onlyUnit(t, r, "jvm:common"); len(common.Entrypoints) != 0 {
+		t.Fatalf("a library runs nothing: %+v", common.Entrypoints)
+	}
+}
+
+func TestJVM_gradleProjectsAndVersionCatalogs(t *testing.T) {
+	r := run(t, JVM{}, map[string]string{
+		"settings.gradle.kts":                  "rootProject.name = \"shop\"\ninclude(\":services:api\", \":services:worker\")\ninclude(\"lib\")\n",
+		"gradle/libs.versions.toml":            "[libraries]\nktor-server-netty = { module = \"io.ktor:ktor-server-netty\", version = \"3.0.0\" }\nkafka = \"org.apache.kafka:kafka-clients:3.8.0\"\n",
+		"services/api/build.gradle.kts":        "plugins {\n    application\n    kotlin(\"jvm\")\n}\n\ndependencies {\n    implementation(libs.ktor.server.netty)\n    implementation(project(\":lib\"))\n}\n\nkotlin { jvmToolchain(21) }\n",
+		"services/api/src/main/kotlin/Main.kt": "package shop\n\nfun main() {\n}\n",
+		"services/worker/build.gradle":         "plugins {\n    id 'org.springframework.boot' version '3.3.0'\n}\n\ndependencies {\n    implementation 'org.springframework.boot:spring-boot-starter'\n    implementation libs.kafka\n    // implementation 'org.postgresql:postgresql'\n}\n",
+		"lib/build.gradle.kts":                 "plugins { `java-library` }\n",
+		"lib/src/main/java/Lib.java":           "public class Lib {}\n",
+	})
+	if len(r.Workspaces) != 1 || r.Workspaces[0].Tool != "gradle" || len(r.Workspaces[0].Members) != 3 {
+		t.Fatalf("workspaces %+v", r.Workspaces)
+	}
+	api := onlyUnit(t, r, "jvm:services/api")
+	if api.Runtime != "java 21" || len(api.Entrypoints) != 1 {
+		t.Fatalf("api %+v", api)
+	}
+	if fw := frameworkOf(t, api, "services/api", "ktor"); fw == nil || fw.Evidence.Line != 7 {
+		t.Fatalf("ktor through the catalog %+v", fw)
+	}
+	if len(api.DependsOn) != 1 || api.DependsOn[0].Unit != "jvm:lib" {
+		t.Fatalf("api depends on %+v", api.DependsOn)
+	}
+	worker := onlyUnit(t, r, "jvm:services/worker")
+	if len(worker.Entrypoints) != 1 || len(worker.Entrypoints[0].Frameworks) != 0 {
+		t.Fatalf("a Spring Boot app with no web starter is a worker: %+v", worker)
+	}
+	if len(worker.Resources) != 1 || worker.Resources[0].Kind != "kafka" {
+		t.Fatalf("a commented-out dependency doesn't count: %+v", worker.Resources)
+	}
+	if lib := onlyUnit(t, r, "jvm:lib"); len(lib.Entrypoints) != 0 {
+		t.Fatalf("lib %+v", lib.Entrypoints)
+	}
+}

@@ -62,7 +62,7 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 
 | Field | What it does |
 |---|---|
-| `source` | Where the service's code is, as analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's directory, or a Dockerfile. When two ecosystems have a service at one path, prefix it: `go:services/api`. Required. |
+| `source` | Where the service's code is, as analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's, Python project's or JVM module's directory, or a Dockerfile. When two ecosystems have a service at one path, prefix it: `go:services/api`, `python:services/api`. Required. |
 | `kind` | Corrects what analysis decided the service is: `http-service`, `web-app`, `static-site` or `worker`. |
 | `build` | `{context}`: the directory its Dockerfile builds from, from the repository's root (`.` is the root). Without it, the context a Compose file gives the Dockerfile, or the Dockerfile's own directory. |
 | `provider`, `region` | Where it runs. |

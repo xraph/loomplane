@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/xraph/loomplane/internal/graph"
+	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -1257,6 +1258,12 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 				Message: fmt.Sprintf("Nothing says which port %s listens on, so the plan assumes %d. Set %s.port if it's another.", name, DefaultPort, base),
 			})
 		}
+	}
+	if gs.Ecosystem == discovery.Python && runs.Execution == provider.Container && cfg.Image == "" && cfg.Start == "" {
+		p.warn(Finding{
+			Code: "start-assumed", Subject: ServiceSubject, Name: name, Path: base + ".source",
+			Message: fmt.Sprintf("Nothing says how to start %s, so its buildpack runs gunicorn with main:app. Add a Procfile with a web: line, or a Dockerfile, if that's wrong.", name),
+		})
 	}
 	if prov.Scaling {
 		cfg.Scale, cfg.Size = set.Scale, set.Size

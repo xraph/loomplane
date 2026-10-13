@@ -127,7 +127,7 @@
           "pattern": "^[a-z][a-z0-9-]{0,31}$"
         },
         "source": {
-          "description": "Where the service's code is, as repository analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's directory, or a Dockerfile. Prefix the ecosystem (go:, rust:, node:, container:) when two have a service at the same path.",
+          "description": "Where the service's code is, as repository analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's, Python project's or JVM module's directory, or a Dockerfile. Prefix the ecosystem (go:, rust:, node:, python:, jvm:, container:) when two have a service at the same path.",
           "type": "string",
           "minLength": 1
         },

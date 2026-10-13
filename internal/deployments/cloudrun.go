@@ -198,10 +198,15 @@ func buildFor(cfg *planning.ServiceConfig, root, image string) gcp.Build {
 	}
 	args := []string{"build", image, "--builder", googleBuilder, "--publish"}
 	dir := root
-	if cfg.Ecosystem == "go" {
+	switch {
+	case cfg.Ecosystem == "go":
 		// The Go buildpack builds one main package of a module: name it.
 		args = append(args, "--env", "GOOGLE_BUILDABLE=./"+cfg.Source)
-	} else {
+	case cfg.Ecosystem == "jvm" && cfg.Source != ".":
+		// A module of a Maven or Gradle build needs the build around it,
+		// so the Java buildpack builds from the root and is told which.
+		args = append(args, "--env", "GOOGLE_BUILDABLE="+cfg.Source)
+	default:
 		dir = root + "/" + cfg.Source
 	}
 	args = append(args, "--path", dir)

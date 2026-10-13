@@ -2040,3 +2040,24 @@ func TestServiceConfig_DockerfileIn(t *testing.T) {
 		}
 	}
 }
+
+func TestCompute_pythonStartAssumed(t *testing.T) {
+	g := *polyglot(t)
+	g.Services = append(slices.Clone(g.Services), graph.Service{
+		ID: "svc:python:services/ml", Name: "ml", Kind: graph.HTTPService, Deployable: true,
+		Ecosystem: pd.Python, Path: "services/ml", Entrypoint: "services/ml", Confidence: pd.Likely,
+	})
+	in := func(start string) *Result {
+		g.Services[len(g.Services)-1].Commands.Start = start
+		return Compute(Input{
+			Environment: "production", Graph: &g, Providers: providers.Registry(), Connections: connected,
+			Manifest: parse(t, "version: 1\ndefaults:\n  provider: cloud-run\nservices:\n  ml:\n    source: services/ml\n    port: 8080\n"),
+		})
+	}
+	if r := in(""); !slices.Contains(codes(r.Warnings), "start-assumed:ml") {
+		t.Fatalf("no start command and no warning: %v", codes(r.Warnings))
+	}
+	if r := in("gunicorn shop.wsgi"); slices.Contains(codes(r.Warnings), "start-assumed:ml") {
+		t.Fatalf("a Procfile's start, and still a warning: %v", codes(r.Warnings))
+	}
+}

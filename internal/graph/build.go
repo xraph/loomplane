@@ -202,7 +202,7 @@ func buildStep(img *discovery.Image, eco discovery.Ecosystem, ep discovery.Entry
 	switch eco {
 	case discovery.Rust:
 		re = regexp.MustCompile(`--bin[ =]` + regexp.QuoteMeta(ep.Name) + `($|\s)`)
-	case discovery.Go, discovery.Node, discovery.Container:
+	case discovery.Go, discovery.Node, discovery.Python, discovery.JVM, discovery.Container:
 		rel := strings.TrimPrefix(ep.Path, img.Context+"/")
 		if img.Context == "." {
 			rel = ep.Path

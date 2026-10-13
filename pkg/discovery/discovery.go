@@ -23,6 +23,8 @@ const (
 	Go        Ecosystem = "go"
 	Rust      Ecosystem = "rust"
 	Node      Ecosystem = "node"
+	Python    Ecosystem = "python"
+	JVM       Ecosystem = "jvm"
 	Container Ecosystem = "container"
 )
 

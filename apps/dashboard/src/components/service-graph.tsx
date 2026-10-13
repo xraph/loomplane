@@ -85,6 +85,8 @@ const ecosystemShort: Record<string, string> = {
   go: "Go",
   rust: "Rust",
   node: "Node",
+  python: "Python",
+  jvm: "JVM",
   container: "Docker",
 }
 
