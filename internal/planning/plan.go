@@ -132,6 +132,12 @@ type ServiceConfig struct {
 	Size    *manifest.Size  `json:"size,omitempty"`
 	// Public says whether it gets an address on the internet.
 	Public bool `json:"public"`
+	// Internal gives a private service an address on its environment's
+	// internal load balancer, for services that reach it over a link.
+	Internal bool `json:"internal,omitempty"`
+	// PrivateEgress sends the service's traffic to private addresses into
+	// its cloud's network, and over a link to the other cloud.
+	PrivateEgress bool `json:"private_egress,omitempty"`
 	// Env are the variables Loomplane sets so the service finds what it
 	// needs. The values exist only once those things are deployed.
 	Env []EnvLink `json:"env,omitempty"`

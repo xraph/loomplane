@@ -41,6 +41,13 @@
       "propertyNames": { "$ref": "#/$defs/name" },
       "additionalProperties": { "$ref": "#/$defs/gateway" }
     },
+    "links": {
+      "description": "Private network links between two clouds, by name: an HA VPN between a Google Cloud project's default network and an AWS account's default VPC, so services on Google Cloud reach private services and databases on AWS. Each environment gets its own, billed by the hour on both clouds.",
+      "type": "object",
+      "maxProperties": 5,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/link" }
+    },
     "ignore": {
       "description": "What repository analysis found that the application doesn't use.",
       "type": "object",
@@ -216,6 +223,35 @@
             "additionalProperties": false,
             "properties": {
               "provider": { "$ref": "#/$defs/provider" },
+              "region": { "$ref": "#/$defs/region" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": ["between"],
+      "additionalProperties": false,
+      "properties": {
+        "between": {
+          "description": "The two clouds the link joins: gcp and aws.",
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["gcp", "aws"] }
+        },
+        "region": { "$ref": "#/$defs/region", "description": "Where the Google Cloud side runs, such as us-central1." },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
               "region": { "$ref": "#/$defs/region" },
               "enabled": { "type": "boolean" }
             }

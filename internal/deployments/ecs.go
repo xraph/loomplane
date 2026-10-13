@@ -333,6 +333,46 @@ func expose(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, lbG
 	return tg, l.ARN, listenerURL(lb.DNS, l), nil
 }
 
+// LinkedRange is the other cloud's network a link reaches AWS from:
+// Google Cloud's default network, in auto mode.
+const LinkedRange = "10.128.0.0/9"
+
+// internalGroup is the security group of an environment's internal load
+// balancer, which a link lets the other cloud into.
+func internalGroup(ctx context.Context, s *aws.Session, vpc, env string) (string, error) {
+	return s.EnsureSecurityGroup(ctx, vpc, "loomplane-"+env+"-ilb", "Loomplane internal load balancer for "+env)
+}
+
+// exposeInternally puts a private service behind the environment's
+// internal load balancer, which has only private addresses: a service on
+// the other cloud reaches it over a link. Its name resolves anywhere, to
+// those addresses.
+func exposeInternally(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, taskGroup, envName string) (tg, listener, url string, err error) {
+	group, err := internalGroup(ctx, s, net.VPC, envName)
+	if err != nil {
+		return "", "", "", err
+	}
+	if aerr := s.AllowFromGroup(ctx, taskGroup, group); aerr != nil {
+		return "", "", "", aerr
+	}
+	if aerr := s.AllowFromCIDR(ctx, group, LinkedRange); aerr != nil {
+		return "", "", "", aerr
+	}
+	lb, err := s.EnsureInternalLoadBalancer(ctx, shortName(envName+"-in"), net.Subnets, group)
+	if err != nil {
+		return "", "", "", err
+	}
+	port := int32(job.Action.Service.Port) //nolint:gosec // G115: a port, validated by the manifest
+	if tg, err = s.EnsureTargetGroup(ctx, shortName(instanceSlug(job)), net.VPC, port); err != nil {
+		return "", "", "", err
+	}
+	l, err := s.EnsureListener(ctx, lb.ARN, tg, "")
+	if err != nil {
+		return "", "", "", err
+	}
+	return tg, l.ARN, listenerURL(lb.DNS, l), nil
+}
+
 // run sets up the environment's network and load balancer, the service's
 // secrets, and runs it through Ctrl Plane.
 func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (externalID, url string, err error) {
@@ -388,9 +428,18 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 	if cfg.Size != nil {
 		labels[ecs.LabelCPU] = strconv.Itoa(int(cfg.Size.CPU * 1024))
 	}
-	if cfg.Public && cfg.Port > 0 {
+	switch {
+	case cfg.Public && cfg.Port > 0:
 		job.Progress(StepDeploying, "Setting up the load balancer")
 		tg, listener, lbURL, xerr := expose(ctx, s, job, net, lbGroup, envName)
+		if xerr != nil {
+			return "", "", xerr
+		}
+		labels[ecs.LabelTargetGroup], labels[ecs.LabelListener] = tg, listener
+		url = lbURL
+	case cfg.Internal && cfg.Port > 0:
+		job.Progress(StepDeploying, "Setting up the internal load balancer")
+		tg, listener, lbURL, xerr := exposeInternally(ctx, s, job, net, taskGroup, envName)
 		if xerr != nil {
 			return "", "", xerr
 		}

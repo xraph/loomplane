@@ -185,6 +185,17 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 	j(ecsAPI+"UpdateService", func(in map[string]any) (int, any) {
 		return 200, map[string]any{"service": upsert(in["service"].(string), in)}
 	})
+	j(ecsAPI+"DeleteService", func(in map[string]any) (int, any) {
+		name := in["service"].(string)
+		svc, ok := e.services[name]
+		if !ok {
+			return 400, map[string]any{"__type": "ServiceNotFoundException", "message": "service not found"}
+		}
+		delete(e.services, name)
+		e.deleted = append(e.deleted, name)
+		svc["status"] = "DRAINING"
+		return 200, map[string]any{"service": svc}
+	})
 	j(ecsAPI+"DescribeTaskDefinition", func(in map[string]any) (int, any) {
 		for _, td := range e.tasks {
 			if strings.Contains(in["taskDefinition"].(string), "/"+td["family"].(string)+":") {
@@ -304,6 +315,18 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		arn := fmt.Sprintf("arn:aws:elasticloadbalancing:us-east-1:%s:listener/app/lb/1/%d", awsAccount, len(e.listeners)+1)
 		e.listeners = append(e.listeners, map[string]any{"arn": arn, "port": form.Get("Port"), "tg": form.Get("DefaultActions.member.1.TargetGroupArn")})
 		return 200, resp("CreateListener", elbNS, `<Listeners><member><ListenerArn>`+arn+`</ListenerArn><Port>`+form.Get("Port")+`</Port></member></Listeners>`)
+	})
+	q("DeleteListener", func(form url.Values) (int, string) {
+		e.listeners = slices.DeleteFunc(e.listeners, func(l map[string]any) bool { return l["arn"] == form.Get("ListenerArn") })
+		return 200, resp("DeleteListener", elbNS, ``)
+	})
+	q("DeleteTargetGroup", func(form url.Values) (int, string) {
+		for name, arn := range e.tgs {
+			if arn == form.Get("TargetGroupArn") {
+				delete(e.tgs, name)
+			}
+		}
+		return 200, resp("DeleteTargetGroup", elbNS, ``)
 	})
 
 	// RDS, in the common query dialect too. An instance is creating the

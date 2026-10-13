@@ -89,7 +89,7 @@ A service gets a variable for each thing it `needs`. A resource's is named for i
 
 Resource addresses hold credentials, so they're secrets: they reach the service through its cloud's secret store, never as plain variables.
 
-How a service reaches another depends on where both run. Two services on ECS in the same environment reach each other inside the VPC, at `http://name:port`, whether or not the one they need is public. A private Cloud Run service only takes calls from the project's own services, which have to send a Google ID token. A private service needed from another cloud is a problem on the plan: nothing there could reach it.
+How a service reaches another depends on where both run. Two services on ECS in the same environment reach each other inside the VPC, at `http://name:port`, whether or not the one they need is public. A private Cloud Run service only takes calls from the project's own services, which have to send a Google ID token. A private service needed from another cloud is a problem on the plan, unless a [link](#links) joins the two clouds' networks and the caller is on Google Cloud.
 
 ## resources
 
@@ -116,6 +116,33 @@ One public address in front of several services, routing each request by its pat
 
 A gateway gets the addresses it routes to and none of the project's variables. On ECS it reaches private services inside the environment; elsewhere a route to a private service is a problem, since a gateway can't present Cloud Run's ID token.
 
+## links
+
+A link joins an environment's Google Cloud network to its AWS VPC, so a Cloud Run service can need a private ECS service, an RDS database or an ElastiCache cache:
+
+```yaml
+links:
+  vpn:
+    between: [gcp, aws]
+    region: us-central1
+```
+
+| Field | What it does |
+|---|---|
+| `between` | The two clouds it joins: `gcp` and `aws`. Required. |
+| `region` | Where the Google Cloud side runs. Put it where the Cloud Run services that use it run. |
+| `environments` | `region` or `enabled` by environment name. |
+
+Each environment gets its own link: an HA VPN gateway and a Cloud Router on the project's default network, a virtual private gateway on the account's default VPC, and four IPsec tunnels between them, each carrying a BGP session, so losing an endpoint on either side keeps the link up. The default network (`10.128.0.0/9`) and VPC (`172.31.0.0/16`) don't overlap, so their routes need no translating. Both clouds bill a VPN by the hour, whether or not anything uses it, so turn a link off in environments that don't need it.
+
+With a link, a Cloud Run service that needs something on AWS sends its private traffic into the default network. A private ECS service it needs gets an address on the environment's internal load balancer, which has private addresses only; RDS and ElastiCache are reached at their own private addresses. The environment's database, cache and internal load balancer security groups let in Google's network, and nothing else from outside the VPC.
+
+It works one way. AWS has a route back, but a private Cloud Run service checks Google identity tokens rather than addresses, so a service on ECS still can't call one. Make it public, or move the caller.
+
+A link needs more than a connection's check asks for. The Google Cloud key needs Compute Network Admin (`roles/compute.networkAdmin`) for the HA VPN, router and tunnels. The AWS key needs `ec2:CreateVpnGateway`, `ec2:AttachVpnGateway`, `ec2:DetachVpnGateway`, `ec2:DeleteVpnGateway`, `ec2:DescribeVpnGateways`, `ec2:CreateCustomerGateway`, `ec2:DeleteCustomerGateway`, `ec2:CreateVpnConnection`, `ec2:DeleteVpnConnection`, `ec2:DescribeVpnConnections`, `ec2:DescribeRouteTables`, `ec2:EnableVgwRoutePropagation` and `ec2:CreateTags`.
+
+Removing a link from the manifest takes it down on both clouds, Google's side first. A link with a tunnel down shows as drift, and the next plan brings back what's missing.
+
 ## ignore
 
 `resources` lists kinds analysis found that the application doesn't use, so plans stop asking about them.
@@ -133,6 +160,7 @@ A gateway gets the addresses it routes to and none of the project's variables. O
 | `rds` | AWS | | Postgres 17, 16, 15; MySQL 8.4, 8.0 |
 | `elasticache` | AWS | | Redis |
 | `s3` | AWS | | Object storage |
+| `cross-cloud-vpn` | Google Cloud and AWS | | [Links](#links) between them |
 | `render` | Render | HTTP services, web apps, workers, static sites | Postgres 17, 16, 15; Key Value (Redis) |
 
 Buckets are private on both clouds, and services reach them as their own identity, so `STORAGE_URL` carries no credentials: `s3://bucket?region=...` for an ECS task's environment role, `gs://bucket` for Cloud Run's runtime account. Redis gets an auth token in `REDIS_URL`: `rediss://...` on ElastiCache, which also encrypts in transit and at rest, and `redis://...` on Memorystore, which only has an address on the project's default network, so Cloud Run services that need it send their private traffic there.

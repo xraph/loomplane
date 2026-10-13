@@ -109,6 +109,7 @@ func Compute(in Input) *Result {
 		p.bindings[actionID(b.Subject, b.Name)] = b
 	}
 	p.planResources()
+	p.planLinks()
 	p.planServices()
 	p.planGateways()
 	p.readdress()
@@ -122,6 +123,8 @@ func Compute(in Input) *Result {
 }
 
 type planner struct {
+	// links are the plan's links, by their two clouds, sorted.
+	links    map[[2]string]*Action
 	in       Input
 	actions  []*Action
 	problems []Finding
@@ -381,7 +384,7 @@ func (p *planner) planResources() {
 		r := m.Resources[name]
 		base := "resources." + name
 		set := r.For(p.in.Environment, m.Defaults)
-		if !manifest.On(set.Enabled) {
+		if !manifest.On(set.Enabled) || p.noLinkKind(name, base, r) {
 			continue
 		}
 		able := p.in.Providers.Provisioning(r.Kind)
@@ -483,6 +486,7 @@ func (p *planner) planServices() {
 		p.actions = append(p.actions, a)
 	}
 	p.retain()
+	p.markInternal()
 	// Needs are settled once every service has its action, since a service
 	// can need one planned after it. A held service keeps the links it was
 	// deployed with.
@@ -1414,6 +1418,13 @@ func (p *planner) link(name string, a *Action) {
 				continue
 			}
 			if rc, sc := p.cloud(dep.Provider), p.cloud(a.Provider); rc != sc {
+				if l := p.reachOver(sc, rc); l != nil {
+					// Over the link, the resource's private address works.
+					p.throughLink(a, l)
+					a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+					a.DependsOn = append(a.DependsOn, dep.ID)
+					continue
+				}
 				p.problem(Finding{
 					Code: "unreachable-resource", Subject: ServiceSubject, Name: name, Path: base,
 					Message: fmt.Sprintf("%s runs on %s, but %s is on %s, and a managed resource is only reachable from its own cloud. Put them on the same one.", name, cloudTitle(sc), need, cloudTitle(rc)),
@@ -1454,6 +1465,10 @@ func (p *planner) link(name string, a *Action) {
 			// Both run in the environment's network, so traffic between
 			// them stays in it, public or not.
 			link.Address = fmt.Sprintf("http://%s:%d", need, dep.Service.Port)
+		case !dep.Service.Public && dep.Service.Internal && p.reachOver(p.cloud(a.Provider), p.cloud(dep.Provider)) != nil:
+			// Over the link, at its address on the environment's internal
+			// load balancer, which the runner takes from its binding.
+			p.throughLink(a, p.reachOver(p.cloud(a.Provider), p.cloud(dep.Provider)))
 		case !dep.Service.Public && p.cloud(dep.Provider) != p.cloud(a.Provider):
 			p.problem(Finding{
 				Code: "private-across-clouds", Subject: ServiceSubject, Name: name, Path: base,
@@ -2003,6 +2018,9 @@ func (p *planner) wanted(b *Binding) (wanted, on bool) {
 		}
 		s, ok := m.Services[b.Name]
 		return ok, ok && manifest.On(s.For(p.in.Environment, m.Defaults).Enabled)
+	}
+	if l, ok := m.Links[b.Name]; ok {
+		return true, manifest.On(l.For(p.in.Environment).Enabled)
 	}
 	r, ok := m.Resources[b.Name]
 	return ok, ok && manifest.On(r.For(p.in.Environment, m.Defaults).Enabled)

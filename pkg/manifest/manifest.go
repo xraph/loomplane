@@ -43,7 +43,11 @@ const (
 	MaxPort      = 65535
 	MaxGateways  = 10
 	MaxRoutes    = 50
+	MaxLinks     = 5
 )
+
+// LinkClouds are the clouds a link can join, as a pair.
+var LinkClouds = [][2]string{{"aws", "gcp"}}
 
 // ErrInvalid wraps every validation failure.
 var ErrInvalid = errors.New("invalid manifest")
@@ -55,8 +59,56 @@ type Manifest struct {
 	Services  map[string]Service  `json:"services,omitempty" yaml:"services,omitempty"`
 	Resources map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
 	Gateways  map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
-	Ignore    Ignore              `json:"ignore,omitzero" yaml:"ignore,omitempty"`
+	// Links join two clouds' private networks, so services on one reach
+	// what's private on the other.
+	Links  map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
+	Ignore Ignore          `json:"ignore,omitzero" yaml:"ignore,omitempty"`
 }
+
+// Link is a private network link between two clouds: an HA VPN between
+// a Google Cloud project's default network and an AWS account's default
+// VPC, for each environment.
+type Link struct {
+	// Between names the two clouds, such as [gcp, aws].
+	Between []string `json:"between" yaml:"between"`
+	// Region is where the Google Cloud side runs. Services there reach
+	// the link from that region.
+	Region string `json:"region,omitempty" yaml:"region,omitempty"`
+	// Environments override the region, or turn the link off, by name.
+	Environments map[string]LinkSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
+}
+
+// LinkSettings are what an environment can override on a link.
+type LinkSettings struct {
+	Region  string `json:"region,omitempty" yaml:"region,omitempty"`
+	Enabled *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// For is the link's settings in env. Defaults don't apply: a default
+// region is one cloud's, and a link spans two.
+func (l Link) For(env string) LinkSettings {
+	out := LinkSettings{Region: l.Region}
+	if o, ok := l.Environments[env]; ok {
+		if o.Region != "" {
+			out.Region = o.Region
+		}
+		out.Enabled = o.Enabled
+	}
+	return out
+}
+
+// Pair is the link's two clouds, sorted.
+func (l Link) Pair() [2]string {
+	c := slices.Clone(l.Between)
+	slices.Sort(c)
+	if len(c) != 2 {
+		return [2]string{}
+	}
+	return [2]string{c[0], c[1]}
+}
+
+// LinkNames returns the links' names, sorted.
+func (m *Manifest) LinkNames() []string { return sortedKeys(m.Links) }
 
 // Defaults apply to every service and resource that doesn't set its own.
 type Defaults struct {
@@ -327,6 +379,7 @@ func (m *Manifest) Validate() error {
 		add("gateways", "has %d gateways; the most is %d", len(m.Gateways), MaxGateways)
 	}
 	m.validateGateways(add)
+	m.validateLinks(add)
 
 	for _, name := range m.ResourceNames() {
 		r := m.Resources[name]
@@ -492,6 +545,45 @@ func (m *Manifest) serviceCycle() []string {
 		}
 	}
 	return nil
+}
+
+func (m *Manifest) validateLinks(add func(string, string, ...any)) {
+	if len(m.Links) > MaxLinks {
+		add("links", "has %d links; the most is %d", len(m.Links), MaxLinks)
+	}
+	pairs := map[[2]string]string{}
+	for _, name := range m.LinkNames() {
+		l := m.Links[name]
+		path := "links." + name
+		if !nameRE.MatchString(name) {
+			add(path, "the name must be lower case letters, digits and hyphens, starting with a letter, at most 40 long")
+		}
+		_, isService := m.Services[name]
+		_, isResource := m.Resources[name]
+		_, isGateway := m.Gateways[name]
+		if isService || isResource || isGateway {
+			add(path, "a service, resource or gateway has the same name")
+		}
+		pair := l.Pair()
+		switch {
+		case len(l.Between) != 2 || l.Between[0] == l.Between[1]:
+			add(path+".between", "names two different clouds, such as [gcp, aws]")
+		case !slices.Contains(LinkClouds, pair):
+			add(path+".between", "Loomplane links gcp and aws; it can't link %s and %s", pair[0], pair[1])
+		case pairs[pair] != "":
+			add(path+".between", "%s already links %s and %s", pairs[pair], pair[0], pair[1])
+		default:
+			pairs[pair] = name
+		}
+		checkToken(add, path+".region", "region", l.Region)
+		for _, env := range sortedKeys(l.Environments) {
+			epath := path + ".environments." + env
+			if !envRE.MatchString(env) {
+				add(epath, "isn't an environment name")
+			}
+			checkToken(add, epath+".region", "region", l.Environments[env].Region)
+		}
+	}
 }
 
 func (m *Manifest) validateGateways(add func(string, string, ...any)) {

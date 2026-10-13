@@ -311,6 +311,11 @@ func spec(job *Job, image string, secrets map[string]string) (s cpprovider.Servi
 		slices.Sort(instances)
 		labels[cloudrun.LabelCloudSQL] = strings.Join(instances, ",")
 	}
+	if cfg.PrivateEgress {
+		// What it needs over a link is reached through the default
+		// network, which the link joins to the other cloud.
+		labels[cloudrun.LabelVPC] = "default"
+	}
 	return s, labels
 }
 

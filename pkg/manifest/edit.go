@@ -20,7 +20,7 @@ func WithResource(doc []byte, name string, r Resource) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, section := range []string{"services", "resources", "gateways"} {
+	for _, section := range []string{"services", "resources", "gateways", "links"} {
 		if m := child(root, section); m != nil && child(m, name) != nil {
 			return nil, fmt.Errorf("%w: something is already called %s", ErrInvalid, name)
 		}
