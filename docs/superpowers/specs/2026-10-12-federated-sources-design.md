@@ -17,6 +17,8 @@ api     acme/platform     services/   main
 site    acme/platform     apps/www    main
 ```
 
+You can attach them as you create the project, or add them afterwards. The New project dialog takes a row per repository, and so does `loomctl projects create --repo`, which you can repeat: `--repo acme/frontend --repo api=acme/platform`.
+
 Service IDs gain the alias, so `svc:go:cmd/server` becomes `svc:api:go:cmd/server`. The manifest says which source a service comes from:
 
 ```yaml
@@ -82,7 +84,7 @@ An alias matches `^[a-z][a-z0-9-]{0,31}$` and can't be an ecosystem name (`go`, 
 
 Removing a source sets `removed_at`. Its analyses stay, because applied plans reference them.
 
-`loomplane_projects.repository_url` stays in the table, unread and unwritten, so a rollback to the previous release still finds it. A later migration drops it. The project's JSON loses `repository_url` and gains a read-only `repositories`, the `owner/name` of each live source sorted by alias, which the projects store reads from the sources table. Creating a project still accepts `repository_url` and turns it into the first source.
+`loomplane_projects.repository_url` stays in the table, unread and unwritten, so a rollback to the previous release still finds it. A later migration drops it. The project's JSON loses `repository_url` and gains a read-only `repositories`, the `owner/name` of each live source sorted by alias, which the projects store reads from the sources table. Creating a project takes `repositories`, up to ten, each with what adding a source takes: the repository, and an optional alias, root and ref. They're attached in order. `repository_url` still works and goes first. If one can't be attached, the project is taken back out along with any already attached, and the error names the one that failed.
 
 ### Analyses
 
@@ -223,7 +225,7 @@ DELETE /api/v1/projects/:id/sources/:alias     sets removed_at
 GET    /api/v1/projects/:id/graph              the composed graph, and each source's latest SHA and analysis state
 ```
 
-Creating a project with a repository URL still works, and creates the first source.
+`POST /api/v1/projects` attaches the project's first sources from `repositories`, or from `repository_url` for one.
 
 ## Planning
 
@@ -256,7 +258,7 @@ Bindings stay keyed by manifest name per environment, which is already unique ac
 
 The project page swaps its single-repository header (`pages/project-detail.tsx:210-273`) and repository row (`:521`) for a sources panel. Each row shows the alias, repository, root, ref, latest SHA and analysis state, and has an Analyze action, with Analyze all at the top.
 
-`ConnectRepository` (`components/architecture.tsx:300`) opens an add-source dialog in place of PATCHing `repositoryUrl`. The dialog uses the existing `useGithubRepositories` hook as a picker, fills the alias from the repository name, takes an optional root and ref, and shows the access check inline. The new-project dialog keeps its one repository field, which becomes the first source.
+`ConnectRepository` (`components/architecture.tsx:300`) opens an add-source dialog in place of PATCHing `repositoryUrl`. The dialog uses the existing `useGithubRepositories` hook as a picker, fills the alias from the repository name, takes an optional root and ref, and shows the access check inline. The new-project dialog takes several repositories, a row each, up to ten. Once there are two, each row gets an alias field whose placeholder is the alias the API would pick, and two rows that would end up with the same alias (`acme/web` and `other/web` are both `web`) are flagged before you can submit.
 
 `ServiceGraph` draws one cluster per source and gives cross-repository `uses` edges their own style, dashed when Likely. `GraphCaption` shows a chip per source (`web@3f2c1a9 · api@9a1b02e`) in place of one `repository@sha`. `evidenceURL` and `commitURL` (`lib/architecture.ts:92`) look up `evidence.source` in `graph.sources`. The services table gets a Repo column, analysis history can be filtered by source, and the command menu gets "Analyze source…".
 
@@ -267,7 +269,7 @@ The plan screens from `d36ca4a` get two additions. Creating a plan offers a scop
 | Code | When |
 |---|---|
 | `source-inaccessible` | No installation covers the repository you're adding |
-| `alias-taken` | A live or removed source in the project already used the alias |
+| `alias-taken` | A live or removed source in the project already used the alias, or two of a new project's repositories want the same one |
 | `alias-reserved` | The alias is an ecosystem name |
 | `roots-overlap` | The same repository is attached twice with nested roots |
 | `no-analysis` | An in-scope source has no succeeded analysis |
