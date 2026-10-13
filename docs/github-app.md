@@ -56,7 +56,7 @@ For GitHub Enterprise Server, also set `LOOMPLANE_GITHUB_API_URL` to `https://<h
 
 ## Connect an account
 
-An owner or admin opens **Integrations** in the dashboard and chooses **Connect GitHub**. GitHub asks which account to install on and which repositories to allow, then sends them back to Loomplane. From then on, any project in the organization whose repository that installation can see is analyzed with access to it. Choosing repositories later happens in the App's settings on GitHub.
+An owner or admin opens **Integrations** in the dashboard and chooses **Install on GitHub**. GitHub asks which account to install on and which repositories to allow, then sends them back to Loomplane. From then on, any project in the organization whose repository that installation can see is analyzed with access to it. Choosing repositories later happens in the App's settings on GitHub.
 
 ## What Loomplane does with it
 
@@ -77,6 +77,14 @@ An App installed on GitHub still needs to be connected to your Loomplane organiz
 1. Connect the account from Integrations and confirm it appears after GitHub sends you back. Reload the page to check the connection persists.
 2. Open New project. Choose a private repository from the account's group, then analyze it. The graph should name the repository and its exact commit.
 3. Check the App's **Permissions & events** settings: **Push** must be selected. A working webhook URL alone does not subscribe the App to pushes.
-4. Push an ordinary change to that repository's default branch, or redeliver an existing push from GitHub's Recent Deliveries. Confirm GitHub receives HTTP 202 and Loomplane starts another analysis for the matching source.
+4. Push an ordinary change to that repository's default branch, or redeliver an existing push from GitHub's Recent Deliveries. For a direct webhook, confirm GitHub receives HTTP 202 with `analyses_started` greater than zero. In Loomplane, open the project's Analyses tab and check that another analysis finishes at the new commit without pressing Analyze.
 
-If you use Smee locally, keep its client running with the Loomplane webhook endpoint as the target. Verify the delivery reaches Loomplane with GitHub's signature header and the original body. A relay accepting the event does not prove Loomplane received it.
+For local development, you can point the App's webhook URL at a Smee channel and run its client in a separate terminal:
+
+```bash
+npx smee-client --url https://smee.io/YOUR_CHANNEL --target http://localhost:8780/api/v1/github/webhook
+```
+
+Keep it running. Set the same webhook secret in GitHub and Loomplane, and select Push under the App's Permissions & events settings. The channel receives push metadata for the repositories your App can access, including commit messages and authors.
+
+With Smee, GitHub's Recent Deliveries shows the relay's response. Check the client's terminal for Loomplane's HTTP 202 response, then confirm the new analysis in the dashboard. An accepted relay delivery alone does not prove Loomplane received the original body and signature.
