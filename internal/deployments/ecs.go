@@ -411,13 +411,13 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 
 	key := e.provider(job)
 	ctx = infrastructure.WithPrincipal(ctx, principal(job))
-	inst, err := currentInstance(ctx, e.Ctrl, job, key)
+	inst, name, err := currentInstance(ctx, e.Ctrl, job, key)
 	if err != nil {
 		return "", "", err
 	}
 	if inst == nil {
 		created, err := e.Ctrl.Instances.Create(ctx, instance.CreateRequest{
-			Name: instanceName(job), ProviderName: key, Region: s.Region(),
+			Name: name, ProviderName: key, Region: s.Region(),
 			Services: []cpprovider.ServiceSpec{spec}, Labels: labels,
 		})
 		if err != nil {

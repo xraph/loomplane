@@ -1747,7 +1747,7 @@ func TestCompute_aHeldServiceUsingAReplacedServiceKeepsTheOldAddress(t *testing.
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "site in site, which this plan holds back, uses api's address, and this plan replaces api, so site keeps the old one's address, which this plan stops tracking. Add site to the scope."
+	want := "site in site, which this plan holds back, uses api's address, and this plan replaces api, so site keeps the old one's address, which the deployment removes once the new one is up. Add site to the scope."
 	if p := r.Problems[0]; p.Message != want || p.Path != "services.site" || p.Subject != ServiceSubject {
 		t.Fatalf("problem %+v", p)
 	}
@@ -1847,7 +1847,7 @@ services:
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:api"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "api in mono, which this plan holds back, uses site's address, and this plan replaces site, so api keeps the old one's address, which this plan stops tracking. Add mono to the scope."
+	want := "api in mono, which this plan holds back, uses site's address, and this plan replaces site, so api keeps the old one's address, which the deployment removes once the new one is up. Add mono to the scope."
 	if r.Problems[0].Message != want {
 		t.Fatalf("problem %+v", r.Problems[0])
 	}
@@ -1892,7 +1892,7 @@ resources:
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:site"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "site, which this plan keeps for mono, which it holds back, uses db's address, and this plan replaces db, so site keeps the old one's address, which this plan stops tracking. Add mono to the scope."
+	want := "site, which this plan keeps for mono, which it holds back, uses db's address, and this plan replaces db, so site keeps the old one's address, which the deployment removes once the new one is up. Add mono to the scope."
 	if r.Problems[0].Message != want {
 		t.Fatalf("problem %+v", r.Problems[0])
 	}
@@ -1919,7 +1919,7 @@ func TestCompute_aDroppedHeldServiceUsingAReplacedResourceKeepsTheOldAddress(t *
 	if got := codes(r.Problems); !slices.Equal(got, []string{"held-address:api"}) {
 		t.Fatalf("problems %v", got)
 	}
-	want := "api in mono, which this plan holds back, uses db's address, and this plan replaces db, so api keeps the old one's address, which this plan stops tracking. Add mono to the scope."
+	want := "api in mono, which this plan holds back, uses db's address, and this plan replaces db, so api keeps the old one's address, which the deployment removes once the new one is up. Add mono to the scope."
 	if p := r.Problems[0]; p.Message != want || p.Path != "services.api" {
 		t.Fatalf("problem %+v", p)
 	}

@@ -75,6 +75,12 @@ type Job struct {
 	SourceID string
 	// Binding is what runs the action now, or nil.
 	Binding *planning.Binding
+	// Replaces is what runs the action on another provider or in another
+	// region, which the runner removes once this one is up, through the
+	// executor that deployed it. Binding is nil when it's set, since
+	// nothing runs the action here yet. An executor whose names could
+	// collide with the old one's reads it to choose another.
+	Replaces *planning.Binding
 	// Resume is what Checkpoint saved in an earlier attempt, such as a
 	// build's operation name, or nil.
 	Resume []byte
@@ -494,6 +500,19 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		}
 		return r.plans.DeleteBinding(ctx, d.OrgID, current.ID)
 	}
+	// An action that moves to another provider or region starts the new
+	// one with nothing bound to it, and removes the old one once the new
+	// one is up. The binding names the old one until then, so a retry
+	// after a failure anywhere in between finds it again.
+	var moved *replaceCheckpoint
+	if moves(current, a) {
+		moved = readReplaceCheckpoint(resume)
+		job.Binding, job.Replaces, job.Resume = nil, current, moved.Apply
+		job.Checkpoint = func(data []byte) error {
+			moved.Apply = data
+			return heartbeat(moved.encode())
+		}
+	}
 	if a.Service != nil {
 		if a.Service.Gateway == nil {
 			repo := a.Service.Repo
@@ -525,7 +544,105 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			return err
 		}
 	}
+	if moved != nil {
+		if err := r.removeReplaced(ctx, job, out, connID, moved, heartbeat); err != nil {
+			return err
+		}
+	}
 	return r.bind(ctx, d, a, current, out, connID)
+}
+
+// moves reports whether an action runs somewhere other than its binding:
+// on another provider, or in another region. The planner replaces it.
+func moves(b *planning.Binding, a planning.Action) bool {
+	return b != nil && (b.Provider != a.Provider || b.Region != a.Region)
+}
+
+// replaceCheckpoint is what a moving action saves: the new executor's
+// progress and the old one's, apart, so a retry hands each its own.
+type replaceCheckpoint struct {
+	Replace bool   `json:"replace"`
+	Apply   []byte `json:"apply,omitempty"`
+	Remove  []byte `json:"remove,omitempty"`
+}
+
+// readReplaceCheckpoint reads what an earlier attempt at a moving action
+// saved. Anything else, such as a checkpoint from before the runner
+// split them, is the new executor's.
+func readReplaceCheckpoint(data []byte) *replaceCheckpoint {
+	var rc replaceCheckpoint
+	if len(data) > 0 && json.Unmarshal(data, &rc) == nil && rc.Replace {
+		return &rc
+	}
+	return &replaceCheckpoint{Replace: true, Apply: data}
+}
+
+func (rc *replaceCheckpoint) encode() []byte {
+	data, _ := json.Marshal(rc) //nolint:errcheck // a plain struct always encodes
+	return data
+}
+
+// removeReplaced removes what an action ran as before it moved, once its
+// replacement is up: through the old provider's executor, with the
+// connection that deployed it. Something already gone isn't an error, so
+// a retry that gets here again finishes the job.
+func (r *Runner) removeReplaced(ctx context.Context, job *Job, out *Outcome, connID string, rc *replaceCheckpoint, heartbeat func([]byte) error) error {
+	old, a := job.Replaces, job.Action
+	oldConnID := old.ConnectionID
+	if oldConnID == "" {
+		// A binding from before bindings recorded their connection was
+		// deployed with the plan's connection to its cloud.
+		prov, err := r.providers.Get(old.Provider)
+		if err != nil {
+			return fmt.Errorf("find %s, which runs the %s it replaces: %w", old.Provider, a.Name, err)
+		}
+		oldConnID = job.Plan.Connections[prov.Cloud]
+	}
+	// An executor that answers with what it was to replace didn't start
+	// another one, so removing the old one would remove the new one too.
+	if out.ExternalID != "" && out.ExternalID == old.ExternalID && oldConnID == connID {
+		return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed",
+			a.Provider, a.Name, placement(a.Provider, a.Region), old.ExternalID)
+	}
+	exec, ok := r.executors[old.Provider]
+	if !ok {
+		return fmt.Errorf("%w: %s, which runs the %s it replaces", ErrNoExecutor, old.Provider, a.Name)
+	}
+	if oldConnID == "" {
+		return fmt.Errorf("the plan names no connection for %s, which runs the %s it replaces", old.Provider, a.Name)
+	}
+	conn, cred, err := r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	if err != nil {
+		return err
+	}
+	gone := *job
+	gone.Action.Provider, gone.Action.Region = old.Provider, old.Region
+	gone.Connection, gone.Credential = conn, cred
+	gone.Binding, gone.Replaces, gone.Resume = old, nil, rc.Remove
+	gone.Checkpoint = func(data []byte) error {
+		rc.Remove = data
+		return heartbeat(rc.encode())
+	}
+	gone.Keep = func(context.Context, string, []byte) error {
+		return errors.New("removing what an action replaces keeps nothing")
+	}
+	// What's kept under the action's name, such as a database's address,
+	// is the replacement's now.
+	gone.Forget = func(context.Context) error { return nil }
+	job.Progress(StepDeploying, "Removing the one it replaces on "+placement(old.Provider, old.Region))
+	if err := exec.Remove(ctx, &gone, old); err != nil {
+		return fmt.Errorf("remove the %s it replaces on %s: %w", a.Name, placement(old.Provider, old.Region), err)
+	}
+	return nil
+}
+
+// placement names a provider and, when it has one, a region:
+// "cloud-run in europe-west1".
+func placement(prov, region string) string {
+	if region == "" {
+		return prov
+	}
+	return prov + " in " + region
 }
 
 // env is what a service gets: its resolved variables, then the address of

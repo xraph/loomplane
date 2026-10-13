@@ -51,6 +51,30 @@ func SQLInstanceName(job *Job) string {
 	return "lp-" + strings.ToLower(job.Action.Name+"-"+job.Deployment.Environment+"-"+idSuffix(job.Deployment.ProjectID))
 }
 
+// cloudSQLInstance is the Cloud SQL instance a resource is: the one its
+// binding names, or a new one's name, which ends with its region. A
+// region can't change in place, so a move creates another instance, and
+// it needs a name of its own while the old one still runs.
+func cloudSQLInstance(job *Job) string {
+	if b := job.Binding; b != nil {
+		if name := sqlInstanceID(b.ExternalID); name != "" {
+			return name
+		}
+	}
+	return SQLInstanceName(job) + "-" + strings.ToLower(job.Action.Resource.Region)
+}
+
+// sqlInstanceID is the instance a connection name names: the last part of
+// "project:region:instance", where a domain-scoped project has a colon
+// of its own.
+func sqlInstanceID(connection string) string {
+	parts := strings.Split(connection, ":")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
 // Apply implements Executor.
 func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	cfg := job.Action.Resource
@@ -84,7 +108,7 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 
 	job.Progress(StepDeploying, "Creating the database instance; this takes several minutes")
 	in, err := s.EnsureSQLInstance(ctx, gcp.SQLInstanceSpec{
-		Name: SQLInstanceName(job), DatabaseVersion: version, Region: cfg.Region, Tier: sqlTier,
+		Name: cloudSQLInstance(job), DatabaseVersion: version, Region: cfg.Region, Tier: sqlTier,
 	}, state.Operation, func(op string) {
 		state.Operation = op
 		save()

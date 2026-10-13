@@ -368,13 +368,13 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 	ctx = infrastructure.WithPrincipal(ctx, principal(job))
 	sp, labels := spec(job, image, secrets)
 
-	inst, err := currentInstance(ctx, c.Ctrl, job, key)
+	inst, name, err := currentInstance(ctx, c.Ctrl, job, key)
 	if err != nil {
 		return "", "", err
 	}
 	if inst == nil {
 		created, err := c.Ctrl.Instances.Create(ctx, instance.CreateRequest{
-			Name: instanceName(job), ProviderName: key, Region: job.Action.Region,
+			Name: name, ProviderName: key, Region: job.Action.Region,
 			Services: []cpprovider.ServiceSpec{sp}, Labels: labels,
 		})
 		if err != nil {
@@ -400,34 +400,75 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 
 // currentInstance finds the Ctrl Plane instance an action deploys to: its
 // binding's, or one an earlier attempt created before it could record a
-// binding. One on another provider, from a replaced action, is deleted
-// first.
-func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (*instance.Instance, error) {
-	var inst *instance.Instance
+// binding. name is what to call the instance when there's none.
+//
+// An instance an action replaces, on another provider or in another
+// region, isn't this one: the runner removes it once this one is up. Until
+// then it keeps its slug, so this one takes another name. One on another
+// connection with the same provider and region isn't a move the planner
+// replaces, so it's deleted here, before this one is created in its place.
+func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (inst *instance.Instance, name string, err error) {
 	if job.Binding != nil && job.Binding.ExternalID != "" {
-		iid, err := id.Parse(job.Binding.ExternalID)
-		if err != nil {
-			return nil, fmt.Errorf("the binding names no instance: %w", err)
+		iid, perr := id.Parse(job.Binding.ExternalID)
+		if perr != nil {
+			return nil, "", fmt.Errorf("the binding names no instance: %w", perr)
 		}
 		if inst, err = ctrl.Instances.Get(ctx, iid); err != nil && !errors.Is(err, ctrlplane.ErrNotFound) {
-			return nil, err
+			return nil, "", err
 		}
 	}
+	if name, err = newInstanceName(ctx, ctrl, job); err != nil {
+		return nil, "", err
+	}
 	if inst == nil {
-		found, err := ctrl.Instances.GetBySlug(ctx, instanceSlug(job))
-		if err != nil && !errors.Is(err, ctrlplane.ErrNotFound) {
-			return nil, err
+		found, ferr := ctrl.Instances.GetBySlug(ctx, strings.ToLower(name))
+		if ferr != nil && !errors.Is(ferr, ctrlplane.ErrNotFound) {
+			return nil, "", ferr
 		}
 		inst = found
 	}
-	if inst != nil && inst.ProviderName != key {
-		job.Progress(StepDeploying, "Removing the service it replaces")
+	switch {
+	case inst == nil || replaced(job, inst):
+		return nil, name, nil
+	case inst.ProviderName != key:
+		job.Progress(StepDeploying, "Removing the service on the environment's old connection")
 		if err := ctrl.Instances.Delete(ctx, inst.ID); err != nil {
-			return nil, fmt.Errorf("remove the service it replaces: %w", err)
+			return nil, "", fmt.Errorf("remove the service on the old connection: %w", err)
 		}
-		return nil, nil
+		return nil, name, nil
 	}
-	return inst, nil
+	return inst, name, nil
+}
+
+// replaced reports whether inst is the instance the action replaces.
+func replaced(job *Job, inst *instance.Instance) bool {
+	return job.Replaces != nil && job.Replaces.ExternalID == inst.ID.String()
+}
+
+// newInstanceName is what to call an instance the action creates: its
+// name, or when the instance it replaces already has that slug, its name
+// with "-2". A move back takes the first name again.
+func newInstanceName(ctx context.Context, ctrl CtrlPlane, job *Job) (string, error) {
+	name := instanceName(job)
+	if job.Replaces == nil || job.Replaces.ExternalID == "" {
+		return name, nil
+	}
+	iid, err := id.Parse(job.Replaces.ExternalID)
+	if err != nil {
+		// It isn't a Ctrl Plane instance, such as a Vercel project, so
+		// it holds no slug.
+		return name, nil
+	}
+	old, err := ctrl.Instances.Get(ctx, iid)
+	switch {
+	case errors.Is(err, ctrlplane.ErrNotFound):
+		return name, nil
+	case err != nil:
+		return "", fmt.Errorf("read the instance it replaces: %w", err)
+	case strings.EqualFold(old.Slug, name):
+		return name + "-2", nil
+	}
+	return name, nil
 }
 
 // instanceName names the Ctrl Plane instance: the service, the

@@ -555,8 +555,9 @@ func fixedAddress(dep *Action, target string) string {
 // readdressed decides: held services, the services retained for them, and
 // held services the manifest dropped. A replacement, or what's created
 // again, gets an address of its own, but none of those is deployed
-// again, so each keeps the old one's address. This plan stops tracking
-// the old one once its binding is the replacement's, so that's a problem. It
+// again, so each keeps the old one's address. A deployment removes what it
+// replaces once the replacement is up, and what's created again is gone
+// already, so that's a problem. It
 // runs after planGateways, since a gateway that takes the name of what a
 // held service used can replace it too. What was deleted outside
 // Loomplane runs nowhere, so it uses nothing. Each one it reports is noted
@@ -617,10 +618,16 @@ func (p *planner) heldAddresses() {
 			}
 			seen = append(seen, dep.ID)
 			p.addressed[dep.ID] = append(p.addressed[dep.ID], u.name)
+			// A deployment removes what it replaces once the new one is up.
+			// What's created again was deleted outside Loomplane.
+			fate := "which this plan stops tracking"
+			if dep.Op == Replace {
+				fate = "which the deployment removes once the new one is up"
+			}
 			p.problem(Finding{
 				Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
-				Message: fmt.Sprintf("%s, uses %s's address, and this plan %s, so %s keeps the old one's address, which this plan stops tracking. %s",
-					who, e.From, how, u.name, scope),
+				Message: fmt.Sprintf("%s, uses %s's address, and this plan %s, so %s keeps the old one's address, %s. %s",
+					who, e.From, how, u.name, fate, scope),
 			})
 		}
 	}
@@ -1476,16 +1483,16 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 	switch {
 	case b.Provider != providerName:
 		a.Op = Replace
-		a.Reason = fmt.Sprintf("%s moves from %s to %s. The new one starts before the old one goes.", a.Name, b.Provider, providerName)
+		a.Reason = fmt.Sprintf("%s moves from %s to %s. The new one starts first, and the old one is removed once it's up.", a.Name, b.Provider, providerName)
 	case b.Region != region:
 		a.Op = Replace
-		a.Reason = fmt.Sprintf("%s moves from %s to %s, and a region can't change in place.", a.Name, b.Region, region)
+		a.Reason = fmt.Sprintf("%s moves from %s to %s. A region can't change in place, so the new one starts there first, and the old one is removed once it's up.", a.Name, b.Region, region)
 	}
 	if a.Op == Replace {
 		if a.Subject == ResourceSubject {
 			p.warn(Finding{
 				Code: "data-loss", Subject: ResourceSubject, Name: a.Name, Path: "resources." + a.Name,
-				Message: fmt.Sprintf("Replacing %s provisions a new, empty one and then deletes the old one with its data. Loomplane doesn't move data between them.", a.Name),
+				Message: fmt.Sprintf("Replacing %s provisions a new, empty one, then deletes the old one and its data once the new one is up. Loomplane doesn't move data between them.", a.Name),
 			})
 		}
 		return
