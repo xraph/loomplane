@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -180,18 +179,19 @@ func idSuffix(s string) string {
 }
 
 // buildFor is the Cloud Build for a service: its Dockerfile, built from
-// the Dockerfile's own directory the way docker build and Compose do, or
-// Google's buildpacks when it has none.
+// its build context (the Dockerfile's own directory unless the manifest or
+// a Compose file says another), or Google's buildpacks when it has none.
 func buildFor(cfg *planning.ServiceConfig, root, image string) gcp.Build {
 	b := gcp.Build{Timeout: buildTimeout, Tags: []string{"loomplane"}}
 	if cfg.Image != "" {
+		ctx := cfg.ContextDir()
 		dir := root
-		if d := path.Dir(cfg.Image); d != "." {
-			dir += "/" + d
+		if ctx != "." {
+			dir += "/" + ctx
 		}
 		b.Steps = []gcp.BuildStep{{
 			Name: dockerBuilder, Dir: dir,
-			Args: []string{"build", "-t", image, "-f", path.Base(cfg.Image), "."},
+			Args: []string{"build", "-t", image, "-f", cfg.DockerfileIn(ctx), "."},
 		}}
 		b.Images = []string{image}
 		return b

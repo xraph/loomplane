@@ -4352,6 +4352,9 @@
           "confidence": {
             "type": "string"
           },
+          "context": {
+            "type": "string"
+          },
           "deployable": {
             "type": "boolean"
           },
@@ -4427,6 +4430,9 @@
             "type": "string"
           },
           "commit_sha": {
+            "type": "string"
+          },
+          "context": {
             "type": "string"
           },
           "ecosystem": {

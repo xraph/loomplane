@@ -135,6 +135,18 @@
           "description": "Corrects what analysis decided the service is.",
           "enum": ["http-service", "web-app", "static-site", "worker"]
         },
+        "build": {
+          "description": "How the service's Dockerfile is built.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "description": "The directory the build runs in, from the repository's root: . for the root itself. Empty uses what analysis found, which is the Dockerfile's own directory unless a Compose file says another.",
+              "type": "string",
+              "pattern": "^(?:\\.|(?!\\.\\.?(?:/|$))[A-Za-z0-9._@+-]+(?:/(?!\\.\\.?(?:/|$))[A-Za-z0-9._@+-]+)*)$"
+            }
+          }
+        },
         "needs": {
           "description": "Resources and other services this one talks to. Each one it names gets the service its address, in a variable.",
           "type": "array",

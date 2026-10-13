@@ -68,7 +68,7 @@ func Build(r *discovery.Report) *Graph {
 			svc := service(u, ep)
 			if img, build := matchImage(r.Images, u, ep, used); img != nil {
 				used[img.Path] = true
-				svc.Image = img.Path
+				svc.Image, svc.Context = img.Path, img.Context
 				svc.Ports = img.Ports
 				svc.Evidence = append(svc.Evidence, img.Evidence...)
 				if build != nil {
@@ -229,7 +229,7 @@ func imageService(img discovery.Image) Service {
 	}
 	return Service{
 		ID: "svc:container:" + img.Path, Name: name, Kind: kind, Deployable: true, Ecosystem: discovery.Container,
-		Path: img.Context, Entrypoint: img.Path, Image: img.Path, Ports: img.Ports, Confidence: conf,
+		Path: img.Context, Entrypoint: img.Path, Image: img.Path, Context: img.Context, Ports: img.Ports, Confidence: conf,
 		Evidence: append([]discovery.Evidence(nil), img.Evidence...),
 	}
 }

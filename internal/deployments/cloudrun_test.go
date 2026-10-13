@@ -20,6 +20,8 @@ func TestBuildFor(t *testing.T) {
 			dockerBuilder, "acme-mono-1/services/api", []string{"build", "-t", img, "-f", "Dockerfile", "."}},
 		{"one at the root builds from the root", planning.ServiceConfig{Image: "Dockerfile.prod"},
 			dockerBuilder, "acme-mono-1", []string{"build", "-t", img, "-f", "Dockerfile.prod", "."}},
+		{"a build context from the root names the Dockerfile from there", planning.ServiceConfig{Image: "services/api/Dockerfile", Context: "."},
+			dockerBuilder, "acme-mono-1", []string{"build", "-t", img, "-f", "services/api/Dockerfile", "."}},
 		{"go without one uses the buildpack on its main package", planning.ServiceConfig{Ecosystem: "go", Source: "services/api"},
 			packBuilder, "", []string{"build", img, "--builder", googleBuilder, "--publish", "--env", "GOOGLE_BUILDABLE=./services/api", "--path", "acme-mono-1"}},
 		{"node without one builds its package", planning.ServiceConfig{Ecosystem: "node", Source: "apps/gateway"},

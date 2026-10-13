@@ -123,7 +123,7 @@ Everything up to step 6 is tested against fakes that stand in for Google Cloud a
 Left over, for after the acceptance run:
 
 1. Variables, secrets included, were set as plain environment variables on Cloud Run. Milestone 5 moved secrets to Secret Manager.
-2. A Dockerfile is built from its own directory. One that expects the repository root needs a setting the manifest doesn't have yet.
+2. A Dockerfile was built from its own directory. Done after milestone 6: it builds from the context a Compose file gives it, or `build.context` in the manifest, on Cloud Build, CodeBuild and provider plugins alike.
 3. Services found each other by public URL. Milestone 5 added private addresses on ECS and private Cloud Run services; a private service on another cloud stays unreachable, and the plan says so.
 4. Ctrl Plane gaps worth fixing upstream: instances keep the provider's name rather than its registry key, providers get credentials only at construction, Deploy carries only images and variables, and nothing polls status after a call returns.
 

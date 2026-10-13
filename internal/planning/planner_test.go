@@ -1287,3 +1287,39 @@ func TestCompute_driftOnAHeldServiceNothingNeedsIsAWarning(t *testing.T) {
 		})
 	}
 }
+
+func TestCompute_buildContext(t *testing.T) {
+	// The api's Dockerfile builds from its own directory, which the plan
+	// leaves unsaid, so bindings from before build contexts don't change.
+	r := compute(t, acme, "production")
+	if api := action(t, r, "service:api"); api.Service.Image != "services/api/Dockerfile" || api.Service.Context != "" || api.Service.ContextDir() != "services/api" {
+		t.Fatalf("api %+v", api.Service)
+	}
+
+	m := strings.Replace(acme, "    source: services/api\n", "    source: services/api\n    build: {context: .}\n", 1)
+	m = strings.Replace(m, "    source: apps/gateway\n", "    source: apps/gateway\n    build: {context: apps}\n", 1)
+	r = compute(t, m, "production")
+	api := action(t, r, "service:api")
+	if api.Service.Context != "." || api.Service.DockerfileIn(api.Service.ContextDir()) != "services/api/Dockerfile" {
+		t.Fatalf("api %+v", api.Service)
+	}
+	// The gateway has no Dockerfile, so there's nothing to build from it.
+	if gw := action(t, r, "service:gateway"); gw.Service.Context != "" || !slices.Contains(codes(r.Warnings), "build-context-ignored:gateway") {
+		t.Fatalf("gateway %+v, findings %v", gw.Service, codes(r.Warnings))
+	}
+}
+
+func TestServiceConfig_DockerfileIn(t *testing.T) {
+	for _, tc := range []struct{ image, dir, want string }{
+		{"services/api/Dockerfile", "services/api", "Dockerfile"},
+		{"services/api/Dockerfile", ".", "services/api/Dockerfile"},
+		{"services/api/Dockerfile", "services", "api/Dockerfile"},
+		{"docker/api.Dockerfile", "services/api", "../../docker/api.Dockerfile"},
+		{"Dockerfile", ".", "Dockerfile"},
+	} {
+		c := &ServiceConfig{Image: tc.image}
+		if got := c.DockerfileIn(tc.dir); got != tc.want {
+			t.Errorf("DockerfileIn(%s, %s) = %s, want %s", tc.image, tc.dir, got, tc.want)
+		}
+	}
+}
