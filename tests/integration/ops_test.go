@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/grove/migrate"
 
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/config"
@@ -149,5 +150,65 @@ func TestOps_anOlderLoomplaneRefusesANewerSchema(t *testing.T) {
 	if err := app.Start(sctx); !errors.Is(err, ops.ErrNewerSchema) {
 		_ = app.Stop(ctx)
 		t.Fatalf("started against a newer schema: %v", err)
+	}
+}
+
+// olderSchema is a group whose second migration changes a table the
+// first made, standing in for any Loomplane release that changes one.
+func olderSchema(both bool) *migrate.Group {
+	g := migrate.NewGroup("restore_test")
+	run := func(stmt string) migrate.MigrateFunc {
+		return func(ctx context.Context, exec migrate.Executor) error {
+			_, err := exec.Exec(ctx, stmt)
+			return err
+		}
+	}
+	g.MustRegister(&migrate.Migration{Name: "create", Version: "1",
+		Up: run(`CREATE TABLE restore_test (a TEXT NOT NULL)`), Down: run(`DROP TABLE restore_test`)})
+	if both {
+		g.MustRegister(&migrate.Migration{Name: "add_b", Version: "2",
+			Up:   run(`ALTER TABLE restore_test ADD COLUMN b TEXT NOT NULL DEFAULT 'filled'`),
+			Down: run(`ALTER TABLE restore_test DROP COLUMN b`)})
+	}
+	return g
+}
+
+func TestOps_aBackupFromAnOlderSchemaRestoresAndUpgrades(t *testing.T) {
+	ctx := context.Background()
+	old := freshDatabase(t)
+	if err := ops.Migrate(ctx, old, append(migrations.All(), olderSchema(false))); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO restore_test (a) VALUES ('kept')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close(ctx)
+	var backup bytes.Buffer
+	if _, err = ops.Backup(ctx, old, "old", &backup); err != nil {
+		t.Fatal(err)
+	}
+
+	// This Loomplane has the migration the backup predates. The rows load
+	// at the backup's schema, then the migration runs over them.
+	fresh := freshDatabase(t)
+	if _, err = ops.Restore(ctx, fresh, append(migrations.All(), olderSchema(true)), bytes.NewReader(backup.Bytes()), ops.RestoreOptions{}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	conn, err = pgx.Connect(ctx, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var a, b string
+	if err = conn.QueryRow(ctx, `SELECT a, b FROM restore_test`).Scan(&a, &b); err != nil || a != "kept" || b != "filled" {
+		t.Fatalf("restored row %q %q, %v", a, b, err)
+	}
+	st, err := ops.SchemaStatus(ctx, fresh, append(migrations.All(), olderSchema(true)))
+	if err != nil || len(st.Pending) != 0 {
+		t.Fatalf("status %+v, %v", st, err)
 	}
 }
