@@ -475,9 +475,10 @@ func (p *planner) keep(name, alias string, b *Binding) {
 // plan still links to or routes to is a problem, because what needs it
 // would point at nothing. Anything else that drifted is a warning.
 //
-// A held service the manifest dropped, or turned off here, is held too:
-// planDeletes leaves it running, so its drift is reported the same way,
-// except that no plan brings it back.
+// A held service the manifest no longer has is held too: planDeletes
+// leaves it running, so its drift is reported the same way, except that
+// no plan brings it back. Nor does one bring back a held service that's
+// off here, since a plan that moves its repository removes it.
 func (p *planner) heldDrift() {
 	type heldItem struct {
 		id      string
@@ -521,12 +522,24 @@ func (p *planner) heldDrift() {
 			p.droppedDrift(f, b, it.aliases)
 			continue
 		}
+		// A held service that's off here is kept as deployed, but a plan
+		// that moves its repository removes it.
+		off := !it.kept && !p.serviceOn(b.Name)
 		switch {
+		case b.Drift == DriftMissing && p.needed(it.id) && off:
+			f.Code = "held-missing"
+			f.Message = fmt.Sprintf("%s was deleted outside Loomplane, and %s, so this plan can't bring it back. It's off in %s, so turn it on and %s.", b.Name, from, p.in.Environment, heldMove(it.aliases))
+			p.problem(f)
+			continue
 		case b.Drift == DriftMissing && p.needed(it.id):
 			f.Code = "held-missing"
 			f.Message = fmt.Sprintf("%s was deleted outside Loomplane, and %s, so this plan can't bring it back. %s", b.Name, from, scope)
 			p.problem(f)
 			continue
+		case b.Drift == DriftMissing && off:
+			f.Message = fmt.Sprintf("%s was deleted outside Loomplane, and %s, so it stays gone. It's off in %s, so %s clears what's left of it.", b.Name, from, p.in.Environment, heldClearer(it.aliases))
+		case off:
+			f.Message = fmt.Sprintf("%s was changed outside Loomplane (%s), and %s, so it stays that way. It's off in %s, so %s removes it.", b.Name, b.DriftMessage, from, p.in.Environment, heldClearer(it.aliases))
 		// What's kept for a held service is what the manifest no longer
 		// plans, so a plan that moves the repository removes it rather than
 		// bringing it back.
@@ -549,14 +562,10 @@ func (p *planner) heldDrift() {
 // that a plan that moves its repository removes it rather than bringing
 // it back.
 func (p *planner) droppedDrift(f Finding, b *Binding, aliases []string) {
-	move := "plan every repository"
-	if repos, _ := heldScope(aliases); len(aliases) > 0 && !slices.Contains(aliases, "") {
-		move = fmt.Sprintf("add %s to the scope", repos)
-	}
 	switch {
 	case b.Drift == DriftMissing && p.needed(actionID(b.Subject, b.Name)):
 		f.Code = "held-missing"
-		f.Message = fmt.Sprintf("%s was deleted outside Loomplane and the manifest no longer has it, so this plan doesn't bring it back, yet something in this plan still uses it. Put it back in the manifest and %s, or stop using it.", b.Name, move)
+		f.Message = fmt.Sprintf("%s was deleted outside Loomplane and the manifest no longer has it, so this plan doesn't bring it back, yet something in this plan still uses it. Put it back in the manifest and %s, or stop using it.", b.Name, heldMove(aliases))
 		p.problem(f)
 		return
 	case b.Drift == DriftMissing:
@@ -566,6 +575,23 @@ func (p *planner) droppedDrift(f Finding, b *Binding, aliases []string) {
 	}
 	f.Code = "held-drifted"
 	p.warn(f)
+}
+
+// heldMove says what plans the held repositories again, for a message:
+// adding them to the scope, or planning every repository when a binding
+// doesn't say which one it's from.
+func heldMove(aliases []string) string {
+	if len(aliases) == 0 || slices.Contains(aliases, "") {
+		return "plan every repository"
+	}
+	return fmt.Sprintf("add %s to the scope", strings.Join(aliases, " and "))
+}
+
+// serviceOn reports whether the manifest has a service and has it on here.
+func (p *planner) serviceOn(name string) bool {
+	m := p.in.Manifest
+	s, ok := m.Services[name]
+	return ok && manifest.On(s.For(p.in.Environment, m.Defaults).Enabled)
 }
 
 // heldClearer names the plan that removes what a held repository keeps
@@ -610,13 +636,18 @@ func (p *planner) needed(id string) bool {
 	links := func(env []EnvLink) bool {
 		return slices.ContainsFunc(env, func(e EnvLink) bool { return actionID(e.Subject, e.From) == id })
 	}
+	// What's kept as deployed but was deleted outside Loomplane runs
+	// nowhere, so it uses nothing. Anything else deleted is created again.
+	gone := func(a *Action) bool {
+		b := p.bindings[a.ID]
+		return a.Op == Keep && b != nil && b.Drift == DriftMissing
+	}
 	for _, a := range p.actions {
-		if a.ID != id && a.Service != nil && links(a.Service.Env) {
+		if a.ID != id && a.Service != nil && !gone(a) && links(a.Service.Env) {
 			return true
 		}
 	}
 	for bid, b := range p.bindings {
-		// One deleted outside Loomplane runs nowhere, so it uses nothing.
 		if bid == id || b.Drift == DriftMissing {
 			continue
 		}
@@ -768,7 +799,7 @@ func (p *planner) retain() {
 			path = "services"
 		}
 		var msg string
-		switch wanted, on := p.wanted(b); {
+		switch wanted, on := p.wantedAsDeployed(b); {
 		case !wanted:
 			msg = fmt.Sprintf("%s is gone from the manifest, but %s, which this plan holds back, still %s it", b.Name, who, uses)
 		case !on:
@@ -1571,6 +1602,19 @@ func stillThere(b *Binding) string {
 		return ", so this plan doesn't remove it. It was deleted outside Loomplane, so it stays gone."
 	}
 	return ", so it keeps running."
+}
+
+// wantedAsDeployed is wanted for what a binding deployed. A gateway the
+// manifest has by the name of a deployed service that isn't a gateway
+// isn't that service, so to the service the manifest no longer has it.
+func (p *planner) wantedAsDeployed(b *Binding) (wanted, on bool) {
+	if _, ok := p.in.Manifest.Gateways[b.Name]; ok && b.Subject == ServiceSubject {
+		var cfg ServiceConfig
+		if json.Unmarshal(b.Config, &cfg) == nil && cfg.Gateway == nil {
+			return false, false
+		}
+	}
+	return p.wanted(b)
 }
 
 // wanted reports whether the manifest still has a binding's subject, and
