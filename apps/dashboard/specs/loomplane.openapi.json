@@ -3394,8 +3394,7 @@
         "required": [
           "version",
           "defaults",
-          "ignore",
-          "held"
+          "ignore"
         ],
         "properties": {
           "defaults": {
@@ -4297,8 +4296,7 @@
             "required": [
               "version",
               "defaults",
-              "ignore",
-              "held"
+              "ignore"
             ],
             "properties": {
               "defaults": {

@@ -382,7 +382,7 @@ export interface InfrastructureStatus {
 export interface Manifest {
   defaults: Defaults;
   gateways?: Record<string, any>;
-  held: Held;
+  held?: Held;
   ignore: Ignore;
   resources?: Record<string, any>;
   services?: Record<string, any>;
@@ -630,7 +630,7 @@ export interface SaveInputBody {
   manifest?: {
   defaults: Defaults;
   gateways?: Record<string, any>;
-  held: Held;
+  held?: Held;
   ignore: Ignore;
   resources?: Record<string, any>;
   services?: Record<string, any>;

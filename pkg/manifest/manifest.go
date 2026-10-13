@@ -56,7 +56,7 @@ type Manifest struct {
 	Resources map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
 	Gateways  map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
 	Ignore    Ignore              `json:"ignore,omitzero" yaml:"ignore,omitempty"`
-	Held      Held                `json:"held,omitzero" yaml:"held,omitempty"`
+	Held      Held                `json:"held,omitzero" yaml:"held,omitempty" optional:"true"`
 }
 
 // Defaults apply to every service and resource that doesn't set its own.
