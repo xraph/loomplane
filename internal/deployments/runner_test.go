@@ -680,3 +680,260 @@ func TestImageTag_refusesWhatIsntACommit(t *testing.T) {
 		}
 	}
 }
+
+// startMove starts a deployment of plan and stores its source, so a test
+// can run its one action itself.
+func startMove(t *testing.T, r *Runner, plan *planning.Plan) string {
+	t.Helper()
+	id, _, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.FetchSource(t.Context(), plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestRunner_aReplaceStartsTheNewOneThenRemovesTheOldOne(t *testing.T) {
+	log := &moveLog{}
+	oldExec := &placed{provider: "cloud-run", log: log}
+	newExec := &placed{provider: "vercel", log: log, url: answering(t, http.StatusOK)}
+	plan := apiMoves()
+	was := onCloudRun()
+	was.Config = []byte(`{"provider":"cloud-run","service":"svc:go:services/api"}`)
+	r, _, plans, _ := moveRunner(t, plan, was, map[string]Executor{"cloud-run": oldExec, "vercel": newExec})
+	// The new one is bound before the old one goes, so nothing is left
+	// untracked if removing it fails.
+	var boundAtRemove *planning.Binding
+	oldExec.onRemove = func() { boundAtRemove = plans.bindings["service:api"] }
+
+	if _, err := runAll(t, r, plan); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := log.list(), []string{"apply vercel", "remove cloud-run ext-old"}; !slices.Equal(got, want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+	if boundAtRemove == nil || boundAtRemove.Provider != "vercel" || boundAtRemove.ExternalID != "ext-vercel" {
+		t.Fatalf("bound while removing the old one: %+v", boundAtRemove)
+	}
+	// The old one is removed as it was: its provider, region, external
+	// ID and config.
+	rm := oldExec.removes[0]
+	if b := rm.Binding; b.Provider != "cloud-run" || b.Region != "us-central1" || b.ExternalID != "ext-old" ||
+		string(b.Config) != string(was.Config) {
+		t.Fatalf("removed %+v", b)
+	}
+}
+
+func TestRunner_aRetryAfterTheOldOneWouldntGoOnlyRemovesIt(t *testing.T) {
+	log := &moveLog{}
+	oldExec := &placed{provider: "cloud-run", log: log, removeErr: []error{errors.New("google is down")}}
+	newExec := &placed{provider: "vercel", log: log, url: answering(t, http.StatusOK)}
+	plan := apiMoves()
+	r, store, plans, _ := moveRunner(t, plan, onCloudRun(), map[string]Executor{"cloud-run": oldExec, "vercel": newExec})
+	ctx := t.Context()
+	id := startMove(t, r, plan)
+
+	var saved []byte
+	heartbeat := func(b []byte) error { saved = b; return nil }
+	err := r.Run(ctx, "org_1", id, "service:api", nil, heartbeat)
+	if err == nil || !strings.Contains(err.Error(), "google is down") {
+		t.Fatalf("first attempt: %v", err)
+	}
+	if b := plans.bindings["service:api"]; b.Provider != "vercel" || b.ExternalID != "ext-vercel" {
+		t.Fatalf("binding after the failure %+v", b)
+	}
+	if ferr := r.Finish(ctx, "org_1", id, err.Error()); ferr != nil {
+		t.Fatal(ferr)
+	}
+	if ok, rerr := store.Reopen(ctx, "org_1", id); !ok || rerr != nil {
+		t.Fatalf("reopen: %v %v", ok, rerr)
+	}
+	// A retry from a new workflow has no heartbeat to go on; what the
+	// step recorded is enough.
+	if err := r.Run(ctx, "org_1", id, "service:api", nil, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"apply vercel", "remove cloud-run ext-old", "remove cloud-run ext-old"}
+	if got := log.list(); !slices.Equal(got, want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+	d, _ := store.GetDeployment(ctx, "org_1", id)
+	if s := d.Step("service:api"); s.Status != StepSucceeded || s.Replaced != nil || s.Message != "Answering at "+newExec.url {
+		t.Fatalf("step %+v", s)
+	}
+
+	// An activity retry hands Remove the checkpoint it saved.
+	log2 := &moveLog{}
+	oldExec2 := &placed{provider: "cloud-run", log: log2, removeErr: []error{errors.New("google is down")}}
+	newExec2 := &placed{provider: "vercel", log: log2, url: newExec.url}
+	r2, _, _, _ := moveRunner(t, plan, onCloudRun(), map[string]Executor{"cloud-run": oldExec2, "vercel": newExec2})
+	id2 := startMove(t, r2, plan)
+	if err := r2.Run(ctx, "org_1", id2, "service:api", nil, heartbeat); err == nil {
+		t.Fatal("the first attempt succeeded")
+	}
+	if err := r2.Run(ctx, "org_1", id2, "service:api", saved, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if got := log2.list(); !slices.Equal(got, want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+	if got := string(oldExec2.removes[1].Resume); got != "rm-cloud-run" {
+		t.Fatalf("remove resumed from %q", got)
+	}
+}
+
+func TestRunner_aReplacedOneWithNoExecutorFailsAndKeepsTheNewOne(t *testing.T) {
+	log := &moveLog{}
+	newExec := &placed{provider: "vercel", log: log, url: answering(t, http.StatusOK)}
+	plan := apiMoves()
+	r, store, plans, _ := moveRunner(t, plan, onCloudRun(), map[string]Executor{"vercel": newExec})
+	ctx := t.Context()
+	id := startMove(t, r, plan)
+
+	err := r.Run(ctx, "org_1", id, "service:api", nil, func([]byte) error { return nil })
+	if !errors.Is(err, ErrNoExecutor) {
+		t.Fatalf("err %v, want ErrNoExecutor", err)
+	}
+	for _, s := range []string{"remove the old api on cloud-run in us-central1 (ext-old) by hand", "now runs on vercel"} {
+		if !strings.Contains(err.Error(), s) {
+			t.Fatalf("%q doesn't say %q", err, s)
+		}
+	}
+	if b := plans.bindings["service:api"]; b.Provider != "vercel" || b.ExternalID != "ext-vercel" {
+		t.Fatalf("binding %+v", b)
+	}
+	d, _ := store.GetDeployment(ctx, "org_1", id)
+	if s := d.Step("service:api"); s.Status != StepFailed || s.Message != err.Error() {
+		t.Fatalf("step %+v", s)
+	}
+
+	// Loomplane can't do more about the old one, so a retry, once it's
+	// been removed by hand, doesn't fail on it again.
+	if ferr := r.Finish(ctx, "org_1", id, err.Error()); ferr != nil {
+		t.Fatal(ferr)
+	}
+	if ok, rerr := store.Reopen(ctx, "org_1", id); !ok || rerr != nil {
+		t.Fatalf("reopen: %v %v", ok, rerr)
+	}
+	if err := r.Run(ctx, "org_1", id, "service:api", nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunner_aServiceOnAnotherConnectionStartsAgainBeforeTheOldOneGoes(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-run", log: log, url: answering(t, http.StatusOK)}
+	plan := apiMoves()
+	plan.Actions[0].Op, plan.Actions[0].Provider, plan.Actions[0].Region = planning.Update, "cloud-run", "us-central1"
+	plan.Actions[0].Service.Provider = "cloud-run"
+	was := onCloudRun()
+	was.ConnectionID = "conn_old"
+	r, _, plans, _ := moveRunner(t, plan, was, map[string]Executor{"cloud-run": exec})
+
+	if _, err := runAll(t, r, plan); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := log.list(), []string{"apply cloud-run", "remove cloud-run ext-old"}; !slices.Equal(got, want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+	if apply := exec.applies[0]; apply.Binding != nil || apply.Replaces == nil || apply.Connection.ID != "conn_g" {
+		t.Fatalf("applied through %s with binding %+v, replacing %+v", apply.Connection.ID, apply.Binding, apply.Replaces)
+	}
+	if rm := exec.removes[0]; rm.Connection.ID != "conn_old" {
+		t.Fatalf("removed through %s", rm.Connection.ID)
+	}
+	if b := plans.bindings["service:api"]; b.ConnectionID != "conn_g" || b.ExternalID != "ext-cloud-run" {
+		t.Fatalf("binding %+v", b)
+	}
+
+	// A resource stays where its data is: a new connection reaches the
+	// same one.
+	log.events = nil
+	db := &placed{provider: "cloud-sql", log: log, externalID: "p:us-central1:lp-db"}
+	dbPlan, dbWas := dbMoves()
+	dbPlan.Actions[0].Op, dbPlan.Actions[0].Region, dbPlan.Actions[0].Resource.Region = planning.Update, "us-central1", "us-central1"
+	dbWas.ConnectionID = "conn_old"
+	r, _, _, _ = moveRunner(t, dbPlan, dbWas, map[string]Executor{"cloud-sql": db})
+	if _, err := runAll(t, r, dbPlan); err != nil {
+		t.Fatal(err)
+	}
+	if got := log.list(); !slices.Equal(got, []string{"apply cloud-sql"}) {
+		t.Fatalf("events %v", got)
+	}
+	if db.applies[0].Binding == nil || db.applies[0].Replaces != nil {
+		t.Fatalf("the database was applied as a move: %+v", db.applies[0])
+	}
+}
+
+func TestRunner_aServiceOnAnotherConnectionThatsTheSameOneRemovesNothing(t *testing.T) {
+	log := &moveLog{}
+	// Both connections reach the same Vercel team, so the project is the
+	// one already bound.
+	exec := &placed{provider: "vercel", log: log, url: answering(t, http.StatusOK), externalID: "prj_1"}
+	plan := apiMoves()
+	plan.Actions[0].Op = planning.Update
+	was := &planning.Binding{
+		ID: "bind_api", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject,
+		Name: "api", Provider: "vercel", ExternalID: "prj_1", ConnectionID: "conn_old",
+	}
+	r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{"vercel": exec})
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := log.list(); !slices.Equal(got, []string{"apply vercel"}) {
+		t.Fatalf("events %v", got)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	if d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if b := plans.bindings["service:api"]; b.ConnectionID != "conn_v" || b.ExternalID != "prj_1" {
+		t.Fatalf("binding %+v", b)
+	}
+}
+
+// goneCredentials are fakeCredentials, except for connections that were
+// deleted.
+type goneCredentials struct {
+	fakeCredentials
+	gone map[string]bool
+}
+
+func (g goneCredentials) Credential(ctx context.Context, orgID, id string) (*connections.Connection, []byte, error) {
+	if g.gone[id] {
+		return nil, nil, connections.ErrNotFound
+	}
+	return g.fakeCredentials.Credential(ctx, orgID, id)
+}
+
+func TestRunner_aReplacedOneWhoseConnectionIsGoneFailsAndKeepsTheNewOne(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-run", log: log, url: answering(t, http.StatusOK)}
+	plan := apiMoves()
+	plan.Actions[0].Op, plan.Actions[0].Provider, plan.Actions[0].Region = planning.Update, "cloud-run", "us-central1"
+	plan.Actions[0].Service.Provider = "cloud-run"
+	was := onCloudRun()
+	was.ConnectionID = "conn_old"
+	r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{"cloud-run": exec})
+	r.credentials = goneCredentials{gone: map[string]bool{"conn_old": true}}
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	if !strings.Contains(d.Error, "the connection that deployed the old api is gone") ||
+		!strings.Contains(d.Error, "remove the old api on cloud-run in us-central1 (ext-old) by hand") {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if got := log.list(); !slices.Equal(got, []string{"apply cloud-run"}) {
+		t.Fatalf("events %v", got)
+	}
+	if b := plans.bindings["service:api"]; b.ConnectionID != "conn_g" || b.ExternalID != "ext-cloud-run" {
+		t.Fatalf("binding %+v", b)
+	}
+}

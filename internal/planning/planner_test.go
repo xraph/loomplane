@@ -313,6 +313,18 @@ func TestCompute_againstWhatsDeployed(t *testing.T) {
 		if !slices.Contains(codes(r.Warnings), "data-loss:cache") {
 			t.Errorf("replacing a store of data without a warning: %v", codes(r.Warnings))
 		}
+		// What a replace says is what a deployment does: the new one
+		// first, and the old one once it's up.
+		want := "Replacing cache provisions a new, empty one, then deletes the old one with its data once the new one is up. Loomplane doesn't move data between them."
+		for _, w := range r.Warnings {
+			if w.Code == "data-loss" && w.Name == "cache" && w.Message != want {
+				t.Errorf("warning %q, want %q", w.Message, want)
+			}
+		}
+		reason := "worker moves from ecs-fargate to render. The new one starts first, and the old one is removed once it's up."
+		if got := action(t, r, "service:worker").Reason; got != reason {
+			t.Errorf("reason %q, want %q", got, reason)
+		}
 	})
 
 	t.Run("removed and turned off", func(t *testing.T) {

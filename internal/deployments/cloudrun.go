@@ -402,11 +402,14 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 // binding's, or one an earlier attempt created before it could record a
 // binding. name is what to call the instance when there's none.
 //
-// An instance an action replaces, on another provider or in another
-// region, isn't this one: the runner removes it once this one is up. Until
-// then it keeps its slug, so this one takes another name. One on another
-// connection with the same provider and region isn't a move the planner
-// replaces, so it's deleted here, before this one is created in its place.
+// An instance an action replaces, on another provider, region or
+// connection, isn't this one: the runner removes it once this one is up.
+// Until then it keeps its slug, so this one takes another name. Nothing
+// here deletes an instance, so an old one never goes before what takes
+// its place has started. One on another provider key that isn't what the
+// action replaces is left alone, and the step fails saying so, since it
+// can't be updated through this connection and removing it is a person's
+// call.
 func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (inst *instance.Instance, name string, err error) {
 	if job.Binding != nil && job.Binding.ExternalID != "" {
 		iid, perr := id.Parse(job.Binding.ExternalID)
@@ -431,11 +434,8 @@ func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) 
 	case inst == nil || replaced(job, inst):
 		return nil, name, nil
 	case inst.ProviderName != key:
-		job.Progress(StepDeploying, "Removing the service on the environment's old connection")
-		if err := ctrl.Instances.Delete(ctx, inst.ID); err != nil {
-			return nil, "", fmt.Errorf("remove the service on the old connection: %w", err)
-		}
-		return nil, name, nil
+		return nil, "", fmt.Errorf("%s already runs as Ctrl Plane instance %s (%s), on %s rather than %s. Loomplane won't remove it before a new one starts, so remove it, then deploy again",
+			job.Action.Name, inst.Slug, inst.ID, inst.ProviderName, key)
 	}
 	return inst, name, nil
 }

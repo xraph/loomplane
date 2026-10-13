@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
+
+	"github.com/xraph/loomplane/internal/planning"
 )
 
 // PgStore is the Postgres Store. The schema is migration group "loomplane"
@@ -36,7 +38,8 @@ func scan(row pgx.Row) (*Deployment, error) {
 	if err := json.Unmarshal(sources, &d.Sources); err != nil {
 		return nil, fmt.Errorf("decode sources: %w", err)
 	}
-	if err := json.Unmarshal(steps, &d.Steps); err != nil {
+	var err error
+	if d.Steps, err = decodeSteps(steps); err != nil {
 		return nil, fmt.Errorf("decode steps: %w", err)
 	}
 	d.normalize()
@@ -47,7 +50,7 @@ func scan(row pgx.Row) (*Deployment, error) {
 // second start for the same plan return the first deployment.
 func (s *PgStore) CreateDeployment(ctx context.Context, d *Deployment) (*Deployment, error) {
 	d.normalize()
-	steps, err := json.Marshal(d.Steps)
+	steps, err := encodeSteps(d.Steps)
 	if err != nil {
 		return nil, fmt.Errorf("encode steps: %w", err)
 	}
@@ -150,8 +153,8 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 	if err != nil {
 		return fmt.Errorf("read steps: %w", err)
 	}
-	var steps []Step
-	if err = json.Unmarshal(raw, &steps); err != nil {
+	steps, err := decodeSteps(raw)
+	if err != nil {
 		return fmt.Errorf("decode steps: %w", err)
 	}
 	found := false
@@ -163,7 +166,7 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 	if !found {
 		return fmt.Errorf("%w: no step %s", ErrNotFound, step.ActionID)
 	}
-	if raw, err = json.Marshal(steps); err != nil {
+	if raw, err = encodeSteps(steps); err != nil {
 		return fmt.Errorf("encode steps: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments SET steps = $3 WHERE org_id = $1 AND id = $2`, orgID, id, raw); err != nil {
@@ -207,8 +210,8 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 	if err != nil {
 		return false, fmt.Errorf("read deployment: %w", err)
 	}
-	var steps []Step
-	if err = json.Unmarshal(raw, &steps); err != nil {
+	steps, err := decodeSteps(raw)
+	if err != nil {
 		return false, fmt.Errorf("decode steps: %w", err)
 	}
 	for i := range steps {
@@ -216,7 +219,7 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 			steps[i].Status, steps[i].Message, steps[i].StartedAt, steps[i].FinishedAt = StepPending, "Waiting to retry", nil, nil
 		}
 	}
-	if raw, err = json.Marshal(steps); err != nil {
+	if raw, err = encodeSteps(steps); err != nil {
 		return false, fmt.Errorf("encode steps: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments
@@ -228,4 +231,32 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 		return false, fmt.Errorf("commit: %w", err)
 	}
 	return true, nil
+}
+
+// storedStep is a step as it's stored: with what it replaces, which the
+// API leaves out, since it's only there for a retry.
+type storedStep struct {
+	Step
+	Replaced *planning.Binding `json:"replaced,omitempty"`
+}
+
+func encodeSteps(steps []Step) ([]byte, error) {
+	out := make([]storedStep, len(steps))
+	for i, s := range steps {
+		out[i] = storedStep{Step: s, Replaced: s.Replaced}
+	}
+	return json.Marshal(out)
+}
+
+func decodeSteps(raw []byte) ([]Step, error) {
+	var in []storedStep
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return nil, err
+	}
+	out := make([]Step, len(in))
+	for i, s := range in {
+		out[i] = s.Step
+		out[i].Replaced = s.Replaced
+	}
+	return out, nil
 }

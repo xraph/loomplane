@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/xraph/loomplane/internal/planning"
 )
 
 // Deployment statuses.
@@ -93,6 +95,12 @@ type Step struct {
 	Image      string     `json:"image"`
 	StartedAt  *time.Time `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at"`
+	// Replaced is what the action ran as before it moved, from when the
+	// move starts until the old one is removed. A retry after the new one
+	// is up reads it to remove the old one and do nothing else, since the
+	// binding names the new one by then. It's stored with the step, but
+	// the API doesn't show it.
+	Replaced *planning.Binding `json:"-"`
 }
 
 func (d *Deployment) normalize() {

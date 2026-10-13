@@ -75,9 +75,10 @@ type Job struct {
 	SourceID string
 	// Binding is what runs the action now, or nil.
 	Binding *planning.Binding
-	// Replaces is what runs the action on another provider or in another
-	// region, which the runner removes once this one is up, through the
-	// executor that deployed it. Binding is nil when it's set, since
+	// Replaces is what runs the action on another provider, in another
+	// region or through another connection, which the runner removes once
+	// this one is up and bound, through the executor that deployed it.
+	// Binding is nil when it's set, since
 	// nothing runs the action here yet. An executor whose names could
 	// collide with the old one's reads it to choose another.
 	Replaces *planning.Binding
@@ -500,17 +501,28 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		}
 		return r.plans.DeleteBinding(ctx, d.OrgID, current.ID)
 	}
-	// An action that moves to another provider or region starts the new
-	// one with nothing bound to it, and removes the old one once the new
-	// one is up. The binding names the old one until then, so a retry
-	// after a failure anywhere in between finds it again.
-	var moved *replaceCheckpoint
-	if moves(current, a) {
-		moved = readReplaceCheckpoint(resume)
-		job.Binding, job.Replaces, job.Resume = nil, current, moved.Apply
+	// A move starts the new one with nothing bound to it, binds it once
+	// it's up, and only then removes the old one, through the executor
+	// that deployed it. The step records the old one before anything
+	// starts, so a retry knows what's left to remove, whatever stopped
+	// the last attempt.
+	rc := readReplaceCheckpoint(resume)
+	if step.Replaced != nil && current != nil && !moves(current, a, connID) {
+		// The new one is up and bound already, so removing the old one is
+		// all that's left. Starting the new one again would only redeploy
+		// it.
+		return r.removeReplaced(ctx, job, step, rc, heartbeat)
+	}
+	moving := moves(current, a, connID)
+	if moving {
+		job.Binding, job.Replaces, job.Resume = nil, current, rc.Apply
 		job.Checkpoint = func(data []byte) error {
-			moved.Apply = data
-			return heartbeat(moved.encode())
+			rc.Apply = data
+			return heartbeat(rc.encode())
+		}
+		step.Replaced = current
+		if uerr := r.store.UpdateStep(ctx, d.OrgID, d.ID, *step); uerr != nil {
+			return fmt.Errorf("record what %s replaces: %w", a.Name, uerr)
 		}
 	}
 	if a.Service != nil {
@@ -544,18 +556,41 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			return err
 		}
 	}
-	if moved != nil {
-		if err := r.removeReplaced(ctx, job, out, connID, moved, heartbeat); err != nil {
-			return err
+	if moving && out.ExternalID != "" && out.ExternalID == current.ExternalID {
+		// An executor that answers with what it was to replace didn't
+		// start another one, so removing the old one would remove the new
+		// one too.
+		if current.Provider != a.Provider || current.Region != a.Region {
+			return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed",
+				a.Provider, a.Name, placement(a.Provider, a.Region), current.ExternalID)
 		}
+		// Through another connection it found the very one it replaces,
+		// such as a project in a team both connections reach, so nothing
+		// else runs it.
+		step.Replaced = nil
 	}
-	return r.bind(ctx, d, a, current, out, connID)
+	if err := r.bind(ctx, d, a, current, out, connID); err != nil {
+		return err
+	}
+	if step.Replaced == nil {
+		return nil
+	}
+	return r.removeReplaced(ctx, job, step, rc, heartbeat)
 }
 
 // moves reports whether an action runs somewhere other than its binding:
-// on another provider, or in another region. The planner replaces it.
-func moves(b *planning.Binding, a planning.Action) bool {
-	return b != nil && (b.Provider != a.Provider || b.Region != a.Region)
+// on another provider, or in another region, which the planner replaces.
+// A service deployed through another connection, such as another
+// account's, moves too, since what runs it there can't be reached from
+// this one. A resource on another connection stays where its data is.
+func moves(b *planning.Binding, a planning.Action, connID string) bool {
+	switch {
+	case b == nil:
+		return false
+	case b.Provider != a.Provider || b.Region != a.Region:
+		return true
+	}
+	return a.Subject == planning.ServiceSubject && b.ConnectionID != "" && b.ConnectionID != connID
 }
 
 // replaceCheckpoint is what a moving action saves: the new executor's
@@ -583,35 +618,38 @@ func (rc *replaceCheckpoint) encode() []byte {
 }
 
 // removeReplaced removes what an action ran as before it moved, once its
-// replacement is up: through the old provider's executor, with the
-// connection that deployed it. Something already gone isn't an error, so
-// a retry that gets here again finishes the job.
-func (r *Runner) removeReplaced(ctx context.Context, job *Job, out *Outcome, connID string, rc *replaceCheckpoint, heartbeat func([]byte) error) error {
-	old, a := job.Replaces, job.Action
+// replacement is up and bound: through the old provider's executor, with
+// the connection that deployed it. Something already gone isn't an error,
+// so a retry that gets here again finishes the job. When nothing here can
+// remove it, the step fails saying so, and stops waiting for it, since a
+// retry couldn't do more.
+func (r *Runner) removeReplaced(ctx context.Context, job *Job, step *Step, rc *replaceCheckpoint, heartbeat func([]byte) error) error {
+	old, a := step.Replaced, job.Action
+	byHand := func(why error) error {
+		step.Replaced = nil
+		return fmt.Errorf("%w. %s now runs on %s, so remove the old %s on %s (%s) by hand",
+			why, a.Name, placement(a.Provider, a.Region), a.Name, placement(old.Provider, old.Region), old.ExternalID)
+	}
+	exec, ok := r.executors[old.Provider]
+	if !ok {
+		return byHand(fmt.Errorf("%w: %s, which ran %s before it moved", ErrNoExecutor, old.Provider, a.Name))
+	}
 	oldConnID := old.ConnectionID
 	if oldConnID == "" {
 		// A binding from before bindings recorded their connection was
 		// deployed with the plan's connection to its cloud.
 		prov, err := r.providers.Get(old.Provider)
 		if err != nil {
-			return fmt.Errorf("find %s, which runs the %s it replaces: %w", old.Provider, a.Name, err)
+			return fmt.Errorf("find %s, which ran %s before it moved: %w", old.Provider, a.Name, err)
 		}
-		oldConnID = job.Plan.Connections[prov.Cloud]
-	}
-	// An executor that answers with what it was to replace didn't start
-	// another one, so removing the old one would remove the new one too.
-	if out.ExternalID != "" && out.ExternalID == old.ExternalID && oldConnID == connID {
-		return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed",
-			a.Provider, a.Name, placement(a.Provider, a.Region), old.ExternalID)
-	}
-	exec, ok := r.executors[old.Provider]
-	if !ok {
-		return fmt.Errorf("%w: %s, which runs the %s it replaces", ErrNoExecutor, old.Provider, a.Name)
-	}
-	if oldConnID == "" {
-		return fmt.Errorf("the plan names no connection for %s, which runs the %s it replaces", old.Provider, a.Name)
+		if oldConnID = job.Plan.Connections[prov.Cloud]; oldConnID == "" {
+			return byHand(fmt.Errorf("the plan names no %s connection, which %s ran on before it moved", prov.Cloud, a.Name))
+		}
 	}
 	conn, cred, err := r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	if errors.Is(err, connections.ErrNotFound) {
+		return byHand(fmt.Errorf("the connection that deployed the old %s is gone", a.Name))
+	}
 	if err != nil {
 		return err
 	}
@@ -633,6 +671,7 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, out *Outcome, con
 	if err := exec.Remove(ctx, &gone, old); err != nil {
 		return fmt.Errorf("remove the %s it replaces on %s: %w", a.Name, placement(old.Provider, old.Region), err)
 	}
+	step.Replaced = nil
 	return nil
 }
 

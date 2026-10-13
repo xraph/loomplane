@@ -47,6 +47,9 @@ type placed struct {
 	externalID string
 	applyErr   error
 	removeErr  []error
+	// onRemove runs as Remove starts, so a test can see what's bound
+	// at that point.
+	onRemove func()
 
 	mu      sync.Mutex
 	applies []*Job
@@ -88,6 +91,9 @@ func (p *placed) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 		err, p.removeErr = p.removeErr[0], p.removeErr[1:]
 	}
 	p.mu.Unlock()
+	if p.onRemove != nil {
+		p.onRemove()
+	}
 	p.log.add("remove " + p.provider + " " + b.ExternalID)
 	if cerr := job.Checkpoint([]byte("rm-" + p.provider)); cerr != nil {
 		return cerr
@@ -209,65 +215,6 @@ func TestRunner_aMoveThatDoesntStartKeepsTheOldOne(t *testing.T) {
 	}
 	if b := plans.bindings["service:api"]; b.Provider != "cloud-run" || b.ExternalID != "ext-old" {
 		t.Fatalf("binding %+v", b)
-	}
-}
-
-func TestRunner_aRetryAfterAPartialMoveConverges(t *testing.T) {
-	log := &moveLog{}
-	oldExec := &placed{provider: "cloud-run", log: log, removeErr: []error{errors.New("google is down")}}
-	newExec := &placed{provider: "vercel", log: log, url: answering(t, http.StatusOK)}
-	plan := apiMoves()
-	r, store, plans, _ := moveRunner(t, plan, onCloudRun(), map[string]Executor{"cloud-run": oldExec, "vercel": newExec})
-	ctx := t.Context()
-
-	id, _, err := r.Start(ctx, "org_1", plan.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ferr := r.FetchSource(ctx, "org_1", id); ferr != nil {
-		t.Fatal(ferr)
-	}
-	var saved []byte
-	heartbeat := func(b []byte) error { saved = b; return nil }
-	err = r.Run(ctx, "org_1", id, "service:api", nil, heartbeat)
-	if err == nil || !strings.Contains(err.Error(), "google is down") {
-		t.Fatalf("first attempt: %v", err)
-	}
-	if ferr := r.Finish(ctx, "org_1", id, err.Error()); ferr != nil {
-		t.Fatal(ferr)
-	}
-	// The new one is up, but the old one is still bound, so nothing is
-	// left untracked.
-	if b := plans.bindings["service:api"]; b.Provider != "cloud-run" || b.ExternalID != "ext-old" {
-		t.Fatalf("binding after the failure %+v", b)
-	}
-	if ok, rerr := store.Reopen(ctx, "org_1", id); !ok || rerr != nil {
-		t.Fatalf("reopen: %v %v", ok, rerr)
-	}
-	if err := r.Run(ctx, "org_1", id, "service:api", saved, heartbeat); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Finish(ctx, "org_1", id, ""); err != nil {
-		t.Fatal(err)
-	}
-
-	want := []string{"apply vercel", "remove cloud-run ext-old", "apply vercel", "remove cloud-run ext-old"}
-	if got := log.list(); !slices.Equal(got, want) {
-		t.Fatalf("events %v, want %v", got, want)
-	}
-	// Each executor resumes from its own checkpoint.
-	if got := string(newExec.applies[1].Resume); got != "op-vercel" {
-		t.Fatalf("apply resumed from %q", got)
-	}
-	if got := string(oldExec.removes[1].Resume); got != "rm-cloud-run" {
-		t.Fatalf("remove resumed from %q", got)
-	}
-	if b := plans.bindings["service:api"]; b.ID != "bind_api" || b.Provider != "vercel" || b.ExternalID != "ext-vercel" {
-		t.Fatalf("binding %+v", b)
-	}
-	d, _ := store.GetDeployment(ctx, "org_1", id)
-	if s := d.Step("service:api"); s.Status != StepSucceeded {
-		t.Fatalf("step %+v", s)
 	}
 }
 
@@ -417,6 +364,32 @@ func TestCurrentInstance_aReplacementTakesANameOfItsOwn(t *testing.T) {
 	}
 }
 
+// Cloud Run and ECS share currentInstance, so neither deletes an instance
+// before the one that takes its place has started.
+func TestCurrentInstance_neverDeletesOneOnAnotherConnection(t *testing.T) {
+	job := &Job{
+		Deployment: &Deployment{ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
+		Action:     planning.Action{Name: "api"}, Progress: func(string, string) {},
+	}
+	for _, key := range []string{"cloudrun.conn_old.us-central1", "ecs.conn_old.us-east-1"} {
+		other := ctrlInstance(instanceSlug(job), key)
+		instances := &fakeInstances{byID: map[id.ID]*instance.Instance{other.ID: other}}
+		ctrl := CtrlPlane{Instances: instances}
+
+		// Found by its binding, and found by its name.
+		for _, b := range []*planning.Binding{{ExternalID: other.ID.String()}, nil} {
+			job.Binding = b
+			_, _, err := currentInstance(t.Context(), ctrl, job, strings.Replace(key, "conn_old", "conn_new", 1))
+			if err == nil || !strings.Contains(err.Error(), "remove it") {
+				t.Fatalf("%s, binding %v: %v", key, b, err)
+			}
+			if len(instances.deleted) > 0 {
+				t.Fatalf("%s: deleted the instance on another connection", key)
+			}
+		}
+	}
+}
+
 func TestCloudSQLInstance(t *testing.T) {
 	job := &Job{
 		Deployment: &Deployment{ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
@@ -429,5 +402,16 @@ func TestCloudSQLInstance(t *testing.T) {
 	job.Binding = &planning.Binding{ExternalID: "example.com:acme:us-central1:lp-db-production-jhp41"}
 	if got := cloudSQLInstance(job); got != "lp-db-production-jhp41" {
 		t.Fatalf("a bound instance is %q", got)
+	}
+	// One bound in the same region keeps its name too.
+	job.Binding.Region = "europe-west1"
+	if got := cloudSQLInstance(job); got != "lp-db-production-jhp41" {
+		t.Fatalf("a bound instance in its region is %q", got)
+	}
+	// One bound in another region can't be this one, since a region
+	// can't change in place, so this one gets a name of its own.
+	job.Binding.Region = "us-central1"
+	if got, want := cloudSQLInstance(job), SQLInstanceName(job)+"-europe-west1"; got != want {
+		t.Fatalf("with a binding in another region, %q, want %q", got, want)
 	}
 }

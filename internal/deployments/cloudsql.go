@@ -52,16 +52,19 @@ func SQLInstanceName(job *Job) string {
 }
 
 // cloudSQLInstance is the Cloud SQL instance a resource is: the one its
-// binding names, or a new one's name, which ends with its region. A
-// region can't change in place, so a move creates another instance, and
-// it needs a name of its own while the old one still runs.
+// binding names, when that's in the resource's region, or a new one's
+// name, which ends with its region. A region can't change in place, so a
+// move creates another instance, and it needs a name of its own while the
+// old one still runs. Bound instances keep the names they have, including
+// those from before names had a region, so nothing live is renamed.
 func cloudSQLInstance(job *Job) string {
-	if b := job.Binding; b != nil {
+	region := job.Action.Resource.Region
+	if b := job.Binding; b != nil && (b.Region == "" || b.Region == region) {
 		if name := sqlInstanceID(b.ExternalID); name != "" {
 			return name
 		}
 	}
-	return SQLInstanceName(job) + "-" + strings.ToLower(job.Action.Resource.Region)
+	return SQLInstanceName(job) + "-" + strings.ToLower(region)
 }
 
 // sqlInstanceID is the instance a connection name names: the last part of

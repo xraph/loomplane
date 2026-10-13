@@ -1492,7 +1492,7 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		if a.Subject == ResourceSubject {
 			p.warn(Finding{
 				Code: "data-loss", Subject: ResourceSubject, Name: a.Name, Path: "resources." + a.Name,
-				Message: fmt.Sprintf("Replacing %s provisions a new, empty one, then deletes the old one and its data once the new one is up. Loomplane doesn't move data between them.", a.Name),
+				Message: fmt.Sprintf("Replacing %s provisions a new, empty one, then deletes the old one with its data once the new one is up. Loomplane doesn't move data between them.", a.Name),
 			})
 		}
 		return
