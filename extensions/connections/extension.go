@@ -92,10 +92,13 @@ func (e *Extension) Register(fapp forge.App) error {
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	log := e.Logger()
 	checkers := map[string]connections.Checker{
-		connections.GCP:    connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
-		connections.Vercel: connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
-		connections.AWS:    connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
-		connections.Render: connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
+		connections.GCP:        connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
+		connections.Vercel:     connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		connections.AWS:        connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
+		connections.Render:     connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
+		connections.Server:     connections.ServerChecker{},
+		connections.Kubernetes: connections.KubernetesChecker{},
+		connections.Registry:   connections.RegistryChecker{},
 	}
 	// A provider plugin's cloud is connected through the plugin.
 	plugs, err := e.plugins.Plugins()
@@ -131,7 +134,7 @@ func fail(err error) error {
 	switch {
 	case errors.Is(err, connections.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, connections.ErrExists):
+	case errors.Is(err, connections.ErrExists), errors.Is(err, connections.ErrInUse):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, connections.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())

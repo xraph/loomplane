@@ -130,13 +130,34 @@ func (s *PgStore) UpdateConnection(ctx context.Context, c *Connection) error {
 }
 
 // DeleteConnection implements Store.
-func (s *PgStore) DeleteConnection(ctx context.Context, orgID, id string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM loomplane_cloud_connections WHERE org_id = $1 AND id = $2`, orgID, id)
+func (s *PgStore) DeleteConnection(ctx context.Context, orgID, id string) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin connection deletion: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+				err = errors.Join(err, fmt.Errorf("rollback connection deletion: %w", rollbackErr))
+			}
+		}
+	}()
+	tag, err := tx.Exec(ctx, `DELETE FROM loomplane_cloud_connections WHERE org_id = $1 AND id = $2`, orgID, id)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return ErrInUse
+	}
 	if err != nil {
 		return fmt.Errorf("delete connection: %w", err)
 	}
-	if n, err := tag.RowsAffected(); err == nil && n == 0 {
+	if n, rowsErr := tag.RowsAffected(); rowsErr == nil && n == 0 {
 		return ErrNotFound
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit connection deletion: %w", err)
 	}
 	return nil
 }

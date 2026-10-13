@@ -79,10 +79,10 @@ Files: create clients under `internal/clouds/server`, `internal/clouds/kubernete
 
 Produces connection checkers implementing the existing `Parse([]byte, map[string]string) (Check, error)` and `Check(context.Context, []byte, map[string]string) (Check, error)` contract. SSH clients expose a pinned-key authenticated Docker HTTP transport. Kubernetes configuration accepts only self-contained credentials. Registry clients expose authenticated push/pull metadata.
 
-- [ ] Write checker tests using real parsers and a local SSH/API fixture: an unexpected host key is refused; kubeconfig with exec/file references/insecure TLS is refused; two namespace checks remain isolated; denied object permissions produce incomplete status; rotated credentials preserve identity.
-- [ ] Run `go test ./internal/clouds/server ./internal/clouds/kubernetes ./internal/clouds/registry ./internal/connections -count=1`. Expected: missing clients/checkers or refusal assertions fail.
-- [ ] Implement bounded dials, cancellation, SSH authentication and Docker transport; explicit Kubernetes REST configs and permission checks; registry credential parsing/checking. Never load ambient credentials. Delete protection consults active plan references and bindings.
-- [ ] Run the same focused tests, format/lint/full tests and commit `feat: connect servers clusters and image registries`.
+- [x] Write checker tests using real parsers and a local SSH/API fixture: an unexpected host key is refused; kubeconfig with exec/file references/insecure TLS is refused; two namespace checks remain isolated; denied object permissions produce incomplete status; rotated credentials preserve identity.
+- [x] Run `go test ./internal/clouds/server ./internal/clouds/kubernetes ./internal/clouds/registry ./internal/connections -count=1`. Expected: missing clients/checkers or refusal assertions fail.
+- [x] Implement bounded dials, cancellation, SSH authentication and Docker transport; explicit Kubernetes REST configs and permission checks; registry credential parsing/checking. Never load ambient credentials. Delete protection consults active plan references and bindings.
+- [x] Run the same focused tests, format/lint/full tests and commit `feat: connect servers clusters and image registries`.
 
 ## Task 4: Durable event and build-log storage
 

@@ -176,3 +176,24 @@ services:
 		t.Fatalf("move or held source: %+v %+v", r.Problems, r.Actions)
 	}
 }
+
+func TestInfrastructureTargets_clusterCapabilitiesAreRequiredOnlyWhenUsed(t *testing.T) {
+	for _, tc := range []struct{ name, settings, code string }{
+		{"private fixed", "public: false, scale: {min: 1, max: 1}", ""},
+		{"denied ingress", "public: true, endpoint: {hostname: api.example.com}", "ingress-unavailable"},
+		{"zero elastic replicas", "public: false, scale: {min: 0, max: 2}", "hpa-minimum"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			connections := []ConnectionOption{infrastructureConnection(t, targetA, "kubernetes", map[string]string{"namespace": "apps", "hpa": "ready", "ingress": "unavailable", "cluster_ca": "reviewed-ca"})}
+			doc := fmt.Sprintf("version: 1\nservices:\n  api: {source: cmd/api, provider: kubernetes, target: %s, %s, build: {image: 'docker.io/acme/api@sha256:%s'}}\n", targetA, tc.settings, strings.Repeat("a", 64))
+			r := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: infrastructureProviders(t), Connections: connections})
+			if tc.code == "" {
+				if !r.Executable || action(t, r, "service:api").Service.TargetSettings["cluster_ca"] != "reviewed-ca" {
+					t.Fatalf("private placement/trust: %+v", r)
+				}
+			} else if r.Executable || !slices.Contains(findingCodes(r.Problems), tc.code) {
+				t.Fatalf("wanted %s: %+v", tc.code, r.Problems)
+			}
+		})
+	}
+}

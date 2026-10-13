@@ -47,6 +47,7 @@ func Group() *migrate.Group {
 		statements("20261014000005", "index_source_repositories_by_name", sourceRepositoryIndexUp, sourceRepositoryIndexDown),
 		statements("20261015000001", "drop_superseded_columns", supersededUp, supersededDown),
 		statements("20261016000001", "add_binding_replaced", bindingReplacedUp, bindingReplacedDown),
+		statements("20261016000002", "protect_connection_uses", connectionUsesUp, connectionUsesDown),
 	)
 	return g
 }

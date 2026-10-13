@@ -68,8 +68,18 @@ func TestPlugin_aProviderPluginDeploysLikeABuiltInTarget(t *testing.T) {
 		} `json:"clouds"`
 	}
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/connection-clouds", nil, &clouds)
-	if n := len(clouds.Clouds); n != 5 || clouds.Clouds[4].Cloud != "static-host" || clouds.Clouds[4].Builtin || clouds.Clouds[4].Credential != "Access token" {
-		t.Fatalf("clouds %+v", clouds.Clouds)
+	found := false
+	for _, cloud := range clouds.Clouds {
+		if cloud.Cloud != "static-host" {
+			continue
+		}
+		if cloud.Builtin || cloud.Credential != "Access token" {
+			t.Fatalf("plugin form: %+v", cloud)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("plugin missing from clouds: %+v", clouds.Clouds)
 	}
 	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/connections",
 		map[string]any{"cloud": "static-host", "name": "Sites", "credential": "wrong"}, nil)

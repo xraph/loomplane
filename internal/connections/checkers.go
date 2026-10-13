@@ -9,7 +9,10 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
+	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/render"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
@@ -147,6 +150,7 @@ func rejected(err error) bool {
 	var ve *vercel.APIError
 	var re *render.APIError
 	return errors.Is(err, render.ErrRejected) || errors.As(err, &re) || errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
+		errors.Is(err, server.ErrRejected) || errors.Is(err, kubernetes.ErrRejected) || errors.Is(err, registry.ErrRejected) ||
 		errors.Is(err, aws.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
 		errors.As(err, &ge) || errors.As(err, &ve)
 }

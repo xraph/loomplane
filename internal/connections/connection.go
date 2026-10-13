@@ -15,10 +15,13 @@ import (
 // catalog (internal/providers), so a target's cloud names the connection
 // it deploys with.
 const (
-	GCP    = "gcp"
-	Vercel = "vercel"
-	AWS    = "aws"
-	Render = "render"
+	GCP        = "gcp"
+	Vercel     = "vercel"
+	AWS        = "aws"
+	Render     = "render"
+	Server     = "server"
+	Kubernetes = "kubernetes"
+	Registry   = "registry"
 )
 
 // Statuses. A connection is checked when it's made and whenever someone
@@ -36,6 +39,7 @@ var (
 	ErrNotFound = errors.New("cloud connection not found")
 	ErrInvalid  = errors.New("invalid cloud connection")
 	ErrExists   = errors.New("this organization already has a connection with that name")
+	ErrInUse    = errors.New("this connection is used by a deployment or an active plan")
 	// ErrNotReady is a deployment asking for a connection that isn't
 	// ready.
 	ErrNotReady = errors.New("the cloud connection isn't ready")

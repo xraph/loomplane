@@ -20,9 +20,9 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 	case "server":
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
 	case "kubernetes":
-		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "ingress_class", "ingress_domain", "tls_secret"}
+		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_domain", "tls_secret"}
 	case "registry":
-		keys = []string{"endpoint", "repository"}
+		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
 	}
 	var out map[string]string
 	for _, k := range keys {
@@ -111,11 +111,17 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	if prov.Cloud == "kubernetes" && cfg.Scale != nil && cfg.Scale.Min != cfg.Scale.Max && (c == nil || c.Details["hpa"] != "ready") {
 		p.problem(Finding{Code: "hpa-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".scale", Message: "Elastic Kubernetes scaling needs the metrics API and namespace HPA permissions. Check the cluster connection or choose a fixed replica count."})
 	}
+	if prov.Cloud == "kubernetes" && cfg.Scale != nil && cfg.Scale.Min != cfg.Scale.Max && cfg.Scale.Min == 0 {
+		p.problem(Finding{Code: "hpa-minimum", Subject: ServiceSubject, Name: name, Path: base + ".scale.min", Message: "CPU-based Kubernetes autoscaling needs at least one replica. Choose min: 1 or a fixed replica count."})
+	}
 	if cfg.Public && prov.Cloud == "server" && (cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0) {
 		p.problem(Finding{Code: "host-port-required", Subject: ServiceSubject, Name: name, Path: base + ".endpoint.host_port", Message: "Choose the host port this server publishes for the service."})
 	}
 	if cfg.Public && prov.Cloud == "kubernetes" && (cfg.Endpoint == nil || cfg.Endpoint.Hostname == "") {
 		p.problem(Finding{Code: "ingress-required", Subject: ServiceSubject, Name: name, Path: base + ".endpoint.hostname", Message: "Choose an ingress hostname for this public Kubernetes service."})
+	}
+	if cfg.Public && prov.Cloud == "kubernetes" && c != nil && c.Details["ingress"] != "ready" {
+		p.problem(Finding{Code: "ingress-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".endpoint", Message: "This connection needs namespace ingress permissions to deploy a public service. Check the connection after granting them."})
 	}
 }
 
