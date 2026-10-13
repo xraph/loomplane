@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/xraph/forge/cli"
 
 	"github.com/xraph/loomplane/pkg/client"
 )
@@ -64,5 +67,28 @@ func TestCreateProject_sendsEachRepo(t *testing.T) {
 	want := []client.NewRepository{{Repository: "acme/web"}, {Alias: "billing", Repository: "other/web"}, {Repository: "acme/api"}}
 	if got.Name != "Shop" || !slices.Equal(got.Repositories, want) {
 		t.Fatalf("sent %+v", got)
+	}
+}
+
+// Forge's help prints the program's name before a command's usage, so a
+// usage that starts with it too reads "loomctl loomctl".
+func TestUsage_leavesTheProgramNameToHelp(t *testing.T) {
+	var walk func(cmds []cli.Command)
+	walk = func(cmds []cli.Command) {
+		for _, c := range cmds {
+			if strings.HasPrefix(c.Usage(), "loomctl ") {
+				t.Errorf("%s's usage starts with loomctl: %q", c.Name(), c.Usage())
+			}
+			walk(c.Subcommands())
+		}
+	}
+	walk(New(Options{}).commands())
+
+	var out bytes.Buffer
+	app := New(Options{Out: &out, Getenv: func(string) string { return "" }, ConfigPath: t.TempDir() + "/none.json"})
+	// Help may end with an error; the text is what's checked.
+	_ = app.Run([]string{"projects", "create", "--help"})
+	if !strings.Contains(out.String(), "  loomctl projects create <name>") || strings.Contains(out.String(), "loomctl loomctl") {
+		t.Fatalf("help:\n%s", out.String())
 	}
 }
