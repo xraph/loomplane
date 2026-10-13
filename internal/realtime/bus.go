@@ -73,6 +73,15 @@ func (b *Bus) Watch(org string) (wake <-chan struct{}, unsubscribe func()) {
 	return ch, func() { b.mu.Lock(); delete(b.listeners, id); b.mu.Unlock() }
 }
 
+type SubscriptionCount func() int
+
+// Subscribers reports active local subscriptions for lifecycle diagnostics.
+func (b *Bus) Subscribers() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.listeners)
+}
+
 func (b *Bus) wake(org string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

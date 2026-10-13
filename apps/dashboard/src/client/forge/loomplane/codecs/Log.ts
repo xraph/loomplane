@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_Log: Codec = {"kind": "object", "fields": {"action_id": {"ts": "actionId"}, "attempt": {"ts": "attempt"}, "deployment_id": {"ts": "deploymentId"}, "id": {"ts": "id"}, "level": {"ts": "level"}, "message": {"ts": "message"}, "operation_id": {"ts": "operationId"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "provider_id": {"ts": "providerId"}, "source": {"ts": "source"}, "stream": {"ts": "stream"}, "time": {"ts": "time"}, "truncated": {"ts": "truncated"}}, "required": ["action_id", "attempt", "deployment_id", "id", "level", "message", "operation_id", "org_id", "project_id", "provider_id", "source", "stream", "time", "truncated"]};

@@ -1,0 +1,3864 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "Loomplane realtime",
+    "version": "0.1.0-dev"
+  },
+  "channels": {
+    "api-v1-realtime-events": {
+      "address": "/api/v1/realtime/events",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "bindingVersion": "latest"
+        }
+      },
+      "messages": {
+        "analysis.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Analysis"
+          },
+          "contentType": "text/event-stream",
+          "name": "analysis.deleted",
+          "title": "analysis.deleted event",
+          "summary": "SSE event: analysis.deleted"
+        },
+        "analysis.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Analysis"
+          },
+          "contentType": "text/event-stream",
+          "name": "analysis.updated",
+          "title": "analysis.updated event",
+          "summary": "SSE event: analysis.updated"
+        },
+        "binding.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Binding"
+          },
+          "contentType": "text/event-stream",
+          "name": "binding.deleted",
+          "title": "binding.deleted event",
+          "summary": "SSE event: binding.deleted"
+        },
+        "binding.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Binding"
+          },
+          "contentType": "text/event-stream",
+          "name": "binding.updated",
+          "title": "binding.updated event",
+          "summary": "SSE event: binding.updated"
+        },
+        "build.collection": {
+          "payload": {
+            "$ref": "#/components/schemas/Collection"
+          },
+          "contentType": "text/event-stream",
+          "name": "build.collection",
+          "title": "build.collection event",
+          "summary": "SSE event: build.collection"
+        },
+        "build.log": {
+          "payload": {
+            "$ref": "#/components/schemas/Log"
+          },
+          "contentType": "text/event-stream",
+          "name": "build.log",
+          "title": "build.log event",
+          "summary": "SSE event: build.log"
+        },
+        "connection.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Connection"
+          },
+          "contentType": "text/event-stream",
+          "name": "connection.deleted",
+          "title": "connection.deleted event",
+          "summary": "SSE event: connection.deleted"
+        },
+        "connection.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Connection"
+          },
+          "contentType": "text/event-stream",
+          "name": "connection.updated",
+          "title": "connection.updated event",
+          "summary": "SSE event: connection.updated"
+        },
+        "deployment.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Deployment"
+          },
+          "contentType": "text/event-stream",
+          "name": "deployment.deleted",
+          "title": "deployment.deleted event",
+          "summary": "SSE event: deployment.deleted"
+        },
+        "deployment.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Deployment"
+          },
+          "contentType": "text/event-stream",
+          "name": "deployment.updated",
+          "title": "deployment.updated event",
+          "summary": "SSE event: deployment.updated"
+        },
+        "environment.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Environment"
+          },
+          "contentType": "text/event-stream",
+          "name": "environment.deleted",
+          "title": "environment.deleted event",
+          "summary": "SSE event: environment.deleted"
+        },
+        "environment.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Environment"
+          },
+          "contentType": "text/event-stream",
+          "name": "environment.updated",
+          "title": "environment.updated event",
+          "summary": "SSE event: environment.updated"
+        },
+        "forge.gap": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeForgeGap"
+          },
+          "contentType": "text/event-stream",
+          "name": "forge.gap",
+          "title": "forge.gap event",
+          "summary": "SSE event: forge.gap"
+        },
+        "forge.resumed": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeForgeResumed"
+          },
+          "contentType": "text/event-stream",
+          "name": "forge.resumed",
+          "title": "forge.resumed event",
+          "summary": "SSE event: forge.resumed"
+        },
+        "manifest.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "contentType": "text/event-stream",
+          "name": "manifest.deleted",
+          "title": "manifest.deleted event",
+          "summary": "SSE event: manifest.deleted"
+        },
+        "manifest.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "contentType": "text/event-stream",
+          "name": "manifest.updated",
+          "title": "manifest.updated event",
+          "summary": "SSE event: manifest.updated"
+        },
+        "plan.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "contentType": "text/event-stream",
+          "name": "plan.deleted",
+          "title": "plan.deleted event",
+          "summary": "SSE event: plan.deleted"
+        },
+        "plan.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "contentType": "text/event-stream",
+          "name": "plan.updated",
+          "title": "plan.updated event",
+          "summary": "SSE event: plan.updated"
+        },
+        "project.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "contentType": "text/event-stream",
+          "name": "project.deleted",
+          "title": "project.deleted event",
+          "summary": "SSE event: project.deleted"
+        },
+        "project.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "contentType": "text/event-stream",
+          "name": "project.updated",
+          "title": "project.updated event",
+          "summary": "SSE event: project.updated"
+        },
+        "realtime.snapshot": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeRealtimeSnapshot"
+          },
+          "contentType": "text/event-stream",
+          "name": "realtime.snapshot",
+          "title": "realtime.snapshot event",
+          "summary": "SSE event: realtime.snapshot"
+        },
+        "realtime.status": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeRealtimeStatus"
+          },
+          "contentType": "text/event-stream",
+          "name": "realtime.status",
+          "title": "realtime.status event",
+          "summary": "SSE event: realtime.status"
+        },
+        "source.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "contentType": "text/event-stream",
+          "name": "source.deleted",
+          "title": "source.deleted event",
+          "summary": "SSE event: source.deleted"
+        },
+        "source.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "contentType": "text/event-stream",
+          "name": "source.updated",
+          "title": "source.updated event",
+          "summary": "SSE event: source.updated"
+        }
+      },
+      "tags": [
+        {
+          "name": "Realtime"
+        }
+      ],
+      "x-forge-stream": [
+        {
+          "entityType": "Project",
+          "intent": "upsert",
+          "invalidates": [
+            "Project[]"
+          ],
+          "message": "project.updated",
+          "type": "github.com/xraph/loomplane/internal/projects.Project"
+        },
+        {
+          "entityType": "Project",
+          "intent": "evict",
+          "invalidates": [
+            "Project[]"
+          ],
+          "message": "project.deleted",
+          "type": "github.com/xraph/loomplane/internal/projects.Project"
+        },
+        {
+          "entityType": "Environment",
+          "intent": "upsert",
+          "invalidates": [
+            "Environment[]"
+          ],
+          "message": "environment.updated",
+          "type": "github.com/xraph/loomplane/internal/projects.Environment"
+        },
+        {
+          "entityType": "Environment",
+          "intent": "evict",
+          "invalidates": [
+            "Environment[]"
+          ],
+          "message": "environment.deleted",
+          "type": "github.com/xraph/loomplane/internal/projects.Environment"
+        },
+        {
+          "entityType": "Source",
+          "intent": "upsert",
+          "invalidates": [
+            "Source[]"
+          ],
+          "message": "source.updated",
+          "type": "github.com/xraph/loomplane/internal/discovery.Source"
+        },
+        {
+          "entityType": "Source",
+          "intent": "evict",
+          "invalidates": [
+            "Source[]"
+          ],
+          "message": "source.deleted",
+          "type": "github.com/xraph/loomplane/internal/discovery.Source"
+        },
+        {
+          "entityType": "Analysis",
+          "intent": "upsert",
+          "invalidates": [
+            "Analysis[]"
+          ],
+          "message": "analysis.updated",
+          "type": "github.com/xraph/loomplane/internal/discovery.Analysis"
+        },
+        {
+          "entityType": "Analysis",
+          "intent": "evict",
+          "invalidates": [
+            "Analysis[]"
+          ],
+          "message": "analysis.deleted",
+          "type": "github.com/xraph/loomplane/internal/discovery.Analysis"
+        },
+        {
+          "entityType": "Revision",
+          "intent": "upsert",
+          "invalidates": [
+            "Revision[]"
+          ],
+          "message": "manifest.updated",
+          "type": "github.com/xraph/loomplane/internal/manifests.Revision"
+        },
+        {
+          "entityType": "Revision",
+          "intent": "evict",
+          "invalidates": [
+            "Revision[]"
+          ],
+          "message": "manifest.deleted",
+          "type": "github.com/xraph/loomplane/internal/manifests.Revision"
+        },
+        {
+          "entityType": "Plan",
+          "intent": "upsert",
+          "invalidates": [
+            "Plan[]"
+          ],
+          "message": "plan.updated",
+          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+        },
+        {
+          "entityType": "Plan",
+          "intent": "evict",
+          "invalidates": [
+            "Plan[]"
+          ],
+          "message": "plan.deleted",
+          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+        },
+        {
+          "entityType": "Binding",
+          "intent": "upsert",
+          "invalidates": [
+            "Binding[]",
+            "Instance[]"
+          ],
+          "message": "binding.updated",
+          "type": "github.com/xraph/loomplane/internal/planning.Binding"
+        },
+        {
+          "entityType": "Binding",
+          "intent": "evict",
+          "invalidates": [
+            "Binding[]"
+          ],
+          "message": "binding.deleted",
+          "type": "github.com/xraph/loomplane/internal/planning.Binding"
+        },
+        {
+          "entityType": "Connection",
+          "intent": "upsert",
+          "invalidates": [
+            "Connection[]"
+          ],
+          "message": "connection.updated",
+          "type": "github.com/xraph/loomplane/internal/connections.Connection"
+        },
+        {
+          "entityType": "Connection",
+          "intent": "evict",
+          "invalidates": [
+            "Connection[]"
+          ],
+          "message": "connection.deleted",
+          "type": "github.com/xraph/loomplane/internal/connections.Connection"
+        },
+        {
+          "entityType": "Deployment",
+          "intent": "upsert",
+          "invalidates": [
+            "Deployment[]",
+            "Instance[]"
+          ],
+          "message": "deployment.updated",
+          "type": "github.com/xraph/loomplane/internal/deployments.Deployment"
+        },
+        {
+          "entityType": "Deployment",
+          "intent": "evict",
+          "invalidates": [
+            "Deployment[]"
+          ],
+          "message": "deployment.deleted",
+          "type": "github.com/xraph/loomplane/internal/deployments.Deployment"
+        },
+        {
+          "entityType": "Log",
+          "intent": "upsert",
+          "invalidates": [
+            "Log[]"
+          ],
+          "message": "build.log",
+          "type": "github.com/xraph/loomplane/internal/realtime.Log"
+        },
+        {
+          "entityType": "Collection",
+          "intent": "upsert",
+          "invalidates": [
+            "Collection[]"
+          ],
+          "message": "build.collection",
+          "type": "github.com/xraph/loomplane/internal/realtime.Collection"
+        }
+      ]
+    },
+    "api-v1-realtime-ws": {
+      "address": "/api/v1/realtime/ws",
+      "bindings": {
+        "ws": {
+          "method": "GET",
+          "bindingVersion": "latest"
+        }
+      },
+      "messages": {
+        "receive": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeReceive"
+          },
+          "contentType": "application/json",
+          "name": "ReceiveMessage",
+          "title": "Server to Client Message",
+          "summary": "Messages sent from server to client"
+        },
+        "send": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeSend"
+          },
+          "contentType": "application/json",
+          "name": "SendMessage",
+          "title": "Client to Server Message",
+          "summary": "Messages sent from client to server"
+        }
+      },
+      "tags": [
+        {
+          "name": "Realtime"
+        }
+      ],
+      "x-forge-stream": [
+        {
+          "entityType": "Project",
+          "intent": "upsert",
+          "invalidates": [
+            "Project[]"
+          ],
+          "message": "project.updated",
+          "type": "github.com/xraph/loomplane/internal/projects.Project"
+        },
+        {
+          "entityType": "Project",
+          "intent": "evict",
+          "invalidates": [
+            "Project[]"
+          ],
+          "message": "project.deleted",
+          "type": "github.com/xraph/loomplane/internal/projects.Project"
+        },
+        {
+          "entityType": "Environment",
+          "intent": "upsert",
+          "invalidates": [
+            "Environment[]"
+          ],
+          "message": "environment.updated",
+          "type": "github.com/xraph/loomplane/internal/projects.Environment"
+        },
+        {
+          "entityType": "Environment",
+          "intent": "evict",
+          "invalidates": [
+            "Environment[]"
+          ],
+          "message": "environment.deleted",
+          "type": "github.com/xraph/loomplane/internal/projects.Environment"
+        },
+        {
+          "entityType": "Source",
+          "intent": "upsert",
+          "invalidates": [
+            "Source[]"
+          ],
+          "message": "source.updated",
+          "type": "github.com/xraph/loomplane/internal/discovery.Source"
+        },
+        {
+          "entityType": "Source",
+          "intent": "evict",
+          "invalidates": [
+            "Source[]"
+          ],
+          "message": "source.deleted",
+          "type": "github.com/xraph/loomplane/internal/discovery.Source"
+        },
+        {
+          "entityType": "Analysis",
+          "intent": "upsert",
+          "invalidates": [
+            "Analysis[]"
+          ],
+          "message": "analysis.updated",
+          "type": "github.com/xraph/loomplane/internal/discovery.Analysis"
+        },
+        {
+          "entityType": "Analysis",
+          "intent": "evict",
+          "invalidates": [
+            "Analysis[]"
+          ],
+          "message": "analysis.deleted",
+          "type": "github.com/xraph/loomplane/internal/discovery.Analysis"
+        },
+        {
+          "entityType": "Revision",
+          "intent": "upsert",
+          "invalidates": [
+            "Revision[]"
+          ],
+          "message": "manifest.updated",
+          "type": "github.com/xraph/loomplane/internal/manifests.Revision"
+        },
+        {
+          "entityType": "Revision",
+          "intent": "evict",
+          "invalidates": [
+            "Revision[]"
+          ],
+          "message": "manifest.deleted",
+          "type": "github.com/xraph/loomplane/internal/manifests.Revision"
+        },
+        {
+          "entityType": "Plan",
+          "intent": "upsert",
+          "invalidates": [
+            "Plan[]"
+          ],
+          "message": "plan.updated",
+          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+        },
+        {
+          "entityType": "Plan",
+          "intent": "evict",
+          "invalidates": [
+            "Plan[]"
+          ],
+          "message": "plan.deleted",
+          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+        },
+        {
+          "entityType": "Binding",
+          "intent": "upsert",
+          "invalidates": [
+            "Binding[]",
+            "Instance[]"
+          ],
+          "message": "binding.updated",
+          "type": "github.com/xraph/loomplane/internal/planning.Binding"
+        },
+        {
+          "entityType": "Binding",
+          "intent": "evict",
+          "invalidates": [
+            "Binding[]"
+          ],
+          "message": "binding.deleted",
+          "type": "github.com/xraph/loomplane/internal/planning.Binding"
+        },
+        {
+          "entityType": "Connection",
+          "intent": "upsert",
+          "invalidates": [
+            "Connection[]"
+          ],
+          "message": "connection.updated",
+          "type": "github.com/xraph/loomplane/internal/connections.Connection"
+        },
+        {
+          "entityType": "Connection",
+          "intent": "evict",
+          "invalidates": [
+            "Connection[]"
+          ],
+          "message": "connection.deleted",
+          "type": "github.com/xraph/loomplane/internal/connections.Connection"
+        },
+        {
+          "entityType": "Deployment",
+          "intent": "upsert",
+          "invalidates": [
+            "Deployment[]",
+            "Instance[]"
+          ],
+          "message": "deployment.updated",
+          "type": "github.com/xraph/loomplane/internal/deployments.Deployment"
+        },
+        {
+          "entityType": "Deployment",
+          "intent": "evict",
+          "invalidates": [
+            "Deployment[]"
+          ],
+          "message": "deployment.deleted",
+          "type": "github.com/xraph/loomplane/internal/deployments.Deployment"
+        },
+        {
+          "entityType": "Log",
+          "intent": "upsert",
+          "invalidates": [
+            "Log[]"
+          ],
+          "message": "build.log",
+          "type": "github.com/xraph/loomplane/internal/realtime.Log"
+        },
+        {
+          "entityType": "Collection",
+          "intent": "upsert",
+          "invalidates": [
+            "Collection[]"
+          ],
+          "message": "build.collection",
+          "type": "github.com/xraph/loomplane/internal/realtime.Collection"
+        }
+      ]
+    }
+  },
+  "operations": {
+    "realtime.events": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/api-v1-realtime-events"
+      },
+      "title": "Receive SSE events",
+      "summary": "Receive Server-Sent Events from /api/v1/realtime/events",
+      "tags": [
+        {
+          "name": "Realtime"
+        }
+      ],
+      "messages": [
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/analysis.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/analysis.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/binding.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/binding.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/build.collection"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/build.log"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/connection.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/connection.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/deployment.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/deployment.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/environment.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/environment.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/forge.gap"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/forge.resumed"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/manifest.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/manifest.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/plan.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/plan.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/project.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/project.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/realtime.snapshot"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/realtime.status"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/source.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/source.updated"
+        }
+      ]
+    },
+    "realtime.wsReceive": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/api-v1-realtime-ws"
+      },
+      "title": "Receive message",
+      "summary": "Receive messages from /api/v1/realtime/ws",
+      "tags": [
+        {
+          "name": "Realtime"
+        }
+      ],
+      "messages": [
+        {
+          "$ref": "#/channels/api-v1-realtime-ws/messages/receive"
+        }
+      ]
+    },
+    "realtime.wsSend": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/api-v1-realtime-ws"
+      },
+      "title": "Send message",
+      "summary": "Send messages to /api/v1/realtime/ws",
+      "tags": [
+        {
+          "name": "Realtime"
+        }
+      ],
+      "messages": [
+        {
+          "$ref": "#/channels/api-v1-realtime-ws/messages/send"
+        }
+      ]
+    }
+  },
+  "components": {
+    "schemas": {
+      "Action": {
+        "type": "object",
+        "required": [
+          "id",
+          "op",
+          "subject",
+          "name",
+          "provider",
+          "engine",
+          "creates",
+          "reason",
+          "step"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            }
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "creates": {
+            "type": "string"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "engine": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceConfig"
+          },
+          "service": {
+            "$ref": "#/components/schemas/ServiceConfig"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "BuildTarget": {
+        "type": "object",
+        "properties": {
+          "builder": {
+            "type": "string"
+          },
+          "builder_settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "image": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "registry_settings": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Change": {
+        "type": "object",
+        "required": [
+          "field",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "Defaults": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      },
+      "Endpoint": {
+        "type": "object",
+        "properties": {
+          "host_port": {
+            "type": "integer"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "ingress_class": {
+            "type": "string"
+          },
+          "tls_secret": {
+            "type": "string"
+          }
+        }
+      },
+      "EnvLink": {
+        "type": "object",
+        "required": [
+          "key",
+          "from",
+          "subject"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "Evidence": {
+        "type": "object",
+        "required": [
+          "path",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "GraphSummary": {
+        "properties": {
+          "deployable": {
+            "type": "integer"
+          },
+          "needs_confirmation": {
+            "type": "integer"
+          },
+          "packages": {
+            "type": "integer"
+          },
+          "resources": {
+            "type": "integer"
+          },
+          "services": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "services",
+          "deployable",
+          "packages",
+          "resources",
+          "needs_confirmation"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/graph.Summary"
+      },
+      "Held": {
+        "type": "object",
+        "properties": {
+          "same_address": {
+            "type": "string"
+          }
+        }
+      },
+      "Ignore": {
+        "type": "object",
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Manifest": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/Defaults"
+          },
+          "gateways": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "held": {
+            "$ref": "#/components/schemas/Held"
+          },
+          "ignore": {
+            "$ref": "#/components/schemas/Ignore"
+          },
+          "links": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "services": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "PlanSource": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "alias",
+          "repository",
+          "root",
+          "analysis_id",
+          "commit_sha",
+          "in_scope"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "analysis_id": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "in_scope": {
+            "type": "boolean"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PlanningSummary": {
+        "properties": {
+          "create": {
+            "type": "integer"
+          },
+          "delete": {
+            "type": "integer"
+          },
+          "keep": {
+            "type": "integer"
+          },
+          "replace": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "create",
+          "update",
+          "replace",
+          "delete",
+          "keep"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
+      },
+      "ResourceConfig": {
+        "type": "object",
+        "required": [
+          "provider",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Route": {
+        "type": "object",
+        "required": [
+          "path",
+          "to",
+          "env"
+        ],
+        "properties": {
+          "env": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "strip_prefix": {
+            "type": "boolean"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "Scale": {
+        "type": "object",
+        "required": [
+          "min",
+          "max"
+        ],
+        "properties": {
+          "max": {
+            "type": "integer"
+          },
+          "min": {
+            "type": "integer"
+          }
+        }
+      },
+      "ServiceConfig": {
+        "type": "object",
+        "required": [
+          "provider",
+          "workload",
+          "execution",
+          "service",
+          "source",
+          "ecosystem",
+          "public"
+        ],
+        "properties": {
+          "build": {
+            "type": "string"
+          },
+          "build_target": {
+            "$ref": "#/components/schemas/BuildTarget"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "ecosystem": {
+            "type": "string"
+          },
+          "endpoint": {
+            "$ref": "#/components/schemas/Endpoint"
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvLink"
+            }
+          },
+          "execution": {
+            "type": "string"
+          },
+          "framework": {
+            "type": "string"
+          },
+          "gateway": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Route"
+            }
+          },
+          "health_path": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "internal": {
+            "type": "boolean"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "private_egress": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "region": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "scale": {
+            "$ref": "#/components/schemas/Scale"
+          },
+          "service": {
+            "type": "string"
+          },
+          "size": {
+            "$ref": "#/components/schemas/Size"
+          },
+          "source": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "target_settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "workload": {
+            "type": "string"
+          }
+        }
+      },
+      "Size": {
+        "type": "object",
+        "required": [
+          "cpu",
+          "memory"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "number"
+          },
+          "memory": {
+            "type": "integer"
+          }
+        }
+      },
+      "SnapshotRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "event",
+          "entity_id",
+          "data",
+          "time"
+        ],
+        "properties": {
+          "data": {},
+          "entity_id": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SourceArtifact": {
+        "type": "object",
+        "required": [
+          "alias",
+          "repository",
+          "commit_sha",
+          "key"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          }
+        }
+      },
+      "Step": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "name",
+          "subject",
+          "op",
+          "provider",
+          "order",
+          "status",
+          "message",
+          "url",
+          "image"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Analysis": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "source_id",
+          "source",
+          "status",
+          "repository",
+          "ref",
+          "commit_sha",
+          "error",
+          "summary",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/GraphSummary"
+          }
+        }
+      },
+      "Binding": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "subject",
+          "name",
+          "provider",
+          "region",
+          "engine",
+          "external_id",
+          "config",
+          "url",
+          "connection_id",
+          "revision",
+          "commit_sha",
+          "drift",
+          "drift_message",
+          "plan_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
+          "config": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "drift": {
+            "type": "string"
+          },
+          "drift_message": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "Collection": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "deployment_id",
+          "action_id",
+          "attempt",
+          "operation_id",
+          "state",
+          "message",
+          "updated_at"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Log": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "deployment_id",
+          "action_id",
+          "attempt",
+          "operation_id",
+          "provider_id",
+          "stream",
+          "source",
+          "level",
+          "message",
+          "time",
+          "truncated"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "level": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Connection": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "cloud",
+          "name",
+          "account",
+          "details",
+          "status",
+          "missing",
+          "message",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Deployment": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "plan_id",
+          "commit_sha",
+          "status",
+          "sources",
+          "error",
+          "steps",
+          "retries",
+          "started_by",
+          "started_at"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "retries": {
+            "type": "integer"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceArtifact"
+            }
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_by": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Step"
+            }
+          }
+        }
+      },
+      "Environment": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "name",
+          "kind",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RealtimeForgeGap": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "RealtimeForgeResumed": {
+        "type": "object",
+        "required": [
+          "from",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "from": {
+            "type": "string"
+          }
+        }
+      },
+      "Revision": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "revision",
+          "yaml",
+          "digest",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/Manifest"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "yaml": {
+            "type": "string"
+          }
+        }
+      },
+      "Plan": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "status",
+          "revision",
+          "sources",
+          "manifest_id",
+          "manifest_revision",
+          "actions",
+          "problems",
+          "warnings",
+          "summary",
+          "executable",
+          "connections",
+          "error",
+          "created_by",
+          "created_at",
+          "decided_by",
+          "decision_note"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          },
+          "connections": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "decided_at": {
+            "type": "string"
+          },
+          "decided_by": {
+            "type": "string"
+          },
+          "decision_note": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "executable": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "manifest_id": {
+            "type": "string"
+          },
+          "manifest_revision": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "planned_at": {
+            "type": "string"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanSource"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/PlanningSummary"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "slug",
+          "description",
+          "icon",
+          "color",
+          "repositories",
+          "status",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "slug": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RealtimeRealtimeSnapshot": {
+        "type": "object",
+        "required": [
+          "cursor",
+          "records",
+          "partial"
+        ],
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SnapshotRecord"
+            }
+          }
+        }
+      },
+      "RealtimeRealtimeStatus": {
+        "type": "object",
+        "required": [
+          "cursor",
+          "time"
+        ],
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Source": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "alias",
+          "repository",
+          "root",
+          "ref",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "removed_at": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RealtimeReceive": {
+        "type": "object",
+        "required": [
+          "event",
+          "data",
+          "cursor",
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "data": {},
+          "event": {
+            "type": "string"
+          }
+        }
+      },
+      "RealtimeSend": {
+        "type": "object",
+        "required": [
+          "op",
+          "org_id"
+        ],
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "deployment_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "op": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "messages": {
+      "api-v1-realtime-eventsanalysis.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "source_id",
+            "source",
+            "status",
+            "repository",
+            "ref",
+            "commit_sha",
+            "error",
+            "summary",
+            "created_by",
+            "created_at"
+          ],
+          "properties": {
+            "commit_sha": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "ref": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "source_id": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "summary": {
+              "$ref": "#/components/schemas/GraphSummary"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "analysis.deleted",
+        "title": "analysis.deleted event",
+        "summary": "SSE event: analysis.deleted"
+      },
+      "api-v1-realtime-eventsanalysis.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "source_id",
+            "source",
+            "status",
+            "repository",
+            "ref",
+            "commit_sha",
+            "error",
+            "summary",
+            "created_by",
+            "created_at"
+          ],
+          "properties": {
+            "commit_sha": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "ref": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "source_id": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "summary": {
+              "$ref": "#/components/schemas/GraphSummary"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "analysis.updated",
+        "title": "analysis.updated event",
+        "summary": "SSE event: analysis.updated"
+      },
+      "api-v1-realtime-eventsbinding.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "subject",
+            "name",
+            "provider",
+            "region",
+            "engine",
+            "external_id",
+            "config",
+            "url",
+            "connection_id",
+            "revision",
+            "commit_sha",
+            "drift",
+            "drift_message",
+            "plan_id",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "commit_sha": {
+              "type": "string"
+            },
+            "config": {
+              "type": "string"
+            },
+            "connection_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "drift": {
+              "type": "string"
+            },
+            "drift_message": {
+              "type": "string"
+            },
+            "engine": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "external_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "observed_at": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "binding.deleted",
+        "title": "binding.deleted event",
+        "summary": "SSE event: binding.deleted"
+      },
+      "api-v1-realtime-eventsbinding.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "subject",
+            "name",
+            "provider",
+            "region",
+            "engine",
+            "external_id",
+            "config",
+            "url",
+            "connection_id",
+            "revision",
+            "commit_sha",
+            "drift",
+            "drift_message",
+            "plan_id",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "commit_sha": {
+              "type": "string"
+            },
+            "config": {
+              "type": "string"
+            },
+            "connection_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "drift": {
+              "type": "string"
+            },
+            "drift_message": {
+              "type": "string"
+            },
+            "engine": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "external_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "observed_at": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "binding.updated",
+        "title": "binding.updated event",
+        "summary": "SSE event: binding.updated"
+      },
+      "api-v1-realtime-eventsbuild.collection": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "deployment_id",
+            "action_id",
+            "attempt",
+            "operation_id",
+            "state",
+            "message",
+            "updated_at"
+          ],
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "attempt": {
+              "type": "string"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "build.collection",
+        "title": "build.collection event",
+        "summary": "SSE event: build.collection"
+      },
+      "api-v1-realtime-eventsbuild.log": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "deployment_id",
+            "action_id",
+            "attempt",
+            "operation_id",
+            "provider_id",
+            "stream",
+            "source",
+            "level",
+            "message",
+            "time",
+            "truncated"
+          ],
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "attempt": {
+              "type": "string"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "level": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "provider_id": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "stream": {
+              "type": "string"
+            },
+            "time": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "build.log",
+        "title": "build.log event",
+        "summary": "SSE event: build.log"
+      },
+      "api-v1-realtime-eventsconnection.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "cloud",
+            "name",
+            "account",
+            "details",
+            "status",
+            "missing",
+            "message",
+            "created_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "account": {
+              "type": "string"
+            },
+            "checked_at": {
+              "type": "string"
+            },
+            "cloud": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "details": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "message": {
+              "type": "string"
+            },
+            "missing": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "connection.deleted",
+        "title": "connection.deleted event",
+        "summary": "SSE event: connection.deleted"
+      },
+      "api-v1-realtime-eventsconnection.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "cloud",
+            "name",
+            "account",
+            "details",
+            "status",
+            "missing",
+            "message",
+            "created_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "account": {
+              "type": "string"
+            },
+            "checked_at": {
+              "type": "string"
+            },
+            "cloud": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "details": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "message": {
+              "type": "string"
+            },
+            "missing": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "connection.updated",
+        "title": "connection.updated event",
+        "summary": "SSE event: connection.updated"
+      },
+      "api-v1-realtime-eventsdeployment.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "plan_id",
+            "commit_sha",
+            "status",
+            "sources",
+            "error",
+            "steps",
+            "retries",
+            "started_by",
+            "started_at"
+          ],
+          "properties": {
+            "commit_sha": {
+              "type": "string"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "retries": {
+              "type": "integer"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/SourceArtifact"
+              }
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "started_by": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Step"
+              }
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "deployment.deleted",
+        "title": "deployment.deleted event",
+        "summary": "SSE event: deployment.deleted"
+      },
+      "api-v1-realtime-eventsdeployment.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "plan_id",
+            "commit_sha",
+            "status",
+            "sources",
+            "error",
+            "steps",
+            "retries",
+            "started_by",
+            "started_at"
+          ],
+          "properties": {
+            "commit_sha": {
+              "type": "string"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "retries": {
+              "type": "integer"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/SourceArtifact"
+              }
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "started_by": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Step"
+              }
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "deployment.updated",
+        "title": "deployment.updated event",
+        "summary": "SSE event: deployment.updated"
+      },
+      "api-v1-realtime-eventsenvironment.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "name",
+            "kind",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "environment.deleted",
+        "title": "environment.deleted event",
+        "summary": "SSE event: environment.deleted"
+      },
+      "api-v1-realtime-eventsenvironment.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "name",
+            "kind",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "environment.updated",
+        "title": "environment.updated event",
+        "summary": "SSE event: environment.updated"
+      },
+      "api-v1-realtime-eventsforge.gap": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "reason"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "forge.gap",
+        "title": "forge.gap event",
+        "summary": "SSE event: forge.gap"
+      },
+      "api-v1-realtime-eventsforge.resumed": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "from",
+            "count"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer"
+            },
+            "from": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "forge.resumed",
+        "title": "forge.resumed event",
+        "summary": "SSE event: forge.resumed"
+      },
+      "api-v1-realtime-eventsmanifest.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "revision",
+            "yaml",
+            "digest",
+            "created_by",
+            "created_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "manifest": {
+              "$ref": "#/components/schemas/Manifest"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "yaml": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "manifest.deleted",
+        "title": "manifest.deleted event",
+        "summary": "SSE event: manifest.deleted"
+      },
+      "api-v1-realtime-eventsmanifest.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "revision",
+            "yaml",
+            "digest",
+            "created_by",
+            "created_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "manifest": {
+              "$ref": "#/components/schemas/Manifest"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "yaml": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "manifest.updated",
+        "title": "manifest.updated event",
+        "summary": "SSE event: manifest.updated"
+      },
+      "api-v1-realtime-eventsplan.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "status",
+            "revision",
+            "sources",
+            "manifest_id",
+            "manifest_revision",
+            "actions",
+            "problems",
+            "warnings",
+            "summary",
+            "executable",
+            "connections",
+            "error",
+            "created_by",
+            "created_at",
+            "decided_by",
+            "decision_note"
+          ],
+          "properties": {
+            "actions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Action"
+              }
+            },
+            "connections": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "decided_at": {
+              "type": "string"
+            },
+            "decided_by": {
+              "type": "string"
+            },
+            "decision_note": {
+              "type": "string"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "executable": {
+              "type": "boolean"
+            },
+            "expires_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "manifest_id": {
+              "type": "string"
+            },
+            "manifest_revision": {
+              "type": "integer"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "planned_at": {
+              "type": "string"
+            },
+            "problems": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Finding"
+              }
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlanSource"
+              }
+            },
+            "status": {
+              "type": "string"
+            },
+            "summary": {
+              "$ref": "#/components/schemas/PlanningSummary"
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Finding"
+              }
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "plan.deleted",
+        "title": "plan.deleted event",
+        "summary": "SSE event: plan.deleted"
+      },
+      "api-v1-realtime-eventsplan.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "status",
+            "revision",
+            "sources",
+            "manifest_id",
+            "manifest_revision",
+            "actions",
+            "problems",
+            "warnings",
+            "summary",
+            "executable",
+            "connections",
+            "error",
+            "created_by",
+            "created_at",
+            "decided_by",
+            "decision_note"
+          ],
+          "properties": {
+            "actions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Action"
+              }
+            },
+            "connections": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "decided_at": {
+              "type": "string"
+            },
+            "decided_by": {
+              "type": "string"
+            },
+            "decision_note": {
+              "type": "string"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "executable": {
+              "type": "boolean"
+            },
+            "expires_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "manifest_id": {
+              "type": "string"
+            },
+            "manifest_revision": {
+              "type": "integer"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "planned_at": {
+              "type": "string"
+            },
+            "problems": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Finding"
+              }
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlanSource"
+              }
+            },
+            "status": {
+              "type": "string"
+            },
+            "summary": {
+              "$ref": "#/components/schemas/PlanningSummary"
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Finding"
+              }
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "plan.updated",
+        "title": "plan.updated event",
+        "summary": "SSE event: plan.updated"
+      },
+      "api-v1-realtime-eventsproject.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "name",
+            "slug",
+            "description",
+            "icon",
+            "color",
+            "repositories",
+            "status",
+            "created_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "icon": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "slug": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "project.deleted",
+        "title": "project.deleted event",
+        "summary": "SSE event: project.deleted"
+      },
+      "api-v1-realtime-eventsproject.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "name",
+            "slug",
+            "description",
+            "icon",
+            "color",
+            "repositories",
+            "status",
+            "created_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "icon": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "slug": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "project.updated",
+        "title": "project.updated event",
+        "summary": "SSE event: project.updated"
+      },
+      "api-v1-realtime-eventsrealtime.snapshot": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "cursor",
+            "records",
+            "partial"
+          ],
+          "properties": {
+            "cursor": {
+              "type": "string"
+            },
+            "partial": {
+              "type": "boolean"
+            },
+            "records": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/SnapshotRecord"
+              }
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "realtime.snapshot",
+        "title": "realtime.snapshot event",
+        "summary": "SSE event: realtime.snapshot"
+      },
+      "api-v1-realtime-eventsrealtime.status": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "cursor",
+            "time"
+          ],
+          "properties": {
+            "cursor": {
+              "type": "string"
+            },
+            "time": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "realtime.status",
+        "title": "realtime.status event",
+        "summary": "SSE event: realtime.status"
+      },
+      "api-v1-realtime-eventssource.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "alias",
+            "repository",
+            "root",
+            "ref",
+            "created_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "ref": {
+              "type": "string"
+            },
+            "removed_at": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "root": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "source.deleted",
+        "title": "source.deleted event",
+        "summary": "SSE event: source.deleted"
+      },
+      "api-v1-realtime-eventssource.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "alias",
+            "repository",
+            "root",
+            "ref",
+            "created_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_by": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "ref": {
+              "type": "string"
+            },
+            "removed_at": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "root": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "source.updated",
+        "title": "source.updated event",
+        "summary": "SSE event: source.updated"
+      },
+      "api-v1-realtime-wsReceiveMessage": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "event",
+            "data",
+            "cursor",
+            "channel"
+          ],
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "data": {},
+            "event": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "application/json",
+        "name": "ReceiveMessage",
+        "title": "Server to Client Message",
+        "summary": "Messages sent from server to client"
+      },
+      "api-v1-realtime-wsSendMessage": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "op",
+            "org_id"
+          ],
+          "properties": {
+            "cursor": {
+              "type": "string"
+            },
+            "deployment_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "op": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "contentType": "application/json",
+        "name": "SendMessage",
+        "title": "Client to Server Message",
+        "summary": "Messages sent from client to server"
+      }
+    }
+  },
+  "servers": {}
+}

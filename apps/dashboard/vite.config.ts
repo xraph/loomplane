@@ -31,9 +31,10 @@ export default defineConfig({
     proxy: {
       // Each prefix ends in a slash, so a page such as /api-keys stays
       // with the dashboard.
-      "/api/": api,
+      "/api/": { target: api, ws: true },
       "/authsome/": api,
       "/openapi.json": api,
+      "/asyncapi.json": api,
       "/_/": api,
     },
   },

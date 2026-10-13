@@ -172,6 +172,19 @@ export interface CloudList {
   clouds: CloudForm[];
 }
 
+export interface Collection {
+  actionId: string;
+  attempt: string;
+  deploymentId: string;
+  id: string;
+  message: string;
+  operationId: string;
+  orgId: string;
+  projectId: string;
+  state: string;
+  updatedAt: string;
+}
+
 export interface Commands {
   build?: string;
   dev?: string;
@@ -457,6 +470,29 @@ export interface InfrastructureStatus {
   store: string;
 }
 
+export interface Log {
+  actionId: string;
+  attempt: string;
+  deploymentId: string;
+  id: string;
+  level: string;
+  message: string;
+  operationId: string;
+  orgId: string;
+  projectId: string;
+  providerId: string;
+  source: string;
+  stream: string;
+  time: string;
+  truncated: boolean;
+}
+
+export interface LogPage {
+  gap: boolean;
+  logs: Log[];
+  next: string;
+}
+
 export interface Manifest {
   defaults?: Defaults;
   gateways?: Record<string, any>;
@@ -645,6 +681,41 @@ export interface PublicConfig {
   publishableKey: string;
 }
 
+export interface RealtimeForgeGap {
+  reason: string;
+}
+
+export interface RealtimeForgeResumed {
+  count: number;
+  from: string;
+}
+
+export interface RealtimeRealtimeSnapshot {
+  cursor: string;
+  partial: boolean;
+  records: SnapshotRecord[];
+}
+
+export interface RealtimeRealtimeStatus {
+  cursor: string;
+  time: string;
+}
+
+export interface RealtimeReceive {
+  channel: string;
+  cursor: string;
+  data: any;
+  event: string;
+}
+
+export interface RealtimeSend {
+  cursor?: string;
+  deploymentIds?: string[];
+  op: string;
+  orgId: string;
+  projectIds?: string[];
+}
+
 export interface ReplaceInputBody {
   credential: string;
   settings?: Record<string, any>;
@@ -801,6 +872,22 @@ export interface Setting {
 export interface Size {
   cpu: number;
   memory: number;
+}
+
+export interface Snapshot {
+  cursor: string;
+  partial: boolean;
+  records: SnapshotRecord[];
+}
+
+export interface SnapshotRecord {
+  data: any;
+  entityId: string;
+  event: string;
+  id: string;
+  orgId: string;
+  projectId?: string;
+  time: string;
 }
 
 export interface Source {

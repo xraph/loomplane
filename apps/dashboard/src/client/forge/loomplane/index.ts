@@ -7,3 +7,6 @@ export * from './client';
 export * from './rest';
 export * from './ops';
 export * from './hooks';
+export * from './events';
+export * from './websocket';
+export * from './sse';

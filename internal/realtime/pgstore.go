@@ -80,33 +80,37 @@ func (s *PgStore) Events(ctx context.Context, org, after string, limit int) ([]E
 			return nil, false, scanErr
 		}
 		event.ID, event.OrgID = cursor(org, n), org
-		if event.Type == "manifest.updated" {
-			var fields map[string]json.RawMessage
-			if decodeErr := json.Unmarshal(event.Data, &fields); decodeErr != nil {
-				return nil, false, decodeErr
-			}
-			var yaml string
-			if decodeErr := json.Unmarshal(fields["yaml"], &yaml); decodeErr != nil {
-				return nil, false, decodeErr
-			}
-			parsed, parseErr := manifest.Parse([]byte(yaml))
-			if parseErr != nil {
-				return nil, false, parseErr
-			}
-			body, encodeErr := json.Marshal(parsed)
-			if encodeErr != nil {
-				return nil, false, encodeErr
-			}
-			fields["manifest"] = body
-			encoded, encodeErr := json.Marshal(fields)
-			if encodeErr != nil {
-				return nil, false, encodeErr
-			}
-			event.Data = encoded
+		if hydrateErr := hydrateEvent(&event); hydrateErr != nil {
+			return nil, false, hydrateErr
 		}
 		out = append(out, event)
 	}
 	return out, true, rows.Err()
+}
+
+func hydrateEvent(event *Event) error {
+	if event.Type != "manifest.updated" {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(event.Data, &fields); err != nil {
+		return err
+	}
+	var yaml string
+	if err := json.Unmarshal(fields["yaml"], &yaml); err != nil {
+		return err
+	}
+	parsed, err := manifest.Parse([]byte(yaml))
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(parsed)
+	if err != nil {
+		return err
+	}
+	fields["manifest"] = body
+	event.Data, err = json.Marshal(fields)
+	return err
 }
 
 func (s *PgStore) Since(ctx context.Context, channel, id string) (logged []forge.LoggedEvent, resolvable bool, err error) {

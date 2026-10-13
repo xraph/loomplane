@@ -35,6 +35,7 @@ import (
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
+	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/extensions/web"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/infrastructure"
@@ -69,7 +70,7 @@ func New(cfg config.Config) (forge.App, error) {
 		forge.WithShutdownTimeout(shutdownTimeout),
 		forge.WithEnvPrefix(forgeEnvPrefix),
 		forge.WithCentralMigrations(),
-		forge.WithAppRouterOptions(forge.WithOpenAPI(openAPI(cfg))),
+		forge.WithAppRouterOptions(forge.WithOpenAPI(openAPI(cfg)), forge.WithAsyncAPI(forge.AsyncAPIConfig{Title: "Loomplane realtime", Version: Version, SpecEnabled: true, UIEnabled: cfg.IsDevelopment()})),
 	)
 	for _, ext := range Extensions(cfg) {
 		if err := app.RegisterExtension(ext); err != nil {
@@ -136,6 +137,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
 		connectionsext.New(cfg, plugs),
+		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),

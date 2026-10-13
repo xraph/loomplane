@@ -369,6 +369,32 @@ export class RESTClient extends Client {
     },
 
     /**
+     */
+    logs: async (id: string, cursor?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.LogPage> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/logs`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["LogPage"],
+      };
+
+      return this.request<types.LogPage>(config);
+    },
+
+    /**
      * Run a failed deployment's failed and skipped steps again, with the plan that was approved
      */
     retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
@@ -978,6 +1004,105 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.PublicConfig>(config);
+    },
+
+  };
+
+  public readonly realtime = {
+    /**
+     */
+    events: async (orgId?: string | undefined, projectIds?: string | undefined, deploymentIds?: string | undefined, cursor?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/realtime/events`;
+      const queryParams: Record<string, any> = {};
+      if (orgId !== undefined) {
+        queryParams['org_id'] = orgId;
+      }
+      if (projectIds !== undefined) {
+        queryParams['project_ids'] = projectIds;
+      }
+      if (deploymentIds !== undefined) {
+        queryParams['deployment_ids'] = deploymentIds;
+      }
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     */
+    snapshot: async (orgId?: string | undefined, projectIds?: string | undefined, deploymentIds?: string | undefined, cursor?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Snapshot> => {
+      let __path = `/api/v1/realtime/snapshot`;
+      const queryParams: Record<string, any> = {};
+      if (orgId !== undefined) {
+        queryParams['org_id'] = orgId;
+      }
+      if (projectIds !== undefined) {
+        queryParams['project_ids'] = projectIds;
+      }
+      if (deploymentIds !== undefined) {
+        queryParams['deployment_ids'] = deploymentIds;
+      }
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Snapshot"],
+      };
+
+      return this.request<types.Snapshot>(config);
+    },
+
+    /**
+     */
+    ws: async (orgId?: string | undefined, projectIds?: string | undefined, deploymentIds?: string | undefined, cursor?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/realtime/ws`;
+      const queryParams: Record<string, any> = {};
+      if (orgId !== undefined) {
+        queryParams['org_id'] = orgId;
+      }
+      if (projectIds !== undefined) {
+        queryParams['project_ids'] = projectIds;
+      }
+      if (deploymentIds !== undefined) {
+        queryParams['deployment_ids'] = deploymentIds;
+      }
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
     },
 
   };

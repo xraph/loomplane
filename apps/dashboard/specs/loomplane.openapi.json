@@ -419,6 +419,51 @@
         }
       }
     },
+    "/api/v1/deployments/{id}/logs": {
+      "get": {
+        "tags": [
+          "Realtime"
+        ],
+        "operationId": "deployments.logs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retained build output",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/deployments/{id}/retry": {
       "post": {
         "tags": [
@@ -1985,6 +2030,143 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/realtime/events": {
+      "get": {
+        "tags": [
+          "Realtime"
+        ],
+        "operationId": "realtime.events",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deployment_ids",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/realtime/snapshot": {
+      "get": {
+        "operationId": "realtime.snapshot",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deployment_ids",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current permitted state and replay cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Realtime"
+        ],
+        "x-forge-no-entity": true
+      }
+    },
+    "/api/v1/realtime/ws": {
+      "get": {
+        "tags": [
+          "Realtime"
+        ],
+        "operationId": "realtime.ws",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deployment_ids",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
           }
         }
       }
@@ -3667,6 +3849,93 @@
           }
         }
       },
+      "Log": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "deployment_id",
+          "action_id",
+          "attempt",
+          "operation_id",
+          "provider_id",
+          "stream",
+          "source",
+          "level",
+          "message",
+          "time",
+          "truncated"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "level": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LogPage": {
+        "type": "object",
+        "required": [
+          "logs",
+          "next",
+          "gap"
+        ],
+        "properties": {
+          "gap": {
+            "type": "boolean"
+          },
+          "logs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Log"
+            }
+          },
+          "next": {
+            "type": "string"
+          }
+        }
+      },
       "Manifest": {
         "type": "object",
         "required": [
@@ -4898,6 +5167,61 @@
           },
           "memory": {
             "type": "integer"
+          }
+        }
+      },
+      "Snapshot": {
+        "type": "object",
+        "required": [
+          "cursor",
+          "records",
+          "partial"
+        ],
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SnapshotRecord"
+            }
+          }
+        }
+      },
+      "SnapshotRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "event",
+          "entity_id",
+          "data",
+          "time"
+        ],
+        "properties": {
+          "data": {},
+          "entity_id": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

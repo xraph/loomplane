@@ -15,7 +15,7 @@ concurrency:
 env:
   # The forge CLI has no tags yet, so this pins the commit whose generator
   # wrote apps/dashboard/src/client/forge. Move it when you regenerate.
-  FORGE_CLI: github.com/xraph/forge/cmd/forge@v0.0.0-20261012043317-2314a6ba593a
+  FORGE_CLI: github.com/xraph/forge/cmd/forge@v0.0.0-20261013234600-b0f1622a9bcf
 
 jobs:
   lint:

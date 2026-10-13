@@ -111,11 +111,11 @@ Files: create `extensions/realtime` routes/extension/tests; wire it in `internal
 
 Consumes Task 4's events and EventLog. Produces `/api/v1/realtime/ws`, `/api/v1/realtime/events`, `/api/v1/deployments/:id/logs`, named Forge event contracts and generated stream clients/bindings.
 
-- [ ] Add live route tests for authentication, cross-organization denial, project log permission, WebSocket origin, cursor replay, expired cursor gap, slow consumer cancellation and cookie session revocation.
-- [ ] Run `go test ./extensions/realtime -count=1`. Expected: missing routes or contract assertions fail.
-- [ ] Register Forge WebSocket/EventStream routes with `WithStreamBinding`, `Emits`, WS/SSE message schemas and producer EventLog. Give snapshots an atomic high-water cursor; use identical entity/log payloads across transports. The WS envelope uses `event`, `data`, cursor and channel metadata.
-- [ ] Save OpenAPI/AsyncAPI documents, enable streaming for the Loomplane client, generate clients and validate snake_case/camelCase event decoding with real wire fixtures.
-- [ ] Run route tests, dashboard typecheck/tests, `pnpm --dir apps/dashboard check:client`, format/lint/build and commit `feat: expose Forge deployment realtime streams`.
+- [x] Add live route tests for authentication, cross-organization denial, project log permission, WebSocket origin, cursor replay, expired cursor gap, slow consumer cancellation and cookie session revocation.
+- [x] Run `go test ./extensions/realtime -count=1`. Expected: missing routes or contract assertions fail.
+- [x] Register Forge WebSocket/EventStream routes with `WithStreamBinding`, `Emits`, WS/SSE message schemas and producer EventLog. Give snapshots an atomic high-water cursor; use identical entity/log payloads across transports. The WS envelope uses `event`, `data`, cursor and channel metadata.
+- [x] Save OpenAPI/AsyncAPI documents, enable streaming for the Loomplane client, generate clients and validate snake_case/camelCase event decoding with real wire fixtures.
+- [x] Run route tests, dashboard typecheck/tests, `pnpm --dir apps/dashboard check:client`, format/lint/build and commit `feat: expose Forge deployment realtime streams`.
 
 ## Task 6: Remote image builds and Forge Dockerfiles
 

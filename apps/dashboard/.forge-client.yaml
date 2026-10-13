@@ -7,6 +7,7 @@
 source:
   sources:
     - { type: file, path: ./specs/loomplane.openapi.json }
+    - { type: file, path: ./specs/loomplane.asyncapi.json }
     - { type: file, path: ./specs/authsome.openapi.json }
 
 defaults:
@@ -36,6 +37,7 @@ clients:
     output: ./src/client/forge/loomplane
     package: "@loomplane/loomplane-client"
     include: ["/api/**"]
+    streaming: true
 
   # authsome's organization API: organizations, members, invitations, and
   # switching the session's active organization. Sign-in and sessions are

@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Source, SourceList, Variable, VariableList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Snapshot, Source, SourceList, Variable, VariableList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -26,6 +26,7 @@ export const useConnectionsDelete = mutation(ops['connections.delete']);
 export const useConnectionsCheck = mutation<Connection, Connection>(ops['connections.check']);
 export const useConnectionsReplace = mutation<Connection, Connection>(ops['connections.replace']);
 export const useDeploymentsGet = query<Deployment>(ops['deployments.get']);
+export const useDeploymentsLogs = query<LogPage>(ops['deployments.logs']);
 export const useDeploymentsRetry = mutation<Deployment, Deployment>(ops['deployments.retry']);
 export const useGithubStatus = query<GitHubStatus>(ops['github.status']);
 export const useGithubConnect = mutation<GitHubInstallation, GitHubInstallation>(ops['github.connect']);
@@ -71,6 +72,9 @@ export const useProjectVariablesCreate = mutation<Variable, Variable>(ops['proje
 export const useVariablesResolve = query<Resolution>(ops['variables.resolve']);
 export const useProvidersList = query<ProviderList>(ops['providers.list']);
 export const usePublicConfigGet = query<PublicConfig>(ops['publicConfig.get']);
+export const useRealtimeEvents = query(ops['realtime.events']);
+export const useRealtimeSnapshot = query<Snapshot>(ops['realtime.snapshot']);
+export const useRealtimeWs = query(ops['realtime.ws']);
 export const useSessionGet = query<Session>(ops['session.get']);
 export const useVariablesList = query<VariableList>(ops['variables.list']);
 export const useVariablesCreate = mutation<Variable, Variable>(ops['variables.create']);
