@@ -363,6 +363,7 @@ func (p *planner) planServices() {
 			continue
 		}
 		cfg := p.serviceConfig(name, base, gs, prov, runs, set)
+		p.buildContext(name, base, s.Build, gs, cfg)
 		a := &Action{
 			ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 			Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
@@ -459,6 +460,30 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 		})
 	}
 	return cfg
+}
+
+// buildContext sets the directory a service's Dockerfile builds from:
+// the manifest's, else what analysis found. It's kept only when it isn't
+// the Dockerfile's own directory, which is what the builders assume, so
+// services deployed before contexts existed don't change.
+func (p *planner) buildContext(name, base string, b *manifest.Build, gs *graph.Service, cfg *ServiceConfig) {
+	dir := gs.Context
+	if b != nil && b.Context != "" {
+		if cfg.Image == "" {
+			p.warn(Finding{
+				Code: "build-context-ignored", Subject: ServiceSubject, Name: name, Path: base + ".build.context",
+				Message: fmt.Sprintf("%s has no Dockerfile, so its build context is ignored. It's built from its source.", name),
+			})
+			return
+		}
+		dir = b.Context
+	}
+	if cfg.Image != "" && dir != "" {
+		cfg.Context = dir
+		if cfg.Context == cfg.ownDir() {
+			cfg.Context = ""
+		}
+	}
 }
 
 // link gives a service the variables for what it needs, and orders it

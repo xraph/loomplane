@@ -3931,6 +3931,9 @@
           "confidence": {
             "type": "string"
           },
+          "context": {
+            "type": "string"
+          },
           "deployable": {
             "type": "boolean"
           },
@@ -3991,6 +3994,9 @@
         ],
         "properties": {
           "build": {
+            "type": "string"
+          },
+          "context": {
             "type": "string"
           },
           "ecosystem": {

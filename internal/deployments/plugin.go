@@ -62,6 +62,9 @@ func sdkJob(job *Job) *sdk.Job {
 			Build: cfg.Build, Start: cfg.Start, Workload: string(cfg.Workload), Port: cfg.Port, Public: cfg.Public,
 			Env: job.Env, Secrets: slices.Sorted(maps.Keys(job.Secrets)),
 		}
+		if cfg.Image != "" {
+			s.Context = cfg.ContextDir()
+		}
 		if cfg.Scale != nil {
 			s.MinScale, s.MaxScale = cfg.Scale.Min, cfg.Scale.Max
 		}

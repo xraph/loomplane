@@ -591,6 +591,7 @@ export interface Scale {
 export interface Service {
   commands: Commands;
   confidence: string;
+  context?: string;
   deployable: boolean;
   ecosystem: string;
   entrypoint: string;
@@ -608,6 +609,7 @@ export interface Service {
 
 export interface ServiceConfig {
   build?: string;
+  context?: string;
   ecosystem: string;
   env?: EnvLink[];
   execution: string;

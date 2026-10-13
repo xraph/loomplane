@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -153,16 +152,16 @@ func codeBuildPolicy(s *aws.Session, bucket string) string {
 		`"Resource":"arn:aws:ecr:` + s.Region() + `:` + s.Account() + `:repository/loomplane/*"}]}`
 }
 
-// buildspec builds the image with its Dockerfile, from the Dockerfile's
-// own directory, or with Google's buildpacks through pack, the same way
-// Cloud Build does, and pushes it.
+// buildspec builds the image with its Dockerfile, from its build context,
+// or with Google's buildpacks through pack, the same way Cloud Build does,
+// and pushes it.
 func buildspec(s *aws.Session, cfg *planning.ServiceConfig, image string) string {
 	registry := s.Account() + ".dkr.ecr." + s.Region() + ".amazonaws.com"
 	login := "aws ecr get-login-password --region " + s.Region() + " | docker login --username AWS --password-stdin " + registry
 	var install, build []string
 	if cfg.Image != "" {
 		build = []string{
-			`cd "$CODEBUILD_SRC_DIR/` + path.Dir(cfg.Image) + `" && docker build -t ` + image + ` -f ` + path.Base(cfg.Image) + ` .`,
+			`cd "$CODEBUILD_SRC_DIR/` + cfg.ContextDir() + `" && docker build -t ` + image + ` -f ` + cfg.DockerfileIn(cfg.ContextDir()) + ` .`,
 			"docker push " + image,
 		}
 	} else {

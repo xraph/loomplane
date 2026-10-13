@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/gateway"
@@ -112,12 +114,15 @@ type ServiceConfig struct {
 	Ecosystem discovery.Ecosystem `json:"ecosystem"`
 	Framework string              `json:"framework,omitempty"`
 	// Image is the Dockerfile that builds it, if there is one.
-	Image string          `json:"image,omitempty"`
-	Build string          `json:"build,omitempty"`
-	Start string          `json:"start,omitempty"`
-	Port  int             `json:"port,omitempty"`
-	Scale *manifest.Scale `json:"scale,omitempty"`
-	Size  *manifest.Size  `json:"size,omitempty"`
+	Image string `json:"image,omitempty"`
+	// Context is the directory Image builds from, when it isn't the
+	// Dockerfile's own. ContextDir gives the one to use.
+	Context string          `json:"context,omitempty"`
+	Build   string          `json:"build,omitempty"`
+	Start   string          `json:"start,omitempty"`
+	Port    int             `json:"port,omitempty"`
+	Scale   *manifest.Scale `json:"scale,omitempty"`
+	Size    *manifest.Size  `json:"size,omitempty"`
 	// Public says whether it gets an address on the internet.
 	Public bool `json:"public"`
 	// Env are the variables Loomplane sets so the service finds what it
@@ -126,6 +131,30 @@ type ServiceConfig struct {
 	// Gateway are a gateway's routes. A service with routes is a gateway
 	// Loomplane generates and builds, not code from the repository.
 	Gateway []gateway.Route `json:"gateway,omitempty"`
+}
+
+// ContextDir is the directory the service's Dockerfile builds from.
+func (c *ServiceConfig) ContextDir() string {
+	if c.Context != "" {
+		return c.Context
+	}
+	return c.ownDir()
+}
+
+// ownDir is the Dockerfile's own directory.
+func (c *ServiceConfig) ownDir() string { return path.Dir(c.Image) }
+
+// DockerfileIn is the service's Dockerfile as a path from dir, its build
+// context, which is how docker build's -f reads it.
+func (c *ServiceConfig) DockerfileIn(dir string) string {
+	if dir == "." {
+		return c.Image
+	}
+	if rest, ok := strings.CutPrefix(c.Image, dir+"/"); ok {
+		return rest
+	}
+	// A Dockerfile outside its context: climb out of the context first.
+	return strings.Repeat("../", strings.Count(dir, "/")+1) + c.Image
 }
 
 // EnvLink is a variable a service gets with the address of something it

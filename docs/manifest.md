@@ -64,6 +64,7 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 |---|---|
 | `source` | Where the service's code is, as analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's directory, or a Dockerfile. When two ecosystems have a service at one path, prefix it: `go:services/api`. Required. |
 | `kind` | Corrects what analysis decided the service is: `http-service`, `web-app`, `static-site` or `worker`. |
+| `build` | `{context}`: the directory its Dockerfile builds from, from the repository's root (`.` is the root). Without it, the context a Compose file gives the Dockerfile, or the Dockerfile's own directory. |
 | `provider`, `region` | Where it runs. |
 | `port` | The port it listens on. Without it, the port in its Dockerfile, or 8080 with a warning. |
 | `public` | Whether it gets an address on the internet. Yes for anything that serves HTTP, no for a worker, unless you say. |
@@ -71,7 +72,18 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 | `size` | `{cpu, memory}`: virtual CPUs, such as 0.5 or 2, and MiB. |
 | `needs` | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them. |
 | `enabled` | `false` leaves it out. |
-| `environments` | Overrides by environment name: any of the fields above but `source`, `kind` and `needs`. |
+| `environments` | Overrides by environment name: any of the fields above but `source`, `kind`, `build` and `needs`. |
+
+A Dockerfile that copies from across the repository, such as a Go service that needs the module's `go.mod` at the root, has to build from the root:
+
+```yaml
+services:
+  api:
+    source: services/api
+    build: {context: .}
+```
+
+Loomplane passes the Dockerfile to the build by its path from the context, so it can sit anywhere. A service without a Dockerfile is built from its source, and a `build` on it is ignored with a warning.
 
 A service gets a variable for each thing it `needs`. A resource's is named for its kind: `DATABASE_URL` for Postgres and MySQL, `REDIS_URL`, `MEMCACHED_SERVERS`, `MONGODB_URI`, `AMQP_URL`, `KAFKA_BROKERS`, `NATS_URL`, `STORAGE_URL`, `SEARCH_URL`, `CLICKHOUSE_URL`. Another service's is its name in capitals and `_URL`: `API_URL`. When two needs would share a name, each gets its own name's instead (`ANALYTICS_URL`). A variable you set yourself wins, so you can point a service somewhere else.
 

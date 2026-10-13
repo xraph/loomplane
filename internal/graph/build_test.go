@@ -46,7 +46,8 @@ func TestBuild_imagesAttachOrStandAlone(t *testing.T) {
 			Entrypoints: []pd.Entrypoint{{Name: "svc", Path: "svc"}},
 		}},
 		Images: []pd.Image{
-			{Path: "svc/Dockerfile", Context: "svc", Ports: []int{8080}},
+			// A Compose file builds this one from the repository's root.
+			{Path: "svc/Dockerfile", Context: ".", Ports: []int{8080}},
 			{Path: "python/Dockerfile", Context: "python", Ports: []int{5000}},
 		},
 	}
@@ -55,10 +56,10 @@ func TestBuild_imagesAttachOrStandAlone(t *testing.T) {
 		t.Fatalf("services %+v", g.Services)
 	}
 	py, svc := g.Services[0], g.Services[1]
-	if svc.Image != "svc/Dockerfile" || len(svc.Ports) != 1 || svc.Ports[0] != 8080 {
+	if svc.Image != "svc/Dockerfile" || svc.Context != "." || len(svc.Ports) != 1 || svc.Ports[0] != 8080 {
 		t.Fatalf("go service %+v", svc)
 	}
-	if py.ID != "svc:container:python/Dockerfile" || py.Kind != HTTPService || py.Ecosystem != pd.Container || py.Name != "python" {
+	if py.ID != "svc:container:python/Dockerfile" || py.Context != "python" || py.Kind != HTTPService || py.Ecosystem != pd.Container || py.Name != "python" {
 		t.Fatalf("container service %+v", py)
 	}
 }

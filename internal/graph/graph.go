@@ -70,7 +70,10 @@ type Service struct {
 	Framework  string `json:"framework,omitempty"`
 	Runtime    string `json:"runtime,omitempty"`
 	// Image is the Dockerfile that builds it, if there is one.
-	Image      string               `json:"image,omitempty"`
+	Image string `json:"image,omitempty"`
+	// Context is the directory the Dockerfile builds from: its own,
+	// unless a Compose file says another.
+	Context    string               `json:"context,omitempty"`
 	Ports      []int                `json:"ports,omitempty"`
 	Commands   discovery.Commands   `json:"commands"`
 	Confidence discovery.Confidence `json:"confidence"`

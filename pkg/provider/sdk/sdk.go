@@ -123,16 +123,19 @@ type Service struct {
 	Ecosystem string `json:"ecosystem,omitempty"`
 	Framework string `json:"framework,omitempty"`
 	// Dockerfile is the Dockerfile that builds it, if there is one.
-	Dockerfile string  `json:"dockerfile,omitempty"`
-	Build      string  `json:"build,omitempty"`
-	Start      string  `json:"start,omitempty"`
-	Workload   string  `json:"workload"`
-	Port       int     `json:"port,omitempty"`
-	Public     bool    `json:"public"`
-	MinScale   int     `json:"min_scale,omitempty"`
-	MaxScale   int     `json:"max_scale,omitempty"`
-	CPU        float64 `json:"cpu,omitempty"`
-	MemoryMB   int     `json:"memory_mb,omitempty"`
+	Dockerfile string `json:"dockerfile,omitempty"`
+	// Context is the directory Dockerfile builds from, as a path from the
+	// repository's root: "." for the root. Set whenever Dockerfile is.
+	Context  string  `json:"context,omitempty"`
+	Build    string  `json:"build,omitempty"`
+	Start    string  `json:"start,omitempty"`
+	Workload string  `json:"workload"`
+	Port     int     `json:"port,omitempty"`
+	Public   bool    `json:"public"`
+	MinScale int     `json:"min_scale,omitempty"`
+	MaxScale int     `json:"max_scale,omitempty"`
+	CPU      float64 `json:"cpu,omitempty"`
+	MemoryMB int     `json:"memory_mb,omitempty"`
 	// Env are its variables: its own, and the addresses of what it needs.
 	Env map[string]string `json:"env,omitempty"`
 	// Secrets are the keys of Env that are secret. Keep them in the

@@ -73,13 +73,23 @@ type Service struct {
 	Source string `json:"source" yaml:"source"`
 	// Kind corrects what analysis decided the service is: http-service,
 	// web-app, static-site or worker. Empty keeps what analysis found.
-	Kind     string `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Kind string `json:"kind,omitempty" yaml:"kind,omitempty"`
+	// Build changes how the service's Dockerfile is built.
+	Build    *Build `json:"build,omitempty" yaml:"build,omitempty"`
 	Settings `json:",inline" yaml:",inline"`
 	// Needs names the resources and other services this one talks to.
 	// Each one it names gets the service its address, in a variable.
 	Needs []string `json:"needs,omitempty" yaml:"needs,omitempty"`
 	// Environments override settings in one environment, by name.
 	Environments map[string]Settings `json:"environments,omitempty" yaml:"environments,omitempty"`
+}
+
+// Build is how a service's Dockerfile is built.
+type Build struct {
+	// Context is the directory the build runs in, from the repository's
+	// root: "." for the root itself. Empty uses what analysis found, which
+	// is the Dockerfile's own directory unless a Compose file says another.
+	Context string `json:"context,omitempty" yaml:"context,omitempty"`
 }
 
 // Settings are what a service sets, and what an environment can override.
@@ -178,6 +188,7 @@ var (
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
 	routeRE   = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$`)
+	dirRE     = regexp.MustCompile(`^[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 	sourceRE  = regexp.MustCompile(`^(?:[a-z]+:)?[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 )
 
@@ -358,6 +369,9 @@ func (m *Manifest) Validate() error {
 		if s.Kind != "" && !slices.Contains(serviceKinds, s.Kind) {
 			add(path+".kind", "%q isn't a service kind; use one of %s", s.Kind, strings.Join(serviceKinds, ", "))
 		}
+		if s.Build != nil && s.Build.Context != "" && !isDir(s.Build.Context) {
+			add(path+".build.context", "%q isn't a directory in the repository; use . for its root", s.Build.Context)
+		}
 		checkSettings(add, path, s.Settings)
 		seen := map[string]bool{}
 		for i, need := range s.Needs {
@@ -519,6 +533,23 @@ func (m *Manifest) validateGateways(add func(string, string, ...any)) {
 }
 
 // GatewayNames returns the gateways' names, sorted.
+// isDir says whether p is a clean directory path inside the repository:
+// no empty, "." or ".." segments, so it can't climb out.
+func isDir(p string) bool {
+	if p == "." {
+		return true
+	}
+	if !dirRE.MatchString(p) {
+		return false
+	}
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *Manifest) GatewayNames() []string { return sortedKeys(m.Gateways) }
 
 // For returns a gateway's settings in an environment, the way a
