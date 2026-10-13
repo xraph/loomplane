@@ -43,6 +43,15 @@ type fakeECS struct {
 	dbPolls map[string]int
 	// namespaces are Cloud Map namespaces, by name.
 	namespaces map[string]string
+	// caches are ElastiCache create requests, by ID, and cachePolls how
+	// often each was read; deleted lists what was deleted.
+	caches     map[string]url.Values
+	cachePolls map[string]int
+	deleted    []string
+	// policies are each role's inline policy, private the buckets made
+	// private.
+	policies map[string]string
+	private  map[string]bool
 }
 
 const ecsAPI = "AmazonEC2ContainerServiceV20141113."
@@ -54,7 +63,8 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		groups: map[string]string{}, lbs: map[string]bool{}, tgs: map[string]string{},
 		services: map[string]map[string]any{}, secrets: map[string]string{}, buckets: map[string]bool{}, uploads: map[string]int{},
 		ingress: map[string][]string{}, dbs: map[string]url.Values{}, dbPolls: map[string]int{},
-		namespaces: map[string]string{},
+		namespaces: map[string]string{}, caches: map[string]url.Values{}, cachePolls: map[string]int{},
+		policies: map[string]string{}, private: map[string]bool{},
 	}
 	j := func(target string, h func(in map[string]any) (int, any)) {
 		f.json[target] = func(body []byte) (int, string) {
@@ -243,7 +253,10 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		return 200, resp("CreateRole", iamNS, role(form.Get("RoleName")))
 	})
 	q("AttachRolePolicy", func(url.Values) (int, string) { return 200, resp("AttachRolePolicy", iamNS, "") })
-	q("PutRolePolicy", func(url.Values) (int, string) { return 200, resp("PutRolePolicy", iamNS, "") })
+	q("PutRolePolicy", func(form url.Values) (int, string) {
+		e.policies[form.Get("RoleName")] = form.Get("PolicyDocument")
+		return 200, resp("PutRolePolicy", iamNS, "")
+	})
 	lbMember := func(name string) string {
 		// The DNS name is the fake itself, so the health check reaches it.
 		return `<member><LoadBalancerArn>arn:aws:elasticloadbalancing:us-east-1:` + awsAccount + `:loadbalancer/app/` + name +
@@ -328,14 +341,61 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		return 200, resp("CreateDBSubnetGroup", rdsNS, `<DBSubnetGroup><DBSubnetGroupName>`+form.Get("DBSubnetGroupName")+`</DBSubnetGroupName></DBSubnetGroup>`)
 	})
 
+	// ElastiCache, in the query dialect.
+	const ecNS = "http://elasticache.amazonaws.com/doc/2015-02-02/"
+	group := func(id string) string {
+		status := "creating"
+		if e.cachePolls[id] > 1 {
+			status = "available"
+		}
+		return `<ReplicationGroup><ReplicationGroupId>` + id + `</ReplicationGroupId><Status>` + status +
+			`</Status><NodeGroups><NodeGroup><PrimaryEndpoint><Address>` + id + `.cache.amazonaws.com</Address><Port>6379</Port></PrimaryEndpoint></NodeGroup></NodeGroups></ReplicationGroup>`
+	}
+	q("CreateCacheSubnetGroup", func(form url.Values) (int, string) {
+		return 200, resp("CreateCacheSubnetGroup", ecNS, `<CacheSubnetGroup><CacheSubnetGroupName>`+form.Get("CacheSubnetGroupName")+`</CacheSubnetGroupName></CacheSubnetGroup>`)
+	})
+	q("CreateReplicationGroup", func(form url.Values) (int, string) {
+		id := form.Get("ReplicationGroupId")
+		e.caches[id] = form
+		return 200, resp("CreateReplicationGroup", ecNS, group(id))
+	})
+	q("DescribeReplicationGroups", func(form url.Values) (int, string) {
+		id := form.Get("ReplicationGroupId")
+		if _, ok := e.caches[id]; !ok {
+			return fail("ReplicationGroupNotFoundFault")
+		}
+		e.cachePolls[id]++
+		return 200, resp("DescribeReplicationGroups", ecNS, `<ReplicationGroups>`+group(id)+`</ReplicationGroups>`)
+	})
+	q("DeleteReplicationGroup", func(form url.Values) (int, string) {
+		id := form.Get("ReplicationGroupId")
+		delete(e.caches, id)
+		e.deleted = append(e.deleted, "cache:"+id)
+		return 200, resp("DeleteReplicationGroup", ecNS, `<ReplicationGroup><ReplicationGroupId>`+id+`</ReplicationGroupId><Status>deleting</Status></ReplicationGroup>`)
+	})
+
 	// S3, path style.
 	f.rest = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
+		q := r.URL.Query()
 		switch {
+		case r.Method == http.MethodPut && len(parts) == 1 && q.Has("publicAccessBlock"):
+			e.private[parts[0]] = true
 		case r.Method == http.MethodPut && len(parts) == 1:
 			e.buckets[parts[0]] = true
+		case r.Method == http.MethodHead && len(parts) == 1:
+			if !e.buckets[parts[0]] {
+				w.WriteHeader(http.StatusNotFound)
+			}
+		case r.Method == http.MethodGet && len(parts) == 1 && q.Get("list-type") == "2":
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>` + parts[0] + `</Name><KeyCount>0</KeyCount><IsTruncated>false</IsTruncated></ListBucketResult>`))
+		case r.Method == http.MethodDelete && len(parts) == 1:
+			delete(e.buckets, parts[0])
+			e.deleted = append(e.deleted, "bucket:"+parts[0])
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPut && len(parts) == 2:
 			body, _ := io.ReadAll(r.Body)
 			e.uploads[parts[1]] = len(body)
@@ -738,5 +798,148 @@ func TestDeploy_aGatewayRoutesToAPrivateService(t *testing.T) {
 	}
 	if public != 1 {
 		t.Fatalf("%d services behind the load balancer", public)
+	}
+}
+
+const apiOnECSWithStorageAndCache = `version: 1
+services:
+  api:
+    source: go:services/api
+    provider: ecs-fargate
+    needs: [files, cache]
+resources:
+  files:
+    kind: object-storage
+    provider: s3
+  cache:
+    kind: redis
+    provider: elasticache
+ignore:
+  resources: [postgres]
+`
+
+func TestDeploy_anECSServiceGetsAPrivateBucketAndCache(t *testing.T) {
+	fake := newFakeAWS(t)
+	cloud := installFakeECS(t, fake)
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.AWSEndpoint = fake.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]any{"cloud": "aws", "name": "AWS", "credential": awsKey(awsKeyID), "settings": map[string]string{"region": "us-east-1"}}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": apiOnECSWithStorageAndCache}, nil)
+
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	if plan.Status != "ready" || !plan.Executable || len(plan.Actions) != 3 {
+		t.Fatalf("plan %+v", plan)
+	}
+	if d := approveAndWait(t, c, plan); d.Status != "succeeded" {
+		t.Fatalf("deployment %+v", d)
+	}
+
+	cloud.mu.Lock()
+	var bucket string
+	for name := range cloud.private {
+		bucket = name
+	}
+	if bucket == "" || !strings.HasPrefix(bucket, "lp-files-") || !cloud.buckets[bucket] {
+		t.Fatalf("buckets %v, private %v", cloud.buckets, cloud.private)
+	}
+	// The environment's tasks run as a role that reaches its buckets, and
+	// api runs as it.
+	var role, policy string
+	for name, p := range cloud.policies {
+		if strings.HasSuffix(name, "-tasks") {
+			role, policy = name, p
+		}
+	}
+	key := bucket[strings.LastIndex(bucket, "-")+1:]
+	if !strings.Contains(policy, "arn:aws:s3:::lp-*-"+key) {
+		t.Fatalf("role %s's policy %s", role, policy)
+	}
+	ctr := cloud.tasks[len(cloud.tasks)-1]
+	if ctr["taskRoleArn"] != "arn:aws:iam::"+awsAccount+":role/"+role {
+		t.Fatalf("api runs as %v", ctr["taskRoleArn"])
+	}
+	// One Redis, encrypted, only the tasks can reach.
+	if len(cloud.caches) != 1 {
+		t.Fatalf("caches %v", cloud.caches)
+	}
+	var cacheID string
+	var cache url.Values
+	for id, v := range cloud.caches {
+		cacheID, cache = id, v
+	}
+	token := cache.Get("AuthToken")
+	if token == "" || cache.Get("TransitEncryptionEnabled") != "true" || cache.Get("AtRestEncryptionEnabled") != "true" {
+		t.Fatalf("cache %v", cache)
+	}
+	cacheGroup := cache.Get("SecurityGroupIds.SecurityGroupId.1")
+	if ingress := cloud.ingress[cacheGroup]; len(ingress) != 1 || !strings.HasSuffix(ingress[0], ":6379") {
+		t.Fatalf("the cache's group takes %v", ingress)
+	}
+	// api finds both through Secrets Manager.
+	got := map[string]string{}
+	container := ctr["containerDefinitions"].([]any)[0].(map[string]any)
+	for _, sec := range container["secrets"].([]any) {
+		m := sec.(map[string]any)
+		for name, v := range cloud.secrets {
+			if strings.Contains(m["valueFrom"].(string), ":secret:"+name+"-") {
+				got[m["name"].(string)] = v
+			}
+		}
+	}
+	cloud.mu.Unlock()
+	if got["STORAGE_URL"] != "s3://"+bucket+"?region=us-east-1" || got["REDIS_URL"] != "rediss://:"+token+"@"+cacheID+".cache.amazonaws.com:6379" {
+		t.Fatalf("api's secrets %v", got)
+	}
+
+	// Planning again keeps all three.
+	var again planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &again)
+	waitPlanned(t, c, &again)
+	for _, a := range again.Actions {
+		if a.Op != "keep" {
+			t.Fatalf("second plan %+v", again)
+		}
+	}
+
+	// Dropping them deletes the bucket and the cache.
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 1\nservices:\n  api:\n    source: go:services/api\n    provider: ecs-fargate\nignore:\n  resources: [postgres, redis]\n"}, nil)
+	var removal planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &removal)
+	waitPlanned(t, c, &removal)
+	if d := approveAndWait(t, c, removal); d.Status != "succeeded" {
+		t.Fatalf("removal %+v", d)
+	}
+	cloud.mu.Lock()
+	defer cloud.mu.Unlock()
+	if !slices.Contains(cloud.deleted, "bucket:"+bucket) || !slices.Contains(cloud.deleted, "cache:"+cacheID) {
+		t.Fatalf("deleted %v", cloud.deleted)
 	}
 }

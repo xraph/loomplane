@@ -336,6 +336,11 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 	if err != nil {
 		return "", "", err
 	}
+	roleName, rolePolicy := tasksRole(s, job)
+	appRole, err := s.EnsureRole(ctx, roleName, "ecs-tasks.amazonaws.com", nil, rolePolicy)
+	if err != nil {
+		return "", "", err
+	}
 	logGroup := "/loomplane/" + instanceSlug(job)
 	if lerr := s.EnsureLogGroup(ctx, logGroup); lerr != nil {
 		return "", "", lerr
@@ -363,7 +368,7 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 	labels := map[string]string{
 		ecs.LabelCluster: ecsCluster, ecs.LabelSubnets: strings.Join(net.Subnets, ","), ecs.LabelGroup: taskGroup,
 		ecs.LabelRole: execRole, ecs.LabelLogGroup: logGroup, ecs.LabelDesired: "1",
-		ecs.LabelNamespace: namespace, ecs.LabelAlias: job.Action.Name,
+		ecs.LabelNamespace: namespace, ecs.LabelAlias: job.Action.Name, ecs.LabelTaskRole: appRole,
 	}
 	if cfg.Scale != nil && cfg.Scale.Min > 0 {
 		labels[ecs.LabelDesired] = strconv.Itoa(cfg.Scale.Min)

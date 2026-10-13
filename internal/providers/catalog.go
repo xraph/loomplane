@@ -135,14 +135,13 @@ func Catalog() []provider.Provider {
 		},
 		{
 			Name: "elasticache", Title: "Amazon ElastiCache", Cloud: "aws",
-			Description: "Managed Redis and Memcached on AWS.",
+			Description: "Managed Redis on AWS.",
 			Model:       provider.Managed,
-			Provisions: []provider.Provisions{
-				{Kind: "redis", Creates: "ElastiCache Redis OSS cluster"},
-				{Kind: "memcached", Creates: "ElastiCache Memcached cluster"},
-			},
-			Regions: awsRegions,
-			Note:    milestone5,
+			Provisions:  []provider.Provisions{{Kind: "redis", Creates: "ElastiCache Redis OSS cluster"}},
+			Regions:     awsRegions,
+			// Provisioned by Loomplane, reachable from the environment's
+			// ECS tasks only (internal/deployments).
+			Available: true,
 		},
 		{
 			Name: "s3", Title: "Amazon S3", Cloud: "aws",
@@ -150,7 +149,9 @@ func Catalog() []provider.Provider {
 			Model:       provider.Managed,
 			Provisions:  []provider.Provisions{{Kind: "object-storage", Creates: "S3 bucket"}},
 			Regions:     awsRegions,
-			Note:        milestone5,
+			// A private bucket the environment's ECS tasks reach through
+			// their role (internal/deployments).
+			Available: true,
 		},
 	}
 }

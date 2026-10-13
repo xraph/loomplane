@@ -42,7 +42,10 @@ const (
 	// LabelNamespace is the Cloud Map namespace the service joins through
 	// Service Connect, and LabelAlias the name it's reached by there.
 	LabelNamespace = "loomplane-ecs-namespace"
-	LabelAlias     = "loomplane-ecs-alias"
+	// LabelTaskRole is the role the application runs as: what it may do
+	// in the account, such as reach its environment's buckets.
+	LabelTaskRole = "loomplane-ecs-task-role"
+	LabelAlias    = "loomplane-ecs-alias"
 	// LabelSecret prefixes a label naming the Secrets Manager secret a
 	// variable is read from: "loomplane-secret.KEY" = ARN.
 	LabelSecret = "loomplane-secret."
@@ -164,7 +167,7 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 	}
 	task, err := s.RegisterTask(ctx, aws.Task{
 		Family: name, Image: spec.Image, Port: port, CPU: cpu, MemoryMB: memory, Env: spec.Env, Secrets: secrets,
-		ExecutionRole: labels[LabelRole], LogGroup: labels[LabelLogGroup],
+		ExecutionRole: labels[LabelRole], TaskRole: labels[LabelTaskRole], LogGroup: labels[LabelLogGroup],
 	})
 	if err != nil {
 		return err

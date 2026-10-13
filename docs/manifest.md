@@ -117,8 +117,12 @@ A gateway gets the addresses it routes to and none of the project's variables. O
 | `cloud-sql` | Google Cloud | | Postgres 17, 16, 15; MySQL 8.4, 8.0 |
 | `ecs-fargate` | AWS | HTTP services, web apps, workers | |
 | `rds` | AWS | | Postgres 17, 16, 15; MySQL 8.4, 8.0 |
+| `elasticache` | AWS | | Redis |
+| `s3` | AWS | | Object storage |
 
-The catalog also describes Render, Memorystore, Cloud Storage, ElastiCache and S3, so a plan can name them, but they can't be deployed yet: a plan that uses one is for review only. Provider plugins add targets of their own ([providers.md](providers.md)).
+An S3 bucket is private, and services on ECS reach it as their environment's task role, so `STORAGE_URL` (`s3://bucket?region=...`) carries no credentials. ElastiCache Redis is encrypted in transit and at rest, with a generated auth token in `REDIS_URL` (`rediss://...`).
+
+The catalog also describes Render, Memorystore and Cloud Storage, so a plan can name them, but they can't be deployed yet: a plan that uses one is for review only. Provider plugins add targets of their own ([providers.md](providers.md)).
 
 ## Environments
 
