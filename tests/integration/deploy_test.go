@@ -48,6 +48,14 @@ type fakeCloud struct {
 	sql       map[string]map[string]any
 	databases map[string][]string
 	passwords map[string]string
+	// buckets are the buckets made besides Loomplane's own, with their
+	// policies; redis are Memorystore instances, by ID; deleted lists
+	// what was deleted.
+	buckets    map[string]map[string]any
+	bucketIAM  map[string]json.RawMessage
+	redis      map[string]map[string]any
+	redisPolls map[string]int
+	deleted    []string
 }
 
 func newFakeCloud(base string) *fakeCloud {
@@ -56,6 +64,8 @@ func newFakeCloud(base string) *fakeCloud {
 		services: map[string]map[string]any{}, public: map[string]bool{}, failed: map[string]bool{},
 		secrets: map[string][][]byte{}, readers: map[string][]string{},
 		sql: map[string]map[string]any{}, databases: map[string][]string{}, passwords: map[string]string{},
+		buckets: map[string]map[string]any{}, bucketIAM: map[string]json.RawMessage{},
+		redis: map[string]map[string]any{}, redisPolls: map[string]int{},
 	}
 }
 
@@ -73,7 +83,39 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.Method == http.MethodPost && p == "/storage/v1/b":
-		reply(map[string]any{"name": "acme-prod_loomplane"})
+		var in map[string]any
+		_ = json.Unmarshal(body, &in)
+		if name, _ := in["name"].(string); name != "acme-prod_loomplane" {
+			f.buckets[name] = in
+		}
+		reply(map[string]any{"name": in["name"]})
+	case strings.HasPrefix(p, "/storage/v1/b/") && strings.HasSuffix(p, "/iam"):
+		name := strings.TrimSuffix(strings.TrimPrefix(p, "/storage/v1/b/"), "/iam")
+		if r.Method == http.MethodPut {
+			f.bucketIAM[name] = body
+			reply(map[string]any{})
+			return
+		}
+		if b, ok := f.bucketIAM[name]; ok {
+			_, _ = w.Write(b)
+			return
+		}
+		reply(map[string]any{"bindings": []any{map[string]any{"role": "roles/storage.legacyBucketOwner", "members": []string{"projectOwner:acme-prod"}}}})
+	case strings.HasPrefix(p, "/storage/v1/b/") && strings.HasSuffix(p, "/o") && r.Method == http.MethodGet:
+		reply(map[string]any{})
+	case strings.HasPrefix(p, "/storage/v1/b/") && r.Method == http.MethodGet:
+		if _, ok := f.buckets[strings.TrimPrefix(p, "/storage/v1/b/")]; !ok {
+			notFound()
+			return
+		}
+		reply(map[string]any{})
+	case strings.HasPrefix(p, "/storage/v1/b/") && r.Method == http.MethodDelete:
+		name := strings.TrimPrefix(p, "/storage/v1/b/")
+		delete(f.buckets, name)
+		f.deleted = append(f.deleted, "bucket:"+name)
+		w.WriteHeader(http.StatusNoContent)
+	case strings.HasPrefix(p, "/v1/projects/acme-prod/locations/us-central1/instances"):
+		f.memorystore(r, p, body, reply, notFound)
 	case r.Method == http.MethodPost && p == "/upload/storage/v1/b/acme-prod_loomplane/o":
 		f.uploads[r.URL.Query().Get("name")] = body
 		reply(map[string]any{})
@@ -147,6 +189,37 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(p, "/run/"):
 		// The deployed service itself, answering its health check.
 		_, _ = w.Write([]byte("hello from " + strings.TrimPrefix(p, "/run/")))
+	default:
+		notFound()
+	}
+}
+
+// memorystore is Memorystore for Redis: an instance is creating the first
+// time it's read, then ready.
+func (f *fakeCloud) memorystore(r *http.Request, p string, body []byte, reply func(any), notFound func()) {
+	rest := strings.TrimPrefix(strings.TrimPrefix(p, "/v1/projects/acme-prod/locations/us-central1/instances"), "/")
+	id, sub, _ := strings.Cut(rest, "/")
+	switch {
+	case r.Method == http.MethodPost && rest == "":
+		var in map[string]any
+		_ = json.Unmarshal(body, &in)
+		f.redis[r.URL.Query().Get("instanceId")] = in
+		reply(map[string]any{"name": "projects/acme-prod/locations/us-central1/operations/redis"})
+	case f.redis[id] == nil:
+		notFound()
+	case r.Method == http.MethodGet && sub == "authString":
+		reply(map[string]any{"authString": "auth-" + id})
+	case r.Method == http.MethodGet:
+		f.redisPolls[id]++
+		state := "CREATING"
+		if f.redisPolls[id] > 1 {
+			state = "READY"
+		}
+		reply(map[string]any{"name": id, "state": state, "host": "10.0.0.5", "port": 6379})
+	case r.Method == http.MethodDelete:
+		delete(f.redis, id)
+		f.deleted = append(f.deleted, "redis:"+id)
+		reply(map[string]any{"name": "op"})
 	default:
 		notFound()
 	}
@@ -969,5 +1042,140 @@ func TestDeploy_aGoServiceGetsItsCloudSQLDatabase(t *testing.T) {
 		if a.Op != "keep" {
 			t.Fatalf("second plan %+v", again)
 		}
+	}
+}
+
+const apiWithBucketAndRedis = `version: 1
+services:
+  api:
+    source: go:services/api
+    provider: cloud-run
+    needs: [files, cache]
+resources:
+  files:
+    kind: object-storage
+    provider: cloud-storage
+  cache:
+    kind: redis
+    provider: memorystore
+ignore:
+  resources: [postgres]
+`
+
+func TestDeploy_aCloudRunServiceGetsABucketAndMemorystore(t *testing.T) {
+	google := newFakeGoogle(t)
+	cloud := newFakeCloud(google.srv.URL)
+	google.deploy = cloud
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.GoogleEndpoint = google.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": apiWithBucketAndRedis}, nil)
+
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	if plan.Status != "ready" || !plan.Executable || len(plan.Actions) != 3 {
+		t.Fatalf("plan %+v", plan)
+	}
+	if d := approveAndWait(t, c, plan); d.Status != "succeeded" {
+		t.Fatalf("deployment %+v", d)
+	}
+
+	cloud.mu.Lock()
+	var bucket string
+	var spec map[string]any
+	for name, b := range cloud.buckets {
+		bucket, spec = name, b
+	}
+	iam := spec["iamConfiguration"].(map[string]any)
+	if !strings.HasPrefix(bucket, "lp-files-") || iam["publicAccessPrevention"] != "enforced" {
+		t.Fatalf("bucket %s %v", bucket, spec)
+	}
+	// The runtime account may use it, and the bucket's other bindings stay.
+	policy := string(cloud.bucketIAM[bucket])
+	if !strings.Contains(policy, "roles/storage.objectAdmin") || !strings.Contains(policy, "serviceAccount:123456-compute@developer.gserviceaccount.com") ||
+		!strings.Contains(policy, "projectOwner:acme-prod") {
+		t.Fatalf("bucket policy %s", policy)
+	}
+	if len(cloud.redis) != 1 {
+		t.Fatalf("redis %v", cloud.redis)
+	}
+	var redisID string
+	for id, in := range cloud.redis {
+		redisID = id
+		if in["authEnabled"] != true || in["authorizedNetwork"] != "projects/acme-prod/global/networks/default" {
+			t.Fatalf("redis %v", in)
+		}
+	}
+	// api reaches the cache through the default network, and gets both
+	// addresses from Secret Manager.
+	var svc map[string]any
+	for _, s := range cloud.services {
+		svc = s
+	}
+	tmpl := svc["template"].(map[string]any)
+	vpc, _ := tmpl["vpcAccess"].(map[string]any)
+	if vpc == nil || vpc["egress"] != "PRIVATE_RANGES_ONLY" {
+		t.Fatalf("api's template %v", tmpl)
+	}
+	got := map[string]string{}
+	for _, e := range tmpl["containers"].([]any)[0].(map[string]any)["env"].([]any) {
+		m := e.(map[string]any)
+		if src, ok := m["valueSource"].(map[string]any); ok {
+			id := src["secretKeyRef"].(map[string]any)["secret"].(string)
+			got[m["name"].(string)] = string(cloud.secrets[id][len(cloud.secrets[id])-1])
+		}
+	}
+	cloud.mu.Unlock()
+	if got["STORAGE_URL"] != "gs://"+bucket || got["REDIS_URL"] != "redis://:auth-"+redisID+"@10.0.0.5:6379" {
+		t.Fatalf("api's secrets %v", got)
+	}
+
+	var again planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &again)
+	waitPlanned(t, c, &again)
+	for _, a := range again.Actions {
+		if a.Op != "keep" {
+			t.Fatalf("second plan %+v", again)
+		}
+	}
+
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 1\nservices:\n  api:\n    source: go:services/api\n    provider: cloud-run\nignore:\n  resources: [postgres, redis]\n"}, nil)
+	var removal planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &removal)
+	waitPlanned(t, c, &removal)
+	if d := approveAndWait(t, c, removal); d.Status != "succeeded" {
+		t.Fatalf("removal %+v", d)
+	}
+	cloud.mu.Lock()
+	defer cloud.mu.Unlock()
+	if !slices.Contains(cloud.deleted, "bucket:"+bucket) || !slices.Contains(cloud.deleted, "redis:"+redisID) {
+		t.Fatalf("deleted %v", cloud.deleted)
 	}
 }

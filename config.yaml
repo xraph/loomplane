@@ -55,6 +55,10 @@ github:
   private_key_file: "${LOOMPLANE_GITHUB_PRIVATE_KEY_FILE:-}"
   client_id: "${LOOMPLANE_GITHUB_CLIENT_ID:-}"
   client_secret: "${LOOMPLANE_GITHUB_CLIENT_SECRET:-}"
+  # The secret GitHub signs webhook deliveries with. Set it, and the same
+  # on the App's webhook, to re-analyze projects when their default
+  # branch moves. Empty turns webhooks off.
+  webhook_secret: "${LOOMPLANE_GITHUB_WEBHOOK_SECRET:-}"
 
 # Repository analysis, which loomplane-worker runs.
 analysis:

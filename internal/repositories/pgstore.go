@@ -66,3 +66,21 @@ func (s *PgStore) DeleteInstallation(ctx context.Context, orgID string, id int64
 	}
 	return nil
 }
+
+// InstallationOrgs lists the organizations that connected an installation.
+func (s *PgStore) InstallationOrgs(ctx context.Context, installationID int64) ([]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT org_id FROM loomplane_github_installations WHERE installation_id = $1 ORDER BY org_id`, installationID)
+	if err != nil {
+		return nil, fmt.Errorf("find the installation's organizations: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

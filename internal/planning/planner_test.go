@@ -120,8 +120,8 @@ func TestCompute_fresh(t *testing.T) {
 	if len(r.Problems) > 0 {
 		t.Fatalf("problems: %+v", r.Problems)
 	}
-	if r.Executable {
-		t.Error("executable, though no provider has an adapter yet")
+	if !r.Executable {
+		t.Error("not executable, though every provider it uses has an adapter")
 	}
 	if r.Summary != (Summary{Create: 6}) {
 		t.Errorf("summary = %+v", r.Summary)
@@ -180,9 +180,6 @@ func TestCompute_fresh(t *testing.T) {
 		"port-assumed:gateway",
 		// Analysis found these, and the manifest leaves them out.
 		"service-left-out:docs", "service-left-out:ingest", "service-left-out:backfill",
-		// Cloud Run, Vercel, Cloud SQL and ECS have adapters; Memorystore
-		// doesn't yet.
-		"provider-unavailable:memorystore",
 		// The worker uses Redis per analysis, but the cache is on another
 		// cloud, so it needs nothing.
 		"unlinked-resource:worker",
@@ -191,10 +188,15 @@ func TestCompute_fresh(t *testing.T) {
 			t.Errorf("no warning %s in %v", w, got)
 		}
 	}
-	for _, ok := range []string{"provider-unavailable:cloud-run", "provider-unavailable:vercel", "provider-unavailable:cloud-sql", "provider-unavailable:ecs-fargate"} {
+	for _, ok := range []string{"provider-unavailable:cloud-run", "provider-unavailable:vercel", "provider-unavailable:cloud-sql", "provider-unavailable:ecs-fargate", "provider-unavailable:memorystore"} {
 		if slices.Contains(got, ok) {
 			t.Errorf("%s has an adapter, but was warned about: %v", ok, got)
 		}
+	}
+	// A target with no adapter yet can be planned, for review only.
+	render := compute(t, "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api}\nignore: {resources: [postgres, redis]}\n", "production")
+	if render.Executable || !slices.Contains(codes(render.Warnings), "provider-unavailable:render") {
+		t.Errorf("render: executable %v, warnings %v", render.Executable, codes(render.Warnings))
 	}
 	// web uses Postgres per analysis but only needs api: worth saying.
 	if !slices.Contains(got, "unlinked-resource:web") {

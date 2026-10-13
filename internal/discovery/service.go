@@ -138,6 +138,24 @@ func (s *Service) Start(ctx context.Context, p security.Principal, projectID str
 	return out, nil
 }
 
+// PushActor is who an analysis a push started is recorded as created by.
+const PushActor = "github-push"
+
+// StartFromPush queues an analysis of a source's tracked branch because
+// GitHub said it moved. It skips the permission check, since nobody asked:
+// the webhook's signature is the authority. A source with an analysis
+// already under way is left alone, and that's ErrAlreadyActive.
+func (s *Service) StartFromPush(ctx context.Context, src *Source) (*Analysis, error) {
+	now := s.now().UTC()
+	switch _, err := s.store.ActiveAnalysis(ctx, src.OrgID, src.ID, now.Add(-activeWindow)); {
+	case err == nil:
+		return nil, fmt.Errorf("%w: %s", ErrAlreadyActive, src.Alias)
+	case !errors.Is(err, ErrNotFound):
+		return nil, err
+	}
+	return s.queue(ctx, security.Principal{OrgID: src.OrgID, UserID: PushActor}, src, src.Ref, now)
+}
+
 // pick finds the sources aliases name, in alias order. No aliases means all
 // of them.
 func pick(live []*Source, aliases []string) ([]*Source, error) {

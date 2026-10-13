@@ -115,14 +115,16 @@ A gateway gets the addresses it routes to and none of the project's variables. O
 | `vercel` | Vercel | web apps, static sites | |
 | `cloud-run` | Google Cloud | HTTP services, web apps | |
 | `cloud-sql` | Google Cloud | | Postgres 17, 16, 15; MySQL 8.4, 8.0 |
+| `memorystore` | Google Cloud | | Redis |
+| `cloud-storage` | Google Cloud | | Object storage |
 | `ecs-fargate` | AWS | HTTP services, web apps, workers | |
 | `rds` | AWS | | Postgres 17, 16, 15; MySQL 8.4, 8.0 |
 | `elasticache` | AWS | | Redis |
 | `s3` | AWS | | Object storage |
 
-An S3 bucket is private, and services on ECS reach it as their environment's task role, so `STORAGE_URL` (`s3://bucket?region=...`) carries no credentials. ElastiCache Redis is encrypted in transit and at rest, with a generated auth token in `REDIS_URL` (`rediss://...`).
+Buckets are private on both clouds, and services reach them as their own identity, so `STORAGE_URL` carries no credentials: `s3://bucket?region=...` for an ECS task's environment role, `gs://bucket` for Cloud Run's runtime account. Redis gets an auth token in `REDIS_URL`: `rediss://...` on ElastiCache, which also encrypts in transit and at rest, and `redis://...` on Memorystore, which only has an address on the project's default network, so Cloud Run services that need it send their private traffic there.
 
-The catalog also describes Render, Memorystore and Cloud Storage, so a plan can name them, but they can't be deployed yet: a plan that uses one is for review only. Provider plugins add targets of their own ([providers.md](providers.md)).
+The catalog also describes Render, so a plan can name it, but it can't be deployed yet: a plan that uses it is for review only. Provider plugins add targets of their own ([providers.md](providers.md)).
 
 ## Environments
 

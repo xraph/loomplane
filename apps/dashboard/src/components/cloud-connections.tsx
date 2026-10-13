@@ -525,8 +525,8 @@ function ConnectDialog({
                   A JSON key for a service account in the project you deploy to.
                   It needs Cloud Run Admin, Cloud Build Editor, Artifact
                   Registry Administrator, Storage Admin, Secret Manager Admin,
-                  Service Account User and Browser; Loomplane says which are
-                  missing.
+                  Cloud SQL Admin, Cloud Memorystore Redis Admin, Service
+                  Account User and Browser; Loomplane says which are missing.
                 </FieldDescription>
               </Field>
             ) : cloud === "aws" ? (

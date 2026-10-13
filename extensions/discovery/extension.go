@@ -115,7 +115,15 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.routes(fapp.Router(), guard); err != nil {
 		return err
 	}
-	return e.githubRoutes(fapp.Router(), guard)
+	if err := e.githubRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	return e.webhookRoute(fapp.Router(), &discovery.Webhooks{
+		Secret:        []byte(e.cfg.GitHub.WebhookSecret),
+		Installations: repositories.NewPgStore(pg).InstallationOrgs,
+		Sources:       discovery.NewPgStore(pg).SourcesByRepository,
+		Start:         e.svc.StartFromPush,
+	})
 }
 
 // connections builds the organization GitHub connections, over the

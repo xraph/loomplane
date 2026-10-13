@@ -75,6 +75,32 @@ func (s *PgStore) ListSources(ctx context.Context, orgID, projectID string, with
 	return out, nil
 }
 
+// SourcesByRepository lists the live sources in any organization that
+// build from repository ("owner/name"), whatever its case, for a push
+// webhook. It's the one query that crosses organizations, and only the
+// webhook, which GitHub signs, uses it; the webhook narrows it to the
+// organizations the push may reach.
+func (s *PgStore) SourcesByRepository(ctx context.Context, repository string) ([]*Source, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+sourceColumns+` FROM loomplane_project_sources
+		WHERE lower(repository) = lower($1) AND removed_at IS NULL ORDER BY created_at, id`, repository)
+	if err != nil {
+		return nil, fmt.Errorf("find sources by repository: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := []*Source{}
+	for rows.Next() {
+		src, err := scanSource(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan source: %w", err)
+		}
+		out = append(out, src)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("find sources by repository: %w", err)
+	}
+	return out, nil
+}
+
 // UpdateSource implements Store.
 func (s *PgStore) UpdateSource(ctx context.Context, src *Source) error {
 	res, err := s.db.Exec(ctx, `UPDATE loomplane_project_sources SET root = $4, ref = $5, updated_at = $6

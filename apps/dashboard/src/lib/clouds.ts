@@ -39,6 +39,7 @@ const rolesByService: Record<string, { role: string; title: string }> = {
   },
   cloudsql: { role: "roles/cloudsql.admin", title: "Cloud SQL Admin" },
   iam: { role: "roles/iam.serviceAccountUser", title: "Service Account User" },
+  redis: { role: "roles/redis.admin", title: "Cloud Memorystore Redis Admin" },
   resourcemanager: { role: "roles/browser", title: "Browser" },
   run: { role: "roles/run.admin", title: "Cloud Run Admin" },
   secretmanager: {
