@@ -11,7 +11,7 @@ import { router } from "./router"
 import { usePublicConfigGet as publicConfig } from "@/client/forge/loomplane/hooks"
 import { forgeClient, setAuthsomeApp } from "@/client/runtime"
 import { SessionRefreshBridge } from "@/client/session-refresh-bridge"
-import { authStorage } from "@/client/session-token"
+import { authStorage, forgetStoredSession } from "@/client/auth-storage"
 import { captureInvite } from "@/lib/invite"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
 import { Toaster } from "@/components/ui/sonner"
@@ -21,6 +21,7 @@ const root = createRoot(document.getElementById("root")!)
 
 // Before anything navigates: signing in leaves the invitation's URL behind.
 captureInvite()
+forgetStoredSession()
 
 // authsome's provider needs the app's publishable key before it mounts, and
 // it differs per deployment, so it's read from Loomplane rather than built
@@ -35,6 +36,7 @@ try {
           <AuthProvider
             baseURL={`${window.location.origin}${config.authBasePath}`}
             publishableKey={config.publishableKey}
+            session="cookie"
             storage={authStorage}
           >
             <ClientProvider client={forgeClient}>

@@ -32,6 +32,7 @@ func TestFromSource_overrides(t *testing.T) {
 		"database.pool_size":                  "8",
 		"http_addr":                           ":9000",
 		"identity.require_email_verification": "yes",
+		"identity.session_cookie":             "loomplane_staging",
 		"orchestration.concurrency":           2,
 		"orchestration.poll_interval":         "250ms",
 		"dashboard.dir":                       "/srv/dashboard",
@@ -46,6 +47,8 @@ func TestFromSource_overrides(t *testing.T) {
 		t.Errorf("http addr %q", c.HTTPAddr)
 	case !c.Identity.RequireEmailVerification:
 		t.Error("email verification should be on")
+	case c.Identity.SessionCookie != "loomplane_staging":
+		t.Errorf("session cookie %q", c.Identity.SessionCookie)
 	case c.Orchestration.Concurrency != 2 || c.Orchestration.PollInterval != 250*time.Millisecond:
 		t.Errorf("orchestration %+v", c.Orchestration)
 	case c.Dashboard.Dir != "/srv/dashboard":
@@ -77,6 +80,7 @@ func TestFromSource_rejects(t *testing.T) {
 		{"bad duration", mapGetter{"database.url": testDSN, "orchestration.poll_interval": "soon"}, "orchestration.poll_interval must be a duration"},
 		{"bad bool", mapGetter{"database.url": testDSN, "identity.require_email_verification": "maybe"}, "must be true or false"},
 		{"bad base path", mapGetter{"database.url": testDSN, "identity.base_path": "authsome"}, "identity.base_path"},
+		{"bad session cookie", mapGetter{"database.url": testDSN, "identity.session_cookie": "loomplane session"}, "identity.session_cookie"},
 		{"bad app id", mapGetter{"database.url": testDSN, "identity.app_id": "app_1"}, "identity.app_id"},
 		{"relative public url", mapGetter{"database.url": testDSN, "public_url": "localhost"}, "public_url must be an absolute URL"},
 		{"production with dev secret", mapGetter{"database.url": testDSN, "environment": "production", "public_url": "https://lp.example.com"}, "development secret_key"},

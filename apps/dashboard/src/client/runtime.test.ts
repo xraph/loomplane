@@ -6,12 +6,16 @@ import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import {
   forgeClient,
   ORG_HEADER,
+  renewSession,
   serviceFor,
   setAuthsomeApp,
+  setSessionRefresher,
   setTabOrganization,
 } from "@/client/runtime"
 
-function signIn(token: string) {
+// leaveToken stores a session the way the dashboard did before cookie
+// sessions, which must never be sent now: the cookie is the credential.
+function leaveToken(token: string) {
   window.localStorage.setItem(
     SESSION_STORAGE_KEY,
     JSON.stringify({
@@ -33,6 +37,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   setTabOrganization("")
   setAuthsomeApp({ publishableKey: "", appId: "" })
+  setSessionRefresher(null)
   forgeClient.clear()
 })
 
@@ -45,10 +50,10 @@ describe("serviceFor", () => {
 })
 
 describe("requests", () => {
-  it("send the session and the tab's organization to Loomplane", async () => {
+  it("send the tab's organization to Loomplane, and no token", async () => {
     const fetch = vi.fn(async () => json({ projects: [] }))
     vi.stubGlobal("fetch", fetch)
-    signIn("tok_1")
+    leaveToken("tok_1")
     setTabOrganization("aorg_1")
 
     const list = await useProjectsList().fetch()
@@ -57,7 +62,7 @@ describe("requests", () => {
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toContain("/api/v1/projects")
     const headers = new Headers(init.headers)
-    expect(headers.get("Authorization")).toBe("Bearer tok_1")
+    expect(headers.get("Authorization")).toBeNull()
     expect(headers.get(ORG_HEADER)).toBe("aorg_1")
     expect(headers.get("X-Publishable-Key")).toBeNull()
   })
@@ -65,7 +70,7 @@ describe("requests", () => {
   it("send the publishable key, not the org, to authsome", async () => {
     const fetch = vi.fn(async () => json({ organizations: [] }))
     vi.stubGlobal("fetch", fetch)
-    signIn("tok_2")
+    leaveToken("tok_2")
     setTabOrganization("aorg_1")
     setAuthsomeApp({ publishableKey: "pk_test", appId: "aapp_1" })
 
@@ -74,7 +79,7 @@ describe("requests", () => {
     expect(orgs.organizations).toEqual([])
     const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
     const headers = new Headers(init.headers)
-    expect(headers.get("Authorization")).toBe("Bearer tok_2")
+    expect(headers.get("Authorization")).toBeNull()
     expect(headers.get("X-Publishable-Key")).toBe("pk_test")
     expect(headers.get(ORG_HEADER)).toBeNull()
   })
@@ -104,5 +109,21 @@ describe("requests", () => {
     const list = await useProjectsList().fetch()
     expect(list.projects[0]?.repositories).toEqual(["a/b"])
     expect(list.projects[0]?.orgId).toBe("aorg_1")
+  })
+})
+
+describe("renewSession", () => {
+  it("retries a 401 while the backend still knows the session", async () => {
+    setSessionRefresher(async () => true)
+    await expect(renewSession()).resolves.toBeUndefined()
+  })
+
+  it("lets the 401 stand once the session has ended", async () => {
+    setSessionRefresher(async () => false)
+    await expect(renewSession()).rejects.toThrow("the session has ended")
+  })
+
+  it("lets it stand before anything can check", async () => {
+    await expect(renewSession()).rejects.toThrow("no session refresher")
   })
 })

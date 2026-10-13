@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@authsome/ui-core@1.7.2': c07f7bac8aa05879404c07369c3d2465cdeb1833b76daaa64d780f83406ce100
+  '@authsome/ui-core@1.7.2': 58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2
   '@authsome/ui-react@1.7.2': d0ebfc238c98705469681d89e9b411e1044f4ae4fc1a73d00e7749920e7bf330
 
 importers:
@@ -17,7 +17,7 @@ importers:
         version: 1.7.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@authsome/ui-core':
         specifier: 1.7.2
-        version: 1.7.2(patch_hash=c07f7bac8aa05879404c07369c3d2465cdeb1833b76daaa64d780f83406ce100)
+        version: 1.7.2(patch_hash=58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2)
       '@authsome/ui-react':
         specifier: 1.7.2
         version: 1.7.2(patch_hash=d0ebfc238c98705469681d89e9b411e1044f4ae4fc1a73d00e7749920e7bf330)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -3536,7 +3536,7 @@ snapshots:
 
   '@authsome/ui-components@1.7.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@authsome/ui-core': 1.7.2(patch_hash=c07f7bac8aa05879404c07369c3d2465cdeb1833b76daaa64d780f83406ce100)
+      '@authsome/ui-core': 1.7.2(patch_hash=58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2)
       '@authsome/ui-react': 1.7.2(patch_hash=d0ebfc238c98705469681d89e9b411e1044f4ae4fc1a73d00e7749920e7bf330)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-avatar': 1.2.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-checkbox': 1.3.12(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -3560,11 +3560,11 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
 
-  '@authsome/ui-core@1.7.2(patch_hash=c07f7bac8aa05879404c07369c3d2465cdeb1833b76daaa64d780f83406ce100)': {}
+  '@authsome/ui-core@1.7.2(patch_hash=58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2)': {}
 
   '@authsome/ui-react@1.7.2(patch_hash=d0ebfc238c98705469681d89e9b411e1044f4ae4fc1a73d00e7749920e7bf330)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@authsome/ui-core': 1.7.2(patch_hash=c07f7bac8aa05879404c07369c3d2465cdeb1833b76daaa64d780f83406ce100)
+      '@authsome/ui-core': 1.7.2(patch_hash=58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2)
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
 

@@ -196,18 +196,31 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := e.engine.Start(ctx); err != nil {
 		return fmt.Errorf("start authsome: %w", err)
 	}
-	verify, err := json.Marshal(e.cfg.Identity.RequireEmailVerification)
-	if err != nil {
+	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {
 		return err
 	}
-	if err := e.engine.Settings().Set(ctx, "auth.require_email_verification", verify,
-		settings.ScopeGlobal, "", "", "", appSlug); err != nil {
-		return fmt.Errorf("authsome settings: %w", err)
+	// Global, not per app: authsome only knows a request's app when it
+	// sends the publishable key, which calls to Loomplane's own API don't.
+	// This engine holds Loomplane's app alone, so global is per app anyway.
+	if err := e.setting(ctx, authsome.SettingCookieName.Def.Key, e.cfg.Identity.SessionCookie); err != nil {
+		return err
 	}
 	if err := e.mount(ctx); err != nil {
 		return err
 	}
 	e.MarkStarted()
+	return nil
+}
+
+// setting sets one of authsome's settings for the whole engine.
+func (e *Extension) setting(ctx context.Context, key string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if err := e.engine.Settings().Set(ctx, key, raw, settings.ScopeGlobal, "", "", "", appSlug); err != nil {
+		return fmt.Errorf("authsome setting %s: %w", key, err)
+	}
 	return nil
 }
 

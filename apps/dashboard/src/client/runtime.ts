@@ -1,6 +1,7 @@
 /**
- * Points @forge-go/client-core at Loomplane, with the authsome session on
- * every request.
+ * Points @forge-go/client-core at Loomplane. The authsome session rides on
+ * every request as its httpOnly cookie, which the browser sends to the same
+ * origin by itself, so no token passes through here.
  *
  * Hand-written, and outside forge/ on purpose: everything under forge/ is
  * generated, and `forge client check` reports any file it didn't write there
@@ -22,7 +23,6 @@ import {
 } from "./forge/authsome/fetch"
 import { entities as loomplaneEntities } from "./forge/loomplane/entities"
 import { HTTPClient as LoomplaneHTTPClient } from "./forge/loomplane/fetch"
-import { sessionToken } from "./session-token"
 
 const REQUEST_TIMEOUT_MS = 30_000
 
@@ -70,7 +70,7 @@ const restClient: RestClientLike = {
 let tabOrganization = ""
 let publishableKey = ""
 let authsomeAppID = ""
-let refresher: (() => Promise<void>) | null = null
+let refresher: (() => Promise<boolean>) | null = null
 
 /** setTabOrganization records the organization this tab acts in. */
 export function setTabOrganization(orgId: string): void {
@@ -95,44 +95,52 @@ export function authsomeApp(): string {
 }
 
 /**
- * setSessionRefresher hands the runtime the authsome SDK's renewal, so a 401
- * renews through the SDK, which owns the refresh token and holds a cross-tab
- * lock while it rotates it. Registered by <SessionRefreshBridge>.
+ * setSessionRefresher hands the runtime the authsome SDK's check of the
+ * session, which asks the backend whether it still knows the cookie and
+ * resolves to whether it does. Registered by <SessionRefreshBridge>.
  */
-export function setSessionRefresher(next: (() => Promise<void>) | null): void {
+export function setSessionRefresher(
+  next: (() => Promise<boolean>) | null
+): void {
   refresher = next
 }
 
 /**
  * What a 401 does. Resolving retries the request; rejecting lets the 401
- * stand. The transport calls this once for a whole burst of failures.
+ * stand. The backend renews the session cookie as requests use it, so a 401
+ * means the session may be over: the SDK asks the backend, and only a
+ * session it still knows is worth a retry. When it doesn't, the SDK is
+ * signed out too, and the dashboard shows sign-in. The transport calls this
+ * once for a whole burst of failures.
  */
-async function renewSession(): Promise<void> {
-  const before = sessionToken()
+export async function renewSession(): Promise<void> {
   if (!refresher) {
     throw new Error("no session refresher is registered")
   }
-  await refresher()
-  const after = sessionToken()
-  if (!after || after === before) {
-    throw new Error("the session could not be renewed")
+  if (!(await refresher())) {
+    throw new Error("the session has ended")
   }
+}
+
+/**
+ * headersFor is what a request to path carries besides its cookie: the
+ * tab's organization for Loomplane, the publishable key for authsome.
+ */
+function headersFor(path: string): Record<string, string> {
+  const headers: Record<string, string> = {}
+  const service = serviceFor(path)
+  if (service.orgScoped && tabOrganization) {
+    headers[ORG_HEADER] = tabOrganization
+  }
+  if (!service.orgScoped && publishableKey) {
+    headers["X-Publishable-Key"] = publishableKey
+  }
+  return headers
 }
 
 const auth: AuthProvider = {
   credentials(meta: OperationMeta) {
-    const headers: Record<string, string> = {}
-    // Read per request: the SDK rotates the token under a long-lived tab.
-    const token = sessionToken()
-    if (token) headers.Authorization = `Bearer ${token}`
-    const service = serviceFor(meta.path)
-    if (service.orgScoped && tabOrganization) {
-      headers[ORG_HEADER] = tabOrganization
-    }
-    if (!service.orgScoped && publishableKey) {
-      headers["X-Publishable-Key"] = publishableKey
-    }
-    return headers
+    return headersFor(meta.path)
   },
   refresh: renewSession,
 }

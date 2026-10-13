@@ -46,6 +46,22 @@ func (e *Extension) authMiddleware() forge.Middleware {
 			if auth == nil {
 				return forge.NewHTTPError(http.StatusServiceUnavailable, "sign-in is still starting; try again")
 			}
+			// Authsome checks the legacy auth_token before its configured
+			// cookie. Another app on this host owns that cookie, so leave it
+			// out of authentication here. Bearer headers remain authoritative.
+			r := c.Request()
+			if e.cfg.Identity.SessionCookie != "auth_token" {
+				if _, err := r.Cookie("auth_token"); err == nil {
+					cookies := r.Cookies()
+					r.Header = r.Header.Clone()
+					r.Header.Del("Cookie")
+					for _, cookie := range cookies {
+						if cookie.Name != "auth_token" {
+							r.AddCookie(cookie)
+						}
+					}
+				}
+			}
 			return auth(next)(c)
 		}
 	}

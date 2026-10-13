@@ -6,7 +6,8 @@ allowBuilds:
 
 patchedDependencies:
   # The same patch tap carries (github.com/xraph/tap-frontend, itself ported
-  # from twinos-app's for 1.7.0). Two fixes, both still missing upstream:
+  # from twinos-app's for 1.7.0), plus Loomplane's cookie sessions. Three
+  # changes, all still missing upstream:
   #
   # - fetchClientConfig built its URL with new URL("/v1/client-config", base),
   #   which drops the base path. Loomplane mounts authsome at /authsome, so
@@ -16,6 +17,13 @@ patchedDependencies:
   #   rotate, so two tabs refreshing at once would race, one would present a
   #   spent token, and reuse detection could sign the user out everywhere.
   #   The generated API client's 401 handling relies on it.
+  # - AuthManager takes session: "cookie", which leaves the session in the
+  #   httpOnly cookie the backend sets on sign-in: requests carry the cookie,
+  #   a reload asks /v1/me who's signed in, and no token is stored or sent.
+  #   Without it the SDK only restores a session from its own storage, so the
+  #   token had to live in local storage, where any script can read it.
+  #   src/client/cookie-session.test.ts covers it. Drop this part once
+  #   authsome's SDK has a cookie mode of its own.
   "@authsome/ui-core@1.7.2": patches/@authsome__ui-core@1.7.2.patch
   # authsome's paged organization endpoint (the version Loomplane's go.mod
   # pins) answers { organizations, next_cursor }, but useOrganizations in

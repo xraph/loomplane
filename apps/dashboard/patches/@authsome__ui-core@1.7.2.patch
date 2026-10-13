@@ -1,5 +1,25 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 1b25828e29b8c238edb270bda89434fbc2d4077f..2fbf462ce52a0182c1a5a62ea45f6c7753c87e7d 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -1706,6 +1706,15 @@ interface AuthConfig {
+      * prefer backend-set httpOnly cookies where available.
+      */
+     storage?: TokenStorage;
++    /**
++     * Where the session lives. "token", the default, keeps its tokens in
++     * storage and sends them as a bearer token. "cookie" leaves it in the
++     * httpOnly cookie the backend sets on sign-in: every request carries the
++     * cookie, a reload asks the backend who's signed in, and no token
++     * reaches JavaScript. The backend renews the cookie, so nothing is
++     * refreshed here, and storage keeps only the cached client config.
++     */
++    session?: "token" | "cookie";
+     /** Callback invoked when the auth state changes. */
+     onStateChange?: (state: AuthState) => void;
+     /** Callback invoked on authentication error. */
 diff --git a/dist/index.js b/dist/index.js
-index 228b1a1..5bbb990 100644
+index 228b1a107919058675bc017d5a1af3fb8e4fcd9c..8d12ba31b6e5067c2017a48ca5f1c1135dbaf69d 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -2977,28 +2977,9 @@ var AuthClient2 = class extends AuthClient {
@@ -32,7 +52,16 @@ index 228b1a1..5bbb990 100644
    }
  };
  
-@@ -3045,11 +3026,31 @@ function isAuthRejection(err) {
+@@ -3039,25 +3020,62 @@ function toSession(res) {
+     expires_at: res.expires_at ?? new Date(Date.now() + DEFAULT_SESSION_TTL_MS).toISOString()
+   };
+ }
++function cookieSessionOf(session) {
++  return { ...session, session_token: "", refresh_token: "" };
++}
+ function isAuthRejection(err) {
+   if (err instanceof AuthClientError) {
+     return err.code === 401 || err.code === 403;
    }
    return false;
  }
@@ -64,15 +93,29 @@ index 228b1a1..5bbb990 100644
    refreshTimer = null;
    onError;
    publishableKey;
-@@ -3058,6 +3059,7 @@ var AuthManager = class {
+   clientConfig = null;
+   configListeners = /* @__PURE__ */ new Set();
    configFetchPromise = null;
++  /**
++   * Whether the session lives in the backend's httpOnly cookie
++   * (session: "cookie") rather than in storage.
++   */
++  cookieSession = false;
    constructor(config) {
++    this.cookieSession = config.session === "cookie";
++    if (this.cookieSession) {
++      const send = config.fetch ?? globalThis.fetch.bind(globalThis);
++      config = {
++        ...config,
++        fetch: (input, init) => send(input, { ...init, credentials: "include" })
++      };
++    }
      this.client = new AuthClient2(config);
 +    this.refreshLockKey = `authsome:refresh:${config.baseURL}:${config.publishableKey ?? ""}`;
      this.storage = config.storage ?? createMemoryStorage();
      this.onError = config.onError;
      this.publishableKey = config.publishableKey;
-@@ -3089,7 +3091,17 @@ var AuthManager = class {
+@@ -3089,17 +3107,31 @@ var AuthManager = class {
     * When a publishableKey is set, also fetches client config in parallel.
     * Call this once on app start.
     */
@@ -91,7 +134,13 @@ index 228b1a1..5bbb990 100644
      if (this.publishableKey && !this.clientConfig) {
        void this.fetchClientConfig();
      }
-@@ -3099,7 +3111,7 @@ var AuthManager = class {
++    if (this.cookieSession) {
++      await this.restoreCookieSession();
++      return;
++    }
+     try {
+       const raw = await this.storage.getItem(SESSION_KEY);
+       if (!raw) {
          this.setState({ status: "unauthenticated" });
          return;
        }
@@ -100,7 +149,7 @@ index 228b1a1..5bbb990 100644
        const expiresAt = new Date(session.expires_at).getTime();
        if (Date.now() >= expiresAt) {
          await this.refreshSession(session.refresh_token);
-@@ -3110,7 +3122,11 @@ var AuthManager = class {
+@@ -3110,7 +3142,11 @@ var AuthManager = class {
        this.setState({ status: "authenticated", user, session });
        this.scheduleRefresh(session);
      } catch (err) {
@@ -113,7 +162,38 @@ index 228b1a1..5bbb990 100644
      }
    }
    /**
-@@ -3146,7 +3162,12 @@ var AuthManager = class {
+@@ -3128,6 +3164,30 @@ var AuthManager = class {
+    * authenticated but retains the session and keeps a refresh scheduled so the
+    * app recovers on its own.
+    */
++  /**
++   * Restores a cookie session by asking the backend, the only one that can
++   * read an httpOnly cookie. A rejection means signed out. An unreachable
++   * backend means unknown, retried later, as for a stored session.
++   */
++  async restoreCookieSession() {
++    try {
++      if (this.state.status === "idle") this.setState({ status: "loading" });
++      const user = await this.client.getMe();
++      this.setState({ status: "authenticated", user, session: cookieSessionOf() });
++    } catch (err) {
++      if (isAuthRejection(err)) {
++        this.setState({ status: "unauthenticated" });
++        return;
++      }
++      this.setState({ status: "unknown", session: cookieSessionOf() });
++      this.clearRefreshTimer();
++      if (this.active) {
++        this.refreshTimer = setTimeout(() => {
++          void this.initialize();
++        }, REFRESH_RETRY_BASE_MS);
++      }
++    }
++  }
+   async handleInitFailure(err) {
+     const stored = await this.storage.getItem(SESSION_KEY);
+     if (!stored) {
+@@ -3146,7 +3206,12 @@ var AuthManager = class {
        return;
      }
      this.setState({ status: "unknown", session });
@@ -127,13 +207,33 @@ index 228b1a1..5bbb990 100644
    }
    /** Sign in with email & password. */
    async signIn(credentials) {
-@@ -3294,9 +3315,10 @@ var AuthManager = class {
+@@ -3213,6 +3278,15 @@ var AuthManager = class {
+   }
+   /** Sign out and clear the session. */
+   async signOut() {
++    if (this.cookieSession) {
++      try {
++        await this.client.signOut();
++      } catch {
++      }
++      this.clearRefreshTimer();
++      this.setState({ status: "unauthenticated" });
++      return;
++    }
+     const token = this.getSessionToken();
+     if (token) {
+       try {
+@@ -3294,9 +3368,14 @@ var AuthManager = class {
    }
    /** Refresh the current session manually. */
    async refreshNow() {
 -    const state = this.state;
 -    if (state.status !== "authenticated") return;
 -    await this.refreshSession(state.session.refresh_token);
++    if (this.cookieSession) {
++      await this.restoreCookieSession();
++      return;
++    }
 +    const raw = await this.storage.getItem(SESSION_KEY);
 +    if (!raw) return;
 +    const session = JSON.parse(raw);
@@ -141,7 +241,7 @@ index 228b1a1..5bbb990 100644
    }
    /**
     * Get the current session token (if authenticated). Returns null
-@@ -3373,6 +3395,7 @@ var AuthManager = class {
+@@ -3373,63 +3452,69 @@ var AuthManager = class {
    }
    /** Tear down: clear timers and listeners. */
    destroy() {
@@ -149,7 +249,14 @@ index 228b1a1..5bbb990 100644
      this.clearRefreshTimer();
      this.listeners.clear();
      this.configListeners.clear();
-@@ -3383,53 +3406,54 @@ var AuthManager = class {
+   }
+   // ── Internals ─────────────────────────────────────
+   async handleAuthResponse(user, session) {
++    if (this.cookieSession) {
++      this.setState({ status: "authenticated", user, session: cookieSessionOf(session) });
++      return;
++    }
+     await this.persistSession(session);
      this.setState({ status: "authenticated", user, session });
      this.scheduleRefresh(session);
    }

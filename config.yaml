@@ -30,6 +30,10 @@ identity:
   app_id: "${LOOMPLANE_AUTHSOME_APP_ID:-}"
   publishable_key: "${LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY:-}"
   require_email_verification: false
+  # The HttpOnly cookie the dashboard's session lives in. Cookies are shared
+  # by every port on a host, so another authsome app on the same host needs
+  # a different name, or each signs the other out.
+  session_cookie: "${LOOMPLANE_SESSION_COOKIE:-loomplane_session}"
 
 dashboard:
   # The built dashboard (pnpm --dir apps/dashboard build).

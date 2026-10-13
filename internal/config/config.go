@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -170,6 +171,10 @@ type IdentityConfig struct {
 	PublishableKey string
 	// RequireEmailVerification makes sign-in wait for a verified email.
 	RequireEmailVerification bool
+	// SessionCookie names the HttpOnly cookie the dashboard's session is
+	// kept in. Cookies are shared by every port on a host, so two authsome
+	// apps on one host need different names, or each replaces the other's.
+	SessionCookie string
 }
 
 // DashboardConfig is the web dashboard Loomplane serves.
@@ -234,6 +239,9 @@ const (
 	approvalWindow    = 7 * 24 * time.Hour
 )
 
+// cookieName is a cookie name as RFC 6265 allows it: a token.
+var cookieName = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+
 // Defaults are the settings used when nothing overrides them.
 func Defaults() Config {
 	return Config{
@@ -246,6 +254,7 @@ func Defaults() Config {
 			BasePath:       "/authsome",
 			AppID:          "aapp_01jm0000000000000000000000",
 			PublishableKey: "pk_test_loomplane_dev",
+			SessionCookie:  "loomplane_session",
 		},
 		Dashboard: DashboardConfig{Dir: "apps/dashboard/dist"},
 		Orchestration: OrchestrationConfig{
@@ -312,6 +321,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.AppID, "identity.app_id")
 	r.str(&c.Identity.PublishableKey, "identity.publishable_key")
 	r.boolean(&c.Identity.RequireEmailVerification, "identity.require_email_verification")
+	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
 
 	r.str(&c.Dashboard.Dir, "dashboard.dir")
 
@@ -371,6 +381,9 @@ func (c *Config) Validate() error {
 	}
 	if !strings.HasPrefix(c.Identity.AppID, "aapp_") {
 		errs = append(errs, fmt.Errorf("identity.app_id must be an authsome app ID (aapp_...), got %q", c.Identity.AppID))
+	}
+	if !cookieName.MatchString(c.Identity.SessionCookie) {
+		errs = append(errs, fmt.Errorf("identity.session_cookie must be a cookie name (letters, digits and !#$%%&'*+-.^_`|~), got %q", c.Identity.SessionCookie))
 	}
 	if u, err := url.Parse(c.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
 		errs = append(errs, fmt.Errorf("public_url must be an absolute URL, got %q", c.PublicURL))
