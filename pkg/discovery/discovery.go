@@ -114,7 +114,10 @@ type Entrypoint struct {
 	Path       string        `json:"path"`
 	Frameworks []Framework   `json:"frameworks,omitempty"`
 	Resources  []ResourceUse `json:"resources,omitempty"`
-	Evidence   []Evidence    `json:"evidence"`
+	// Commands are the entrypoint's own, when they aren't its unit's: a
+	// Procfile process or a task queue's worker beside a web app.
+	Commands *Commands  `json:"commands,omitempty"`
+	Evidence []Evidence `json:"evidence"`
 }
 
 // Commands are how a unit is built and run, as its manifest declares them.

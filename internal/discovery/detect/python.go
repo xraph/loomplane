@@ -508,12 +508,27 @@ func pythonUnit(repo discovery.Repo, p *pyProject, byDir map[string]*pyProject, 
 	sortResources(u.Resources)
 
 	ep := discovery.Entrypoint{Name: p.name, Path: p.dir, Evidence: []discovery.Evidence{p.ev}}
+	web := false
+	for _, fw := range u.Frameworks {
+		web = web || fw.Kind == discovery.HTTP || fw.Kind == discovery.GRPC
+	}
+	var more []discovery.Entrypoint
 	procfile := join(p.dir, "Procfile")
-	if data, n := read(repo, procfile); n == nil {
-		if l := lineOf(data, regexp.MustCompile(`^web:`), 1); l > 0 {
-			u.Commands.Start = strings.TrimSpace(strings.TrimPrefix(lineText(data, l), "web:"))
-			ep.Evidence = append(ep.Evidence, evidence(data, procfile, l))
-			runs = true
+	procs := readProcfile(repo, procfile)
+	for _, pr := range procs {
+		runs = true
+		switch pr.name {
+		case "web":
+			u.Commands.Start = pr.cmd
+			ep.Evidence = append(ep.Evidence, pr.ev)
+		case "release":
+			// Runs once per release (migrations, say), not as a service.
+		default:
+			// Each other process runs on its own, from the same code.
+			more = append(more, discovery.Entrypoint{
+				Name: pr.name, Path: join(procfile, pr.name), Resources: u.Resources,
+				Commands: &discovery.Commands{Start: pr.cmd}, Evidence: []discovery.Evidence{pr.ev},
+			})
 		}
 	}
 	for _, m := range pyMains {
@@ -524,11 +539,116 @@ func pythonUnit(repo discovery.Repo, p *pyProject, byDir map[string]*pyProject, 
 			}
 		}
 	}
+	if len(procs) == 0 {
+		if app, ev := pyCeleryApp(repo, p.dir, byDir); app != "" {
+			start := &discovery.Commands{Start: "celery -A " + app + " worker --loglevel=info"}
+			if web {
+				// A web app with a Celery app beside it: the worker is a
+				// service of its own, at the file that makes the app.
+				more = append(more, discovery.Entrypoint{
+					Name: p.name + "-worker", Path: ev.Path, Resources: u.Resources, Commands: start,
+					Evidence: []discovery.Evidence{ev},
+				})
+			} else {
+				ep.Commands = start
+				ep.Evidence = append(ep.Evidence, ev)
+			}
+			runs = true
+		}
+	}
 	if !runs {
 		return u, true // a library
 	}
 	ep.Frameworks = u.Frameworks
 	ep.Resources = u.Resources
-	u.Entrypoints = []discovery.Entrypoint{ep}
+	u.Entrypoints = append([]discovery.Entrypoint{ep}, more...)
 	return u, true
+}
+
+// pyProcess is a Procfile line: a process type and its command.
+type pyProcess struct {
+	name, cmd string
+	ev        discovery.Evidence
+}
+
+var procfileRE = regexp.MustCompile(`^([A-Za-z0-9_-]+):\s*(.+)$`)
+
+// readProcfile reads a Procfile's processes, in the order it lists them.
+func readProcfile(repo discovery.Repo, f string) []pyProcess {
+	data, n := read(repo, f)
+	if n != nil {
+		return nil
+	}
+	var out []pyProcess
+	seen := map[string]bool{}
+	for i, line := range strings.Split(string(data), "\n") {
+		m := procfileRE.FindStringSubmatch(strings.TrimSpace(line))
+		if len(m) < 3 || seen[strings.ToLower(m[1])] {
+			continue
+		}
+		seen[strings.ToLower(m[1])] = true
+		out = append(out, pyProcess{name: strings.ToLower(m[1]), cmd: strings.TrimSpace(m[2]), ev: evidence(data, f, i+1)})
+	}
+	return out
+}
+
+// maxPySources caps how many of a project's modules are read looking for
+// a Celery app.
+const maxPySources = 1000
+
+var celeryAppRE = regexp.MustCompile(`^\s*[A-Za-z_][A-Za-z0-9_]*\s*(?::\s*[A-Za-z_.]+\s*)?=\s*Celery\(`)
+
+// pyCeleryApp finds the module that makes a Celery app in a project, as
+// celery -A names it, and where. Modules of a project nested inside this
+// one are that project's, and tests make apps of their own, so neither is
+// looked at.
+func pyCeleryApp(repo discovery.Repo, d string, byDir map[string]*pyProject) (string, discovery.Evidence) {
+	dirs := make([]string, 0, len(byDir))
+	for x := range byDir {
+		dirs = append(dirs, x)
+	}
+	checked := 0
+	for _, f := range repo.Files {
+		if !strings.HasSuffix(f, ".py") || !within(f, d) || owner(f, dirs) != d || pyTest(f) {
+			continue
+		}
+		checked++
+		if checked > maxPySources {
+			break
+		}
+		data, n := read(repo, f)
+		if n != nil {
+			continue
+		}
+		l := lineOf(data, celeryAppRE, 1)
+		if l == 0 {
+			continue
+		}
+		rel := strings.TrimPrefix(strings.TrimSuffix(f, ".py"), d+"/")
+		if d == "." {
+			rel = strings.TrimSuffix(f, ".py")
+		}
+		rel = strings.TrimPrefix(rel, "src/")
+		rel = strings.TrimSuffix(strings.TrimSuffix(rel, "/__init__"), "__init__")
+		if rel == "" {
+			continue
+		}
+		return strings.ReplaceAll(rel, "/", "."), evidence(data, f, l)
+	}
+	return "", discovery.Evidence{}
+}
+
+// pyTest reports whether a module is a test, which pytest and unittest
+// find by name and directory.
+func pyTest(f string) bool {
+	base := path.Base(f)
+	if strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py") || base == "conftest.py" {
+		return true
+	}
+	for _, seg := range strings.Split(path.Dir(f), "/") {
+		if seg == "tests" || seg == "test" {
+			return true
+		}
+	}
+	return false
 }

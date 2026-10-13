@@ -44,17 +44,20 @@ func FuzzAnalyzePythonAndJVM(f *testing.F) {
 	f.Add("[tool.uv.workspace]\nmembers = [\"**\"]\n", "git+https://x#egg=y\n--index-url u\n", "<project", "implementation project(':')\n", "include", "[libraries]\nx = {group=\"g\"}\n")
 	f.Fuzz(func(t *testing.T, pyproject, requirements, pomXML, gradle, settings, catalog string) {
 		fsys := fstest.MapFS{
-			"pyproject.toml":              {Data: []byte(pyproject)},
-			"svc/pyproject.toml":          {Data: []byte(pyproject)},
-			"svc/requirements.txt":        {Data: []byte(requirements)},
-			"svc/Pipfile":                 {Data: []byte(pyproject)},
-			"svc/Procfile":                {Data: []byte("web: " + requirements)},
-			"pom.xml":                     {Data: []byte(pomXML)},
-			"b/pom.xml":                   {Data: []byte(pomXML)},
-			"g/build.gradle.kts":          {Data: []byte(gradle)},
-			"g/settings.gradle":           {Data: []byte(settings)},
-			"g/gradle/libs.versions.toml": {Data: []byte(catalog)},
-			"g/src/main/kotlin/Main.kt":   {Data: []byte("fun main() {}\n")},
+			"pyproject.toml":                          {Data: []byte(pyproject)},
+			"svc/pyproject.toml":                      {Data: []byte(pyproject)},
+			"svc/requirements.txt":                    {Data: []byte(requirements)},
+			"svc/Pipfile":                             {Data: []byte(pyproject)},
+			"svc/Procfile":                            {Data: []byte("web: " + requirements + "\nworker: " + requirements + "\nbeat: x\n")},
+			"pom.xml":                                 {Data: []byte(pomXML)},
+			"b/pom.xml":                               {Data: []byte(pomXML)},
+			"g/build.gradle.kts":                      {Data: []byte(gradle)},
+			"g/settings.gradle":                       {Data: []byte(settings)},
+			"g/gradle/libs.versions.toml":             {Data: []byte(catalog)},
+			"g/src/main/kotlin/Main.kt":               {Data: []byte("fun main() {}\n")},
+			"g/build.gradle":                          {Data: []byte("subprojects {\n" + gradle + "\n}\n")},
+			"g/buildSrc/src/main/kotlin/c.gradle.kts": {Data: []byte(gradle)},
+			"svc/app/tasks.py":                        {Data: []byte("app = Celery(" + requirements + ")\n")},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

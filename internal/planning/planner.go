@@ -1259,6 +1259,12 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 			})
 		}
 	}
+	if gs.Ecosystem == discovery.Python {
+		// A Python service builds from its project, whatever process of it
+		// runs: a Procfile's worker is the project's code with another
+		// start command.
+		cfg.Source = gs.Path
+	}
 	if gs.Ecosystem == discovery.Python && runs.Execution == provider.Container && cfg.Image == "" && cfg.Start == "" {
 		p.warn(Finding{
 			Code: "start-assumed", Subject: ServiceSubject, Name: name, Path: base + ".source",

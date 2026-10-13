@@ -66,10 +66,24 @@ type jvmModule struct {
 	coord           string // group:artifact, for Maven
 	deps            []jvmDep
 	app             *discovery.Evidence
-	members         []string
-	ev              discovery.Evidence
-	aggregator      bool
+	plugins         []jvmPlugin
+	// shared is what a root build declares for its projects, in a
+	// subprojects or allprojects block.
+	shared     *jvmModule
+	members    []string
+	ev         discovery.Evidence
+	aggregator bool
 }
+
+// jvmPlugin is a plugin a Gradle build applies, by id.
+type jvmPlugin struct {
+	id string
+	ev discovery.Evidence
+}
+
+// jvmBuildLogic are the plugins of a build that makes Gradle plugins, not
+// an application: buildSrc, or an included build-logic build.
+var jvmBuildLogic = map[string]bool{"kotlin-dsl": true, "groovy-gradle-plugin": true, "java-gradle-plugin": true}
 
 type jvmMatch struct {
 	prefix, name string
@@ -139,8 +153,11 @@ var (
 	gradleDepRE     = regexp.MustCompile(`\b(?:implementation|api|compileOnly|runtimeOnly|compile|runtime)\s*\(?\s*["']([^:"'\s]+):([^:"'\s]+)(?::([^"'\s]+))?["']`)
 	gradleProjectRE = regexp.MustCompile(`\b(?:implementation|api|compileOnly|runtimeOnly|compile|runtime)\s*\(?\s*project\s*\(\s*(?:path\s*[:=]\s*)?["']:?([^"']+)["']`)
 	gradleCatalogRE = regexp.MustCompile(`\b(?:implementation|api|compileOnly|runtimeOnly)\s*\(?\s*libs\.([A-Za-z0-9_.]+)`)
-	gradlePluginRE  = regexp.MustCompile(`^\s*(?:id\s*\(?\s*["']([A-Za-z0-9_.-]+)["']|apply\s+plugin\s*:\s*["']([A-Za-z0-9_.-]+)["']|(application)\s*$|` + "`" + `(application)` + "`" + `)`)
+	gradlePluginRE  = regexp.MustCompile(`^\s*(?:id\s*\(?\s*["']([A-Za-z0-9_.-]+)["']|apply\s+plugin\s*:\s*["']([A-Za-z0-9_.-]+)["']|(application)\s*$|` + "`" + `([A-Za-z0-9_.-]+)` + "`" + `)`)
 	gradleIncludeRE = regexp.MustCompile(`^\s*include\b(.*)$`)
+	gradleMapDepRE  = regexp.MustCompile(`\b(?:implementation|api|compileOnly|runtimeOnly|compile|runtime)\s*\(?\s*group\s*[:=]\s*["']([^"']+)["']\s*,\s*name\s*[:=]\s*["']([^"']+)["'](?:\s*,\s*version\s*[:=]\s*["']([^"']+)["'])?`)
+	gradleSharedRE  = regexp.MustCompile(`^\s*(subprojects|allprojects)\s*\{`)
+	gradleScriptRE  = regexp.MustCompile(`/src/main/(?:kotlin|groovy)/(.+)\.gradle(?:\.kts)?$`)
 	quotedRE        = regexp.MustCompile(`["']([^"']+)["']`)
 	gradleJavaRE    = regexp.MustCompile(`JavaVersion\.VERSION_(\d+)|jvmToolchain\s*\(\s*(\d+)\s*\)|JavaLanguageVersion\.of\s*\(\s*(\d+)\s*\)`)
 	jvmMainRE       = regexp.MustCompile(`@SpringBootApplication|@QuarkusMain|\bpublic\s+static\s+void\s+main\s*\(|^\s*fun\s+main\s*\(`)
@@ -181,6 +198,29 @@ func (JVM) Detect(ctx context.Context, repo discovery.Repo, r *discovery.Report)
 	}
 	for _, f := range settings {
 		readSettings(repo, r, f, byDir)
+	}
+	conventions := gradleConventions(repo, r, catalogs)
+	ordered := make([]string, 0, len(byDir))
+	for d := range byDir {
+		ordered = append(ordered, d)
+	}
+	sort.Strings(ordered)
+	for _, d := range ordered {
+		m := byDir[d]
+		if m.shared == nil {
+			continue
+		}
+		for _, x := range m.members {
+			if member := byDir[x]; member != nil && member != m {
+				member.deps = append(member.deps, m.shared.deps...)
+				member.plugins = append(member.plugins, m.shared.plugins...)
+			}
+		}
+	}
+	for _, d := range ordered {
+		if m := byDir[d]; m.tool == "gradle" {
+			gradleApply(m, conventions)
+		}
 	}
 	if len(byDir) == 0 {
 		return nil
@@ -321,27 +361,28 @@ func readGradle(repo discovery.Repo, r *discovery.Report, f string, catalog map[
 	if m.dir == "." {
 		m.name = "app"
 	}
+	// Braces say when a subprojects or allprojects block ends. What's in
+	// one is for the projects under this build; allprojects is for this
+	// one too.
+	depth, sharedAt, all := 0, -1, false
 	for i, line := range strings.Split(string(data), "\n") {
 		code, _, _ := strings.Cut(line, "//")
 		ev := discovery.Evidence{Path: f, Line: i + 1, Detail: strings.TrimSpace(line)}
-		if s := gradlePluginRE.FindStringSubmatch(code); s != nil {
-			for _, id := range s[1:] {
-				if jvmAppPlugins[id] && m.app == nil {
-					e := ev
-					m.app = &e
-				}
+		if s := gradleSharedRE.FindStringSubmatch(code); s != nil && sharedAt < 0 {
+			sharedAt, all = depth, s[1] == "allprojects"
+			if m.shared == nil {
+				m.shared = &jvmModule{}
 			}
 		}
-		for _, s := range gradleProjectRE.FindAllStringSubmatch(code, -1) {
-			m.deps = append(m.deps, jvmDep{project: gradleProjectDir(s[1]), ev: ev})
-		}
-		for _, s := range gradleDepRE.FindAllStringSubmatch(code, -1) {
-			m.deps = append(m.deps, jvmDep{coord: s[1] + ":" + s[2], version: s[3], ev: ev})
-		}
-		for _, s := range gradleCatalogRE.FindAllStringSubmatch(code, -1) {
-			if coord, ok := catalog[s[1]]; ok {
-				m.deps = append(m.deps, jvmDep{coord: coord, ev: ev})
+		targets := []*jvmModule{m}
+		if sharedAt >= 0 {
+			targets = []*jvmModule{m.shared}
+			if all {
+				targets = append(targets, m)
 			}
+		}
+		for _, t := range targets {
+			gradleLine(t, code, ev, catalog)
 		}
 		if s := gradleJavaRE.FindStringSubmatch(code); s != nil && m.runtime == "" {
 			for _, v := range s[1:] {
@@ -350,8 +391,84 @@ func readGradle(repo discovery.Repo, r *discovery.Report, f string, catalog map[
 				}
 			}
 		}
+		depth += strings.Count(code, "{") - strings.Count(code, "}")
+		if sharedAt >= 0 && depth <= sharedAt {
+			sharedAt = -1
+		}
 	}
 	return m
+}
+
+// gradleLine reads one line of a build script's plugins and dependencies
+// into m.
+func gradleLine(m *jvmModule, code string, ev discovery.Evidence, catalog map[string]string) {
+	if s := gradlePluginRE.FindStringSubmatch(code); s != nil {
+		for _, id := range s[1:] {
+			if id != "" {
+				m.plugins = append(m.plugins, jvmPlugin{id: id, ev: ev})
+			}
+		}
+	}
+	for _, s := range gradleProjectRE.FindAllStringSubmatch(code, -1) {
+		m.deps = append(m.deps, jvmDep{project: gradleProjectDir(s[1]), ev: ev})
+	}
+	for _, s := range gradleDepRE.FindAllStringSubmatch(code, -1) {
+		m.deps = append(m.deps, jvmDep{coord: s[1] + ":" + s[2], version: s[3], ev: ev})
+	}
+	for _, s := range gradleMapDepRE.FindAllStringSubmatch(code, -1) {
+		m.deps = append(m.deps, jvmDep{coord: s[1] + ":" + s[2], version: s[3], ev: ev})
+	}
+	for _, s := range gradleCatalogRE.FindAllStringSubmatch(code, -1) {
+		if coord, ok := catalog[s[1]]; ok {
+			m.deps = append(m.deps, jvmDep{coord: coord, ev: ev})
+		}
+	}
+}
+
+// gradleConventions reads the repository's precompiled script plugins
+// (buildSrc/src/main/kotlin/shop.spring.gradle.kts, or the same in an
+// included build-logic build), by the id a build applies them with.
+func gradleConventions(repo discovery.Repo, r *discovery.Report, catalogs map[string]map[string]string) map[string]*jvmModule {
+	out := map[string]*jvmModule{}
+	for _, f := range repo.Files {
+		s := gradleScriptRE.FindStringSubmatch(f)
+		if s == nil {
+			continue
+		}
+		if m := readGradle(repo, r, f, catalogFor(catalogs, dir(f))); m != nil {
+			out[path.Base(s[1])] = m
+			out[strings.ReplaceAll(s[1], "/", ".")] = m
+		}
+	}
+	return out
+}
+
+// gradleApply adds what the convention plugins a module applies declare,
+// and what those apply in turn, to the module.
+func gradleApply(m *jvmModule, conventions map[string]*jvmModule) {
+	seen := map[string]bool{}
+	for i := 0; i < len(m.plugins); i++ {
+		id := m.plugins[i].id
+		c, ok := conventions[id]
+		if !ok || seen[id] || c == m {
+			continue
+		}
+		seen[id] = true
+		m.deps = append(m.deps, c.deps...)
+		m.plugins = append(m.plugins, c.plugins...)
+		if m.runtime == "" {
+			m.runtime = c.runtime
+		}
+	}
+	for _, p := range m.plugins {
+		if jvmAppPlugins[p.id] && m.app == nil {
+			ev := p.ev
+			m.app = &ev
+		}
+		if jvmBuildLogic[p.id] || path.Base(m.dir) == "buildSrc" {
+			m.aggregator = true // it builds plugins, and runs nothing
+		}
+	}
 }
 
 // gradleProjectDir is a Gradle project path (:services:api) as the

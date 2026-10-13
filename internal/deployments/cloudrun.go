@@ -209,6 +209,10 @@ func buildFor(cfg *planning.ServiceConfig, root, image string) gcp.Build {
 	default:
 		dir = root + "/" + cfg.Source
 	}
+	if cfg.Ecosystem == "python" && cfg.Start != "" {
+		// A project can run several processes; say which this one is.
+		args = append(args, "--env", "GOOGLE_ENTRYPOINT="+cfg.Start)
+	}
 	args = append(args, "--path", dir)
 	b.Steps = []gcp.BuildStep{{Name: packBuilder, Entrypoint: "pack", Args: args}}
 	return b

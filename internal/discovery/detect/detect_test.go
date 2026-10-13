@@ -584,3 +584,90 @@ func TestJVM_gradleProjectsAndVersionCatalogs(t *testing.T) {
 		t.Fatalf("lib %+v", lib.Entrypoints)
 	}
 }
+
+func TestPython_eachProcessIsAService(t *testing.T) {
+	r := run(t, Python{}, map[string]string{
+		"shop/requirements.txt": "django\ncelery[redis]\n",
+		"shop/Procfile":         "release: python manage.py migrate\nweb: gunicorn shop.wsgi\nworker: celery -A shop worker\nbeat: celery -A shop beat\n",
+	})
+	u := onlyUnit(t, r, "python:shop")
+	got := map[string]string{}
+	for _, ep := range u.Entrypoints {
+		start := u.Commands.Start
+		if ep.Commands != nil {
+			start = ep.Commands.Start
+		}
+		got[ep.Path] = start
+	}
+	want := map[string]string{
+		"shop":                 "gunicorn shop.wsgi",
+		"shop/Procfile/worker": "celery -A shop worker",
+		"shop/Procfile/beat":   "celery -A shop beat",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("entrypoints %v", got)
+	}
+	for p, start := range want {
+		if got[p] != start {
+			t.Fatalf("%s starts with %q, want %q", p, got[p], start)
+		}
+	}
+}
+
+func TestPython_aCeleryAppBesideAWebAppIsAWorker(t *testing.T) {
+	files := map[string]string{
+		"api/pyproject.toml":      "[project]\nname = \"api\"\ndependencies = [\"flask\", \"celery\"]\n",
+		"api/src/api/__init__.py": "",
+		"api/src/api/tasks.py":    "from celery import Celery\n\napp = Celery(\"api\")\n",
+		"api/tests/test_tasks.py": "app = Celery(\"test\")\n",
+	}
+	u := onlyUnit(t, run(t, Python{}, files), "python:api")
+	if len(u.Entrypoints) != 2 {
+		t.Fatalf("entrypoints %+v", u.Entrypoints)
+	}
+	w := u.Entrypoints[1]
+	if w.Name != "api-worker" || w.Path != "api/src/api/tasks.py" || w.Commands == nil ||
+		w.Commands.Start != "celery -A api.tasks worker --loglevel=info" || len(w.Frameworks) != 0 {
+		t.Fatalf("worker %+v", w)
+	}
+
+	// With no web framework, the project itself is the worker.
+	files["api/pyproject.toml"] = "[project]\nname = \"api\"\ndependencies = [\"celery\"]\n"
+	u = onlyUnit(t, run(t, Python{}, files), "python:api")
+	if len(u.Entrypoints) != 1 || u.Entrypoints[0].Commands == nil || u.Entrypoints[0].Commands.Start != "celery -A api.tasks worker --loglevel=info" {
+		t.Fatalf("entrypoints %+v", u.Entrypoints)
+	}
+}
+
+func TestJVM_gradleSharedBlocksAndConventionPlugins(t *testing.T) {
+	r := run(t, JVM{}, map[string]string{
+		"settings.gradle": "include 'api', 'jobs'\n",
+		"build.gradle": "subprojects {\n    apply plugin: 'java'\n    dependencies {\n" +
+			"        implementation group: 'org.postgresql', name: 'postgresql', version: '42.7.4'\n    }\n}\n",
+		"buildSrc/build.gradle.kts": "plugins {\n    `kotlin-dsl`\n}\n",
+		"buildSrc/src/main/kotlin/shop.spring-web.gradle.kts": "plugins {\n    id(\"org.springframework.boot\")\n}\n\n" +
+			"dependencies {\n    implementation(\"org.springframework.boot:spring-boot-starter-web\")\n}\n",
+		"api/build.gradle":             "plugins {\n    id 'shop.spring-web'\n}\n",
+		"jobs/build.gradle":            "dependencies {\n    implementation 'info.picocli:picocli:4.7.6'\n}\n",
+		"jobs/src/main/java/Jobs.java": "class Jobs {\n    public static void main(String[] args) {}\n}\n",
+	})
+	if len(r.Units) != 2 {
+		t.Fatalf("the root and buildSrc only build others: %+v", r.Units)
+	}
+	api := onlyUnit(t, r, "jvm:api")
+	if len(api.Entrypoints) != 1 || api.Entrypoints[0].Evidence[0].Path != "buildSrc/src/main/kotlin/shop.spring-web.gradle.kts" {
+		t.Fatalf("the convention plugin applies Spring Boot: %+v", api.Entrypoints)
+	}
+	if fw := frameworkOf(t, api, "api", "spring-boot"); fw == nil || fw.Evidence.Line != 6 {
+		t.Fatalf("its web starter: %+v", fw)
+	}
+	for _, id := range []string{"jvm:api", "jvm:jobs"} {
+		u := onlyUnit(t, r, id)
+		if len(u.Resources) != 1 || u.Resources[0].Kind != "postgres" || u.Resources[0].Evidence.Path != "build.gradle" {
+			t.Fatalf("%s gets the subprojects block's driver: %+v", id, u.Resources)
+		}
+	}
+	if fw := frameworkOf(t, onlyUnit(t, r, "jvm:jobs"), "jobs", "picocli"); fw == nil {
+		t.Fatal("jobs lost its own dependency")
+	}
+}

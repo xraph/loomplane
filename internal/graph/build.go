@@ -145,7 +145,7 @@ func service(u discovery.Unit, ep discovery.Entrypoint) Service {
 		Entrypoint: ep.Path,
 		Framework:  framework,
 		Runtime:    u.Runtime,
-		Commands:   u.Commands,
+		Commands:   commandsOf(u, ep),
 		Confidence: conf,
 		Evidence:   append([]discovery.Evidence(nil), ep.Evidence...),
 	}
@@ -153,6 +153,14 @@ func service(u discovery.Unit, ep discovery.Entrypoint) Service {
 
 // pick returns the first framework of kind whose confidence is at least
 // min.
+// commandsOf are an entrypoint's commands: its own, else its unit's.
+func commandsOf(u discovery.Unit, ep discovery.Entrypoint) discovery.Commands {
+	if ep.Commands != nil {
+		return *ep.Commands
+	}
+	return u.Commands
+}
+
 func pick(fws []discovery.Framework, kind discovery.FrameworkKind, minimum discovery.Confidence) *discovery.Framework {
 	for i := range fws {
 		if fws[i].Kind == kind && fws[i].Confidence.Rank() >= minimum.Rank() {

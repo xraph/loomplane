@@ -62,7 +62,7 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 
 | Field | What it does |
 |---|---|
-| `source` | Where the service's code is, as analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's, Python project's or JVM module's directory, or a Dockerfile. When two ecosystems have a service at one path, prefix it: `go:services/api`, `python:services/api`. Required. |
+| `source` | Where the service's code is, as analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's, Python project's or JVM module's directory, or a Dockerfile. A Python project's Procfile process other than `web` is the project's directory, `/Procfile/` and its name: `shop/Procfile/worker`. When two ecosystems have a service at one path, prefix it: `go:services/api`, `python:services/api`. Required. |
 | `kind` | Corrects what analysis decided the service is: `http-service`, `web-app`, `static-site` or `worker`. |
 | `build` | `{context}`: the directory its Dockerfile builds from, from the repository's root (`.` is the root). Without it, the context a Compose file gives the Dockerfile, or the Dockerfile's own directory. |
 | `provider`, `region` | Where it runs. |
@@ -135,6 +135,8 @@ A gateway gets the addresses it routes to and none of the project's variables. O
 | `s3` | AWS | | Object storage |
 
 Buckets are private on both clouds, and services reach them as their own identity, so `STORAGE_URL` carries no credentials: `s3://bucket?region=...` for an ECS task's environment role, `gs://bucket` for Cloud Run's runtime account. Redis gets an auth token in `REDIS_URL`: `rediss://...` on ElastiCache, which also encrypts in transit and at rest, and `redis://...` on Memorystore, which only has an address on the project's default network, so Cloud Run services that need it send their private traffic there.
+
+On AWS, the region is the connection's. An AWS connection names one, and everything Loomplane runs or provisions with it goes there, since ECS tasks reach RDS and ElastiCache over that region's network. Leave `region` out and you get the connection's. Name another and the plan stops on it, because the deployment would land in the connection's region anyway. To move an environment to another AWS region, choose a connection in that region for it. On Google Cloud you pick the region per service or resource, and a move starts the new one first: Cloud SQL instances and Cloud Storage buckets get names with their region in them, so the new one never collides with the one it replaces.
 
 The catalog also describes Render, so a plan can name it, but it can't be deployed yet: a plan that uses it is for review only. Provider plugins add targets of their own ([providers.md](providers.md)).
 

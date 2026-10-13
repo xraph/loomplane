@@ -180,6 +180,9 @@ func buildspec(s *aws.Session, cfg *planning.ServiceConfig, image string) string
 		default:
 			args += ` --path "$CODEBUILD_SRC_DIR/` + cfg.Source + `"`
 		}
+		if cfg.Ecosystem == "python" && cfg.Start != "" {
+			args += " --env " + shellQuote("GOOGLE_ENTRYPOINT="+cfg.Start)
+		}
 		build = []string{args}
 	}
 	var b strings.Builder
@@ -197,6 +200,9 @@ func buildspec(s *aws.Session, cfg *planning.ServiceConfig, image string) string
 	}
 	return b.String()
 }
+
+// shellQuote makes s one word for the shell, whatever it holds.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // quote makes a command a YAML string, whatever it holds.
 func quote(s string) string {

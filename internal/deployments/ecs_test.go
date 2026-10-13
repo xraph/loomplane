@@ -41,6 +41,10 @@ func TestBuildspec(t *testing.T) {
 	if want := `cd \"$CODEBUILD_SRC_DIR/.\" \u0026\u0026 docker build -t repo:sha -f services/api/Dockerfile .`; !strings.Contains(root, want) {
 		t.Fatalf("buildspec from the root lacks %s:\n%s", want, root)
 	}
+	py := buildspec(s, &planning.ServiceConfig{Ecosystem: "python", Source: "api", Start: "celery -A it's worker"}, "repo:sha")
+	if want := `--env 'GOOGLE_ENTRYPOINT=celery -A it'\\''s worker'`; !strings.Contains(py, want) {
+		t.Fatalf("python buildspec lacks %s:\n%s", want, py)
+	}
 	pack := buildspec(s, &planning.ServiceConfig{Ecosystem: "go", Source: "services/api"}, "repo:sha")
 	if !strings.Contains(pack, "pack build repo:sha --builder "+googleBuilder+" --publish --env GOOGLE_BUILDABLE=./services/api") ||
 		!strings.Contains(pack, "install:") {
