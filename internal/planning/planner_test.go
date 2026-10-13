@@ -2146,3 +2146,132 @@ func TestServiceConfig_DockerfileIn(t *testing.T) {
 		}
 	}
 }
+
+// computeOn is computeFed with these connections, and gcp chosen as
+// conn_gcp.
+func computeOn(t *testing.T, conns []ConnectionOption, held []string, bindings ...*Binding) *Result {
+	t.Helper()
+	h := map[string]bool{}
+	for _, a := range held {
+		h[a] = true
+	}
+	return Compute(Input{
+		Environment: "production", Graph: federated(t), Manifest: parse(t, federatedYAML),
+		Providers: providers.Registry(), Bindings: bindings, Held: h, Connections: conns,
+		Chosen: map[string]string{"gcp": "conn_gcp"},
+	})
+}
+
+// deployedThrough is what federatedYAML deploys, each through the
+// connection it names by binding name, or the plan's.
+func deployedThrough(t *testing.T, conns map[string]string) []*Binding {
+	t.Helper()
+	live := deployed(t, computeFed(t, federatedYAML, nil))
+	for _, b := range live {
+		b.ConnectionID = map[string]string{"cloud-run": "conn_gcp", "cloud-sql": "conn_gcp", "vercel": "conn_vercel"}[b.Provider]
+		if id, ok := conns[b.Name]; ok {
+			b.ConnectionID = id
+		}
+	}
+	return live
+}
+
+func TestCompute_aServiceOnAnotherConnectionIsReplaced(t *testing.T) {
+	old := append(slices.Clone(connected), ConnectionOption{ID: "conn_old", Name: "Old", Cloud: "gcp", Ready: true})
+	live := deployedThrough(t, map[string]string{"api": "conn_old"})
+
+	r := computeOn(t, old, nil, live...)
+	if len(r.Problems) != 0 || !r.Executable {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	api := action(t, r, "service:api")
+	want := "api moves from Old to Prod, which production now deploys to Google Cloud with. The new one starts first, and the old one is removed through Old once it's up."
+	if api.Op != Replace || api.Reason != want {
+		t.Fatalf("api %s: %q, want %q", api.Op, api.Reason, want)
+	}
+	// So what uses api gets its new address.
+	if site := action(t, r, "service:site"); site.Op != Update || site.Reason != "api moves, so site gets its new address." {
+		t.Fatalf("site %s: %s", site.Op, site.Reason)
+	}
+	if db := action(t, r, "resource:db"); db.Op != Keep {
+		t.Fatalf("db %s", db.Op)
+	}
+
+	// A held service that uses it keeps the old address, which the
+	// deployment removes, so that's a problem.
+	held := computeOn(t, old, []string{"site"}, live...)
+	if !slices.Contains(codes(held.Problems), "held-address:site") {
+		t.Fatalf("problems %v", codes(held.Problems))
+	}
+
+	// The old connection was removed: the reason says the deployment
+	// can't remove what it ran on.
+	gone := computeOn(t, connected, nil, live...)
+	if api := action(t, gone, "service:api"); api.Op != Replace || !strings.Contains(api.Reason, "from a connection that's been removed") ||
+		!strings.Contains(api.Reason, "says how to remove it yourself") {
+		t.Fatalf("api %s: %s", api.Op, api.Reason)
+	}
+
+	// A binding from before bindings recorded their connection could be
+	// on either, so it isn't moved here: the runner finds out.
+	legacy := deployedThrough(t, map[string]string{"api": ""})
+	if api := action(t, computeOn(t, old, nil, legacy...), "service:api"); api.Op != Keep {
+		t.Fatalf("api from before connections were recorded %s: %s", api.Op, api.Reason)
+	}
+}
+
+func TestCompute_aResourceOnAnotherConnectionIsAProblem(t *testing.T) {
+	old := append(slices.Clone(connected), ConnectionOption{ID: "conn_old", Name: "Old", Cloud: "gcp", Ready: true})
+	live := deployedThrough(t, map[string]string{"db": "conn_old"})
+
+	r := computeOn(t, old, nil, live...)
+	if got := codes(r.Problems); !slices.Equal(got, []string{"connection-moved:db"}) || r.Executable {
+		t.Fatalf("problems %v, executable %v", got, r.Executable)
+	}
+	want := "db was provisioned through Old, and production now deploys to Google Cloud with Prod. Loomplane doesn't move data between connections, so provisioning db through Prod would start an empty one and leave the one holding its data behind. Choose Old for Google Cloud again to keep db where it is."
+	if p := r.Problems[0]; p.Message != want || p.Path != "resources.db" || p.Subject != ResourceSubject {
+		t.Fatalf("problem %+v", p)
+	}
+
+	gone := computeOn(t, connected, nil, live...)
+	if got := codes(gone.Problems); !slices.Equal(got, []string{"connection-moved:db"}) ||
+		!strings.Contains(gone.Problems[0].Message, "through a connection that's been removed") {
+		t.Fatalf("problems %+v", gone.Problems)
+	}
+
+	// A binding from before bindings recorded their connection could be
+	// on either, so it isn't a problem.
+	legacy := deployedThrough(t, map[string]string{"db": ""})
+	if r := computeOn(t, old, nil, legacy...); len(r.Problems) != 0 {
+		t.Fatalf("a binding from before connections were recorded: %v", codes(r.Problems))
+	}
+}
+
+func TestCompute_whatAMoveLeftRunningIsAWarning(t *testing.T) {
+	live := deployedThrough(t, nil)
+	for _, b := range live {
+		if b.Name == "api" {
+			b.Replaced = []Binding{{Subject: ServiceSubject, Name: "api", Provider: "ecs-fargate", Region: "us-east-1", ExternalID: "inst_old"}}
+		}
+	}
+	r := computeOn(t, connected, nil, live...)
+	w := warning(r, "still-replaced", "api")
+	want := "api moved, and the old one on ecs-fargate in us-east-1 (inst_old) hasn't been removed yet. This plan keeps api as it is, so it won't. Retry the deployment that moved api, or deploy a change to it, and that removes it."
+	if w == nil || w.Message != want || w.Path != "services.api" {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+	if !r.Executable {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+
+	// A plan that deploys api removes it.
+	for _, b := range live {
+		if b.Name == "api" {
+			b.CommitSHA = strings.Repeat("0", 40)
+		}
+	}
+	r = computeOn(t, connected, nil, live...)
+	if w := warning(r, "still-replaced", "api"); w == nil || !strings.HasSuffix(w.Message, "This plan's deployment removes it.") {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+}

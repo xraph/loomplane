@@ -372,6 +372,13 @@ type Binding struct {
 	PlanID    string    `json:"plan_id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Replaced is what the action ran as before it moved and still needs
+	// removing, each with the provider, region and connection that reach
+	// it. The deployment that moved it records it with the new binding,
+	// so it's tracked whatever happens to that deployment, and any later
+	// one that deploys the action removes it. Plans warn about it until
+	// then. The API doesn't show it.
+	Replaced []Binding `json:"-"`
 }
 
 // Drift a check can find.
@@ -416,6 +423,9 @@ type Store interface {
 	RecordDrift(ctx context.Context, orgID, id, drift, message string, at time.Time) error
 	PutBinding(ctx context.Context, b *Binding) error
 	DeleteBinding(ctx context.Context, orgID, id string) error
+	// SetReplaced records what a binding's action ran as before it moved
+	// and still needs removing, replacing what was recorded.
+	SetReplaced(ctx context.Context, orgID, id string, replaced []Binding) error
 
 	// DeployedSources returns the commit of each repository deployed in an
 	// environment.

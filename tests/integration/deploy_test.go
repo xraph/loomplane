@@ -1043,6 +1043,34 @@ func TestDeploy_aGoServiceGetsItsCloudSQLDatabase(t *testing.T) {
 			t.Fatalf("second plan %+v", again)
 		}
 	}
+
+	// Moving the environment to another Google Cloud connection would
+	// leave db's data behind, so the plan refuses, and api starts again
+	// through the new one.
+	var other struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "gcp", "name": "Other", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, &other)
+	c.must(http.StatusOK, http.MethodPut, base+"/environments/production/connections/gcp", map[string]string{"connection_id": other.ID}, nil)
+	var moved planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &moved)
+	waitPlanned(t, c, &moved)
+	if moved.Executable || len(moved.Problems) != 1 || moved.Problems[0].Code != "connection-moved" ||
+		!strings.Contains(moved.Problems[0].Message, "Choose Prod for Google Cloud again") {
+		t.Fatalf("plan through another connection %+v", moved)
+	}
+	for _, a := range moved.Actions {
+		if want := map[string]string{"resource:db": "keep", "service:api": "replace"}[a.ID]; a.Op != want {
+			t.Fatalf("plan through another connection %+v", moved)
+		}
+	}
+	cloud.mu.Lock()
+	instances := len(cloud.sql)
+	cloud.mu.Unlock()
+	if instances != 1 {
+		t.Fatalf("%d cloud sql instances", instances)
+	}
 }
 
 const apiWithBucketAndRedis = `version: 1

@@ -173,3 +173,11 @@ A deployment is a Dispatch durable workflow, running beside the API. Each step i
 | Finish, recording the commit now deployed for each source that moved, or fail with the step and its reason | a failed deployment can be retried from that step |
 
 Steps run in order, each after everything it needs, so a service gets the address of the database and services it needs when it deploys.
+
+### When something moves
+
+A service or resource that moves to another provider or region is replaced, and so is a service that moves to another connection, since what one connection deployed can't be updated through another. The new one starts first, with nothing bound to it. Once it's up, and answers if it's public, the binding names it and lists the old one as still to remove, with the provider, region and connection that reach it. Then the old one goes, through the executor and the connection that deployed it.
+
+That list lives on the binding, not on the deployment, so a removal that fails isn't lost when you plan again instead of pressing Retry. Every plan warns about what's on it. Retrying the deployment removes it, and so does any later deployment of that service or resource, after its own work (or before, when the action is a delete). Something only a change to Loomplane's setup can reach, such as a provider plugin that's been taken out, stays on the list until it's back. One whose connection was deleted comes off it: nothing can ever reach it again, so the step fails once, saying where to delete it yourself.
+
+A resource never moves between connections. Its data would stay behind, so a plan that would provision one through another connection than the one that provisioned it has a problem, and the runner refuses it too. Choose the old connection again to keep it. A binding from before bindings recorded their connection names none, and the planner can't tell. Cloud Run and ECS find out as they deploy, since a Ctrl Plane instance's provider names its connection and region, and treat it as a move. When another instance holds a service's name in Ctrl Plane, the new one takes the next free one (`api-production-x1-2`, then `-3`), so nothing has to be removed first.

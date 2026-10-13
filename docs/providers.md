@@ -30,7 +30,7 @@ http.ListenAndServe(":9100", sdk.Handler(myProvider, os.Getenv("PLUGIN_TOKEN")))
 
 `Apply` makes a service or resource exist as the job describes. A service's job has its source (`job.Source()`, the tarball of the service's repository at its commit, with one top-level directory, and that commit as `job.Commit`), the path of its entrypoint in the repository, its Dockerfile if it has one with the directory it builds from (`Context`, from the repository's root), its port, whether it's public, its size and scale, and its variables, with the secret ones listed so you can put them in your cloud's secret store. A resource's job has its kind and version, and no commit. Nor has a gateway's: its source is the program Loomplane generates for its routes. Return an `ExternalID` you'll recognise later, a `URL` for a public service, a `Revision` that drift checks compare with, and for a resource, an `Address` (a database URL, say). Loomplane keeps the address in Vault and hands it, as a secret, to the services that need the resource.
 
-`Remove` deletes what a binding names. Something already gone isn't an error.
+`Remove` deletes what a binding names. Something already gone isn't an error. You'll also get a `Remove` for what a service or resource ran as before it moved to another provider, region or connection, once the new one is up, with the credential of the connection that deployed it. If that one fails, the next deployment of the action sends it again, so it can arrive long after the move.
 
 `Observe` reads what's live, without changing anything. Return `Exists: false` when it's gone, and the live `Revision`. The drift check calls it on a schedule.
 

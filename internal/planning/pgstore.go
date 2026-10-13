@@ -281,7 +281,7 @@ func affected(r driver.Result) (bool, error) {
 
 const bindingColumns = `id, org_id, project_id, environment_id, subject, name, provider, region, engine,
 	external_id, config, url, connection_id, revision, commit_sha, drift, drift_message, observed_at,
-	plan_id, created_at, updated_at`
+	plan_id, created_at, updated_at, replaced`
 
 // ListBindings implements Store.
 func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error) {
@@ -307,13 +307,16 @@ func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string)
 
 func scanBinding(row pgx.Row) (*Binding, error) {
 	var b Binding
-	var cfg []byte
+	var cfg, replaced []byte
 	if err := row.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region,
 		&b.Engine, &b.ExternalID, &cfg, &b.URL, &b.ConnectionID, &b.Revision, &b.CommitSHA, &b.Drift, &b.DriftMessage,
-		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt); err != nil {
+		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt, &replaced); err != nil {
 		return nil, fmt.Errorf("scan binding: %w", err)
 	}
 	b.Config = cfg
+	if err := json.Unmarshal(replaced, &b.Replaced); err != nil {
+		return nil, fmt.Errorf("decode what binding %s replaced: %w", b.ID, err)
+	}
 	b.CreatedAt, b.UpdatedAt = b.CreatedAt.UTC(), b.UpdatedAt.UTC()
 	if b.ObservedAt != nil {
 		t := b.ObservedAt.UTC()
@@ -360,22 +363,52 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 	if len(cfg) == 0 {
 		cfg = []byte("{}")
 	}
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+	replaced, err := encodeReplaced(b.Replaced)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 		ON CONFLICT (environment_id, subject, name) DO UPDATE SET
 			provider = EXCLUDED.provider, region = EXCLUDED.region, engine = EXCLUDED.engine,
 			external_id = EXCLUDED.external_id, config = EXCLUDED.config, url = EXCLUDED.url,
 			connection_id = EXCLUDED.connection_id, revision = EXCLUDED.revision, commit_sha = EXCLUDED.commit_sha,
 			drift = EXCLUDED.drift, drift_message = EXCLUDED.drift_message, observed_at = EXCLUDED.observed_at,
-			plan_id = EXCLUDED.plan_id, updated_at = EXCLUDED.updated_at
+			plan_id = EXCLUDED.plan_id, updated_at = EXCLUDED.updated_at, replaced = EXCLUDED.replaced
 		WHERE loomplane_bindings.org_id = EXCLUDED.org_id`,
 		b.ID, b.OrgID, b.ProjectID, b.EnvironmentID, b.Subject, b.Name, b.Provider, b.Region, b.Engine,
 		b.ExternalID, cfg, b.URL, b.ConnectionID, b.Revision, b.CommitSHA, b.Drift, b.DriftMessage, b.ObservedAt,
-		b.PlanID, b.CreatedAt, b.UpdatedAt)
+		b.PlanID, b.CreatedAt, b.UpdatedAt, replaced)
 	if err != nil {
 		return fmt.Errorf("put binding: %w", err)
 	}
 	return nil
+}
+
+// SetReplaced implements Store.
+func (s *PgStore) SetReplaced(ctx context.Context, orgID, id string, replaced []Binding) error {
+	raw, err := encodeReplaced(replaced)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE loomplane_bindings SET replaced = $3 WHERE org_id = $1 AND id = $2`,
+		orgID, id, raw); err != nil {
+		return fmt.Errorf("record what binding %s replaced: %w", id, err)
+	}
+	return nil
+}
+
+// encodeReplaced is what a binding replaced as it's stored: a list,
+// empty for nothing.
+func encodeReplaced(replaced []Binding) ([]byte, error) {
+	if replaced == nil {
+		replaced = []Binding{}
+	}
+	raw, err := json.Marshal(replaced)
+	if err != nil {
+		return nil, fmt.Errorf("encode what a binding replaced: %w", err)
+	}
+	return raw, nil
 }
 
 // DeleteBinding implements Store.

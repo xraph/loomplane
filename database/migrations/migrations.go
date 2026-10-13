@@ -45,6 +45,7 @@ func Group() *migrate.Group {
 		statements("20261014000003", "add_deployment_sources", deploymentSourcesUp, deploymentSourcesDown),
 		statements("20261014000004", "backfill_environment_sources", environmentSourcesBackfillUp, environmentSourcesBackfillDown),
 		statements("20261014000005", "index_source_repositories_by_name", sourceRepositoryIndexUp, sourceRepositoryIndexDown),
+		statements("20261016000001", "add_binding_replaced", bindingReplacedUp, bindingReplacedDown),
 	)
 	return g
 }
@@ -601,4 +602,14 @@ var sourceRepositoryIndexDown = []string{
 	`CREATE INDEX IF NOT EXISTS loomplane_project_sources_repository
 		ON loomplane_project_sources (repository)`,
 	`DROP INDEX IF EXISTS loomplane_project_sources_repository_lower`,
+}
+
+// What an action ran as before it moved and still needs removing, kept
+// with what runs it now: a list of bindings, empty for most.
+var bindingReplacedUp = []string{
+	`ALTER TABLE loomplane_bindings ADD COLUMN IF NOT EXISTS replaced JSONB NOT NULL DEFAULT '[]'`,
+}
+
+var bindingReplacedDown = []string{
+	`ALTER TABLE loomplane_bindings DROP COLUMN IF EXISTS replaced`,
 }

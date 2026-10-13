@@ -14,6 +14,8 @@ import (
 	"github.com/xraph/ctrlplane/id"
 	"github.com/xraph/ctrlplane/instance"
 
+	"github.com/xraph/loomplane/internal/clouds/cloudrun"
+	"github.com/xraph/loomplane/internal/clouds/ecs"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
@@ -50,6 +52,9 @@ type placed struct {
 	// onRemove runs as Remove starts, so a test can see what's bound
 	// at that point.
 	onRemove func()
+	// onApply runs as Apply starts, as an executor that finds what it
+	// deploys to does.
+	onApply func(job *Job)
 
 	mu      sync.Mutex
 	applies []*Job
@@ -61,6 +66,9 @@ func (p *placed) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	p.applies = append(p.applies, job)
 	p.mu.Unlock()
 	p.log.add("apply " + p.provider)
+	if p.onApply != nil {
+		p.onApply(job)
+	}
 	if p.applyErr != nil {
 		return nil, p.applyErr
 	}
@@ -335,12 +343,12 @@ func TestCurrentInstance_aReplacementTakesANameOfItsOwn(t *testing.T) {
 		Action:     planning.Action{Name: "api"}, Progress: func(string, string) {},
 	}
 	base := instanceSlug(job)
-	old := ctrlInstance(base, "cloudrun.conn_g.us-central1")
+	old := ctrlInstance(base, cloudrun.Key("conn_g", "us-central1"))
 	instances := &fakeInstances{byID: map[id.ID]*instance.Instance{old.ID: old}}
 	ctrl := CtrlPlane{Instances: instances}
 	job.Replaces = &planning.Binding{ExternalID: old.ID.String()}
 
-	inst, name, err := currentInstance(t.Context(), ctrl, job, "cloudrun.conn_g.europe-west1")
+	inst, name, err := currentInstance(t.Context(), ctrl, job, cloudrun.Key("conn_g", "europe-west1"))
 	if err != nil || inst != nil || name != base+"-2" {
 		t.Fatalf("got %v %q %v, want a new instance named %s-2", inst, name, err, base)
 	}
@@ -349,9 +357,9 @@ func TestCurrentInstance_aReplacementTakesANameOfItsOwn(t *testing.T) {
 	}
 
 	// A retry finds the one the first attempt created.
-	created := ctrlInstance(base+"-2", "cloudrun.conn_g.europe-west1")
+	created := ctrlInstance(base+"-2", cloudrun.Key("conn_g", "europe-west1"))
 	instances.byID[created.ID] = created
-	if inst, _, err = currentInstance(t.Context(), ctrl, job, "cloudrun.conn_g.europe-west1"); err != nil || inst != created {
+	if inst, _, err = currentInstance(t.Context(), ctrl, job, cloudrun.Key("conn_g", "europe-west1")); err != nil || inst != created {
 		t.Fatalf("retry found %v %v", inst, err)
 	}
 
@@ -359,34 +367,87 @@ func TestCurrentInstance_aReplacementTakesANameOfItsOwn(t *testing.T) {
 	// one takes the first.
 	job.Replaces = &planning.Binding{ExternalID: created.ID.String()}
 	delete(instances.byID, old.ID)
-	if _, name, _ = currentInstance(t.Context(), ctrl, job, "cloudrun.conn_g.us-central1"); name != instanceName(job) {
+	if _, name, _ = currentInstance(t.Context(), ctrl, job, cloudrun.Key("conn_g", "us-central1")); name != instanceName(job) {
 		t.Fatalf("moving back named it %q", name)
 	}
 }
 
 // Cloud Run and ECS share currentInstance, so neither deletes an instance
-// before the one that takes its place has started.
-func TestCurrentInstance_neverDeletesOneOnAnotherConnection(t *testing.T) {
+// before the one that takes its place has started. A bound one under
+// another provider key, as a binding from before bindings recorded their
+// connection can have, is replaced through the connection and region its
+// key names.
+func TestCurrentInstance_aBoundOneOnAnotherConnectionIsReplaced(t *testing.T) {
 	job := &Job{
 		Deployment: &Deployment{ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
 		Action:     planning.Action{Name: "api"}, Progress: func(string, string) {},
 	}
-	for _, key := range []string{"cloudrun.conn_old.us-central1", "ecs.conn_old.us-east-1"} {
-		other := ctrlInstance(instanceSlug(job), key)
+	for _, c := range []struct{ old, now, region string }{
+		{cloudrun.Key("conn_old", "us-central1"), cloudrun.Key("conn_new", "us-central1"), "us-central1"},
+		{ecs.Key("conn_old", "us-east-1"), ecs.Key("conn_new", "us-east-1"), "us-east-1"},
+	} {
+		other := ctrlInstance(instanceSlug(job), c.old)
 		instances := &fakeInstances{byID: map[id.ID]*instance.Instance{other.ID: other}}
 		ctrl := CtrlPlane{Instances: instances}
+		job.Binding = &planning.Binding{ID: "bind_api", Provider: "cloud-run", ExternalID: other.ID.String()}
+		job.Replaces = nil
 
-		// Found by its binding, and found by its name.
-		for _, b := range []*planning.Binding{{ExternalID: other.ID.String()}, nil} {
-			job.Binding = b
-			_, _, err := currentInstance(t.Context(), ctrl, job, strings.Replace(key, "conn_old", "conn_new", 1))
-			if err == nil || !strings.Contains(err.Error(), "remove it") {
-				t.Fatalf("%s, binding %v: %v", key, b, err)
-			}
-			if len(instances.deleted) > 0 {
-				t.Fatalf("%s: deleted the instance on another connection", key)
-			}
+		inst, name, err := currentInstance(t.Context(), ctrl, job, c.now)
+		if err != nil || inst != nil || name != instanceName(job)+"-2" {
+			t.Fatalf("%s: got %v %q %v, want a new instance named %s-2", c.old, inst, name, err, instanceName(job))
 		}
+		if len(instances.deleted) > 0 {
+			t.Fatalf("%s: deleted the instance on another connection", c.old)
+		}
+		r := job.Replaces
+		if job.Binding != nil || r == nil || r.ID != "bind_api" || r.ExternalID != other.ID.String() ||
+			r.ConnectionID != "conn_old" || r.Region != c.region {
+			t.Fatalf("%s: binding %+v, replacing %+v", c.old, job.Binding, r)
+		}
+	}
+}
+
+// Something that only holds the name, such as an instance a failed first
+// attempt left under an earlier connection, or one a person removed from
+// the cloud but not from Ctrl Plane, doesn't stop a deployment: the new
+// one takes the next free name.
+func TestCurrentInstance_oneThatOnlyHoldsTheNameIsLeftAlone(t *testing.T) {
+	job := &Job{
+		Deployment: &Deployment{ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
+		Action:     planning.Action{Name: "api"}, Progress: func(string, string) {},
+	}
+	key := cloudrun.Key("conn_new", "us-central1")
+	first := ctrlInstance(instanceSlug(job), cloudrun.Key("conn_old", "us-central1"))
+	second := ctrlInstance(instanceSlug(job)+"-2", cloudrun.Key("conn_gone", "us-central1"))
+	instances := &fakeInstances{byID: map[id.ID]*instance.Instance{first.ID: first, second.ID: second}}
+	ctrl := CtrlPlane{Instances: instances}
+
+	inst, name, err := currentInstance(t.Context(), ctrl, job, key)
+	if err != nil || inst != nil || name != instanceName(job)+"-3" {
+		t.Fatalf("got %v %q %v, want a new instance named %s-3", inst, name, err, instanceName(job))
+	}
+	if len(instances.deleted) > 0 || job.Replaces != nil {
+		t.Fatalf("deleted %v, replacing %+v", instances.deleted, job.Replaces)
+	}
+	// A retry finds the one the first attempt created under this key.
+	created := ctrlInstance(instanceSlug(job)+"-3", key)
+	instances.byID[created.ID] = created
+	if inst, _, err = currentInstance(t.Context(), ctrl, job, key); err != nil || inst != created {
+		t.Fatalf("retry found %v %v", inst, err)
+	}
+}
+
+func TestDeployedThrough(t *testing.T) {
+	b := &planning.Binding{ExternalID: "inst_1", ConnectionID: "", Region: "us-central1"}
+	if got := deployedThrough(b, cloudrun.Key("conn_typeid_01h", "europe-west1")); got.ConnectionID != "conn_typeid_01h" || got.Region != "europe-west1" {
+		t.Fatalf("cloud run: %+v", got)
+	}
+	if got := deployedThrough(b, ecs.Key("conn_a", "eu-west-1")); got.ConnectionID != "conn_a" || got.Region != "eu-west-1" {
+		t.Fatalf("ecs: %+v", got)
+	}
+	// A key it can't read leaves the binding as it is.
+	if got := deployedThrough(b, "something-else"); got.ConnectionID != "" || got.Region != "us-central1" || got == b {
+		t.Fatalf("unknown key: %+v", got)
 	}
 }
 
@@ -413,5 +474,21 @@ func TestCloudSQLInstance(t *testing.T) {
 	job.Binding.Region = "us-central1"
 	if got, want := cloudSQLInstance(job), SQLInstanceName(job)+"-europe-west1"; got != want {
 		t.Fatalf("with a binding in another region, %q, want %q", got, want)
+	}
+}
+
+func TestLocate(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	b := &planning.Binding{Provider: "cloud-run", Region: "us-central1", ExternalID: iid.String()}
+	if got, want := locate(&CloudRun{}, b), "the Cloud Run service "+cloudrun.ServiceName(iid)+" in us-central1"; got != want {
+		t.Fatalf("cloud run: %q, want %q", got, want)
+	}
+	b.Provider, b.Region = "ecs-fargate", "us-east-1"
+	if got := locate(&ECS{}, b); !strings.HasPrefix(got, "the ECS service "+ecs.ServiceName(iid)+" in cluster ") {
+		t.Fatalf("ecs: %q", got)
+	}
+	v := &planning.Binding{Provider: "vercel", ExternalID: "prj_1"}
+	if got := locate(&placed{}, v); got != "prj_1 on vercel" {
+		t.Fatalf("anything else: %q", got)
 	}
 }

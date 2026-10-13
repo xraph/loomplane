@@ -49,7 +49,10 @@ type ECS struct {
 	Credentials Credentials
 }
 
-var _ Executor = (*ECS)(nil)
+var (
+	_ Executor = (*ECS)(nil)
+	_ Locator  = (*ECS)(nil)
+)
 
 type ecsState struct {
 	BuildID string `json:"build_id,omitempty"`
@@ -304,14 +307,17 @@ func tasksGroup(ctx context.Context, s *aws.Session, vpc, env string) (string, e
 }
 
 // expose puts a public service behind the environment's load balancer:
-// its own target group, and a listener that forwards to it.
-func expose(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, lbGroup, envName string) (tg, listener, url string, err error) {
+// its own target group, and a listener that forwards to it. Both are
+// named after the instance's slug, so a replacement in the same account
+// gets its own, and removing the old instance, which removes its target
+// group and listener, leaves the new one's alone.
+func expose(ctx context.Context, s *aws.Session, job *Job, net *aws.Network, lbGroup, envName, slug string) (tg, listener, url string, err error) {
 	lb, err := s.EnsureLoadBalancer(ctx, shortName(envName), net.Subnets, lbGroup)
 	if err != nil {
 		return "", "", "", err
 	}
 	port := int32(job.Action.Service.Port) //nolint:gosec // G115: a port, validated by the manifest
-	if tg, err = s.EnsureTargetGroup(ctx, shortName(instanceSlug(job)), net.VPC, port); err != nil {
+	if tg, err = s.EnsureTargetGroup(ctx, shortName(slug), net.VPC, port); err != nil {
 		return "", "", "", err
 	}
 	l, err := s.EnsureListener(ctx, lb.ARN, tg, job.Connection.Details["certificate_arn"])
@@ -379,9 +385,16 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 	if cfg.Size != nil {
 		labels[ecs.LabelCPU] = strconv.Itoa(int(cfg.Size.CPU * 1024))
 	}
+	key := e.provider(job)
+	ctx = infrastructure.WithPrincipal(ctx, principal(job))
+	inst, name, err := currentInstance(ctx, e.Ctrl, job, key)
+	if err != nil {
+		return "", "", err
+	}
+	slug := strings.ToLower(name)
 	if cfg.Public && cfg.Port > 0 {
 		job.Progress(StepDeploying, "Setting up the load balancer")
-		tg, listener, lbURL, xerr := expose(ctx, s, job, net, lbGroup, envName)
+		tg, listener, lbURL, xerr := expose(ctx, s, job, net, lbGroup, envName, slug)
 		if xerr != nil {
 			return "", "", xerr
 		}
@@ -409,12 +422,6 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 		spec.Resources.MemoryMB = cfg.Size.Memory
 	}
 
-	key := e.provider(job)
-	ctx = infrastructure.WithPrincipal(ctx, principal(job))
-	inst, name, err := currentInstance(ctx, e.Ctrl, job, key)
-	if err != nil {
-		return "", "", err
-	}
 	if inst == nil {
 		created, err := e.Ctrl.Instances.Create(ctx, instance.CreateRequest{
 			Name: name, ProviderName: key, Region: s.Region(),
@@ -495,6 +502,16 @@ func (e *ECS) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 	}
 	e.provider(job)
 	return e.Ctrl.Instances.Delete(infrastructure.WithPrincipal(ctx, principal(job)), iid)
+}
+
+// Locate implements Locator: the ECS service Ctrl Plane named after the
+// instance, in Loomplane's cluster.
+func (e *ECS) Locate(b *planning.Binding) string {
+	iid, err := id.Parse(b.ExternalID)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("the ECS service %s in cluster %s, in %s", ecs.ServiceName(iid), ecsCluster, b.Region)
 }
 
 // Observe implements Executor: the service's image, read from ECS.

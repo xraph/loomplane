@@ -108,6 +108,7 @@ func Compute(in Input) *Result {
 	p.checkFindings()
 	p.impact()
 	p.planDeletes()
+	p.stillReplaced()
 	return p.finish()
 }
 
@@ -1541,6 +1542,8 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 	case b.Region != region:
 		a.Op = Replace
 		a.Reason = fmt.Sprintf("%s moves from %s to %s. A region can't change in place, so the new one starts there first, and the old one is removed once it's up.", a.Name, b.Region, region)
+	default:
+		p.connectionMoves(a, b, providerName)
 	}
 	if a.Op == Replace {
 		if a.Subject == ResourceSubject {
@@ -1571,6 +1574,60 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		a.Op = Keep
 		a.Reason = "Unchanged."
 	}
+}
+
+// connectionMoves settles an action whose binding was deployed through
+// another connection than the one the plan deploys to its cloud with, on
+// the same provider and in the same region. What one connection deployed
+// can't be updated through another, which may reach another account, so
+// a service is replaced: the new one starts through this connection, and
+// the old one is removed through its own once it's up, so whatever uses
+// it is deployed again with the new address. A resource isn't, since
+// that would leave its data behind: the plan has a problem instead.
+//
+// A binding from before bindings recorded their connection names none,
+// and could have been deployed through either, so it isn't counted as
+// moved. For Cloud Run and ECS the runner finds out as it deploys, since
+// a Ctrl Plane instance's provider names its connection, and moves it
+// then. Where connect reports a problem, there's nothing to compare with.
+func (p *planner) connectionMoves(a *Action, b *Binding, providerName string) {
+	prov, err := p.in.Providers.Get(providerName)
+	if err != nil || b.ConnectionID == "" {
+		return
+	}
+	now := p.connectionFor(prov.Cloud)
+	if now == "" || now == b.ConnectionID {
+		return
+	}
+	from, to, cloud := p.connectionName(b.ConnectionID), p.connectionName(now), cloudTitle(prov.Cloud)
+	if a.Subject == ResourceSubject {
+		msg := fmt.Sprintf("%s was provisioned through %s, and %s now deploys to %s with %s. Loomplane doesn't move data between connections, so provisioning %s through %s would start an empty one and leave the one holding its data behind. Choose %s for %s again to keep %s where it is.",
+			a.Name, from, p.in.Environment, cloud, to, a.Name, to, from, cloud, a.Name)
+		if from == "" {
+			msg = fmt.Sprintf("%s was provisioned through a connection that's been removed, and %s now deploys to %s with %s. Loomplane doesn't move data between connections, and can't tell whether %s reaches %s, so it won't provision %s through it. To start over with an empty one, copy out what you need, take %s out of the manifest, deploy, and put it back. If it's in another account, delete it there yourself.",
+				a.Name, p.in.Environment, cloud, to, to, a.Name, a.Name, a.Name)
+		}
+		p.problem(Finding{Code: "connection-moved", Subject: ResourceSubject, Name: a.Name, Path: "resources." + a.Name, Message: msg})
+		return
+	}
+	a.Op = Replace
+	a.Reason = fmt.Sprintf("%s moves from %s to %s, which %s now deploys to %s with. The new one starts first, and the old one is removed through %s once it's up.",
+		a.Name, from, to, p.in.Environment, cloud, from)
+	if from == "" {
+		a.Reason = fmt.Sprintf("%s moves to %s, which %s now deploys to %s with, from a connection that's been removed. The new one starts first. Loomplane can't reach the old one to remove it, so the deployment says how to remove it yourself.",
+			a.Name, to, p.in.Environment, cloud)
+	}
+}
+
+// connectionName names a connection for people, or is empty for one
+// that's been removed.
+func (p *planner) connectionName(id string) string {
+	for _, c := range p.in.Connections {
+		if c.ID == id {
+			return c.Name
+		}
+	}
+	return ""
 }
 
 // newCode reports whether a service is built from another commit than
@@ -1808,6 +1865,40 @@ func (p *planner) planDeletes() {
 			ID: id, Op: Delete, Subject: b.Subject, Name: b.Name, Provider: b.Provider, Region: b.Region,
 			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
 		})
+	}
+}
+
+// stillReplaced warns about what an action ran as before it moved and
+// still needs removing, such as an old one whose removal failed. A
+// deployment of the action removes it, before anything else when the
+// action is deleted, and after it's deployed otherwise.
+func (p *planner) stillReplaced() {
+	for _, id := range slices.Sorted(maps.Keys(p.bindings)) {
+		b := p.bindings[id]
+		if len(b.Replaced) == 0 {
+			continue
+		}
+		path := "services." + b.Name
+		switch {
+		case b.Subject == ResourceSubject:
+			path = "resources." + b.Name
+		case p.isGateway(b):
+			path = "gateways." + b.Name
+		}
+		then := fmt.Sprintf("This plan keeps %s as it is, so it won't. Retry the deployment that moved %s, or deploy a change to it, and that removes it.", b.Name, b.Name)
+		if i := slices.IndexFunc(p.actions, func(a *Action) bool { return a.ID == id }); i >= 0 && p.actions[i].Op != Keep {
+			then = "This plan's deployment removes it."
+		}
+		for _, old := range b.Replaced {
+			on := old.Provider
+			if old.Region != "" {
+				on += " in " + old.Region
+			}
+			p.warn(Finding{
+				Code: "still-replaced", Subject: b.Subject, Name: b.Name, Path: path,
+				Message: fmt.Sprintf("%s moved, and the old one on %s (%s) hasn't been removed yet. %s", b.Name, on, old.ExternalID, then),
+			})
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"archive/tar"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	cpprovider "github.com/xraph/ctrlplane/provider"
 
 	"github.com/xraph/loomplane/internal/clouds/cloudrun"
+	"github.com/xraph/loomplane/internal/clouds/ecs"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/connections"
@@ -57,7 +59,10 @@ type CloudRun struct {
 	Credentials Credentials
 }
 
-var _ Executor = (*CloudRun)(nil)
+var (
+	_ Executor = (*CloudRun)(nil)
+	_ Locator  = (*CloudRun)(nil)
+)
 
 // cloudRunState is what a Cloud Run action checkpoints, so a retry picks
 // up the same build instead of starting another.
@@ -402,14 +407,16 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 // binding's, or one an earlier attempt created before it could record a
 // binding. name is what to call the instance when there's none.
 //
-// An instance an action replaces, on another provider, region or
-// connection, isn't this one: the runner removes it once this one is up.
-// Until then it keeps its slug, so this one takes another name. Nothing
-// here deletes an instance, so an old one never goes before what takes
-// its place has started. One on another provider key that isn't what the
-// action replaces is left alone, and the step fails saying so, since it
-// can't be updated through this connection and removing it is a person's
-// call.
+// Nothing here deletes an instance, so an old one never goes before what
+// takes its place has started. An instance an action replaces, on another
+// provider, region or connection, isn't this one: the runner removes it
+// once this one is up. A bound instance under another provider key, as a
+// binding from before bindings recorded their connection can have, can't
+// be updated through this connection either, so it's replaced the same
+// way: job.Replaces names it, with the connection and region its key
+// names, and the runner removes it through them once this one is up. An
+// instance any of those leaves holding the slug keeps it, and this one
+// takes the next free name.
 func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (inst *instance.Instance, name string, err error) {
 	if job.Binding != nil && job.Binding.ExternalID != "" {
 		iid, perr := id.Parse(job.Binding.ExternalID)
@@ -419,56 +426,65 @@ func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) 
 		if inst, err = ctrl.Instances.Get(ctx, iid); err != nil && !errors.Is(err, ctrlplane.ErrNotFound) {
 			return nil, "", err
 		}
-	}
-	if name, err = newInstanceName(ctx, ctrl, job); err != nil {
-		return nil, "", err
-	}
-	if inst == nil {
-		found, ferr := ctrl.Instances.GetBySlug(ctx, strings.ToLower(name))
-		if ferr != nil && !errors.Is(ferr, ctrlplane.ErrNotFound) {
-			return nil, "", ferr
+		switch {
+		case inst != nil && inst.ProviderName == key:
+			return inst, cmp.Or(inst.Name, instanceName(job)), nil
+		case inst != nil:
+			job.Progress(StepDeploying, "Starting "+job.Action.Name+" again through this connection, since it ran through another")
+			job.Replaces, job.Binding = deployedThrough(job.Binding, inst.ProviderName), nil
 		}
-		inst = found
 	}
-	switch {
-	case inst == nil || replaced(job, inst):
-		return nil, name, nil
-	case inst.ProviderName != key:
-		return nil, "", fmt.Errorf("%s already runs as Ctrl Plane instance %s (%s), on %s rather than %s. Loomplane won't remove it before a new one starts, so remove it, then deploy again",
-			job.Action.Name, inst.Slug, inst.ID, inst.ProviderName, key)
+	return freeInstance(ctx, ctrl, job, key)
+}
+
+// deployedThrough is b as the provider key that deployed its instance
+// places it: with that key's connection and region, which reach it. A key
+// it can't read leaves b as it is.
+func deployedThrough(b *planning.Binding, providerKey string) *planning.Binding {
+	out := *b
+	for _, prefix := range []string{cloudrun.KeyPrefix, ecs.KeyPrefix} {
+		rest, ok := strings.CutPrefix(providerKey, prefix)
+		if !ok {
+			continue
+		}
+		if i := strings.LastIndex(rest, "."); i > 0 && i < len(rest)-1 {
+			out.ConnectionID, out.Region = rest[:i], rest[i+1:]
+		}
 	}
-	return inst, name, nil
+	return &out
+}
+
+// freeInstance finds an instance by the action's name, the way an earlier
+// attempt that created it before it could record a binding would have
+// named it, or the first free name. An instance by that name under this
+// provider key is this action's. One under another key, or the one the
+// action replaces, keeps its slug, so this one tries the name with "-2",
+// then "-3", and so on. A move back takes the first name again, once
+// what held it is gone.
+func freeInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (*instance.Instance, string, error) {
+	const tries = 20
+	base := instanceName(job)
+	for n := 1; n <= tries; n++ {
+		name := base
+		if n > 1 {
+			name = base + "-" + strconv.Itoa(n)
+		}
+		found, err := ctrl.Instances.GetBySlug(ctx, strings.ToLower(name))
+		switch {
+		case errors.Is(err, ctrlplane.ErrNotFound):
+			return nil, name, nil
+		case err != nil:
+			return nil, "", err
+		case found.ProviderName == key && !replaced(job, found):
+			return found, name, nil
+		}
+	}
+	return nil, "", fmt.Errorf("every name from %s to %s-%d is taken in Ctrl Plane by an instance that isn't this one", base, base, tries)
 }
 
 // replaced reports whether inst is the instance the action replaces.
 func replaced(job *Job, inst *instance.Instance) bool {
 	return job.Replaces != nil && job.Replaces.ExternalID == inst.ID.String()
-}
-
-// newInstanceName is what to call an instance the action creates: its
-// name, or when the instance it replaces already has that slug, its name
-// with "-2". A move back takes the first name again.
-func newInstanceName(ctx context.Context, ctrl CtrlPlane, job *Job) (string, error) {
-	name := instanceName(job)
-	if job.Replaces == nil || job.Replaces.ExternalID == "" {
-		return name, nil
-	}
-	iid, err := id.Parse(job.Replaces.ExternalID)
-	if err != nil {
-		// It isn't a Ctrl Plane instance, such as a Vercel project, so
-		// it holds no slug.
-		return name, nil
-	}
-	old, err := ctrl.Instances.Get(ctx, iid)
-	switch {
-	case errors.Is(err, ctrlplane.ErrNotFound):
-		return name, nil
-	case err != nil:
-		return "", fmt.Errorf("read the instance it replaces: %w", err)
-	case strings.EqualFold(old.Slug, name):
-		return name + "-2", nil
-	}
-	return name, nil
 }
 
 // instanceName names the Ctrl Plane instance: the service, the
@@ -508,6 +524,16 @@ func (c *CloudRun) Remove(ctx context.Context, job *Job, b *planning.Binding) er
 		return nil
 	}
 	return err
+}
+
+// Locate implements Locator: the Cloud Run service Ctrl Plane named after
+// the instance.
+func (c *CloudRun) Locate(b *planning.Binding) string {
+	iid, err := id.Parse(b.ExternalID)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("the Cloud Run service %s in %s", cloudrun.ServiceName(iid), b.Region)
 }
 
 // Observe implements Executor: it reads the Cloud Run service straight

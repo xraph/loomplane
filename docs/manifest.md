@@ -150,3 +150,5 @@ The catalog also describes Render, so a plan can name it, but it can't be deploy
 ## Environments
 
 Every project has `production` and `preview`, and you can add others. A plan is for one environment, and each field's environment override applies there. `enabled: false` in an environment leaves a service, resource or gateway out of it, and removes it if it was deployed.
+
+Choosing another connection for an environment moves its services: each one starts again through the new connection, and the old one is removed once it's up, so what uses it gets the new address. Resources don't move, since their data would stay behind. A plan that would provision one through another connection than the one it was provisioned through has a problem until you choose that connection again.
