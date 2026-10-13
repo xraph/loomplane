@@ -116,9 +116,9 @@ func TestSource_routes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the gateway, fetching its modules")
 	}
-	data, _, err := Source(routes)
-	if err != nil {
-		t.Fatal(err)
+	data, _, sourceErr := Source(routes)
+	if sourceErr != nil {
+		t.Fatal(sourceErr)
 	}
 	dir := t.TempDir()
 	for name, b := range unpack(t, data) {
@@ -134,8 +134,8 @@ func TestSource_routes(t *testing.T) {
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", bin, ".")
 	build.Dir = filepath.Join(dir, "gateway")
 	build.Env = append(os.Environ(), "GOFLAGS=-mod=readonly", "GOWORK=off")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("the gateway doesn't build: %v\n%s", err, out)
+	if out, buildErr := build.CombinedOutput(); buildErr != nil {
+		t.Fatalf("the gateway doesn't build: %v\n%s", buildErr, out)
 	}
 
 	seen := make(chan string, 8)
@@ -148,7 +148,7 @@ func TestSource_routes(t *testing.T) {
 		return srv
 	}
 	api, web := upstream("api"), upstream("web")
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

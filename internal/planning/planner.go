@@ -2067,7 +2067,7 @@ func (p *planner) stillReplaced() {
 			continue
 		}
 		path := p.bindingPath(b)
-		then :=fmt.Sprintf("This plan keeps %s as it is, so it won't. Retry the deployment that moved %s, or deploy a change to it, and that removes it.", b.Name, b.Name)
+		then := fmt.Sprintf("This plan keeps %s as it is, so it won't. Retry the deployment that moved %s, or deploy a change to it, and that removes it.", b.Name, b.Name)
 		if i := slices.IndexFunc(p.actions, func(a *Action) bool { return a.ID == id }); i >= 0 {
 			switch p.actions[i].Op {
 			case Keep:
