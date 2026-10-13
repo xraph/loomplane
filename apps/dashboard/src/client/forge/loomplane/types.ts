@@ -227,6 +227,12 @@ export interface CreateProjectInputBody {
   description?: string;
   icon?: string;
   name: string;
+  repositories?: {
+  alias?: string;
+  ref?: string;
+  repository: string;
+  root?: string;
+}[];
   repositoryUrl?: string;
   slug?: string;
 }

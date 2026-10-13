@@ -182,19 +182,30 @@ func (a *auditRecorder) Record(_ context.Context, e AuditEvent) {
 	a.events = append(a.events, e)
 }
 
-// attachRecorder stands in for discovery: it attaches every repository as
-// ada/engine, or fails with err.
+// attachRecorder stands in for discovery: it attaches "owner/name" or a
+// URL ending in it as owner/name, aliased by its name or the alias it's
+// given, or fails with err, or with failOn for that repository.
 type attachRecorder struct {
-	urls []string
-	err  error
+	urls   []string
+	err    error
+	failOn map[string]error
 }
 
-func (a *attachRecorder) AttachRepository(_ context.Context, _ security.Principal, proj *Project, url string) (string, error) {
+func (a *attachRecorder) AttachRepository(_ context.Context, _ security.Principal, proj *Project, in RepositoryInput) (repository, alias string, err error) {
 	if a.err != nil {
-		return "", a.err
+		return "", "", a.err
 	}
-	a.urls = append(a.urls, proj.ID+" "+url)
-	return "ada/engine", nil
+	if err := a.failOn[in.Repository]; err != nil {
+		return "", "", err
+	}
+	a.urls = append(a.urls, proj.ID+" "+in.Repository)
+	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(in.Repository, "git@github.com:"), ".git"), "/")
+	repository = strings.Join(parts[len(parts)-2:], "/")
+	alias = in.Alias
+	if alias == "" {
+		alias = parts[len(parts)-1]
+	}
+	return repository, alias, nil
 }
 
 type fixture struct {
@@ -658,5 +669,64 @@ func TestService_aRepositoryNeedsAnAttacher(t *testing.T) {
 	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
 	if _, err := f.svc.Create(context.Background(), dev, CreateProjectInput{Name: "Engine", RepositoryURL: "https://github.com/ada/engine"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Create: %v", err)
+	}
+}
+
+func TestService_createWithSeveralRepositories(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{
+		Name: "Shop", RepositoryURL: "https://github.com/acme/web",
+		Repositories: []RepositoryInput{
+			{Repository: "acme/api"},
+			{Repository: "   "},
+			{Repository: "other/api", Alias: "billing", Root: "svc", Ref: "main"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Attached in the order sent, the single URL first, a blank one left
+	// out, and listed by alias, as the store reads them.
+	if want := []string{p.ID + " https://github.com/acme/web", p.ID + " acme/api", p.ID + " other/api"}; !slices.Equal(f.attach.urls, want) {
+		t.Fatalf("attached %v, want %v", f.attach.urls, want)
+	}
+	if want := []string{"acme/api", "other/api", "acme/web"}; !slices.Equal(p.Repositories, want) {
+		t.Fatalf("repositories %v, want %v", p.Repositories, want)
+	}
+}
+
+func TestService_aRepositoryThatFailsTakesTheProjectBackOut(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	f.attach.failOn = map[string]error{"acme/private": fmt.Errorf("%w: Loomplane can't read it", ErrRepository)}
+
+	_, err := f.svc.Create(ctx, dev, CreateProjectInput{
+		Name:         "Shop",
+		Repositories: []RepositoryInput{{Repository: "acme/web"}, {Repository: "acme/private"}},
+	})
+	if !errors.Is(err, ErrRepository) || !strings.HasPrefix(err.Error(), "acme/private: ") {
+		t.Fatalf("Create: %v, want a repository error naming acme/private", err)
+	}
+	if list, lerr := f.svc.List(ctx, dev); lerr != nil || len(list) != 0 {
+		t.Fatalf("a half-made project was left behind: %v, %+v", lerr, list)
+	}
+}
+
+func TestService_aProjectStartsWithAtMostTenRepositories(t *testing.T) {
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	repos := make([]RepositoryInput, maxRepositories+1)
+	for i := range repos {
+		repos[i] = RepositoryInput{Repository: fmt.Sprintf("acme/r%d", i)}
+	}
+	if _, err := f.svc.Create(context.Background(), dev, CreateProjectInput{Name: "Shop", Repositories: repos}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(f.attach.urls) != 0 {
+		t.Fatalf("attached %v before refusing", f.attach.urls)
 	}
 }

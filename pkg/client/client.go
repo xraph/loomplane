@@ -173,7 +173,22 @@ type NewProject struct {
 	Name string `json:"name"`
 	// RepositoryURL is attached as the project's first repository.
 	RepositoryURL string `json:"repository_url,omitempty"`
-	Description   string `json:"description,omitempty"`
+	// Repositories are attached after it, in order, up to ten in all.
+	Repositories []NewRepository `json:"repositories,omitempty"`
+	Description  string          `json:"description,omitempty"`
+}
+
+// NewRepository is a repository a new project starts with.
+type NewRepository struct {
+	// Repository is a GitHub URL or "owner/name".
+	Repository string `json:"repository"`
+	// Alias names it in the project. Empty picks one from its name.
+	Alias string `json:"alias,omitempty"`
+	// Root is the directory the project builds from, and Ref the branch
+	// analyses read. Empty means the whole repository and its default
+	// branch.
+	Root string `json:"root,omitempty"`
+	Ref  string `json:"ref,omitempty"`
 }
 
 // Projects lists the organization's projects.

@@ -2893,6 +2893,29 @@
           "name": {
             "type": "string"
           },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "repository"
+              ],
+              "properties": {
+                "alias": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "repository": {
+                  "type": "string"
+                },
+                "root": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "repository_url": {
             "type": "string"
           },
