@@ -168,9 +168,10 @@ type planner struct {
 	// addressed are the services heldAddresses reported as keeping the
 	// address of what this plan replaces, by the replaced action's ID.
 	addressed map[string][]string
-	// removing are the clouds of what earlier moves left to remove, which
-	// a deployment may need a connection to even when nothing else in the
-	// plan uses them.
+	// removing are the clouds of what earlier moves left to remove, and
+	// of what's deleted from before bindings recorded their connection,
+	// which a deployment may need a connection to even when nothing else
+	// in the plan uses them.
 	removing map[string]bool
 }
 
@@ -2008,14 +2009,50 @@ func (p *planner) planDeletes() {
 				Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
 			})
 		}
-		if prov, err := p.in.Providers.Get(b.Provider); err == nil {
-			p.use(prov)
-		}
+		p.deleteThrough(b)
 		p.actions = append(p.actions, &Action{
 			ID: id, Op: Delete, Subject: b.Subject, Name: b.Name, Provider: b.Provider, Region: b.Region,
 			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
 		})
 	}
+}
+
+// deleteThrough settles the connection a delete goes through: the one
+// that deployed what it deletes, which needn't be the one the environment
+// deploys with now, so the plan needs none of its own for it. Only a
+// binding from before bindings recorded their connection goes through the
+// plan's, which is noted in removing, as stillReplaced does, so the plan
+// pins one when there's one. A provider Loomplane can't deploy to now is
+// a problem either way: nothing could remove it.
+func (p *planner) deleteThrough(b *Binding) {
+	prov, err := p.in.Providers.Get(b.Provider)
+	switch {
+	case err != nil:
+		return
+	case !prov.Available:
+		p.use(prov)
+		return
+	case b.ConnectionID == "":
+		p.removing[prov.Cloud] = true
+		return
+	}
+	if !slices.ContainsFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == b.ConnectionID }) {
+		p.warn(Finding{
+			Code: "delete-unreachable", Subject: b.Subject, Name: b.Name, Path: p.bindingPath(b),
+			Message: fmt.Sprintf("%s was deployed through a connection that's been removed, so the deployment can't reach it to delete it. Loomplane stops tracking it, and if it still runs, you delete it yourself.", b.Name),
+		})
+	}
+}
+
+// bindingPath is where the manifest has, or had, what a binding deployed.
+func (p *planner) bindingPath(b *Binding) string {
+	switch {
+	case b.Subject == ResourceSubject:
+		return "resources." + b.Name
+	case p.isGateway(b):
+		return "gateways." + b.Name
+	}
+	return "services." + b.Name
 }
 
 // stillReplaced warns about what an action ran as before it moved and
@@ -2029,20 +2066,15 @@ func (p *planner) stillReplaced() {
 		if len(b.Replaced) == 0 {
 			continue
 		}
-		path := "services." + b.Name
-		switch {
-		case b.Subject == ResourceSubject:
-			path = "resources." + b.Name
-		case p.isGateway(b):
-			path = "gateways." + b.Name
-		}
-		then := fmt.Sprintf("This plan keeps %s as it is, so it won't. Retry the deployment that moved %s, or deploy a change to it, and that removes it.", b.Name, b.Name)
+		path := p.bindingPath(b)
+		then :=fmt.Sprintf("This plan keeps %s as it is, so it won't. Retry the deployment that moved %s, or deploy a change to it, and that removes it.", b.Name, b.Name)
 		if i := slices.IndexFunc(p.actions, func(a *Action) bool { return a.ID == id }); i >= 0 {
 			switch p.actions[i].Op {
 			case Keep:
 			case Delete:
-				// The binding tracks it, so the delete waits for it.
-				then = fmt.Sprintf("This plan's deployment removes it before it deletes %s, and fails if it can't.", b.Name)
+				// The binding tracks it, so it goes first. Deleting the
+				// binding stops tracking it either way.
+				then = fmt.Sprintf("This plan's deployment removes it before it deletes %s. If it can't, it warns, and Loomplane stops tracking it, so you delete it yourself.", b.Name)
 			default:
 				then = "This plan's deployment removes it, and warns if it can't."
 			}
@@ -2228,9 +2260,10 @@ func (p *planner) finish() *Result {
 	connections := p.connect()
 	// A cloud only what's left to remove needs gets the connection it
 	// would deploy with, when there's one, so the runner can reach an old
-	// one whose binding names no connection. When there isn't one, that's
-	// no problem for this plan, which deploys nothing there: the runner
-	// warns instead.
+	// one, or one it deletes, whose binding names no connection. When
+	// there isn't one, that's no problem for this plan, which deploys
+	// nothing there: the runner warns about an old one, and a delete fails
+	// saying to choose one.
 	for cloud := range p.removing {
 		if _, ok := connections[cloud]; !ok {
 			if id := p.connectionFor(cloud); id != "" {

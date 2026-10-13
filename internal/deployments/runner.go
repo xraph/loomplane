@@ -426,14 +426,6 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
-	connID := plan.Connections[prov.Cloud]
-	if connID == "" {
-		return fmt.Errorf("the plan names no %s connection", prov.Cloud)
-	}
-	conn, cred, err := r.credentials.Credential(ctx, d.OrgID, connID)
-	if err != nil {
-		return err
-	}
 	bindings, err := r.plans.ListBindings(ctx, d.OrgID, d.EnvironmentID)
 	if err != nil {
 		return err
@@ -451,6 +443,32 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		case planning.ResourceSubject:
 			resources[b.Name] = b
 		}
+	}
+	deleting := a.Op == planning.Delete
+	if deleting && current == nil {
+		return nil
+	}
+	connID := plan.Connections[prov.Cloud]
+	if deleting && current.ConnectionID != "" {
+		// What's deleted goes through the connection that deployed it,
+		// which needn't be the one the environment deploys with now. Only
+		// a binding from before bindings recorded their connection is
+		// taken to be on the plan's.
+		connID = current.ConnectionID
+	}
+	if connID == "" {
+		if deleting {
+			return fmt.Errorf("%s was deployed before Loomplane recorded which connection deployed it, and the plan names no %s connection to delete it through. Choose one for %s and plan again",
+				a.Name, prov.Cloud, d.Environment)
+		}
+		return fmt.Errorf("the plan names no %s connection", prov.Cloud)
+	}
+	conn, cred, err := r.credentials.Credential(ctx, d.OrgID, connID)
+	// A delete whose connection is gone can't reach what it deletes. That
+	// fails nothing: deleteBound stops tracking it and says so.
+	unreachable := deleting && errors.Is(err, connections.ErrNotFound)
+	if err != nil && !unreachable {
+		return err
 	}
 	job := &Job{
 		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
@@ -499,21 +517,8 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	// apart, so a retry hands each its own.
 	rc := readReplaceCheckpoint(resume)
 	job.Resume = rc.Apply
-	if a.Op == planning.Delete {
-		if current == nil {
-			return nil
-		}
-		// What a move left running goes first, so nothing that ran the
-		// action outlives its binding. Each one has to go, or the binding
-		// stays, since it's what tracks them.
-		if rerr := r.removeReplaced(ctx, job, current, nil, nil, rc, heartbeat); rerr != nil {
-			return rerr
-		}
-		progress(StepDeploying, "Removing "+a.Name)
-		if rerr := exec.Remove(ctx, job, current); rerr != nil {
-			return rerr
-		}
-		return r.plans.DeleteBinding(ctx, d.OrgID, current.ID)
+	if deleting {
+		return r.deleteBound(ctx, job, exec, current, unreachable, step, rc, heartbeat)
 	}
 	// A failure removing what an earlier move left only warns: the plan
 	// keeps warning about it, and a permanent one, such as a revoked
@@ -702,6 +707,43 @@ func (rc *replaceCheckpoint) encode() []byte {
 	return data
 }
 
+// deleteBound carries out a Delete. What a move left running goes first,
+// each through the connection that deployed it, then what's bound, through
+// its own, and then the binding. Deleting the binding stops tracking what
+// it lists, so one that can't be removed only warns, as it does on a later
+// deployment: a permanent failure, such as a revoked permission, would
+// otherwise fail every deployment that deletes the action. The warnings
+// land on the step only once the binding is gone, since until then it
+// still tracks them, and a retry tries them again. unreachable is a
+// binding whose connection has been removed, which nothing can reach.
+func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound *planning.Binding, unreachable bool,
+	step *Step, rc *replaceCheckpoint, heartbeat func([]byte) error,
+) error {
+	var warnings []string
+	warn := func(err error) { warnings = append(warnings, err.Error()) }
+	if err := r.removeReplaced(ctx, job, bound, nil, warn, rc, heartbeat); err != nil {
+		return err
+	}
+	a := job.Action
+	if unreachable {
+		warn(fmt.Errorf("the connection that deployed %s has been removed, so Loomplane can't reach it to delete it, and stops tracking it. If %s still runs, delete it yourself, in the account that connection reached",
+			a.Name, locate(exec, bound)))
+		if err := job.Forget(ctx); err != nil {
+			return err
+		}
+	} else {
+		job.Progress(StepDeploying, "Removing "+a.Name)
+		if err := exec.Remove(ctx, job, bound); err != nil {
+			return err
+		}
+	}
+	if err := r.plans.DeleteBinding(ctx, job.Deployment.OrgID, bound.ID); err != nil {
+		return err
+	}
+	step.Warnings = append(step.Warnings, warnings...)
+	return nil
+}
+
 // removeReplaced removes what an action ran as before it moved, which its
 // binding records, through the executor that deployed each, and stops
 // recording each one as it goes. One that's what's bound now, as after a
@@ -750,13 +792,23 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 // could ever reach it.
 func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding, rc *replaceCheckpoint, heartbeat func([]byte) error) (done bool, err error) {
 	a := job.Action
+	exec, ok := r.executors[old.Provider]
+	// Deleting the action deletes the binding that tracks the old one, so
+	// a failure says it's left to you.
+	deleting := a.Op == planning.Delete
+	untracked := func(why error) error {
+		return fmt.Errorf("%w. Deleting %s stops Loomplane tracking the old one, so if %s still runs, delete it yourself",
+			why, a.Name, locate(exec, old))
+	}
 	// notYet is a failure that a change to Loomplane's setup fixes, so the
 	// record stays, and a later attempt removes it.
 	notYet := func(why error) error {
+		if deleting {
+			return untracked(why)
+		}
 		return fmt.Errorf("%w. %s now runs on %s, but the old one on %s (%s) can't be removed until that's fixed. Loomplane keeps track of it, and retrying this deployment, or the next one that deploys %s, removes it then",
 			why, a.Name, placement(a.Provider, a.Region), placement(old.Provider, old.Region), old.ExternalID, a.Name)
 	}
-	exec, ok := r.executors[old.Provider]
 	if !ok {
 		return false, notYet(fmt.Errorf("%w: %s, which ran %s before it moved", ErrNoExecutor, old.Provider, a.Name))
 	}
@@ -776,8 +828,12 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if errors.Is(err, connections.ErrNotFound) {
 		// Nothing can reach it again, so keeping the record would fail
 		// every deployment of the action from now on.
-		return true, fmt.Errorf("the connection that deployed the old %s has been removed, so Loomplane can't reach it, and stops tracking it. %s now runs on %s. If %s still runs, delete it yourself, in the account that connection reached",
-			a.Name, a.Name, placement(a.Provider, a.Region), locate(exec, old))
+		now := ""
+		if !deleting {
+			now = fmt.Sprintf(" %s now runs on %s.", a.Name, placement(a.Provider, a.Region))
+		}
+		return true, fmt.Errorf("the connection that deployed the old %s has been removed, so Loomplane can't reach it, and stops tracking it.%s If %s still runs, delete it yourself, in the account that connection reached",
+			a.Name, now, locate(exec, old))
 	}
 	if err != nil {
 		return false, err
@@ -801,6 +857,9 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	gone.Forget = func(context.Context) error { return nil }
 	job.Progress(StepDeploying, "Removing the one it replaces on "+placement(old.Provider, old.Region))
 	if err := exec.Remove(ctx, &gone, old); err != nil {
+		if deleting {
+			return false, untracked(fmt.Errorf("remove the old %s on %s: %w", a.Name, placement(old.Provider, old.Region), err))
+		}
 		return false, fmt.Errorf("remove the %s it replaces on %s: %w", a.Name, placement(old.Provider, old.Region), err)
 	}
 	return true, nil

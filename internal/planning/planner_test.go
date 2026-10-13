@@ -2290,7 +2290,7 @@ func TestCompute_whatAMoveLeftRunningIsAWarning(t *testing.T) {
 	if r.Connections["aws"] != "conn_aws" || len(r.Problems) != 0 {
 		t.Fatalf("connections %v, problems %v", r.Connections, codes(r.Problems))
 	}
-	// Deleting api waits for it, and fails if it can't go.
+	// Deleting api removes it first, and warns if it can't go.
 	gone := strings.Replace(federatedYAML, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
 	gone = strings.Replace(gone, "    needs: [api]\n", "", 1)
 	del := Compute(Input{
@@ -2300,7 +2300,7 @@ func TestCompute_whatAMoveLeftRunningIsAWarning(t *testing.T) {
 	if a := action(t, del, "service:api"); a.Op != Delete {
 		t.Fatalf("api %s", a.Op)
 	}
-	if w := warning(del, "still-replaced", "api"); w == nil || !strings.HasSuffix(w.Message, "This plan's deployment removes it before it deletes api, and fails if it can't.") {
+	if w := warning(del, "still-replaced", "api"); w == nil || !strings.HasSuffix(w.Message, "This plan's deployment removes it before it deletes api. If it can't, it warns, and Loomplane stops tracking it, so you delete it yourself.") {
 		t.Fatalf("warnings %+v", del.Warnings)
 	}
 	// With no AWS connection, the plan still goes ahead.
@@ -2312,6 +2312,49 @@ func TestCompute_whatAMoveLeftRunningIsAWarning(t *testing.T) {
 	}
 	if r := computeOn(t, noAWS, nil, live...); !r.Executable || r.Connections["aws"] != "" {
 		t.Fatalf("without aws: problems %v, connections %v", codes(r.Problems), r.Connections)
+	}
+}
+
+// A delete goes through the connection that deployed what it deletes, so
+// the plan needs no connection of its own to that cloud. Only one from
+// before bindings recorded their connection goes through the plan's.
+func TestCompute_aDeleteGoesThroughItsBindingsConnection(t *testing.T) {
+	// Two Render connections and none chosen: nothing settles which one
+	// production deploys to Render with.
+	two := append(slices.Clone(connected), ConnectionOption{ID: "conn_render_2", Name: "Render 2", Cloud: "render", Ready: true})
+	gone := func(conn string) []*Binding {
+		return append(deployedThrough(t, nil), &Binding{
+			ID: "bind_old", Subject: ServiceSubject, Name: "old", Provider: "render", ExternalID: "srv_old", ConnectionID: conn,
+		})
+	}
+
+	r := computeOn(t, two, nil, gone("conn_render")...)
+	if a := action(t, r, "service:old"); a.Op != Delete {
+		t.Fatalf("old %s", a.Op)
+	}
+	if !r.Executable || len(r.Problems) != 0 || r.Connections["render"] != "" {
+		t.Fatalf("problems %v, connections %v", codes(r.Problems), r.Connections)
+	}
+	if w := warning(r, "delete-unreachable", "old"); w != nil {
+		t.Fatalf("warnings %+v", r.Warnings)
+	}
+
+	// Its connection was removed: the plan goes ahead, and says what that
+	// leaves to you.
+	r = computeOn(t, two, nil, gone("conn_render_gone")...)
+	w := warning(r, "delete-unreachable", "old")
+	if !r.Executable || w == nil || w.Path != "services.old" ||
+		w.Message != "old was deployed through a connection that's been removed, so the deployment can't reach it to delete it. Loomplane stops tracking it, and if it still runs, you delete it yourself." {
+		t.Fatalf("problems %v, warnings %+v", codes(r.Problems), r.Warnings)
+	}
+
+	// A binding that names no connection goes through the plan's: the
+	// plan pins it when there's one, and goes ahead when there isn't.
+	if r := computeOn(t, connected, nil, gone("")...); !r.Executable || r.Connections["render"] != "conn_render" {
+		t.Fatalf("problems %v, connections %v", codes(r.Problems), r.Connections)
+	}
+	if r := computeOn(t, two, nil, gone("")...); !r.Executable || r.Connections["render"] != "" {
+		t.Fatalf("problems %v, connections %v", codes(r.Problems), r.Connections)
 	}
 }
 

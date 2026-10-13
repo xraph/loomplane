@@ -1119,7 +1119,8 @@ func TestRunner_aLaterDeploymentThatCantRemoveWhatAMoveLeftWarns(t *testing.T) {
 		t.Fatalf("binding %+v", b)
 	}
 
-	// Deleting the action can't leave it untracked, so that fails.
+	// Deleting the action warns too, and says the old one is yours now:
+	// the binding that tracked it goes.
 	del := apiMoves()
 	del.ID, del.Actions[0].Op, del.Actions[0].Service = "plan_2", planning.Delete, nil
 	plans.plan = del
@@ -1127,11 +1128,130 @@ func TestRunner_aLaterDeploymentThatCantRemoveWhatAMoveLeftWarns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d, _ := store.GetDeployment(t.Context(), "org_1", second); d.Status != StatusFailed || !strings.Contains(d.Error, "permission denied") {
-		t.Fatalf("deleting: %s: %s", d.Status, d.Error)
+	d, _ = store.GetDeployment(t.Context(), "org_1", second)
+	s = d.Step("service:api")
+	want := "remove the old api on cloud-run in us-central1: permission denied. Deleting api stops Loomplane tracking the old one, so if ext-old on cloud-run in us-central1 still runs, delete it yourself"
+	if d.Status != StatusSucceeded || len(s.Warnings) != 1 || s.Warnings[0] != want {
+		t.Fatalf("deleting: %s: %s, warnings %q", d.Status, d.Error, s.Warnings)
+	}
+	if _, ok := plans.bindings["service:api"]; ok {
+		t.Fatal("the binding is still there")
+	}
+	if got := log.list(); got[len(got)-1] != "remove vercel ext-vercel" {
+		t.Fatalf("events %v", got)
+	}
+}
+
+// A delete goes through the connection that deployed what it deletes,
+// not the one the plan deploys with now, and needs none from the plan.
+func TestRunner_aDeleteGoesThroughTheBindingsConnection(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-run", log: log}
+	plan := apiMoves()
+	plan.Actions[0].Op, plan.Actions[0].Provider, plan.Actions[0].Region, plan.Actions[0].Service = planning.Delete, "cloud-run", "us-central1", nil
+	plan.Connections = map[string]string{"vercel": "conn_v"}
+	was := onCloudRun()
+	was.ConnectionID = "conn_old"
+	r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{"cloud-run": exec})
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if rm := exec.removes[0]; rm.Connection.ID != "conn_old" || string(rm.Credential) != "secret-conn_old" {
+		t.Fatalf("removed with %s %q", rm.Connection.ID, rm.Credential)
+	}
+	if _, ok := plans.bindings["service:api"]; ok {
+		t.Fatal("the binding is still there")
+	}
+}
+
+// A binding from before bindings recorded their connection is deleted
+// through the plan's, and fails, saying why, when the plan names none.
+func TestRunner_aLegacyDeleteGoesThroughThePlansConnection(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-run", log: log}
+	plan := apiMoves()
+	plan.Actions[0].Op, plan.Actions[0].Provider, plan.Actions[0].Region, plan.Actions[0].Service = planning.Delete, "cloud-run", "us-central1", nil
+	was := onCloudRun()
+	was.ConnectionID = ""
+	r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{"cloud-run": exec})
+
+	if _, err := runAll(t, r, plan); err != nil {
+		t.Fatal(err)
+	}
+	if rm := exec.removes[0]; rm.Connection.ID != "conn_g" {
+		t.Fatalf("removed with %s", rm.Connection.ID)
+	}
+
+	again := apiMoves()
+	again.ID, again.Actions = "plan_2", plan.Actions
+	again.Connections = map[string]string{"vercel": "conn_v"}
+	plans.plan = again
+	plans.bindings["service:api"] = &planning.Binding{
+		ID: "bind_api", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject,
+		Name: "api", Provider: "cloud-run", Region: "us-central1", ExternalID: "ext-old",
+	}
+	id, err := runAll(t, r, again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	if d.Status != StatusFailed || !strings.Contains(d.Error, "the plan names no gcp connection to delete it through") {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
 	}
 	if _, ok := plans.bindings["service:api"]; !ok {
-		t.Fatal("the binding went with something still to remove")
+		t.Fatal("the binding went with nothing removed")
+	}
+}
+
+// A delete whose connection has been removed can't reach what it deletes,
+// and failing would fail every deployment from then on, so it stops
+// tracking it, forgets what's kept for it, and says it's yours.
+func TestRunner_aDeleteWhoseConnectionIsGoneStopsTrackingIt(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-sql", log: log}
+	plan, was := dbMoves()
+	plan.Actions[0].Op, plan.Actions[0].Provider, plan.Actions[0].Region, plan.Actions[0].Resource = planning.Delete, was.Provider, was.Region, nil
+	was.ConnectionID = "conn_old"
+	r, store, plans, secrets := moveRunner(t, plan, was, map[string]Executor{was.Provider: exec})
+	r.credentials = goneCredentials{gone: map[string]bool{"conn_old": true}}
+	key := resourceKey("org_1", "env_1", "db", ResourceURL)
+	secrets.m[key] = []byte("postgres://old")
+
+	// No executor runs, so nothing checkpoints, which runAll insists on.
+	ctx := t.Context()
+	id, _, err := r.Start(ctx, plan.OrgID, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.FetchSource(ctx, plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(ctx, plan.OrgID, id, "resource:db", nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Finish(ctx, plan.OrgID, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(ctx, "org_1", id)
+	s := d.Step("resource:db")
+	if d.Status != StatusSucceeded || len(s.Warnings) != 1 ||
+		!strings.Contains(s.Warnings[0], "the connection that deployed db has been removed") ||
+		!strings.Contains(s.Warnings[0], "delete it yourself") {
+		t.Fatalf("deployment %s: %s, warnings %q", d.Status, d.Error, s.Warnings)
+	}
+	if got := log.list(); len(got) != 0 {
+		t.Fatalf("events %v", got)
+	}
+	if _, ok := plans.bindings["resource:db"]; ok {
+		t.Fatal("the binding is still there")
+	}
+	if _, ok := secrets.m[key]; ok {
+		t.Fatal("what was kept for db is still there")
 	}
 }
 
