@@ -455,6 +455,16 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['ManifestDraft'],
   },
+  'manifests.edit': {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/manifest/edits',
+    entity: 'Revision',
+    rootType: 'Revision',
+    provides: ['Revision:{id}'],
+    invalidates: ['Revision[]'],
+    bodyCodec: CODECS['EditInputBody'],
+    responseCodec: CODECS['Revision'],
+  },
   'manifests.history': {
     method: 'GET',
     path: '/api/v1/projects/{id}/manifest/revisions',

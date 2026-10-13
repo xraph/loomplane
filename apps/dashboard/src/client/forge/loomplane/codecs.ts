@@ -61,6 +61,8 @@ export const CODECS: Record<string, Codec> = {
   "DeploymentList.deployments": {"kind": "array", "items": () => CODECS["Deployment"]},
   "Edge": {"kind": "object", "fields": {"confidence": {"ts": "confidence"}, "evidence": {"ts": "evidence", "codec": () => CODECS["Edge.evidence"]}, "from": {"ts": "from"}, "kind": {"ts": "kind"}, "to": {"ts": "to"}}, "required": ["confidence", "evidence", "from", "kind", "to"]},
   "Edge.evidence": {"kind": "array", "items": () => CODECS["Evidence"]},
+  "EditInputBody": {"kind": "object", "fields": {"add_resource": {"ts": "addResource", "codec": () => CODECS["EditInputBody.add_resource"]}, "ignore": {"ts": "ignore"}}},
+  "EditInputBody.add_resource": {"kind": "object", "fields": {"kind": {"ts": "kind"}, "name": {"ts": "name"}, "provider": {"ts": "provider"}}, "required": ["kind", "name"]},
   "EnvLink": {"kind": "object", "fields": {"address": {"ts": "address"}, "from": {"ts": "from"}, "key": {"ts": "key"}, "subject": {"ts": "subject"}}, "required": ["from", "key", "subject"]},
   "Environment": {"kind": "object", "fields": {"created_at": {"ts": "createdAt"}, "id": {"ts": "id"}, "kind": {"ts": "kind"}, "name": {"ts": "name"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "updated_at": {"ts": "updatedAt"}}, "required": ["created_at", "id", "kind", "name", "org_id", "project_id", "updated_at"]},
   "EnvironmentConnections": {"kind": "object", "fields": {"connections": {"ts": "connections", "codec": () => CODECS["EnvironmentConnections.connections"]}, "environment": {"ts": "environment"}}, "required": ["connections", "environment"]},

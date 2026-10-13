@@ -52,7 +52,7 @@ Where it differs from the plan above, and why:
 Left over:
 
 1. Re-analyzing on push, which needs GitHub webhooks. Done after milestone 6: a push to a repository's default branch re-analyzes every project tracking it, in the organizations that connected the installation it came through.
-2. A repository picker when creating a project. The Integrations page lists what the App can read, but a project still takes a URL.
+2. A repository picker when creating a project. Done with the dashboard redesign: the new project dialog lists what the GitHub App can read, and a URL still works for a public repository.
 3. Detection limits: Python, Java and the rest are found through their Dockerfiles only. A Go command that imports the server's packages reads as a server, because classification follows imports. A Rust crate with both clap and axum is ambiguous.
 4. The GitHub App flow has only been run against a fake GitHub that checks the App's JWT signature. Try it against a real App before relying on it.
 
@@ -90,8 +90,8 @@ Where it differs from the plan above, and why:
 Left over:
 
 1. Nothing happens after approval yet. Milestone 4 adds provisioning, builds and deploys to the same workflow, behind a new `DeploymentBuild`.
-2. Adding or ignoring a resource from a plan saves the manifest from its parsed form, so comments in the YAML don't survive it. Edits made in the editor keep them.
-3. There's no diff between manifest revisions in the dashboard, only the current one.
+2. Adding or ignoring a resource from a plan saved the manifest from its parsed form, so comments in the YAML didn't survive it. Done after milestone 6: the API edits the YAML's node tree (`POST /projects/:id/manifest/edits`), so your comments and order stay where you put them.
+3. There was no diff between manifest revisions. Done after milestone 6: History on the Deploy tab lists every revision and what each changed from the one before.
 
 ## Milestone 4: Real deployments
 
