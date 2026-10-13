@@ -10,8 +10,9 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, Analysis, AnalysisGraph, AnalysisList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Source, SourceList, Variable, VariableList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Revision, RevisionList, Session, Source, SourceList, Variable, VariableList } from './types';
 
+export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
 export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
 export const useApiKeysList = query<APIKeyList>(ops['apiKeys.list']);

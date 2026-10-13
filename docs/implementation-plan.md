@@ -165,4 +165,4 @@ Left over:
 2. A license for Loomplane, and answers to the dependency license questions in [forge-integration.md](forge-integration.md#licenses).
 3. Render is in the catalog without an adapter. Memorystore, Cloud Storage, ElastiCache and S3 have theirs; Render builds from its own GitHub connection, which Loomplane can't hand it.
 4. Private links between clouds, which would need a VPN between them.
-5. The dashboard has no screen for backups or metrics; those are commands and Prometheus.
+5. The dashboard had no screen for metrics. Done: Activity shows the organization's deployments, how often they succeed and how long they take, plan decisions, analyses and drift over 7, 30 or 90 days, counted from Loomplane's own records (`GET /api/v1/activity`). Backups stay a command, `loomplane backup`, since a backup holds every organization's data and doesn't belong behind one organization's page.

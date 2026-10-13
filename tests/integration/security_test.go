@@ -143,6 +143,24 @@ func TestSecurity_organizationsAndRolesHoldEverywhere(t *testing.T) {
 		}
 		refused(t, grace, c.method, c.path, body)
 	}
+	// Activity counts an organization's own: Ada's deployment is in hers
+	// and not in Grace's.
+	var act struct {
+		Deployments struct {
+			Succeeded int `json:"succeeded"`
+		} `json:"deployments"`
+		Drift struct {
+			Deployed int `json:"deployed"`
+		} `json:"drift"`
+	}
+	grace.must(http.StatusOK, http.MethodGet, "/api/v1/activity", nil, &act)
+	if act.Deployments.Succeeded != 0 || act.Drift.Deployed != 0 {
+		t.Fatalf("Grace sees Ada's activity: %+v", act)
+	}
+	ada.must(http.StatusOK, http.MethodGet, "/api/v1/activity", nil, &act)
+	if act.Deployments.Succeeded != 1 {
+		t.Fatalf("Ada's activity %+v", act)
+	}
 	// Ada's key doesn't reach Grace's organization either: it's Ada's.
 	as := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey, token: key.Secret}
 	as.must(http.StatusOK, http.MethodGet, base, nil, nil)

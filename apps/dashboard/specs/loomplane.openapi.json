@@ -7,6 +7,36 @@
   },
   "servers": [],
   "paths": {
+    "/api/v1/activity": {
+      "get": {
+        "tags": [
+          "Activity"
+        ],
+        "summary": "What the organization's Loomplane has done lately: deployments, plans, analyses and drift",
+        "operationId": "activity.get",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Activity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivitySummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/analyses/{id}": {
       "get": {
         "tags": [
@@ -2227,6 +2257,64 @@
           }
         }
       },
+      "ActivityDay": {
+        "type": "object",
+        "required": [
+          "date",
+          "succeeded",
+          "failed"
+        ],
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "succeeded": {
+            "type": "integer"
+          }
+        }
+      },
+      "ActivitySummary": {
+        "type": "object",
+        "required": [
+          "days",
+          "since",
+          "deployments",
+          "plans",
+          "analyses",
+          "drift",
+          "daily"
+        ],
+        "properties": {
+          "analyses": {
+            "$ref": "#/components/schemas/AnalysisCounts"
+          },
+          "daily": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityDay"
+            }
+          },
+          "days": {
+            "type": "integer"
+          },
+          "deployments": {
+            "$ref": "#/components/schemas/DeploymentCounts"
+          },
+          "drift": {
+            "$ref": "#/components/schemas/DriftCounts"
+          },
+          "plans": {
+            "$ref": "#/components/schemas/PlanCounts"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "AddSourceInputBody": {
         "type": "object",
         "required": [
@@ -2311,6 +2399,21 @@
           },
           "summary": {
             "$ref": "#/components/schemas/GraphSummary"
+          }
+        }
+      },
+      "AnalysisCounts": {
+        "type": "object",
+        "required": [
+          "succeeded",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "integer"
+          },
+          "succeeded": {
+            "type": "integer"
           }
         }
       },
@@ -2995,6 +3098,33 @@
           }
         }
       },
+      "DeploymentCounts": {
+        "type": "object",
+        "required": [
+          "succeeded",
+          "failed",
+          "running",
+          "retried",
+          "median_seconds"
+        ],
+        "properties": {
+          "failed": {
+            "type": "integer"
+          },
+          "median_seconds": {
+            "type": "integer"
+          },
+          "retried": {
+            "type": "integer"
+          },
+          "running": {
+            "type": "integer"
+          },
+          "succeeded": {
+            "type": "integer"
+          }
+        }
+      },
       "DeploymentList": {
         "properties": {
           "deployments": {
@@ -3009,6 +3139,25 @@
         ],
         "type": "object",
         "x-forge-envelope": "deployments"
+      },
+      "DriftCounts": {
+        "type": "object",
+        "required": [
+          "deployed",
+          "missing",
+          "changed"
+        ],
+        "properties": {
+          "changed": {
+            "type": "integer"
+          },
+          "deployed": {
+            "type": "integer"
+          },
+          "missing": {
+            "type": "integer"
+          }
+        }
       },
       "Edge": {
         "type": "object",
@@ -3728,6 +3877,37 @@
             "items": {
               "$ref": "#/components/schemas/Finding"
             }
+          }
+        }
+      },
+      "PlanCounts": {
+        "type": "object",
+        "required": [
+          "approved",
+          "rejected",
+          "expired",
+          "superseded",
+          "failed",
+          "waiting"
+        ],
+        "properties": {
+          "approved": {
+            "type": "integer"
+          },
+          "expired": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "rejected": {
+            "type": "integer"
+          },
+          "superseded": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer"
           }
         }
       },

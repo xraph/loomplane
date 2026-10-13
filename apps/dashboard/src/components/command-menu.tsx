@@ -1,5 +1,6 @@
 // The command menu (⌘K): go anywhere, open any project, run an action.
 import {
+  ActivityIcon,
   BracesIcon,
   FolderGit2Icon,
   FolderPlusIcon,
@@ -142,6 +143,13 @@ export function CommandMenu({
               <ServerIcon />
               Infrastructure
               <CommandShortcut>G I</CommandShortcut>
+            </CommandItem>
+            <CommandItem
+              value="activity deployments metrics drift"
+              onSelect={run(() => void navigate({ to: "/activity" }))}
+            >
+              <ActivityIcon />
+              Activity
             </CommandItem>
             <CommandItem
               value="variables secrets organization"

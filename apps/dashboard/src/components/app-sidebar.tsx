@@ -3,6 +3,7 @@
 // It collapses to icons (⌘B) and the projects stay visible when it does.
 import { useAuth } from "@authsome/ui-react"
 import {
+  ActivityIcon,
   CopyIcon,
   FolderGit2Icon,
   KeyboardIcon,
@@ -70,6 +71,12 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       icon: <ServerIcon />,
       link: <Link to="/infrastructure" />,
       isActive: path.startsWith("/infrastructure"),
+    },
+    {
+      title: "Activity",
+      icon: <ActivityIcon />,
+      link: <Link to="/activity" />,
+      isActive: path.startsWith("/activity"),
     },
     {
       title: "Settings",

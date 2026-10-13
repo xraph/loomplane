@@ -4,6 +4,33 @@ import * as types from './types';
 import { CODECS } from './codecs';
 
 export class RESTClient extends Client {
+  public readonly activity = {
+    /**
+     * What the organization's Loomplane has done lately: deployments, plans, analyses and drift
+     */
+    get: async (days?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ActivitySummary> => {
+      let __path = `/api/v1/activity`;
+      const queryParams: Record<string, any> = {};
+      if (days !== undefined) {
+        queryParams['days'] = days;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ActivitySummary"],
+      };
+
+      return this.request<types.ActivitySummary>(config);
+    },
+
+  };
+
   public readonly analyses = {
     /**
      * Analyze the project's repositories, or the ones named

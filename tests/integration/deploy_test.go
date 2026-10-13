@@ -810,6 +810,38 @@ func TestDeploy_aFailedDeploymentIsRetriedFromWhereItStopped(t *testing.T) {
 	if builds != 2 {
 		t.Fatalf("%d builds, want the failed one and the retry", builds)
 	}
+
+	// The organization's activity counts the deployment once, retried.
+	var act struct {
+		Days        int `json:"days"`
+		Deployments struct {
+			Succeeded     int `json:"succeeded"`
+			Failed        int `json:"failed"`
+			Retried       int `json:"retried"`
+			MedianSeconds int `json:"median_seconds"`
+		} `json:"deployments"`
+		Plans struct {
+			Approved int `json:"approved"`
+		} `json:"plans"`
+		Analyses struct {
+			Succeeded int `json:"succeeded"`
+		} `json:"analyses"`
+		Drift struct {
+			Deployed int `json:"deployed"`
+		} `json:"drift"`
+		Daily []struct {
+			Date      string `json:"date"`
+			Succeeded int    `json:"succeeded"`
+		} `json:"daily"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/activity?days=7", nil, &act)
+	today := time.Now().UTC().Format(time.DateOnly)
+	if act.Days != 7 || act.Deployments.Succeeded != 1 || act.Deployments.Failed != 0 || act.Deployments.Retried != 1 ||
+		act.Plans.Approved != 1 || act.Analyses.Succeeded == 0 || act.Drift.Deployed != 2 ||
+		len(act.Daily) != 7 || act.Daily[6].Date != today || act.Daily[6].Succeeded != 1 {
+		t.Fatalf("activity %+v", act)
+	}
+	c.must(http.StatusUnprocessableEntity, http.MethodGet, "/api/v1/activity?days=soon", nil, nil)
 }
 
 type bindingBody struct {

@@ -36,6 +36,7 @@ import (
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
+	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/artifacts"
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
@@ -71,6 +72,7 @@ type Extension struct {
 	manifests   *manifests.Service
 	plans       *planning.Service
 	deploys     *deployments.Service
+	activity    *activity.Service
 	artifacts   *artifacts.Store
 }
 
@@ -160,6 +162,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
 	e.deploys.Projects = prj
+	e.activity = activity.NewService(pg, authz)
 	executors := map[string]deployments.Executor{
 		"cloud-run": &deployments.CloudRun{
 			Google:      gcp.New(e.cfg.Clouds.GoogleEndpoint),

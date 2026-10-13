@@ -78,6 +78,13 @@ export const securitySchemes = {
 } as const;
 
 export const ops = {
+  'activity.get': {
+    method: 'GET',
+    path: '/api/v1/activity',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['ActivitySummary'],
+  },
   'analyses.get': {
     method: 'GET',
     path: '/api/v1/analyses/{id}',
