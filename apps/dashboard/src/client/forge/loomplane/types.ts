@@ -423,10 +423,11 @@ export interface InfrastructureStatus {
 }
 
 export interface Manifest {
-  defaults: Defaults;
+  defaults?: Defaults;
   gateways?: Record<string, any>;
   held?: Held;
-  ignore: Ignore;
+  ignore?: Ignore;
+  links?: Record<string, any>;
   resources?: Record<string, any>;
   services?: Record<string, any>;
   version: number;
@@ -680,10 +681,11 @@ export interface Runs {
 
 export interface SaveInputBody {
   manifest?: {
-  defaults: Defaults;
+  defaults?: Defaults;
   gateways?: Record<string, any>;
   held?: Held;
-  ignore: Ignore;
+  ignore?: Ignore;
+  links?: Record<string, any>;
   resources?: Record<string, any>;
   services?: Record<string, any>;
   version: number;
@@ -728,7 +730,9 @@ export interface ServiceConfig {
   framework?: string;
   gateway?: Route[];
   image?: string;
+  internal?: boolean;
   port?: number;
+  privateEgress?: boolean;
   provider: string;
   public: boolean;
   region?: string;
