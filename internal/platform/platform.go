@@ -112,9 +112,6 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithDisableRoutes(),
 		dispatchext.WithDisableMigrate(),
 	)
-	// Dispatch finds the database in DI while it registers, and declares no
-	// dependency of its own, so without this it could register first.
-	jobs.SetDependencies([]string{groveext.ExtensionName})
 
 	// Provider plugins, described when the first extension that needs
 	// them registers.
@@ -128,10 +125,6 @@ func Extensions(cfg config.Config) []forge.Extension {
 		cpext.WithDisableRoutes(),
 		cpext.WithDisableMigrate(),
 	)
-	// Same as Dispatch: without the database in DI, Ctrl Plane falls back to
-	// an in-memory store. The infrastructure extension refuses to start if
-	// it did anyway.
-	ctrl.SetDependencies([]string{groveext.ExtensionName})
 
 	return []forge.Extension{
 		newSchemaGuard(cfg),
@@ -188,7 +181,6 @@ func WorkerExtensions(cfg config.Config) []forge.Extension {
 		// is short too.
 		dispatchext.WithCronLeaderTTL(workerCronLease),
 	)
-	jobs.SetDependencies([]string{groveext.ExtensionName})
 	return []forge.Extension{newSchemaGuard(cfg), db, jobs, discoveryext.NewWorker(cfg, jobs.Engine)}
 }
 

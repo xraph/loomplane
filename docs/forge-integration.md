@@ -10,20 +10,20 @@ Go 1.26 (the `go` directive is `1.26.0`; it's tested on go1.26.3).
 
 | Library | Module | Pinned | License at that version |
 |---|---|---|---|
-| Forge | `github.com/xraph/forge` | v1.12.8 | Apache-2.0 file; see the note below |
-| Grove | `github.com/xraph/grove`, `.../drivers/pgdriver`, `.../extension` | v1.7.3 | MIT |
-| Authsome | `github.com/xraph/authsome` | v1.7.3-0.20261010165401-f1acbe4f253d | no license file; README says all rights reserved |
+| Forge | `github.com/xraph/forge` | v1.12.9-0.20261013040932-c8f5fcc38b7c (main) | Apache-2.0 file; see the note below |
+| Grove | `github.com/xraph/grove`, `.../drivers/pgdriver`, `.../extension` | v1.7.3; the extension at v1.7.4-0.20261013042516-c28fa000e1b3 (main) | MIT |
+| Authsome | `github.com/xraph/authsome` | v1.7.3-0.20261013045248-b3fd5f9edebc (main) | no license file; README says all rights reserved |
 | Warden | `github.com/xraph/warden` | v1.7.2 | Apache-2.0 |
 | Chronicle | `github.com/xraph/chronicle` | v1.8.0 | no license file |
-| Dispatch | `github.com/xraph/dispatch` | v1.8.0 | no license file (its SDKs say MIT) |
-| Ctrl Plane | `github.com/xraph/ctrlplane` | v1.7.0 | Apache-2.0 |
+| Dispatch | `github.com/xraph/dispatch` | v1.8.1-0.20261013040216-46004e7c0445 (main) | no license file (its SDKs say MIT) |
+| Ctrl Plane | `github.com/xraph/ctrlplane` | v1.7.1-0.20261013050604-236f4beb621f (main) | Apache-2.0 |
 | Confy | `github.com/xraph/confy` | v1.0.3 | MIT per README, no license file |
 
 The dashboard (`apps/dashboard`) pins:
 
 | Package | Version |
 |---|---|
-| `@forge-go/client-core`, `@forge-go/client-react` | 1.12.7 |
+| `@forge-go/client-core`, `@forge-go/client-react` | 1.12.8 |
 | `@authsome/ui-core`, `@authsome/ui-react`, `@authsome/ui-components` | 1.7.2, two of them patched |
 | shadcn CLI | 4.21.4, preset `b1YmpVjlo` (nova, neutral, Geist) |
 | `@base-ui/react` | 1.9, the primitives under every shadcn component |
@@ -68,7 +68,7 @@ Routes carry the cache contract the generated client reads: `forge.WithName` set
 
 What we found:
 
-- Forge's router is forgemux, and `Router.Handle("/", h)` mounts only the wildcard `/*`, which doesn't match `/` itself (`internal/router/forgemux/mux.go:84` trims the trailing slash, then fails to parse the empty base). `extensions/web` registers `GET /` separately.
+- Forge's router is forgemux, and `Router.Handle("/", h)` mounts only the wildcard `/*`, which doesn't match `/` itself (`internal/router/forgemux/mux.go:84` trims the trailing slash, then fails to parse the empty base). Fixed in Forge (c96a1075), so `extensions/web` mounts its catch-all with `Handle("/")` alone.
 - Vessel starts a lazily provided service that has a `Start` method the first time anything resolves it (`vessel/type_registry.go:213`). Dispatch provides its engine and Ctrl Plane its `*app.CtrlPlane` that way. Resolve either from DI while extensions register and you start their workers before the migration pass has made their tables. Loomplane takes them from the extensions' own accessors (`dispatchext.Extension.Engine`, `cpext.Extension.CtrlPlane`).
 - The CLI's `migrate` commands look for a `CentralMigrator`, and the grove extension contributes a `MigrationRegistry`, so with central migrations on they report nothing to do. `cmd/loomplane` turns them off. Migrations run on every start.
 - A middleware that was nil during Register (authsome builds its own only when its engine starts) made `app.Start` hang instead of failing.
@@ -101,7 +101,7 @@ The guard on Loomplane's routes is authsome's session chain as authsome's own ex
 What we found:
 
 - The tagged v1.7.2 doesn't build against Forge 1.12 (above).
-- Several organization handlers write their JSON twice, so a client can't parse the body even though the write succeeded. `internal/httpx.FirstJSON` keeps the first document, as tap does.
+- Several organization handlers write their JSON twice, so a client can't parse the body even though the write succeeded. Fixed in authsome (e371f402); Loomplane's `FirstJSON` workaround is gone.
 - Creating an organization with a slug that's taken answers 500, not 409. The dashboard checks the slug first with `GET /authsome/v1/orgs/check-slug`.
 - `engine.AuthMiddleware()` is nil until the engine starts, so the guard looks it up per request.
 - Most of authsome's hook events (`session.create`, `device.register`, `org.create`, `rbac.role.assign`, `org.invitation.accept`) carry no audit category, and Chronicle refuses an event without one. Every one of them was logged as `audit record failed` and never stored. `extensions/identity/audit.go` hands authsome an emitter that files them under `auth`; an event that names its own category keeps it.
@@ -170,7 +170,7 @@ Loomplane registers the official extension with its own queue added (`WithQueues
 What we found:
 
 - No job deduplication. Every Loomplane handler is idempotent so a retried or duplicated job does no harm.
-- The extension declares no dependency on grove and finds the database while registering, so `internal/platform` adds the dependency.
+- The extension declared no dependency on grove. Fixed in Dispatch (46004e7), so `internal/platform` no longer adds one.
 - On a fresh database the engine tries to register its worker row before the tables exist and logs a warning; the heartbeat registers it again a moment later.
 - Dispatch has two workflow engines. The older `workflow` package runs a whole workflow synchronously in the caller and resumes every running workflow inside `engine.Start`, so an approval waiting for a day would hold startup. Deployment workflows use the durable runtime (`durable/runtime`), which has leases, durable timers and signals; an approval is a signal. Its handlers have to be given to the extension when it's built, before the planning extension exists, so `internal/platform` builds them (`orchestration.NewDeployments`) and the planning extension binds the planner to them while it registers.
 - Every Dispatch app competes for cron leadership, there's no way to opt out, and a stopped app keeps the lease until it expires. Followers only look for a leader every half lease, which by default is 30 seconds. The API runs with a 10-second lease and `loomplane-worker`, which schedules nothing, with 5, so a leader that stops is replaced in seconds and the drift check keeps its schedule.
@@ -192,7 +192,7 @@ What we found:
 - Only Docker, Kubernetes and Nomad providers exist. There's no Vercel, Cloud Run, ECS or Render provider, despite the docs listing AWS and GCP as "interface defined".
 - Instance drift correction is a stub. The reconciler only reconciles datacenter bootstrap services, and the health, telemetry and certificate workers are no-ops. Its scheduler isn't leader-elected, so two replicas run every worker twice.
 - `Config.DefaultProvider` is never applied; every create needs a provider or datacenter.
-- The extension declares no dependency on grove; `internal/platform` adds it.
+- The extension declared no dependency on grove. Fixed in Ctrl Plane (9068e10), so `internal/platform` no longer adds one.
 
 The provider adapters Loomplane needs are planned in [implementation-plan.md](implementation-plan.md).
 
@@ -212,14 +212,16 @@ Tests: `internal/config`.
 
 ## Bastion
 
-Loomplane doesn't run Bastion itself. A `gateways:` entry in `loomplane.yaml` becomes a small Go program on Bastion (`internal/gateway`), generated with the routes baked in and built on the cloud's own builder like any service, so application traffic never passes through Loomplane. Each route's target arrives in a variable, the way any service finds what it needs. The program pins Bastion v1.1.1 on Forge v1.9.2, with its own `go.sum`; the embedded files are named `.txt` so Go doesn't treat them as part of this module, and a test builds the generated program with `-mod=readonly`.
+Loomplane doesn't run Bastion itself. A `gateways:` entry in `loomplane.yaml` becomes a small Go program on Bastion (`internal/gateway`), generated with the routes baked in and built on the cloud's own builder like any service, so application traffic never passes through Loomplane. Each route's target arrives in a variable, the way any service finds what it needs. The program pins Bastion and Forge at their main commits, with its own `go.sum`; the embedded files are named `.txt` so Go doesn't treat them as part of this module, and one test builds the generated program with `-mod=readonly`, and another runs it in front of two upstreams and checks what each receives.
 
-What we found wiring it, each worked around in the generated program:
+What we found wiring it, and where it stands:
 
-- `bastion.New` registers routes but never wires the proxy ("proxy handler not set"); `bastion/extension.New` does, at the cost of pulling in its Mongo, Postgres and SQLite stores.
-- The admin REST API has no authentication of its own. It's only registered when the dashboard is enabled, so the gateway disables the dashboard, OpenAPI aggregation and discovery.
-- Active health checks are on by default against `/_/health`. An app that doesn't serve that path gets its route taken down after three probes, so the gateway turns health checks off: each route has one target, already load balanced by its cloud.
-- Forge's router trims a trailing slash before Bastion sees the request, so `/docs/` reached the service as `/docs`, which many servers redirect back to `/docs/`. The gateway adds an `OnRequest` hook, after `Register` creates the hook engine, that restores the slash from `RequestURI`.
+- `bastion.New` registered routes but never wired the proxy, and `bastion/extension.New` pulled in Mongo, Postgres and SQLite stores. Bastion now has `gateway.New`, which proxies without the stores, and the program uses it.
+- The admin REST API has no authentication of its own. It's only registered when the dashboard is enabled, so the gateway disables the dashboard, OpenAPI aggregation and discovery. Bastion can now require a token for it (`WithAdminToken`), but the gateway has no use for the API at all.
+- Active health checks are on by default against `/_/health`. An app that doesn't serve that path gets its route taken down after three probes, so the gateway turns health checks off: each route has one target, already load balanced by its cloud. Bastion now only fails a probe on a server error unless you set a path, but there's still nothing to fail over to, so they stay off.
+- Forge's old router trimmed a trailing slash before Bastion saw the request, so `/docs/` reached the service as `/docs`. Forge's current router keeps it and Bastion now forwards what the client sent, so the program's hook that put it back is gone.
+- On Forge's current router, the catch-all at `/*path` didn't answer `/` itself, so a route at the root 404ed there. Fixed in Bastion (23c004a); the test that runs the gateway is what found it.
+- Retries are on by default now: a GET, HEAD or OPTIONS that gets a 502, 503 or 504 is retried, up to three attempts and within a budget of 20% of a target's requests.
 
 FARP isn't used: a gateway's routes come from the manifest, not from live discovery.
 

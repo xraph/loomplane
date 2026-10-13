@@ -54,16 +54,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
 	}
-	h := e.Handler()
-	if err := fapp.Router().Handle("/", h); err != nil {
-		return err
-	}
-	// Forge's router (forgemux) mounts "/" as the wildcard "/*" alone, which
-	// doesn't match the bare root, so the root gets its own route.
-	return fapp.Router().GET("/", func(c forge.Context) error {
-		h.ServeHTTP(c.Response(), c.Request())
-		return nil
-	}, forge.WithSchemaExclude())
+	return fapp.Router().Handle("/", e.Handler())
 }
 
 // Start reports whether there's a dashboard to serve.

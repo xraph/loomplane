@@ -51,7 +51,6 @@ import (
 
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
-	"github.com/xraph/loomplane/internal/httpx"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
@@ -230,7 +229,7 @@ func (e *Extension) mount(ctx context.Context) error {
 	}
 	e.router = r
 	base := e.cfg.Identity.BasePath
-	if err := e.App().Router().Handle(base, http.StripPrefix(base, httpx.FirstJSON(r.Handler()))); err != nil {
+	if err := e.App().Router().Handle(base, http.StripPrefix(base, r.Handler())); err != nil {
 		return fmt.Errorf("mount authsome at %s: %w", base, err)
 	}
 	return nil

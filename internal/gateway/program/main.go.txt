@@ -8,12 +8,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 
 	"github.com/xraph/bastion"
-	"github.com/xraph/bastion/extension"
+	"github.com/xraph/bastion/gateway"
 	"github.com/xraph/forge"
 )
 
@@ -68,7 +67,9 @@ func run() error {
 	}
 	app := forge.NewApp(forge.AppConfig{
 		Name: "loomplane-gateway", Version: "1", HTTPAddress: ":" + port,
-		Extensions: []forge.Extension{gateway{extension.New(
+		// gateway.New is Bastion's proxy without its stores: the routes
+		// are fixed, so there's nothing to keep.
+		Extensions: []forge.Extension{gateway.New(
 			bastion.WithRoutes(configs),
 			// No admin API or dashboard: they'd be open to anyone who can
 			// reach the gateway, and the routes never change at runtime.
@@ -79,33 +80,7 @@ func run() error {
 			// so there's nothing to fail over to; probing a path the app
 			// may not serve would only take the route down.
 			bastion.WithHealthCheck(bastion.HealthCheckConfig{}),
-		)}},
+		)},
 	})
 	return app.Run()
-}
-
-// gateway is Bastion's extension, with the request's own path.
-type gateway struct{ *extension.Extension }
-
-// Register implements forge.Extension.
-func (g gateway) Register(app forge.App) error {
-	if err := g.Extension.Register(app); err != nil {
-		return err
-	}
-	g.Gateway().Hooks().OnRequest(keepTrailingSlash)
-	return nil
-}
-
-// keepTrailingSlash puts back the trailing slash Forge's router trims
-// before Bastion sees the request, so /docs/ reaches the service as
-// /docs/ and not as /docs, which many servers redirect to /docs/.
-func keepTrailingSlash(r *http.Request, _ *bastion.Route) error {
-	sent, _, _ := strings.Cut(r.RequestURI, "?")
-	if strings.HasSuffix(sent, "/") && !strings.HasSuffix(r.URL.Path, "/") {
-		r.URL.Path += "/"
-		if r.URL.RawPath != "" {
-			r.URL.RawPath += "/"
-		}
-	}
-	return nil
 }

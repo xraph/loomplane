@@ -1,8 +1,6 @@
 module github.com/xraph/loomplane
 
-go 1.26.0
-
-toolchain go1.26.9
+go 1.26.9
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -25,16 +23,16 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/xraph/authsome v1.7.3-0.20261010165401-f1acbe4f253d
+	github.com/xraph/authsome v1.7.3-0.20261013045248-b3fd5f9edebc
 	github.com/xraph/chronicle v1.8.0
 	github.com/xraph/confy v1.0.3
-	github.com/xraph/ctrlplane v1.7.0
-	github.com/xraph/dispatch v1.8.0
-	github.com/xraph/forge v1.12.8
+	github.com/xraph/ctrlplane v1.7.1-0.20261013050604-236f4beb621f
+	github.com/xraph/dispatch v1.8.1-0.20261013040216-46004e7c0445
+	github.com/xraph/forge v1.12.9-0.20261013040932-c8f5fcc38b7c
 	github.com/xraph/go-utils v1.3.0
 	github.com/xraph/grove v1.7.3
 	github.com/xraph/grove/drivers/pgdriver v1.7.3
-	github.com/xraph/grove/extension v1.7.3
+	github.com/xraph/grove/extension v1.7.4-0.20261013042516-c28fa000e1b3
 	github.com/xraph/keysmith v1.7.1
 	github.com/xraph/trove v1.7.0
 	github.com/xraph/vault v1.7.1
@@ -146,7 +144,6 @@ require (
 	github.com/xraph/grove/drivers/mongodriver v1.7.3 // indirect
 	github.com/xraph/grove/drivers/sqlitedriver v1.7.3 // indirect
 	github.com/xraph/grove/kv v1.7.3 // indirect
-	github.com/xraph/grove/kv/drivers/redisdriver v1.7.3 // indirect
 	github.com/xraph/ledger v1.7.0 // indirect
 	github.com/xraph/vessel v1.0.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
@@ -172,9 +169,9 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
-	k8s.io/api v0.36.3 // indirect
-	k8s.io/apimachinery v0.36.3 // indirect
-	k8s.io/client-go v0.36.3 // indirect
+	k8s.io/api v0.37.1 // indirect
+	k8s.io/apimachinery v0.37.1 // indirect
+	k8s.io/client-go v0.37.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
