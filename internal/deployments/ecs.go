@@ -106,11 +106,15 @@ func sourceBucket(s *aws.Session) string { return "loomplane-" + s.Account() + "
 // build runs the service's build on CodeBuild and returns its image.
 func (e *ECS) build(ctx context.Context, s *aws.Session, job *Job, state *ecsState, save func()) (string, error) {
 	cfg := job.Action.Service
+	tag, err := imageTag(job)
+	if err != nil {
+		return "", err
+	}
 	repo, err := s.EnsureRepository(ctx, "loomplane/"+imageName(job))
 	if err != nil {
 		return "", err
 	}
-	image := repo + ":" + job.SourceID[:12]
+	image := repo + ":" + tag
 	if state.BuildID == "" {
 		bucket := sourceBucket(s)
 		job.Progress(StepBuilding, "Uploading the source to CodeBuild")

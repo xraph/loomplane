@@ -114,7 +114,11 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *cloudRunState, save func()) (string, error) {
 	a, cfg := job.Action, job.Action.Service
 	project := s.Key().ProjectID
-	image := gcp.ImageName(project, a.Region, imageRepository, imageName(job), job.SourceID[:12])
+	tag, err := imageTag(job)
+	if err != nil {
+		return "", err
+	}
+	image := gcp.ImageName(project, a.Region, imageRepository, imageName(job), tag)
 	if state.BuildID == "" {
 		job.Progress(StepBuilding, "Uploading the source to Cloud Build")
 		bucket := project + "_loomplane"
@@ -153,6 +157,16 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 }
 
 // imageName names the service's image, unique within the project.
+// imageTag tags a build's image with the first 12 characters of what it
+// was built from. Anything shorter isn't a commit or a generated source,
+// so the build stops rather than tag every build alike.
+func imageTag(job *Job) (string, error) {
+	if len(job.SourceID) < 12 {
+		return "", fmt.Errorf("%s has no commit to build from", job.Action.Name)
+	}
+	return job.SourceID[:12], nil
+}
+
 func imageName(job *Job) string {
 	return strings.ToLower(job.Action.Name + "-" + idSuffix(job.Deployment.ProjectID))
 }

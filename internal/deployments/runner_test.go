@@ -645,3 +645,38 @@ func TestRunner_aRetryStoresOnlyTheRepositoriesAFailureMissed(t *testing.T) {
 		}
 	}
 }
+
+func TestCommitFor_aServiceThatNamesNoRepository(t *testing.T) {
+	svc := planning.Action{Service: &planning.ServiceConfig{}}
+	one := &Deployment{CommitSHA: shaAPI, Sources: []SourceArtifact{{CommitSHA: shaAPI}}}
+	several := &Deployment{
+		CommitSHA: "api@aaaaaaa web@bbbbbbb",
+		Sources:   []SourceArtifact{{Alias: "api", CommitSHA: shaAPI}, {Alias: "web", CommitSHA: shaWeb}},
+	}
+	older := &Deployment{CommitSHA: shaAPI}
+	for name, tt := range map[string]struct {
+		d    *Deployment
+		want string
+	}{
+		"one repository":                   {one, shaAPI},
+		"several repositories":             {several, ""},
+		"a deployment from before sources": {older, shaAPI},
+	} {
+		if got := commitFor(tt.d, svc); got != tt.want {
+			t.Errorf("%s: %q, want %q", name, got, tt.want)
+		}
+	}
+}
+
+func TestImageTag_refusesWhatIsntACommit(t *testing.T) {
+	job := &Job{Action: planning.Action{Name: "api"}, SourceID: shaAPI}
+	if tag, err := imageTag(job); err != nil || tag != shaAPI[:12] {
+		t.Fatalf("tag %q, %v", tag, err)
+	}
+	for _, id := range []string{"", "abc1234"} {
+		job.SourceID = id
+		if _, err := imageTag(job); err == nil || err.Error() != "api has no commit to build from" {
+			t.Errorf("SourceID %q: %v", id, err)
+		}
+	}
+}

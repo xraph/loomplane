@@ -325,9 +325,10 @@ func sourceFor(d *Deployment, repo string) (string, error) {
 
 // commitFor is the commit an action builds from: the one its plan pinned
 // for the service's repository. A service from a plan that names no
-// repository takes the deployment's commit, which is the one commit when
-// the deployment moves one repository. A resource builds nothing, and a
-// gateway is built from what Loomplane generates, so neither has one.
+// repository takes the commit of the deployment's one repository, and has
+// none when the deployment moves several, since it can't be told which. A
+// resource builds nothing, and a gateway is built from what Loomplane
+// generates, so neither has one.
 func commitFor(d *Deployment, a planning.Action) string {
 	switch {
 	case a.Service == nil || a.Service.Gateway != nil:
@@ -336,6 +337,10 @@ func commitFor(d *Deployment, a planning.Action) string {
 		return a.Service.CommitSHA
 	case len(d.Sources) == 1:
 		return d.Sources[0].CommitSHA
+	case len(d.Sources) > 1:
+		// d.CommitSHA names every repository, as "api@aaaaaaa
+		// web@bbbbbbb", which isn't a commit.
+		return ""
 	}
 	return d.CommitSHA
 }
