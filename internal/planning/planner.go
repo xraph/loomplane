@@ -533,6 +533,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
 	p.buildContext(name, base, s.Build, gs, cfg)
+	p.checkRender(name, base, cfg)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
@@ -1459,6 +1460,10 @@ func (p *planner) link(name string, a *Action) {
 				Message: fmt.Sprintf("%s runs on %s, but %s is private on %s, and nothing on another cloud can reach a private service. Make %s public, or run them on the same cloud.", name, cloudTitle(p.cloud(a.Provider)), need, cloudTitle(p.cloud(dep.Provider)), need),
 			})
 			continue
+		case !dep.Service.Public && dep.Provider == renderTarget && a.Provider == renderTarget:
+			// Render's private network: the dependency's address is its
+			// name there, which Render gives it when it's made, so the
+			// runner takes it from the dependency's binding.
 		case !dep.Service.Public && dep.Provider == cloudRun:
 			p.warn(Finding{
 				Code: "authenticated-call", Subject: ServiceSubject, Name: name, Path: base,
@@ -1483,9 +1488,43 @@ func (p *planner) link(name string, a *Action) {
 
 // Targets the planner knows how services on them reach each other.
 const (
-	ecsFargate = "ecs-fargate"
-	cloudRun   = "cloud-run"
+	ecsFargate   = "ecs-fargate"
+	cloudRun     = "cloud-run"
+	renderTarget = "render"
 )
+
+// renderNative are the ecosystems Render builds without a Dockerfile.
+var renderNative = map[discovery.Ecosystem]bool{discovery.Go: true, discovery.Node: true, discovery.Python: true}
+
+// checkRender reports what Render can't build: it has native runtimes
+// for some languages, and starts a Node service with npm start.
+func (p *planner) checkRender(name, base string, cfg *ServiceConfig) {
+	if cfg.Provider != renderTarget || cfg.Image != "" || cfg.Execution == provider.Static {
+		return
+	}
+	switch {
+	case !renderNative[cfg.Ecosystem]:
+		p.problem(Finding{
+			Code: "render-needs-dockerfile", Subject: ServiceSubject, Name: name, Path: base + ".provider",
+			Message: fmt.Sprintf("Render has no native runtime for %s like %s, so it builds from a Dockerfile. Add one, or run %s somewhere else.", ecosystemTitle(cfg.Ecosystem), name, name),
+		})
+	case cfg.Ecosystem == discovery.Node && cfg.Start == "":
+		p.problem(Finding{
+			Code: "render-needs-start", Subject: ServiceSubject, Name: name, Path: base + ".source",
+			Message: fmt.Sprintf("Render starts a Node service with npm start, and %s's package.json has no start script. Add one, or a Dockerfile.", name),
+		})
+	}
+}
+
+func ecosystemTitle(e discovery.Ecosystem) string {
+	switch e {
+	case discovery.Rust:
+		return "Rust services"
+	case discovery.JVM:
+		return "JVM services"
+	}
+	return string(e) + " services"
+}
 
 func (p *planner) cloud(name string) string {
 	if prov, err := p.in.Providers.Get(name); err == nil {

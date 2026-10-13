@@ -43,12 +43,18 @@ func (e *Extension) clouds() (CloudList, error) {
 		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true},
 		{Cloud: connections.Vercel, Title: "Vercel", Builtin: true},
 		{Cloud: connections.AWS, Title: "AWS", Builtin: true},
+		// Render's form is the plain one plugins get: a key and a setting.
+		{
+			Cloud: connections.Render, Title: "Render", Credential: "API key",
+			Help:     "Create one in Render under Account settings, API keys. Render builds from your repositories through its own GitHub connection, so give it access to them there too. The workspace ID is only needed when the key reaches more than one.",
+			Settings: []sdk.Setting{{Key: "owner_id", Label: "Workspace ID"}},
+		},
 	}}
 	plugs, err := e.plugins.Plugins()
 	if err != nil {
 		return out, err
 	}
-	seen := map[string]bool{connections.GCP: true, connections.Vercel: true, connections.AWS: true}
+	seen := map[string]bool{connections.GCP: true, connections.Vercel: true, connections.AWS: true, connections.Render: true}
 	for _, p := range plugs {
 		if seen[p.Cloud()] {
 			continue

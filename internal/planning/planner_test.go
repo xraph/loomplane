@@ -194,9 +194,19 @@ func TestCompute_fresh(t *testing.T) {
 		}
 	}
 	// A target with no adapter yet can be planned, for review only.
-	render := compute(t, "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api}\nignore: {resources: [postgres, redis]}\n", "production")
-	if render.Executable || !slices.Contains(codes(render.Warnings), "provider-unavailable:render") {
-		t.Errorf("render: executable %v, warnings %v", render.Executable, codes(render.Warnings))
+	reg := providers.Registry()
+	if err := reg.Register(provider.Provider{
+		Name: "later", Title: "Later", Cloud: "later", Model: provider.Instance, Note: "Its adapter comes later.",
+		Runs: []provider.Runs{{Workload: provider.HTTPService, Execution: provider.Container, Creates: "thing"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	later := Compute(Input{
+		Environment: "production", Graph: polyglot(t), Providers: reg, Connections: connected,
+		Manifest: parse(t, "version: 1\ndefaults: {provider: later}\nservices:\n  api: {source: services/api}\nignore: {resources: [postgres, redis]}\n"),
+	})
+	if later.Executable || !slices.Contains(codes(later.Warnings), "provider-unavailable:later") {
+		t.Errorf("later: executable %v, warnings %v", later.Executable, codes(later.Warnings))
 	}
 	// web uses Postgres per analysis but only needs api: worth saying.
 	if !slices.Contains(got, "unlinked-resource:web") {
@@ -228,7 +238,8 @@ func TestCompute_problems(t *testing.T) {
 		{"needs a worker", "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api, needs: [w]}\n  w: {source: services/worker/cmd/worker}", "need-worker:api"},
 		{"needs something off", "version: 1\ndefaults: {provider: render}\nservices:\n  api: {source: services/api, needs: [db]}\nresources:\n  db:\n    kind: postgres\n    environments: {production: {enabled: false}}", "need-off:api"},
 		{"private across clouds", "version: 1\nservices:\n  web: {source: apps/web, provider: vercel, needs: [api]}\n  api: {source: services/api, provider: ecs-fargate, public: false}", "private-across-clouds:web"},
-		{"private with no network", "version: 1\ndefaults: {provider: render}\nservices:\n  gw: {source: apps/gateway, needs: [api]}\n  api: {source: services/api, public: false}", "private-unreachable:gw"},
+		{"private with no network", "version: 1\ndefaults: {provider: vercel}\nservices:\n  web: {source: apps/web, needs: [docs]}\n  docs: {source: apps/docs, public: false}", "private-unreachable:web"},
+		{"render without a dockerfile", "version: 1\nservices:\n  ingest: {source: crates/ingest/src/main.rs, provider: render}", "render-needs-dockerfile:ingest"},
 		{"tool kind", "version: 1\nservices:\n  api: {source: services/api, provider: render, kind: worker}\n  w: {source: services/worker/cmd/worker, provider: cloud-run, kind: http-service}", ""},
 	}
 	for _, tt := range tests {
@@ -2149,5 +2160,16 @@ func TestCompute_onAWSTheConnectionDecidesTheRegion(t *testing.T) {
 	r = plan(inOregon(federatedOnAWS, "db"), "conn_ie", before...)
 	if db := action(t, r, "resource:db"); db.Op != Keep || slices.Contains(codes(r.Problems), "connection-region:db") {
 		t.Fatalf("db %+v, problems %v", db, codes(r.Problems))
+	}
+}
+
+func TestCompute_renderServicesReachEachOtherPrivately(t *testing.T) {
+	r := compute(t, "version: 1\ndefaults: {provider: render}\nservices:\n  gw: {source: apps/gateway, needs: [api]}\n  api: {source: services/api, public: false}\nignore: {resources: [postgres, redis]}\n", "production")
+	if len(r.Problems) != 0 || !r.Executable {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	gw := action(t, r, "service:gw")
+	if len(gw.Service.Env) != 1 || gw.Service.Env[0].Key != "API_URL" || gw.Service.Env[0].Address != "" || gw.Engine != provider.Loomplane {
+		t.Fatalf("gw %+v", gw)
 	}
 }

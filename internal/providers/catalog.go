@@ -1,12 +1,14 @@
 // Package providers is Loomplane's catalog of deployment targets: the
 // clouds and platforms a plan can name, described with pkg/provider.
 //
-// Nothing here talks to a cloud. Each adapter arrives with its milestone
-// (docs/implementation-plan.md); until then its target is described but
-// not available, and plans that use it are for review only.
+// Nothing here talks to a cloud: internal/deployments has the adapters.
+// A target without one, or one paused in the configuration, is described
+// but not available, and plans that use it are for review only.
 package providers
 
 import (
+	"slices"
+
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -24,10 +26,6 @@ var (
 		"eu-central-1", "eu-north-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1",
 	}
 	renderRegions = []string{"oregon", "ohio", "virginia", "frankfurt", "singapore"}
-)
-
-const (
-	milestone5 = "Loomplane's adapter for it arrives in milestone 5."
 )
 
 // Catalog returns the built-in targets, in the order a person choosing one
@@ -76,8 +74,8 @@ func Catalog() []provider.Provider {
 		},
 		{
 			Name: "render", Title: "Render", Cloud: "render",
-			Description: "Runs web services, background workers and static sites, and provisions Postgres and Key Value alongside them.",
-			Model:       provider.Instance,
+			Description: "Builds and runs web services, private services, background workers and static sites from your repository, and provisions Postgres and Key Value alongside them.",
+			Model:       provider.Build,
 			Runs: []provider.Runs{
 				{Workload: provider.HTTPService, Execution: provider.Container, Creates: "Render web service"},
 				{Workload: provider.WebApp, Execution: provider.Container, Creates: "Render web service"},
@@ -89,7 +87,7 @@ func Catalog() []provider.Provider {
 				{Kind: "redis", Creates: "Render Key Value instance"},
 			},
 			Regions: renderRegions, Scaling: true,
-			Note: milestone5,
+			Available: true,
 		},
 		{
 			Name: "cloud-sql", Title: "Google Cloud SQL", Cloud: "gcp",
@@ -160,9 +158,24 @@ func Catalog() []provider.Provider {
 	}
 }
 
+// PausedNote is what a plan says about a paused target.
+const PausedNote = "It's paused in this Loomplane's configuration (providers.paused)."
+
+// Pause makes p a target whose plans are for review only.
+func Pause(p *provider.Provider) {
+	p.Available, p.Note = false, PausedNote
+}
+
 // Registry returns a registry of the catalog.
-func Registry() *provider.Registry {
-	r, err := provider.NewRegistry(Catalog()...)
+// Any named in paused are for review only.
+func Registry(paused ...string) *provider.Registry {
+	all := Catalog()
+	for i := range all {
+		if slices.Contains(paused, all[i].Name) {
+			Pause(&all[i])
+		}
+	}
+	r, err := provider.NewRegistry(all...)
 	if err != nil {
 		// The catalog is a constant; its test registers it.
 		panic(err)

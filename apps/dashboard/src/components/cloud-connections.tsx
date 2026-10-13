@@ -1,5 +1,5 @@
 // The organization's cloud connections: the Google Cloud projects and
-// Vercel accounts it deploys to. Credentials go in once and never come
+// AWS, Vercel and Render accounts it deploys to. Credentials go in once and never come
 // back; the API checks each with its cloud before keeping it.
 import { CloudIcon, RefreshCwIcon, Trash2Icon, UploadIcon } from "lucide-react"
 import { type FormEvent, useRef, useState } from "react"
@@ -79,9 +79,9 @@ export function CloudConnections() {
       <CardHeader>
         <CardTitle>Clouds</CardTitle>
         <CardDescription>
-          The Google Cloud projects and Vercel accounts Loomplane deploys to.
-          Each credential is checked with its cloud before it&apos;s kept,
-          stored encrypted, and never shown again.
+          The Google Cloud projects and AWS, Vercel and Render accounts
+          Loomplane deploys to. Each credential is checked with its cloud before
+          it&apos;s kept, stored encrypted, and never shown again.
         </CardDescription>
         {mayManage && (
           <CardAction>
@@ -106,7 +106,7 @@ export function CloudConnections() {
         {list.data && connections.length === 0 && (
           <p className="text-sm text-muted-foreground">
             {mayManage
-              ? "No clouds connected yet. Connect Google Cloud for services that run as containers, and Vercel for web apps."
+              ? "No clouds connected yet. Connect Google Cloud, AWS or Render for services and databases, and Vercel for web apps."
               : "No clouds connected yet. An admin can connect one."}
           </p>
         )}

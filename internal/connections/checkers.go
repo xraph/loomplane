@@ -9,6 +9,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
@@ -85,12 +86,67 @@ func (v VercelChecker) Check(ctx context.Context, credential []byte, settings ma
 	return c, nil
 }
 
+// ownerRE matches Render workspace IDs: tea- for a team, usr- for a
+// person's own.
+var ownerRE = regexp.MustCompile(`^(tea|usr)-[a-z0-9]{1,64}$`)
+
+// RenderChecker checks Render API keys. The one setting is owner_id, the
+// workspace to deploy in. A key reaches every workspace its person is in;
+// without the setting, the only one it reaches is used, and several is an
+// error naming them.
+type RenderChecker struct{ Client *render.Client }
+
+// Parse implements Checker.
+func (r RenderChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
+	if err := render.CheckKey(string(credential)); err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	details := map[string]string{}
+	if owner := strings.TrimSpace(settings["owner_id"]); owner != "" {
+		if !ownerRE.MatchString(owner) {
+			return Check{}, fmt.Errorf("%w: %q isn't a Render workspace ID; they look like tea- or usr- followed by letters and digits", ErrInvalid, owner)
+		}
+		details["owner_id"] = owner
+	}
+	return Check{Details: details}, nil
+}
+
+// Check implements Checker: it asks Render which workspaces the key
+// reaches, and settles on one.
+func (r RenderChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
+	c, err := r.Parse(credential, settings)
+	if err != nil {
+		return Check{}, err
+	}
+	owners, err := r.Client.Owners(ctx, render.Key{Value: strings.TrimSpace(string(credential))})
+	if err != nil {
+		return Check{}, err
+	}
+	want := c.Details["owner_id"]
+	names := make([]string, 0, len(owners))
+	for _, o := range owners {
+		if o.ID == want || (want == "" && len(owners) == 1) {
+			c.Details["owner_id"], c.Account = o.ID, o.Name
+			return c, nil
+		}
+		names = append(names, o.Name+" ("+o.ID+")")
+	}
+	switch {
+	case len(owners) == 0:
+		return Check{}, fmt.Errorf("%w: the key reaches no Render workspace", render.ErrRejected)
+	case want != "":
+		return Check{}, fmt.Errorf("%w: the key can't reach workspace %s; it reaches %s", render.ErrRejected, want, strings.Join(names, ", "))
+	}
+	return Check{}, fmt.Errorf("%w: the key reaches %d workspaces, %s; set owner_id to the one to deploy in", ErrInvalid, len(owners), strings.Join(names, ", "))
+}
+
 // rejected reports whether a check failed because the cloud refused the
 // credential, as opposed to the cloud being unreachable.
 func rejected(err error) bool {
 	var ge *gcp.APIError
 	var ve *vercel.APIError
-	return errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
+	var re *render.APIError
+	return errors.Is(err, render.ErrRejected) || errors.As(err, &re) || errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
 		errors.Is(err, aws.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
 		errors.As(err, &ge) || errors.As(err, &ve)
 }

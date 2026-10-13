@@ -90,6 +90,7 @@ clouds:
   google_endpoint: "${LOOMPLANE_GOOGLE_ENDPOINT:-}"
   vercel_endpoint: "${LOOMPLANE_VERCEL_ENDPOINT:-}"
   aws_endpoint: "${LOOMPLANE_AWS_ENDPOINT:-}"
+  render_endpoint: "${LOOMPLANE_RENDER_ENDPOINT:-}"
 
 providers:
   # Deployment targets that run as their own services, built with
@@ -98,6 +99,9 @@ providers:
   #     - url: http://fly-provider:9000
   #       token: "${FLY_PROVIDER_TOKEN}"
   plugins: []
+  # Targets whose plans can be reviewed but not carried out, by name, such
+  # as render or cloud-run. A list, or a comma-separated string.
+  paused: "${LOOMPLANE_PAUSED_PROVIDERS:-}"
 
 worker:
   # Where loomplane-worker serves its health checks, and nothing else.
