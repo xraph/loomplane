@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -124,5 +125,31 @@ func TestWebhooks_aPushReanalyzesEverySourceTrackingTheDefaultBranch(t *testing.
 	}
 	if len(started) != 0 {
 		t.Fatalf("started %v", started)
+	}
+}
+
+func TestWebhooks_oneSourceFailingDoesntStopTheRest(t *testing.T) {
+	sources := []*Source{
+		{ID: "src_a", OrgID: "org_a", ProjectID: "proj_a", Alias: "web", Repository: "acme/mono"},
+		{ID: "src_b", OrgID: "org_a", ProjectID: "proj_b", Alias: "api", Repository: "acme/mono"},
+		{ID: "src_c", OrgID: "org_a", ProjectID: "proj_c", Alias: "mono", Repository: "acme/mono"},
+	}
+	var started []string
+	w := &Webhooks{
+		Sources: func(context.Context, string) ([]*Source, error) { return sources, nil },
+		Start: func(_ context.Context, src *Source) (*Analysis, error) {
+			if src.ID == "src_b" {
+				return nil, errors.New("queue down")
+			}
+			started = append(started, src.ID)
+			return &Analysis{}, nil
+		},
+	}
+	n, err := w.Handle(context.Background(), "push", push("refs/heads/main", 0, false))
+	if n != 2 || !slices.Equal(started, []string{"src_a", "src_c"}) {
+		t.Fatalf("started %d %v", n, started)
+	}
+	if err == nil || !strings.Contains(err.Error(), "analyze api of proj_b: queue down") {
+		t.Fatalf("error %v", err)
 	}
 }

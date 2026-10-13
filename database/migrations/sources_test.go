@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -261,6 +262,9 @@ func TestSourceRepositoryIndex_findsARepositoryWhateverItsCase(t *testing.T) {
 	exec(t, conn, analysesUp...)
 	exec(t, conn, variablesUp...)
 	exec(t, conn, projectStyleUp...)
+	exec(t, conn,
+		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
+			('proj_a', 'org', 'A', 'a', 'https://github.com/Acme/Storefront', 'ready', 'usr', now(), now())`)
 	exec(t, conn, sourcesUp...)
 	exec(t, conn, sourceRepositoryIndexUp...)
 	exec(t, conn, sourceRepositoryIndexUp...)
@@ -268,6 +272,19 @@ func TestSourceRepositoryIndex_findsARepositoryWhateverItsCase(t *testing.T) {
 		AND indexname LIKE 'loomplane_project_sources_repository%' ORDER BY indexname`
 	if got := strs(t, conn, indexes); !slices.Equal(got, []string{"loomplane_project_sources_repository_lower"}) {
 		t.Fatalf("indexes %q", got)
+	}
+	// The webhook's lookup (discovery.PgStore.SourcesByRepository) finds
+	// the source whatever case GitHub names it in, through the index.
+	const lookup = `SELECT id FROM loomplane_project_sources
+		WHERE lower(repository) = lower('acme/storefront') AND removed_at IS NULL`
+	if got := strs(t, conn, lookup); len(got) != 1 {
+		t.Fatalf("found %q", got)
+	}
+	exec(t, conn, `SET enable_seqscan = off`)
+	plan := strings.Join(strs(t, conn, `EXPLAIN `+lookup), "\n")
+	exec(t, conn, `SET enable_seqscan = on`)
+	if !strings.Contains(plan, "loomplane_project_sources_repository_lower") {
+		t.Fatalf("the lookup doesn't use the index:\n%s", plan)
 	}
 	exec(t, conn, sourceRepositoryIndexDown...)
 	if got := strs(t, conn, indexes); !slices.Equal(got, []string{"loomplane_project_sources_repository"}) {

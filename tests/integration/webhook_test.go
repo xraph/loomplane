@@ -63,15 +63,30 @@ func TestWebhook_aPushReanalyzesTheSourcesThatTrackIt(t *testing.T) {
 	// A second of Ada's projects tracks acme/mono's default branch too, and
 	// a third tracks its release branch, spelled in another case, which a
 	// push to main doesn't move.
-	var shop, release struct {
+	// A fourth tracks main under that other spelling, which the lookup
+	// finds whatever its case; a fifth's source was removed, so it hears
+	// nothing.
+	var shop, release, cased, gone struct {
 		ID string `json:"id"`
 	}
 	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Shop", "repository_url": "https://github.com/acme/mono"}, &shop)
 	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Release"}, &release)
-	if _, err := conn.Exec(context.Background(), `INSERT INTO loomplane_project_sources
-		(id, org_id, project_id, alias, repository, root, ref, created_by, created_at, updated_at)
-		VALUES ('src_release', $1, $2, 'mono', 'Acme/Mono', '', 'release', 'test', now(), now())`, adaOrg, release.ID); err != nil {
-		t.Fatal(err)
+	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Cased"}, &cased)
+	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Gone"}, &gone)
+	for _, s := range []struct {
+		id, project, repository, ref string
+		removed                      bool
+	}{
+		{"src_release", release.ID, "Acme/Mono", "release", false},
+		{"src_cased", cased.ID, "Acme/Mono", "", false},
+		{"src_gone", gone.ID, "acme/mono", "", true},
+	} {
+		if _, err := conn.Exec(context.Background(), `INSERT INTO loomplane_project_sources
+			(id, org_id, project_id, alias, repository, root, ref, created_by, created_at, updated_at, removed_at)
+			VALUES ($1, $2, $3, 'mono', $4, '', $5, 'test', now(), now(), CASE WHEN $6 THEN now() END)`,
+			s.id, adaOrg, s.project, s.repository, s.ref, s.removed); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	deliver := func(event string, payload any, secret string) (int, int) {
@@ -121,17 +136,20 @@ func TestWebhook_aPushReanalyzesTheSourcesThatTrackIt(t *testing.T) {
 	}
 
 	// Through the installation, only Ada's organization hears about it,
-	// and both of her projects tracking main.
-	if code, n := deliver("push", push("refs/heads/main", 42), cfg.GitHub.WebhookSecret); code != http.StatusAccepted || n != 2 {
+	// and each of her live sources tracking main, whatever its case.
+	if code, n := deliver("push", push("refs/heads/main", 42), cfg.GitHub.WebhookSecret); code != http.StatusAccepted || n != 3 {
 		t.Fatalf("push through the installation: %d, %d", code, n)
 	}
-	for _, id := range []string{adaProj, shop.ID} {
+	for _, id := range []string{adaProj, shop.ID, cased.ID} {
 		if a := analyses(ada, id); len(a) != 1 || a[0].Status != "queued" || a[0].Source != "mono" {
 			t.Fatalf("ada's analyses of %s %+v", id, a)
 		}
 	}
 	if a := analyses(ada, release.ID); len(a) != 0 {
 		t.Fatalf("a source tracking release was analyzed: %+v", a)
+	}
+	if a := analyses(ada, gone.ID); len(a) != 0 {
+		t.Fatalf("a removed source was analyzed: %+v", a)
 	}
 	var by string
 	if err := conn.QueryRow(context.Background(), `SELECT created_by FROM loomplane_analyses WHERE project_id = $1`, shop.ID).Scan(&by); err != nil || by != "github-push" {
