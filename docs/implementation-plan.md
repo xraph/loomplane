@@ -66,7 +66,7 @@ Added after milestone 2, because deployments need configuration to deploy with.
 - Secret variables are encrypted in Vault and write-only: the API never returns their value, and the audit trail records keys, never values. Owners and admins set organization-wide variables; developers set their projects'.
 - In the dashboard: environments on each project page, a Variables card that resolves an environment for the project or one service and lets you set, edit or override at that layer, and an organization-wide Variables page.
 
-Left over: nothing reads the resolved variables yet. Deployments (milestone 4) will, and they'll be the only path that reveals a secret. A variable can't move to another layer or environment once set; delete it and set it again. Environments can't be renamed, because organization-wide variables name them.
+Left over: deployments read the resolved variables since milestone 4, and they're the only path that reveals a secret. A variable can't move to another layer or environment once set; delete it and set it again. Environments can't be renamed, because organization-wide variables name them.
 
 ## Milestone 3: Planning
 
@@ -90,7 +90,7 @@ Where it differs from the plan above, and why:
 
 Left over:
 
-1. Nothing happens after approval yet. Milestone 4 adds provisioning, builds and deploys to the same workflow, behind a new `DeploymentBuild`.
+1. Nothing happened after approval. Milestone 4 added provisioning, builds and deploys to the same workflow.
 2. Adding or ignoring a resource from a plan saved the manifest from its parsed form, so comments in the YAML didn't survive it. Done after milestone 6: the API edits the YAML's node tree (`POST /projects/:id/manifest/edits`), so your comments and order stay where you put them.
 3. There was no diff between manifest revisions. Done after milestone 6: History on the Deploy tab lists every revision and what each changed from the one before.
 
