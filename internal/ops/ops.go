@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -280,13 +281,17 @@ func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Read
 	if err != nil {
 		return nil, err
 	}
+	triggers, err := pauseRestoreTriggers(ctx, tx, names)
+	if err != nil {
+		return nil, err
+	}
 	quotedAll := make([]string, 0, len(names))
 	for _, t := range names {
 		quotedAll = append(quotedAll, quoted(t))
 	}
 	if len(quotedAll) > 0 {
-		if _, err := tx.Exec(ctx, "TRUNCATE "+strings.Join(quotedAll, ", ")+" CASCADE"); err != nil {
-			return nil, fmt.Errorf("empty the tables: %w", err)
+		if _, truncateErr := tx.Exec(ctx, "TRUNCATE "+strings.Join(quotedAll, ", ")+" CASCADE"); truncateErr != nil {
+			return nil, fmt.Errorf("empty the tables: %w", truncateErr)
 		}
 	}
 	for _, t := range names {
@@ -294,8 +299,20 @@ func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Read
 		if !ok {
 			continue // a table this Loomplane has and the backup's didn't
 		}
-		if _, err := tx.Conn().PgConn().CopyFrom(ctx, strings.NewReader(string(data)), "COPY "+quoted(t)+" FROM STDIN"); err != nil {
-			return nil, fmt.Errorf("load %s: %w", t, err)
+		if _, copyErr := tx.Conn().PgConn().CopyFrom(ctx, strings.NewReader(string(data)), "COPY "+quoted(t)+" FROM STDIN"); copyErr != nil {
+			return nil, fmt.Errorf("load %s: %w", t, copyErr)
+		}
+	}
+	if _, err = tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE"); err != nil {
+		return nil, fmt.Errorf("validate restored references: %w", err)
+	}
+	for _, trigger := range triggers {
+		enable := "ENABLE TRIGGER "
+		if trigger.mode == "A" {
+			enable = "ENABLE ALWAYS TRIGGER "
+		}
+		if _, err := tx.Exec(ctx, "ALTER TABLE "+quoted(trigger.table)+" "+enable+pgx.Identifier{trigger.name}.Sanitize()); err != nil {
+			return nil, fmt.Errorf("restore triggers for %s: %w", trigger.table, err)
 		}
 	}
 	if err := resetSequences(ctx, tx); err != nil {
@@ -308,6 +325,38 @@ func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Read
 		return nil, fmt.Errorf("the backup is loaded, but bringing it up to this Loomplane's schema failed: %w", err)
 	}
 	return m, nil
+}
+
+type restoreTrigger struct{ table, name, mode string }
+
+// Archive rows already include derived records. Pause only triggers that run
+// for this restore session, keeping disabled and replica-only triggers intact.
+func pauseRestoreTriggers(ctx context.Context, tx pgx.Tx, names []string) ([]restoreTrigger, error) {
+	rows, err := tx.Query(ctx, `SELECT n.nspname||'.'||c.relname,t.tgname,t.tgenabled::text FROM pg_trigger t
+		JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+		WHERE NOT t.tgisinternal AND t.tgenabled IN ('O','A')`)
+	if err != nil {
+		return nil, err
+	}
+	all, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (restoreTrigger, error) {
+		var trigger restoreTrigger
+		scanErr := row.Scan(&trigger.table, &trigger.name, &trigger.mode)
+		return trigger, scanErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	selected := make([]restoreTrigger, 0, len(all))
+	for _, trigger := range all {
+		if !slices.Contains(names, trigger.table) {
+			continue
+		}
+		if _, err = tx.Exec(ctx, "ALTER TABLE "+quoted(trigger.table)+" DISABLE TRIGGER "+pgx.Identifier{trigger.name}.Sanitize()); err != nil {
+			return nil, fmt.Errorf("pause restore triggers for %s: %w", trigger.table, err)
+		}
+		selected = append(selected, trigger)
+	}
+	return selected, nil
 }
 
 // upTo is groups with only the migrations named, as group:version: the

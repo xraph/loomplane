@@ -13,6 +13,7 @@ import (
 	chronpg "github.com/xraph/chronicle/store/postgres"
 	cppg "github.com/xraph/ctrlplane/store/postgres"
 	dispatchpg "github.com/xraph/dispatch/store/postgres"
+	conduitpg "github.com/xraph/forge/extensions/conduit/providers/postgres"
 	"github.com/xraph/grove/migrate"
 	kspg "github.com/xraph/keysmith/store/postgres"
 	vaultpg "github.com/xraph/vault/store/postgres"
@@ -48,6 +49,9 @@ func Group() *migrate.Group {
 		statements("20261015000001", "drop_superseded_columns", supersededUp, supersededDown),
 		statements("20261016000001", "add_binding_replaced", bindingReplacedUp, bindingReplacedDown),
 		statements("20261016000002", "protect_connection_uses", connectionUsesUp, connectionUsesDown),
+		statements("20261016000003", "persist_realtime_events", realtimeUp, realtimeDown),
+		statements("20261016000004", "conduit_realtime_transport", conduitpg.Migrations("loomplane_realtime_broker"), []string{`DROP SCHEMA IF EXISTS loomplane_realtime_broker CASCADE`}),
+		statements("20261016000005", "finalize_realtime_contracts", realtimeFinalizeUp(), nil),
 	)
 	return g
 }

@@ -100,10 +100,10 @@ type LogInput struct {
 // State writers append within their existing database transaction.
 ```
 
-- [ ] Write PostgreSQL tests with two independent connections. Hold the cursor lock in one transaction while another writer starts; replay must return both committed events in order. Roll back a state write and require no event. Deduplicate the same provider ID, retain two identical lines with different provider IDs, and verify truncation/redaction.
-- [ ] Run `LOOMPLANE_TEST_DATABASE_URL=... go test -tags=integration ./internal/realtime -count=1`. Expected: missing store or ordering/record assertions fail.
-- [ ] Add the organization cursor, durable event rows, bounded log records, retention and literal-secret redaction. Use Postgres transactions for authoritative state events. Implement producer-owned replay and Conduit wake-up delivery, with durable catch-up after a missed wake-up.
-- [ ] Run focused integration tests, existing integration suite, format/lint/full tests and commit `feat: persist deployment events and build output`.
+- [x] Write PostgreSQL tests with two independent connections. Hold the cursor lock in one transaction while another writer starts; replay must return both committed events in order. Roll back a state write and require no event. Deduplicate the same provider ID, retain two identical lines with different provider IDs, and verify truncation/redaction.
+- [x] Run `LOOMPLANE_TEST_DATABASE_URL=... go test -tags=integration ./internal/realtime -count=1`. Expected: missing store or ordering/record assertions fail.
+- [x] Add the organization cursor, durable event rows, bounded log records, retention and literal-secret redaction. Use Postgres transactions for authoritative state events. Implement producer-owned replay and Conduit wake-up delivery, with durable catch-up after a missed wake-up.
+- [x] Run focused integration tests, existing integration suite, format/lint/full tests and commit `feat: persist deployment events and build output`.
 
 ## Task 5: Forge WS/SSE routes and generated clients
 
