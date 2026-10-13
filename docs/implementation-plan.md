@@ -51,7 +51,7 @@ Where it differs from the plan above, and why:
 
 Left over:
 
-1. Re-analyzing on push, which needs GitHub webhooks.
+1. Re-analyzing on push, which needs GitHub webhooks. Done after milestone 6: a push to a repository's default branch re-analyzes every project tracking it, in the organizations that connected the installation it came through.
 2. A repository picker when creating a project. The Integrations page lists what the App can read, but a project still takes a URL.
 3. Detection limits: Python, Java and the rest are found through their Dockerfiles only. A Go command that imports the server's packages reads as a server, because classification follows imports. A Rust crate with both clap and axum is ambiguous.
 4. The GitHub App flow has only been run against a fake GitHub that checks the App's JWT signature. Try it against a real App before relying on it.

@@ -72,6 +72,26 @@ func (s *Service) Start(ctx context.Context, p security.Principal, projectID str
 	if err != nil {
 		return nil, err
 	}
+	return s.start(ctx, p, proj, in.Ref)
+}
+
+// PushActor is who an analysis a push started is recorded as created by.
+const PushActor = "github-push"
+
+// StartFromPush queues an analysis of a project's default branch because
+// GitHub said it moved. It skips the permission check, since nobody asked:
+// the webhook's signature is the authority. A project with an analysis
+// already under way is left alone.
+func (s *Service) StartFromPush(ctx context.Context, orgID, projectID string) (*Analysis, error) {
+	proj, err := s.projects.GetProject(ctx, orgID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return s.start(ctx, security.Principal{OrgID: orgID, UserID: PushActor}, proj, "")
+}
+
+func (s *Service) start(ctx context.Context, p security.Principal, proj *projects.Project, rawRef string) (*Analysis, error) {
+	projectID := proj.ID
 	if strings.TrimSpace(proj.RepositoryURL) == "" {
 		return nil, ErrNoRepository
 	}
@@ -79,7 +99,7 @@ func (s *Service) Start(ctx context.Context, p security.Principal, projectID str
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	ref := strings.TrimSpace(in.Ref)
+	ref := strings.TrimSpace(rawRef)
 	if ref != "" && !repositories.ValidRef(ref) {
 		return nil, fmt.Errorf("%w: %q isn't a branch, tag or commit name", ErrInvalid, ref)
 	}

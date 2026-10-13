@@ -13,7 +13,8 @@ On GitHub, go to **Settings → Developer settings → GitHub Apps → New GitHu
 | Callback URL | `<public_url>/integrations/github/setup` |
 | Request user authorization (OAuth) during installation | **On** |
 | Expire user authorization tokens | On |
-| Webhook | **Off** (uncheck Active); Loomplane doesn't use webhooks yet |
+| Webhook | **Active**, URL `<public_url>/api/v1/github/webhook`, with a secret you generate (`openssl rand -hex 32`); or off, if you'd rather press Analyze yourself |
+| Subscribe to events | **Push** |
 | Repository permissions: Contents | **Read-only** |
 | Repository permissions: Metadata | Read-only (GitHub requires it) |
 | Everything else | No access |
@@ -50,3 +51,9 @@ An owner or admin opens **Integrations** in the dashboard and chooses **Connect 
 - **Connecting.** GitHub's redirect carries the installation's number and a one-time code. Loomplane exchanges the code for the installer's own token and checks that their account can see that installation. Only then does it connect the installation to the organization. The number alone proves nothing, since anyone can guess one. The state in the link is signed, lasts 15 minutes, and names the organization and person who started it. The installer's token is used for that one check and dropped.
 - **Analyzing.** For each analysis, the worker mints an installation token limited to the one repository and to reading its contents. GitHub expires it within the hour. Loomplane stores no token anywhere, and uses an organization's own installations only, so one organization can never read another's code.
 - **Disconnecting** removes the installation from the organization in Loomplane. The App stays installed on GitHub until someone uninstalls it there.
+
+## Re-analyzing on push
+
+With the webhook on, set its secret in `LOOMPLANE_GITHUB_WEBHOOK_SECRET` for `loomplane`. When a repository's default branch moves, every project tracking it is analyzed again, so the next plan has the new commit without anyone pressing Analyze. Only organizations that connected the installation the push came through hear about it. Pushes to other branches, and deliveries without a matching signature, do nothing.
+
+A public repository needs no App for this: add a webhook to the repository itself, with the same URL and secret and the push event, and every project tracking it is re-analyzed.

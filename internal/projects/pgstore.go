@@ -246,3 +246,26 @@ func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation
 }
+
+// ProjectsByRepository lists projects in any organization whose repository
+// URL mentions fullName, such as acme/mono, for a push webhook to match
+// exactly. It's the one query that crosses organizations, and only the
+// webhook, which GitHub signs, uses it.
+func (s *PgStore) ProjectsByRepository(ctx context.Context, fullName string) ([]*Project, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+projectColumns+` FROM loomplane_projects
+		WHERE repository_url ILIKE '%' || $1 || '%' ORDER BY created_at, id`, fullName)
+	if err != nil {
+		return nil, fmt.Errorf("find projects by repository: %w", err)
+	}
+	defer rows.Close()
+	out := []*Project{}
+	for rows.Next() {
+		var p Project
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepositoryURL, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan project: %w", err)
+		}
+		p.normalize()
+		out = append(out, &p)
+	}
+	return out, rows.Err()
+}

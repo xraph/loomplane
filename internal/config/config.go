@@ -115,6 +115,10 @@ type GitHubConfig struct {
 	// App can see the installation.
 	ClientID     string
 	ClientSecret string
+	// WebhookSecret is the secret GitHub signs webhook deliveries with.
+	// Set it, and the same secret on the App's webhook, to re-analyze a
+	// project when its default branch moves. Empty turns webhooks off.
+	WebhookSecret string
 }
 
 // AppConfigured reports whether a GitHub App is set up.
@@ -317,6 +321,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.GitHub.PrivateKeyFile, "github.private_key_file")
 	r.str(&c.GitHub.ClientID, "github.client_id")
 	r.str(&c.GitHub.ClientSecret, "github.client_secret")
+	r.str(&c.GitHub.WebhookSecret, "github.webhook_secret")
 	r.str(&c.Analysis.WorkDir, "analysis.work_dir")
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
