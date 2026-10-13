@@ -608,6 +608,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Add a resource to the manifest, or ignore a resource kind, keeping the YAML's comments
+     */
+    edit: async (id: string, body: types.EditInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Revision> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/manifest/edits`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["EditInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Revision"],
+      };
+
+      return this.request<types.Revision>(config);
+    },
+
+    /**
      * The project's latest manifest revisions, newest first
      */
     history: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RevisionList> => {

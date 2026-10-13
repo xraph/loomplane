@@ -1471,6 +1471,59 @@
         }
       }
     },
+    "/api/v1/projects/{id}/manifest/edits": {
+      "post": {
+        "tags": [
+          "Manifests"
+        ],
+        "summary": "Add a resource to the manifest, or ignore a resource kind, keeping the YAML's comments",
+        "operationId": "manifests.edit",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The current revision, unchanged when nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Revision"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Revision"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/manifest/revisions": {
       "get": {
         "tags": [
@@ -2983,6 +3036,32 @@
             "type": "string"
           },
           "to": {
+            "type": "string"
+          }
+        }
+      },
+      "EditInputBody": {
+        "type": "object",
+        "properties": {
+          "add_resource": {
+            "type": "object",
+            "required": [
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              }
+            }
+          },
+          "ignore": {
             "type": "string"
           }
         }

@@ -52,7 +52,7 @@ Where it differs from the plan above, and why:
 Left over:
 
 1. Re-analyzing on push, which needs GitHub webhooks. Done after milestone 6: a push to a repository's default branch re-analyzes every source tracking it (one that names no branch, or names that one), in the organizations that connected the installation it came through. Sources are indexed by repository, so a push to `owner/name` maps to the sources that track it with one lookup.
-2. A repository picker when creating a project. The add-source dialog already suggests repositories from the GitHub connection, but the new-project dialog still takes a URL, which becomes the project's first source.
+2. A repository picker when creating a project. Done with the dashboard redesign: the new project dialog lists what the GitHub App can read, and a URL still works for a public repository.
 3. Detection limits: Python, Java and the rest are found through their Dockerfiles only. A Go command that imports the server's packages reads as a server, because classification follows imports. A Rust crate with both clap and axum is ambiguous.
 4. The GitHub App flow has only been run against a fake GitHub that checks the App's JWT signature. Try it against a real App before relying on it.
 5. A cleanup migration. It drops `loomplane_projects.repository_url`, `loomplane_plans.analysis_id` and `commit_sha`, and `loomplane_deployments.source`. Sources and plan locksets replaced all four, and nothing reads them now. They stay so a rollback to the previous release can still read what was there before the upgrade. That's all it can read, though: projects, plans and deployments made after the upgrade leave those columns empty.
@@ -91,8 +91,8 @@ Where it differs from the plan above, and why:
 Left over:
 
 1. Nothing happens after approval yet. Milestone 4 adds provisioning, builds and deploys to the same workflow, behind a new `DeploymentBuild`.
-2. Adding or ignoring a resource from a plan saves the manifest from its parsed form, so comments in the YAML don't survive it. Edits made in the editor keep them.
-3. There's no diff between manifest revisions in the dashboard, only the current one.
+2. Adding or ignoring a resource from a plan saved the manifest from its parsed form, so comments in the YAML didn't survive it. Done after milestone 6: the API edits the YAML's node tree (`POST /projects/:id/manifest/edits`), so your comments and order stay where you put them.
+3. There was no diff between manifest revisions. Done after milestone 6: History on the Deploy tab lists every revision and what each changed from the one before.
 
 ## Milestone 4: Real deployments
 

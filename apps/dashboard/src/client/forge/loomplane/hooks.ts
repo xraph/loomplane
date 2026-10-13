@@ -57,6 +57,7 @@ export const useProjectsGraph = query<ProjectView>(ops['projects.graph']);
 export const useManifestsCurrent = query<Revision>(ops['manifests.current']);
 export const useManifestsSave = mutation<Revision, Revision>(ops['manifests.save']);
 export const useManifestsDraft = query<ManifestDraft>(ops['manifests.draft']);
+export const useManifestsEdit = mutation<Revision, Revision>(ops['manifests.edit']);
 export const useManifestsHistory = query<RevisionList>(ops['manifests.history']);
 export const usePlansList = query<PlanList>(ops['plans.list']);
 export const usePlansCreate = mutation<Plan, Plan>(ops['plans.create']);

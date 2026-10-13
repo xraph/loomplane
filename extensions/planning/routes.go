@@ -111,6 +111,13 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithResponseSchema(http.StatusOK, "The current revision, unchanged when nothing changed", manifests.Revision{}),
 			forge.WithResponseSchema(http.StatusCreated, "The new revision", manifests.Revision{}),
 		}},
+		{http.MethodPost, "/projects/:id/manifest/edits", e.editManifest, []forge.RouteOption{
+			forge.WithName("manifests.edit"),
+			forge.WithSummary("Add a resource to the manifest, or ignore a resource kind, keeping the YAML's comments"),
+			forge.WithRequestSchema(manifests.EditInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The current revision, unchanged when nothing changed", manifests.Revision{}),
+			forge.WithResponseSchema(http.StatusCreated, "The new revision", manifests.Revision{}),
+		}},
 		{http.MethodGet, "/projects/:id/manifest/revisions", e.manifestHistory, []forge.RouteOption{
 			forge.WithName("manifests.history"),
 			forge.WithSummary("The project's latest manifest revisions, newest first"),
@@ -254,6 +261,25 @@ func (e *Extension) saveManifest(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"yaml": "..."}`)
 	}
 	rev, created, err := e.manifests.Save(c.Request().Context(), p, c.Param("id"), in)
+	if err != nil {
+		return fail(err)
+	}
+	if created {
+		return c.JSON(http.StatusCreated, rev)
+	}
+	return c.JSON(http.StatusOK, rev)
+}
+
+func (e *Extension) editManifest(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in manifests.EditInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"add_resource": {...}} or {"ignore": "kind"}`)
+	}
+	rev, created, err := e.manifests.Edit(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
 		return fail(err)
 	}

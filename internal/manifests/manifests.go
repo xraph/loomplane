@@ -92,6 +92,51 @@ type SaveInput struct {
 	Manifest *manifest.Manifest `json:"manifest,omitempty"`
 }
 
+// EditInput is one change to the current manifest, made to its YAML so
+// the comments in it survive: add a resource, or ignore a resource kind.
+type EditInput struct {
+	AddResource *NewResource `json:"add_resource,omitempty"`
+	Ignore      string       `json:"ignore,omitempty"`
+}
+
+// NewResource is a resource to add to the manifest.
+type NewResource struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Provider string `json:"provider,omitempty"`
+}
+
+// Edit applies one change to the project's current manifest and saves the
+// result as a new revision. It keeps the YAML's comments and order.
+func (s *Service) Edit(ctx context.Context, p security.Principal, projectID string, in EditInput) (*Revision, bool, error) {
+	if err := s.authz.Require(ctx, p, security.ProjectUpdate, projectID); err != nil {
+		return nil, false, err
+	}
+	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+		return nil, false, err
+	}
+	cur, err := s.store.CurrentRevision(ctx, p.OrgID, projectID)
+	if err != nil {
+		return nil, false, err
+	}
+	var out []byte
+	switch {
+	case in.AddResource != nil && in.Ignore != "":
+		return nil, false, fmt.Errorf("%w: make one edit at a time", ErrInvalid)
+	case in.AddResource != nil:
+		r := in.AddResource
+		out, err = manifest.WithResource([]byte(cur.YAML), strings.TrimSpace(r.Name), manifest.Resource{Kind: r.Kind, Provider: r.Provider})
+	case in.Ignore != "":
+		out, err = manifest.WithIgnored([]byte(cur.YAML), strings.TrimSpace(in.Ignore))
+	default:
+		return nil, false, fmt.Errorf("%w: say what to change: add_resource or ignore", ErrInvalid)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return s.Save(ctx, p, projectID, SaveInput{YAML: string(out)})
+}
+
 // Current returns the project's manifest.
 func (s *Service) Current(ctx context.Context, p security.Principal, projectID string) (*Revision, error) {
 	if err := s.authz.Require(ctx, p, security.ProjectRead, projectID); err != nil {

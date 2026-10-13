@@ -1,0 +1,66 @@
+//go:build integration
+
+package integration
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/xraph/loomplane/internal/config"
+)
+
+func TestManifest_editsFromAPlanKeepTheComments(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+
+	// No manifest yet: nothing to edit.
+	c.must(http.StatusNotFound, http.MethodPost, base+"/manifest/edits", map[string]any{"ignore": "kafka"}, nil)
+
+	const yaml = "# Ours, with notes.\nversion: 1\nservices:\n  # The API.\n  api:\n    source: go:services/api # its module\n    provider: cloud-run\n"
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": yaml}, nil)
+
+	type revision struct {
+		Revision int    `json:"revision"`
+		YAML     string `json:"yaml"`
+	}
+	var rev revision
+	c.must(http.StatusCreated, http.MethodPost, base+"/manifest/edits",
+		map[string]any{"add_resource": map[string]string{"name": "db", "kind": "postgres", "provider": "cloud-sql"}}, &rev)
+	c.must(http.StatusCreated, http.MethodPost, base+"/manifest/edits", map[string]any{"ignore": "kafka"}, &rev)
+	for _, want := range []string{"# Ours, with notes.", "# The API.", "# its module", "db:", "kind: postgres", "kafka"} {
+		if !strings.Contains(rev.YAML, want) {
+			t.Errorf("the edited manifest lacks %q:\n%s", want, rev.YAML)
+		}
+	}
+	if rev.Revision != 3 {
+		t.Fatalf("revision %d", rev.Revision)
+	}
+	// Ignoring it again changes nothing.
+	c.must(http.StatusOK, http.MethodPost, base+"/manifest/edits", map[string]any{"ignore": "kafka"}, &rev)
+
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, base+"/manifest/edits",
+		map[string]any{"add_resource": map[string]string{"name": "api", "kind": "redis"}}, nil)
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, base+"/manifest/edits", map[string]any{}, nil)
+}

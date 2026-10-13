@@ -16,6 +16,7 @@ import {
   useEnvironmentConnectionsChoose,
   useManifestsCurrent,
   useManifestsDraft,
+  useManifestsEdit,
   useManifestsSave,
   usePlansApprove,
   usePlansCreate,
@@ -27,6 +28,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type {
   Action,
+  EditInputBody,
   Analysis,
   Deployment,
   Environment,
@@ -35,6 +37,7 @@ import type {
   Plan,
   PlanSource,
   Project,
+  Provider,
 } from "@/client/forge/loomplane/types"
 import {
   useInvalidate,
@@ -115,10 +118,10 @@ import {
   steps,
   toggleScope,
   type Tone,
-  withIgnored,
   withResource,
 } from "@/lib/plans"
 import { cn } from "@/lib/utils"
+import { ManifestHistory } from "@/components/manifest-history"
 
 export function DeployTab({
   project,
@@ -292,9 +295,14 @@ function ManifestEditor({
               Draft
             </Badge>
           ) : (
-            <Badge variant="secondary" className="tabular-nums">
-              Revision {revision}
-            </Badge>
+            <div className="flex items-center gap-2">
+              {revision !== undefined && revision > 1 && (
+                <ManifestHistory projectId={project.id} />
+              )}
+              <Badge variant="secondary" className="tabular-nums">
+                Revision {revision}
+              </Badge>
+            </div>
           )}
         </CardAction>
       </CardHeader>
@@ -1027,7 +1035,7 @@ function ConnectionPicker({
 function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
   const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
   const providers = useQuery(useProvidersList)
-  const save = useMutation(useManifestsSave)
+  const save = useMutation(useManifestsEdit)
   const invalidate = useInvalidate()
   const manifest = current.data?.manifest
   const catalog = providers.data?.providers
@@ -1037,12 +1045,11 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
     p.provisions?.some((v) => v.kind === kind)
   )
 
-  const apply = async (next: Manifest, done: string) => {
+  // The edit is made to the saved YAML, on the server, so its comments
+  // survive.
+  const apply = async (body: EditInputBody, done: string) => {
     try {
-      await save.mutateAsync({
-        path: { id: project.id },
-        body: { manifest: next },
-      })
+      await save.mutateAsync({ path: { id: project.id }, body })
       invalidate(useManifestsCurrent)
       toast.success(`${done}. Plan again to see the result.`)
     } catch (err) {
@@ -1060,7 +1067,7 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
           disabled={save.isPending}
           onClick={() =>
             void apply(
-              withResource(manifest, kind, catalog),
+              { addResource: added(manifest, kind, catalog) },
               `Added ${resourceLabel(kind)} to the manifest`
             )
           }
@@ -1075,7 +1082,7 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
         disabled={save.isPending}
         onClick={() =>
           void apply(
-            withIgnored(manifest, kind),
+            { ignore: kind },
             `The manifest ignores ${resourceLabel(kind)} now`
           )
         }
@@ -1084,6 +1091,17 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
       </Button>
     </div>
   )
+}
+
+/** added is the resource withResource would add: its name, kind and provider. */
+function added(m: Manifest, kind: string, catalog: Provider[]) {
+  const next = withResource(m, kind, catalog)
+  const name =
+    Object.keys(next.resources ?? {}).find(
+      (n) => !(n in (m.resources ?? {}))
+    ) ?? kind
+  const r = (next.resources ?? {})[name] as { provider?: string }
+  return { name, kind, provider: r?.provider }
 }
 
 function Steps({ actions }: { actions: Action[] }) {

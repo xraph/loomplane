@@ -281,6 +281,15 @@ export interface Edge {
   to: string;
 }
 
+export interface EditInputBody {
+  addResource?: {
+  kind: string;
+  name: string;
+  provider?: string;
+};
+  ignore?: string;
+}
+
 export interface EnvLink {
   address?: string;
   from: string;
