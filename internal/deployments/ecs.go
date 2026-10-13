@@ -73,6 +73,11 @@ func (e *ECS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if job.Action.Service == nil {
 		return nil, fmt.Errorf("%w: ecs runs services, not %s", ErrNoExecutor, job.Action.Subject)
 	}
+	// What's bound has to be this connection's before anything is built
+	// or set up.
+	if _, err := boundInstance(infrastructure.WithPrincipal(ctx, principal(job)), e.Ctrl, job, e.provider(job)); err != nil {
+		return nil, err
+	}
 	s, err := e.session(job, job.Credential)
 	if err != nil {
 		return nil, err

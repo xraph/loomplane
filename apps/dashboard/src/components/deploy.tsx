@@ -1330,7 +1330,10 @@ function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
                     aria-hidden="true"
                     className="mt-1 size-1.5 shrink-0 rounded-full bg-weld"
                   />
-                  {w}
+                  <span>
+                    <span className="sr-only">Warning: </span>
+                    {w}
+                  </span>
                 </p>
               ))}
               {s.url && s.status === "succeeded" && (

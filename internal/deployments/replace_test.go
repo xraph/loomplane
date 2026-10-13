@@ -572,3 +572,54 @@ func TestBucketName(t *testing.T) {
 		t.Fatalf("a bound bucket is %q", got)
 	}
 }
+
+// Cloud Run and ECS find out what's bound runs through another connection
+// before they build or set anything up, so the step creates nothing. With
+// no Google or AWS client, getting any further would panic.
+func TestApply_aBoundOneOnAnotherConnectionBuildsNothing(t *testing.T) {
+	job := &Job{
+		Deployment: &Deployment{OrgID: "org_1", ProjectID: "proj_01h2xcejqtf2nbrexx3vqjhp41", Environment: "production"},
+		Action: planning.Action{Name: "api", Provider: "cloud-run", Region: "us-central1",
+			Service: &planning.ServiceConfig{Provider: "cloud-run"}},
+		Connection: &connections.Connection{ID: "conn_new", Details: map[string]string{"region": "us-east-1"}},
+		Progress:   func(string, string) {},
+	}
+	for _, c := range []struct {
+		exec Executor
+		key  string
+	}{
+		{&CloudRun{}, cloudrun.Key("conn_old", "us-central1")},
+		{&ECS{}, ecs.Key("conn_old", "us-east-1")},
+	} {
+		other := ctrlInstance("api-production-jhp41", c.key)
+		ctrl := CtrlPlane{Providers: cpprovider.NewRegistry(), Instances: &fakeInstances{byID: map[id.ID]*instance.Instance{other.ID: other}}}
+		switch e := c.exec.(type) {
+		case *CloudRun:
+			e.Ctrl = ctrl
+		case *ECS:
+			e.Ctrl = ctrl
+		}
+		job.Binding = &planning.Binding{ExternalID: other.ID.String()}
+		_, err := c.exec.Apply(t.Context(), job)
+		var elsewhere *ElsewhereError
+		if !errors.As(err, &elsewhere) || elsewhere.ConnectionID != "conn_old" {
+			t.Fatalf("%s: %v", c.key, err)
+		}
+	}
+}
+
+// What an ElsewhereError says depends on what the runner could record.
+func TestElsewhereError_saysWhatWasRecorded(t *testing.T) {
+	e := &ElsewhereError{Name: "api", Instance: "inst_1", ConnectionID: "conn_old", Key: "cloud-run.conn_old.us-central1"}
+	if msg := e.Error(); !strings.Contains(msg, "couldn't record that") || !strings.Contains(msg, "Retry this step") {
+		t.Fatalf("not recorded: %s", msg)
+	}
+	e.Recorded = true
+	if msg := e.Error(); !strings.Contains(msg, "has recorded that on its binding: plan again") {
+		t.Fatalf("recorded: %s", msg)
+	}
+	e.ConnectionID = ""
+	if msg := e.Error(); !strings.Contains(msg, "Choose the connection that deployed it") || strings.Contains(msg, "recorded") {
+		t.Fatalf("unreadable key: %s", msg)
+	}
+}

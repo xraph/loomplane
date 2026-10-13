@@ -536,6 +536,15 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return nil
 	}
 	moving := moves(current, a, connID)
+	if moving && a.Op != planning.Replace && current.Provider == a.Provider && current.Region == a.Region {
+		// Only the planner moves something to another connection, since
+		// only it deploys again what uses it, or refuses when something
+		// held does. A plan made before the binding said where it runs,
+		// as a retry after an executor recorded that would carry out,
+		// didn't plan the move, so it doesn't make it.
+		return fmt.Errorf("%s runs through connection %s, not %s, which this plan deploys with, and this plan doesn't replace it, so nothing was deployed. Plan again, and the new plan replaces %s through this connection and deploys again what uses it",
+			a.Name, current.ConnectionID, connID, a.Name)
+	}
 	if a.Subject == planning.ResourceSubject && current != nil && !moving && current.Drift != planning.DriftMissing &&
 		current.ConnectionID != "" && current.ConnectionID != connID {
 		// The planner refuses this. Applying the binding through another
@@ -618,12 +627,16 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 
 // deployedElsewhere records the connection and region that reach what an
 // action is bound to, when an executor finds another connection deployed
-// it and the binding, from before bindings recorded their connection,
-// doesn't say so. Nothing was deployed: moving it here would give it a
+// it and the binding doesn't say so, as one from before bindings recorded
+// their connection doesn't. Nothing was deployed: moving it here would give it a
 // new address that what the plan keeps or holds wouldn't get. The next
 // plan sees the move, and replaces it with everything that implies.
 func (r *Runner) deployedElsewhere(ctx context.Context, current *planning.Binding, e *ElsewhereError) error {
-	if current == nil || current.ConnectionID != "" || e.ConnectionID == "" {
+	switch {
+	case current == nil || e.ConnectionID == "":
+		return e
+	case current.ConnectionID == e.ConnectionID:
+		e.Recorded = true
 		return e
 	}
 	b := *current
@@ -634,6 +647,7 @@ func (r *Runner) deployedElsewhere(ctx context.Context, current *planning.Bindin
 	if err := r.plans.PutBinding(ctx, &b); err != nil {
 		return errors.Join(e, fmt.Errorf("record where %s runs: %w", b.Name, err))
 	}
+	e.Recorded = true
 	return e
 }
 

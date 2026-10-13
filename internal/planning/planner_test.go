@@ -2290,6 +2290,19 @@ func TestCompute_whatAMoveLeftRunningIsAWarning(t *testing.T) {
 	if r.Connections["aws"] != "conn_aws" || len(r.Problems) != 0 {
 		t.Fatalf("connections %v, problems %v", r.Connections, codes(r.Problems))
 	}
+	// Deleting api waits for it, and fails if it can't go.
+	gone := strings.Replace(federatedYAML, "  api:\n    repo: mono\n    source: services/api\n    needs: [db]\n", "", 1)
+	gone = strings.Replace(gone, "    needs: [api]\n", "", 1)
+	del := Compute(Input{
+		Environment: "production", Graph: federated(t), Manifest: parse(t, gone),
+		Providers: providers.Registry(), Bindings: live, Connections: connected, Chosen: map[string]string{"gcp": "conn_gcp"},
+	})
+	if a := action(t, del, "service:api"); a.Op != Delete {
+		t.Fatalf("api %s", a.Op)
+	}
+	if w := warning(del, "still-replaced", "api"); w == nil || !strings.HasSuffix(w.Message, "This plan's deployment removes it before it deletes api, and fails if it can't.") {
+		t.Fatalf("warnings %+v", del.Warnings)
+	}
 	// With no AWS connection, the plan still goes ahead.
 	var noAWS []ConnectionOption
 	for _, c := range connected {

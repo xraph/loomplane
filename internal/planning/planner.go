@@ -2037,8 +2037,15 @@ func (p *planner) stillReplaced() {
 			path = "gateways." + b.Name
 		}
 		then := fmt.Sprintf("This plan keeps %s as it is, so it won't. Retry the deployment that moved %s, or deploy a change to it, and that removes it.", b.Name, b.Name)
-		if i := slices.IndexFunc(p.actions, func(a *Action) bool { return a.ID == id }); i >= 0 && p.actions[i].Op != Keep {
-			then = "This plan's deployment removes it, and warns if it can't."
+		if i := slices.IndexFunc(p.actions, func(a *Action) bool { return a.ID == id }); i >= 0 {
+			switch p.actions[i].Op {
+			case Keep:
+			case Delete:
+				// The binding tracks it, so the delete waits for it.
+				then = fmt.Sprintf("This plan's deployment removes it before it deletes %s, and fails if it can't.", b.Name)
+			default:
+				then = "This plan's deployment removes it, and warns if it can't."
+			}
 		}
 		for _, old := range b.Replaced {
 			if prov, err := p.in.Providers.Get(old.Provider); err == nil && prov.Available {

@@ -77,6 +77,10 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if a.Service == nil {
 		return nil, fmt.Errorf("%w: cloud run runs services, not %s", ErrNoExecutor, a.Subject)
 	}
+	// What's bound has to be this connection's before anything is built.
+	if _, err := boundInstance(infrastructure.WithPrincipal(ctx, principal(job)), c.Ctrl, job, c.provider(job)); err != nil {
+		return nil, err
+	}
 	key, err := gcp.ParseKey(job.Credential)
 	if err != nil {
 		return nil, err
@@ -433,38 +437,61 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 // next plan then sees the move and replaces it properly. An instance that
 // only holds the slug keeps it, and this one takes the next free name.
 func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (inst *instance.Instance, name string, err error) {
-	if job.Binding != nil && job.Binding.ExternalID != "" {
-		iid, perr := id.Parse(job.Binding.ExternalID)
-		if perr != nil {
-			return nil, "", fmt.Errorf("the binding names no instance: %w", perr)
-		}
-		if inst, err = ctrl.Instances.Get(ctx, iid); err != nil && !errors.Is(err, ctrlplane.ErrNotFound) {
-			return nil, "", err
-		}
-		switch {
-		case inst != nil && inst.ProviderName == key:
-			return inst, cmp.Or(inst.Name, instanceName(job)), nil
-		case inst != nil:
-			conn, region := keyPlace(inst.ProviderName)
-			return nil, "", &ElsewhereError{Name: job.Action.Name, Instance: inst.ID.String(), ConnectionID: conn, Region: region, Key: inst.ProviderName}
-		}
+	if inst, err = boundInstance(ctx, ctrl, job, key); err != nil {
+		return nil, "", err
+	}
+	if inst != nil {
+		return inst, cmp.Or(inst.Name, instanceName(job)), nil
 	}
 	return freeInstance(ctx, ctrl, job, key)
+}
+
+// boundInstance is the instance the binding names, when it's there and
+// under this provider key, or nil. One under another key is an
+// ElsewhereError. Executors check it before they build or set anything
+// up, so a step that can't deploy creates nothing.
+func boundInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (*instance.Instance, error) {
+	if job.Binding == nil || job.Binding.ExternalID == "" {
+		return nil, nil
+	}
+	iid, err := id.Parse(job.Binding.ExternalID)
+	if err != nil {
+		return nil, fmt.Errorf("the binding names no instance: %w", err)
+	}
+	inst, err := ctrl.Instances.Get(ctx, iid)
+	switch {
+	case errors.Is(err, ctrlplane.ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case inst.ProviderName != key:
+		conn, region := keyPlace(inst.ProviderName)
+		return nil, &ElsewhereError{Name: job.Action.Name, Instance: inst.ID.String(), ConnectionID: conn, Region: region, Key: inst.ProviderName}
+	}
+	return inst, nil
 }
 
 // ElsewhereError is a bound instance another connection deployed, which
 // the connection a plan deploys with can't update. ConnectionID and Region
 // are the ones its provider key names, empty when the key can't be read.
+// Recorded says the runner recorded ConnectionID on the binding, so the
+// next plan sees the move.
 type ElsewhereError struct {
 	Name, Instance, ConnectionID, Region, Key string
+	Recorded                                  bool
 }
 
 func (e *ElsewhereError) Error() string {
-	if e.ConnectionID == "" {
-		return fmt.Sprintf("%s runs as Ctrl Plane instance %s under provider %s, which this plan's connection can't update, so nothing was deployed", e.Name, e.Instance, e.Key)
+	at := fmt.Sprintf("%s runs as Ctrl Plane instance %s", e.Name, e.Instance)
+	switch {
+	case e.ConnectionID == "":
+		return fmt.Sprintf("%s under provider %s, which names no connection Loomplane can read, so nothing was deployed. Choose the connection that deployed it for this environment, then deploy again", at, e.Key)
+	case e.Recorded:
+		return fmt.Sprintf("%s through connection %s, not the one this plan deploys with, so nothing was deployed. Loomplane has recorded that on its binding: plan again, and the plan replaces %s through this connection, deploys again what uses it, and removes the old one once the new one is up",
+			at, e.ConnectionID, e.Name)
 	}
-	return fmt.Sprintf("%s runs as Ctrl Plane instance %s through connection %s, not the one this plan deploys with, so nothing was deployed. Loomplane has recorded that on its binding: plan again, and the plan replaces %s through this connection, deploys again what uses it, and removes the old one once the new one is up",
-		e.Name, e.Instance, e.ConnectionID, e.Name)
+	return fmt.Sprintf("%s through connection %s, not the one this plan deploys with, so nothing was deployed. Loomplane couldn't record that on its binding, so a plan can't see the move yet. Retry this step to record it, then plan again, or choose connection %s for this environment to keep %s where it is",
+		at, e.ConnectionID, e.ConnectionID, e.Name)
 }
 
 // keyPlace reads the connection and region a Cloud Run or ECS provider
