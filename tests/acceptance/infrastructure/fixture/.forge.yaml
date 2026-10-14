@@ -1,0 +1,5 @@
+project:
+  name: infrastructure-acceptance
+  layout: single-module
+  structure:
+    cmd: cmd

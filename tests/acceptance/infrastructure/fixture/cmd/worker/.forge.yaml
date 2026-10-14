@@ -1,0 +1,3 @@
+app:
+  name: acceptance-worker
+  type: worker

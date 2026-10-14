@@ -186,12 +186,14 @@ Files: create `tests/acceptance/infrastructure` harness/fixtures and scoped clea
 
 Consumes all prior tasks. Produces a repeatable real infrastructure run with recorded ownership, isolated database, TLS kubeconfig, SSH Docker builder, OCI registry and browser screenshots.
 
-- [ ] Create a uniquely named kind cluster/namespace, loopback registry and SSH/Docker builder fixture. Record all resources. Use explicit kubeconfig/context throughout. Seed an isolated organization/account and source fixture so the application API and authentication remain real.
-- [ ] Connect through the product, save targets, review/approve, build, roll out and exercise Forge HTTP/worker fixtures. Verify visible build marker output before completion on WS and SSE, then reload/reconnect to retained logs.
-- [ ] Run failure/retry, stopped API replica, worker restart, private dependency, denied access, stale cursor and replacement scenarios listed in the spec. Inspect actual container/pod/image/Secret/binding state as well as UI status.
-- [ ] Check desktop and 390px layouts and save screenshots. Clean only recorded test-owned resources, then verify their absence and survival of an unrelated sentinel resource.
-- [ ] Run `make acceptance-infrastructure`. Expected: all assertions pass, report names the source-fixture boundary and cleanup leaves no test deployment.
-- [ ] Run normal format/lint/tests/build/client gates, commit harness/docs and push.
+- [x] Create a uniquely named kind cluster/namespace, loopback registry and SSH/Docker builder fixture. Record all resources. Use explicit kubeconfig/context throughout. Seed an isolated organization/account and source fixture so the application API and authentication remain real.
+- [x] Connect through the product, save targets, review/approve, build, roll out and exercise Forge HTTP/worker fixtures. Verify visible build marker output before completion on WS and SSE, then reload/reconnect to retained logs.
+- [x] Run failure/retry, stopped API replica, worker restart, private dependency, denied access, stale cursor and replacement scenarios listed in the spec. Inspect actual container/pod/image/Secret/binding state as well as UI status.
+- [x] Check desktop and 390px layouts and save screenshots. Clean only recorded test-owned resources, then verify their absence and survival of an unrelated sentinel resource.
+- [x] Run `make acceptance-infrastructure`. Expected: all assertions pass, report names the source-fixture boundary and cleanup leaves no test deployment.
+- [x] Run normal format/lint/tests/build/client gates, commit harness/docs and push.
+
+Verified: final unattended run `loomplane-e2e-b4e249e419` passed in 738.05s. Real SSH/Docker, OCI and Kubernetes builds and rollouts, authenticated cold-node pull, API/worker loss, readiness failure, build failure/retry, access revocation, organization isolation, cursor expiry and truncation all passed. Product removal and fixture cleanup preserved 23 baseline containers and the ambient kubeconfig. The browser run passed separately with desktop/390px views, live WS/SSE stdout, second-browser updates and organization switching. Live Vercel retained 93 provider lines, served the interactive counter and was removed successfully. Format, lint, 227 dashboard tests, full Go tests, integration (162.637s), build, generated-client drift and Python fixture checks pass.
 
 ## Task 12: Completion audit and independent review
 

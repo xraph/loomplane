@@ -2,6 +2,18 @@
 
 What it takes to keep a Loomplane running: backups, restores, upgrades, and knowing when something goes wrong. The commands here are `loomplane` commands, run with the same configuration the server runs with.
 
+## Live deployment state
+
+Proxy `/api/v1/realtime/ws` with WebSocket upgrades and leave `/api/v1/realtime/events` unbuffered for SSE. Both routes use the same authenticated Forge contracts and organization-scoped cursor. The dashboard falls back to SSE after a WebSocket failure, then to REST recovery when the stream is stale. A Live badge confirms a recent status heartbeat; a disconnected page must not be treated as current.
+
+Events and build output are committed in Postgres before delivery. Conduit notifications wake other API replicas, which read the durable sequence. You can restart an API or deployment worker without relying on its memory for status or checkpoints. An interrupted Docker build may need rebuilding; its earlier attempt stays visible as incomplete.
+
+If a database timeout stops Dispatch's durable worker, `/_/health` reports the extension as unhealthy. Restart that API or worker process after database access recovers so another worker can claim the durable work. Monitor this health result in your process supervisor; a running HTTP listener alone doesn't establish that deployment work is progressing.
+
+Build output is retained for seven days, with 16 KiB per line and 10 MiB per action attempt. The deployment log endpoint pages retained output. A cursor older than retention produces a gap and a current snapshot. Collector checkpoints and cloud credentials are excluded from public events; runtime variables stay out of Docker build arguments.
+
+Keep a connection while a plan, build, binding or deployment references it. Changing a host key, namespace UID, CA or reviewed registry endpoint requires another connection check and plan. Rotating a credential can keep the same destination. Removal uses each binding's recorded connection and ownership labels, including resources left pending cleanup after a replacement.
+
 ## Backups
 
 ```bash

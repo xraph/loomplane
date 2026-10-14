@@ -6,6 +6,24 @@ It costs money while it runs. Most of it is the few minutes services and databas
 
 ## Running it
 
+### Verify SSH/Docker and local Kubernetes
+
+With Docker, kind, kubectl, Python 3, Go and the local Postgres running:
+
+```bash
+make acceptance-infrastructure
+```
+
+The harness records a unique cluster, namespace, Docker-in-Docker builder, registry and network before creating them. It uses an explicit kubeconfig, binds fixture ports to loopback and creates an isolated account, organization and database. Your existing Docker containers and kubeconfig stay in place.
+
+The Forge HTTP and worker applications are real. The harness drives connection checks, manifests, plans, approvals and retries through the application API, builds on Docker, pushes to the OCI registry and waits for real Kubernetes pods. It verifies WS/SSE output before completion, cursor replay on a second API after the first worker stops, private dependencies, failed replacement, build retry history, read revocation, organization isolation, expired cursors, truncation and product-driven removal.
+
+There are fixture boundaries: a source server replaces GitHub, an authenticated SSH bridge forwards channels to the isolated Docker daemon, and a small HTTP build dependency lets the test cause and recover an actual Docker build failure. Cursor floors and log budgets are advanced in the isolated database to test expiry and limits without waiting seven days or storing megabytes of filler. No Docker build, registry push, Kubernetes rollout or readiness response is fabricated.
+
+Cleanup uses the recorded names and labels and checks that the containers present before the run still exist. It never prunes Docker globally or edits your kubeconfig. A failed run keeps its ownership record and diagnostics under `.superpowers/sdd/2026-10-13-own-infrastructure-live-deployments/`; `state.json` identifies exactly what its cleanup script may remove.
+
+For a rendered browser run, set `LOOMPLANE_ACCEPTANCE_BROWSER=1`. The harness serves an isolated dashboard at `http://127.0.0.1:5190` and writes `browser.json` beside its ownership record. Use the disposable account `acceptance@example.test`, password `Acceptance-Build-logs-42`. At each checkpoint, inspect the view and create the named `continue-<stage>` file. A `disable-ws` file in that directory makes only this test proxy reject WebSockets, so you can verify the generated client's SSE fallback. The dashboard process stops with the run. Using `127.0.0.1` keeps its session separate from your localhost dashboard.
+
 ### Verify the dashboard flow on Vercel
 
 You can also test the managed deployment controls through a running Loomplane dashboard, using the Vercel account you connect under Integrations. Keep the token in that form. You don't need to export it for this flow.
@@ -16,7 +34,7 @@ You can also test the managed deployment controls through a running Loomplane da
 4. Wait for the deployment to succeed. Open the served URL, navigate to another route and exercise a client control. The Astro sample's Islands page has a Svelte counter you can increment.
 5. Turn the test service off in Deployment targets and save the placement. Plan again, review its deletion, and approve cleanup. Check that cleanup succeeds, the environment has no service binding, and the old URL no longer serves the app.
 
-The October 13, 2026 browser run completed this sequence with the Astro sample, including the interactive counter and Vercel project removal. This verifies Vercel's static-site path. The other targets still need their own cloud acceptance runs.
+The October 14, 2026 browser run completed this sequence with the Astro sample and retained 93 real Vercel build lines across reload. The interactive counter worked, removal succeeded and the old URL returned `DEPLOYMENT_NOT_FOUND`. This verifies Vercel's static-site path and build-log reader. GCP and AWS log adapters have API fixture coverage; their live cloud acceptance remains account-specific.
 
 ### Run the acceptance harness
 
