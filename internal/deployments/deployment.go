@@ -11,6 +11,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -138,7 +139,9 @@ type Store interface {
 	GetDeployment(ctx context.Context, orgID, id string) (*Deployment, error)
 	// ForPlan returns the plan's deployment, or ErrNotFound.
 	ForPlan(ctx context.Context, orgID, planID string) (*Deployment, error)
-	ListDeployments(ctx context.Context, orgID, projectID string, limit int) ([]*Deployment, error)
+	// ListDeployments returns up to limit of a project's deployments started
+	// before the cursor, newest first. The zero cursor starts at the newest.
+	ListDeployments(ctx context.Context, orgID, projectID string, before page.Cursor, limit int) ([]*Deployment, error)
 	// SetSources records the repositories' tarballs as they're stored.
 	SetSources(ctx context.Context, orgID, id string, sources []SourceArtifact) error
 	// UpdateStep writes one step.

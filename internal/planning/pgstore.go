@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
+	"github.com/xraph/loomplane/internal/page"
 )
 
 const pgUniqueViolation = "23505"
@@ -146,10 +147,11 @@ func (s *PgStore) GetPlan(ctx context.Context, orgID, id string) (*Plan, error) 
 }
 
 // ListPlans implements Store.
-func (s *PgStore) ListPlans(ctx context.Context, orgID, projectID, environmentID string, limit int) ([]*Plan, error) {
+func (s *PgStore) ListPlans(ctx context.Context, orgID, projectID, environmentID string, before page.Cursor, limit int) ([]*Plan, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+planColumns+` FROM loomplane_plans
 		WHERE org_id = $1 AND project_id = $2 AND ($3 = '' OR environment_id = $3)
-		ORDER BY created_at DESC, id DESC LIMIT $4`, orgID, projectID, environmentID, limit)
+			AND ($5 = '' OR (created_at, id) < ($6, $5))
+		ORDER BY created_at DESC, id DESC LIMIT $4`, orgID, projectID, environmentID, limit, before.ID, before.At)
 	if err != nil {
 		return nil, fmt.Errorf("list plans: %w", err)
 	}

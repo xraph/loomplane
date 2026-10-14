@@ -355,8 +355,19 @@ export class RESTClient extends Client {
     /**
      * The project's latest deployments, newest first, with each step's progress
      */
-    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentList> => {
+    list: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentList> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/deployments`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
@@ -789,11 +800,17 @@ export class RESTClient extends Client {
     /**
      * The project's latest plans, newest first
      */
-    list: async (id: string, environment?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PlanList> => {
+    list: async (id: string, environment?: string | undefined, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PlanList> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/plans`;
       const queryParams: Record<string, any> = {};
       if (environment !== undefined) {
         queryParams['environment'] = environment;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {

@@ -1,6 +1,7 @@
 package planning
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -20,6 +22,16 @@ type PlanQuery struct {
 	// Environment is an environment's name. Without it, every
 	// environment's plans.
 	Environment string `query:"environment,omitempty"`
+	PageQuery
+}
+
+// PageQuery pages a newest-first list.
+type PageQuery struct {
+	// Before is the next of the page before, to read older ones. Without
+	// it, the newest.
+	Before string `query:"before,omitempty"`
+	// Limit is how many to return: 30 when it's left out, at most 100.
+	Limit int `query:"limit,omitempty"`
 }
 
 // ActivityQuery is the query of GET /api/v1/activity.
@@ -38,6 +50,9 @@ type BindingQuery struct {
 // PlanList is the body of GET /api/v1/projects/:id/plans.
 type PlanList struct {
 	Plans []planning.Plan `json:"plans"`
+	// Next reads the page after this one, as ?before=. It's empty on the
+	// last page.
+	Next string `json:"next,omitempty"`
 }
 
 // ForgeEnvelope tells the generated client the list wraps Plans.
@@ -87,6 +102,9 @@ type EnvironmentConnections struct {
 // DeploymentList is the body of GET /api/v1/projects/:id/deployments.
 type DeploymentList struct {
 	Deployments []deployments.Deployment `json:"deployments"`
+	// Next reads the page after this one, as ?before=. It's empty on the
+	// last page.
+	Next string `json:"next,omitempty"`
 }
 
 // ForgeEnvelope tells the generated client the list wraps Deployments.
@@ -192,6 +210,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodGet, "/projects/:id/deployments", e.listDeployments, []forge.RouteOption{
 			forge.WithName("deployments.list"),
 			forge.WithSummary("The project's latest deployments, newest first, with each step's progress"),
+			forge.WithQuerySchema(PageQuery{}),
 			forge.WithResponseSchema(http.StatusOK, "Deployments", DeploymentList{}),
 		}},
 		{http.MethodGet, "/deployments/:id", e.getDeployment, []forge.RouteOption{
@@ -367,11 +386,15 @@ func (e *Extension) listPlans(c forge.Context) error {
 	if err != nil {
 		return err
 	}
-	plans, err := e.plans.List(c.Request().Context(), p, c.Param("id"), c.Request().URL.Query().Get("environment"))
+	before, limit, err := pageOf(c)
+	if err != nil {
+		return err
+	}
+	plans, next, err := e.plans.List(c.Request().Context(), p, c.Param("id"), c.Request().URL.Query().Get("environment"), before, limit)
 	if err != nil {
 		return fail(err)
 	}
-	out := PlanList{Plans: make([]planning.Plan, 0, len(plans))}
+	out := PlanList{Plans: make([]planning.Plan, 0, len(plans)), Next: next.String()}
 	for _, pl := range plans {
 		out.Plans = append(out.Plans, *pl)
 	}
@@ -509,11 +532,15 @@ func (e *Extension) listDeployments(c forge.Context) error {
 	if err != nil {
 		return err
 	}
-	list, err := e.deploys.List(c.Request().Context(), p, c.Param("id"))
+	before, limit, err := pageOf(c)
+	if err != nil {
+		return err
+	}
+	list, next, err := e.deploys.List(c.Request().Context(), p, c.Param("id"), before, limit)
 	if err != nil {
 		return fail(err)
 	}
-	out := DeploymentList{Deployments: make([]deployments.Deployment, 0, len(list))}
+	out := DeploymentList{Deployments: make([]deployments.Deployment, 0, len(list)), Next: next.String()}
 	for _, d := range list {
 		out.Deployments = append(out.Deployments, *d)
 	}
@@ -554,4 +581,18 @@ func (e *Extension) retryDeployment(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, d)
+}
+
+// pageOf reads a list's ?before= and ?limit=.
+func pageOf(c forge.Context) (page.Cursor, int, error) {
+	q := c.Request().URL.Query()
+	before, err := page.Parse(q.Get("before"))
+	if err != nil {
+		return page.Cursor{}, 0, forge.NewHTTPError(http.StatusBadRequest, "before must be the next of an earlier page")
+	}
+	limit, err := page.Limit(q.Get("limit"))
+	if err != nil {
+		return page.Cursor{}, 0, forge.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("limit must be a whole number from 1 to %d", page.Max))
+	}
+	return before, limit, nil
 }

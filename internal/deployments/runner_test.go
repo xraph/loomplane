@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -65,7 +66,7 @@ func (m *memStore) ForPlan(_ context.Context, _, planID string) (*Deployment, er
 	return nil, ErrNotFound
 }
 
-func (m *memStore) ListDeployments(context.Context, string, string, int) ([]*Deployment, error) {
+func (m *memStore) ListDeployments(context.Context, string, string, page.Cursor, int) ([]*Deployment, error) {
 	return nil, nil
 }
 

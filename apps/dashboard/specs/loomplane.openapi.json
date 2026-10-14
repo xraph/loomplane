@@ -1129,6 +1129,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -1653,6 +1667,20 @@
             "in": "query",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
             }
           }
         ],
@@ -3379,6 +3407,9 @@
             "items": {
               "$ref": "#/components/schemas/Deployment"
             }
+          },
+          "next": {
+            "type": "string"
           }
         },
         "required": [
@@ -4324,6 +4355,9 @@
       },
       "PlanList": {
         "properties": {
+          "next": {
+            "type": "string"
+          },
           "plans": {
             "type": "array",
             "items": {

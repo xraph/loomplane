@@ -113,7 +113,8 @@ export function Deployments({ status }: { status: RunFilter }) {
   const navigate = useNavigate()
   const { can } = useOrganization()
   const { openDeploy } = useShell()
-  const { runs, projects, loaded, error, refetch } = useRuns()
+  const { runs, projects, loaded, error, refetch, whole, more, loadingMore } =
+    useRuns()
   const now = useNow()
   const [projectID, setProjectID] = useState("all")
   const [env, setEnv] = useState("all")
@@ -124,18 +125,33 @@ export function Deployments({ status }: { status: RunFilter }) {
     () => [...new Set(runs.map((r) => r.environment))].sort(),
     [runs]
   )
+  // Past whole, another project's runs may not be read yet, so the list
+  // stops there until more() reads further back.
+  const known = useMemo(
+    () =>
+      whole === undefined
+        ? runs
+        : runs.filter((r) => Date.parse(r.createdAt) >= Date.parse(whole)),
+    [runs, whole]
+  )
   const scoped = useMemo(
     () =>
-      runs.filter(
+      known.filter(
         (r) =>
           (projectID === "all" || r.projectId === projectID) &&
           (env === "all" || r.environment === env) &&
           matches(r, search)
       ),
-    [runs, projectID, env, search]
+    [known, projectID, env, search]
   )
   const filter = runFilters.find((f) => f.value === status) ?? runFilters[0]
   const rows = scoped.filter((r) => filter.test(r))
+  const older = whole !== undefined
+  const showMore = () => {
+    setLimit((l) => l + pageSize)
+    // Read further back when what's loaded won't fill the next page.
+    if (older && rows.length < limit + pageSize) more()
+  }
   const groups: { label: string; rows: Run[] }[] = []
   for (const r of rows.slice(0, limit)) {
     const label = dayLabel(Date.parse(r.createdAt), now)
@@ -299,7 +315,9 @@ export function Deployments({ status }: { status: RunFilter }) {
             <EmptyHeader>
               <EmptyTitle>No deployments match</EmptyTitle>
               <EmptyDescription>
-                Nothing fits those filters. Clear them to see everything again.
+                {older
+                  ? "Nothing loaded so far fits those filters. Older deployments may, or clear the filters to see everything again."
+                  : "Nothing fits those filters. Clear them to see everything again."}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
@@ -316,6 +334,17 @@ export function Deployments({ status }: { status: RunFilter }) {
               >
                 Clear filters
               </Button>
+              {older && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-full"
+                  disabled={loadingMore}
+                  onClick={more}
+                >
+                  {loadingMore ? "Loading…" : "Look further back"}
+                </Button>
+              )}
             </EmptyContent>
           </Empty>
         ) : (
@@ -342,16 +371,19 @@ export function Deployments({ status }: { status: RunFilter }) {
             ))}
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               <span className="tabular-nums">
-                Showing {Math.min(limit, rows.length)} of {rows.length}
+                {older
+                  ? `Showing ${Math.min(limit, rows.length)}, with older ones still to load`
+                  : `Showing ${Math.min(limit, rows.length)} of ${rows.length}`}
               </span>
-              {rows.length > limit && (
+              {(rows.length > limit || older) && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="rounded-full"
-                  onClick={() => setLimit((l) => l + pageSize)}
+                  disabled={loadingMore}
+                  onClick={showMore}
                 >
-                  Show more
+                  {loadingMore ? "Loading…" : "Show more"}
                 </Button>
               )}
             </div>
