@@ -374,8 +374,8 @@ export class LoomplaneRealtime {
       const result = await snapshotQuery(
         {
           query: {
-            orgId: this.options.orgId,
-            deploymentIds: this.deployments.join(","),
+            org_id: this.options.orgId,
+            deployment_ids: this.deployments.join(","),
           },
         },
         { client: this.options.cache }

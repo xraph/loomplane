@@ -124,7 +124,8 @@ describe("older runs", () => {
   function serve(plans: ReturnType<typeof plan>[]) {
     vi.stubGlobal("fetch", async (url: string) => {
       const u = new URL(url, "http://localhost")
-      if (u.pathname === "/api/v1/projects") return json({ projects: [project] })
+      if (u.pathname === "/api/v1/projects")
+        return json({ projects: [project] })
       if (u.pathname.endsWith("/deployments")) return json({ deployments: [] })
       if (u.pathname.endsWith("/plans")) {
         const before = u.searchParams.get("before")

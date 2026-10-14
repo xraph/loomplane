@@ -163,6 +163,30 @@ it("restores historical collection status when a deployment joins the live scope
   live.stop()
 })
 
+it("sends scoped snapshot query parameters using their wire names", async () => {
+  let query: unknown
+  const cache = new QueryCache({
+    entities,
+    transport: {
+      execute: async (request) => {
+        query = request.args.query
+        return { cursor: "org_one:10", records: [] }
+      },
+    },
+  })
+  const live = new LoomplaneRealtime({
+    cache,
+    orgId: "org_one",
+    connect: () => new Connection(),
+  })
+  live.start()
+  live.setDeployments(["dep_one"])
+  await vi.waitFor(() =>
+    expect(query).toEqual({ org_id: "org_one", deployment_ids: "dep_one" })
+  )
+  live.stop()
+})
+
 it("prefers WS, falls back to SSE, retains replay cursor and closes old scope", async () => {
   vi.useFakeTimers()
   const connections: Connection[] = []
