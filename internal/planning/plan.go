@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/gateway"
+	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -418,9 +419,10 @@ type Store interface {
 	// environment, returning their IDs.
 	CreatePlan(ctx context.Context, p *Plan) (superseded []string, err error)
 	GetPlan(ctx context.Context, orgID, id string) (*Plan, error)
-	// ListPlans returns a project's latest plans, newest first, in one
-	// environment or, with environmentID empty, in all of them.
-	ListPlans(ctx context.Context, orgID, projectID, environmentID string, limit int) ([]*Plan, error)
+	// ListPlans returns up to limit of a project's plans older than before,
+	// newest first, in one environment or, with environmentID empty, in all
+	// of them. The zero cursor starts at the newest.
+	ListPlans(ctx context.Context, orgID, projectID, environmentID string, before page.Cursor, limit int) ([]*Plan, error)
 	// FinishPlanning stores a planning result. It returns false, with no
 	// error, when the plan isn't planning any more.
 	FinishPlanning(ctx context.Context, p *Plan) (bool, error)

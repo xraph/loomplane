@@ -335,6 +335,7 @@ export interface DeploymentCounts {
 
 export interface DeploymentList {
   deployments: Deployment[];
+  next?: string;
 }
 
 export interface DriftCounts {
@@ -598,6 +599,7 @@ export interface PlanCounts {
 }
 
 export interface PlanList {
+  next?: string;
   plans: Plan[];
 }
 

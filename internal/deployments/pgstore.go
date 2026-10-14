@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
 
+	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -94,9 +95,10 @@ func (s *PgStore) ForPlan(ctx context.Context, orgID, planID string) (*Deploymen
 }
 
 // ListDeployments implements Store.
-func (s *PgStore) ListDeployments(ctx context.Context, orgID, projectID string, limit int) ([]*Deployment, error) {
+func (s *PgStore) ListDeployments(ctx context.Context, orgID, projectID string, before page.Cursor, limit int) ([]*Deployment, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+columns+` FROM loomplane_deployments
-		WHERE org_id = $1 AND project_id = $2 ORDER BY started_at DESC, id DESC LIMIT $3`, orgID, projectID, limit)
+		WHERE org_id = $1 AND project_id = $2 AND ($4 = '' OR (started_at, id) < ($5, $4))
+		ORDER BY started_at DESC, id DESC LIMIT $3`, orgID, projectID, limit, before.ID, before.At)
 	if err != nil {
 		return nil, fmt.Errorf("list deployments: %w", err)
 	}

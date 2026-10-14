@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
+	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -28,7 +29,6 @@ import (
 const StatusStale = "stale"
 
 const (
-	listLimit = 30
 	// analysisLookback is how many of a project's latest analyses are
 	// searched for one that succeeded.
 	analysisLookback = 20
@@ -298,24 +298,31 @@ func (s *Service) settle(ctx context.Context, plan *Plan) *Plan {
 	}
 }
 
-// List returns a project's latest plans, newest first, in one environment
-// or, with environment empty, in all of them.
-func (s *Service) List(ctx context.Context, p security.Principal, projectID, environment string) ([]*Plan, error) {
+// List returns a page of a project's plans older than before, newest
+// first, in one environment or, with environment empty, in all of them,
+// and where the next page starts: the zero cursor when this is the last.
+func (s *Service) List(ctx context.Context, p security.Principal, projectID, environment string, before page.Cursor, limit int) ([]*Plan, page.Cursor, error) {
 	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
-		return nil, err
+		return nil, page.Cursor{}, err
 	}
 	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
-		return nil, err
+		return nil, page.Cursor{}, err
 	}
 	envID := ""
 	if environment = strings.TrimSpace(environment); environment != "" {
 		env, err := s.environment(ctx, p.OrgID, projectID, environment)
 		if err != nil {
-			return nil, err
+			return nil, page.Cursor{}, err
 		}
 		envID = env.ID
 	}
-	return s.store.ListPlans(ctx, p.OrgID, projectID, envID, listLimit)
+	// One more than a page says whether there's another.
+	plans, err := s.store.ListPlans(ctx, p.OrgID, projectID, envID, before, limit+1)
+	if err != nil {
+		return nil, page.Cursor{}, err
+	}
+	plans, next := page.Trim(plans, limit, func(pl *Plan) page.Cursor { return page.Cursor{At: pl.CreatedAt, ID: pl.ID} })
+	return plans, next, nil
 }
 
 // Get returns one plan.

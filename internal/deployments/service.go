@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
-
-const listLimit = 30
 
 // Authorizer decides whether a principal may act.
 type Authorizer interface {
@@ -88,19 +87,27 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*
 	return s.store.GetDeployment(ctx, p.OrgID, id)
 }
 
-// List returns a project's latest deployments, newest first.
-func (s *Service) List(ctx context.Context, p security.Principal, projectID string) ([]*Deployment, error) {
+// List returns a page of a project's deployments started before the
+// cursor, newest first, and where the next page starts: the zero cursor
+// when this is the last.
+func (s *Service) List(ctx context.Context, p security.Principal, projectID string, before page.Cursor, limit int) ([]*Deployment, page.Cursor, error) {
 	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
-		return nil, err
+		return nil, page.Cursor{}, err
 	}
 	// Another organization's project is not found, not an empty list: the
 	// answer mustn't differ by whether the project exists.
 	if s.Projects != nil {
 		if _, err := s.Projects.GetProject(ctx, p.OrgID, projectID); err != nil {
-			return nil, err
+			return nil, page.Cursor{}, err
 		}
 	}
-	return s.store.ListDeployments(ctx, p.OrgID, projectID, listLimit)
+	// One more than a page says whether there's another.
+	list, err := s.store.ListDeployments(ctx, p.OrgID, projectID, before, limit+1)
+	if err != nil {
+		return nil, page.Cursor{}, err
+	}
+	list, next := page.Trim(list, limit, func(d *Deployment) page.Cursor { return page.Cursor{At: d.StartedAt, ID: d.ID} })
+	return list, next, nil
 }
 
 // Get returns one deployment.
