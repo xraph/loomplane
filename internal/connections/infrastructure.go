@@ -56,6 +56,9 @@ func (KubernetesChecker) Check(ctx context.Context, raw []byte, settings map[str
 	if err != nil {
 		return Check{}, err
 	}
+	if checkErr := c.CheckPullSecret(ctx); checkErr != nil {
+		return Check{}, checkErr
+	}
 	return Check{Account: cfg.Context + "/" + cfg.Namespace, Details: result.Details, Missing: result.Missing}, nil
 }
 

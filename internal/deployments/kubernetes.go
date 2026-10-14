@@ -39,6 +39,11 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		}
 		operation := labels[owned.LabelOperation]
 		activate := operation == "" || operation == "apply" || operation == "start"
+		if activate {
+			if err := client.CheckPullSecret(ctx); err != nil {
+				return nil, err
+			}
+		}
 		if activate && labels[owned.LabelPublic] == "true" && result.Details["ingress"] != "ready" {
 			return nil, errors.New("this workload needs namespace ingress permissions")
 		}

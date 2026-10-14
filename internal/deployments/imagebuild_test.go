@@ -76,7 +76,28 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 	}
 	config.Details["architecture"], config.Details["docker_id"] = "amd64", "build-fixture"
 	connection := &connections.Connection{ID: "conn_builder", OrgID: "org_fixture", Cloud: connections.Server, Name: "Builder", Status: connections.StatusReady, Details: config.Details}
-	registry := &connections.Connection{ID: "conn_registry", OrgID: "org_fixture", Cloud: connections.Registry, Name: "Registry", Status: connections.StatusReady, Details: map[string]string{"endpoint": "http://127.0.0.1:5000", "repository": "team", "api": "ready", "pull": "ready", "push": "ready"}}
+	var registryURL string
+	registryAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			user, password, ok := r.BasicAuth()
+			if !ok || user != "builder" || password != "registry-private-value" {
+				t.Error("token service credential absent")
+			}
+			if !strings.HasPrefix(r.URL.Query().Get("scope"), "repository:team/loomplane/") {
+				t.Errorf("wrong repository scope: %s", r.URL.Query().Get("scope"))
+			}
+			_, _ = io.WriteString(w, `{"token":"repository-scoped-token"}`)
+			return
+		}
+		if r.Header.Get("Authorization") != "" {
+			t.Error("registry probe received a raw credential")
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="`+registryURL+`/token",service="fixture"`)
+		w.WriteHeader(401)
+	}))
+	registryURL = registryAPI.URL
+	t.Cleanup(registryAPI.Close)
+	registry := &connections.Connection{ID: "conn_registry", OrgID: "org_fixture", Cloud: connections.Registry, Name: "Registry", Status: connections.StatusReady, Details: map[string]string{"endpoint": registryURL, "repository": "team", "api": "ready", "pull": "ready", "push": "ready"}}
 	sink := &buildLogFixture{}
 	job := &Job{Deployment: &Deployment{ID: "dep_fixture", OrgID: "org_fixture", ProjectID: "proj_fixture", EnvironmentID: "env_fixture"}, Action: planning.Action{ID: "service:api", Name: "api", Service: &planning.ServiceConfig{Source: "cmd/api", Image: "Dockerfile", Context: ".", BuildTarget: &planning.BuildTarget{Builder: connection.ID, BuilderSettings: planning.ReviewedConnectionSettings(connection.Cloud, connection.Details)}}}, SourceID: strings.Repeat("a", 40), Env: map[string]string{"RUNTIME_TOKEN": "runtime-private-value"}, Secrets: map[string]bool{"RUNTIME_TOKEN": true}, Logs: sink, Attempt: "1.1", Progress: func(string, string) {}}
 	job.BuildCredentials = buildCredentialFunc(func(_ context.Context, org, id string) (*connections.Connection, []byte, error) {
@@ -127,7 +148,7 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "sha256:" + strings.Repeat("b", 64), "Config": map[string]any{"Labels": map[string]string{imageOwnerLabel: imageOwner(job), imageSourceLabel: job.SourceID}}})
 		case strings.HasPrefix(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/push"):
 			auth, decodeErr := base64.URLEncoding.DecodeString(r.Header.Get("X-Registry-Auth"))
-			if decodeErr != nil || !strings.Contains(string(auth), "registry-private-value") {
+			if decodeErr != nil || !strings.Contains(string(auth), "repository-scoped-token") || strings.Contains(string(auth), "registry-private-value") {
 				t.Errorf("selected registry credential was not sent to push: %v", decodeErr)
 			}
 			_, _ = io.WriteString(w, "{\"status\":\"pushing\"}\n{\"aux\":{\"Digest\":\"sha256:"+strings.Repeat("c", 64)+"\"}}\n")
@@ -160,7 +181,7 @@ func TestImageBuild_remoteArtifactCheckpointAndRedactedRepeatedOutput(t *testing
 			if err != nil || image == "" || *builds != 1 || saves < 2 {
 				t.Fatalf("remote build: %+v %d %d %v", state, *builds, saves, err)
 			}
-			if push && !strings.Contains(image, "127.0.0.1:5000/team/loomplane/") {
+			if push && !strings.Contains(image, "/team/loomplane/") {
 				t.Fatalf("published reference: %s", image)
 			}
 			if len(sink.logs) < 2 || sink.logs[0].Message != sink.logs[1].Message || sink.logs[0].ProviderID == sink.logs[1].ProviderID || strings.Contains(sink.logs[0].Message, "runtime-private-value") {

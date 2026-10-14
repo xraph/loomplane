@@ -64,7 +64,7 @@ Store the kubeconfig in Vault. Show only its endpoint, context, namespace and ch
 
 ### Registry and builder
 
-Add a `registry` connection for an OCI registry endpoint, repository prefix and encrypted authentication. A checked server connection can also act as a builder. Registry credentials are used for the build push and, when needed, an owned Kubernetes image-pull Secret.
+Add a `registry` connection for an OCI registry endpoint, repository prefix and encrypted authentication. A checked server connection can also act as a builder. Registry credentials are used by the control plane for access checks and scoped token exchange. Docker receives the resulting registry token for publishing and server pulls. Private Kubernetes images use a selected existing namespace image-pull Secret, pinned in the connection settings; its credentials and lifecycle remain with the cluster owner.
 
 For a server, the default builder is the target itself and an image can stay in its Docker daemon. A different builder requires a registry. Kubernetes source builds require both a builder and a registry. A digest-pinned existing image skips building and requires only the pull access it needs.
 
@@ -226,6 +226,12 @@ The harness cleans up by the recorded ownership names/labels. It must not reset 
 - Go/dashboard lint, formatting, unit/integration tests, build and client generation checks pass before each relevant commit/push.
 
 Local acceptance establishes these adapters against the tested Docker/Kubernetes versions. It does not establish every production cluster's ingress, registry, authentication method or network configuration. Report those configuration requirements and any unverified managed-provider log acceptance explicitly.
+
+## Registry authentication ruling, October 14
+
+The final review found that native Docker and kubelet authentication can follow a registry's challenge to a token realm the control plane has not reviewed. Docker operations now receive only a direct registry token or a repository token minted through the approved realm. Basic-only authenticated Docker operations are refused with setup instructions. Anonymous pull and push access are checked separately, including cleanup of an empty push probe.
+
+Generic Kubernetes image-pull Secrets do not consume direct bearer tokens. Select an existing namespace Secret through `image_pull_secret`; its name is covered by each action's reviewed target settings. Preflight requests a credential-free Secret Table row, validates its name/type and refuses full-object fallback. Loomplane preserves that external Secret through rollback and removal. This replaces the proposed creation of native pull Secrets from the control plane's registry password. Runtime application Secrets remain owned and managed by Loomplane.
 
 ## Source references
 

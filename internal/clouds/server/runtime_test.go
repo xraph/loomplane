@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -231,7 +232,88 @@ func TestRuntime_recoversInterruptedReplacement(t *testing.T) {
 	}
 }
 
-type runtimeLeases struct{ held bool }
+type runtimeLeases struct {
+	held  bool
+	ports map[int]bool
+}
 
-func (r *runtimeLeases) Reserve(context.Context, owned.Reservation) error { r.held = true; return nil }
-func (r *runtimeLeases) Release(context.Context, owned.Reservation) error { r.held = false; return nil }
+func (r *runtimeLeases) Reserve(_ context.Context, lease owned.Reservation) error {
+	r.held = true
+	if r.ports != nil {
+		r.ports[lease.Port] = true
+	}
+	return nil
+}
+func (r *runtimeLeases) Release(_ context.Context, lease owned.Reservation) error {
+	r.held = false
+	delete(r.ports, lease.Port)
+	return nil
+}
+func (r *runtimeLeases) Reconcile(_ context.Context, lease owned.Reservation) error {
+	for port := range r.ports {
+		if port != lease.Port {
+			delete(r.ports, port)
+		}
+	}
+	r.held = lease.Port > 0
+	return nil
+}
+
+func TestRuntime_reconcilesLeasesAfterBackupDeletionAndOnRemoval(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelConnection: "conn_fixture", owned.LabelRevision: "new", owned.LabelPublic: "true", owned.LabelHostPort: "18081"}
+	leases := &runtimeLeases{ports: map[int]bool{18080: true, 18081: true}}
+	present := true
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/containers/json":
+			_, _ = io.WriteString(w, `[]`)
+		case strings.HasPrefix(r.URL.Path, "/networks/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}, "Containers": map[string]any{"current": true}})
+		case r.URL.Path == "/containers/"+ContainerName(iid)+"/json" && present:
+			containerLabels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelInstance: iid.String(), owned.LabelRevision: "new", owned.LabelHostPort: "18081"}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "current", "Config": map[string]any{"Image": "sha256:new", "Labels": containerLabels}, "State": map[string]any{"Running": true}})
+		case r.Method == http.MethodDelete && r.URL.Path == "/containers/current":
+			present = false
+			w.WriteHeader(204)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	u, _ := url.Parse(api.URL)
+	runtime := &Runtime{Ports: leases, Session: func(context.Context, map[string]string) (*Client, error) {
+		return &Client{Config: &Config{Details: map[string]string{"docker_id": "fixture"}}, HTTP: &http.Client{Transport: runtimeTransport(func(r *http.Request) (*http.Response, error) {
+			r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
+			return http.DefaultTransport.RoundTrip(r)
+		})}}, nil
+	}}
+	if _, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:new"}, labels); err != nil {
+		t.Fatal(err)
+	}
+	if leases.ports[18080] || !leases.ports[18081] {
+		t.Fatalf("recovered reservations: %+v", leases.ports)
+	}
+	leases.ports[18082] = true // An earlier crash may have lost more than one backup.
+	if err := runtime.Remove(t.Context(), iid, labels); err != nil {
+		t.Fatal(err)
+	}
+	if len(leases.ports) != 0 {
+		t.Fatalf("orphaned reservations after removal: %+v", leases.ports)
+	}
+}
+
+func TestRuntime_pullErrorDoesNotExposeBrokeredToken(t *testing.T) {
+	auth := base64.URLEncoding.EncodeToString([]byte(`{"registrytoken":"private-broker-token"}`))
+	client := &Client{HTTP: &http.Client{Transport: runtimeTransport(func(r *http.Request) (*http.Response, error) {
+		status, body := 200, `{"error":"denied private-broker-token"}`
+		if r.Method == http.MethodGet {
+			status = 404
+			body = `{}`
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+	})}}
+	if err := (&Runtime{}).pull(t.Context(), client, "registry.example.com/team/api@sha256:fixture", auth); err == nil || strings.Contains(err.Error(), "private-broker-token") {
+		t.Fatalf("pull error leaked authentication: %v", err)
+	}
+}

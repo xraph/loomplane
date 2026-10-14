@@ -88,6 +88,10 @@ func (c *Client) uploadPath(location, base string) (string, error) {
 }
 
 func (c *Client) request(ctx context.Context, method, path string) (*http.Response, error) {
+	return c.requestFor(ctx, method, path, c.Config.Repository+"/loomplane-check")
+}
+
+func (c *Client) requestFor(ctx context.Context, method, path, repository string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.Config.Endpoint+path, http.NoBody)
 	if err != nil {
 		return nil, err
@@ -109,6 +113,15 @@ func (c *Client) request(ctx context.Context, method, path string) (*http.Respon
 		return response, nil
 	}
 	_ = response.Body.Close()
+	token, err := c.bearerToken(ctx, challenge, repository, "pull,push")
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return c.HTTP.Do(req)
+}
+
+func (c *Client) bearerToken(ctx context.Context, challenge, repository, actions string) (string, error) {
 	// MIME's quoted-parameter parser preserves commas inside scope values.
 	var parameters strings.Builder
 	quoted, escaped := false, false
@@ -125,54 +138,53 @@ func (c *Client) request(ctx context.Context, method, path string) (*http.Respon
 	_, params, err := mime.ParseMediaType("bearer;" + parameters.String())
 	// Scope is generated from the reviewed repository, not the challenge.
 	if err != nil {
-		return nil, fmt.Errorf("%w: malformed registry challenge", ErrInvalid)
+		return "", fmt.Errorf("%w: malformed registry challenge", ErrInvalid)
 	}
 	realm, err := safeURL(params["realm"], false)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	endpoint, err := url.Parse(c.Config.Endpoint)
 	if err != nil {
-		return nil, ErrInvalid
+		return "", ErrInvalid
 	}
 	if realm.String() != c.Config.AuthEndpoint && (realm.Scheme != endpoint.Scheme || realm.Host != endpoint.Host) {
-		return nil, fmt.Errorf("%w: set auth_endpoint to approve the registry's token service", ErrInvalid)
+		return "", fmt.Errorf("%w: set auth_endpoint to approve the registry's token service", ErrInvalid)
 	}
 	query := realm.Query()
 	query.Set("service", params["service"])
-	query.Set("scope", "repository:"+c.Config.Repository+"/loomplane-check:pull,push")
+	query.Set("scope", "repository:"+repository+":"+actions)
 	realm.RawQuery = query.Encode()
 	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodGet, realm.String(), http.NoBody)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if c.Config.Username != "" {
 		tokenReq.SetBasicAuth(c.Config.Username, c.Config.Password)
 	}
 	tokenResponse, err := c.HTTP.Do(tokenReq)
 	if err != nil {
-		return nil, fmt.Errorf("reach registry token service: %w", err)
+		return "", fmt.Errorf("reach registry token service: %w", err)
 	}
 	defer tokenResponse.Body.Close()
 	if tokenResponse.StatusCode == 401 || tokenResponse.StatusCode == 403 {
-		return nil, ErrRejected
+		return "", ErrRejected
 	}
 	if tokenResponse.StatusCode != 200 {
-		return nil, fmt.Errorf("registry token service returned HTTP %d", tokenResponse.StatusCode)
+		return "", fmt.Errorf("registry token service returned HTTP %d", tokenResponse.StatusCode)
 	}
 	var token struct {
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
 	if err = json.NewDecoder(io.LimitReader(tokenResponse.Body, 1<<20)).Decode(&token); err != nil {
-		return nil, fmt.Errorf("decode registry token: %w", err)
+		return "", fmt.Errorf("decode registry token: %w", err)
 	}
 	if token.Token == "" {
 		token.Token = token.AccessToken
 	}
 	if token.Token == "" || strings.ContainsAny(token.Token, "\r\n") {
-		return nil, ErrRejected
+		return "", ErrRejected
 	}
-	req.Header.Set("Authorization", "Bearer "+token.Token)
-	return c.HTTP.Do(req)
+	return token.Token, nil
 }

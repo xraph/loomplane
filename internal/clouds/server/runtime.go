@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,6 +102,24 @@ func (r *Runtime) reservation(c *Client, iid id.ID, labels map[string]string) ow
 	return owned.Reservation{Scope: "docker/" + c.Config.Details["docker_id"], Port: port, Owner: iid.String(), OrgID: labels[owned.LabelOrg], ProjectID: labels[owned.LabelProject], EnvironmentID: labels[owned.LabelEnvironment], ConnectionID: labels[owned.LabelConnection]}
 }
 
+func (r *Runtime) reconcilePorts(ctx context.Context, c *Client, iid id.ID, labels map[string]string) error {
+	if r.Ports == nil {
+		if labels[owned.LabelPublic] == "true" {
+			return errors.New("the server has no host port reservation store")
+		}
+		return nil
+	}
+	reservation := r.reservation(c, iid, labels)
+	if labels[owned.LabelPublic] == "true" {
+		if err := r.Ports.Reserve(ctx, reservation); err != nil {
+			return err
+		}
+	} else {
+		reservation.Port = 0
+	}
+	return r.Ports.Reconcile(ctx, reservation)
+}
+
 func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (out *cpprovider.ProvisionResult, err error) {
 	c, err := r.Session(ctx, labels)
 	if err != nil {
@@ -135,6 +154,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 				return nil, checkErr
 			}
 			if checkErr := r.removeContainer(ctx, c, backup, iid, labels); checkErr != nil {
+				return nil, checkErr
+			}
+			if checkErr := r.reconcilePorts(ctx, c, iid, labels); checkErr != nil {
 				return nil, checkErr
 			}
 			return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: old.ID}, Endpoints: r.endpoints(c, iid, spec, labels)}, nil
@@ -268,6 +290,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			if checkErr := r.wait(ctx, c, name, iid, labels); checkErr != nil {
 				return nil, checkErr
 			}
+			if checkErr := r.reconcilePorts(ctx, c, iid, labels); checkErr != nil {
+				return nil, checkErr
+			}
 			return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: old.ID}, Endpoints: r.endpoints(c, iid, spec, labels)}, nil
 		}
 		changed = true
@@ -297,15 +322,8 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			return nil, checkErr
 		}
 	}
-	if old != nil && r.Ports != nil {
-		oldPort := labelPort(old.Config.Labels[owned.LabelHostPort])
-		if oldPort > 0 && (!reserved || oldPort != reservation.Port) {
-			oldReservation := reservation
-			oldReservation.Port = oldPort
-			if checkErr := r.Ports.Release(ctx, oldReservation); checkErr != nil {
-				return nil, checkErr
-			}
-		}
+	if checkErr := r.reconcilePorts(ctx, c, iid, labels); checkErr != nil {
+		return nil, checkErr
 	}
 	return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: result.ID}, Endpoints: r.endpoints(c, iid, spec, labels)}, nil
 }
@@ -413,8 +431,10 @@ func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]strin
 			return checkErr
 		}
 	}
-	if r.Ports != nil && labels[owned.LabelPublic] == "true" {
-		if checkErr := r.Ports.Release(ctx, r.reservation(c, iid, labels)); checkErr != nil {
+	if r.Ports != nil {
+		reservation := r.reservation(c, iid, labels)
+		reservation.Port = 0
+		if checkErr := r.Ports.Reconcile(ctx, reservation); checkErr != nil {
 			return checkErr
 		}
 	}
@@ -503,6 +523,14 @@ func (r *Runtime) pull(ctx context.Context, c *Client, image, auth string) error
 			return err
 		}
 		if frame.Error != "" {
+			if raw, decodeErr := base64.URLEncoding.DecodeString(auth); decodeErr == nil {
+				var credential struct {
+					Token string `json:"registrytoken"`
+				}
+				if decodeErr = json.Unmarshal(raw, &credential); decodeErr == nil && credential.Token != "" {
+					frame.Error = strings.ReplaceAll(frame.Error, credential.Token, "[redacted]")
+				}
+			}
 			return fmt.Errorf("pull selected image: %s", frame.Error)
 		}
 	}

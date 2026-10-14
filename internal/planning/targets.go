@@ -21,7 +21,7 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 	case "server":
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
 	case "kubernetes":
-		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_domain", "tls_secret"}
+		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_domain", "tls_secret", "image_pull_secret"}
 	case "registry":
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
 	}

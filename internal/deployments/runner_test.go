@@ -232,11 +232,12 @@ func (f *fakeSources) Open(_ context.Context, key string) (io.ReadCloser, int64,
 // recorder is an executor that answers at url and remembers each job, and
 // what each service's source held.
 type recorder struct {
-	mu   sync.Mutex
-	url  string
-	fail map[string]error
-	jobs []*Job
-	read map[string]string
+	mu       sync.Mutex
+	url      string
+	fail     map[string]error
+	jobs     []*Job
+	read     map[string]string
+	progress func(*Job)
 }
 
 func (r *recorder) Apply(ctx context.Context, job *Job) (*Outcome, error) {
@@ -244,6 +245,9 @@ func (r *recorder) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	r.jobs = append(r.jobs, job)
 	err := r.fail[job.Action.Name]
 	r.mu.Unlock()
+	if r.progress != nil {
+		r.progress(job)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +479,37 @@ func TestRunner_retryResumesFromTheLastCheckpoint(t *testing.T) {
 	// A step that already succeeded isn't run again.
 	if err := r.Run(t.Context(), "org_1", id, "service:api", nil, func([]byte) error { return nil }); err != nil || len(exec.jobs) != 1 {
 		t.Fatalf("ran again: %d jobs, %v", len(exec.jobs), err)
+	}
+}
+
+func TestRunner_activeRetryClearsThePreviousFinishTime(t *testing.T) {
+	exec := &recorder{url: answering(t, http.StatusOK), fail: map[string]error{"api": errors.New("first attempt failed")}}
+	r, store, _ := newRunner(t, webAndAPI(), exec, fakeVariables{})
+	id, _, err := r.Start(t.Context(), "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.FetchSource(t.Context(), "org_1", id); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Run(t.Context(), "org_1", id, "service:api", nil, func([]byte) error { return nil }); err == nil {
+		t.Fatal("first attempt succeeded")
+	}
+	exec.fail = nil
+	exec.progress = func(job *Job) {
+		job.Progress(StepDeploying, "Retrying")
+		d, readErr := store.GetDeployment(t.Context(), "org_1", id)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, step := range d.Steps {
+			if step.ActionID == "service:api" && (step.StartedAt == nil || step.FinishedAt != nil) {
+				t.Fatalf("active retry timestamps: %+v", step)
+			}
+		}
+	}
+	if err = r.Run(t.Context(), "org_1", id, "service:api", nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
 	}
 }
 

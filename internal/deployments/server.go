@@ -32,6 +32,7 @@ import (
 
 const labelRegistry = "loomplane.registry"
 const labelRegistrySettings = "loomplane.registry.settings"
+const labelImage = "loomplane.image.ref"
 
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
@@ -146,27 +147,30 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 	if !reflect.DeepEqual(reviewed, planning.ReviewedConnectionSettings(c.Cloud, cfg.Details)) {
 		return values, errors.New("registry trust settings changed since review; plan again")
 	}
+	if e.Cloud == connections.Kubernetes {
+		var target map[string]string
+		if decodeErr := json.Unmarshal([]byte(labels[owned.LabelSettings]), &target); decodeErr != nil {
+			return values, decodeErr
+		}
+		if (cfg.Username != "" || cfg.Token != "") && target["image_pull_secret"] == "" {
+			return values, errors.New("private Kubernetes images need an existing namespace image_pull_secret in the target connection; registry credentials remain with the builder")
+		}
+		return values, nil
+	}
+	image := labels[labelImage]
+	if image == "" {
+		return values, nil
+	} // The source build has not produced its image yet.
 	endpoint, err := url.Parse(cfg.Endpoint)
 	if err != nil {
 		return values, err
 	}
-	auth := map[string]string{"username": cfg.Username, "password": cfg.Password, "identitytoken": cfg.Token, "serveraddress": endpoint.Host}
-	if e.Cloud == connections.Server {
-		data, marshalErr := json.Marshal(auth)
-		if marshalErr != nil {
-			return values, marshalErr
-		}
-		values.PullAuth = base64.URLEncoding.EncodeToString(data)
-	} else {
-		if cfg.Username != "" {
-			auth["auth"] = base64.StdEncoding.EncodeToString([]byte(cfg.Username + ":" + cfg.Password))
-		}
-		data, marshalErr := json.Marshal(map[string]any{"auths": map[string]any{endpoint.Host: auth}})
-		if marshalErr != nil {
-			return values, marshalErr
-		}
-		values.PullAuth = string(data)
+	repository, _, _ := strings.Cut(strings.TrimPrefix(image, endpoint.Host+"/"), "@")
+	auth, err := registry.New(cfg).DockerAuth(ctx, repository, "pull")
+	if err != nil {
+		return values, err
 	}
+	values.PullAuth = base64.URLEncoding.EncodeToString(auth)
 	return values, nil
 }
 
@@ -268,6 +272,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		return &Outcome{ExternalID: inst.ID.String(), URL: endpoint(inst.Endpoints), Image: state.Image.Reference, Revision: state.Image.Reference}, nil
 	}
 	_, preflightLabels := ownedSpec(job, "", state)
+	if _, checkErr := e.values(ctx, preflightLabels); checkErr != nil {
+		return nil, checkErr
+	}
 	if checkErr := e.validateTarget(ctx, preflightLabels); checkErr != nil {
 		return nil, checkErr
 	}
@@ -393,6 +400,10 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	labels = map[string]string{owned.LabelOrg: job.Deployment.OrgID, owned.LabelProject: job.Deployment.ProjectID, owned.LabelEnvironment: job.Deployment.EnvironmentID, owned.LabelAction: job.Action.ID, owned.LabelService: job.Action.Name, owned.LabelConnection: job.Connection.ID, owned.LabelRuntime: state.RuntimeRef, owned.LabelPublic: strconv.FormatBool(cfg.Public), owned.LabelHealth: cfg.HealthPath, owned.LabelArchitecture: state.Image.Architecture, owned.LabelRevision: job.Deployment.ID + "/" + job.Action.ID}
 	if cfg.Workload == provider.Worker {
 		labels[owned.LabelHealth] = ""
+	}
+	labels[labelImage] = image
+	if image == "" && cfg.BuildTarget != nil {
+		labels[labelImage] = cfg.BuildTarget.Image
 	}
 	settings, _ := json.Marshal(cfg.TargetSettings) //nolint:errcheck // string maps always encode
 	labels[owned.LabelSettings] = string(settings)

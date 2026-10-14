@@ -128,6 +128,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		return nil, err
 	}
 	ns, name := c.Config.Namespace, WorkloadName(iid)
+	if checkErr := c.CheckPullSecret(ctx); checkErr != nil {
+		return nil, checkErr
+	}
 	old, err := r.objects(ctx, c, iid, labels)
 	if err != nil {
 		return nil, err
@@ -151,6 +154,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			return nil, err
 		}
 	}
+	if values.PullAuth != "" {
+		return nil, errors.New("private Kubernetes registry credentials require an existing image_pull_secret; native bearer pull Secrets are unsupported")
+	}
 	identity := objectLabels(iid, labels)
 	meta := func(name string) metav1.ObjectMeta {
 		return metav1.ObjectMeta{Name: name, Namespace: ns, Labels: maps.Clone(identity)}
@@ -170,23 +176,15 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		return nil, err
 	}
 	pulls := []corev1.LocalObjectReference{}
-	if values.PullAuth != "" {
-		pull := &corev1.Secret{ObjectMeta: meta(name + "-pull"), Type: corev1.SecretTypeDockerConfigJson, Data: map[string][]byte{corev1.DockerConfigJsonKey: []byte(values.PullAuth)}}
-		if old.pull != nil {
-			pull.ResourceVersion = old.pull.ResourceVersion
-			_, err = c.Kube.CoreV1().Secrets(ns).Update(ctx, pull, metav1.UpdateOptions{})
-		} else {
-			_, err = c.Kube.CoreV1().Secrets(ns).Create(ctx, pull, metav1.CreateOptions{})
-		}
-		if err != nil {
-			return nil, err
-		}
-		pulls = append(pulls, corev1.LocalObjectReference{Name: pull.Name})
-	} else if old.pull != nil {
+	if selected := c.Config.Details["image_pull_secret"]; selected != "" {
+		pulls = append(pulls, corev1.LocalObjectReference{Name: selected})
+	}
+	if old.pull != nil {
 		if checkErr := c.Kube.CoreV1().Secrets(ns).Delete(ctx, old.pull.Name, deleteOwnedOptions(old.pull)); checkErr != nil {
 			return nil, checkErr
 		}
 	}
+
 	env := []corev1.EnvVar{}
 	for _, key := range slices.Sorted(maps.Keys(spec.Env)) {
 		if _, secret := values.Env[key]; !secret {

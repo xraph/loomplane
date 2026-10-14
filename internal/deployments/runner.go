@@ -392,7 +392,7 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		}
 	}
 	now := r.now().UTC()
-	step.StartedAt, step.Warnings = &now, nil
+	step.StartedAt, step.FinishedAt, step.Warnings = &now, nil, nil
 	progress := func(status, message string) {
 		step.Status, step.Message = status, message
 		_ = r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step) //nolint:errcheck // progress is best effort; the step's end is recorded

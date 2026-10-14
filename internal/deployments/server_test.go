@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -21,6 +22,40 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
+
+func TestOwnedTarget_refusesKubernetesBearerPullCredentialsBeforeBuilding(t *testing.T) {
+	c := &connections.Connection{ID: "conn_registry", OrgID: "org_fixture", Cloud: connections.Registry, Status: connections.StatusReady, Details: map[string]string{"endpoint": "https://registry.example.com", "repository": "team"}}
+	reviewed, _ := json.Marshal(planning.ReviewedConnectionSettings(c.Cloud, c.Details))
+	labels := map[string]string{owned.LabelOrg: c.OrgID, labelRegistry: c.ID, labelRegistrySettings: string(reviewed), owned.LabelSettings: `{}`}
+	e := &OwnedTarget{Cloud: connections.Kubernetes, Credentials: buildCredentialFunc(func(context.Context, string, string) (*connections.Connection, []byte, error) {
+		return c, []byte(`{"token":"direct-bearer"}`), nil
+	})}
+	if _, err := e.values(t.Context(), labels); err == nil || !strings.Contains(err.Error(), "image_pull_secret") {
+		t.Fatalf("unsupported pull credential accepted: %v", err)
+	}
+	labels[owned.LabelSettings] = `{"image_pull_secret":"existing-pull"}`
+	values, err := e.values(t.Context(), labels)
+	if err != nil || values.PullAuth != "" {
+		t.Fatalf("delegated cluster credential: %+v %v", values, err)
+	}
+}
+
+func TestOwnedTarget_serverPullUsesRegistryTokenInsteadOfIdentityToken(t *testing.T) {
+	c := &connections.Connection{ID: "conn_registry", OrgID: "org_fixture", Cloud: connections.Registry, Status: connections.StatusReady, Details: map[string]string{"endpoint": "https://registry.example.com", "repository": "team"}}
+	reviewed, _ := json.Marshal(planning.ReviewedConnectionSettings(c.Cloud, c.Details))
+	labels := map[string]string{owned.LabelOrg: c.OrgID, labelRegistry: c.ID, labelRegistrySettings: string(reviewed), "loomplane.image.ref": "registry.example.com/team/api@sha256:" + strings.Repeat("a", 64)}
+	e := &OwnedTarget{Cloud: connections.Server, Credentials: buildCredentialFunc(func(context.Context, string, string) (*connections.Connection, []byte, error) {
+		return c, []byte(`{"token":"direct-bearer"}`), nil
+	})}
+	values, err := e.values(t.Context(), labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.URLEncoding.DecodeString(values.PullAuth)
+	if err != nil || strings.Contains(string(raw), "identitytoken") || !strings.Contains(string(raw), `"registrytoken":"direct-bearer"`) {
+		t.Fatalf("Docker token encoding: %s %v", raw, err)
+	}
+}
 
 type ownedInstances struct {
 	instance.Service

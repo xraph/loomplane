@@ -87,3 +87,48 @@ func TestReservations_serializesDifferentConnectionsAndProjectsOnOneDaemon(t *te
 		t.Fatalf("released port unavailable: %v", err)
 	}
 }
+
+func TestReservations_reconcilesOnlyThisOwnerAndPreservesItsActivePort(t *testing.T) {
+	r := reservationDatabase(t)
+	lease := Reservation{Scope: "docker/daemon-a", Port: 8080, Owner: "inst_one", OrgID: "org_one", ProjectID: "proj_one", EnvironmentID: "env_one", ConnectionID: "conn_one"}
+	for _, port := range []int{8080, 8081, 8082} {
+		lease.Port = port
+		if err := r.Reserve(t.Context(), lease); err != nil {
+			t.Fatal(err)
+		}
+	}
+	foreign := lease
+	foreign.Owner = "inst_two"
+	foreign.OrgID = "org_two"
+	foreign.ProjectID = "proj_two"
+	foreign.EnvironmentID = "env_two"
+	foreign.ConnectionID = "conn_two"
+	foreign.Port = 8083
+	if err := r.Reserve(t.Context(), foreign); err != nil {
+		t.Fatal(err)
+	}
+	lease.Port = 8082
+	if err := r.Reconcile(t.Context(), lease); err != nil {
+		t.Fatal(err)
+	}
+	for _, port := range []int{8082, 8083} {
+		foreign.Port = port
+		if err := r.Reserve(t.Context(), foreign); port == 8082 && !errors.Is(err, ErrReserved) || port == 8083 && err != nil {
+			t.Fatalf("active/foreign port %d: %v", port, err)
+		}
+	}
+	for _, port := range []int{8080, 8081} {
+		foreign.Port = port
+		if err := r.Reserve(t.Context(), foreign); err != nil {
+			t.Fatalf("orphan %d: %v", port, err)
+		}
+	}
+	lease.Port = 0
+	if err := r.Reconcile(t.Context(), lease); err != nil {
+		t.Fatal(err)
+	}
+	foreign.Port = 8082
+	if err := r.Reserve(t.Context(), foreign); err != nil {
+		t.Fatalf("removed active lease: %v", err)
+	}
+}

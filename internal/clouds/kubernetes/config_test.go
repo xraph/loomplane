@@ -38,11 +38,11 @@ func testCA(t *testing.T) []byte {
 
 func TestConfig_isExplicitAndSelfContained(t *testing.T) {
 	raw := kubeconfig(t, "https://cluster.example.com:6443", testCA(t))
-	c, err := ParseConfig(raw, map[string]string{"namespace": "preview"})
+	c, err := ParseConfig(raw, map[string]string{"namespace": "preview", "image_pull_secret": "existing-pull"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Namespace != "preview" || c.REST.Host != "https://cluster.example.com:6443" || c.REST.BearerToken != "test-token" {
+	if c.Details["image_pull_secret"] != "existing-pull" || c.Namespace != "preview" || c.REST.Host != "https://cluster.example.com:6443" || c.REST.BearerToken != "test-token" {
 		t.Fatalf("wrong explicit configuration: %+v", c.Details)
 	}
 	for _, key := range []string{"token", "client_key", "credential"} {
@@ -85,5 +85,14 @@ func TestConfig_rejectsExecutableAndAmbientCredentials(t *testing.T) {
 				t.Fatalf("unsafe config: %v, want %s", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestConfig_rejectsReservedOrInvalidPullSecretNames(t *testing.T) {
+	raw := kubeconfig(t, "https://cluster.example.com", testCA(t))
+	for _, name := range []string{"../foreign", "lp-inst-owned-pull", "UPPER"} {
+		if _, err := ParseConfig(raw, map[string]string{"image_pull_secret": name}); err == nil {
+			t.Fatalf("accepted pull Secret %s", name)
+		}
 	}
 }

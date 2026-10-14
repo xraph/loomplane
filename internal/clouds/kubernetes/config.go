@@ -115,5 +115,11 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 	if rc.ServerName != "" {
 		details["tls_server_name"] = rc.ServerName
 	}
+	if name := strings.TrimSpace(settings["image_pull_secret"]); name != "" {
+		if err := validatePullSecret(name); err != nil {
+			return nil, err
+		}
+		details["image_pull_secret"] = name
+	}
 	return &Config{REST: rc, Namespace: namespace, Context: contextName, Details: details}, nil
 }

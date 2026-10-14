@@ -47,10 +47,10 @@ func (e *Extension) clouds() (CloudList, error) {
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
 			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
 		{Cloud: connections.Kubernetes, Title: "Kubernetes", Credential: "Self-contained kubeconfig",
-			Help:     "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. File references and executable authentication plugins are refused.",
-			Settings: []sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}}},
+			Help:     "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. File references and executable authentication plugins are refused. For private images, select an existing namespace pull Secret that you manage.",
+			Settings: []sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}, {Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"}}},
 		{Cloud: connections.Registry, Title: "Image registry", Credential: "Credential JSON", //nolint:gosec // Form label, not a credential.
-			Help:     "Use username/password or token JSON, with optional ca PEM. Use {} for anonymous access. HTTPS is required outside loopback. A separate token service needs an approved auth endpoint.",
+			Help:     "Use username/password or token JSON, with optional ca PEM. Use {} for anonymous access. HTTPS is required outside loopback. A separate token service needs an approved auth endpoint. Docker publishing and server pulls use bearer tokens; Basic-only registries need a token service. Kubernetes pulls use your existing namespace Secret.",
 			Settings: []sdk.Setting{{Key: "endpoint", Label: "Registry endpoint", Required: true}, {Key: "repository", Label: "Repository prefix", Required: true}, {Key: "auth_endpoint", Label: "Token service endpoint (optional)"}}},
 		// Render's form is the plain one plugins get: a key and a setting.
 		{

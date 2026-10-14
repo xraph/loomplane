@@ -111,6 +111,7 @@ export class LoomplaneRealtime {
   private stopped = true
   private generation = 0
   private syncingGeneration = -1
+  private scopePending = false
   constructor(private options: Options) {}
   state = () => this.snapshot
   subscribe = (fn: () => void) => {
@@ -131,7 +132,8 @@ export class LoomplaneRealtime {
     this.timer = setInterval(() => {
       if (this.snapshot.lastSync && Date.now() - this.snapshot.lastSync > 10000)
         this.update({ status: "stale" })
-      if (this.snapshot.status !== "live") void this.synchronize()
+      if (this.scopePending || this.snapshot.status !== "live")
+        void this.synchronize()
     }, 15000)
   }
   stop() {
@@ -147,6 +149,7 @@ export class LoomplaneRealtime {
     if (next.join(",") === this.deployments.join(",")) return
     this.deployments = next
     if (!this.stopped) {
+      this.scopePending = true
       this.close()
       this.open()
       void this.synchronize()
@@ -278,7 +281,7 @@ export class LoomplaneRealtime {
       if ((this.sequence(next) ?? -1n) >= (this.sequence(this.cursor) ?? -1n))
         this.cursor = next
       this.update({
-        status: "live",
+        status: this.scopePending ? "reconnecting" : "live",
         lastSync: Date.now(),
         transport: this.mode,
       })
@@ -333,10 +336,11 @@ export class LoomplaneRealtime {
     snapshot: Snapshot,
     deliver?: (frame: unknown) => void
   ) {
-    if (!snapshot.cursor || this.sequence(snapshot.cursor) === undefined) return
+    if (!snapshot.cursor || this.sequence(snapshot.cursor) === undefined)
+      return false
     const previous = this.cursor ? this.sequence(this.cursor) : undefined
     if (previous !== undefined && this.sequence(snapshot.cursor)! < previous)
-      return
+      return false
     const records = snapshot.records ?? []
     for (const record of records) {
       if (record.orgId !== this.options.orgId) continue
@@ -360,6 +364,7 @@ export class LoomplaneRealtime {
         )
       )
     this.update({ lastSync: Date.now() })
+    return true
   }
   async synchronize() {
     if (
@@ -371,17 +376,25 @@ export class LoomplaneRealtime {
     const generation = this.generation
     this.syncingGeneration = generation
     try {
-      const result = await snapshotQuery(
-        {
-          query: {
-            org_id: this.options.orgId,
-            deployment_ids: this.deployments.join(","),
+      // Retry boundedly if organization activity overtakes the scoped snapshot.
+      // The timer continues recovery even when the transport stays connected.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const result = await snapshotQuery(
+          {
+            query: {
+              org_id: this.options.orgId,
+              deployment_ids: this.deployments.join(","),
+            },
           },
-        },
-        { client: this.options.cache }
-      ).refetch()
-      if (generation === this.generation && !this.stopped)
-        this.applySnapshot(result)
+          { client: this.options.cache }
+        ).refetch()
+        if (generation !== this.generation || this.stopped) return
+        if (this.applySnapshot(result)) {
+          this.scopePending = false
+          return
+        }
+        this.scopePending = true
+      }
     } catch (error) {
       if (generation === this.generation && !this.stopped) {
         if (statusOf(error) === 401 || statusOf(error) === 403) {

@@ -223,15 +223,20 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 	digest, reference := image.ID, image.ID
 	if registryConfig != nil {
 		job.Progress(StepBuilding, "Publishing the built image")
-		auth, marshalErr := json.Marshal(map[string]string{"username": registryConfig.Username, "password": registryConfig.Password, "registrytoken": registryConfig.Token, "serveraddress": registryConfig.Endpoint})
-		if marshalErr != nil {
-			return "", marshalErr
-		}
 		repository, tag, _ := strings.Cut(state.Tag, ":")
 		// A registry host can itself contain a port. The tag follows the last colon.
 		if colon := strings.LastIndex(state.Tag, ":"); colon > strings.LastIndex(state.Tag, "/") {
 			repository, tag = state.Tag[:colon], state.Tag[colon+1:]
 		}
+		endpoint, parseErr := url.Parse(registryConfig.Endpoint)
+		if parseErr != nil {
+			return "", parseErr
+		}
+		auth, authErr := registry.New(registryConfig).DockerAuth(ctx, strings.TrimPrefix(repository, endpoint.Host+"/"), "pull,push")
+		if authErr != nil {
+			return "", authErr
+		}
+		collector.addCredential(auth)
 		response, err = dockerRequest(ctx, client, http.MethodPost, "/images/"+url.PathEscape(repository)+"/push?tag="+url.QueryEscape(tag), nil, "", http.Header{"X-Registry-Auth": {base64.URLEncoding.EncodeToString(auth)}})
 		if err != nil {
 			return "", err

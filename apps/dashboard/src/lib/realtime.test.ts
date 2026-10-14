@@ -187,6 +187,69 @@ it("sends scoped snapshot query parameters using their wire names", async () => 
   live.stop()
 })
 
+it("retries a scoped snapshot overtaken by an unrelated live event", async () => {
+  let finish: (value: unknown) => void = () => {}
+  let reads = 0
+  const collection = {
+    id: "collection_old",
+    org_id: "org_one",
+    deployment_id: "dep_one",
+    state: "incomplete",
+  }
+  const cache = new QueryCache({
+    entities,
+    transport: {
+      execute: async () => {
+        reads++
+        if (reads === 1)
+          return new Promise((resolve) => {
+            finish = resolve
+          })
+        return {
+          cursor: "org_one:11",
+          records: [
+            { orgId: "org_one", event: "build.collection", data: collection },
+          ],
+        }
+      },
+    },
+  })
+  const connection = new Connection()
+  const live = new LoomplaneRealtime({
+    cache,
+    orgId: "org_one",
+    connect: () => connection,
+  })
+  const output: unknown[] = []
+  live.onOutput((_event, data) => output.push(data))
+  live.start()
+  connection.message({
+    event: "realtime.status",
+    cursor: "org_one:10",
+    data: { cursor: "org_one:10" },
+  })
+  live.setDeployments(["dep_one"])
+  await vi.waitFor(() => expect(reads).toBe(1))
+  connection.message({
+    event: "project.updated",
+    cursor: "org_one:11",
+    data: { id: "proj_other", org_id: "org_one", name: "New" },
+  })
+  finish({
+    cursor: "org_one:10",
+    records: [
+      { orgId: "org_one", event: "build.collection", data: collection },
+    ],
+  })
+  await vi.waitFor(() =>
+    expect(output).toContainEqual(
+      expect.objectContaining({ id: "collection_old", state: "incomplete" })
+    )
+  )
+  expect(reads).toBe(2)
+  live.stop()
+})
+
 it("prefers WS, falls back to SSE, retains replay cursor and closes old scope", async () => {
   vi.useFakeTimers()
   const connections: Connection[] = []

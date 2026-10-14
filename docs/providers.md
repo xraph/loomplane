@@ -1,6 +1,62 @@
 # Writing a provider
 
-A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel and ECS on Fargate for services, and Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage and S3 for resources. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
+A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel, ECS on Fargate, Render, SSH/Docker servers and Kubernetes for services, and Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage and S3 for resources. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
+
+## Your servers and clusters
+
+Connect an SSH server, Kubernetes namespace and optional image registry under Integrations. Each service can select its own infrastructure connection. The plan pins that destination, its trust settings and the source commit before you approve it.
+
+For SSH, you need a Linux Docker daemon, an existing private key and the server's verified public host key. The SSH user needs access to the Docker Unix socket and TCP forwarding for readiness checks. Loomplane does not install Docker or use sudo. Choose a published host port for a public HTTP service; private services use the environment's Docker network. A readiness path checks the application over SSH before its binding changes.
+
+For Kubernetes, use a self-contained HTTPS kubeconfig with an embedded CA and token or client certificate. File references, exec authentication, insecure TLS and impersonation are rejected. Select an existing namespace; Loomplane pins its UID and checks permissions for workloads, services and secrets. Public HTTP services need your ingress controller, hostname and an existing TLS secret. CPU autoscaling also needs the metrics API.
+
+A source build for Kubernetes needs an SSH/Docker builder and an OCI registry reachable by both builder and cluster. You can instead provide an existing image pinned as `registry/repository@sha256:...`.
+
+For private Kubernetes images, enter an existing namespace Secret name in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Loomplane checks its name and registry Secret type through a Table response with `includeObject=None`, then references it in the Pod. Rollback and removal preserve that external Secret. Names beginning with `lp-` are reserved for Loomplane's own objects.
+
+Docker publishing and server pulls accept a direct registry bearer token or a repository token obtained through your reviewed token service. Username/password connections need a Bearer token exchange for authenticated Docker operations. Basic-only credentials can check registry API access, but cannot be delegated to Docker. Kubernetes uses your existing pull Secret for native authentication; it cannot consume a direct bearer token from a generic Docker configuration Secret. See [Docker's registry token contract](https://github.com/moby/moby/blob/v28.0.0/api/types/registry/authconfig.go) and [Kubernetes image authentication](https://kubernetes.io/docs/concepts/containers/images/#specifying-imagepullsecrets-on-a-pod).
+
+The control plane sends registry credentials only to the selected registry or its approved token endpoint. If you use a private CA, install its trust on the builder daemon, target daemon and Kubernetes nodes that contact the registry. The connection's CA configures Loomplane's checks and token exchange.
+
+```yaml
+version: 1
+services:
+  api:
+    source: go:cmd/api
+    provider: kubernetes
+    target: conn_cluster
+    port: 8080
+    health_path: /_/health
+    public: false
+    scale: {min: 2, max: 2}
+    build:
+      context: .
+      builder: conn_builder
+      registry: conn_registry
+  worker:
+    source: go:cmd/worker
+    provider: server
+    target: conn_server
+    public: false
+    build: {context: .}
+```
+
+Replace those connection IDs with the ones you saved. Forge HTTP apps without a Dockerfile can use the generated Go build; a repository Dockerfile takes precedence. Forge's declared worker role keeps a worker from becoming an HTTP service. A private dependency must have a supported network path between its selected targets; choosing destinations does not create a cross-cluster network.
+
+## Build output
+
+| Target | Collection |
+| --- | --- |
+| SSH/Docker and Kubernetes source builds | Docker/BuildKit output from the selected SSH builder |
+| Vercel | Streamed deployment build events |
+| Cloud Run | Polled Cloud Build entries from Cloud Logging |
+| ECS on Fargate | Polled CodeBuild output from its exact CloudWatch log stream |
+| Render | Progress only; its published log API cannot isolate one concurrent deployment |
+| Provider plugin | Optional operation logs through the SDK |
+
+Log access is independent of deployment access. A denied or interrupted collector shows unavailable or incomplete output while the deployment keeps its own status. Logs retain source, action and attempt IDs; retries preserve earlier output. Repeated provider records use stable IDs so reconnects do not duplicate them.
+
+To opt a Go plugin in, implement `sdk.OperationLogger` with `OperationLogs() bool` returning true and call `job.Log(stream, message)`. The handler serves bounded pages at `/v1/operations/{id}/logs`. Older plugins can keep their progress callbacks. Plugin restart or retention loss produces a gap rather than pretending older lines are complete.
 
 A plugin is a small HTTP service. Loomplane reads its description when it starts and puts it in the catalog beside the built-in targets, so manifests can name it, plans check against what it says it runs, and deployments, retries and drift checks drive it like any other. It runs on your infrastructure, so the credential it deploys with never leaves it, apart from the copy Loomplane keeps in Vault.
 

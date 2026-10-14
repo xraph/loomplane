@@ -7,9 +7,26 @@ import {
   useRef,
 } from "react"
 import { useDeploymentsLogs as deploymentLogQuery } from "@/client/forge/loomplane/hooks"
-import type { Collection, Log } from "@/client/forge/loomplane/types"
+import type { Collection, Log, LogPage } from "@/client/forge/loomplane/types"
 import { useRealtime } from "@/lib/realtime-provider"
 import { useLiveState } from "@/lib/realtime-state"
+
+export async function readBuildLogPages(
+  load: (cursor: string) => Promise<LogPage>,
+  accept: (page: LogPage) => void,
+  active: () => boolean
+) {
+  let cursor = ""
+  for (; active();) {
+    const result = await load(cursor)
+    if (!active()) return
+    accept(result)
+    if (!result.next) return
+    if (result.next === cursor)
+      throw new Error("Retained output cursor did not advance.")
+    cursor = result.next
+  }
+}
 
 export function mergeBuildLogs(
   before: Log[],
@@ -93,27 +110,30 @@ export function useBuildLogs(deploymentId?: string) {
         })
     })
     realtime?.setDeployments([deploymentId])
+    let reading = false
     const read = async () => {
+      if (reading) return
+      reading = true
       try {
-        let cursor = ""
-        for (let page = 0; page < 10; page++) {
-          const result = await deploymentLogQuery({
-            path: { id: deploymentId },
-            query: { cursor, limit: 1000 },
-          }).refetch()
-          if (closed) return
-          store.update({
-            logs: mergeBuildLogs(store.snapshot().logs, result.logs),
-            gap: store.snapshot().gap || result.gap,
-          })
-          if (!result.next) break
-          if (page === 9) store.update({ gap: true })
-          cursor = result.next
-        }
+        await readBuildLogPages(
+          (cursor) =>
+            deploymentLogQuery({
+              path: { id: deploymentId },
+              query: { cursor, limit: 1000 },
+            }).refetch(),
+          (result) => {
+            store.update({
+              logs: mergeBuildLogs(store.snapshot().logs, result.logs),
+              gap: store.snapshot().gap || result.gap,
+            })
+          },
+          () => !closed
+        )
         if (!closed) store.update({ error: undefined })
       } catch (error) {
         if (!closed) store.update({ error })
       } finally {
+        reading = false
         if (!closed) store.update({ loaded: true })
       }
     }

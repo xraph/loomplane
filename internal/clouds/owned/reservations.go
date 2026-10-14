@@ -17,6 +17,7 @@ type Reservation struct {
 type PortReservations interface {
 	Reserve(context.Context, Reservation) error
 	Release(context.Context, Reservation) error
+	Reconcile(context.Context, Reservation) error
 }
 
 type Reservations struct{ db *pgdriver.PgDB }
@@ -46,5 +47,15 @@ func (s *Reservations) Reserve(ctx context.Context, r Reservation) error {
 
 func (s *Reservations) Release(ctx context.Context, r Reservation) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM loomplane_host_ports WHERE scope=$1 AND port=$2 AND owner=$3 AND org_id=$4`, r.Scope, r.Port, r.Owner, r.OrgID)
+	return err
+}
+
+// Reconcile keeps only the port of the ready container. Zero releases every
+// reservation for a removed or private instance, including interrupted changes.
+func (s *Reservations) Reconcile(ctx context.Context, r Reservation) error {
+	if r.Scope == "" || r.Owner == "" || r.OrgID == "" || r.ProjectID == "" || r.EnvironmentID == "" || r.Port < 0 || r.Port > 65535 {
+		return errors.New("invalid host port reconciliation")
+	}
+	_, err := s.db.Exec(ctx, `DELETE FROM loomplane_host_ports WHERE scope=$1 AND owner=$2 AND org_id=$3 AND project_id=$4 AND environment_id=$5 AND port<>$6`, r.Scope, r.Owner, r.OrgID, r.ProjectID, r.EnvironmentID, r.Port)
 	return err
 }
