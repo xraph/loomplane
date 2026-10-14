@@ -113,6 +113,7 @@ import {
   lockedOn,
   opLabel,
   planStatus,
+  planConnections,
   scopeBody,
   stepStatus,
   steps,
@@ -814,7 +815,7 @@ function PlanBody({
               .
             </>
           )}
-          <DeploysWith connections={plan.connections} />
+          <DeploysWith plan={plan} />
           {plan.decidedAt && plan.status !== "superseded" && (
             <>
               Settled{" "}
@@ -965,9 +966,9 @@ function Section({
 const evidenceShown = 3
 
 /** DeploysWith names the cloud connections a plan deploys with. */
-function DeploysWith({ connections }: { connections: Record<string, string> }) {
+function DeploysWith({ plan }: { plan: Plan }) {
   const list = useQuery(useConnectionsList)
-  const names = Object.entries(connections).map(([cloud, id]) => {
+  const names = planConnections(plan).map(({ cloud, id }) => {
     const c = list.data?.connections.find((x) => x.id === id)
     return `${c?.name ?? "a removed connection"} (${cloudLabel(cloud)})`
   })
@@ -1225,6 +1226,12 @@ function Steps({ actions }: { actions: Action[] }) {
 }
 
 function ActionRow({ action: a }: { action: Action }) {
+  const connections = useQuery(useConnectionsList)
+  const target = a.connectionId
+    ? connections.data?.connections.find(
+        (connection) => connection.id === a.connectionId
+      )
+    : undefined
   const env = a.service?.env ?? []
   const routes = a.service?.gateway ?? []
   return (
@@ -1239,6 +1246,7 @@ function ActionRow({ action: a }: { action: Action }) {
         <span className="font-medium">{a.name}</span>
         <span className="text-sm text-muted-foreground">
           {a.creates} on {a.provider}
+          {a.connectionId ? `, ${target?.name ?? a.connectionId}` : ""}
           {a.region ? `, ${a.region}` : ""}
         </span>
       </div>

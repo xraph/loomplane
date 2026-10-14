@@ -110,7 +110,7 @@ export class LoomplaneRealtime {
   private frames = new Set<(event: string, data: Log | Collection) => void>()
   private stopped = true
   private generation = 0
-  private syncing = false
+  private syncingGeneration = -1
   constructor(private options: Options) {}
   state = () => this.snapshot
   subscribe = (fn: () => void) => {
@@ -149,6 +149,7 @@ export class LoomplaneRealtime {
     if (!this.stopped) {
       this.close()
       this.open()
+      void this.synchronize()
     }
   }
   private close() {
@@ -290,6 +291,8 @@ export class LoomplaneRealtime {
             orgId?: string
             project_id?: string
             projectId?: string
+            plan_id?: string
+            planId?: string
           }
         | undefined
       if (
@@ -300,6 +303,7 @@ export class LoomplaneRealtime {
         return
       if (cursor) this.cursor = cursor
       this.output(frame.event ?? "", frame.data)
+      this.refreshDeploymentLookup(frame.event, frame.data)
       if (
         frame.event === "analysis.updated" ||
         frame.event === "manifest.updated"
@@ -319,6 +323,12 @@ export class LoomplaneRealtime {
     }
     deliver(frame)
   }
+  private refreshDeploymentLookup(event: string | undefined, data: unknown) {
+    if (event !== "deployment.updated" || !data) return
+    const deployment = data as { plan_id?: string; planId?: string }
+    const plan = deployment.plan_id ?? deployment.planId
+    if (plan) this.options.cache.invalidate([`Deployment:${plan}`])
+  }
   private applySnapshot(
     snapshot: Snapshot,
     deliver?: (frame: unknown) => void
@@ -330,6 +340,7 @@ export class LoomplaneRealtime {
     const records = snapshot.records ?? []
     for (const record of records) {
       if (record.orgId !== this.options.orgId) continue
+      this.refreshDeploymentLookup(record.event, record.data)
       this.output(record.event, record.data)
       const frame = { event: record.event, data: record.data, channel }
       if (deliver) deliver(frame)
@@ -351,10 +362,14 @@ export class LoomplaneRealtime {
     this.update({ lastSync: Date.now() })
   }
   async synchronize() {
-    if (this.syncing || this.stopped || this.snapshot.status === "denied")
+    if (
+      this.syncingGeneration === this.generation ||
+      this.stopped ||
+      this.snapshot.status === "denied"
+    )
       return
-    this.syncing = true
     const generation = this.generation
+    this.syncingGeneration = generation
     try {
       const result = await snapshotQuery(
         {
@@ -377,7 +392,7 @@ export class LoomplaneRealtime {
         } else this.update({ status: "stale" })
       }
     } finally {
-      this.syncing = false
+      if (this.syncingGeneration === generation) this.syncingGeneration = -1
     }
   }
 }

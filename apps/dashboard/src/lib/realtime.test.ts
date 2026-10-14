@@ -4,10 +4,60 @@ import { entities } from "@/client/forge/loomplane/entities"
 import {
   useProjectsList,
   useProjectsGraph,
+  useDeploymentsForPlan,
 } from "@/client/forge/loomplane/hooks"
 import { LoomplaneRealtime } from "@/lib/realtime"
 
 afterEach(() => vi.useRealTimers())
+
+it("refreshes a missing plan deployment when the deployment starts", async () => {
+  let reads = 0
+  let started = false
+  const cache = new QueryCache({
+    entities,
+    transport: {
+      execute: async () => {
+        reads++
+        if (!started)
+          throw Object.assign(new Error("Not started"), { status: 404 })
+        return {
+          id: "dep_one",
+          orgId: "org_one",
+          planId: "plan_one",
+          status: "running",
+        }
+      },
+    },
+  })
+  const query = useDeploymentsForPlan(
+    { path: { id: "plan_one" } },
+    { client: cache }
+  )
+  await query.fetch().catch(() => undefined)
+  const release = query.subscribe(() => {})
+  await vi.waitFor(() => expect(reads).toBeGreaterThan(1))
+  const connection = new Connection()
+  const live = new LoomplaneRealtime({
+    cache,
+    orgId: "org_one",
+    connect: () => connection,
+  })
+  live.start()
+  started = true
+  connection.message({
+    event: "deployment.updated",
+    cursor: "org_one:1",
+    data: {
+      id: "dep_one",
+      org_id: "org_one",
+      plan_id: "plan_one",
+      status: "running",
+    },
+  })
+  await vi.waitFor(() => expect(query.getState().data?.id).toBe("dep_one"))
+  release()
+  live.stop()
+})
 
 it("refreshes the graph projection when analysis completes", async () => {
   let reads = 0
@@ -69,6 +119,49 @@ class Connection implements StreamConnection {
     this.closed = true
   }
 }
+
+it("restores historical collection status when a deployment joins the live scope", async () => {
+  const collection = {
+    id: "collection_one",
+    org_id: "org_one",
+    deployment_id: "dep_one",
+    state: "incomplete",
+    message: "Earlier build interrupted",
+  }
+  const cache = new QueryCache({
+    entities,
+    transport: {
+      execute: async () => ({
+        cursor: "org_one:10",
+        records: [
+          { orgId: "org_one", event: "build.collection", data: collection },
+        ],
+      }),
+    },
+  })
+  const connection = new Connection()
+  const live = new LoomplaneRealtime({
+    cache,
+    orgId: "org_one",
+    connect: () => connection,
+  })
+  const messages: unknown[] = []
+  const release = live.onOutput((_event, data) => messages.push(data))
+  live.start()
+  connection.message({
+    event: "realtime.status",
+    cursor: "org_one:10",
+    data: { cursor: "org_one:10" },
+  })
+  live.setDeployments(["dep_one"])
+  await vi.waitFor(() =>
+    expect(messages).toContainEqual(
+      expect.objectContaining({ deploymentId: "dep_one", state: "incomplete" })
+    )
+  )
+  release()
+  live.stop()
+})
 
 it("prefers WS, falls back to SSE, retains replay cursor and closes old scope", async () => {
   vi.useFakeTimers()

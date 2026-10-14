@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func TestReadBuildOutputDockerPushStatusDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("c", 64)
+	input := `{"status":"Layer already exists","id":"layer"}` + "\n" + `{"status":"release: digest: ` + digest + ` size: 674"}` + "\n"
+	got, err := readBuildOutput(strings.NewReader(input), func(buildLine) error { return nil })
+	if err != nil || got != digest {
+		t.Fatalf("real Docker push digest: %q %v", got, err)
+	}
+}
+
 func TestImageBuildOutput_preservesRepeatsAndReportsDaemonErrors(t *testing.T) {
 	var lines []buildLine
 	_, err := readBuildOutput(strings.NewReader("{\"stream\":\"same line\\n\"}\n{\"stream\":\"same line\\n\"}\n{\"errorDetail\":{\"message\":\"compile failed\"},\"error\":\"compile failed\"}\n"), func(line buildLine) error { lines = append(lines, line); return nil })

@@ -192,6 +192,14 @@ func readBuildOutput(input io.Reader, emit func(buildLine) error) (string, error
 		case frame.Stream != "":
 			lines = append(lines, buildLine{Stream: "stdout", Source: "docker", Level: "info", Message: frame.Stream})
 		case frame.Status != "":
+			// Docker 29 can report a successful push in the final status
+			// record instead of an aux.Digest object.
+			fields := strings.Fields(frame.Status)
+			for index, field := range fields {
+				if field == "digest:" && index+1 < len(fields) && imageDigest.MatchString(fields[index+1]) {
+					image = fields[index+1]
+				}
+			}
 			lines = append(lines, buildLine{Stream: "system", Source: "docker", Level: "info", Message: frame.ID + " " + frame.Status})
 		}
 		for _, line := range lines {

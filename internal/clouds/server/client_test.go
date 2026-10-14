@@ -125,7 +125,7 @@ func TestClient_readsDockerThroughPinnedSSH(t *testing.T) {
 	}
 	defer c.Close()
 	details, missing, err := c.Check(t.Context())
-	if err != nil || len(missing) != 0 || details["docker_id"] != "isolated-daemon" || details["architecture"] != "aarch64" {
+	if err != nil || len(missing) != 0 || details["docker_id"] != "isolated-daemon" || details["architecture"] != "arm64" {
 		t.Fatalf("check: %v %v %v", details, missing, err)
 	}
 }

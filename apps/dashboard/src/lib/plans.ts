@@ -10,6 +10,24 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { lockLabel, shortSHA } from "@/lib/architecture"
 
+/** Every reviewed destination, including separate targets on the same cloud. */
+export function planConnections(
+  plan: Pick<Plan, "connections" | "actions">
+): { cloud: string; id: string }[] {
+  const result = Object.entries(plan.connections).map(([cloud, id]) => ({
+    cloud,
+    id,
+  }))
+  for (const action of plan.actions) {
+    if (
+      action.connectionId &&
+      !result.some((entry) => entry.id === action.connectionId)
+    )
+      result.push({ cloud: action.provider, id: action.connectionId })
+  }
+  return result
+}
+
 /** isPlanning reports whether a plan is still being worked out. */
 export function isPlanning(status: string): boolean {
   return status === "planning"

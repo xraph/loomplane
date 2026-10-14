@@ -7,6 +7,7 @@ import {
   deploymentStatus,
   lockedOn,
   planStatus,
+  planConnections,
   scopeBody,
   stepStatus,
   steps,
@@ -42,6 +43,23 @@ const providers = [
   provider("cloud-sql", "gcp", ["postgres", "mysql"]),
   provider("rds", "aws", ["postgres", "mysql"]),
 ]
+
+it("keeps different per-service connections on the same infrastructure kind", () => {
+  expect(
+    planConnections({
+      connections: { server: "conn_one" },
+      actions: [
+        { provider: "server", connectionId: "conn_one" } as Action,
+        { provider: "server", connectionId: "conn_two" } as Action,
+        { provider: "kubernetes", connectionId: "conn_cluster" } as Action,
+      ],
+    })
+  ).toEqual([
+    { cloud: "server", id: "conn_one" },
+    { cloud: "server", id: "conn_two" },
+    { cloud: "kubernetes", id: "conn_cluster" },
+  ])
+})
 
 describe("withResource", () => {
   it("provisions on the cloud most services run on", () => {

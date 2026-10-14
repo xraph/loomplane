@@ -119,7 +119,18 @@ func (c *Client) Check(ctx context.Context) (details map[string]string, missing 
 	if err := c.getJSON(ctx, "/info", &info); err != nil {
 		return details, []string{"docker:info"}, nil
 	}
-	details["version"], details["architecture"], details["docker_id"] = version.Version, info.Architecture, info.ID
+	architecture := info.Architecture
+	// Docker's info endpoint can use uname names, while OCI images and
+	// Kubernetes node labels use Go architecture names.
+	switch architecture {
+	case "aarch64":
+		architecture = "arm64"
+	case "x86_64":
+		architecture = "amd64"
+	case "armv7l", "armv6l":
+		architecture = "arm"
+	}
+	details["version"], details["architecture"], details["docker_id"] = version.Version, architecture, info.ID
 	if info.OSType != "linux" {
 		missing = append(missing, "docker:linux")
 	}

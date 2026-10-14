@@ -101,7 +101,7 @@ import { commitURL, resourceLabel } from "@/lib/architecture"
 import { cloudLabel } from "@/lib/clouds"
 import { dateTime, duration, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
-import { scopeBody } from "@/lib/plans"
+import { scopeBody, planConnections } from "@/lib/plans"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import { isLive, type Run, runLog, type ThreadStep } from "@/lib/runs"
@@ -487,8 +487,8 @@ function IdStrip({ run, now }: { run: Run; now: number }) {
   const person = usePeople()
   const connections = useQuery(useConnectionsList)
   const p = run.plan
-  const deploysWith = Object.entries(p.connections as Record<string, string>)
-    .map(([cloud, id]) => {
+  const deploysWith = planConnections(p)
+    .map(({ cloud, id }) => {
       const c = connections.data?.connections.find((x) => x.id === id)
       return `${c?.name ?? "a removed connection"} (${cloudLabel(cloud)})`
     })
