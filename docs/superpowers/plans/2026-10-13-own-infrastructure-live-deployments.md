@@ -197,8 +197,10 @@ Verified: final unattended run `loomplane-e2e-b4e249e419` passed in 738.05s. Rea
 
 ## Task 12: Completion audit and independent review
 
-- [ ] Run `make lint`, `make test`, `make test-integration`, `make build`, `pnpm --dir apps/dashboard check:client` and the infrastructure acceptance harness after final edits. Inspect every exit status/output.
-- [ ] Obtain one independent whole-change review using the requesting-code-review skill, with the spec, plan, Review Focus and ledger rulings. Resolve important findings with a failing regression and passing relevant/full checks.
-- [ ] Match every spec completion criterion and E2E matrix row to current source, test output or live rendered/resource evidence. Missing evidence keeps this goal active.
-- [ ] Commit/push exact owned files, verify remote SHA and clean/concurrent status, update this plan with evidence and report provider/environment verification limits accurately.
-- [ ] Mark the goal complete only after the full audit passes.
+- [x] Run `make lint`, `make test`, `make test-integration`, `make build`, `pnpm --dir apps/dashboard check:client` and the infrastructure acceptance harness after final edits. Inspect every exit status/output.
+- [x] Obtain one independent whole-change review using the requesting-code-review skill, with the spec, plan, Review Focus and ledger rulings. Resolve important findings with a failing regression and passing relevant/full checks.
+- [x] Match every spec completion criterion and E2E matrix row to current source, test output or live rendered/resource evidence. Missing evidence keeps this goal active.
+- [x] Commit/push exact owned files, verify remote SHA and clean/concurrent status, update this plan with evidence and report provider/environment verification limits accurately.
+- [x] Mark the goal complete only after the full audit passes.
+
+Verified: the [acceptance record](2026-10-14-own-infrastructure-acceptance.md) maps all seven completion criteria and 14 scenarios to current source, checks and live evidence. The independent whole-change review has no remaining Important findings. Final checks and both live target runs passed, disposable deployments were removed and unrelated infrastructure was preserved. GCP/AWS log readers have fixture coverage; their live accounts, production ingress/HPA and private CA setup remain environment-specific. Private Kubernetes pulls use an existing namespace Secret. Render output stays unavailable until its API can isolate the requested deployment. Exact-path commits are pushed to main, and the final closure checks verify remote equality and cleanup.
