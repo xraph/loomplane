@@ -2329,8 +2329,8 @@ func TestCompute_aDeleteGoesThroughItsBindingsConnection(t *testing.T) {
 	}
 
 	r := computeOn(t, two, nil, gone("conn_render")...)
-	if a := action(t, r, "service:old"); a.Op != Delete {
-		t.Fatalf("old %s", a.Op)
+	if a := action(t, r, "service:old"); a.Op != Delete || a.ConnectionID != "conn_render" {
+		t.Fatalf("delete destination: %+v", a)
 	}
 	if !r.Executable || len(r.Problems) != 0 || r.Connections["render"] != "" {
 		t.Fatalf("problems %v, connections %v", codes(r.Problems), r.Connections)
@@ -2342,6 +2342,9 @@ func TestCompute_aDeleteGoesThroughItsBindingsConnection(t *testing.T) {
 	// Its connection was removed: the plan goes ahead, and says what that
 	// leaves to you.
 	r = computeOn(t, two, nil, gone("conn_render_gone")...)
+	if a := action(t, r, "service:old"); a.ConnectionID != "" {
+		t.Fatalf("missing delete destination entered active connection uses: %+v", a)
+	}
 	w := warning(r, "delete-unreachable", "old")
 	if !r.Executable || w == nil || w.Path != "services.old" ||
 		w.Message != "old was deployed through a connection that's been removed, so the deployment can't reach it to delete it. Loomplane stops tracking it, and if it still runs, you delete it yourself." {

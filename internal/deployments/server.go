@@ -272,6 +272,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		return &Outcome{ExternalID: inst.ID.String(), URL: endpoint(inst.Endpoints), Image: state.Image.Reference, Revision: state.Image.Reference}, nil
 	}
 	_, preflightLabels := ownedSpec(job, "", state)
+	// A failed attempt may have removed its temporary runtime values. They are
+	// recreated below; preflight checks the reviewed target and registry only.
+	delete(preflightLabels, owned.LabelRuntime)
 	if _, checkErr := e.values(ctx, preflightLabels); checkErr != nil {
 		return nil, checkErr
 	}

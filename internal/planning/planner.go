@@ -2030,9 +2030,9 @@ func (p *planner) planDeletes() {
 				Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
 			})
 		}
-		p.deleteThrough(b)
+		connectionID := p.deleteThrough(b)
 		p.actions = append(p.actions, &Action{
-			ID: id, Op: Delete, Subject: b.Subject, Name: b.Name, Provider: b.Provider, Region: b.Region,
+			ID: id, Op: Delete, Subject: b.Subject, Name: b.Name, Provider: b.Provider, Region: b.Region, ConnectionID: connectionID,
 			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
 		})
 	}
@@ -2045,24 +2045,26 @@ func (p *planner) planDeletes() {
 // plan's, which is noted in removing, as stillReplaced does, so the plan
 // pins one when there's one. A provider Loomplane can't deploy to now is
 // a problem either way: nothing could remove it.
-func (p *planner) deleteThrough(b *Binding) {
+func (p *planner) deleteThrough(b *Binding) string {
 	prov, err := p.in.Providers.Get(b.Provider)
 	switch {
 	case err != nil:
-		return
+		return ""
 	case !prov.Available:
 		p.use(prov)
-		return
+		return ""
 	case b.ConnectionID == "":
 		p.removing[prov.Cloud] = true
-		return
+		return ""
 	}
 	if !slices.ContainsFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == b.ConnectionID }) {
 		p.warn(Finding{
 			Code: "delete-unreachable", Subject: b.Subject, Name: b.Name, Path: p.bindingPath(b),
 			Message: fmt.Sprintf("%s was deployed through a connection that's been removed, so the deployment can't reach it to delete it. Loomplane stops tracking it, and if it still runs, you delete it yourself.", b.Name),
 		})
+		return ""
 	}
+	return b.ConnectionID
 }
 
 // bindingPath is where the manifest has, or had, what a binding deployed.

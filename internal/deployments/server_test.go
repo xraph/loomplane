@@ -143,8 +143,8 @@ func TestOwnedTarget_failedReplacementRestoresPersistedSpecAndSecretReference(t 
 		t.Fatalf("recovery checkpoint missing: %+v", state)
 	}
 	job.Resume = checkpoint
-	if _, err := e.Apply(t.Context(), job); err == nil {
-		t.Fatal("retry failure accepted")
+	if _, err := e.Apply(t.Context(), job); err == nil || !strings.Contains(err.Error(), "rollout failed") {
+		t.Fatalf("retry did not reach the rollout: %v", err)
 	}
 	if string(secrets.m[oldLabels[owned.LabelRuntime]]) != `{"TOKEN":"old-secret"}` {
 		t.Fatal("old runtime credential overwritten")
