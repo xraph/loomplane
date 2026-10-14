@@ -154,7 +154,11 @@ func (p *planner) checkTargetPlacements() {
 		if cfg == nil || a.Provider != "server" || !cfg.Public || cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0 {
 			continue
 		}
-		key := fmt.Sprintf("%s:%d", cfg.Target, cfg.Endpoint.HostPort)
+		scope := cfg.TargetSettings["docker_id"]
+		if scope == "" {
+			scope = cfg.Target
+		}
+		key := fmt.Sprintf("%s:%d", scope, cfg.Endpoint.HostPort)
 		if other := ports[key]; other != "" {
 			p.problem(Finding{Code: "target-port-conflict", Subject: ServiceSubject, Name: name, Path: "services." + name + ".endpoint.host_port",
 				Message: fmt.Sprintf("%s and %s publish host port %d on the same server. Choose different ports.", name, other, cfg.Endpoint.HostPort)})

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -622,7 +623,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	step.URL, step.Image = out.URL, out.Image
 	if out.URL != "" && a.Service != nil && a.Service.Public {
 		progress(StepVerifying, "Checking "+out.URL+" answers")
-		if verr := r.verify(ctx, out.URL); verr != nil {
+		if verr := r.verifyService(ctx, out.URL, a); verr != nil {
 			return verr
 		}
 	}
@@ -1082,4 +1083,44 @@ func (r *Runner) recordDeployed(ctx context.Context, d *Deployment, at time.Time
 		}
 	}
 	return nil
+}
+
+func (r *Runner) verifyService(ctx context.Context, address string, a planning.Action) error {
+	if a.Service == nil || !planning.OwnedCloud(a.Provider) {
+		return r.verify(ctx, address)
+	}
+	health := a.Service.HealthPath
+	if health == "" {
+		return r.verify(ctx, address)
+	}
+	target, err := neturl.Parse(address)
+	if err != nil {
+		return err
+	}
+	target.Path, target.RawPath, target.RawQuery, target.Fragment = health, "", "", ""
+	deadline := r.now().Add(r.verifyWait)
+	client := *r.http
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	for {
+		req, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), http.NoBody)
+		if requestErr != nil {
+			return requestErr
+		}
+		res, requestErr := client.Do(req)
+		if requestErr == nil {
+			_ = res.Body.Close()
+			if res.StatusCode >= 200 && res.StatusCode < 300 {
+				return nil
+			}
+			requestErr = fmt.Errorf("health endpoint returned HTTP %d", res.StatusCode)
+		}
+		if r.now().After(deadline) {
+			return fmt.Errorf("the public service did not pass its health check: %w", requestErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }

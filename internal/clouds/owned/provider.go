@@ -1,0 +1,194 @@
+package owned
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"maps"
+	"time"
+
+	"github.com/xraph/ctrlplane"
+	"github.com/xraph/ctrlplane/id"
+	"github.com/xraph/ctrlplane/instance"
+	cpprovider "github.com/xraph/ctrlplane/provider"
+)
+
+const (
+	LabelOrg           = "loomplane.org"
+	LabelProject       = "loomplane.project"
+	LabelEnvironment   = "loomplane.environment"
+	LabelAction        = "loomplane.action"
+	LabelService       = "loomplane.service"
+	LabelOperation     = "loomplane.operation"
+	LabelConnection    = "loomplane.connection"
+	LabelSettings      = "loomplane.target.settings"
+	LabelRuntime       = "loomplane.runtime.ref"
+	LabelPublic        = "loomplane.public"
+	LabelHostPort      = "loomplane.host.port"
+	LabelHealth        = "loomplane.health.path"
+	LabelHostname      = "loomplane.hostname"
+	LabelIngressClass  = "loomplane.ingress.class"
+	LabelTLSSecret     = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
+	LabelReplicas      = "loomplane.replicas"
+	LabelScaleMin      = "loomplane.scale.min"
+	LabelScaleMax      = "loomplane.scale.max"
+	LabelArchitecture  = "loomplane.architecture"
+	LabelRevision      = "loomplane.revision"
+	LabelInstance      = "loomplane.instance"
+	LabelManageIngress = "loomplane.manage.ingress"
+	LabelManageHPA     = "loomplane.manage.hpa"
+)
+
+type Instances interface {
+	Get(context.Context, id.ID) (*instance.Instance, error)
+}
+
+type RuntimeValues struct {
+	Env      map[string]string
+	PullAuth string
+}
+type Values func(context.Context, map[string]string) (RuntimeValues, error)
+
+// Backend uses an explicitly selected connection for every operation. Its
+// runtime values are resolved in memory; Ctrl Plane stores only references.
+type Backend interface {
+	Apply(context.Context, id.ID, cpprovider.ServiceSpec, map[string]string) (*cpprovider.ProvisionResult, error)
+	Remove(context.Context, id.ID, map[string]string) error
+	Status(context.Context, id.ID, map[string]string) (*cpprovider.InstanceStatus, error)
+	SetRunning(context.Context, id.ID, map[string]string, bool) error
+	Scale(context.Context, id.ID, map[string]string, cpprovider.ResourceSpec) error
+}
+
+type Provider struct {
+	Key       string
+	Instances Instances
+	Backend   Backend
+	AutoScale bool
+	Wait      time.Duration
+}
+
+var _ cpprovider.Provider = (*Provider)(nil)
+var _ cpprovider.ReadinessWaiter = (*Provider)(nil)
+
+func (p *Provider) Info() cpprovider.ProviderInfo {
+	return cpprovider.ProviderInfo{Name: p.Key, Version: "v1"}
+}
+func (p *Provider) Capabilities() []cpprovider.Capability {
+	caps := []cpprovider.Capability{cpprovider.CapProvision, cpprovider.CapDeploy}
+	if p.AutoScale {
+		caps = append(caps, cpprovider.CapAutoScale)
+	}
+	return caps
+}
+func (p *Provider) ReadinessPolicy() cpprovider.ReadinessPolicy {
+	wait := p.Wait
+	if wait <= 0 {
+		wait = 3 * time.Minute
+	}
+	return cpprovider.ReadinessPolicy{Timeout: wait, Interval: time.Second}
+}
+func (p *Provider) Provision(ctx context.Context, r cpprovider.ProvisionRequest) (*cpprovider.ProvisionResult, error) {
+	if len(r.Services) != 1 || r.Labels[LabelOrg] != r.TenantID {
+		return nil, fmt.Errorf("owned target needs one service in its recorded organization")
+	}
+	return p.Backend.Apply(ctx, r.InstanceID, r.Services[0], maps.Clone(r.Labels))
+}
+func (p *Provider) Deploy(ctx context.Context, r cpprovider.DeployRequest) (*cpprovider.DeployResult, error) {
+	inst, err := p.Instances.Get(ctx, r.InstanceID)
+	if err != nil {
+		return nil, err
+	}
+	if len(inst.Services) != 1 {
+		return nil, fmt.Errorf("owned target needs one service")
+	}
+	spec := inst.Services[0]
+	for _, service := range r.Services {
+		if service.Name == spec.Name {
+			spec.Image = service.Image
+			if service.Env != nil {
+				spec.Env = service.Env
+			}
+		}
+	}
+	labels := maps.Clone(inst.Labels)
+	labels[LabelRevision] = r.ReleaseID.String()
+	result, err := p.Backend.Apply(ctx, r.InstanceID, spec, labels)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(p.ReadinessPolicy().Timeout)
+	for {
+		status, statusErr := p.Backend.Status(ctx, r.InstanceID, inst.Labels)
+		if statusErr != nil {
+			return nil, statusErr
+		}
+		if status.Ready {
+			return &cpprovider.DeployResult{ProviderRef: result.ProviderRef, Status: "succeeded", Endpoints: result.Endpoints}, nil
+		}
+		if status.State == cpprovider.StateFailed || time.Now().After(deadline) {
+			return nil, fmt.Errorf("owned target did not become ready: %s", status.Message)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+func (p *Provider) Deprovision(ctx context.Context, iid id.ID) error {
+	inst, err := p.Instances.Get(ctx, iid)
+	if err != nil {
+		return err
+	}
+	return p.Backend.Remove(ctx, iid, inst.Labels)
+}
+func (p *Provider) Status(ctx context.Context, iid id.ID) (*cpprovider.InstanceStatus, error) {
+	inst, err := p.Instances.Get(ctx, iid)
+	if err != nil {
+		return nil, err
+	}
+	return p.Backend.Status(ctx, iid, inst.Labels)
+}
+func (p *Provider) Start(ctx context.Context, iid id.ID) error {
+	inst, err := p.Instances.Get(ctx, iid)
+	if err != nil {
+		return err
+	}
+	return p.Backend.SetRunning(ctx, iid, inst.Labels, true)
+}
+func (p *Provider) Stop(ctx context.Context, iid id.ID) error {
+	inst, err := p.Instances.Get(ctx, iid)
+	if err != nil {
+		return err
+	}
+	return p.Backend.SetRunning(ctx, iid, inst.Labels, false)
+}
+func (p *Provider) Restart(ctx context.Context, iid id.ID) error {
+	if err := p.Stop(ctx, iid); err != nil {
+		return err
+	}
+	return p.Start(ctx, iid)
+}
+func (p *Provider) Scale(ctx context.Context, iid id.ID, spec cpprovider.ResourceSpec) error {
+	inst, err := p.Instances.Get(ctx, iid)
+	if err != nil {
+		return err
+	}
+	return p.Backend.Scale(ctx, iid, inst.Labels, spec)
+}
+func (*Provider) Rollback(context.Context, id.ID, id.ID) error { return ctrlplane.ErrProviderUnavail }
+func (*Provider) Resources(context.Context, id.ID) (*cpprovider.ResourceUsage, error) {
+	return nil, ctrlplane.ErrProviderUnavail
+}
+func (*Provider) Logs(context.Context, id.ID, cpprovider.LogOptions) (io.ReadCloser, error) {
+	return nil, ctrlplane.ErrProviderUnavail
+}
+func (*Provider) Exec(context.Context, id.ID, cpprovider.ExecRequest) (*cpprovider.ExecResult, error) {
+	return nil, ctrlplane.ErrProviderUnavail
+}
+
+func ForOperation(labels map[string]string, operation string) map[string]string {
+	out := maps.Clone(labels)
+	out[LabelOperation] = operation
+	return out
+}

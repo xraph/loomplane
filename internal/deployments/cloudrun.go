@@ -500,6 +500,11 @@ func (e *ElsewhereError) Error() string {
 // keyPlace reads the connection and region a Cloud Run or ECS provider
 // key names, or nothing from a key it doesn't know.
 func keyPlace(providerKey string) (connectionID, region string) {
+	for _, prefix := range []string{"server.", "kubernetes."} {
+		if connection, ok := strings.CutPrefix(providerKey, prefix); ok {
+			return connection, ""
+		}
+	}
 	for _, prefix := range []string{cloudrun.KeyPrefix, ecs.KeyPrefix} {
 		rest, ok := strings.CutPrefix(providerKey, prefix)
 		if !ok {

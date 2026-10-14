@@ -134,10 +134,12 @@ Files: create `internal/deployments/server.go`, `kubernetes.go` and tests; creat
 
 Consumes Tasks 1-3 and 6. Produces the existing Executor Apply/Remove/Observe contract for `server` and `kubernetes`, integrated with Ctrl Plane's lifecycle and owned bindings.
 
-- [ ] Test Apply/Remove/Observe against strict Docker/Kubernetes API fixtures: ownership conflicts, ports, namespace, runtime secret references, fixed replicas, readiness timeout, failed replacement and retry cleanup with the old credential. Test placement change after approval and credential-only rotation separately.
-- [ ] Run `go test ./internal/deployments ./internal/clouds/server ./internal/clouds/kubernetes -count=1`. Expected: missing adapters or lifecycle assertions fail.
-- [ ] Implement one-container server lifecycle and namespace-scoped Deployment/Service/Secret/Ingress lifecycle. Support requested HPA only after permissions/metrics capability checks. Verify readiness, record digest revision and private/public addresses, and enforce reviewed settings before mutation.
-- [ ] Advertise providers available only after all executor/checker wiring exists. Run focused tests, format/lint/full tests/build and commit `feat: deploy to owned servers and Kubernetes`.
+- [x] Test Apply/Remove/Observe against strict Docker/Kubernetes API fixtures: ownership conflicts, ports, namespace, runtime secret references, fixed replicas, readiness timeout, failed replacement and retry cleanup with the old credential. Test placement change after approval and credential-only rotation separately.
+- [x] Run `go test ./internal/deployments ./internal/clouds/server ./internal/clouds/kubernetes -count=1`. Expected: missing adapters or lifecycle assertions fail.
+- [x] Implement one-container server lifecycle and namespace-scoped Deployment/Service/Secret/Ingress lifecycle. Support requested HPA only after permissions/metrics capability checks. Verify readiness, record digest revision and private/public addresses, and enforce reviewed settings before mutation.
+- [x] Advertise providers available only after all executor/checker wiring exists. Run focused tests, format/lint/full tests/build and commit `feat: deploy to owned servers and Kubernetes`.
+
+Verified: strict Docker and TLS Kubernetes API fixtures, PostgreSQL port reservations, worker readiness, HPA stop/start, rollout recovery and scoped Vault cleanup pass. `make lint`, `make test`, `make test-integration` (137.873s), `make build`, generated-client checks and focused race tests pass. Independent review findings were fixed with regressions. Live SSH/Docker and kind verification remains in Task 11.
 
 ## Task 8: Optional provider-plugin operation logs
 

@@ -52,6 +52,7 @@ func Group() *migrate.Group {
 		statements("20261016000003", "persist_realtime_events", realtimeUp, realtimeDown),
 		statements("20261016000004", "conduit_realtime_transport", conduitpg.Migrations("loomplane_realtime_broker"), []string{`DROP SCHEMA IF EXISTS loomplane_realtime_broker CASCADE`}),
 		statements("20261016000005", "finalize_realtime_contracts", realtimeFinalizeUp(), nil),
+		statements("20261016000006", "reserve_owned_target_ports", ownedReservationsUp, []string{`DROP TABLE IF EXISTS loomplane_host_ports`}),
 	)
 	return g
 }

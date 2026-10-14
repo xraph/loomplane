@@ -165,16 +165,16 @@ func Catalog() []provider.Provider {
 		{
 			Name: "server", Title: "Existing server", Cloud: "server",
 			Description: "Runs a service container on the Docker daemon of the SSH server you choose.",
-			Model:       provider.Instance, Scaling: true,
-			Runs: containerWorkloads("Docker container"),
-			Note: "The server connection and executor are being wired up.",
+			Model:       provider.Instance,
+			Runs:        containerWorkloads("Docker container"),
+			Available:   true,
 		},
 		{
 			Name: "kubernetes", Title: "Kubernetes", Cloud: "kubernetes",
 			Description: "Runs service containers in the namespace of the cluster you choose.",
 			Model:       provider.Instance, Scaling: true,
-			Runs: containerWorkloads("Kubernetes Deployment"),
-			Note: "The cluster connection and executor are being wired up.",
+			Runs:      containerWorkloads("Kubernetes Deployment"),
+			Available: true,
 		},
 	}
 }

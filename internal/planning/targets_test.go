@@ -215,3 +215,17 @@ func TestInfrastructureTargets_clusterCapabilitiesAreRequiredOnlyWhenUsed(t *tes
 		})
 	}
 }
+
+func TestInfrastructureTargets_aliasesCannotPublishSamePhysicalServerPort(t *testing.T) {
+	connections := infrastructureConnections(t)
+	for index := range connections {
+		if connections[index].Cloud == "server" {
+			connections[index].Details["docker_id"] = "same-daemon"
+		}
+	}
+	doc := fmt.Sprintf("version: 1\nservices:\n  api: {source: cmd/api, provider: server, target: %s, public: true, endpoint: {host_port: 8081}}\n  copy: {source: cmd/api, provider: server, target: %s, public: true, endpoint: {host_port: 8081}}\n", targetA, targetB)
+	result := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: infrastructureProviders(t), Connections: connections})
+	if result.Executable || !slices.Contains(findingCodes(result.Problems), "target-port-conflict") {
+		t.Fatalf("alias port conflict missed: %+v", result)
+	}
+}

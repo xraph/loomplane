@@ -41,6 +41,7 @@ import (
 	"github.com/xraph/loomplane/internal/artifacts"
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
@@ -67,16 +68,17 @@ const Name = "loomplane-planning"
 // Extension serves the manifest and plan API.
 type Extension struct {
 	*forge.BaseExtension
-	cfg         config.Config
-	engineOf    func() *engine.Engine
-	ctrlplane   func() *app.CtrlPlane
-	deployments *orchestration.Deployments
-	plugins     *plugins.Set
-	manifests   *manifests.Service
-	plans       *planning.Service
-	deploys     *deployments.Service
-	activity    *activity.Service
-	artifacts   *artifacts.Store
+	cfg            config.Config
+	engineOf       func() *engine.Engine
+	ctrlplane      func() *app.CtrlPlane
+	deployments    *orchestration.Deployments
+	plugins        *plugins.Set
+	manifests      *manifests.Service
+	plans          *planning.Service
+	deploys        *deployments.Service
+	activity       *activity.Service
+	artifacts      *artifacts.Store
+	restoreTargets func(context.Context) error
 }
 
 // New returns the extension. engineOf returns the dispatch extension's
@@ -229,6 +231,35 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	resourceSecrets := deployments.NewVaultResourceSecrets(
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
+	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
+	serverTarget := &deployments.OwnedTarget{Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets}
+	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
+	e.restoreTargets = func(ctx context.Context) error {
+		// Restore provider keys after central migrations have run.
+		rows, err := pg.Query(ctx, "SELECT org_id,id,cloud FROM loomplane_cloud_connections WHERE cloud IN ('server','kubernetes')")
+		if err != nil {
+			return fmt.Errorf("restore owned target providers: %w", err)
+		}
+		for rows.Next() {
+			var org, connection, cloud string
+			if err = rows.Scan(&org, &connection, &cloud); err != nil {
+				rows.Close()
+				return err
+			}
+			if cloud == connections.Server {
+				serverTarget.Register(org, connection)
+			} else {
+				clusterTarget.Register(org, connection)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		Logs:  logStore,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
@@ -252,6 +283,11 @@ func (e *Extension) Register(fapp forge.App) error {
 // Start schedules the drift check. Dispatch runs the workflow and the
 // check; the schedule needs the database, which is migrated by now.
 func (e *Extension) Start(ctx context.Context) error {
+	if e.restoreTargets != nil {
+		if err := e.restoreTargets(ctx); err != nil {
+			return err
+		}
+	}
 	if every := e.cfg.Drift.Interval; every > 0 {
 		def := &cron.Definition[orchestration.DriftPayload]{
 			Name: orchestration.CronDriftCheck, Schedule: "@every " + every.String(),

@@ -84,12 +84,19 @@ func (c *Client) Close() error {
 
 // Request addresses only the configured Docker daemon. The caller owns Body.
 func (c *Client) Request(ctx context.Context, method, resource string, body io.Reader) (*http.Response, error) {
+	return c.RequestHeaders(ctx, method, resource, body, nil)
+}
+
+func (c *Client) RequestHeaders(ctx context.Context, method, resource string, body io.Reader, headers http.Header) (*http.Response, error) {
 	if !strings.HasPrefix(resource, "/") || strings.HasPrefix(resource, "//") {
 		return nil, ErrInvalid
 	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://docker"+resource, body)
 	if err != nil {
 		return nil, err
+	}
+	if headers != nil {
+		req.Header = headers.Clone()
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
