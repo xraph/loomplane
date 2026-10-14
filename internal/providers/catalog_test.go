@@ -7,6 +7,20 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
+func TestBuildLogCapabilitiesAreOperationScoped(t *testing.T) {
+	want := map[string]string{"vercel": "streamed", "cloud-run": "polled", "ecs-fargate": "polled", "render": "unavailable"}
+	for _, p := range Catalog() {
+		if expected, ok := want[p.Name]; ok {
+			if p.BuildLogs != expected {
+				t.Errorf("%s output: %s", p.Name, p.BuildLogs)
+			}
+			if p.Name == "render" && p.LogNote == "" {
+				t.Error("Render scope limitation is missing")
+			}
+		}
+	}
+}
+
 func TestCatalog_registers(t *testing.T) {
 	if _, err := provider.NewRegistry(Catalog()...); err != nil {
 		t.Fatal(err)

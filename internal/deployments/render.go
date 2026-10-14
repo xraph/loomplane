@@ -121,6 +121,7 @@ func (r *Render) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		save()
 	}
 	job.Progress(StepBuilding, "Building on Render")
+	job.Collector(state.DeployID, job.LogAttempt()).RecordState(ctx, "", "unavailable", "Render's build-log API cannot isolate one deployment. Progress remains available.")
 	d, err := r.Client.WaitDeploy(ctx, key, svc.ID, state.DeployID)
 	if err != nil {
 		return nil, err

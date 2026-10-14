@@ -120,10 +120,16 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		if e.polls[id] > 1 {
 			status = "SUCCEEDED"
 		}
-		return 200, map[string]any{"builds": []any{map[string]any{"id": id, "buildStatus": status, "currentPhase": "BUILD"}}}
+		return 200, map[string]any{"builds": []any{map[string]any{"id": id, "buildStatus": status, "currentPhase": "BUILD", "logs": map[string]any{"groupName": "loomplane-build", "streamName": id}}}}
 	})
 	// Logs and Secrets Manager.
 	j("Logs_20140328.CreateLogGroup", func(map[string]any) (int, any) { return 200, map[string]any{} })
+	j("Logs_20140328.GetLogEvents", func(in map[string]any) (int, any) {
+		if in["nextToken"] == "end" {
+			return 200, map[string]any{"events": []any{}, "nextForwardToken": "end"}
+		}
+		return 200, map[string]any{"events": []any{map[string]any{"timestamp": 1000, "ingestionTime": 1001, "message": "CodeBuild fixture output"}}, "nextForwardToken": "end"}
+	})
 	j("secretsmanager.CreateSecret", func(in map[string]any) (int, any) {
 		name := in["Name"].(string)
 		e.secrets[name] = in["SecretString"].(string)

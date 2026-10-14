@@ -4513,10 +4513,16 @@
           "available": {
             "type": "boolean"
           },
+          "build_logs": {
+            "type": "string"
+          },
           "cloud": {
             "type": "string"
           },
           "description": {
+            "type": "string"
+          },
+          "log_note": {
             "type": "string"
           },
           "model": {

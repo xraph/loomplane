@@ -646,8 +646,10 @@ export interface ProjectView {
 
 export interface Provider {
   available: boolean;
+  buildLogs?: string;
   cloud: string;
   description: string;
+  logNote?: string;
   model: string;
   name: string;
   note?: string;

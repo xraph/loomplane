@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/xraph/loomplane/internal/clouds/buildlogs"
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/connections"
@@ -52,6 +53,7 @@ var _ Executor = (*Vercel)(nil)
 type vercelState struct {
 	ProjectID    string `json:"project_id,omitempty"`
 	DeploymentID string `json:"deployment_id,omitempty"`
+	LogAttempt   string `json:"log_attempt,omitempty"`
 }
 
 func token(job *Job) vercel.Token {
@@ -112,7 +114,15 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		save()
 	}
 	job.Progress(StepBuilding, "Building on Vercel")
+	if state.LogAttempt == "" {
+		state.LogAttempt = job.LogAttempt()
+		save()
+	}
+	output := startManagedOutput(ctx, job, state.DeploymentID, state.LogAttempt, func(ctx context.Context, cursor string, follow bool, emit buildlogs.Emit) (string, bool, error) {
+		return v.Client.BuildLogs(ctx, tok, state.DeploymentID, cursor, follow, emit)
+	})
 	d, err := v.Client.WaitDeployment(ctx, tok, state.DeploymentID)
+	output.finish(ctx, d != nil)
 	if err != nil {
 		return nil, err
 	}

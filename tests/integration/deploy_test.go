@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/realtime"
 )
 
 // fakeCloud is the part of Google Cloud a deployment uses: Cloud
@@ -135,6 +136,11 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := fmt.Sprintf("build-%d", len(f.builds))
 		f.failed[id] = f.failBuilds
 		reply(map[string]any{"metadata": map[string]any{"build": map[string]any{"id": id}}})
+	case r.Method == http.MethodPost && p == "/v2/entries:list":
+		// A build may succeed without logging.viewer. Keep this separate
+		// from the permissions required to deploy.
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"message":"logging read denied"}}`))
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1/projects/acme-prod/builds/"):
 		id := strings.TrimPrefix(p, "/v1/projects/acme-prod/builds/")
 		f.polls[id]++
@@ -629,6 +635,10 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(200, map[string]any{"id": "dpl_1", "readyState": "READY", "aliasAssigned": true,
 			"alias": []string{f.srv.URL + "/site/web"}, "url": "web-abc.vercel.app"})
+	case r.Method == http.MethodGet && p == "/v3/deployments/dpl_1/events":
+		for _, id := range []string{"build-a", "build-b"} {
+			_ = json.NewEncoder(w).Encode(map[string]any{"type": "stdout", "created": 10000, "payload": map[string]any{"id": id, "deploymentId": "dpl_1", "text": "build output " + f.token}})
+		}
 	default:
 		reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Not found"}})
 	}
@@ -697,6 +707,28 @@ func TestDeploy_aNextAppOnVercelFindsItsGoAPIOnCloudRun(t *testing.T) {
 	d := approveAndWait(t, c, plan)
 	if d.Status != "succeeded" || len(d.Steps) != 2 {
 		t.Fatalf("deployment %+v", d)
+	}
+	var retained realtime.LogPage
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/deployments/"+d.ID+"/logs", nil, &retained)
+	if len(retained.Logs) != 2 || retained.Logs[0].ProviderID == retained.Logs[1].ProviderID || strings.Contains(retained.Logs[0].Message, vercelToken) {
+		t.Fatalf("managed output replay/redaction: %+v", retained)
+	}
+	var snapshot realtime.Snapshot
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/realtime/snapshot?deployment_ids="+d.ID, nil, &snapshot)
+	denied := false
+	for _, record := range snapshot.Records {
+		if record.Type == "build.collection" {
+			var collection realtime.Collection
+			if err := json.Unmarshal(record.Data, &collection); err != nil {
+				t.Fatal(err)
+			}
+			if collection.OperationID == "build-1" && collection.State == "unavailable" {
+				denied = true
+			}
+		}
+	}
+	if !denied {
+		t.Fatalf("log permission failure did not remain independent: %+v", snapshot.Records)
 	}
 	api, web := d.Steps[0], d.Steps[1]
 	if api.ActionID != "service:api" || web.ActionID != "service:web" || web.URL != vc.srv.URL+"/site/web" {

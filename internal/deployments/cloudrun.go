@@ -19,6 +19,7 @@ import (
 	"github.com/xraph/ctrlplane/instance"
 	cpprovider "github.com/xraph/ctrlplane/provider"
 
+	"github.com/xraph/loomplane/internal/clouds/buildlogs"
 	"github.com/xraph/loomplane/internal/clouds/cloudrun"
 	"github.com/xraph/loomplane/internal/clouds/ecs"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
@@ -67,8 +68,9 @@ var (
 // cloudRunState is what a Cloud Run action checkpoints, so a retry picks
 // up the same build instead of starting another.
 type cloudRunState struct {
-	BuildID string `json:"build_id,omitempty"`
-	Image   string `json:"image,omitempty"`
+	BuildID    string `json:"build_id,omitempty"`
+	Image      string `json:"image,omitempty"`
+	LogAttempt string `json:"log_attempt,omitempty"`
 }
 
 // Apply implements Executor.
@@ -158,8 +160,17 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 		save()
 	}
 	job.Progress(StepBuilding, "Building on Cloud Build")
-	if _, err := s.WaitBuild(ctx, state.BuildID); err != nil {
-		return "", err
+	if state.LogAttempt == "" {
+		state.LogAttempt = job.LogAttempt()
+		save()
+	}
+	output := startManagedOutput(ctx, job, state.BuildID, state.LogAttempt, func(ctx context.Context, cursor string, _ bool, emit buildlogs.Emit) (string, bool, error) {
+		return s.BuildLogs(ctx, state.BuildID, cursor, emit)
+	})
+	build, buildErr := s.WaitBuild(ctx, state.BuildID)
+	output.finish(ctx, build != nil)
+	if buildErr != nil {
+		return "", buildErr
 	}
 	return image, nil
 }
@@ -191,7 +202,7 @@ func idSuffix(s string) string {
 // its build context (the Dockerfile's own directory unless the manifest or
 // a Compose file says another), or Google's buildpacks when it has none.
 func buildFor(cfg *planning.ServiceConfig, root, image string) gcp.Build {
-	b := gcp.Build{Timeout: buildTimeout, Tags: []string{"loomplane"}}
+	b := gcp.Build{Timeout: buildTimeout, Tags: []string{"loomplane"}, Options: map[string]string{"logging": "CLOUD_LOGGING_ONLY"}}
 	if cfg.Image != "" {
 		ctx := cfg.ContextDir()
 		dir := root

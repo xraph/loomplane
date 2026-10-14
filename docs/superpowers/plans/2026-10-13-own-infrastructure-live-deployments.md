@@ -160,10 +160,12 @@ Files: extend clients/executors for Vercel, Cloud Build, CodeBuild and Render; a
 
 Consumes Task 4 storage and Task 6 log emission. Produces collectors scoped to a specific build/deploy operation, with provider cursor checkpoints and terminal catch-up.
 
-- [ ] Test Vercel live-follow frames, Cloud Logging entry IDs, CloudWatch forward tokens and Render build-log filtering. Test 403 log permission while deployment succeeds, rate-limit retry, delayed final output and restarting a collector from its checkpoint.
-- [ ] Run focused cloud/executor tests. Expected: raw build output is absent or incorrect cursor behavior.
-- [ ] Implement supported readers and declare streamed/polled/unavailable capabilities accurately. Verify Render build-log API scope before declaring support; runtime logs are not build output. Keep log-reader failure separate from deployment failure.
-- [ ] Run focused/full tests, format/lint/build and commit `feat: stream managed provider build logs`.
+- [x] Test Vercel live-follow frames, Cloud Logging entry IDs, CloudWatch forward tokens and Render build-log filtering. Test 403 log permission while deployment succeeds, rate-limit retry, delayed final output and restarting a collector from its checkpoint.
+- [x] Run focused cloud/executor tests. Expected: raw build output is absent or incorrect cursor behavior.
+- [x] Implement supported readers and declare streamed/polled/unavailable capabilities accurately. Verify Render build-log API scope before declaring support; runtime logs are not build output. Keep log-reader failure separate from deployment failure.
+- [x] Run focused/full tests, format/lint/build and commit `feat: stream managed provider build logs`.
+
+Verified: Vercel live-follow frames, Cloud Logging insertId pagination, CodeBuild forward-token replay, delayed final output and durable collection recovery pass. The real app test preserves deployment success when log access is denied. Render stays unavailable because its published build-log API cannot isolate one deployment. Format, make lint/test/build, focused race tests, client generation/drift and full integration (165.347s) pass. Live Vercel acceptance remains in Task 11.
 
 ## Task 10: Dashboard placement, infrastructure and live cache
 

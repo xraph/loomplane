@@ -111,6 +111,9 @@ type Provider struct {
 	// Scaling says whether you choose how many instances run and how big
 	// each is. Targets that scale on their own ignore both.
 	Scaling bool `json:"scaling"`
+	// BuildLogs is streamed, polled or unavailable for one build operation.
+	BuildLogs string `json:"build_logs,omitempty"`
+	LogNote   string `json:"log_note,omitempty"`
 	// Available says whether Loomplane can carry out this target's actions
 	// yet. A plan can still name it; it just can't be applied.
 	Available bool `json:"available"`

@@ -24,6 +24,7 @@ import (
 	cpprovider "github.com/xraph/ctrlplane/provider"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
+	"github.com/xraph/loomplane/internal/clouds/buildlogs"
 	"github.com/xraph/loomplane/internal/clouds/ecs"
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/connections"
@@ -56,8 +57,9 @@ var (
 )
 
 type ecsState struct {
-	BuildID string `json:"build_id,omitempty"`
-	Image   string `json:"image,omitempty"`
+	BuildID    string `json:"build_id,omitempty"`
+	Image      string `json:"image,omitempty"`
+	LogAttempt string `json:"log_attempt,omitempty"`
 }
 
 func (e *ECS) session(job *Job, cred []byte) (*aws.Session, error) {
@@ -147,8 +149,17 @@ func (e *ECS) build(ctx context.Context, s *aws.Session, job *Job, state *ecsSta
 		save()
 	}
 	job.Progress(StepBuilding, "Building on CodeBuild")
-	if err := s.WaitBuild(ctx, state.BuildID); err != nil {
-		return "", err
+	if state.LogAttempt == "" {
+		state.LogAttempt = job.LogAttempt()
+		save()
+	}
+	output := startManagedOutput(ctx, job, state.BuildID, state.LogAttempt, func(ctx context.Context, cursor string, _ bool, emit buildlogs.Emit) (string, bool, error) {
+		return s.BuildLogs(ctx, state.BuildID, cursor, emit)
+	})
+	buildErr := s.WaitBuild(ctx, state.BuildID)
+	output.finish(ctx, buildErr == nil || errors.Is(buildErr, aws.ErrBuildFailed))
+	if buildErr != nil {
+		return "", buildErr
 	}
 	return image, nil
 }

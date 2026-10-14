@@ -34,6 +34,7 @@ func Catalog() []provider.Provider {
 	return []provider.Provider{
 		{
 			Name: "vercel", Title: "Vercel", Cloud: "vercel",
+			BuildLogs:   "streamed",
 			Description: "Builds web apps and static sites into immutable deployments, served from Vercel's network with server rendering in functions.",
 			Model:       provider.Build,
 			Runs: []provider.Runs{
@@ -46,6 +47,7 @@ func Catalog() []provider.Provider {
 		},
 		{
 			Name: "cloud-run", Title: "Google Cloud Run", Cloud: "gcp",
+			BuildLogs: "polled", LogNote: "Requires Cloud Logging read permission.",
 			Description: "Runs containers that serve requests, scaling them with traffic, down to zero if you let it.",
 			Model:       provider.Instance,
 			Runs: []provider.Runs{
@@ -59,6 +61,7 @@ func Catalog() []provider.Provider {
 		},
 		{
 			Name: "ecs-fargate", Title: "AWS ECS on Fargate", Cloud: "aws",
+			BuildLogs: "polled", LogNote: "Requires CloudWatch GetLogEvents permission.",
 			Description: "Runs containers as ECS services on Fargate, so there are no servers to manage. Services that serve HTTP sit behind a load balancer.",
 			Model:       provider.Instance,
 			Runs: []provider.Runs{
@@ -74,6 +77,7 @@ func Catalog() []provider.Provider {
 		},
 		{
 			Name: "render", Title: "Render", Cloud: "render",
+			BuildLogs: "unavailable", LogNote: "Render's build-log API cannot isolate one deployment; progress remains available.",
 			Description: "Builds and runs web services, private services, background workers and static sites from your repository, and provisions Postgres and Key Value alongside them.",
 			Model:       provider.Build,
 			Runs: []provider.Runs{
@@ -164,6 +168,7 @@ func Catalog() []provider.Provider {
 		},
 		{
 			Name: "server", Title: "Existing server", Cloud: "server",
+			BuildLogs:   "streamed",
 			Description: "Runs a service container on the Docker daemon of the SSH server you choose.",
 			Model:       provider.Instance,
 			Runs:        containerWorkloads("Docker container"),
@@ -171,6 +176,7 @@ func Catalog() []provider.Provider {
 		},
 		{
 			Name: "kubernetes", Title: "Kubernetes", Cloud: "kubernetes",
+			BuildLogs:   "streamed",
 			Description: "Runs service containers in the namespace of the cluster you choose.",
 			Model:       provider.Instance, Scaling: true,
 			Runs:      containerWorkloads("Kubernetes Deployment"),

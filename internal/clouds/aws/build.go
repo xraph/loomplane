@@ -257,12 +257,14 @@ func (s *Session) EnsureBuildProject(ctx context.Context, name, role, bucket str
 		Image: sdk.String("aws/codebuild/standard:7.0"), PrivilegedMode: sdk.Bool(true),
 	}
 	artifacts := &cbtypes.ProjectArtifacts{Type: cbtypes.ArtifactsTypeNoArtifacts}
+	logs := &cbtypes.LogsConfig{CloudWatchLogs: &cbtypes.CloudWatchLogsConfig{Status: cbtypes.LogsConfigStatusTypeEnabled}}
 	_, err := cli.CreateProject(ctx, &codebuild.CreateProjectInput{
 		Name: sdk.String(name), ServiceRole: sdk.String(role), Source: source, Environment: env, Artifacts: artifacts,
+		LogsConfig:       logs,
 		TimeoutInMinutes: sdk.Int32(30),
 	})
 	if IsExists(err) {
-		_, err = cli.UpdateProject(ctx, &codebuild.UpdateProjectInput{Name: sdk.String(name), ServiceRole: sdk.String(role)})
+		_, err = cli.UpdateProject(ctx, &codebuild.UpdateProjectInput{Name: sdk.String(name), ServiceRole: sdk.String(role), LogsConfig: logs})
 	}
 	if err != nil {
 		return fmt.Errorf("set up the build project: %w", err)
@@ -296,6 +298,8 @@ func (s *Session) StartBuild(ctx context.Context, project, bucket, key, buildspe
 
 // WaitBuild polls a build until it finishes, and fails unless it
 // succeeded.
+var ErrBuildFailed = errors.New("CodeBuild did not succeed")
+
 func (s *Session) WaitBuild(ctx context.Context, id string) error {
 	cli := codebuild.NewFromConfig(s.cfg)
 	for {
@@ -315,7 +319,7 @@ func (s *Session) WaitBuild(ctx context.Context, id string) error {
 			if b.Logs != nil {
 				link = sdk.ToString(b.Logs.DeepLink)
 			}
-			return fmt.Errorf("codebuild %s %s in %s. Its log: %s", id, strings.ToLower(string(b.BuildStatus)),
+			return fmt.Errorf("%w: codebuild %s %s in %s. Its log: %s", ErrBuildFailed, id, strings.ToLower(string(b.BuildStatus)),
 				strings.ToLower(sdk.ToString(b.CurrentPhase)), link)
 		}
 		progress.Report(ctx, "Building on CodeBuild ("+strings.ToLower(sdk.ToString(b.CurrentPhase))+")")
