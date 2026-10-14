@@ -273,7 +273,7 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	if err != nil {
 		return nil, nil, err
 	}
-	if c.Status != StatusReady {
+	if c.Status != StatusReady && !RegistryPullReady(c) {
 		return nil, nil, fmt.Errorf("%w: %s is %s", ErrNotReady, c.Name, c.Status)
 	}
 	cred, err := s.secrets.Reveal(ctx, orgID, id)

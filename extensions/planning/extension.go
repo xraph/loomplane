@@ -36,6 +36,7 @@ import (
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
+	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/artifacts"
 	"github.com/xraph/loomplane/internal/clouds/aws"
@@ -53,6 +54,7 @@ import (
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -97,7 +99,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 func (e *Extension) Dependencies() []string {
 	return []string{
 		identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
-		connectionsext.Name, environmentsext.Name,
+		connectionsext.Name, environmentsext.Name, realtimeext.Name,
 	}
 }
 
@@ -110,6 +112,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	db, err := forge.InjectType[*grove.DB](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the grove extension: %w", err)
+	}
+	logStore, err := forge.InjectType[*realtime.PgStore](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the realtime store: %w", err)
 	}
 	authz, err := forge.InjectType[*security.Authorizer](c)
 	if err != nil {
@@ -224,6 +230,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	resourceSecrets := deployments.NewVaultResourceSecrets(
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
 	runner := deployments.NewRunner(deployments.RunnerDeps{
+		Logs:  logStore,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,

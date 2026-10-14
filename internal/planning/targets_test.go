@@ -58,6 +58,24 @@ func infrastructureConnections(t *testing.T) []ConnectionOption {
 	}
 }
 
+func TestInfrastructureTargets_pinnedImageAcceptsPullOnlyRegistry(t *testing.T) {
+	connections := infrastructureConnections(t)
+	connections[2].Ready = false
+	connections[2].PullReady = true
+	connections[2].Details["pull"] = "ready"
+	connections[2].Details["push"] = "unavailable"
+	doc := fmt.Sprintf("version: 1\nservices:\n  api: {source: cmd/api, provider: server, target: %s, public: false, build: {registry: %s, image: 'registry.example.com/acme/api@sha256:%s'}}\n", targetA, registryTarget, strings.Repeat("a", 64))
+	r := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: infrastructureProviders(t), Connections: connections})
+	if !r.Executable {
+		t.Fatalf("pinned image needs only pull: %+v", r.Problems)
+	}
+	doc = fmt.Sprintf("version: 1\nservices:\n  api: {source: cmd/api, provider: server, target: %s, public: false, build: {registry: %s}}\n", targetA, registryTarget)
+	r = Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: infrastructureProviders(t), Connections: connections})
+	if r.Executable {
+		t.Fatal("source build accepted a registry without push")
+	}
+}
+
 func TestInfrastructureTargets_eachServicePinsItsConnection(t *testing.T) {
 	doc := fmt.Sprintf(`version: 1
 services:

@@ -33,6 +33,7 @@ type Event struct {
 type LogInput struct {
 	OrgID, ProjectID, DeploymentID, ActionID, Attempt, OperationID, ProviderID, Stream, Source, Level, Message string
 	Time                                                                                                       time.Time
+	Truncated                                                                                                  bool
 }
 
 // Log is immutable output retained for replay and export.

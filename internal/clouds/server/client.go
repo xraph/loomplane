@@ -72,7 +72,15 @@ func Dial(ctx context.Context, cfg *Config) (*Client, error) {
 }
 
 // Close ends the authenticated transport and all its forwarded connections.
-func (c *Client) Close() error { c.transport.CloseIdleConnections(); return c.ssh.Close() }
+func (c *Client) Close() error {
+	if c.transport != nil {
+		c.transport.CloseIdleConnections()
+	}
+	if c.ssh != nil {
+		return c.ssh.Close()
+	}
+	return nil
+}
 
 // Request addresses only the configured Docker daemon. The caller owns Body.
 func (c *Client) Request(ctx context.Context, method, resource string, body io.Reader) (*http.Response, error) {

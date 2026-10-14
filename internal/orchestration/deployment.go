@@ -11,6 +11,8 @@ import (
 	"github.com/xraph/dispatch/durable"
 	drt "github.com/xraph/dispatch/durable/runtime"
 	"github.com/xraph/dispatch/engine"
+
+	"github.com/xraph/loomplane/internal/realtime"
 )
 
 // The deployment workflow runs on Dispatch's durable runtime: history
@@ -582,6 +584,7 @@ func (d *Deployments) deployAction(ctx context.Context, info drt.ActivityInfo, i
 		return nil, err
 	}
 	heartbeat := func(details []byte) error { return info.Heartbeat(ctx, details) }
+	ctx = realtime.WithActivityAttempt(ctx, info.Attempt)
 	return []byte("{}"), dep.Run(ctx, in.OrgID, in.DeploymentID, in.ActionID, info.HeartbeatDetails(), heartbeat)
 }
 

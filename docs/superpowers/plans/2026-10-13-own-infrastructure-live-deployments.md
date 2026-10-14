@@ -123,10 +123,10 @@ Files: create `internal/deployments/imagebuild.go`, `imagebuild_test.go`, `inter
 
 Consumes resolved BuildTarget and server/registry clients. Produces a digest-pinned artifact and checkpoint containing attempt, operation and image. A builder accepts only stored source artifacts from the approved lockset.
 
-- [ ] Test real tar/context processing: nested Forge app modules, go.work context, existing Dockerfile outside its Compose context, excluded examples and explicit example builds. Require source markers from both build streams, bounded lines, no runtime secrets in the build request, artifact reuse after checkpoint and distinct retry attempts.
-- [ ] Run `go test ./internal/deployments -run 'ImageBuild|Forgefile' -count=1`. Expected: missing build behavior.
-- [ ] Implement remote Docker build through SSH, build-output decoding, safe tar paths/context, registry push and final digest/checkpoint. Generate a Go Dockerfile from the detected Forge entrypoint when one is absent; fail unsupported contexts before rollout.
-- [ ] Run focused tests, format/lint/full tests and commit `feat: build Forge images on connected infrastructure`.
+- [x] Test real tar/context processing: nested Forge app modules, go.work context, existing Dockerfile outside its Compose context, excluded examples and explicit example builds. Require source markers from both build streams, bounded lines, no runtime secrets in the build request, artifact reuse after checkpoint and distinct retry attempts.
+- [x] Run `go test ./internal/deployments -run 'ImageBuild|Forgefile' -count=1`. Expected: missing build behavior.
+- [x] Implement remote Docker build through SSH, build-output decoding, safe tar paths/context, registry push and final digest/checkpoint. Generate a Go Dockerfile from the detected Forge entrypoint when one is absent; fail unsupported contexts before rollout.
+- [x] Run focused tests, format/lint/full tests and commit `feat: build Forge images on connected infrastructure`.
 
 ## Task 7: Server and Kubernetes executors
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -38,6 +39,8 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 
 func (p *planner) targetConnection(name, path, role, cloud, id string) *ConnectionOption {
 	code, message := "", ""
+	pullOnly := role == "registry-pull"
+	role = strings.TrimSuffix(role, "-pull")
 	i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
 	switch {
 	case id == "":
@@ -46,7 +49,7 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 		code, message = role+"-gone", fmt.Sprintf("%s names a %s connection that isn't in this organization. Choose an existing connection.", name, role)
 	case p.in.Connections[i].Cloud != cloud:
 		code, message = role+"-cloud", fmt.Sprintf("%s needs a %s %s, but %s is a %s connection.", name, cloudTitle(cloud), role, p.in.Connections[i].Name, cloudTitle(p.in.Connections[i].Cloud))
-	case !p.in.Connections[i].Ready:
+	case !p.in.Connections[i].Ready && (!pullOnly || !p.in.Connections[i].PullReady):
 		code, message = role+"-not-ready", fmt.Sprintf("%s's %s connection %s isn't ready. Check it under Integrations.", name, role, p.in.Connections[i].Name)
 	default:
 		return &p.in.Connections[i]
@@ -93,7 +96,11 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		}
 	}
 	if build.Registry != "" {
-		if registry := p.targetConnection(name, base+".build.registry", "registry", "registry", build.Registry); registry != nil {
+		role := "registry"
+		if build.Image != "" {
+			role = "registry-pull"
+		}
+		if registry := p.targetConnection(name, base+".build.registry", role, "registry", build.Registry); registry != nil {
 			build.RegistrySettings = ReviewedConnectionSettings(registry.Cloud, registry.Details)
 		}
 	}

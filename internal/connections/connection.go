@@ -82,6 +82,25 @@ func (c *Connection) normalize() {
 	}
 }
 
+// RegistryPullReady permits an existing pinned image when only push is missing.
+func RegistryPullReady(c *Connection) bool {
+	if c == nil || c.Cloud != Registry {
+		return false
+	}
+	if c.Status == StatusReady {
+		return true
+	}
+	if c.Status != StatusIncomplete || c.Details["api"] != "ready" || c.Details["pull"] != "ready" || len(c.Missing) == 0 {
+		return false
+	}
+	for _, missing := range c.Missing {
+		if missing != "registry:push" {
+			return false
+		}
+	}
+	return true
+}
+
 // Store persists connections, scoped to an organization: another
 // organization's read as not found.
 type Store interface {

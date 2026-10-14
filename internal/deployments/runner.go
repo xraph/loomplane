@@ -49,10 +49,13 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
-	Deployment *Deployment
-	Plan       *planning.Plan
-	Action     planning.Action
-	Connection *connections.Connection
+	BuildCredentials Credentials
+	Logs             LogSink
+	Attempt          string
+	Deployment       *Deployment
+	Plan             *planning.Plan
+	Action           planning.Action
+	Connection       *connections.Connection
 	// Credential is the connection's secret. It's only ever passed to the
 	// cloud's client, in memory.
 	Credential []byte
@@ -165,6 +168,7 @@ type Runner struct {
 	executors   map[string]Executor
 	resources   ResourceSecrets
 	telemetry   *telemetry.Recorder
+	logs        LogSink
 	http        *http.Client
 	now         func() time.Time
 	// verifyWait is how long a deployed service has to answer.
@@ -173,6 +177,7 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	Logs        LogSink
 	Store       Store
 	Plans       Plans
 	Credentials Credentials
@@ -192,7 +197,7 @@ type RunnerDeps struct {
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
 		store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -483,6 +488,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		}
 	}
 	job := &Job{
+		BuildCredentials: r.credentials, Logs: r.logs, Attempt: logAttempt(ctx, d.Retries),
 		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
 		Resume: resume, Checkpoint: heartbeat, Progress: progress,
 		Keep: func(ctx context.Context, field string, value []byte) error {

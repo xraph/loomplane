@@ -540,7 +540,8 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	for _, c := range all {
 		out = append(out, ConnectionOption{
 			ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
-			HTTPS: c.Details["certificate_arn"] != "", Region: c.Details["region"],
+			PullReady: connections.RegistryPullReady(c),
+			HTTPS:     c.Details["certificate_arn"] != "", Region: c.Details["region"],
 			Details: maps.Clone(c.Details),
 		})
 	}

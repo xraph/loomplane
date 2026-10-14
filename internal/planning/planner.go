@@ -41,10 +41,11 @@ type Input struct {
 
 // ConnectionOption is a cloud connection a plan could deploy with.
 type ConnectionOption struct {
-	ID    string
-	Name  string
-	Cloud string
-	Ready bool
+	ID        string
+	Name      string
+	Cloud     string
+	Ready     bool
+	PullReady bool
 	// HTTPS says whether the connection serves public services over
 	// HTTPS where that takes a certificate of its own, as ECS does.
 	HTTPS bool

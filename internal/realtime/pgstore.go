@@ -192,6 +192,7 @@ func (s *PgStore) AppendLog(ctx context.Context, input LogInput, redactor *Redac
 		return nil, err
 	}
 	message, truncated := redactor.Line(input.Message, MaxLineBytes)
+	truncated = truncated || input.Truncated
 	if used+int64(len(message)) > MaxAttemptBytes {
 		message, truncated = "Build output reached the 10 MiB limit for this attempt. Later output is omitted.", true
 		stopped = true
