@@ -2,6 +2,21 @@
 // role grants a permission a Google Cloud connection is missing.
 
 export const clouds = {
+  server: {
+    label: "SSH server",
+    credential: "SSH private key",
+    account: "Server",
+  },
+  kubernetes: {
+    label: "Kubernetes",
+    credential: "Kubeconfig",
+    account: "Cluster",
+  },
+  registry: {
+    label: "Image registry",
+    credential: "Credential JSON",
+    account: "Registry",
+  },
   gcp: {
     label: "Google Cloud",
     credential: "Service account key",

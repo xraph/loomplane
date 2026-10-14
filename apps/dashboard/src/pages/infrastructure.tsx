@@ -28,10 +28,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -73,10 +71,10 @@ import {
 } from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cloudLabel } from "@/lib/clouds"
-import { formatDate, relative } from "@/lib/format"
+import { relative } from "@/lib/format"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
-import { useNow, usePeople, useRunning } from "@/lib/use-runs"
+import { useNow, useRunning } from "@/lib/use-runs"
 import { cn } from "@/lib/utils"
 
 const connectionStatus: Record<string, { label: string; tone: string }> = {
@@ -98,14 +96,14 @@ export function Infrastructure() {
       <Page>
         <PageHeading
           title="Infrastructure"
-          description="The clouds Loomplane deploys to, and everything it runs there for you. Ctrl Plane owns the lifecycle; you see one list."
+          description="Connected servers, Kubernetes clusters and cloud accounts, with the services running on each."
           actions={
             <Link
               to="/integrations"
               className={cn(buttonVariants(), "rounded-full")}
             >
               <PlusIcon />
-              Connect a cloud
+              Connect infrastructure
             </Link>
           }
         />
@@ -123,14 +121,14 @@ export function Infrastructure() {
         <section className="grid gap-4">
           <SectionHeading
             id="clouds"
-            title="Clouds"
+            title="Deployment infrastructure"
             description="Connected accounts, their health and what runs on each"
           />
           {!connections.data &&
           connections.status === "error" ? null : !connections.data ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2 md:grid-cols-2">
               {[0, 1].map((i) => (
-                <Skeleton key={i} className="h-56 rounded-xl" />
+                <Skeleton key={i} className="h-16 rounded-xl" />
               ))}
             </div>
           ) : connections.data.connections.length === 0 ? (
@@ -139,10 +137,11 @@ export function Infrastructure() {
                 <EmptyMedia variant="icon">
                   <ServerIcon />
                 </EmptyMedia>
-                <EmptyTitle>No clouds connected yet</EmptyTitle>
+                <EmptyTitle>No infrastructure connected yet</EmptyTitle>
                 <EmptyDescription>
-                  Connect Google Cloud, AWS, Vercel or Render, and plans can
-                  place services and resources there.
+                  Connect a server, Kubernetes cluster or managed cloud account,
+                  then choose it for each service in your project's deployment
+                  targets.
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
@@ -155,7 +154,7 @@ export function Infrastructure() {
               </EmptyContent>
             </Empty>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2 md:grid-cols-2">
               {connections.data.connections.map((c) => (
                 <CloudCard
                   key={c.id}
@@ -166,25 +165,6 @@ export function Infrastructure() {
             </div>
           )}
         </section>
-
-        <Card id="spend" className="scroll-mt-16">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <WalletIcon className="size-4 text-muted-foreground" />
-              Spend this month
-            </CardTitle>
-            <CardDescription>
-              Spend arrives with billing from your cloud connections: what each
-              cloud charges, against a budget you set.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div
-              aria-hidden="true"
-              className="canvas-dots h-48 w-full rounded-lg opacity-60"
-            />
-          </CardContent>
-        </Card>
 
         {error !== undefined && (
           <QueryError
@@ -201,6 +181,19 @@ export function Infrastructure() {
             projects={list}
           />
         )}
+
+        <Card id="spend" className="scroll-mt-16">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <WalletIcon className="size-4 text-muted-foreground" />
+              Spend this month
+            </CardTitle>
+            <CardDescription>
+              Spend arrives with billing from your cloud connections: what each
+              cloud charges, against a budget you set.
+            </CardDescription>
+          </CardHeader>
+        </Card>
 
         {infra.data && (
           <section className="grid gap-3">
@@ -276,99 +269,61 @@ function CloudCard({
   connection: Connection
   bindings: Binding[]
 }) {
-  const person = usePeople()
   const status = connectionStatus[c.status] ?? {
     label: c.status,
     tone: "bg-muted-foreground/50",
   }
-  const services = bindings.filter((b) => b.subject === "service").length
-  const resources = bindings.filter((b) => b.subject === "resource").length
-  const regions = [...new Set(bindings.map((b) => b.region).filter(Boolean))]
-  const drifted = bindings.filter((b) => !!b.drift).length
+  const services = bindings.filter(
+    (binding) => binding.subject === "service"
+  ).length
+  const resources = bindings.filter(
+    (binding) => binding.subject === "resource"
+  ).length
+  const drifted = bindings.filter((binding) => binding.drift).length
   return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <CloudGlyph cloud={c.cloud} className="size-6 text-[10px]" />
-          <span className="truncate">{c.name}</span>
-        </CardTitle>
-        <CardDescription className="flex min-w-0 items-center gap-1.5">
-          <span className={cn("size-1.5 shrink-0 rounded-full", status.tone)} />
-          <span className="shrink-0">{status.label}</span>
-          <span className="truncate font-mono text-xs">{c.account}</span>
-        </CardDescription>
-        <CardAction>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`${c.name} actions`}
-                />
-              }
-            >
-              <EllipsisIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem render={<Link to="/integrations" />}>
-                Check, replace or remove it
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="grid gap-4">
+    <Card size="sm" className="flex-row items-center gap-3 px-3 py-2">
+      <CloudGlyph cloud={c.cloud} className="size-8 shrink-0 text-[10px]" />
+      <div className="grid min-w-0 flex-1 gap-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate text-sm font-medium">{c.name}</span>
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <span className={cn("size-1.5 rounded-full", status.tone)} />
+            {status.label}
+          </span>
+        </div>
+        <p className="truncate text-xs text-muted-foreground">
+          {cloudLabel(c.cloud)} · {c.account} · {services} services ·{" "}
+          {resources} resources
+        </p>
         {c.status !== "ready" && (
           <p className="text-weld-ink text-xs">
-            {c.message ||
-              (c.missing.length
-                ? `Missing ${c.missing.length} ${c.missing.length === 1 ? "permission" : "permissions"}`
-                : "Needs attention")}
+            {c.message || "Check the connection under Integrations."}
           </p>
         )}
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div className="grid gap-0.5">
-            <span className="text-xs text-muted-foreground">Services</span>
-            <span className="tabular-nums">{services}</span>
-          </div>
-          <div className="grid gap-0.5">
-            <span className="text-xs text-muted-foreground">Resources</span>
-            <span className="tabular-nums">{resources}</span>
-          </div>
-        </div>
-        <div className="grid gap-1.5">
-          <div className="flex items-baseline justify-between text-sm">
-            <span className="text-muted-foreground">Spend</span>
-            <span className="text-xs text-muted-foreground">
-              Not reported yet
-            </span>
-          </div>
-          {drifted > 0 && (
-            <p className="text-weld-ink text-xs">
-              {drifted} {drifted === 1 ? "thing has" : "things have"} drifted
-              from what Loomplane deployed
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {regions.length ? (
-            regions.map((r) => (
-              <Badge key={r} variant="outline" className="font-normal">
-                {r}
-              </Badge>
-            ))
-          ) : (
-            <span className="text-xs text-muted-foreground">
-              Nothing deployed with it yet
-            </span>
-          )}
-        </div>
-      </CardContent>
-      <CardFooter className="mt-auto text-xs text-muted-foreground">
-        {cloudLabel(c.cloud)}, connected by {person(c.createdBy).name} on{" "}
-        {formatDate(c.createdAt)}
-      </CardFooter>
+        {drifted > 0 && (
+          <p className="text-weld-ink text-xs">
+            {drifted} deployments need review
+          </p>
+        )}
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`${c.name} actions`}
+            />
+          }
+        >
+          <EllipsisIcon />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem render={<Link to="/integrations" />}>
+            Check, replace or remove it
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </Card>
   )
 }

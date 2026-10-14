@@ -14,6 +14,7 @@ import { usePath } from "@/lib/router"
 import { AcceptInvitation } from "@/pages/accept-invitation"
 import { AuthPage } from "@/pages/auth"
 import { Onboarding } from "@/pages/onboarding"
+import { RealtimeProvider } from "@/lib/realtime-provider"
 
 const authPaths = ["/sign-in", "/sign-up"]
 
@@ -56,7 +57,9 @@ export function App() {
         }
       }}
     >
-      <Shell />
+      <RealtimeProvider>
+        <Shell />
+      </RealtimeProvider>
     </OrganizationGate>
   )
 }

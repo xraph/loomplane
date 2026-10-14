@@ -12,6 +12,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type {
   Environment,
+  Connection,
   Manifest,
   Provider,
 } from "@/client/forge/loomplane/types"
@@ -49,6 +50,7 @@ import {
   compatibleTargets,
   placementRows,
   placementSettings,
+  targetConnections,
   type PlacementFields,
   type PlacementRow,
 } from "@/lib/placement"
@@ -174,6 +176,7 @@ function TargetRow({
 }) {
   const { can } = useOrganization()
   const save = useMutation(useManifestsEdit)
+  const connections = useQuery(useConnectionsList)
   const invalidate = useInvalidate()
   const settings = placementSettings(manifest, row, environment)
   const [changes, setChanges] = useState<PlacementFields>({})
@@ -185,6 +188,14 @@ function TargetRow({
   const offered = targets.some((p) => p.name === value.provider)
   const dirty = Object.keys(changes).length > 0
   const disabled = !can("project:update") || save.isPending
+  const owned =
+    row.section === "services" &&
+    (selected?.cloud === "server" || selected?.cloud === "kubernetes")
+  const accounts = connections.data?.connections ?? []
+  const buildChange = (patch: NonNullable<PlacementFields["build"]>) =>
+    change({ build: { ...value.build, ...patch } })
+  const endpointChange = (patch: NonNullable<PlacementFields["endpoint"]>) =>
+    change({ endpoint: { ...value.endpoint, ...patch } })
   const change = (patch: PlacementFields) => {
     setChanges((c) => ({ ...c, ...patch }))
     setSaved(false)
@@ -229,7 +240,19 @@ function TargetRow({
         </div>
         <Select
           value={value.provider || null}
-          onValueChange={(v) => v && change({ provider: v, region: "" })}
+          onValueChange={(v) =>
+            v &&
+            change({
+              provider: v,
+              region: "",
+              ...(owned || v === "server" || v === "kubernetes"
+                ? { target: "", endpoint: {} }
+                : {}),
+              ...(owned && v !== "server" && v !== "kubernetes"
+                ? { build: { context: value.build?.context } }
+                : {}),
+            })
+          }
         >
           <SelectTrigger
             size="sm"
@@ -296,6 +319,156 @@ function TargetRow({
           </Button>
         )}
       </div>
+      {owned && (
+        <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <ConnectionChoice
+            label={`Infrastructure for ${row.name}`}
+            value={value.target}
+            connections={targetConnections(accounts, selected!.cloud)}
+            disabled={disabled}
+            automatic="Environment default"
+            onChange={(target) => change({ target, endpoint: {} })}
+          />
+          <ConnectionChoice
+            label={`Builder for ${row.name}`}
+            value={value.build?.builder}
+            connections={targetConnections(accounts, "server")}
+            disabled={disabled || !!value.build?.image}
+            automatic={
+              selected?.cloud === "server"
+                ? "Use target server"
+                : "Choose a builder"
+            }
+            onChange={(builder) => buildChange({ builder })}
+          />
+          <ConnectionChoice
+            label={`Registry for ${row.name}`}
+            value={value.build?.registry}
+            connections={accounts.filter(
+              (c) =>
+                c.cloud === "registry" &&
+                (c.status === "ready" ||
+                  (!!value.build?.image && c.details.pull === "ready"))
+            )}
+            disabled={disabled}
+            automatic="No registry selected"
+            onChange={(registry) => buildChange({ registry })}
+          />
+          <label className="grid gap-1 text-xs text-muted-foreground">
+            Build context
+            <Input
+              className="h-8 text-xs"
+              aria-label={`Build context for ${row.name}`}
+              value={value.build?.context ?? ""}
+              placeholder="Repository root"
+              disabled={disabled}
+              onChange={(e) => buildChange({ context: e.target.value })}
+            />
+          </label>
+          <label className="grid gap-1 text-xs text-muted-foreground sm:col-span-2">
+            Existing image (optional)
+            <Input
+              className="h-8 min-w-0 font-mono text-xs"
+              aria-label={`Image for ${row.name}`}
+              value={value.build?.image ?? ""}
+              placeholder="registry/repository@sha256:..."
+              disabled={disabled}
+              onChange={(e) => buildChange({ image: e.target.value })}
+            />
+          </label>
+          {row.kind !== "worker" && (
+            <>
+              <label className="grid gap-1 text-xs text-muted-foreground">
+                Readiness path
+                <Input
+                  className="h-8 text-xs"
+                  aria-label={`Readiness path for ${row.name}`}
+                  value={value.healthPath ?? ""}
+                  placeholder="/ready"
+                  disabled={disabled}
+                  onChange={(e) => change({ healthPath: e.target.value })}
+                />
+              </label>
+              {selected?.cloud === "server" ? (
+                <label className="grid gap-1 text-xs text-muted-foreground">
+                  Published host port
+                  <Input
+                    className="h-8 text-xs"
+                    aria-label={`Host port for ${row.name}`}
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={value.endpoint?.hostPort ?? ""}
+                    placeholder="Private until published"
+                    disabled={disabled}
+                    onChange={(e) =>
+                      endpointChange({
+                        hostPort: e.target.value
+                          ? Number(e.target.value)
+                          : undefined,
+                      })
+                    }
+                  />
+                </label>
+              ) : (
+                <>
+                  <label className="grid gap-1 text-xs text-muted-foreground">
+                    Public hostname
+                    <Input
+                      className="h-8 text-xs"
+                      aria-label={`Hostname for ${row.name}`}
+                      value={value.endpoint?.hostname ?? ""}
+                      placeholder="api.example.com"
+                      disabled={disabled}
+                      onChange={(e) =>
+                        endpointChange({ hostname: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs text-muted-foreground">
+                    Ingress class
+                    <Input
+                      className="h-8 text-xs"
+                      aria-label={`Ingress class for ${row.name}`}
+                      value={value.endpoint?.ingressClass ?? ""}
+                      placeholder="Cluster default"
+                      disabled={disabled}
+                      onChange={(e) =>
+                        endpointChange({ ingressClass: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs text-muted-foreground">
+                    TLS secret
+                    <Input
+                      className="h-8 text-xs"
+                      aria-label={`TLS secret for ${row.name}`}
+                      value={value.endpoint?.tlsSecret ?? ""}
+                      placeholder="Existing namespace secret"
+                      disabled={disabled}
+                      onChange={(e) =>
+                        endpointChange({ tlsSecret: e.target.value })
+                      }
+                    />
+                  </label>
+                </>
+              )}
+            </>
+          )}
+          {selected?.logNote && (
+            <p className="text-xs text-muted-foreground sm:col-span-2 xl:col-span-3">
+              {selected.logNote}
+            </p>
+          )}
+          {connections.status === "error" && (
+            <QueryError
+              error={connections.error}
+              fallback="Infrastructure choices couldn't be loaded."
+              retry={connections.refetch}
+            />
+          )}
+        </div>
+      )}
       {targets.length === 0 && (
         <p className="text-xs text-muted-foreground">
           No available target supports this{" "}
@@ -313,6 +486,52 @@ function TargetRow({
           Placement saved. Create a new plan to review the change.
         </p>
       )}
+    </div>
+  )
+}
+
+function ConnectionChoice({
+  label,
+  value,
+  connections,
+  disabled,
+  automatic,
+  onChange,
+}: {
+  label: string
+  value?: string
+  connections: Connection[]
+  disabled: boolean
+  automatic: string
+  onChange: (value: string) => void
+}) {
+  const found = connections.find((c) => c.id === value)
+  return (
+    <div className="grid min-w-0 gap-1 text-xs text-muted-foreground">
+      <span>{label}</span>
+      <Select
+        value={value || "automatic"}
+        onValueChange={(v) => v && onChange(v === "automatic" ? "" : v)}
+      >
+        <SelectTrigger
+          size="sm"
+          className="w-full min-w-0"
+          aria-label={label}
+          disabled={disabled}
+        >
+          <SelectValue>
+            {found?.name ?? (value ? "Connection unavailable" : automatic)}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="automatic">{automatic}</SelectItem>
+          {connections.map((c) => (
+            <SelectItem key={c.id} value={c.id}>
+              {c.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }

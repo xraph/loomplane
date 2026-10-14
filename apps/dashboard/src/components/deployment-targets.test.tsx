@@ -25,6 +25,149 @@ afterEach(() => {
   forgeClient.clear()
 })
 
+it("saves an owned target, builder and registry while preserving the build context", async () => {
+  const manifest: Manifest = {
+    version: 1,
+    services: {
+      api: {
+        source: "go:cmd/api",
+        provider: "server",
+        build: { context: "workspace" },
+      },
+      second: { source: "go:cmd/second", provider: "server" },
+    },
+  }
+  const writes: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (init?.body) writes.push(JSON.parse(String(init.body)))
+      let body: unknown = {}
+      if (url.endsWith("/graph"))
+        body = {
+          graph: {
+            sources: [],
+            services: [
+              {
+                id: "svc:go:cmd/api",
+                entrypoint: "cmd/api",
+                path: ".",
+                kind: "http-service",
+                deployable: true,
+              },
+              {
+                id: "svc:go:cmd/second",
+                entrypoint: "cmd/second",
+                path: ".",
+                kind: "http-service",
+                deployable: true,
+              },
+            ],
+          },
+        }
+      if (url.endsWith("/providers"))
+        body = {
+          providers: [
+            {
+              name: "server",
+              title: "Existing server",
+              cloud: "server",
+              available: true,
+              runs: [{ workload: "http-service" }],
+            },
+          ],
+        }
+      if (url.endsWith("/connections"))
+        body = {
+          connections: [
+            {
+              id: "conn_host",
+              name: "Host",
+              cloud: "server",
+              status: "ready",
+              details: {},
+            },
+            {
+              id: "conn_builder",
+              name: "Builder",
+              cloud: "server",
+              status: "ready",
+              details: {},
+            },
+            {
+              id: "conn_registry",
+              name: "Registry",
+              cloud: "registry",
+              status: "ready",
+              details: {},
+            },
+          ],
+        }
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+  )
+  render(
+    <ClientProvider client={forgeClient}>
+      <DeploymentTargets
+        projectId="p"
+        manifest={manifest}
+        environments={[{ id: "env", name: "production" } as Environment]}
+        environment="production"
+        onEnvironment={() => {}}
+      />
+    </ClientProvider>
+  )
+  await userEvent.click(
+    await screen.findByRole("combobox", { name: "Infrastructure for api" })
+  )
+  await userEvent.click(await screen.findByRole("option", { name: "Host" }))
+  await userEvent.click(
+    screen.getByRole("combobox", { name: "Builder for api" })
+  )
+  await userEvent.click(await screen.findByRole("option", { name: "Builder" }))
+  await userEvent.click(
+    screen.getByRole("combobox", { name: "Registry for api" })
+  )
+  await userEvent.click(await screen.findByRole("option", { name: "Registry" }))
+  await userEvent.type(
+    screen.getByRole("spinbutton", { name: "Host port for api" }),
+    "8088"
+  )
+  await userEvent.click(
+    screen.getByRole("button", { name: "Save api placement" })
+  )
+  expect(writes).toContainEqual({
+    placement: expect.objectContaining({
+      name: "api",
+      environment: "production",
+      target: "conn_host",
+      build: {
+        context: "workspace",
+        builder: "conn_builder",
+        registry: "conn_registry",
+      },
+      endpoint: { host_port: 8088 },
+    }),
+  })
+  await userEvent.click(
+    screen.getByRole("combobox", { name: "Infrastructure for second" })
+  )
+  await userEvent.click(await screen.findByRole("option", { name: "Builder" }))
+  await userEvent.click(
+    screen.getByRole("button", { name: "Save second placement" })
+  )
+  expect(writes).toContainEqual({
+    placement: expect.objectContaining({
+      name: "second",
+      target: "conn_builder",
+    }),
+  })
+})
+
 it("keeps unsaved YAML when a placement revision arrives and prevents overwriting it", async () => {
   const project = {
     id: "p",

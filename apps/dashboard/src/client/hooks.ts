@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { useLiveState } from "@/lib/realtime-state"
 
 // Client components use the generated bindings through these.
 export { useInvalidate, useMutation, useQuery } from "@forge-go/client-react"
@@ -14,12 +15,16 @@ export function useRefetchWhile(
   refetch: () => Promise<unknown>,
   interval = 1000
 ): void {
+  const live = useLiveState().status === "live"
   useEffect(() => {
-    if (!active) return
-    const id = window.setInterval(() => {
-      // A failed refetch is shown by the query's own error state.
-      refetch().catch(() => undefined)
-    }, interval)
+    if (!active || live) return
+    const id = window.setInterval(
+      () => {
+        // A failed refetch is shown by the query's own error state.
+        refetch().catch(() => undefined)
+      },
+      Math.max(interval, 15000)
+    )
     return () => window.clearInterval(id)
-  }, [active, refetch, interval])
+  }, [active, refetch, interval, live])
 }

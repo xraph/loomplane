@@ -38,7 +38,6 @@ import {
   Code,
   CopyButton,
   EnvBadge,
-  LogViewer,
   PersonAvatar,
   PhaseRuler,
   RunBadge,
@@ -106,6 +105,7 @@ import { scopeBody } from "@/lib/plans"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import { isLive, type Run, runLog, type ThreadStep } from "@/lib/runs"
+import { BuildLogPanel } from "@/components/build-log-panel"
 import { useNow, usePeople, useRunFor } from "@/lib/use-runs"
 import { cn } from "@/lib/utils"
 
@@ -221,14 +221,14 @@ function Loaded({
               <TabsTrigger value="services">Services</TabsTrigger>
             </TabsList>
             <TabsContent value="logs">
-              <LogViewer
-                lines={lines}
+              <BuildLogPanel
+                activity={lines}
+                deploymentId={run.deployment?.id}
                 live={live}
                 name={run.deployment?.id ?? run.id}
                 step={step}
                 stepName={run.thread.find((s) => s.key === step)?.name}
                 onClearStep={() => setStep(null)}
-                empty="Nothing recorded yet."
               />
             </TabsContent>
             <TabsContent value="plan">

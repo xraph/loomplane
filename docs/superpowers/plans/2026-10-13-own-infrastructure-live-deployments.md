@@ -173,10 +173,12 @@ Files: modify `components/deployment-targets.tsx`, `pages/infrastructure.tsx`, i
 
 Consumes generated Task 5 bindings and Tasks 1-3 placement fields. Produces a shared organization-scoped SubscriptionManager/StreamBinder connection, WS preference with SSE fallback, REST/gap recovery and compact target/builder/registry controls.
 
-- [ ] Write UI tests selecting separate service targets, saving builder/registry/endpoint choices and inspecting persisted request bodies. Replay a newer streamed entity before an older REST reply; require newer status to remain. Test WS loss, SSE fallback, stale label, resume gap, organization switch and read denial.
-- [ ] Run the new Vitest files. Expected: controls/stream bindings/status recovery absent.
-- [ ] Implement controls with the shared component system and ZeroState adapter. Wire generated streaming transports and bindings into the existing cache, replace live two-second polling with stream updates and disconnected REST fallback. Render persisted build logs with bounded follow/pause/filter/export behavior.
-- [ ] Regenerate/check clients, format/lint/full tests/build and commit `feat: show owned targets and live deployment output`.
+- [x] Write UI tests selecting separate service targets, saving builder/registry/endpoint choices and inspecting persisted request bodies. Replay a newer streamed entity before an older REST reply; require newer status to remain. Test WS loss, SSE fallback, stale label, resume gap, organization switch and read denial.
+- [x] Run the new Vitest files. Expected: controls/stream bindings/status recovery absent.
+- [x] Implement controls with the shared component system and ZeroState adapter. Wire generated streaming transports and bindings into the existing cache, replace live two-second polling with stream updates and disconnected REST fallback. Render persisted build logs with bounded follow/pause/filter/export behavior.
+- [x] Regenerate/check clients, format/lint/full tests/build and commit `feat: show owned targets and live deployment output`.
+
+Verified: separate per-service targets, builder/registry/endpoint saves, context inheritance, WS/SSE fallback, REST fencing, projection refresh, replay cursor monotonicity and denied-read cleanup pass. The signed-in infrastructure page reports Live via Forge WS. Desktop and 390px screenshots are saved, and the narrow page has no horizontal overflow. Format, make lint/test (209 dashboard tests)/build and generated-client checks pass. The real deployment log view and remaining live scenario matrix are Task 11.
 
 ## Task 11: Local Docker/SSH and kind acceptance
 

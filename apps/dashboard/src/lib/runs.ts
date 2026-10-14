@@ -320,8 +320,8 @@ export interface RunLogLine {
 
 /**
  * runLog tells a run's story from what Loomplane recorded: the plan, its
- * findings, the decision, and each step's start and end. Builds and
- * providers write more than this; streaming their output is still to come.
+ * findings, the decision, and each step's start and end. The build-log panel
+ * combines this activity with retained provider output.
  */
 export function runLog(
   r: Run,

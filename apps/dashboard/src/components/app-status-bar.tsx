@@ -10,8 +10,10 @@ import { useShell } from "@/components/shell"
 import { StatusBar, StatusItem, StatusLight } from "@/components/status-bar"
 import { Link } from "@/lib/router"
 import { useRuns } from "@/lib/use-runs"
+import { useLiveState } from "@/lib/realtime-state"
 
 export function AppStatusBar() {
+  const live = useLiveState()
   const { openCommand, openShortcuts } = useShell()
   const infra = useQuery(useInfrastructureGet)
   const github = useQuery(useGithubStatus)
@@ -26,6 +28,22 @@ export function AppStatusBar() {
 
   return (
     <StatusBar onShortcuts={openShortcuts} onCommand={openCommand}>
+      <StatusItem
+        hint={
+          live.lastSync
+            ? `Last synchronized ${new Date(live.lastSync).toLocaleTimeString()} via ${live.transport.toUpperCase()}`
+            : "Waiting for an authenticated status stream"
+        }
+      >
+        <StatusLight tone={live.status === "live" ? "ok" : "warn"} />
+        {live.status === "live"
+          ? "Live"
+          : live.status === "denied"
+            ? "Access denied"
+            : live.status === "reconnecting"
+              ? "Reconnecting"
+              : "Status stale"}
+      </StatusItem>
       {infra.data && (
         <StatusItem
           hint={`Ctrl Plane keeps deployment state in ${infra.data.store}`}

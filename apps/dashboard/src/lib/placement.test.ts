@@ -138,3 +138,59 @@ it("offers gateway targets the deployment engine can actually build", () => {
     "ecs-fargate",
   ])
 })
+
+it("inherits owned targets and build context, and clears endpoints when a target changes", () => {
+  const m = {
+    version: 1,
+    services: {
+      api: {
+        source: "go:cmd/api",
+        provider: "server",
+        target: "conn_server",
+        health_path: "/ready",
+        endpoint: { host_port: 8088 },
+        build: {
+          context: "workspace",
+          builder: "conn_builder",
+          registry: "conn_registry",
+        },
+        environments: {
+          preview: {
+            provider: "kubernetes",
+            target: "conn_cluster",
+            endpoint: { hostname: "api.test", ingress_class: "nginx" },
+          },
+        },
+      },
+    },
+  } as Manifest
+  const row = placementRows(m, graph)[0]
+  expect(placementSettings(m, row, "production")).toMatchObject({
+    target: "conn_server",
+    healthPath: "/ready",
+    endpoint: { hostPort: 8088 },
+    build: { context: "workspace", builder: "conn_builder" },
+  })
+  expect(placementSettings(m, row, "preview")).toMatchObject({
+    provider: "kubernetes",
+    target: "conn_cluster",
+    endpoint: { hostname: "api.test", ingressClass: "nginx" },
+    build: { context: "workspace" },
+  })
+  const changed = {
+    ...m,
+    services: {
+      api: {
+        ...m.services!.api,
+        environments: { preview: { target: "conn_other" } },
+      },
+    },
+  }
+  const settings = placementSettings(
+    changed,
+    placementRows(changed, graph)[0],
+    "preview"
+  )
+  expect(settings.target).toBe("conn_other")
+  expect(settings.endpoint).toBeUndefined()
+})

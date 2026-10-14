@@ -1,15 +1,27 @@
-import type { Graph, Manifest, Provider } from "@/client/forge/loomplane/types"
+import type {
+  Build,
+  Connection,
+  Endpoint,
+  Graph,
+  Manifest,
+  Provider,
+} from "@/client/forge/loomplane/types"
 
 export type PlacementFields = {
   provider?: string
   region?: string
   enabled?: boolean
+  target?: string
+  build?: Build
+  endpoint?: Endpoint
+  healthPath?: string
 }
 type Entry = PlacementFields & {
   source?: string
   repo?: string
   kind?: string
-  environments?: Record<string, PlacementFields>
+  health_path?: string
+  environments?: Record<string, PlacementFields & { health_path?: string }>
 }
 export type PlacementRow = {
   section: "services" | "resources" | "gateways"
@@ -90,7 +102,7 @@ export function placementSettings(
   m: Manifest,
   row: PlacementRow,
   environment: string
-): Required<PlacementFields> {
+): PlacementFields & { provider: string; region: string; enabled: boolean } {
   const d = m.defaults
   const s = row.entry
   let provider = s.provider || d?.provider || ""
@@ -101,5 +113,46 @@ export function placementSettings(
     region = provider === d?.provider ? d?.region || "" : ""
   }
   if (o?.region) region = o.region
-  return { provider, region, enabled: o?.enabled ?? s.enabled ?? true }
+  const changedProvider =
+    !!o?.provider && o.provider !== (s.provider || d?.provider)
+  const target = o?.target || (changedProvider ? undefined : s.target)
+  const changedTarget = !!o?.target && o.target !== s.target
+  const rawEndpoint =
+    o?.endpoint ?? (changedProvider || changedTarget ? undefined : s.endpoint)
+  // Manifest maps are opaque JSON in the generated contract. Normalize their
+  // snake_case members at this boundary; placement writes use generated codecs.
+  const raw = rawEndpoint as
+    | (Endpoint & {
+        host_port?: number
+        ingress_class?: string
+        tls_secret?: string
+      })
+    | undefined
+  const endpoint = raw
+    ? {
+        hostPort: raw.hostPort ?? raw.host_port,
+        hostname: raw.hostname,
+        ingressClass: raw.ingressClass ?? raw.ingress_class,
+        tlsSecret: raw.tlsSecret ?? raw.tls_secret,
+      }
+    : undefined
+  const build = o?.build ?? s.build
+  const healthPath =
+    o?.healthPath ?? o?.health_path ?? s.healthPath ?? s.health_path
+  return {
+    provider,
+    region,
+    enabled: o?.enabled ?? s.enabled ?? true,
+    ...(target ? { target } : {}),
+    ...(endpoint ? { endpoint } : {}),
+    ...(build ? { build } : {}),
+    ...(healthPath ? { healthPath } : {}),
+  }
+}
+
+export function targetConnections(
+  connections: Connection[],
+  cloud: string
+): Connection[] {
+  return connections.filter((c) => c.cloud === cloud && c.status === "ready")
 }
