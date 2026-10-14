@@ -28,8 +28,10 @@ type server struct {
 	token string
 	dir   string
 
-	mu  sync.Mutex
-	ops map[string]*Operation
+	mu            sync.Mutex
+	ops           map[string]*Operation
+	logs          map[string]*operationOutput
+	logGeneration uint64
 }
 
 // Handler serves p over the protocol, refusing any request without token.
@@ -45,6 +47,7 @@ func Handler(p Provider, token string) http.Handler {
 	mux.HandleFunc("PUT /v1/sources/{id}", s.putSource)
 	mux.HandleFunc("POST /v1/operations", s.start)
 	mux.HandleFunc("GET /v1/operations/{id}", s.operation)
+	mux.HandleFunc("GET /v1/operations/{id}/logs", s.operationLogs)
 	mux.HandleFunc("POST /v1/observe", s.observe)
 	return s.auth(mux)
 }
@@ -72,6 +75,9 @@ func fail(w http.ResponseWriter, status int, err error) {
 
 func (s *server) describe(w http.ResponseWriter, _ *http.Request) {
 	d := Description{Protocol: Protocol, Provider: s.p.Describe()}
+	if logger, ok := s.p.(OperationLogger); ok {
+		d.OperationLogs = logger.OperationLogs()
+	}
 	if c, ok := s.p.(Connector); ok {
 		d.Connection = c.ConnectionForm()
 	} else {
@@ -197,9 +203,16 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 	}
 	op := &Operation{ID: id, Kind: req.Kind, Status: StatusRunning}
 	s.ops[id] = op
+	s.enableOutput(id)
+	epoch := ""
+	if output := s.logs[id]; output != nil {
+		epoch = output.epoch
+		op.ExecutionID = epoch
+	}
 	started := *op
 	s.mu.Unlock()
 
+	job.log = func(stream, message string) { s.appendOutput(id, epoch, stream, message) }
 	job.progress = func(m string) { s.update(id, func(o *Operation) { o.Progress = m }) }
 	job.checkpoint = func(b []byte) {
 		cp := append([]byte(nil), b...)

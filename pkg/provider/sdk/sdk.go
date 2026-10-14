@@ -116,6 +116,7 @@ type Job struct {
 	source     func() (io.ReadCloser, error)
 	progress   func(string)
 	checkpoint func([]byte)
+	log        func(string, string)
 }
 
 // Service is a service to run.
@@ -206,5 +207,14 @@ func (j *Job) Progress(message string) {
 func (j *Job) Checkpoint(data []byte) {
 	if j.checkpoint != nil {
 		j.checkpoint(data)
+	}
+}
+
+// Log emits one operation-output record. Repeated messages keep separate IDs.
+// Emit before Apply or Remove returns. Oversized records are omitted whole.
+// Keep credentials out of build output.
+func (j *Job) Log(stream, message string) {
+	if j.log != nil {
+		j.log(stream, message)
 	}
 }

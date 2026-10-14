@@ -156,3 +156,11 @@ func (c *Collector) safeError(err error) error {
 	}
 	return errors.New(message)
 }
+
+func (c *Collector) clearCancelledError() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if errors.Is(c.err, context.Canceled) || errors.Is(c.err, context.DeadlineExceeded) {
+		c.err = nil
+	}
+}

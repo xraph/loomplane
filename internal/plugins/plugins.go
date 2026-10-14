@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -222,3 +223,13 @@ func (s *Set) Plugins() ([]*Plugin, error) {
 	})
 	return s.list, s.err
 }
+
+// OperationLogs reads an advertised optional output page from a single operation.
+func (c *Client) OperationLogs(ctx context.Context, id, cursor string, limit int) (*sdk.LogPage, error) {
+	query := url.Values{"cursor": {cursor}, "limit": {strconv.Itoa(limit)}}
+	var page sdk.LogPage
+	return &page, c.do(ctx, http.MethodGet, "/v1/operations/"+url.PathEscape(id)+"/logs?"+query.Encode(), nil, "", &page)
+}
+
+// RedactionValues are used only in worker memory to sanitize provider output.
+func (c *Client) RedactionValues() []string { return []string{c.token} }

@@ -3,14 +3,20 @@
 package integration
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/xraph/forge"
+
 	"github.com/xraph/loomplane/examples/provider-plugin/statichost"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/plugins"
+	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
 const docsOnStaticHost = `version: 1
@@ -24,8 +30,28 @@ ignore:
 `
 
 func TestPlugin_aProviderPluginDeploysLikeABuiltInTarget(t *testing.T) {
+	t.Run("progress", func(t *testing.T) { testPluginLifecycle(t, false) })
+	t.Run("operation-output", func(t *testing.T) { testPluginLifecycle(t, true) })
+}
+
+type loggingStaticHost struct{ *statichost.Host }
+
+func (loggingStaticHost) OperationLogs() bool { return true }
+func (h loggingStaticHost) Apply(ctx context.Context, job *sdk.Job) (*sdk.Outcome, error) {
+	job.Log("stdout", "Fixture build marker "+h.Token)
+	job.Log("stdout", "Fixture build marker "+h.Token)
+	return h.Host.Apply(ctx, job)
+}
+func testPluginLifecycle(t *testing.T, logs bool) {
 	host := &statichost.Host{Dir: t.TempDir(), Token: "host-token-0123456789"}
-	plugin := httptest.NewServer(host.Handler("plugin-token-0123456789"))
+	handler := host.Handler("plugin-token-0123456789")
+	if logs {
+		mux := http.NewServeMux()
+		mux.Handle("/v1/", sdk.Handler(loggingStaticHost{host}, "plugin-token-0123456789"))
+		mux.Handle("/", handler)
+		handler = mux
+	}
+	plugin := httptest.NewServer(handler)
 	defer plugin.Close()
 	host.BaseURL = plugin.URL
 
@@ -103,6 +129,42 @@ func TestPlugin_aProviderPluginDeploysLikeABuiltInTarget(t *testing.T) {
 	d := approveAndWait(t, c, plan)
 	if d.Status != "succeeded" {
 		t.Fatalf("deployment %+v", d)
+	}
+	if logs {
+		var retained realtime.LogPage
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/deployments/"+d.ID+"/logs", nil, &retained)
+		if len(retained.Logs) != 2 || retained.Logs[0].ProviderID == retained.Logs[1].ProviderID {
+			t.Fatalf("plugin output identities: %+v", retained)
+		}
+		for _, line := range retained.Logs {
+			if strings.Contains(line.Message, host.Token) || !strings.Contains(line.Message, "Fixture build marker [redacted]") {
+				t.Fatalf("unsafe provider output: %+v", line)
+			}
+		}
+		first := retained.Logs[0]
+		page, readErr := plugins.New(plugin.URL, "plugin-token-0123456789").OperationLogs(t.Context(), first.OperationID, "", 100)
+		if readErr != nil || len(page.Lines) != 2 {
+			t.Fatalf("plugin replay: %+v %v", page, readErr)
+		}
+		store, injectErr := forge.InjectType[*realtime.PgStore](r.app.(forge.App).Container())
+		if injectErr != nil {
+			t.Fatal(injectErr)
+		}
+		for _, line := range page.Lines {
+			_, appendErr := store.AppendLog(t.Context(), realtime.LogInput{OrgID: first.OrgID, ProjectID: first.ProjectID, DeploymentID: first.DeploymentID, ActionID: first.ActionID, OperationID: first.OperationID, Attempt: first.Attempt, ProviderID: line.ID, Stream: line.Stream, Source: "provider", Level: "info", Message: line.Message, Time: line.Time}, realtime.NewRedactor([]string{host.Token}))
+			if appendErr != nil {
+				t.Fatal(appendErr)
+			}
+		}
+		var replay realtime.LogPage
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/deployments/"+d.ID+"/logs", nil, &replay)
+		if len(replay.Logs) != 2 {
+			t.Fatalf("provider replay duplicated retained output: %+v", replay)
+		}
+		checkpoint, checkpointErr := store.Checkpoint(t.Context(), realtime.LogInput{OrgID: first.OrgID, DeploymentID: first.DeploymentID, ActionID: first.ActionID, OperationID: first.OperationID, Attempt: first.Attempt})
+		if checkpointErr != nil || checkpoint.State != "complete" {
+			t.Fatalf("collection: %+v %v", checkpoint, checkpointErr)
+		}
 	}
 	site := d.Steps[0].URL
 	if !strings.HasPrefix(site, plugin.URL+"/sites/"+proj.ID+"/production/docs/") {

@@ -2,6 +2,8 @@ package deployments
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -21,7 +23,8 @@ import (
 type Plugin struct {
 	Client *plugins.Client
 	// Every is how often an operation is read. Zero means a second.
-	Every time.Duration
+	Every         time.Duration
+	OperationLogs bool
 }
 
 var _ Executor = (*Plugin)(nil)
@@ -138,41 +141,131 @@ func (p *Plugin) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 
 // run starts an operation and reads it until it's done. Each reading
 // passes the plugin's checkpoint on, which is also the step's heartbeat.
-func (p *Plugin) run(ctx context.Context, job *Job, req sdk.OperationRequest) (*sdk.Operation, error) {
-	op, err := p.Client.Start(ctx, req)
-	if err != nil {
-		return nil, err
+type pluginCheckpoint struct {
+	Version         string `json:"loomplane_plugin_checkpoint"`
+	Key             string `json:"key"`
+	Provider        []byte `json:"provider,omitempty"`
+	Operation       string `json:"operation,omitempty"`
+	Execution       string `json:"execution,omitempty"`
+	Attempt         string `json:"attempt,omitempty"`
+	Terminal        bool   `json:"terminal,omitempty"`
+	OutputFinalized bool   `json:"output_finalized,omitempty"`
+}
+
+func (p *Plugin) run(ctx context.Context, job *Job, req sdk.OperationRequest) (result *sdk.Operation, err error) {
+	safe := job.Collector("provider-start", job.LogAttempt())
+	for _, value := range p.Client.RedactionValues() {
+		safe.addCredential([]byte(value))
 	}
-	last, checkpoint := "", job.Resume
+	var output *pluginOutput
+	terminal := false
+	defer func() { err = safe.safeError(err) }()
+	state := pluginCheckpoint{Version: "1", Key: req.Job.Key, Provider: job.Resume}
+	var saved pluginCheckpoint
+	if json.Unmarshal(job.Resume, &saved) == nil && saved.Version == "1" && saved.Key == req.Job.Key {
+		state = saved
+	}
+	req.Job.Resume = state.Provider
+	var op *sdk.Operation
+	var startErr error
+	if p.OperationLogs && state.Terminal && !state.OutputFinalized && state.Operation != "" {
+		op, startErr = p.Client.Operation(ctx, state.Operation)
+		if startErr != nil {
+			if errors.Is(startErr, plugins.ErrNotFound) {
+				op = nil
+			} else {
+				return nil, startErr
+			}
+		}
+		if startErr == nil && op.ExecutionID != state.Execution {
+			op = nil
+		}
+	}
+	if op == nil {
+		op, startErr = p.Client.Start(ctx, req)
+	}
+	if startErr != nil {
+		return nil, startErr
+	}
+	gap := state.Operation != "" && !state.OutputFinalized && (state.Operation != op.ID || state.Execution != op.ExecutionID)
+	if state.Attempt == "" || state.Operation != op.ID || state.Execution != op.ExecutionID {
+		state.Attempt = pluginCollectionAttempt(job.LogAttempt(), op.ExecutionID)
+	}
+	state.Operation, state.Execution, state.Terminal = op.ID, op.ExecutionID, false
+	state.OutputFinalized = false
+	save := func() error {
+		if !p.OperationLogs {
+			return job.Checkpoint(state.Provider)
+		}
+		raw, marshalErr := json.Marshal(state)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		return job.Checkpoint(raw)
+	}
+	defer func() {
+		if output != nil {
+			output.finish(ctx, terminal)
+			if terminal {
+				state.OutputFinalized = true
+				if saveErr := save(); saveErr != nil {
+					err = errors.Join(err, saveErr)
+				}
+			}
+		}
+	}()
+	if checkpointErr := save(); checkpointErr != nil {
+		return nil, checkpointErr
+	}
+	output = p.output(ctx, job, op.ID, state.Attempt, op.ExecutionID, gap)
+	safe = output.collector
+	output.start(ctx, p.every())
+	last := ""
 	for {
+		if len(op.Checkpoint) > 0 {
+			state.Provider = op.Checkpoint
+		}
+		state.Terminal = op.Status != sdk.StatusRunning
+		if checkpointErr := save(); checkpointErr != nil {
+			return nil, checkpointErr
+		}
 		switch op.Status {
 		case sdk.StatusSucceeded:
+			terminal = true
 			return op, nil
 		case sdk.StatusFailed:
+			terminal = true
 			return nil, fmt.Errorf("the provider failed: %s", op.Error)
 		}
 		if op.Progress != "" && op.Progress != last {
 			last = op.Progress
-			job.Progress(StepDeploying, op.Progress)
+			message, _ := safe.message(op.Progress)
+			job.Progress(StepDeploying, message)
 		}
-		if len(op.Checkpoint) > 0 {
-			checkpoint = op.Checkpoint
-		}
-		_ = job.Checkpoint(checkpoint) //nolint:errcheck // the next reading retries it
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(p.every()):
 		}
-		next, err := p.Client.Operation(ctx, op.ID)
-		if errors.Is(err, plugins.ErrNotFound) {
-			// The plugin restarted and lost it; start it again, from the
-			// last checkpoint.
-			req.Job.Resume = checkpoint
-			next, err = p.Client.Start(ctx, req)
+		next, readErr := p.Client.Operation(ctx, op.ID)
+		if errors.Is(readErr, plugins.ErrNotFound) {
+			output.finish(ctx, false)
+			req.Job.Resume = state.Provider
+			next, readErr = p.Client.Start(ctx, req)
+			if readErr == nil {
+				state.Operation, state.Execution, state.Attempt = next.ID, next.ExecutionID, pluginCollectionAttempt(job.LogAttempt(), next.ExecutionID)
+				state.Terminal = false
+				state.OutputFinalized = false
+				if checkpointErr := save(); checkpointErr != nil {
+					return nil, checkpointErr
+				}
+				output = p.output(ctx, job, next.ID, state.Attempt, next.ExecutionID, true)
+				safe = output.collector
+				output.start(ctx, p.every())
+			}
 		}
-		if err != nil {
-			return nil, err
+		if readErr != nil {
+			return nil, readErr
 		}
 		op = next
 	}
@@ -186,4 +279,12 @@ func (p *Plugin) Observe(ctx context.Context, conn *connections.Connection, secr
 		return nil, err
 	}
 	return &Observation{Exists: o.Exists, Revision: o.Revision}, nil
+}
+
+func pluginCollectionAttempt(activity, execution string) string {
+	if execution == "" {
+		return activity
+	}
+	digest := sha256.Sum256([]byte(execution))
+	return activity + "." + fmt.Sprintf("%x", digest[:8])
 }

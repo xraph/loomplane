@@ -147,10 +147,12 @@ Files: extend `pkg/provider/sdk` protocol/server and `internal/plugins` client; 
 
 Produces an optional advertised log capability and cursor-paged operation log response. Existing v1 plugins with no capability remain compatible.
 
-- [ ] Run a real SDK handler with an operation that emits two identical lines with distinct IDs. Read pages, retry the cursor and restart the handler; require deduplication and an explicit restart gap. Run an old plugin that only reports progress.
-- [ ] Run `go test ./pkg/provider/sdk ./internal/plugins -count=1`. Expected: new capability/log endpoint absent.
-- [ ] Add optional capability discovery, bounded operation output, cursor pages and the runner collector. Persist output before browser delivery and retain progress fallback for old plugins.
-- [ ] Run focused/plugin integration tests, format/lint/full tests and commit `feat: collect provider plugin build logs`.
+- [x] Run a real SDK handler with an operation that emits two identical lines with distinct IDs. Read pages, retry the cursor and restart the handler; require deduplication and an explicit restart gap. Run an old plugin that only reports progress.
+- [x] Run `go test ./pkg/provider/sdk ./internal/plugins -count=1`. Expected: new capability/log endpoint absent.
+- [x] Add optional capability discovery, bounded operation output, cursor pages and the runner collector. Persist output before browser delivery and retain progress fallback for old plugins.
+- [x] Run focused/plugin integration tests, format/lint/full tests and commit `feat: collect provider plugin build logs`.
+
+Verified: real SDK output, stable replay IDs, provider restart gaps, bounded final catch-up and legacy progress compatibility pass. Focused race tests, make lint/test/build, client drift and full integration (116.364s) pass. The final recovery review found no remaining material issue.
 
 ## Task 9: Managed integration build-log readers
 

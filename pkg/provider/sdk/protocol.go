@@ -15,6 +15,7 @@ const Protocol = "loomplane.provider/v1"
 //	PUT  /v1/sources/{id}        a gzipped tarball
 //	POST /v1/operations          OperationRequest -> 202 Operation
 //	GET  /v1/operations/{id}     -> Operation
+//	GET  /v1/operations/{id}/logs?cursor=...&limit=100 -> LogPage (optional)
 //	POST /v1/observe             Target -> Observation
 //
 // Apply and Remove run as operations, because builds and databases take
@@ -23,8 +24,9 @@ const Protocol = "loomplane.provider/v1"
 
 // Description is what GET /v1/describe answers.
 type Description struct {
-	Protocol string            `json:"protocol"`
-	Provider provider.Provider `json:"provider"`
+	Protocol      string            `json:"protocol"`
+	Provider      provider.Provider `json:"provider"`
+	OperationLogs bool              `json:"operation_logs,omitempty"`
 	// Connection tells the dashboard how to ask for a credential.
 	Connection ConnectionForm `json:"connection"`
 }
@@ -85,11 +87,14 @@ const (
 
 // Operation is an Apply or Remove in progress or done.
 type Operation struct {
-	ID         string   `json:"id"`
-	Kind       string   `json:"kind"`
-	Status     string   `json:"status"`
-	Progress   string   `json:"progress,omitempty"`
-	Checkpoint []byte   `json:"checkpoint,omitempty"`
-	Outcome    *Outcome `json:"outcome,omitempty"`
-	Error      string   `json:"error,omitempty"`
+	ID string `json:"id"`
+	// ExecutionID distinguishes executions of a reused operation ID.
+	// Log-capable providers return it so worker retries reuse the same cursor.
+	ExecutionID string   `json:"execution_id,omitempty"`
+	Kind        string   `json:"kind"`
+	Status      string   `json:"status"`
+	Progress    string   `json:"progress,omitempty"`
+	Checkpoint  []byte   `json:"checkpoint,omitempty"`
+	Outcome     *Outcome `json:"outcome,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }

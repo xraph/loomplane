@@ -212,7 +212,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		if rerr := catalog.Register(desc); rerr != nil {
 			return fmt.Errorf("provider plugin %s: %w", p.Name(), rerr)
 		}
-		executors[p.Name()] = &deployments.Plugin{Client: p.Client, Every: e.cfg.Orchestration.PollInterval}
+		executors[p.Name()] = &deployments.Plugin{Client: p.Client, Every: e.cfg.Orchestration.PollInterval, OperationLogs: p.Description.OperationLogs}
 	}
 	for name := range paused {
 		if _, gerr := catalog.Get(name); gerr != nil {
