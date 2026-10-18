@@ -9,7 +9,6 @@ import { toast } from "sonner"
 import { messageOf, statusOf } from "@/client/errors"
 import {
   useConnectionsList,
-  useDeployedList,
   useDeploymentsForPlan,
   useDeploymentsList,
   useDeploymentsRetry,
@@ -24,7 +23,6 @@ import {
   usePlansList,
   usePlansReject,
   useProvidersList,
-  useSourcesList,
 } from "@/client/forge/loomplane/hooks"
 import type {
   Action,
@@ -104,27 +102,28 @@ import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
 import {
   changeCount,
-  chosenScope,
   deployedCommits,
   deploymentStatus,
   isDeploying,
   isOpen,
   isPlanning,
-  lockedOn,
   opLabel,
   planStatus,
   planConnections,
   scopeBody,
   stepStatus,
   steps,
-  toggleScope,
   type Tone,
   withResource,
 } from "@/lib/plans"
 import { cn } from "@/lib/utils"
 import { ManifestHistory } from "@/components/manifest-history"
 import { DeploymentTargets } from "@/components/deployment-targets"
-import { useDeploymentWrites } from "@/lib/deployment-writes"
+import { useDeploymentScope } from "@/lib/deployment-scope"
+import {
+  useDeploymentDraft,
+  useDeploymentWrites,
+} from "@/lib/deployment-writes"
 
 export function DeployTab({
   project,
@@ -325,6 +324,7 @@ export function ManifestEditor({
     }
   }
   const dirty = text !== yaml
+  useDeploymentDraft(dirty, onPendingChange)
   const drafted = draftedFrom !== undefined
 
   const submit = async () => {
@@ -597,30 +597,16 @@ function PlanControls({
   onPlanned: (id: string) => void
 }) {
   const create = useMutation(usePlansCreate)
-  const sources = useQuery(useSourcesList, { path: { id: project.id } })
-  const deployed = useQuery(useDeployedList, {
-    path: { id: project.id, environment },
-  })
-  // null means every repository moves, including one added later.
-  const [moving, setMoving] = useState<string[] | null>(null)
-  const aliases = (sources.data?.sources ?? [])
-    .filter((s) => !s.removedAt)
-    .map((s) => s.alias)
-  // Until what's deployed is known, every repository moves: a full plan
-  // never asks to hold something that isn't there.
-  const running = deployed.data?.sources.map((d) => d.alias)
-  const known = running !== undefined
-  const locked = known ? lockedOn(aliases, running) : new Set(aliases)
-  const chosen = chosenScope(aliases, moving, locked)
-
-  const toggle = (alias: string) =>
-    setMoving(toggleScope(aliases, chosen, alias, locked))
+  const { aliases, known, locked, chosen, toggle, body } = useDeploymentScope(
+    project.id,
+    environment
+  )
 
   const plan = async () => {
     try {
       const p = await create.mutateAsync({
         path: { id: project.id },
-        body: { environment, ...scopeBody(aliases, chosen) },
+        body: { environment, ...body },
       })
       onPlanned(p.id)
     } catch (err) {

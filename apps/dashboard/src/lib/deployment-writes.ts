@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useSyncExternalStore } from "react"
 
 // Pending requests are transient UI state. Placement and account choices
 // remain on the server; this only coordinates the tab and global dialog.
@@ -30,4 +30,17 @@ export function useDeploymentWrites(projectId: string) {
     [projectId]
   )
   return { busy: count > 0, onPendingChange }
+}
+
+// Unsaved form edits count as active writes until they are saved, undone
+// or unmounted. Cleanup keeps project/environment changes balanced.
+export function useDeploymentDraft(
+  dirty: boolean,
+  onPendingChange?: (pending: boolean) => void
+) {
+  useEffect(() => {
+    if (!dirty) return
+    onPendingChange?.(true)
+    return () => onPendingChange?.(false)
+  }, [dirty, onPendingChange])
 }

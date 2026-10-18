@@ -44,17 +44,21 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
+import { BoxIcon, GlobeIcon, DatabaseIcon } from "lucide-react"
+import { CloudGlyph } from "@/components/cloud-glyph"
 import { cloudLabel } from "@/lib/clouds"
 import { useOrganization } from "@/lib/organization"
 import {
   compatibleTargets,
   placementRows,
   placementSettings,
+  placementSummary,
   targetConnections,
   type PlacementFields,
   type PlacementRow,
 } from "@/lib/placement"
 import { Link } from "@/lib/router"
+import { useDeploymentDraft } from "@/lib/deployment-writes"
 
 export function DeploymentTargets({
   projectId,
@@ -63,8 +67,10 @@ export function DeploymentTargets({
   environment,
   onEnvironment,
   onPendingChange,
+  setup = false,
 }: {
   projectId: string
+  setup?: boolean
   manifest: Manifest
   environments: Environment[]
   environment: string
@@ -77,85 +83,103 @@ export function DeploymentTargets({
     ? placementRows(manifest, graph.data.graph)
     : []
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Deployment targets</CardTitle>
-        <CardDescription>
-          Choose where each service runs in {environment}. Save a placement,
-          then review a new plan before deploying.
-        </CardDescription>
-        <CardAction>
-          <Select
-            value={environment}
-            onValueChange={(v) => v && onEnvironment(v)}
-          >
-            <SelectTrigger size="sm" aria-label="Placement environment">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {environments.map((e) => (
-                <SelectItem key={e.id} value={e.name}>
-                  {e.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        {graph.status === "error" || providers.status === "error" ? (
-          <QueryError
-            error={graph.error ?? providers.error}
-            fallback="Deployment targets couldn't be loaded."
-            retry={() =>
-              Promise.allSettled([graph.refetch(), providers.refetch()])
-            }
-          />
-        ) : !graph.data || !providers.data ? (
-          <Skeleton className="h-24" />
-        ) : !graph.data.graph ? (
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>Analyze your repositories first</EmptyTitle>
-              <EmptyDescription>
-                Service target choices need a successful repository analysis.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : rows.length === 0 ? (
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>No services to place</EmptyTitle>
-              <EmptyDescription>
-                Add services or resources to your manifest, then choose their
-                targets here.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          rows.map((row) => (
-            <TargetRow
-              key={`${projectId}:${environment}:${row.section}:${row.name}`}
-              projectId={projectId}
-              manifest={manifest}
-              row={row}
-              environment={environment}
-              catalog={providers.data!.providers}
-              onPendingChange={onPendingChange}
+    <div className="grid min-w-0 gap-4">
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>
+            {setup ? "Services and resources" : "Deployment targets"}
+          </CardTitle>
+          <CardDescription>
+            Choose where each service runs. Save changes before reviewing your
+            deployment.
+          </CardDescription>
+          {!setup && (
+            <CardAction>
+              <Select
+                value={environment}
+                onValueChange={(v) => v && onEnvironment(v)}
+              >
+                <SelectTrigger size="sm" aria-label="Placement environment">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {environments.map((e) => (
+                    <SelectItem key={e.id} value={e.name}>
+                      {e.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </CardAction>
+          )}
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {graph.status === "error" || providers.status === "error" ? (
+            <QueryError
+              error={graph.error ?? providers.error}
+              fallback="Deployment targets couldn't be loaded."
+              retry={() =>
+                Promise.allSettled([graph.refetch(), providers.refetch()])
+              }
             />
-          ))
+          ) : !graph.data || !providers.data ? (
+            <Skeleton className="h-24" />
+          ) : !graph.data.graph ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>Analyze your repositories first</EmptyTitle>
+                <EmptyDescription>
+                  Service target choices need a successful repository analysis.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : rows.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>No services to place</EmptyTitle>
+                <EmptyDescription>
+                  Add services or resources to your manifest, then choose their
+                  targets here.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            rows.map((row) => (
+              <TargetRow
+                key={`${projectId}:${environment}:${row.section}:${row.name}`}
+                projectId={projectId}
+                manifest={manifest}
+                row={row}
+                environment={environment}
+                catalog={providers.data!.providers}
+                onPendingChange={onPendingChange}
+              />
+            ))
+          )}
+        </CardContent>
+      </Card>
+      {providers.data &&
+        placementSummary(manifest, environment, providers.data.providers).clouds
+          .length > 0 && (
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>Accounts</CardTitle>
+              <CardDescription className="text-xs">
+                Where {environment}'s services and resources will be installed.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <EnvironmentAccounts
+                projectId={projectId}
+                environment={environment}
+                manifest={manifest}
+                catalog={providers.data.providers}
+                onPendingChange={onPendingChange}
+              />
+            </CardContent>
+          </Card>
         )}
-        {providers.data && (
-          <EnvironmentAccounts
-            projectId={projectId}
-            environment={environment}
-            manifest={manifest}
-            catalog={providers.data.providers}
-            onPendingChange={onPendingChange}
-          />
-        )}
-      </CardContent>
-    </Card>
+    </div>
   )
 }
 
@@ -188,6 +212,7 @@ function TargetRow({
   const offered = targets.some((p) => p.name === value.provider)
   const dirty = Object.keys(changes).length > 0
   const disabled = !can("project:update") || save.isPending
+  useDeploymentDraft(dirty, onPendingChange)
   const owned =
     row.section === "services" &&
     (selected?.cloud === "server" || selected?.cloud === "kubernetes")
@@ -226,58 +251,94 @@ function TargetRow({
     }
   }
   return (
-    <div className="grid gap-2 border-b pb-3 last:border-0">
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 lg:grid-cols-[minmax(8rem,1fr)_minmax(9rem,1.4fr)_minmax(7rem,1fr)_auto_auto]">
-        <div className="col-span-2 min-w-0 lg:col-span-1">
-          <p className="truncate text-sm font-medium">{row.name}</p>
-          <p className="text-xs text-muted-foreground">
-            {row.section === "services"
-              ? row.kind || "Source needs review"
-              : row.section === "gateways"
-                ? "Gateway"
-                : row.kind}
+    <section
+      aria-label={`${row.name} configuration`}
+      className="grid min-w-0 gap-3 border-b pb-3 last:border-0 last:pb-0"
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/30">
+          {row.section === "resources" ? (
+            <DatabaseIcon className="size-4" />
+          ) : row.kind === "static-site" || row.kind === "web-app" ? (
+            <GlobeIcon className="size-4" />
+          ) : (
+            <BoxIcon className="size-4" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium break-words">{row.name}</p>
+          <p className="font-mono text-xs break-all text-muted-foreground">
+            {row.entry.source ?? row.kind}
           </p>
         </div>
-        <Select
-          value={value.provider || null}
-          onValueChange={(v) =>
-            v &&
-            change({
-              provider: v,
-              region: "",
-              ...(owned || v === "server" || v === "kubernetes"
-                ? { target: "", endpoint: {} }
-                : {}),
-              ...(owned && v !== "server" && v !== "kubernetes"
-                ? { build: { context: value.build?.context } }
-                : {}),
-            })
-          }
-        >
-          <SelectTrigger
+        <Switch
+          size="sm"
+          aria-label={`Enable ${row.name} in ${environment}`}
+          checked={value.enabled}
+          disabled={disabled}
+          onCheckedChange={(enabled) => change({ enabled })}
+        />
+        {can("project:update") && dirty && (
+          <Button
             size="sm"
-            className="col-span-2 w-full min-w-0 lg:col-span-1"
-            aria-label={`Target for ${row.name}`}
-            disabled={disabled || targets.length === 0}
+            variant="outline"
+            className="rounded-full"
+            aria-label={`Save ${row.name} placement`}
+            disabled={disabled || (value.enabled && !offered)}
+            onClick={() => void submit()}
           >
-            <SelectValue placeholder="Choose a target">
-              {selected?.title ?? value.provider}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {!offered && value.provider && (
-              <SelectItem value={value.provider} disabled>
-                {selected?.title ?? value.provider} (unavailable)
-              </SelectItem>
-            )}
-            {targets.map((p) => (
-              <SelectItem key={p.name} value={p.name}>
-                {p.title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div>
+            Save
+          </Button>
+        )}
+      </div>
+      <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+        <label className="grid min-w-0 gap-1 text-xs text-muted-foreground">
+          Infrastructure
+          <Select
+            value={value.provider || null}
+            onValueChange={(v) =>
+              v &&
+              change({
+                provider: v,
+                region: "",
+                ...(owned || v === "server" || v === "kubernetes"
+                  ? { target: "", endpoint: {} }
+                  : {}),
+                ...(owned && v !== "server" && v !== "kubernetes"
+                  ? { build: { context: value.build?.context } }
+                  : {}),
+              })
+            }
+          >
+            <SelectTrigger
+              size="sm"
+              className="w-full min-w-0"
+              aria-label={`Target for ${row.name}`}
+              disabled={disabled || targets.length === 0}
+            >
+              <SelectValue placeholder="Choose a target">
+                {selected?.title ?? value.provider}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {!offered && value.provider && (
+                <SelectItem value={value.provider} disabled>
+                  {selected?.title ?? value.provider} (unavailable)
+                </SelectItem>
+              )}
+              {targets.map((p) => (
+                <SelectItem key={p.name} value={p.name}>
+                  <span aria-hidden="true">
+                    <CloudGlyph cloud={p.cloud} />
+                  </span>
+                  {p.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="grid min-w-0 gap-1 text-xs text-muted-foreground">
+          Region
           <Input
             className="h-8 text-sm"
             aria-label={`Region for ${row.name}`}
@@ -296,28 +357,7 @@ function TargetRow({
               <option key={r} value={r} />
             ))}
           </datalist>
-        </div>
-        <label className="flex items-center gap-2 text-xs">
-          <Switch
-            size="sm"
-            aria-label={`Enable ${row.name} in ${environment}`}
-            checked={value.enabled}
-            disabled={disabled}
-            onCheckedChange={(enabled) => change({ enabled })}
-          />
-          Enabled
         </label>
-        {can("project:update") && (
-          <Button
-            size="sm"
-            variant="outline"
-            aria-label={`Save ${row.name} placement`}
-            disabled={disabled || !dirty || (value.enabled && !offered)}
-            onClick={() => void submit()}
-          >
-            Save
-          </Button>
-        )}
       </div>
       {owned && (
         <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -486,7 +526,7 @@ function TargetRow({
           Placement saved. Create a new plan to review the change.
         </p>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -557,22 +597,7 @@ export function EnvironmentAccounts({
   const choose = useMutation(useEnvironmentConnectionsChoose)
   const { can } = useOrganization()
   const [error, setError] = useState<string>()
-  const clouds = new Set<string>()
-  for (const section of ["services", "resources", "gateways"] as const) {
-    for (const [name, entry] of Object.entries(manifest[section] ?? {})) {
-      const settings = placementSettings(
-        manifest,
-        { section, name, kind: "", entry },
-        environment
-      )
-      const cloud = catalog.find((p) => p.name === settings.provider)?.cloud
-      if (settings.enabled && cloud) clouds.add(cloud)
-    }
-  }
-  for (const link of Object.values(manifest.links ?? {})) {
-    if (link.environments?.[environment]?.enabled !== false)
-      for (const cloud of link.between ?? []) clouds.add(String(cloud))
-  }
+  const { clouds } = placementSummary(manifest, environment, catalog)
   const pick = async (cloud: string, id: string) => {
     setError(undefined)
     onPendingChange?.(true)
@@ -588,10 +613,9 @@ export function EnvironmentAccounts({
       onPendingChange?.(false)
     }
   }
-  if (clouds.size === 0) return null
+  if (clouds.length === 0) return null
   return (
     <div className="grid gap-2 border-t pt-3">
-      <p className="text-sm font-medium">Cloud accounts for {environment}</p>
       {list.status === "error" || chosen.status === "error" ? (
         <QueryError
           error={list.error ?? chosen.error}
@@ -611,10 +635,7 @@ export function EnvironmentAccounts({
           )
           const selected = ready.find((c) => c.id === id)
           return (
-            <div
-              key={cloud}
-              className="flex min-w-0 flex-wrap items-center gap-2"
-            >
+            <div key={cloud} className="grid min-w-0 gap-1.5">
               <span className="min-w-24 text-xs text-muted-foreground">
                 {cloudLabel(cloud)}
               </span>
@@ -632,7 +653,7 @@ export function EnvironmentAccounts({
                 >
                   <SelectTrigger
                     size="sm"
-                    className="w-full min-w-0 sm:w-auto"
+                    className="w-full min-w-0"
                     aria-label={`Account for ${cloudLabel(cloud)} in ${environment}`}
                     disabled={!can("cloud_account:manage") || choose.isPending}
                   >

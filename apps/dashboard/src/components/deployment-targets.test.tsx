@@ -299,7 +299,7 @@ it("waits for a saved placement before allowing a plan", async () => {
     .hasAttribute("disabled")
   rerender(view(true))
   const dialogBlocked = (
-    await screen.findByRole("button", { name: "Plan deployment" })
+    await screen.findByRole("button", { name: "Review deployment" })
   ).hasAttribute("disabled")
   finishSave(
     new Response(JSON.stringify({ id: "r2", revision: 2 }), {

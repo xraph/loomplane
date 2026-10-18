@@ -19,6 +19,7 @@ import { Route as SignUpRouteImport } from "./routes/sign-up"
 import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as DeploymentsIndexRouteImport } from "./routes/deployments.index"
 import { Route as DeploymentsIdRouteImport } from "./routes/deployments.$id"
+import { Route as DeploymentsNewRouteImport } from "./routes/deployments.new"
 import { Route as DesignDeploymentRouteImport } from "./routes/design.deployment"
 import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
@@ -76,6 +77,11 @@ const DeploymentsIdRoute = DeploymentsIdRouteImport.update({
   path: "/deployments/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
+const DeploymentsNewRoute = DeploymentsNewRouteImport.update({
+  id: "/deployments/new",
+  path: "/deployments/new",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DesignDeploymentRoute = DesignDeploymentRouteImport.update({
   id: "/design/deployment",
   path: "/design/deployment",
@@ -117,6 +123,7 @@ export interface FileRoutesByFullPath {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/deployments/$id": typeof DeploymentsIdRoute
+  "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
@@ -135,6 +142,7 @@ export interface FileRoutesByTo {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/deployments/$id": typeof DeploymentsIdRoute
+  "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
@@ -154,6 +162,7 @@ export interface FileRoutesById {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/deployments/$id": typeof DeploymentsIdRoute
+  "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
@@ -174,6 +183,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/deployments/$id"
+    | "/deployments/new"
     | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
@@ -192,6 +202,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/deployments/$id"
+    | "/deployments/new"
     | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
@@ -210,6 +221,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/deployments/$id"
+    | "/deployments/new"
     | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
@@ -229,6 +241,7 @@ export interface RootRouteChildren {
   SignUpRoute: typeof SignUpRoute
   VariablesRoute: typeof VariablesRoute
   DeploymentsIdRoute: typeof DeploymentsIdRoute
+  DeploymentsNewRoute: typeof DeploymentsNewRoute
   DesignDeploymentRoute: typeof DesignDeploymentRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
@@ -310,6 +323,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof DeploymentsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/deployments/new": {
+      id: "/deployments/new"
+      path: "/deployments/new"
+      fullPath: "/deployments/new"
+      preLoaderRoute: typeof DeploymentsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/design/deployment": {
       id: "/design/deployment"
       path: "/design/deployment"
@@ -365,6 +385,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignUpRoute: SignUpRoute,
   VariablesRoute: VariablesRoute,
   DeploymentsIdRoute: DeploymentsIdRoute,
+  DeploymentsNewRoute: DeploymentsNewRoute,
   DesignDeploymentRoute: DesignDeploymentRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   ProjectsIdRoute: ProjectsIdRoute,

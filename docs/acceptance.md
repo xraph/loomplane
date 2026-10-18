@@ -29,10 +29,12 @@ For a rendered browser run, set `LOOMPLANE_ACCEPTANCE_BROWSER=1`. The harness se
 You can also test the managed deployment controls through a running Loomplane dashboard, using the Vercel account you connect under Integrations. Keep the token in that form. You don't need to export it for this flow.
 
 1. Create a separate test project from a public web app or static site and analyze it. `aurorascharff/astro-demo` at commit `71eae662d03453c3b8333f59de368783828395d0` is a static Astro sample with no backing resources.
-2. Save the draft in the Deploy tab, select Vercel for the service, and check the cloud account shown for the environment. With several ready Vercel accounts, select the one you set aside for testing.
-3. Create a plan. Check the source commit and manifest revision, confirm that its only creation is the test service, then approve it.
+2. Open **New deployment**, select the test project and environment, then choose Vercel for the service. For a first deployment, use the suggested configuration from repository analysis. Save any changed placements and check the account under Accounts. With several ready Vercel accounts, select the one you set aside for testing.
+3. Select **Review deployment**. Check the source commit and manifest revision, confirm that the plan's only creation is the test service, then approve it. Unsaved placements and YAML keep Review disabled; hiding the manifest preserves its draft.
 4. Wait for the deployment to succeed. Open the served URL, navigate to another route and exercise a client control. The Astro sample's Islands page has a Svelte counter you can increment.
-5. Turn the test service off in Deployment targets and save the placement. Plan again, review its deletion, and approve cleanup. Check that cleanup succeeds, the environment has no service binding, and the old URL no longer serves the app.
+5. Open New deployment for the same project and environment, turn the test service off and save the placement. Select Review deployment, review its deletion, and approve cleanup. Check that cleanup succeeds, the environment has no service binding, and the old URL no longer serves the app.
+
+The October 18, 2026 run verified the full setup page, saved placements, plan review, approval, Vercel build logs, HTTPS route navigation, a client counter and cleanup. The source was the same pinned public Astro sample. The create plan used manifest revision 9; the removal plan used revision 10. After cleanup, the Vercel account showed zero service and resource bindings and the URL returned `DEPLOYMENT_NOT_FOUND`. See [the run record](qualification/2026-10-18-deployment-flow.md).
 
 The October 14, 2026 browser run completed this sequence with the Astro sample and retained 93 real Vercel build lines across reload. The interactive counter worked, removal succeeded and the old URL returned `DEPLOYMENT_NOT_FOUND`. This verifies Vercel's static-site path and build-log reader. GCP and AWS log adapters have API fixture coverage; their live cloud acceptance remains account-specific.
 

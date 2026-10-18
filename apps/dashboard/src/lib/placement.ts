@@ -156,3 +156,31 @@ export function targetConnections(
 ): Connection[] {
   return connections.filter((c) => c.cloud === cloud && c.status === "ready")
 }
+
+/** The effective placement in one environment, shared by summaries and account selection. */
+export function placementSummary(
+  m: Manifest,
+  environment: string,
+  catalog: Provider[] = []
+) {
+  const counts = { services: 0, resources: 0, gateways: 0 }
+  const clouds = new Set<string>()
+  for (const section of ["services", "resources", "gateways"] as const) {
+    for (const [name, entry] of Object.entries(m[section] ?? {})) {
+      const settings = placementSettings(
+        m,
+        { section, name, kind: "", entry },
+        environment
+      )
+      if (!settings.enabled) continue
+      counts[section]++
+      const cloud = catalog.find((p) => p.name === settings.provider)?.cloud
+      if (cloud) clouds.add(cloud)
+    }
+  }
+  for (const link of Object.values(m.links ?? {})) {
+    if (link.environments?.[environment]?.enabled !== false)
+      for (const cloud of link.between ?? []) clouds.add(String(cloud))
+  }
+  return { ...counts, clouds: [...clouds].sort() }
+}

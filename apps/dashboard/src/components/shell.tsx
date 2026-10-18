@@ -13,7 +13,7 @@ import {
 } from "react"
 
 import { CommandMenu } from "@/components/command-menu"
-import { DeployDialog, type DeployPreset } from "@/components/deploy-dialog"
+import type { DeployPreset } from "@/components/deploy-dialog"
 import { NewProjectDialog } from "@/components/new-project-dialog"
 import {
   type ShortcutGroup,
@@ -64,7 +64,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const { can } = useOrganization()
   const mayDeploy = can("deployment:create")
   const [command, setCommand] = useState(false)
-  const [deploy, setDeploy] = useState<DeployPreset | null>(null)
   const [newProject, setNewProject] = useState(false)
   const [shortcuts, setShortcuts] = useState(false)
   const pendingG = useRef(0)
@@ -72,8 +71,17 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const openCommand = useCallback(() => setCommand(true), [])
   const openNewProject = useCallback(() => setNewProject(true), [])
   const openDeploy = useCallback(
-    (preset?: DeployPreset) => setDeploy(preset ?? {}),
-    []
+    (preset?: DeployPreset) => {
+      if (mayDeploy)
+        void navigate({
+          to: "/deployments/new",
+          search: {
+            project: preset?.project,
+            environment: preset?.environment,
+          },
+        })
+    },
+    [mayDeploy, navigate]
   )
   const openShortcuts = useCallback(() => setShortcuts(true), [])
 
@@ -107,7 +115,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
         setShortcuts(true)
       } else if (key === "n" && mayDeploy) {
         e.preventDefault()
-        setDeploy({})
+        openDeploy()
       } else if (key === "/") {
         const search =
           document.querySelector<HTMLInputElement>("[data-page-search]")
@@ -119,7 +127,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     }
     window.addEventListener("keydown", onKey, { capture: true })
     return () => window.removeEventListener("keydown", onKey, { capture: true })
-  }, [navigate, mayDeploy])
+  }, [navigate, mayDeploy, openDeploy])
 
   const value = useMemo(
     () => ({ openCommand, openDeploy, openNewProject, openShortcuts }),
@@ -158,12 +166,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     <ShellContext.Provider value={value}>
       {children}
       <CommandMenu open={command} onOpenChange={setCommand} />
-      <DeployDialog
-        preset={deploy}
-        onOpenChange={(open) => {
-          if (!open) setDeploy(null)
-        }}
-      />
       <NewProjectDialog open={newProject} onOpenChange={setNewProject} />
       <ShortcutsDialog
         groups={groups}
