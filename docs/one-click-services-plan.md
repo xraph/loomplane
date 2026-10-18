@@ -136,6 +136,14 @@ The API restart drill exposed concurrent role-catalog replacements while the sch
 
 Verified: a controlled regression reproduced overlapping writes and 27 role replacements where the catalog requires four. It now passes alongside cancellation checks and the full security suite under Go's race detector. Owned security/recovery/planning-extension lint passed with zero issues. This change does not serialize initializers in separate processes; cross-process catalog convergence remains unqualified.
 
+### Recovery target routing, 18 October 2026
+
+Implemented: backup, restore and temporary-copy cleanup select the backend recorded in the source binding. The router rejects organization, resource-subject, provider/configuration and connection mismatches before invoking a target. It preserves the authorized caller and binding. The selected adapter still validates the engine recipe and runtime ownership; routing does not qualify another engine or target.
+
+Verified: the missing router first failed compilation, then passed tests for all three operations on server and Kubernetes targets, absent adapters, inconsistent bindings and propagated backend errors. A separate regression caught engine validation being duplicated in the router; the selected adapter now owns that decision. Security and recovery tests pass under the race detector. The full Docker PostgreSQL API drill passed in 148.15 seconds through the router, including deployment, native role writes, backup persistence after restart, isolated restore, cleanup, scheduled backup and organization denial checks. Its disposable database, containers, volumes and networks were removed by the fixture.
+
+Validation: owned security/recovery/planning-extension lint passed with zero issues; the full Go unit suite, dashboard lint and `make build` passed in the checked run. That dashboard test run had four failures in concurrent notification access-denial tests (270 other tests passed). The first full Go lint attempt encountered a concurrent MySQL test referencing an unfinished method; a later repeat encountered unfinished `AppliedInputReader` and `CloudSyncWorkflow` types. The final repeat passed the Go unit suite, then finished with 267 dashboard tests passing and nine failing across deployment targets, deploy dialog, notifications and account recovery, including timeouts. Those shared-checkout checks remain open. Kubernetes catalog/API/CLI/dashboard support remains pending.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.

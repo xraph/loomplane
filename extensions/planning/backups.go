@@ -14,7 +14,6 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/backupfiles"
-	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
@@ -37,7 +36,7 @@ type BackupList struct {
 
 func (BackupList) ForgeEnvelope() forge.EnvelopeDef { return forge.EnvelopeDef{ItemsField: "backups"} }
 
-func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects.PgStore, plans *planning.PgStore, authz *security.Authorizer, target *deployments.OwnedTarget, audit projects.Auditor) error {
+func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects.PgStore, plans *planning.PgStore, authz *security.Authorizer, target recovery.Targets, audit projects.Auditor) error {
 	manager, err := forge.InjectType[*troveext.TroveManager](app.Container())
 	if err != nil {
 		return err
