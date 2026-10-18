@@ -4,6 +4,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/mock/components/sidebar-07/app-sidebar"
 import { StatusBar } from "@/mock/components/status-bar"
 import { DeploymentPage } from "@/mock/pages/deployment"
+import { CloudsPage } from "@/mock/pages/clouds"
 import { DeploymentsPage } from "@/mock/pages/deployments"
 import { InfrastructurePage } from "@/mock/pages/infrastructure"
 import { OverviewPage } from "@/mock/pages/overview"
@@ -38,6 +39,7 @@ function Routes() {
     return <ProjectPage key={project.id} id={project.id} />
   }
   if (route === "/deployments") return <DeploymentsPage />
+  if (route === "/clouds") return <CloudsPage />
   if (route === "/infrastructure") return <InfrastructurePage />
   return <OverviewPage />
 }

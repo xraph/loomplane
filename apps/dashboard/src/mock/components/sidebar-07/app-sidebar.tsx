@@ -4,6 +4,7 @@
 import {
   BellIcon,
   CopyIcon,
+  CloudIcon,
   FolderGit2Icon,
   KeyboardIcon,
   KeyRoundIcon,
@@ -120,12 +121,18 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       ],
     },
     {
+      title: "Clouds",
+      link: <a href={to("/clouds")} />,
+      icon: <CloudIcon />,
+      isActive: route === "/clouds",
+    },
+    {
       title: "Infrastructure",
       link: <a href={to("/infrastructure")} />,
       icon: <ServerIcon />,
       isActive: route.startsWith("/infrastructure"),
       items: [
-        { title: "Clouds", onSelect: scrollTo("clouds") },
+        { title: "Provider accounts", onSelect: scrollTo("clouds") },
         { title: "Spend", onSelect: scrollTo("spend") },
         { title: "Resources", onSelect: scrollTo("resources") },
       ],
