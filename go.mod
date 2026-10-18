@@ -21,10 +21,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4
 	github.com/aws/smithy-go v1.28.5
 	github.com/gobwas/ws v1.4.0
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/joho/godotenv v1.5.1
 	github.com/moby/patternmatcher v0.6.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/spiffe/go-spiffe/v2 v2.9.0
+	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/xraph/authsome v1.7.3-0.20261013045248-b3fd5f9edebc
 	github.com/xraph/chronicle v1.8.0
 	github.com/xraph/confy v1.0.3
@@ -35,6 +38,7 @@ require (
 	github.com/xraph/go-utils v1.3.0
 	github.com/xraph/grove v1.7.3
 	github.com/xraph/grove/drivers/pgdriver v1.7.3
+	github.com/xraph/grove/drivers/sqlitedriver v1.7.3
 	github.com/xraph/grove/extension v1.7.4-0.20261013042516-c28fa000e1b3
 	github.com/xraph/keysmith v1.7.1
 	github.com/xraph/trove v1.7.1
@@ -46,6 +50,7 @@ require (
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
 	golang.org/x/oauth2 v0.36.0
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.37.1
@@ -55,6 +60,7 @@ require (
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.22 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.29.14 // indirect
@@ -84,6 +90,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
@@ -112,7 +119,6 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grandcat/zeroconf v1.0.0 // indirect
 	github.com/hashicorp/consul/api v1.34.4 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -172,7 +178,6 @@ require (
 	github.com/xraph/forge/extensions/auth v1.12.7 // indirect
 	github.com/xraph/forge/extensions/discovery v1.12.3 // indirect
 	github.com/xraph/grove/drivers/mongodriver v1.7.3 // indirect
-	github.com/xraph/grove/drivers/sqlitedriver v1.7.3 // indirect
 	github.com/xraph/grove/kv v1.7.3 // indirect
 	github.com/xraph/ledger v1.7.0 // indirect
 	github.com/xraph/vessel v1.0.4 // indirect
@@ -203,7 +208,6 @@ require (
 	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
-	google.golang.org/grpc v1.83.2 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect

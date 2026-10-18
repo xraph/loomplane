@@ -1,0 +1,53 @@
+# Workload identity qualification
+
+Status: identity primitives and the isolated Unix/SPIRE fixture are implemented. Task 5 remains open. You cannot enroll a production destination or start an authenticated Loomplane agent from this checkpoint alone.
+
+## Run the local fixture
+
+You need Docker and the repository's Go toolchain:
+
+```sh
+python3 tests/acceptance/federation/identity/run.py
+```
+
+The runner builds for your Docker host's architecture, creates a temporary image from the pinned SPIRE images, and runs with `--network none`. It exposes no host ports. The build context contains only the fixture binary and Dockerfile, and cleanup selects only that run's random container and image names.
+
+## Pinned dependencies
+
+| Component          | Pin                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------- |
+| go-spiffe          | v2.9.0                                                                                         |
+| spire-api-sdk      | v1.15.3                                                                                        |
+| SPIRE server       | 1.15.4, index digest `sha256:a728418a76e5054e977680a7c70a291f93389294e4bef00e2aaad65324f39357` |
+| SPIRE agent        | 1.15.4, index digest `sha256:adc9e89e171af5764b29f9ffc9d3296b8033ba8c6ca11bcadbb56099170d526e` |
+| Local public state | Grove SQLite driver v1.7.3                                                                     |
+
+The SDK has no v1.15.4 tag. Its v1.15.3 registration and revocation calls passed against the pinned 1.15.4 runtime. SPIRE documents [API compatibility across releases](https://github.com/spiffe/spire-api-sdk).
+
+## Verified behavior
+
+The live fixture passed on Linux arm64 in a disposable container:
+
+- The Unix attestor issued the requested identity only when UID, executable path and SHA256 matched the registration. A deliberately wrong executable digest did not provide that SVID.
+- The same consumed join token could not attest a second fresh SPIRE agent. The test requires an explicit token rejection in the agent log; a connection timeout alone cannot pass it.
+- The Workload API rotated a 30-second X509-SVID. Loomplane rejected the expired certificate while accepting the rotated certificate.
+- Wrong trust-domain and destination expectations rejected the live credential. Disabling the test registry entry rejected an otherwise valid certificate.
+- The issuer created and deleted entries through the real SPIRE API.
+
+Unit and race tests cover foreign roots, removal of old roots during rotation, malformed trust replacement, caller-selected identity fields, exact control-plane audience and restored public state. Agent state uses transactional sequence reservation. Every process starts closed, the same epoch cannot reactivate restored state, and a newer epoch prevents an older process from reserving more observations.
+
+The in-memory registry used by the live fixture isolates certificate verification from the enrollment database. Its revocation result does not prove persisted Loomplane enrollment or fleet-wide revocation.
+
+`make build` passed. The exact proposed Go tree passed `go test ./...`, and the identity packages passed the race detector. Full shared-checkout tests and lint encountered concurrent Kubernetes storage changes while that work was incomplete; those files are preserved. Identity package lint is checked separately. This checkpoint does not close the full-repository lint gate.
+
+## Attestation constraints
+
+Kubernetes registration pins namespace, service account, pod UID and container name, with the namespace UID checked against the destination record before registration. These selector names follow the [SPIRE Kubernetes attestor](https://github.com/spiffe/spire/blob/v1.15.4/doc/plugin_agent_workloadattestor_k8s.md). The Kubernetes profile still needs live qualification and a controller that produces the verified binding.
+
+Unix registration requires a verified parent node, UID, executable path and SHA256. The [Unix attestor](https://github.com/spiffe/spire/blob/v1.15.4/doc/plugin_agent_workloadattestor_unix.md) must enable workload-path discovery. Keys remain in the local Workload API source. The public agent state database stores no private keys or reusable bootstrap credentials.
+
+## Remaining Task 5 work
+
+Persist one-use Loomplane enrollment and revocation, wire the active-agent registry to destination state, add the authenticated observation/watch endpoint and agent executable, and connect configuration, audit and namespace-scoped Kubernetes permissions. Prove the complete path with real enrollment records, including replay and restore denial.
+
+The managed-runtime identity profile remains unqualified. Miget activation still requires the test project, credential location, spending limit and live qualification evidence from the [Miget runbook](miget.md).

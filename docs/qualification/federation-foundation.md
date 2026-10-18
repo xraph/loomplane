@@ -49,6 +49,8 @@ Runtime catalog race tests and real PostgreSQL restart, revocation, bounded curs
 
 Catalog snapshots are unsigned input to the later policy signer. No public observation route, workload attestation, agent enrollment, private data plane or live Kubernetes acceptance is enabled by this checkpoint. Task 5 must pin namespace identity and persist sequence reservations before wiring the observer into an authenticated agent.
 
+Identity verification, pinned SPIRE registration and closed-on-start agent state now have an [identity qualification checkpoint](federation-identity.md). Its isolated Unix fixture passed live issuance, rotation and expiry checks. Persisted enrollment and authenticated runtime wiring remain Task 5 work.
+
 ## Next gates
 
 1. Close G0 with an authorized Miget workspace, suitable credentials, an explicit cost envelope and a cleanup inventory. Preserve actual redacted captures separately from the documentation inventory.
