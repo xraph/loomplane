@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
 )
 
 const volumeMountAnnotation = "loomplane.volume.mount"
@@ -87,6 +88,9 @@ func checkClaim(actual, want *corev1.PersistentVolumeClaim) error {
 			return ErrOwned
 		}
 	}
+	if actual.Labels[nativepg.LabelRecovery] != want.Labels[nativepg.LabelRecovery] || actual.Labels[nativepg.LabelDatabase] != want.Labels[nativepg.LabelDatabase] {
+		return ErrOwned
+	}
 	if actual.DeletionTimestamp != nil || len(actual.OwnerReferences) > 0 || actual.Annotations[volumeMountAnnotation] != want.Annotations[volumeMountAnnotation] || actual.Annotations[volumeImageAnnotation] != want.Annotations[volumeImageAnnotation] || actual.Spec.StorageClassName == nil || *actual.Spec.StorageClassName != *want.Spec.StorageClassName || !reflect.DeepEqual(actual.Spec.AccessModes, want.Spec.AccessModes) || actual.Spec.VolumeMode != nil && *actual.Spec.VolumeMode != corev1.PersistentVolumeFilesystem || actual.Spec.Resources.Requests.Storage().Cmp(*want.Spec.Resources.Requests.Storage()) != 0 || actual.Spec.DataSource != nil || actual.Spec.DataSourceRef != nil || actual.Spec.Selector != nil {
 		return errors.New("persistent claim layout or ownership changed; use a reviewed migration")
 	}
@@ -126,6 +130,9 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	if old.deployment != nil || old.ingress != nil || old.hpa != nil {
 		return nil, errors.New("a persistent workload cannot adopt a Deployment or public/autoscaled workload")
 	}
+	if old.stateful != nil && (old.stateful.Labels[nativepg.LabelRecovery] != labels[nativepg.LabelRecovery] || old.stateful.Labels[nativepg.LabelDatabase] != labels[nativepg.LabelDatabase]) {
+		return nil, ErrOwned
+	}
 	sc, err := c.persistentClass(ctx)
 	if err != nil {
 		return nil, err
@@ -133,6 +140,19 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	ns, name := c.Config.Namespace, WorkloadName(iid)
 	identity := objectLabels(iid, labels)
 	identity[owned.LabelConnection] = labels[owned.LabelConnection]
+	if database := labels[nativepg.LabelDatabase]; database != "" {
+		if !nativepg.ValidDatabase(database) || spec.Env["POSTGRES_DB"] != database {
+			return nil, errors.New("invalid PostgreSQL database configuration")
+		}
+		identity[nativepg.LabelDatabase] = database
+	}
+	if recovery := labels[nativepg.LabelRecovery]; recovery != "" {
+		if labels[owned.LabelPublic] != "false" || labels[nativepg.LabelDatabase] == "" {
+			return nil, errors.New("recovery requires a private database profile")
+		}
+		identity[nativepg.LabelRecovery] = recovery
+		identity[recoveryTargetLabel] = "true"
+	}
 	// Claims outlive workloads. Check their recorded roles even when the previous
 	// StatefulSet is gone, so reattachment cannot silently select an empty role.
 	retained, listErr := c.Kube.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{LabelSelector: klabels.Set{owned.LabelInstance: iid.String()}.String()})
@@ -165,6 +185,12 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 			return nil, wantErr
 		}
 		want.Annotations[volumeImageAnnotation] = spec.Image
+		if value := labels[nativepg.LabelRecovery]; value != "" {
+			want.Labels[nativepg.LabelRecovery] = value
+		}
+		if value := labels[nativepg.LabelDatabase]; value != "" {
+			want.Labels[nativepg.LabelDatabase] = value
+		}
 		existing, getErr := c.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, want.Name, metav1.GetOptions{})
 		if getErr != nil && !apierrors.IsNotFound(getErr) {
 			return nil, getErr
@@ -202,7 +228,18 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 		return nil, err
 	}
 	template.Labels = maps.Clone(identity)
+	for _, env := range template.Spec.Containers[0].Env {
+		if env.Name == podUIDEnv {
+			return nil, errors.New("the pod identity environment key is reserved")
+		}
+	}
+	template.Spec.Containers[0].Env = append(template.Spec.Containers[0].Env, podIdentityEnv())
+	automount := false
+	template.Spec.AutomountServiceAccountToken = &automount
 	template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(spec.Ports[0].Container)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
+	if database := labels[nativepg.LabelDatabase]; database != "" {
+		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
+	}
 	for i, v := range spec.Volumes {
 		template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{Name: v.Name, VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claims[i].Name}}})
 		template.Spec.Containers[0].VolumeMounts = append(template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: v.Name, MountPath: v.MountPath})
@@ -220,6 +257,11 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 			err = errors.Join(err, r.restore(rollback, c, iid, labels, old))
 		}
 	}()
+	if labels[nativepg.LabelRecovery] != "" {
+		if policyErr := r.ensureRecoveryPolicy(ctx, c, iid, labels, identity); policyErr != nil {
+			return nil, policyErr
+		}
+	}
 	for _, want := range claims {
 		actual, getErr := c.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, want.Name, metav1.GetOptions{})
 		if apierrors.IsNotFound(getErr) {
@@ -295,6 +337,9 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	}
 	endpoints := make([]cpprovider.Endpoint, 0, len(spec.Ports))
 	for _, p := range spec.Ports {
+		if labels[nativepg.LabelRecovery] != "" {
+			break
+		}
 		endpoints = append(endpoints, cpprovider.Endpoint{ServiceName: spec.Name, URL: fmt.Sprintf("tcp://%s.%s.svc:%d", name, ns, p.Container), Port: p.Container, Protocol: "tcp"})
 	}
 	return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: spec.Name}, Endpoints: endpoints}, nil

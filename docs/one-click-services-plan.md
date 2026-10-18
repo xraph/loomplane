@@ -112,6 +112,18 @@ Verified: the new adapter tests first failed for the missing shared implementati
 
 Pending: the Kubernetes command transport, enforced recovery isolation, catalog routing and Kubernetes recovery acceptance. These changes share database semantics; they do not qualify another target by themselves.
 
+### Kubernetes native PostgreSQL recovery, 18 October 2026
+
+Implemented: the shared PostgreSQL engine now runs through Kubernetes exec, with StatefulSet ownership, pod UID and image checks. An in-container UID guard refuses a replacement pod even if its name is reused between lookup and exec. Native dumps and mode-0600 temporary files travel through the streaming transport; passwords stay out of command arguments.
+
+Recovery copies receive an independent deny-all NetworkPolicy and retained claims. Before fetching a backup, an owned disposable canary proves positive connectivity, then verifies denied ingress and egress while both database processes remain healthy. A policy object alone does not permit restoration. Cleanup records PVC/PV UIDs in an independent witness, removes the workload, checks attachments, switches only the captured temporary volumes to Delete, and waits for their deletion. Retries retain the witness until cleanup finishes. Source storage and backup objects remain intact.
+
+Verified: focused tests cover source-restore and source-cleanup denial before target access, invalid-password rejection, the pod-name reuse guard, and cleanup resuming after the recorded PV has disappeared. The real restore drill found a canary deletion race; cleanup now waits for its exact UID to disappear before returning. The final drill passed in 49.15 seconds on arm64 Kubernetes v1.36.4, Cilium v1.20.3, PostgreSQL 17.11 and a retained `rancher.io/local-path` class. It exercised application-role SQL, a native Trove export, row deletion, corrupt-file rejection, isolated restore, a SQL probe, idempotent temporary PV cleanup and source retention. A separate run with the running Cilium agent's enforcement set to `never` rejected recovery before any Trove object read, then removed its temporary storage (37.14 seconds). Enforcement was restored to `default` before the final positive drill.
+
+Validation: owned Kubernetes, shared PostgreSQL and fixture lint passed with zero issues. The full-suite attempt encountered concurrent agent/deployment test compilation failures, and dashboard typecheck/build encountered a concurrently regenerated `Endpoint` type mismatch. These failures are outside this slice. The same disposable cluster remains available for the next API qualification; its resources contain synthetic test data only.
+
+Pending: Kubernetes catalog/API/CLI/dashboard routing and end-to-end qualification, production CSI and zone-loss recovery, cross-node network-policy qualification, and the remaining phase gates. The native backend does not yet advertise Kubernetes PostgreSQL in the catalog.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.
