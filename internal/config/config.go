@@ -66,7 +66,13 @@ type Config struct {
 	Storage       StorageConfig
 	Drift         DriftConfig
 	Worker        WorkerConfig
+	Federation    FederationConfig
 	Providers     ProvidersConfig
+}
+
+// FederationConfig enables destination management. It does not activate runtime traffic.
+type FederationConfig struct {
+	Enabled bool
 }
 
 // ProvidersConfig adds deployment targets Loomplane doesn't ship with.
@@ -358,6 +364,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
+	r.boolean(&c.Federation.Enabled, "federation.enabled")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err

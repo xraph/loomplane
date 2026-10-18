@@ -52,6 +52,16 @@ var (
 	CloudAccountRead   = Permission{"cloud_account", "read"}
 	CloudAccountManage = Permission{"cloud_account", "manage"}
 
+	DestinationRead   = Permission{"destination", "read"}
+	DestinationManage = Permission{"destination", "manage"}
+	NetworkRead       = Permission{"network", "read"}
+	NetworkManage     = Permission{"network", "manage"}
+	ExportManage      = Permission{"service_export", "manage"}
+	GrantPropose      = Permission{"access_grant", "propose"}
+	GrantApprove      = Permission{"access_grant", "approve"}
+	GrantRevoke       = Permission{"access_grant", "revoke"}
+	TrustManage       = Permission{"federation_trust", "manage"}
+
 	SecretManage = Permission{"secret", "manage"}
 
 	MemberRead   = Permission{"member", "read"}
@@ -81,14 +91,14 @@ type RoleDef struct {
 func Catalog() []RoleDef {
 	viewer := []Permission{
 		ProjectRead, EnvironmentRead, DeploymentRead, InfrastructureRead, CloudAccountRead, MemberRead,
-		VariableRead,
+		VariableRead, DestinationRead, NetworkRead,
 	}
 	developer := append(clone(viewer),
-		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun, VariableManage,
+		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun, VariableManage, GrantPropose,
 	)
 	admin := append(clone(developer),
 		ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
-		RepositoryConnect, OrganizationVariableManage,
+		RepositoryConnect, OrganizationVariableManage, DestinationManage, NetworkManage, ExportManage, GrantApprove, GrantRevoke, TrustManage,
 	)
 	owner := append(clone(admin), OrganizationAdminister)
 	return []RoleDef{
