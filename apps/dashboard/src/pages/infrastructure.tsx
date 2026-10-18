@@ -13,6 +13,7 @@ import {
 import { type ReactNode, useMemo, useState } from "react"
 
 import { QueryError } from "@/components/query-error"
+import { PersistentStorage } from "@/components/persistent-storage"
 import {
   useConnectionsList,
   useInfrastructureGet,
@@ -181,6 +182,8 @@ export function Infrastructure() {
             projects={list}
           />
         )}
+
+        <PersistentStorage environmentNames={envNames} />
 
         <Card id="spend" className="scroll-mt-16">
           <CardHeader>

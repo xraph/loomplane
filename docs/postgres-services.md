@@ -6,7 +6,7 @@ This profile runs one private PostgreSQL instance with a digest-pinned image, a 
 
 ## Persistence and backup storage
 
-A container replacement retains its named volume. Removing the container also retains the volume. Docker local storage shares host capacity: this profile does not reserve a disk quota or survive host loss on its own. Retained-volume inventory and deliberate destruction are still planned, so record the instance and target before removing a service.
+A container replacement retains its named volume. Removing the container also retains the volume. Docker local storage shares host capacity: this profile does not reserve a disk quota or survive host loss on its own. You can inspect retained data under **Infrastructure**, **Persistent storage**, or with `loomctl storage CONNECTION_ID`. See the [inventory guide](storage-inventory.md). Deliberate destruction remains a separate operation; the inventory is read-only.
 
 Loomplane uses the Trove extension for artifacts and backup files. Set `LOOMPLANE_BACKUP_URL` and `LOOMPLANE_BACKUP_BUCKET` to choose a separate backup destination. Without a backup URL, backups use the artifact storage backend in a separate bucket. The development default is local storage.
 
@@ -94,6 +94,6 @@ Backup creation accepts `environment`, `resource` and `request_id`. Restore crea
 
 ## Qualification boundary
 
-The verified profile is PostgreSQL 17.11 on a checked Docker target, with native logical backups, private recovery copies, and local Trove or the tested isolated MinIO endpoint. AWS S3 acceptance, Kubernetes, high availability, point-in-time recovery, retained-data inventory, automatic retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
+The verified profile is PostgreSQL 17.11 on a checked Docker target, with native logical backups, private recovery copies, and local Trove or the tested isolated MinIO endpoint. AWS S3 acceptance, Kubernetes catalog recovery, high availability, point-in-time recovery, deliberate data destruction, automatic retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
 
 See the [implementation plan](one-click-services-plan.md) for the exact verification ledger and remaining catalog work.

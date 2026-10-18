@@ -124,6 +124,13 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	); err != nil {
 		return err
 	}
+	if err := g.GET("/connections/:id/storage", e.storage,
+		forge.WithName("connectionStorage.list"),
+		forge.WithSummary("Owned persistent volumes and current attachment state"),
+		forge.WithResponseSchema(http.StatusOK, "Persistent storage", StorageVolumeList{}),
+	); err != nil {
+		return err
+	}
 	if err := g.PUT("/connections/:id/credential", e.replace,
 		forge.WithName("connections.replace"),
 		forge.WithSummary("Replace the connection's credential, such as with a rotated key"),

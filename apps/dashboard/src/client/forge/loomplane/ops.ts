@@ -189,6 +189,15 @@ export const ops = {
     bodyCodec: CODECS['ReplaceInputBody'],
     responseCodec: CODECS['Connection'],
   },
+  'connectionStorage.list': {
+    method: 'GET',
+    path: '/api/v1/connections/{id}/storage',
+    entity: 'StoredVolume',
+    rootType: 'StorageVolumeList',
+    provides: ['StoredVolume:{id}', 'StoredVolume[]'],
+    invalidates: [],
+    responseCodec: CODECS['StorageVolumeList'],
+  },
   'deployments.get': {
     method: 'GET',
     path: '/api/v1/deployments/{id}',
@@ -799,6 +808,8 @@ export const entities = {
   'Source': { idField: 'id' },
   'SourceList': { fields: { 'sources': 'Source' } },
   'SourceState': { fields: { 'latest': 'Analysis', 'shown': 'Analysis', 'source': 'Source' } },
+  'StorageVolumeList': { fields: { 'volumes': 'StoredVolume' } },
+  'StoredVolume': { idField: 'id' },
   'Variable': { idField: 'id' },
   'VariableList': { fields: { 'variables': 'Variable' } },
 } as const satisfies Record<string, EntityMeta>;

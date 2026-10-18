@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_StoredVolume: Codec = {"kind": "object", "fields": {"capacity_bytes": {"ts": "capacityBytes"}, "connection_id": {"ts": "connectionId"}, "environment_id": {"ts": "environmentId"}, "id": {"ts": "id"}, "instance_id": {"ts": "instanceId"}, "name": {"ts": "name"}, "project_id": {"ts": "projectId"}, "provider": {"ts": "provider"}, "role": {"ts": "role"}, "status": {"ts": "status"}, "storage_class": {"ts": "storageClass"}}, "required": ["capacity_bytes", "connection_id", "environment_id", "id", "instance_id", "name", "project_id", "provider", "role", "status"]};

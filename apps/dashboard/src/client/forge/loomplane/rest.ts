@@ -232,6 +232,25 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionStorage = {
+    /**
+     * Owned persistent volumes and current attachment state
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.StorageVolumeList> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/storage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["StorageVolumeList"],
+      };
+
+      return this.request<types.StorageVolumeList>(config);
+    },
+
+  };
+
   public readonly connections = {
     /**
      * Ask the cloud again what the connection's credential may do

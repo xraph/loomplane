@@ -24,6 +24,10 @@ func TestAcceptanceKubernetesPersistentPostgres(t *testing.T) {
 	if path == "" {
 		t.Skip("set LOOMPLANE_PERSISTENCE_KUBECONFIG for the disposable kind persistence target")
 	}
+	image := os.Getenv("LOOMPLANE_PERSISTENCE_POSTGRES_IMAGE")
+	if image == "" {
+		image = "loomplane-persistence-test:17.11"
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -66,12 +70,24 @@ func TestAcceptanceKubernetesPersistentPostgres(t *testing.T) {
 	}
 	client.Config.Details["storage_class"] = sc.Name
 	client.Config.Details["storage_class_uid"] = string(sc.UID)
+	checkedNamespace, err := client.Kube.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Details["namespace_uid"] = string(checkedNamespace.UID)
 	runtime := &kubernetes.Runtime{Session: func(context.Context, map[string]string) (*kubernetes.Client, error) { return client, nil }, Values: func(context.Context, map[string]string) (owned.RuntimeValues, error) {
 		return owned.RuntimeValues{Env: map[string]string{"POSTGRES_PASSWORD": "fixture-private-password"}}, nil
 	}, Wait: 2 * time.Minute}
 	iid := id.New(id.PrefixInstance)
 	labels := map[string]string{owned.LabelOrg: "fixture-org", owned.LabelProject: suffix, owned.LabelEnvironment: "production", owned.LabelConnection: "fixture-kind", owned.LabelStateful: "true", owned.LabelArchitecture: "arm64", owned.LabelRevision: "first"}
-	spec := cpprovider.ServiceSpec{Name: "database", Image: "loomplane-persistence-test:17.11", Env: map[string]string{"POSTGRES_DB": "database"}, Ports: []cpprovider.PortSpec{{Container: 5432, Protocol: "tcp"}}, Volumes: []cpprovider.VolumeSpec{{Name: "data", Type: "persistent", MountPath: "/var/lib/postgresql/data", SizeMB: 1024}}}
+	spec := cpprovider.ServiceSpec{Name: "database", Image: image, Env: map[string]string{"POSTGRES_DB": "database"}, Ports: []cpprovider.PortSpec{{Container: 5432, Protocol: "tcp"}}, Volumes: []cpprovider.VolumeSpec{{Name: "data", Type: "persistent", MountPath: "/var/lib/postgresql/data", SizeMB: 1024}}}
+	checkInventory := func(status string) {
+		t.Helper()
+		volumes, readErr := client.StorageVolumes(ctx, labels[owned.LabelOrg], labels[owned.LabelConnection])
+		if readErr != nil || len(volumes) != 1 || volumes[0].InstanceID != iid.String() || volumes[0].Status != status || volumes[0].CapacityBytes != 1<<30 || volumes[0].StorageClass != className {
+			t.Fatalf("persistent storage inventory: %+v %v", volumes, readErr)
+		}
+	}
 	if _, err = runtime.Apply(ctx, iid, spec, labels); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +106,7 @@ func TestAcceptanceKubernetesPersistentPostgres(t *testing.T) {
 	if claim.UID == "" || claim.Status.Phase != corev1.ClaimBound {
 		t.Fatalf("claim not bound: %+v", claim)
 	}
+	checkInventory("in-use")
 	pv, err := client.Kube.CoreV1().PersistentVolumes().Get(ctx, claim.Spec.VolumeName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -142,12 +159,14 @@ func TestAcceptanceKubernetesPersistentPostgres(t *testing.T) {
 	if err != nil || kept.UID != claim.UID {
 		t.Fatalf("removal lost retained claim: %v", err)
 	}
+	checkInventory("retained")
 	if _, err = runtime.Apply(ctx, iid, spec, labels); err != nil {
 		t.Fatal(err)
 	}
 	if query("SELECT value FROM persistence_probe") != "survived-kind" {
 		t.Fatal("reattachment lost data")
 	}
+	checkInventory("in-use")
 	kept, err = client.Kube.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, claimName, metav1.GetOptions{})
 	if err != nil || kept.UID != claim.UID {
 		t.Fatalf("reattachment changed claim: %v", err)

@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Policy, PolicyList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, Revision, RevisionList, Session, Snapshot, Source, SourceList, Variable, VariableList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Policy, PolicyList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Variable, VariableList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -25,6 +25,7 @@ export const useConnectionsGet = query<Connection>(ops['connections.get']);
 export const useConnectionsDelete = mutation(ops['connections.delete']);
 export const useConnectionsCheck = mutation<Connection, Connection>(ops['connections.check']);
 export const useConnectionsReplace = mutation<Connection, Connection>(ops['connections.replace']);
+export const useConnectionStorageList = query<StorageVolumeList>(ops['connectionStorage.list']);
 export const useDeploymentsGet = query<Deployment>(ops['deployments.get']);
 export const useDeploymentsLogs = query<LogPage>(ops['deployments.logs']);
 export const useDeploymentsRetry = mutation<Deployment, Deployment>(ops['deployments.retry']);

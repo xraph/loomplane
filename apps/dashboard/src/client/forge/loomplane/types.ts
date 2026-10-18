@@ -1055,6 +1055,24 @@ export interface Step {
   warnings?: string[];
 }
 
+export interface StorageVolumeList {
+  volumes: StoredVolume[];
+}
+
+export interface StoredVolume {
+  capacityBytes: number;
+  connectionId: string;
+  environmentId: string;
+  id: string;
+  instanceId: string;
+  name: string;
+  projectId: string;
+  provider: string;
+  role: string;
+  status: string;
+  storageClass?: string;
+}
+
 export interface UpdateProjectInputBody {
   color?: string;
   description?: string;

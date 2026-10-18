@@ -387,6 +387,38 @@
         }
       }
     },
+    "/api/v1/connections/{id}/storage": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Owned persistent volumes and current attachment state",
+        "operationId": "connectionStorage.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persistent storage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageVolumeList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/deployments/{id}": {
       "get": {
         "tags": [
@@ -6151,6 +6183,72 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "StorageVolumeList": {
+        "properties": {
+          "volumes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoredVolume"
+            }
+          }
+        },
+        "required": [
+          "volumes"
+        ],
+        "type": "object",
+        "x-forge-envelope": "volumes"
+      },
+      "StoredVolume": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "connection_id",
+          "project_id",
+          "environment_id",
+          "instance_id",
+          "role",
+          "provider",
+          "status",
+          "capacity_bytes"
+        ],
+        "properties": {
+          "capacity_bytes": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "storage_class": {
+            "type": "string"
           }
         }
       },

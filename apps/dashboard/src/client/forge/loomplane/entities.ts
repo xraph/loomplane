@@ -43,6 +43,8 @@ export const entities = {
   'Source': { idField: 'id' },
   'SourceList': { fields: { 'sources': 'Source' } },
   'SourceState': { fields: { 'latest': 'Analysis', 'shown': 'Analysis', 'source': 'Source' } },
+  'StorageVolumeList': { fields: { 'volumes': 'StoredVolume' } },
+  'StoredVolume': { idField: 'id' },
   'Variable': { idField: 'id' },
   'VariableList': { fields: { 'variables': 'Variable' } },
 } as const satisfies Record<string, EntityMeta>;
