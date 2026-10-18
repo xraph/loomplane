@@ -17,10 +17,7 @@ import (
 	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
-const maxRequestBytes = 2 << 20
-const maxSnapshotBytes = 16 << 20
 const maxRequests = 128
-const maxWatchDuration = 30 * time.Second
 
 type EnrollmentAuthority interface {
 	CheckPending(context.Context, string, domain.AgentIdentity) error
@@ -51,9 +48,9 @@ func NewHandler(org string, trust workloadidentity.TrustSource, registry workloa
 		return nil, err
 	}
 	h := &Handler{org: org, trust: trust, registry: registry, enrollments: enrollments, catalog: catalog, wake: wake, mux: http.NewServeMux(), slots: make(chan struct{}, maxRequests), watches: map[string]bool{}}
-	h.mux.HandleFunc("POST /runtime/v1/enroll/{id}", h.enroll)
-	h.mux.HandleFunc("POST /runtime/v1/observations", h.observe)
-	h.mux.HandleFunc("GET /runtime/v1/watch", h.watch)
+	h.mux.HandleFunc("POST "+domain.RuntimeEnrollmentPath+"{id}", h.enroll)
+	h.mux.HandleFunc("POST "+domain.RuntimeObservationPath, h.observe)
+	h.mux.HandleFunc("GET "+domain.RuntimeWatchPath, h.watch)
 	return h, nil
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +115,7 @@ func (h *Handler) observe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, deadlineErr)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, domain.MaxObservationBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var batch domain.ObservationBatch
@@ -163,7 +160,7 @@ func (h *Handler) watch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { h.mu.Lock(); delete(h.watches, a.URI); h.mu.Unlock() }()
-	deadline := time.Now().Add(maxWatchDuration)
+	deadline := time.Now().Add(domain.RuntimeStreamLifetime)
 	for _, cert := range r.TLS.PeerCertificates {
 		if cert.NotAfter.Before(deadline) {
 			deadline = cert.NotAfter
@@ -184,7 +181,7 @@ func (h *Handler) watch(w http.ResponseWriter, r *http.Request) {
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if len(payload) > maxSnapshotBytes {
+		if len(payload) > domain.MaxSnapshotBytes {
 			return runtimecatalog.ErrLimit
 		}
 		until := deadline

@@ -131,3 +131,10 @@ func (s *Store) Close() error {
 	s.active = false
 	return s.db.Close()
 }
+
+// Deactivate closes process-local authority without changing durable sequence or epoch.
+func (s *Store) Deactivate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active = false
+}

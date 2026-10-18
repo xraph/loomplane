@@ -64,11 +64,21 @@ The separate runtime handler implements enrollment consumption, observation batc
 
 Read and write deadlines bound slow peers. Mutation contexts end no later than the certificate chain expires. Each agent gets one watch, the handler admits at most 128 concurrent requests, and streams close within 30 seconds so reconnects can pick up rotated credentials. Requests are limited to 2 MiB and snapshots to 16 MiB. The handler has no management routes.
 
-A real local TLS test reuses one connection and confirms that registry revocation denies its next request. Other tests cover actual certificate expiry during a stream, body size and deadline enforcement, bootstrap replay, strict JSON decoding, control-plane organization checks, and request deadlines capped by credential expiry. These transport tests use generated certificates; they have not yet been joined to the live SPIRE and PostgreSQL fixtures.
+A real local TLS test reuses one connection and confirms that registry revocation denies its next request. Other tests cover actual certificate expiry during a stream, body size and deadline enforcement, bootstrap replay, strict JSON decoding, control-plane organization checks, and request deadlines capped by credential expiry. The local TLS tests use generated certificates. The SPIRE fixture now also exercises the actual agent transport and runtime handler with live Workload API sources on both sides. Enrollment, replay denial, observation, a complete snapshot and revocation passed over mutual TLS. That fixture uses an in-memory enrollment registry; PostgreSQL remains a separate test.
 
 Runtime and identity race tests passed, along with the full build, dashboard lint/typecheck, and all Go tests against the proposed commit and its pinned module files. The shared full-repository lint gate remains open because of concurrent recovery and connection edits.
 
 Catalog snapshots remain unsigned inputs to Task 6. This listener is not registered in production configuration, and its output must not authorize routing.
+
+## Outbound agent lifecycle
+
+The agent transport accepts an HTTPS control endpoint and the exact control-plane SPIFFE audience for its organization. It disables ambient proxies, redirects and HTTP connection reuse. Every request reads the current workload credential and ends by its expiry. Every snapshot frame rechecks the control certificate against current trust before delivery.
+
+You get one enrollment attempt per process. A lost response requires a fresh enrollment because the old handle may already be consumed. Once enrollment succeeds, the coordinator activates durable sequence reservation and starts observation and snapshot reception together. Watch reconnects use bounded backoff without reenrollment. Cancellation or a terminal failure stops both loops and closes local authority. The snapshot receiver must verify signatures and apply policy atomically; transport validation does not replace that step.
+
+Protocol paths, body limits and stream lifetime now live in one shared contract used by both ends. Tests reject malformed frames, truncated JSON, oversized snapshots, foreign scope, changed identity and expired control certificates.
+
+The final live SPIRE rerun, package race tests, scoped lint and proposed-tree Go tests passed. Shared dashboard checks are blocked by concurrent placement code referencing an ungenerated `Endpoint` type; full-repository lint reports concurrent planning and identity changes. Those files were preserved.
 
 ## Remaining Task 5 work
 

@@ -79,7 +79,11 @@ func (s *Source) ClientTLS(controlURI string) (*tls.Config, error) {
 		return nil, ErrIdentity
 	}
 	agent, err := ParseAgentURI(s.expected.String())
-	if err != nil || peer.Path() != "/loomplane/control/org/"+agent.OrgID {
+	if err != nil {
+		return nil, ErrIdentity
+	}
+	expected, err := ControlURI(agent)
+	if err != nil || peer.String() != expected {
 		return nil, ErrIdentity
 	}
 	config := tlsconfig.MTLSClientConfig(s, s, tlsconfig.AuthorizeID(peer))
@@ -93,7 +97,7 @@ func (s *Source) Domain() string { return s.expected.TrustDomain().Name() }
 // ServerTLS accepts only agent identities in this control plane's organization.
 // The runtime handler separately checks active or pending enrollment per request.
 func (s *Source) ServerTLS(bundles x509bundle.Source) (*tls.Config, error) {
-	const prefix = "/loomplane/control/org/"
+	const prefix = controlPathPrefix
 	path := s.expected.Path()
 	if bundles == nil || !strings.HasPrefix(path, prefix) || !identitySegment.MatchString(strings.TrimPrefix(path, prefix)) {
 		return nil, ErrIdentity

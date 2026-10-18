@@ -177,7 +177,7 @@ func TestRuntimeRejectsOversizedAndUnboundedBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequestWithContext(t.Context(), "POST", "/runtime/v1/observations", strings.NewReader(`{"endpoints":[{"address":"`+strings.Repeat("a", maxRequestBytes)+`"}]}`))
+	r := httptest.NewRequestWithContext(t.Context(), "POST", "/runtime/v1/observations", strings.NewReader(`{"endpoints":[{"address":"`+strings.Repeat("a", domain.MaxObservationBytes)+`"}]}`))
 	r.TLS = &tls.ConnectionState{Version: tls.VersionTLS13, HandshakeComplete: true, PeerCertificates: []*x509.Certificate{cert}}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(deadlineRecorder{w}, r)

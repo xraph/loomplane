@@ -108,3 +108,22 @@ func (v *Verifier) VerifyPeer(ctx context.Context, chain []*x509.Certificate, ex
 	}
 	return agent, nil
 }
+
+const controlPathPrefix = "/loomplane/control/org/"
+
+// ControlURI derives the only control-plane audience this agent may contact.
+func ControlURI(a domain.AgentIdentity) (string, error) {
+	parsed, err := ParseAgentURI(a.URI)
+	if err != nil || parsed != a {
+		return "", ErrIdentity
+	}
+	id, err := spiffeid.FromString(a.URI)
+	if err != nil {
+		return "", ErrIdentity
+	}
+	control, err := spiffeid.FromPath(id.TrustDomain(), controlPathPrefix+a.OrgID)
+	if err != nil {
+		return "", err
+	}
+	return control.String(), nil
+}
