@@ -2,6 +2,8 @@ package aws
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 
 	sdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -56,6 +58,7 @@ type DBInstanceSpec struct {
 // DBInstance is an RDS instance as it is.
 type DBInstance struct {
 	ID            string
+	ResourceID    string
 	Engine        string
 	EngineVersion string
 	Status        string
@@ -76,6 +79,7 @@ func (s *Session) GetDBInstance(ctx context.Context, id string) (*DBInstance, er
 	in := out.DBInstances[0]
 	db := &DBInstance{
 		ID: sdk.ToString(in.DBInstanceIdentifier), Engine: sdk.ToString(in.Engine),
+		ResourceID:    sdk.ToString(in.DbiResourceId),
 		EngineVersion: sdk.ToString(in.EngineVersion), Status: sdk.ToString(in.DBInstanceStatus),
 	}
 	if in.Endpoint != nil {
@@ -133,11 +137,28 @@ func (s *Session) SetDBPassword(ctx context.Context, id, password string) error 
 	return nil
 }
 
-// DeleteDBInstance deletes an instance, its data and its automated
-// backups, without a final snapshot. One that's already gone is fine.
+// DeleteDBInstance removes compute while retaining automated backups and a
+// final snapshot. Failure to create that snapshot must block removal.
 func (s *Session) DeleteDBInstance(ctx context.Context, id string) error {
-	_, err := rds.NewFromConfig(s.cfg).DeleteDBInstance(ctx, &rds.DeleteDBInstanceInput{
-		DBInstanceIdentifier: sdk.String(id), SkipFinalSnapshot: sdk.Bool(true), DeleteAutomatedBackups: sdk.Bool(true),
+	db, err := s.GetDBInstance(ctx, id)
+	if IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read db instance before removal: %w", err)
+	}
+	if db.Status == "deleting" {
+		return nil
+	}
+	if db.ResourceID == "" {
+		return errors.New("the database has no physical resource identity; removal is blocked")
+	}
+	// Stable for retries, distinct if an identifier is reused for another DB.
+	sum := sha256.Sum256([]byte(db.ResourceID))
+	snapshot := fmt.Sprintf("lp-final-%x", sum[:20])
+	_, err = rds.NewFromConfig(s.cfg).DeleteDBInstance(ctx, &rds.DeleteDBInstanceInput{
+		DBInstanceIdentifier: sdk.String(id), SkipFinalSnapshot: sdk.Bool(false), DeleteAutomatedBackups: sdk.Bool(false),
+		FinalDBSnapshotIdentifier: sdk.String(snapshot),
 	})
 	if err != nil && !IsNotFound(err) {
 		return fmt.Errorf("delete db instance %s: %w", id, err)

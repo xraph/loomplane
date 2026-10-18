@@ -86,6 +86,12 @@ Validation: generated-client drift checks, `tsc --noEmit`, `tsc -b`, and dashboa
 
 Scope: this is the Docker single-instance logical-backup profile. The remaining phase 0-2 gates below are still open. The broader catalog, Kubernetes, PITR, retention, upgrades and binding cutover are not advertised as supported. The [PostgreSQL guide](postgres-services.md) documents the UI, CLI, API and Trove configuration.
 
+### RDS removal retention, 18 October 2026
+
+Implemented: RDS removal requests a final snapshot and retains automated backups. Snapshot names derive from AWS's physical database identity, so retries use the same name and a replacement database gets a different snapshot. An already missing or deleting instance is idempotent. Snapshot refusal blocks removal; no fallback deletes the database without recovery data. Failed instances that AWS cannot snapshot require a separate operator recovery decision.
+
+Verified: the real AWS SDK against a controlled HTTP endpoint sends `SkipFinalSnapshot=false`, `DeleteAutomatedBackups=false` and a final snapshot identifier. The regression reproduced destructive requests before the fix, then covered accepted removal, repeated removal, missing instances and snapshot refusal. This verifies the request contract. Live AWS snapshot creation, retention expiry and fresh-account restore are still unverified. Go lint, AWS/deployment tests and the full Go suite passed. The shared dashboard checks encountered a concurrent test type error (`service-recovery.test.tsx` uses an unsupported `exact` option) and a 5-second timeout in `deploy-dialog.test.tsx`. This backend slice does not edit those files.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.

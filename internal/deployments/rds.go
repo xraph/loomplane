@@ -137,8 +137,8 @@ func rdsURL(kind, password, host string, port int32, db string) string {
 	return "postgresql://" + creds + "@" + hostPort + "/" + db + "?sslmode=require"
 }
 
-// Remove implements Executor: it deletes the instance, with its data and
-// backups, and the credentials Loomplane kept for it.
+// Remove retains a final snapshot and automated backups before forgetting
+// the instance credentials. Snapshot failure keeps the binding retryable.
 func (r *RDS) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 	s, err := r.session(job.Connection, job.Credential)
 	if err != nil {
