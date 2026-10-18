@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/forge"
 	"github.com/xraph/forge/cli"
 
+	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/platform"
 )
@@ -31,7 +32,7 @@ func main() {
 	}
 	cli.NewAppRunner(newApp).
 		Name("loomplane-worker").
-		Version(platform.Version).
+		Version(buildinfo.Version).
 		Description("Loomplane's repository analysis worker").
 		DisableMigrationCommands().
 		Run()

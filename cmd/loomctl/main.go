@@ -12,12 +12,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/ctl"
-	"github.com/xraph/loomplane/internal/platform"
 )
 
 func main() {
-	if err := ctl.New(ctl.Options{Version: platform.Version}).Run(os.Args[1:]); err != nil {
+	if err := ctl.New(ctl.Options{Version: buildinfo.Version}).Run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "loomctl:", err)
 		os.Exit(1)
 	}

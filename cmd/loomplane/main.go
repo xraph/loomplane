@@ -25,6 +25,7 @@ import (
 	"github.com/xraph/forge/cli"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/ops"
 	"github.com/xraph/loomplane/internal/platform"
@@ -38,7 +39,7 @@ func main() {
 	}
 	cli.NewAppRunner(newApp).
 		Name("loomplane").
-		Version(platform.Version).
+		Version(buildinfo.Version).
 		Description("Loomplane: your infrastructure, woven together").
 		// Migrations run on every start, in one pass between registering
 		// and starting the extensions (internal/platform). Forge's migrate
@@ -77,5 +78,5 @@ func settings() (ops.Settings, error) {
 	if err != nil {
 		return ops.Settings{}, err
 	}
-	return ops.Settings{DatabaseURL: cfg.Database.URL, Groups: migrations.All(), Version: platform.Version}, nil
+	return ops.Settings{DatabaseURL: cfg.Database.URL, Groups: migrations.All(), Version: buildinfo.Version}, nil
 }

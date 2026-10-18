@@ -52,6 +52,8 @@ A backup made by a newer Loomplane can't be restored by an older one: its rows f
 
 ## Upgrading
 
+When building from source, use `make build VERSION=your-version`, or `make build-cli VERSION=your-version` for `loomctl` alone. The API, worker and CLI share `internal/buildinfo.Version`. Custom build scripts should set `-ldflags "-X github.com/xraph/loomplane/internal/buildinfo.Version=your-version"`. The CLI reads this small metadata package without importing the server's extensions.
+
 1. Back up.
 2. Stop Loomplane and loomplane-worker.
 3. Replace the binaries, or the image.

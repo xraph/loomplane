@@ -47,7 +47,7 @@ ARG VERSION=dev
 RUN --mount=type=cache,id=loomplane-gomod,target=/go/pkg/mod \
     --mount=type=cache,id=loomplane-gobuild,target=/root/.cache/go-build \
     go build -trimpath \
-      -ldflags "-s -w -X github.com/xraph/loomplane/internal/platform.Version=${VERSION}" \
+      -ldflags "-s -w -X github.com/xraph/loomplane/internal/buildinfo.Version=${VERSION}" \
       -o /out/ ./cmd/loomplane ./cmd/loomplane-worker
 
 FROM alpine:${ALPINE_VERSION}

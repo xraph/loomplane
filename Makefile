@@ -7,7 +7,7 @@
 API_PORT      ?= 8780
 DASHBOARD_DIR := apps/dashboard
 VERSION       ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS       := -ldflags "-s -w -X github.com/xraph/loomplane/internal/platform.Version=$(VERSION)"
+LDFLAGS       := -ldflags "-s -w -X github.com/xraph/loomplane/internal/buildinfo.Version=$(VERSION)"
 COMPOSE       := docker compose -f deployments/docker-compose/docker-compose.yml
 # The compose Postgres. The integration tests create a database of their
 # own on it for each run.

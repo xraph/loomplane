@@ -38,15 +38,12 @@ import (
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/extensions/web"
+	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/plugins"
 )
-
-// Version is set at build time:
-// -ldflags "-X github.com/xraph/loomplane/internal/platform.Version=...".
-var Version = "0.1.0-dev"
 
 const (
 	shutdownTimeout = 30 * time.Second
@@ -65,13 +62,13 @@ const (
 func New(cfg config.Config) (forge.App, error) {
 	app := forge.New(
 		forge.WithAppName("loomplane"),
-		forge.WithAppVersion(Version),
+		forge.WithAppVersion(buildinfo.Version),
 		forge.WithAppEnvironment(cfg.Environment),
 		forge.WithHTTPAddress(cfg.HTTPAddr),
 		forge.WithShutdownTimeout(shutdownTimeout),
 		forge.WithEnvPrefix(forgeEnvPrefix),
 		forge.WithCentralMigrations(),
-		forge.WithAppRouterOptions(forge.WithOpenAPI(openAPI(cfg)), forge.WithAsyncAPI(forge.AsyncAPIConfig{Title: "Loomplane realtime", Version: Version, SpecEnabled: true, UIEnabled: cfg.IsDevelopment()})),
+		forge.WithAppRouterOptions(forge.WithOpenAPI(openAPI(cfg)), forge.WithAsyncAPI(forge.AsyncAPIConfig{Title: "Loomplane realtime", Version: buildinfo.Version, SpecEnabled: true, UIEnabled: cfg.IsDevelopment()})),
 	)
 	for _, ext := range Extensions(cfg) {
 		if err := app.RegisterExtension(ext); err != nil {
@@ -154,7 +151,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 func NewWorker(cfg config.Config) (forge.App, error) {
 	app := forge.New(
 		forge.WithAppName("loomplane-worker"),
-		forge.WithAppVersion(Version),
+		forge.WithAppVersion(buildinfo.Version),
 		forge.WithAppEnvironment(cfg.Environment),
 		forge.WithHTTPAddress(cfg.Worker.HTTPAddr),
 		forge.WithShutdownTimeout(shutdownTimeout),
@@ -229,7 +226,7 @@ func openAPI(cfg config.Config) forge.OpenAPIConfig {
 	return forge.OpenAPIConfig{
 		Title:       "Loomplane",
 		Description: "Loomplane's API: organizations' projects, environments and infrastructure.",
-		Version:     Version,
+		Version:     buildinfo.Version,
 		Servers:     []forge.OpenAPIServer{{URL: cfg.PublicURL}},
 		Security: map[string]forge.SecurityScheme{
 			"session": {Type: "http", Scheme: "bearer", Description: "An authsome session token, sent as a bearer token."},
