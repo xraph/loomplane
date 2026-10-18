@@ -14,14 +14,10 @@ import (
 // ExecOutput streams stdout without mixing diagnostics into a database dump.
 // Callers supply fixed native-tool argument lists, never shell commands.
 func ExecOutput(ctx context.Context, c *Client, container string, args []string, dst io.Writer) error {
-	return execOutput(ctx, c, container, args, nil, dst)
-}
-
-func execOutput(ctx context.Context, c *Client, container string, args, env []string, dst io.Writer) error {
 	var created struct {
 		ID string `json:"Id"`
 	}
-	if err := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(container)+"/exec", map[string]any{"Cmd": args, "Env": env, "AttachStdout": true, "AttachStderr": true, "Tty": false}, &created); err != nil {
+	if err := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(container)+"/exec", map[string]any{"Cmd": args, "AttachStdout": true, "AttachStderr": true, "Tty": false}, &created); err != nil {
 		return err
 	}
 	if created.ID == "" {

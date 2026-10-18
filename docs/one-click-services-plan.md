@@ -102,6 +102,16 @@ Verified: TDD regressions cover foreign claims and connection ownership, changed
 
 Pending: PostgreSQL catalog/API/CLI/dashboard wiring for Kubernetes; native backup and isolated restore on Kubernetes; production CSI and zone-loss qualification; expansion, capacity reporting and retained-data inventory/destruction. The broader phase gates remain open.
 
+### Shared native PostgreSQL adapter, 18 October 2026
+
+Implemented: one transport-independent PostgreSQL export, verified restore, role setup, authentication probe and temporary-file cleanup path. Docker delegates to this adapter. Runtime transports remain responsible for ownership and isolation before issuing commands. Failed native exports cannot publish a recovery object, and the shared restore path refuses live-source restoration.
+
+Application-role setup uses SQL values encoded as hex and a mode-0600 temporary pgpass file. Credentials stay out of command arguments and diagnostic output. Temporary files are removed on success, failure and cancellation; they are placed outside persistent database mounts. Runtime-provided credentials remain in Vault. Invalid passwords fail before opening the target.
+
+Verified: the new adapter tests first failed for the missing shared implementation, then passed for failed-export rejection, recovery-only restore, secret-free command arguments and temporary-file cleanup. A wrapper regression reproduced target access before invalid-password rejection and now passes. The real Docker PostgreSQL/Trove restore drill passed after the refactor, including native role authentication, corrupt-file rejection, retained data and source-restore denial. The full API deployment/backup/restart/restore/cleanup/schedule drill passed again in 62.93 seconds. The full Go suite, all 240 dashboard tests, dashboard lint, `make build` and shared-adapter lint passed. The full-repo Go lint attempt is blocked by concurrent storage-inventory formatting and lint edits; no finding in that run points to this shared adapter.
+
+Pending: the Kubernetes command transport, enforced recovery isolation, catalog routing and Kubernetes recovery acceptance. These changes share database semantics; they do not qualify another target by themselves.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.
