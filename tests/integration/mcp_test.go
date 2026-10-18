@@ -126,7 +126,7 @@ func TestMCP_anAgentPlansAndDeploysThroughLoomctl(t *testing.T) {
 	}
 	// A manifest that doesn't parse comes back as a tool error the agent
 	// can read and fix.
-	if res := call(t, cautious, "save_manifest", map[string]any{"project": "mono", "yaml": "version: 2\n"}, nil); !res.IsError {
+	if res := call(t, cautious, "save_manifest", map[string]any{"project": "mono", "yaml": "version: 999\n"}, nil); !res.IsError {
 		t.Fatal("an invalid manifest was saved")
 	}
 	call(t, cautious, "save_manifest", map[string]any{"project": "mono", "yaml": docsOnStaticHost}, nil)

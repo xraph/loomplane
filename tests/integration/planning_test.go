@@ -171,7 +171,7 @@ func TestPlanning_aPlanIsReviewedAndApprovedAcrossARestart(t *testing.T) {
 	}
 
 	// A manifest that doesn't parse is refused, with where it's wrong.
-	c.must(http.StatusUnprocessableEntity, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 2\n"}, nil)
+	c.must(http.StatusUnprocessableEntity, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 999\n"}, nil)
 
 	var rev struct {
 		ID       string `json:"id"`
