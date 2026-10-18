@@ -201,6 +201,9 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	case err != nil:
 		return nil, err
 	default:
+		if AccountIdentity(c.Cloud, c.Account, c.Details) != AccountIdentity(c.Cloud, res.Account, res.Details) {
+			return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
+		}
 		apply(c, res, now)
 	}
 	if err := s.store.UpdateConnection(ctx, c); err != nil {
@@ -233,6 +236,9 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	res, err := s.check(ctx, c.Cloud, checker, cred, settings)
 	if err != nil {
 		return nil, err
+	}
+	if AccountIdentity(c.Cloud, c.Account, c.Details) != AccountIdentity(c.Cloud, res.Account, res.Details) {
+		return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
 	}
 	if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
 		return nil, err
