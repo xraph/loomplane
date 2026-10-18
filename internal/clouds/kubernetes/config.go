@@ -113,6 +113,12 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 	rc.UserAgent = "loomplane"
 	ca := sha256.Sum256(config.Clusters[chosen.Cluster].CertificateAuthorityData)
 	details := map[string]string{"endpoint": rc.Host, "namespace": namespace, "context": contextName, "cluster_ca": hex.EncodeToString(ca[:])}
+	if architecture := strings.TrimSpace(settings["architecture"]); architecture != "" {
+		if architecture != "amd64" && architecture != "arm64" {
+			return nil, fmt.Errorf("%w: architecture must be amd64 or arm64", ErrInvalid)
+		}
+		details["architecture"] = architecture
+	}
 	if class := strings.TrimSpace(settings["storage_class"]); class != "" {
 		if len(validation.IsDNS1123Subdomain(class)) != 0 {
 			return nil, fmt.Errorf("%w: storage_class must be a Kubernetes storage class name", ErrInvalid)

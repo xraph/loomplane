@@ -15,7 +15,7 @@ import (
 	authv1 "k8s.io/api/authorization/v1"
 )
 
-func clusterFixture(t *testing.T, denySecret bool) (*httptest.Server, *[]string, *sync.Mutex) {
+func clusterFixture(t *testing.T, denySecret bool, denied ...string) (*httptest.Server, *[]string, *sync.Mutex) {
 	t.Helper()
 	paths := []string{}
 	mu := &sync.Mutex{}
@@ -45,15 +45,19 @@ func clusterFixture(t *testing.T, denySecret bool) (*httptest.Server, *[]string,
 				return
 			}
 			attrs := review.Spec.ResourceAttributes
-			if attrs == nil || attrs.Namespace == "" && attrs.Resource != "persistentvolumes" {
+			if attrs == nil || strings.Contains(attrs.Resource, "/") || attrs.Namespace == "" && attrs.Resource != "persistentvolumes" {
 				t.Error("unscoped object permission check")
 				w.WriteHeader(400)
 				return
 			}
 			mu.Lock()
-			paths = append(paths, attrs.Namespace+":"+attrs.Resource+":"+attrs.Verb)
+			resource := attrs.Resource
+			if attrs.Subresource != "" {
+				resource += "/" + attrs.Subresource
+			}
+			paths = append(paths, attrs.Namespace+":"+resource+":"+attrs.Verb)
 			mu.Unlock()
-			review.Status.Allowed = !denySecret || attrs.Resource != "secrets" || attrs.Verb != "create"
+			review.Status.Allowed = (!denySecret || attrs.Resource != "secrets" || attrs.Verb != "create") && !slices.Contains(denied, resource+":"+attrs.Verb)
 			_ = json.NewEncoder(w).Encode(review)
 		default:
 			w.WriteHeader(http.StatusNotFound)

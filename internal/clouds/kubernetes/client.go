@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	authv1 "k8s.io/api/authorization/v1"
@@ -127,6 +128,9 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	if err := c.checkPersistentStorage(ctx, out); err != nil {
 		return nil, err
 	}
+	if err := c.checkPostgresPermissions(ctx, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -134,9 +138,10 @@ func (c *Client) allowed(ctx context.Context, group, resource, verb string) (boo
 	return c.allowedIn(ctx, c.Config.Namespace, group, resource, verb)
 }
 func (c *Client) allowedIn(ctx context.Context, namespace, group, resource, verb string) (bool, error) {
+	base, subresource, _ := strings.Cut(resource, "/")
 	review, err := c.Kube.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{
 		Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authv1.ResourceAttributes{
-			Namespace: namespace, Group: group, Resource: resource, Verb: verb,
+			Namespace: namespace, Group: group, Resource: base, Subresource: subresource, Verb: verb,
 		}},
 	}, metav1.CreateOptions{})
 	if apierrors.IsUnauthorized(err) {
