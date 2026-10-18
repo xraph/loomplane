@@ -10,13 +10,23 @@ Implemented: published Trove root, extension and S3 driver v1.7.1 pins; extensio
 
 Verified: local artifact contents survive extension restart; artifact and backup stores remain separate; shared storage survives closing an artifact handle; the full Forge application starts, migrates and survives restart against real PostgreSQL. `make test` passed, including 227 dashboard tests. Targeted storage/configuration tests passed.
 
-Not yet verified: a live AWS S3 connection, large backup transfer, persistent deployed-service volumes, PostgreSQL service deployment/backup/restore, UI and CLI service management. This slice does not qualify any new catalog service.
+Not yet verified: a live AWS S3 connection, persistent deployed-service volumes, PostgreSQL service deployment/backup/restore, UI and CLI service management. This slice does not qualify any new catalog service.
 
 Formatting uses the repository's configured `golangci-lint fmt` on owned Go files and Prettier on this document. There are no `make f` or `make l` aliases; lint uses `make lint`, or its identical Go command with `--allow-serial-runners` followed by `make lint-dashboard` when another checkout holds the global linter lock.
 
 You should be able to pick a service, choose a connected target, and deploy it with working credentials, durable storage, health checks, and a recovery policy. Once you've configured an environment's defaults, the normal path is one Deploy action. The same recipe must work from the dashboard, loomctl, and the API.
 
 We should build the storage and recovery foundation first, then qualify services in batches. A catalog entry becomes supported only after its deployment, upgrade, backup, restore, and removal paths pass on the targets it advertises.
+
+### Bounded backup transfer, 18 October 2026
+
+Implemented: backup transfer through Trove's selected driver, 8 MiB multipart chunks, bounded part retries, abort on failure/cancellation, SHA-256 and size metadata, version-pinned reads, and verification while downloading to an isolated destination. Local writes use Trove's atomic file replacement. The multipart path currently caps objects at 10,000 parts (about 78 GiB); crash-resumable upload checkpoints and orphan reconciliation remain pending.
+
+Verified: corruption detection, interrupted-source rejection, multipart failure cleanup and chunk bounds in focused tests. A real isolated MinIO S3 endpoint accepted and returned 129 MiB through Trove with matching SHA-256 while the test ran with `GOMEMLIMIT=64MiB`. This is a Go soft memory target, not a measured process-memory ceiling or AWS S3 acceptance. The test container is isolated from existing application storage.
+
+Validation: Go lint and the full Go suite passed. The shared checkout dashboard checks are blocked by concurrent deployment UI edits: a `setup` prop type error and a deployment-target selection test failure. This backend slice does not edit those files.
+
+Pending: AWS S3 credentials/acceptance, process-crash recovery of incomplete uploads, policy-managed retention/encryption, PostgreSQL recovery workflows and restore authorization. Successful object transfer alone does not establish a usable database backup.
 
 ## 1. Proposed catalog
 
