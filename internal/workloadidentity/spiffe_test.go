@@ -233,3 +233,49 @@ func TestAgentTLSRejectsOtherControlPlane(t *testing.T) {
 		t.Fatalf("unsafe transport: %v", err)
 	}
 }
+
+func TestControlTLSScopesRuntimePeers(t *testing.T) {
+	now := time.Now()
+	ca := newCA(t, now)
+	root, err := NewTrust("loomplane.test", []*x509.Certificate{ca.cert})
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := spiffeid.FromString("spiffe://loomplane.test/loomplane/control/org/org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &Source{expected: control}
+	config, err := source.ServerTLS(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MinVersion != tls.VersionTLS13 || !config.SessionTicketsDisabled {
+		t.Fatal("runtime TLS can reuse stale authentication")
+	}
+	a := identityFixture()
+	uri, err := AgentURI("loomplane.test", a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := ca.issue(t, now, uri)
+	if err = config.VerifyPeerCertificate([][]byte{peer.Raw}, nil); err != nil {
+		t.Fatal(err)
+	}
+	a.OrgID = "neighbor"
+	uri, err = AgentURI("loomplane.test", a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer = ca.issue(t, now, uri)
+	if err = config.VerifyPeerCertificate([][]byte{peer.Raw}, nil); err == nil {
+		t.Fatal("neighboring organization authenticated")
+	}
+	agentID, err := spiffeid.FromString(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = (&Source{expected: agentID}).ServerTLS(root); err == nil {
+		t.Fatal("agent identity became control-plane identity")
+	}
+}

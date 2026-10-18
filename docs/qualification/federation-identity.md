@@ -58,8 +58,20 @@ Enrollment race tests, migration reruns, focused package lint, dashboard lint/ty
 
 The PostgreSQL tests use a fake issuer to inject failures. They do not establish distributed SPIRE timeout behavior. The live fixture still uses its in-memory registry, so complete enrollment over the runtime transport remains unverified.
 
+## Runtime transport
+
+The separate runtime handler implements enrollment consumption, observation batches and complete snapshot streams. It requires TLS 1.3, exact organization identity, and a current enrollment check on each request. Snapshot sends recheck certificates, trust bundles and active registration. Resumed TLS sessions are rejected.
+
+Read and write deadlines bound slow peers. Mutation contexts end no later than the certificate chain expires. Each agent gets one watch, the handler admits at most 128 concurrent requests, and streams close within 30 seconds so reconnects can pick up rotated credentials. Requests are limited to 2 MiB and snapshots to 16 MiB. The handler has no management routes.
+
+A real local TLS test reuses one connection and confirms that registry revocation denies its next request. Other tests cover actual certificate expiry during a stream, body size and deadline enforcement, bootstrap replay, strict JSON decoding, control-plane organization checks, and request deadlines capped by credential expiry. These transport tests use generated certificates; they have not yet been joined to the live SPIRE and PostgreSQL fixtures.
+
+Runtime and identity race tests passed, along with the full build, dashboard lint/typecheck, and all Go tests against the proposed commit and its pinned module files. The shared full-repository lint gate remains open because of concurrent recovery and connection edits.
+
+Catalog snapshots remain unsigned inputs to Task 6. This listener is not registered in production configuration, and its output must not authorize routing.
+
 ## Remaining Task 5 work
 
-Add the authenticated observation/watch endpoint and agent executable, connect configuration and namespace-scoped Kubernetes permissions, and implement the verified binding resolver and cleanup scheduler. Prove the complete path with real enrollment records, including replay, restore denial, and ambiguous SPIRE create/delete timeouts.
+Wire the runtime listener and outbound agent executable, connect configuration and namespace-scoped Kubernetes permissions, and implement the verified binding resolver and cleanup scheduler. Prove the complete path with real enrollment records, including replay, restore denial, and ambiguous SPIRE create/delete timeouts.
 
 The managed-runtime identity profile remains unqualified. Miget activation still requires the test project, credential location, spending limit and live qualification evidence from the [Miget runbook](miget.md).

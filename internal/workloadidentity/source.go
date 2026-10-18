@@ -3,9 +3,11 @@ package workloadidentity
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
@@ -81,6 +83,33 @@ func (s *Source) ClientTLS(controlURI string) (*tls.Config, error) {
 		return nil, ErrIdentity
 	}
 	config := tlsconfig.MTLSClientConfig(s, s, tlsconfig.AuthorizeID(peer))
+	config.MinVersion = tls.VersionTLS13
+	config.SessionTicketsDisabled = true
+	return config, nil
+}
+
+func (s *Source) Domain() string { return s.expected.TrustDomain().Name() }
+
+// ServerTLS accepts only agent identities in this control plane's organization.
+// The runtime handler separately checks active or pending enrollment per request.
+func (s *Source) ServerTLS(bundles x509bundle.Source) (*tls.Config, error) {
+	const prefix = "/loomplane/control/org/"
+	path := s.expected.Path()
+	if bundles == nil || !strings.HasPrefix(path, prefix) || !identitySegment.MatchString(strings.TrimPrefix(path, prefix)) {
+		return nil, ErrIdentity
+	}
+	org := strings.TrimPrefix(path, prefix)
+	authorize := func(id spiffeid.ID, _ [][]*x509.Certificate) error {
+		if id.TrustDomain() != s.expected.TrustDomain() {
+			return ErrIdentity
+		}
+		a, err := ParseAgentURI(id.String())
+		if err != nil || a.OrgID != org {
+			return ErrIdentity
+		}
+		return nil
+	}
+	config := tlsconfig.MTLSServerConfig(s, bundles, authorize)
 	config.MinVersion = tls.VersionTLS13
 	config.SessionTicketsDisabled = true
 	return config, nil

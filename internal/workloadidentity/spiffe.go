@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 
@@ -64,13 +65,19 @@ func ParseAgentURI(uri string) (domain.AgentIdentity, error) {
 type Registry interface {
 	CheckAgent(context.Context, domain.AgentIdentity) error
 }
+
+// TrustSource supplies the current bundle, including Workload API rotations.
+type TrustSource interface {
+	x509bundle.Source
+	Domain() string
+}
 type Verifier struct {
-	trust    *Trust
+	trust    TrustSource
 	registry Registry
 	now      func() time.Time
 }
 
-func NewVerifier(trust *Trust, registry Registry) *Verifier {
+func NewVerifier(trust TrustSource, registry Registry) *Verifier {
 	return &Verifier{trust: trust, registry: registry, now: time.Now}
 }
 
