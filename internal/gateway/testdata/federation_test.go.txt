@@ -1,0 +1,30 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/xraph/bastion/security"
+	"github.com/xraph/forge"
+)
+
+// This is a characterization of the pinned dependency, not an assertion that
+// federation TLS is safe. A dependency fix must change this qualification.
+func TestQualificationTLSReloadMissingCA(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, []byte("invalid CA"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager := security.NewTLSManager(security.TLSConfig{Enabled: true, CACertFile: path}, forge.NewNoopLogger())
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Reload(); err != nil {
+		t.Fatalf("pinned behavior changed; requalify: %v", err)
+	}
+	if manager.GlobalTLSConfig().RootCAs != nil {
+		t.Fatal("pinned behavior changed; requalify CA reload")
+	}
+	t.Log("UNSUPPORTED: missing private CA is silently replaced with system trust on reload")
+}

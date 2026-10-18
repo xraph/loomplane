@@ -28,6 +28,16 @@ Validation: Go lint and the full Go suite passed. The shared checkout dashboard 
 
 Pending: AWS S3 credentials/acceptance, process-crash recovery of incomplete uploads, policy-managed retention/encryption, PostgreSQL recovery workflows and restore authorization. Successful object transfer alone does not establish a usable database backup.
 
+### Docker persistent volumes, 18 October 2026
+
+Implemented: stable named volumes per instance and mount role, organization/project/environment/connection ownership checks, read-back after idempotent creation, explicit persistent mounts and retention on container removal. Rollouts reject changed mount roles or paths. Host binds and implied disk quotas are rejected. Docker local volumes share host capacity; this adapter does not promise a reserved size or host-loss durability.
+
+Verified: ownership collision and invalid mount tests; a real PostgreSQL 17 container retained an inserted row through replacement, removal and reattachment. The acceptance test used a unique container, network and volume, then removed its own resources.
+
+Validation: server package tests passed. Full lint and test runs encountered concurrent federation tests referencing unfinished types. These checks must be repeated after that work settles; this slice does not modify federation.
+
+Pending: Kubernetes PVC support, capacity monitoring, retained-volume inventory and explicit destruction, cross-host recovery, catalog wiring and database-aware rollout protection. Container persistence alone does not qualify PostgreSQL end to end.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.

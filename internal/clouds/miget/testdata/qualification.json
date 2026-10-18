@@ -1,0 +1,22 @@
+{
+  "provenance": "documentation-review-only",
+  "checked_on": "2026-10-18",
+  "base_url": "https://app.miget.com/api/v1",
+  "api_revision": null,
+  "live_captures": [],
+  "required_captures": [
+    "workspace-read",
+    "wrong-workspace-denial",
+    "project-denial",
+    "pagination",
+    "immutable-deploy",
+    "disable-auto-sync",
+    "secrets-isolation",
+    "logs-redaction",
+    "replacement-dns",
+    "backend-denial",
+    "ipsec-bootstrap",
+    "tunnel-and-gateway-cleanup"
+  ],
+  "enabled_capabilities": []
+}

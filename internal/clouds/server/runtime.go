@@ -48,6 +48,7 @@ func NetworkName(org, environment string) string {
 type containerInfo struct {
 	ID     string `json:"Id"`
 	Image  string
+	Mounts []struct{ Type, Name, Destination string }
 	Config struct {
 		Labels map[string]string
 		Image  string
@@ -121,6 +122,9 @@ func (r *Runtime) reconcilePorts(ctx context.Context, c *Client, iid id.ID, labe
 }
 
 func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (out *cpprovider.ProvisionResult, err error) {
+	if err := validateVolumes(spec.Volumes); err != nil {
+		return nil, err
+	}
 	c, err := r.Session(ctx, labels)
 	if err != nil {
 		return nil, err
@@ -143,6 +147,13 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	if previous != nil && stopped != nil {
 		return nil, errors.New("multiple previous server containers need reconciliation")
+	}
+	for _, existing := range []*containerInfo{old, previous, stopped} {
+		if existing != nil {
+			if checkErr := checkVolumeLayout(existing, iid, spec.Volumes); checkErr != nil {
+				return nil, checkErr
+			}
+		}
 	}
 	previousRunning := true
 	if stopped != nil {
@@ -178,8 +189,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		old = previous
 		old.State.Running = previousRunning
 	}
-	if len(spec.Volumes) > 0 {
-		return nil, errors.New("server volumes need an explicit supported mount configuration")
+	mounts, err := ensureVolumes(ctx, c, iid, spec.Volumes, labels)
+	if err != nil {
+		return nil, err
 	}
 	if labels[owned.LabelPublic] == "true" && r.Ports == nil {
 		return nil, errors.New("the server has no host port reservation store")
@@ -278,7 +290,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		}
 		ports[key] = []map[string]string{{"HostIp": host, "HostPort": hostPort}}
 	}
-	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": map[string]any{"RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
+	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": map[string]any{"Mounts": mounts, "RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
 	if len(spec.Command) > 0 {
 		body["Entrypoint"] = spec.Command
 	}
