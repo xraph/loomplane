@@ -122,8 +122,8 @@ func (r *Runtime) reconcilePorts(ctx context.Context, c *Client, iid id.ID, labe
 }
 
 func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (out *cpprovider.ProvisionResult, err error) {
-	if err := validateVolumes(spec.Volumes); err != nil {
-		return nil, err
+	if checkErr := validateVolumes(spec.Volumes); checkErr != nil {
+		return nil, checkErr
 	}
 	c, err := r.Session(ctx, labels)
 	if err != nil {

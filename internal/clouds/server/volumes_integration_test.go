@@ -4,7 +4,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -90,5 +89,5 @@ func TestDockerPostgresPersistentLifecycle(t *testing.T) {
 	if value := runSQL("SELECT value FROM persistence_probe"); value != "retained" {
 		t.Fatal(value)
 	}
-	t.Log(fmt.Sprintf("PostgreSQL row survived replacement, container removal and reattachment to %s", retained.Name))
+	t.Logf("PostgreSQL row survived replacement, container removal and reattachment to %s", retained.Name)
 }

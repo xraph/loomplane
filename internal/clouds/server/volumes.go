@@ -45,7 +45,7 @@ func validateVolumes(volumes []cpprovider.VolumeSpec) error {
 		}
 		// Docker's local driver shares host capacity; it cannot promise a disk quota.
 		if v.SizeMB != 0 {
-			return errors.New("Docker local volumes use shared host capacity; size quotas are unsupported")
+			return errors.New("docker local volumes use shared host capacity; size quotas are unsupported")
 		}
 		if names[v.Name] || mounts[v.MountPath] {
 			return errors.New("duplicate volume role or mount")
@@ -77,8 +77,8 @@ func ensureVolumes(ctx context.Context, c *Client, iid id.ID, volumes []cpprovid
 		}
 		err := dockerJSON(ctx, c, http.MethodGet, "/volumes/"+name, nil, &volume)
 		if errors.Is(err, ErrMissing) {
-			if err = dockerJSON(ctx, c, http.MethodPost, "/volumes/create", map[string]any{"Name": name, "Driver": "local", "Labels": expected}, nil); err != nil {
-				return nil, err
+			if createErr := dockerJSON(ctx, c, http.MethodPost, "/volumes/create", map[string]any{"Name": name, "Driver": "local", "Labels": expected}, nil); createErr != nil {
+				return nil, createErr
 			}
 			// Docker create is idempotent. Read back to detect a concurrent collision.
 			err = dockerJSON(ctx, c, http.MethodGet, "/volumes/"+name, nil, &volume)
