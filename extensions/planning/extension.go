@@ -14,8 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/xraph/chronicle"
@@ -27,6 +25,8 @@ import (
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
+	"github.com/xraph/trove"
+	troveext "github.com/xraph/trove/extension"
 	"github.com/xraph/vault/crypto"
 	"github.com/xraph/vault/secret"
 	vaultpg "github.com/xraph/vault/store/postgres"
@@ -101,7 +101,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 func (e *Extension) Dependencies() []string {
 	return []string{
 		identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
-		connectionsext.Name, environmentsext.Name, realtimeext.Name,
+		connectionsext.Name, environmentsext.Name, realtimeext.Name, troveext.ExtensionName,
 	}
 }
 
@@ -143,9 +143,15 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("planning needs the discovery extension: %w", err)
 	}
-	if e.artifacts, err = artifacts.Open(context.Background(), storageURL(e.cfg)); err != nil {
-		return err
+	files, err := forge.InjectType[*trove.Trove](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the trove extension: %w", err)
 	}
+	bucket := e.cfg.Storage.ArtifactBucket
+	if bucket == "" {
+		bucket = artifacts.Bucket
+	}
+	e.artifacts = artifacts.New(files, bucket)
 	if e.engineOf() == nil {
 		return errors.New("planning needs the dispatch extension to have registered")
 	}
@@ -310,19 +316,6 @@ func (e *Extension) Stop(ctx context.Context) error {
 	}
 	e.MarkStopped()
 	return nil
-}
-
-// storageURL is the configured artifact storage, or a directory under
-// the working directory for development.
-func storageURL(cfg config.Config) string {
-	if cfg.Storage.URL != "" {
-		return cfg.Storage.URL
-	}
-	dir, err := filepath.Abs(filepath.Join(".loomplane", "storage"))
-	if err != nil {
-		dir = filepath.Join(os.TempDir(), "loomplane-storage")
-	}
-	return "file://" + filepath.ToSlash(dir)
 }
 
 // fail maps a service error to its HTTP response.

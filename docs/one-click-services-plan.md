@@ -1,6 +1,18 @@
 # One-click services, persistence, and recovery
 
-Status: proposed implementation plan. Source review: 18 October 2026. No new deployment capability is implemented by this document.
+Status: implementation in progress. Source review: 18 October 2026. The verification ledger below records completed slices; the remaining sections describe the target design.
+
+## Implementation and verification ledger
+
+### Trove extension foundation, 18 October 2026
+
+Implemented: published Trove root, extension and S3 driver v1.7.1 pins; extension-owned artifact and backup stores; central Trove metadata migrations; configurable independent backup URL and bucket; existing artifact bucket/key compatibility; borrowed artifact handles do not close the shared driver. Remote S3 buckets must already exist. Local buckets are created at startup.
+
+Verified: local artifact contents survive extension restart; artifact and backup stores remain separate; shared storage survives closing an artifact handle; the full Forge application starts, migrates and survives restart against real PostgreSQL. `make test` passed, including 227 dashboard tests. Targeted storage/configuration tests passed.
+
+Not yet verified: a live AWS S3 connection, large backup transfer, persistent deployed-service volumes, PostgreSQL service deployment/backup/restore, UI and CLI service management. This slice does not qualify any new catalog service.
+
+Formatting uses the repository's configured `golangci-lint fmt` on owned Go files and Prettier on this document. There are no `make f` or `make l` aliases; lint uses `make lint`, or its identical Go command with `--allow-serial-runners` followed by `make lint-dashboard` when another checkout holds the global linter lock.
 
 You should be able to pick a service, choose a connected target, and deploy it with working credentials, durable storage, health checks, and a recovery policy. Once you've configured an environment's defaults, the normal path is one Deploy action. The same recipe must work from the dashboard, loomctl, and the API.
 

@@ -16,6 +16,7 @@ import (
 	conduitpg "github.com/xraph/forge/extensions/conduit/providers/postgres"
 	"github.com/xraph/grove/migrate"
 	kspg "github.com/xraph/keysmith/store/postgres"
+	trovepg "github.com/xraph/trove/extension/store/postgres"
 	vaultpg "github.com/xraph/vault/store/postgres"
 	wardenpg "github.com/xraph/warden/store/postgres"
 )
@@ -71,6 +72,7 @@ func All() []*migrate.Group {
 		cppg.Migrations,
 		vaultpg.Migrations,
 		kspg.Migrations,
+		trovepg.Migrations,
 	}
 }
 

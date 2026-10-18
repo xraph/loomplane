@@ -25,7 +25,9 @@ var ErrNotFound = errors.New("artifact not found")
 
 // Store is Trove, opened on one bucket.
 type Store struct {
-	t *trove.Trove
+	t      *trove.Trove
+	bucket string
+	owned  bool
 }
 
 // Open opens the storage a URL names: file:///absolute/path for a local
@@ -59,12 +61,12 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	if err := t.CreateBucket(ctx, Bucket); err != nil && !errors.Is(err, driver.ErrBucketExists) {
 		return nil, fmt.Errorf("create bucket: %w", err)
 	}
-	return &Store{t: t}, nil
+	return &Store{t: t, bucket: Bucket, owned: true}, nil
 }
 
 // Put stores r under key, replacing what was there, and returns its size.
 func (s *Store) Put(ctx context.Context, key string, r io.Reader, contentType string) (int64, error) {
-	info, err := s.t.Put(ctx, Bucket, key, r, driver.WithContentType(contentType))
+	info, err := s.t.Put(ctx, s.bucket, key, r, driver.WithContentType(contentType))
 	if err != nil {
 		return 0, fmt.Errorf("store artifact: %w", err)
 	}
@@ -73,7 +75,7 @@ func (s *Store) Put(ctx context.Context, key string, r io.Reader, contentType st
 
 // Open reads an artifact. The caller closes it.
 func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, int64, error) {
-	obj, err := s.t.Get(ctx, Bucket, key)
+	obj, err := s.t.Get(ctx, s.bucket, key)
 	if errors.Is(err, trove.ErrNotFound) {
 		return nil, 0, ErrNotFound
 	}
@@ -89,7 +91,7 @@ func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, int64, err
 
 // Exists reports whether key is stored.
 func (s *Store) Exists(ctx context.Context, key string) (bool, error) {
-	_, err := s.t.Head(ctx, Bucket, key)
+	_, err := s.t.Head(ctx, s.bucket, key)
 	if errors.Is(err, trove.ErrNotFound) {
 		return false, nil
 	}
@@ -99,5 +101,13 @@ func (s *Store) Exists(ctx context.Context, key string) (bool, error) {
 	return true, nil
 }
 
-// Close releases the storage.
-func (s *Store) Close(ctx context.Context) error { return s.t.Close(ctx) }
+// New borrows an extension-managed store. Its owner closes the driver.
+func New(t *trove.Trove, bucket string) *Store { return &Store{t: t, bucket: bucket} }
+
+// Close releases storage opened by Open. Borrowed storage stays open.
+func (s *Store) Close(ctx context.Context) error {
+	if s.owned {
+		return s.t.Close(ctx)
+	}
+	return nil
+}

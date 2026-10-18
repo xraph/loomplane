@@ -86,6 +86,10 @@ drift:
 # directory; empty means .loomplane/storage under the working directory.
 storage:
   url: "${LOOMPLANE_STORAGE_URL:-}"
+  artifact_bucket: "${LOOMPLANE_ARTIFACT_BUCKET:-loomplane-artifacts}"
+  # Use an independent S3 destination for off-host recovery.
+  backup_url: "${LOOMPLANE_BACKUP_URL:-}"
+  backup_bucket: "${LOOMPLANE_BACKUP_BUCKET:-loomplane-backups}"
 
 # Where Loomplane's cloud clients send requests. Leave these empty: they
 # exist so tests can stand a fake Google Cloud or Vercel in for the real

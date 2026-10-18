@@ -130,6 +130,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 	return []forge.Extension{
 		newSchemaGuard(cfg),
 		db,
+		newFiles(cfg),
 		identity.New(cfg),
 		jobs,
 		ctrl,

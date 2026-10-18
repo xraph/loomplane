@@ -211,6 +211,12 @@ type DriftConfig struct {
 // StorageConfig is where artifacts go, such as the source of each
 // deployment.
 type StorageConfig struct {
+	// ArtifactBucket overrides the existing artifact bucket name.
+	ArtifactBucket string
+	// BackupURL selects an independent backup backend; empty uses URL.
+	BackupURL string
+	// BackupBucket separates recovery objects from source artifacts.
+	BackupBucket string
 	// URL names the storage: file:///absolute/path for a directory. Empty
 	// means .loomplane/storage under the working directory, for
 	// development.
@@ -342,6 +348,9 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
 	r.str(&c.Storage.URL, "storage.url")
+	r.str(&c.Storage.ArtifactBucket, "storage.artifact_bucket")
+	r.str(&c.Storage.BackupURL, "storage.backup_url")
+	r.str(&c.Storage.BackupBucket, "storage.backup_bucket")
 	r.duration(&c.Drift.Interval, "drift.interval")
 	r.str(&c.Clouds.GoogleEndpoint, "clouds.google_endpoint")
 	r.str(&c.Clouds.VercelEndpoint, "clouds.vercel_endpoint")
