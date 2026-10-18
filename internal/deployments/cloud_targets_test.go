@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/providers"
 )
 
 type cloudResolver struct{ assignment *cloudprofiles.Assignment }
@@ -293,6 +294,59 @@ func TestRunnerCloudTargetsTwoVercelAccountsIgnoreDefault(t *testing.T) {
 		b := plans.bindings[a.ID]
 		if b == nil || b.ConnectionID != a.ConnectionID {
 			t.Fatalf("wrong managed account for %s: %+v", a.Name, b)
+		}
+	}
+}
+
+func TestRunnerCloudAdoptionRevalidatesOwnedConnectionSettings(t *testing.T) {
+	for _, field := range []string{"ingress_domain", "tls_secret", "storage_class"} {
+		for _, atStart := range []bool{true, false} {
+			t.Run(field+map[bool]string{true: " start", false: " run"}[atStart], func(t *testing.T) {
+				r, plan, plans, exec, resolver := cloudRunner(t)
+				r.providers = providers.Registry()
+				a := &plan.Actions[0]
+				a.Provider = "kubernetes"
+				a.Service.Provider = a.Provider
+				a.Op = planning.Keep
+				a.AdoptCloudPlacement = true
+				pin := a.Service.CloudPlacement
+				pin.Provider = a.Provider
+				resolver.assignment.Targets[0].Provider = a.Provider
+				c := r.credentials.(targetCredentials)[a.ConnectionID]
+				c.Cloud = "kubernetes"
+				c.Details = map[string]string{"endpoint": "https://cluster", "namespace": "default", "namespace_uid": "namespace-a", "ingress_domain": "apps.example.com", "tls_secret": "tls-original", "storage_class": "fast"}
+				pin.AccountIdentity = connections.AccountIdentity(c.Cloud, c.Account, c.Details)
+				a.Service.Target = a.ConnectionID
+				a.Service.TargetSettings = planning.ReviewedConnectionSettings(c.Cloud, c.Details)
+				cfg := *a.Service
+				cfg.CloudPlacement = nil
+				raw, _ := json.Marshal(cfg)
+				b := &planning.Binding{ID: "existing", OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Subject: a.Subject, Name: a.Name, Provider: a.Provider, ConnectionID: a.ConnectionID, ExternalID: "serving", Config: raw}
+				a.CloudAdoption = planning.ReviewCloudAdoption(b)
+				plans.bindings[a.ID] = b
+				original := string(raw)
+				if atStart {
+					c.Details[field] = "changed"
+					if _, _, err := r.Start(t.Context(), plan.OrgID, plan.ID); err == nil {
+						t.Fatal("stale owned settings started adoption")
+					}
+				} else {
+					id, _, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					c.Details[field] = "changed"
+					if err = r.Run(t.Context(), plan.OrgID, id, a.ID, nil, func([]byte) error { return nil }); err == nil {
+						t.Fatal("stale owned settings were adopted")
+					}
+				}
+				if string(plans.bindings[a.ID].Config) != original || len(exec.jobs) > 0 {
+					t.Fatal("stale settings changed binding or provider")
+				}
+				if got := connections.AccountIdentity(c.Cloud, c.Account, c.Details); got != pin.AccountIdentity {
+					t.Fatal("fixture changed resource identity instead of reviewed settings")
+				}
+			})
 		}
 	}
 }

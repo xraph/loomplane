@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -53,6 +54,9 @@ func (r *Runner) validateCloudPlacement(ctx context.Context, plan *planning.Plan
 	}
 	if conn == nil || conn.ID != pin.ConnectionID || conn.Cloud != prov.Cloud || conn.Status != connections.StatusReady {
 		return stale("connection is no longer ready for this provider")
+	}
+	if planning.OwnedCloud(conn.Cloud) && !reflect.DeepEqual(a.Service.TargetSettings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
+		return stale("settings changed since review")
 	}
 	identity := connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details)
 	if identity == "" || identity != pin.AccountIdentity {

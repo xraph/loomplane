@@ -13,12 +13,15 @@ import (
 // AccountIdentity fingerprints verified placement scope. Permission results,
 // timestamps, principals and credential material do not participate, so you can
 // rotate a token or service account within the same deployment account. Missing
-// immutable Vercel, namespace or daemon identities return an empty fingerprint.
+// managed account scope, namespace or daemon identities return an empty fingerprint.
 func AccountIdentity(cloud, account string, details map[string]string) string {
 	scope := map[string]string{"cloud": cloud}
 	var keys []string
 	switch cloud {
 	case GCP:
+		if strings.TrimSpace(details["project_id"]) == "" {
+			return ""
+		}
 		keys = []string{"project_id"}
 	case Vercel:
 		if strings.TrimSpace(details["team_id"]) != "" {
@@ -30,8 +33,14 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 			keys = []string{"user_id"}
 		}
 	case Render:
+		if strings.TrimSpace(details["owner_id"]) == "" {
+			return ""
+		}
 		keys = []string{"owner_id"}
 	case AWS:
+		if strings.TrimSpace(account) == "" || strings.TrimSpace(details["region"]) == "" {
+			return ""
+		}
 		keys = []string{"region"}
 	case Kubernetes:
 		if strings.TrimSpace(details["namespace_uid"]) == "" {
@@ -56,15 +65,11 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 	// return an empty fingerprint and must be verified before use.
 	switch cloud {
 	case GCP:
-		if scope["project_id"] == "" {
-			scope["account"] = account
-		}
+		// The verified project ID identifies this account.
 	case Vercel:
 		// User and team IDs already identify their scopes, including renames.
 	case Render:
-		if scope["owner_id"] == "" {
-			scope["account"] = account
-		}
+		// The verified owner ID identifies this workspace.
 	case Kubernetes:
 		if scope["endpoint"] == "" || scope["namespace"] == "" {
 			scope["account"] = account

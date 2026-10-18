@@ -169,6 +169,9 @@ func TestCloudTargetsManagedPrivateDependenciesStayInAccount(t *testing.T) {
 				c[i].Cloud = cloud
 				c[i].Account = c[i].ID
 				c[i].Details = map[string]string{"project_id": c[i].ID}
+				if cloud == "aws" {
+					c[i].Details["region"] = "us-east-1"
+				}
 			}
 			doc := "version: 1\nservices:\n  web: {source: cmd/api, cloud_target: frontend, needs: [private]}\n  private: {source: cmd/api, cloud_target: preview, public: false}\n"
 			m, pins, err := ResolveCloudTargets(parse(t, doc), "production", a, c)

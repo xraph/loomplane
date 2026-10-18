@@ -133,7 +133,7 @@ func TestAccountIdentity_stableScope(t *testing.T) {
 			}
 		})
 	}
-	if AccountIdentity(AWS, "account-a", nil) == AccountIdentity(AWS, "account-b", nil) {
+	if AccountIdentity(AWS, "account-a", map[string]string{"region": "us-east-1"}) == AccountIdentity(AWS, "account-b", map[string]string{"region": "us-east-1"}) {
 		t.Fatal("AWS accounts collapsed")
 	}
 	if AccountIdentity(Vercel, "alice", nil) != "" {
