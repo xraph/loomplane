@@ -53,7 +53,7 @@ func (o *KubernetesObserver) validate() error {
 	if o.Client == nil || o.Publish == nil || o.NextSequence == nil || len(validation.IsDNS1123Label(o.Namespace)) != 0 || len(o.Targets) == 0 || len(o.Targets) > MaxBatch {
 		return ErrInvalid
 	}
-	if err := validateRegistration(o.Registration); err != nil {
+	if err := ValidateRegistration(o.Registration); err != nil {
 		return err
 	}
 	if len(o.Targets) != len(o.Registration.Exports) {

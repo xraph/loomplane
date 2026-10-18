@@ -163,9 +163,12 @@ type EnrollmentRequest struct {
 // Enrollment describes an expiring enrollment handle; secrets are delivered separately.
 type Enrollment struct {
 	Metadata
-	DestinationID string     `json:"destination_id"`
-	ExpiresAt     time.Time  `json:"expires_at"`
-	ConsumedAt    *time.Time `json:"consumed_at,omitempty"`
+	Agent             AgentIdentity    `json:"agent"`
+	Identity          PhysicalIdentity `json:"identity"`
+	AttestationMethod string           `json:"attestation_method"`
+	DestinationID     string           `json:"destination_id"`
+	ExpiresAt         time.Time        `json:"expires_at"`
+	ConsumedAt        *time.Time       `json:"consumed_at,omitempty"`
 }
 
 // ProbeRequest names an exact exported service and caller for a reachability check.

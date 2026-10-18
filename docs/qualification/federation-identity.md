@@ -1,6 +1,6 @@
 # Workload identity qualification
 
-Status: identity primitives and the isolated Unix/SPIRE fixture are implemented. Task 5 remains open. You cannot enroll a production destination or start an authenticated Loomplane agent from this checkpoint alone.
+Status: identity primitives, persisted enrollment, and the isolated Unix/SPIRE fixture are implemented. Task 5 remains open. You cannot enroll a production destination or start an authenticated Loomplane agent from this checkpoint alone.
 
 ## Run the local fixture
 
@@ -46,8 +46,20 @@ Kubernetes registration pins namespace, service account, pod UID and container n
 
 Unix registration requires a verified parent node, UID, executable path and SHA256. The [Unix attestor](https://github.com/spiffe/spire/blob/v1.15.4/doc/plugin_agent_workloadattestor_unix.md) must enable workload-path discovery. Keys remain in the local Workload API source. The public agent state database stores no private keys or reusable bootstrap credentials.
 
+## Persisted enrollment
+
+You can exercise the enrollment store against PostgreSQL with `TestEnrollmentCannotBeReplayed`. It allocates epochs on the server, checks the destination generation and physical identity, and activates an observer in the same transaction that consumes its five-minute reference. Eight concurrent consumers produce one activation. A failed observer insert rolls back both retirement of the old observer and consumption of the new reference.
+
+The active registry reads current observer and destination state. Replacement, quarantine and local revocation deny an otherwise valid identity. Failed SPIRE deletion keeps the destination's trust reference for retry. Successful deletion removes the retired observer and enrollment together; the separate epoch counter survives cleanup. Cleanup candidates exclude an active observer whose bootstrap reference has expired.
+
+The management controller requires destination-management and trust-management permissions, a signed-in user, fresh connection identity, and qualified workload attestation. Its request accepts only a destination ID. A trusted resolver supplies workload bindings and export bounds. Runtime credentials cannot become management principals through this controller.
+
+Enrollment race tests, migration reruns, focused package lint, dashboard lint/typecheck, the full build, and all Go tests against the exact proposed commit tree passed. Full shared-checkout lint currently reports formatting in a concurrent Kubernetes PostgreSQL test; this checkpoint preserves that file.
+
+The PostgreSQL tests use a fake issuer to inject failures. They do not establish distributed SPIRE timeout behavior. The live fixture still uses its in-memory registry, so complete enrollment over the runtime transport remains unverified.
+
 ## Remaining Task 5 work
 
-Persist one-use Loomplane enrollment and revocation, wire the active-agent registry to destination state, add the authenticated observation/watch endpoint and agent executable, and connect configuration, audit and namespace-scoped Kubernetes permissions. Prove the complete path with real enrollment records, including replay and restore denial.
+Add the authenticated observation/watch endpoint and agent executable, connect configuration and namespace-scoped Kubernetes permissions, and implement the verified binding resolver and cleanup scheduler. Prove the complete path with real enrollment records, including replay, restore denial, and ambiguous SPIRE create/delete timeouts.
 
 The managed-runtime identity profile remains unqualified. Miget activation still requires the test project, credential location, spending limit and live qualification evidence from the [Miget runbook](miget.md).

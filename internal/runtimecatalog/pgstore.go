@@ -27,7 +27,7 @@ var _ Store = (*PgStore)(nil)
 // Register is for the authorized enrollment controller. No HTTP observer may
 // choose its identity, allowed exports or CIDRs. The FK retains the destination.
 func (s *PgStore) Register(ctx context.Context, reg Registration) (err error) {
-	if validationErr := validateRegistration(reg); validationErr != nil {
+	if validationErr := ValidateRegistration(reg); validationErr != nil {
 		return validationErr
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -35,6 +35,18 @@ func (s *PgStore) Register(ctx context.Context, reg Registration) (err error) {
 		return err
 	}
 	defer func() { err = finish(tx, err) }()
+	if stepErr := RegisterTx(ctx, tx, reg); stepErr != nil {
+		return stepErr
+	}
+	return tx.Commit()
+}
+
+// RegisterTx joins enrollment activation to the caller's transaction.
+func RegisterTx(ctx context.Context, tx driver.Tx, reg Registration) error {
+	if stepErr := ValidateRegistration(reg); stepErr != nil {
+		return stepErr
+	}
+	var err error
 	var generation int64
 	if err = tx.QueryRow(ctx, `SELECT generation FROM loomplane_federation_destinations WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND id=$4 AND NOT quarantined FOR SHARE`, reg.Agent.OrgID, reg.Agent.ProjectID, reg.Agent.EnvironmentID, reg.Agent.DestinationID).Scan(&generation); err != nil {
 		return catalogError(err)
@@ -50,16 +62,14 @@ func (s *PgStore) Register(ctx context.Context, reg Registration) (err error) {
 	if _, err := tx.Exec(ctx, `INSERT INTO loomplane_federation_observers(org_id,project_id,environment_id,agent_id,destination_id,destination_generation,active,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, reg.Agent.OrgID, reg.Agent.ProjectID, reg.Agent.EnvironmentID, reg.Agent.AgentID, reg.Agent.DestinationID, generation, reg.Active, raw); err != nil {
 		return catalogError(err)
 	}
-	if err := appendChange(ctx, tx, &state); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return appendChange(ctx, tx, &state)
 }
 
-func validateRegistration(reg Registration) error {
+// ValidateRegistration checks server-owned export bounds before issuing credentials.
+func ValidateRegistration(reg Registration) error {
 	state := AgentState{Registration: reg}
-	if err := checkAgent(&state, reg.Agent); err != nil {
-		return err
+	if stepErr := checkAgent(&state, reg.Agent); stepErr != nil {
+		return stepErr
 	}
 	if reg.DestinationGeneration < 1 || len(reg.Exports) > MaxBatch {
 		return ErrInvalid
@@ -93,8 +103,8 @@ func loadAgent(ctx context.Context, tx driver.Tx, agent domain.AgentIdentity, lo
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, fmt.Errorf("decode observer: %w", err)
 	}
-	if err := checkAgent(&state, agent); err != nil {
-		return nil, err
+	if stepErr := checkAgent(&state, agent); stepErr != nil {
+		return nil, stepErr
 	}
 	return &state, nil
 }
@@ -121,8 +131,8 @@ func (s *PgStore) Update(ctx context.Context, agent domain.AgentIdentity, change
 	if _, err := tx.Exec(ctx, `UPDATE loomplane_federation_observers SET state=$3,updated_at=now() WHERE org_id=$1 AND agent_id=$2`, agent.OrgID, agent.AgentID, raw); err != nil {
 		return err
 	}
-	if err := appendChange(ctx, tx, state); err != nil {
-		return err
+	if stepErr := appendChange(ctx, tx, state); stepErr != nil {
+		return stepErr
 	}
 	return tx.Commit()
 }
@@ -213,8 +223,8 @@ func (s *PgStore) GetView(ctx context.Context, agent domain.AgentIdentity, id st
 		}
 		return nil, err
 	}
-	if err := json.Unmarshal(raw, &view); err != nil {
-		return nil, err
+	if stepErr := json.Unmarshal(raw, &view); stepErr != nil {
+		return nil, stepErr
 	}
 	if view.Agent != agent {
 		return nil, ErrCursorExpired
@@ -257,4 +267,43 @@ func finish(tx driver.Tx, err error) error {
 		}
 	}
 	return err
+}
+
+// CheckAgent rechecks the current observer and destination for every credential use.
+func (s *PgStore) CheckAgent(ctx context.Context, agent domain.AgentIdentity) (err error) {
+	tx, err := s.db.BeginTx(ctx, &driver.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { err = finish(tx, err) }()
+	if _, err = loadAgent(ctx, tx, agent, false); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DeactivateTx retires an observer and publishes the invalidation atomically.
+// An empty agent ID retires whichever observer is active at the destination.
+func DeactivateTx(ctx context.Context, tx driver.Tx, org, destination, agent string) error {
+	var raw []byte
+	err := tx.QueryRow(ctx, `SELECT state FROM loomplane_federation_observers WHERE org_id=$1 AND destination_id=$2 AND active AND ($3='' OR agent_id=$3) FOR UPDATE`, org, destination, agent).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var state AgentState
+	if stepErr := json.Unmarshal(raw, &state); stepErr != nil {
+		return stepErr
+	}
+	state.Registration.Active = false
+	raw, err = json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_federation_observers SET active=false,state=$3,updated_at=now() WHERE org_id=$1 AND agent_id=$2`, org, state.Registration.Agent.AgentID, raw); err != nil {
+		return err
+	}
+	return appendChange(ctx, tx, &state)
 }
