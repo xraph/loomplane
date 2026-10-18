@@ -159,12 +159,12 @@ Dependencies: Tasks 1-3. Gate: G1 catalog behavior.
 
 **Interfaces:** `Catalog.Observe(ctx context.Context, agent federation.AgentIdentity, batch federation.ObservationBatch) error`; `Catalog.Snapshot(ctx context.Context, requester federation.AgentIdentity, request federation.SnapshotRequest) (*federation.Snapshot, error)`. Observations are fenced by destination epoch and generation. A snapshot has a revision, continuation cursor, endpoints and tombstones.
 
-- [ ] Write `TestEndpointLeaseAndGeneration`, `TestCatalogScope`, `TestSnapshotAcrossReconnect`, and `TestEndpointTombstoneWins`. Use a fake clock: endpoint is unavailable at 30 seconds without renewal; generation 8 cannot overwrite deletion at generation 9.
-- [ ] Run `go test ./internal/runtimecatalog -run 'TestEndpoint|TestCatalog|TestSnapshot' -count=1`; confirm failing behavior.
-- [ ] Implement scoped persistence, lease expiry, atomic paginated snapshots and EndpointSlice list/watch with resource-version resync. Observe readiness/serving/terminating correctly; avoid assuming a terminated pod address remains valid.
-- [ ] Enforce registered address/port bounds, reject metadata and cross-destination endpoint injection, and cap observations per batch. Use bounded per-scope events for updates and a full snapshot after cursor expiry.
-- [ ] Run `go test -race ./internal/runtimecatalog -count=1` and `go test -tags=integration ./tests/integration -run TestRuntimeCatalog -count=1`. Prove an interrupted snapshot cannot mix revisions or leak a foreign export.
-- [ ] Complete verification and commit `feat: track live service endpoints by destination`.
+- [x] Write `TestEndpointLeaseAndGeneration`, `TestCatalogScope`, `TestSnapshotAcrossReconnect`, and `TestEndpointTombstoneWins`. Use a fake clock: endpoint is unavailable at 30 seconds without renewal; generation 8 cannot overwrite deletion at generation 9.
+- [x] Run `go test ./internal/runtimecatalog -run 'TestEndpoint|TestCatalog|TestSnapshot' -count=1`; confirm failing behavior.
+- [x] Implement scoped persistence, lease expiry, atomic paginated snapshots and EndpointSlice list/watch with resource-version resync. Observe readiness/serving/terminating correctly; avoid assuming a terminated pod address remains valid.
+- [x] Enforce registered address/port bounds, reject metadata and cross-destination endpoint injection, and cap observations per batch. Use bounded per-scope events for updates and a full snapshot after cursor expiry.
+- [x] Run `go test -race ./internal/runtimecatalog -count=1` and `go test -tags=integration ./tests/integration -run TestRuntimeCatalog -count=1`. Prove an interrupted snapshot cannot mix revisions or leak a foreign export.
+- [x] Complete verification and commit `feat: track live service endpoints by destination`.
 
 ### Task 5: Enroll agents and workload identities
 

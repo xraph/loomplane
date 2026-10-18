@@ -91,6 +91,15 @@ type Endpoint struct {
 	ExpiresAt     time.Time `json:"expires_at"`
 }
 
+// EndpointTombstone fences a deleted endpoint against delayed observations.
+type EndpointTombstone struct {
+	Metadata
+	DestinationID string    `json:"destination_id"`
+	ExportID      string    `json:"export_id"`
+	ObserverID    string    `json:"observer_id"`
+	DeletedAt     time.Time `json:"deleted_at"`
+}
+
 // AgentIdentity binds an agent to a destination and restore/revocation epoch.
 type AgentIdentity struct {
 	Scope
@@ -102,14 +111,21 @@ type AgentIdentity struct {
 
 // ObservationBatch fences a destination observer's monotonic report.
 type ObservationBatch struct {
-	Agent     AgentIdentity `json:"agent"`
-	Sequence  uint64        `json:"sequence"`
-	Endpoints []Endpoint    `json:"endpoints"`
+	DestinationGeneration int64               `json:"destination_generation"`
+	Full                  bool                `json:"full,omitempty"`
+	Tombstones            []EndpointTombstone `json:"tombstones,omitempty"`
+	Agent                 AgentIdentity       `json:"agent"`
+	Sequence              uint64              `json:"sequence"`
+	Endpoints             []Endpoint          `json:"endpoints"`
 }
 
-// Snapshot is an expiring, signed routing and policy envelope. Consumers must
-// verify its signature, scope, epoch and revision before applying its payload.
+// Snapshot carries an expiring routing and policy envelope. Catalog reads are
+// unsigned inputs to the policy signer. Consumers must verify the final signature,
+// scope, epoch and revision before applying its payload.
 type Snapshot struct {
+	Full       bool                `json:"full"`
+	NextCursor string              `json:"next_cursor,omitempty"`
+	Tombstones []EndpointTombstone `json:"tombstones,omitempty"`
 	Scope
 	DestinationID string       `json:"destination_id"`
 	Epoch         uint64       `json:"epoch"`
@@ -125,6 +141,8 @@ type Snapshot struct {
 
 // SnapshotRequest identifies the agent's last applied snapshot.
 type SnapshotRequest struct {
+	Cursor        string        `json:"cursor,omitempty"`
+	Limit         int           `json:"limit,omitempty"`
 	Agent         AgentIdentity `json:"agent"`
 	AfterSequence uint64        `json:"after_sequence"`
 }
