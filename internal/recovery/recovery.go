@@ -45,7 +45,7 @@ type Backup struct {
 	Token         string             `json:"-"`
 }
 
-type CreateInput struct {
+type BackupCreateInput struct {
 	Environment string `json:"environment"`
 	Resource    string `json:"resource"`
 	RequestID   string `json:"request_id"`
@@ -75,17 +75,21 @@ type Backend interface {
 	BackupDatabase(context.Context, security.Principal, *planning.Binding, *backupfiles.Store, string) (backupfiles.Object, error)
 }
 type Service struct {
-	Store    Store
-	Authz    Authorizer
-	Projects Projects
-	Bindings Bindings
-	Backend  Backend
-	Files    *backupfiles.Store
-	Enqueue  func(context.Context, string, string) error
-	Audit    projects.Auditor
+	Policies       PolicyStore
+	Restores       RestoreStore
+	RestoreBackend RestoreBackend
+	EnqueueRestore func(context.Context, string, string) error
+	Store          Store
+	Authz          Authorizer
+	Projects       Projects
+	Bindings       Bindings
+	Backend        Backend
+	Files          *backupfiles.Store
+	Enqueue        func(context.Context, string, string) error
+	Audit          projects.Auditor
 }
 
-func (s *Service) Create(ctx context.Context, p security.Principal, project string, in CreateInput) (*Backup, error) {
+func (s *Service) Create(ctx context.Context, p security.Principal, project string, in BackupCreateInput) (*Backup, error) {
 	if err := s.Authz.Require(ctx, p, security.BackupManage, project); err != nil {
 		return nil, err
 	}
@@ -235,6 +239,14 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if checkErr := s.Enqueue(ctx, record.OrgID, record.ID); checkErr != nil {
 			return checkErr
 		}
+	}
+	if s.Policies != nil {
+		if err := s.reconcilePolicies(ctx); err != nil {
+			return err
+		}
+	}
+	if s.Restores != nil {
+		return s.reconcileRestores(ctx)
 	}
 	return nil
 }

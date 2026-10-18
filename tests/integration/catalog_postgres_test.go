@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/xraph/ctrlplane/id"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -145,6 +146,16 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 	if backup.Status != "succeeded" || backup.Bytes == 0 || backup.RestoredAt != nil {
 		t.Fatalf("backup evidence: %+v", backup)
 	}
+	var policy recovery.Policy
+	c.must(http.StatusOK, http.MethodPut, base+"/backup-policies", map[string]any{"environment": "production", "resource": "database", "every_hours": 24, "enabled": true}, &policy)
+	db, err := pgx.Connect(t.Context(), cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(context.Background())
+	if _, err = db.Exec(t.Context(), "UPDATE loomplane_backup_policies SET next_at=now()-interval '1 second' WHERE id=$1", policy.ID); err != nil {
+		t.Fatal(err)
+	}
 	running.stop()
 	running = start(t, cfg)
 	c.base = running.srv.URL
@@ -152,6 +163,87 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/service-backups/"+backup.ID, nil, &afterRestart)
 	if afterRestart.Status != "succeeded" || afterRestart.SHA256 != backup.SHA256 {
 		t.Fatalf("lost recovery point after restart: %+v", afterRestart)
+	}
+
+	// Delete the source row after backup. The recovered copy must contain it,
+	// while the live source must remain unchanged by the restore workflow.
+	fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(iid), "psql", "-U", "app", "-d", "database", "-c", "DELETE FROM catalog_probe")
+	var restored, repeated recovery.Restore
+	restoreRequest := map[string]string{"request_id": "acceptance-restore-1"}
+	c.must(http.StatusAccepted, http.MethodPost, "/api/v1/service-backups/"+backup.ID+"/restore", restoreRequest, &restored)
+	c.must(http.StatusAccepted, http.MethodPost, "/api/v1/service-backups/"+backup.ID+"/restore", restoreRequest, &repeated)
+	if restored.ID != repeated.ID {
+		t.Fatal("restore request is not idempotent")
+	}
+	deadline = time.Now().Add(3 * time.Minute)
+	for restored.Status == "queued" || restored.Status == "running" {
+		if time.Now().After(deadline) {
+			t.Fatalf("restore did not settle: %+v", restored)
+		}
+		time.Sleep(100 * time.Millisecond)
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/service-restores/"+restored.ID, nil, &restored)
+	}
+	if restored.Status != "succeeded" || restored.VerifiedAt == nil {
+		t.Fatalf("restore evidence: %+v", restored)
+	}
+	cloneID, err := id.Parse(restored.ExternalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(cloneID), "psql", "-U", "app", "-d", "database", "-At", "-c", "SELECT value FROM catalog_probe")
+	if recovered != "from-api" {
+		t.Fatalf("restored row: %s", recovered)
+	}
+	live := fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(iid), "psql", "-U", "app", "-d", "database", "-At", "-c", "SELECT count(*) FROM catalog_probe")
+	if live != "0" {
+		t.Fatalf("restore modified the live source: %s", live)
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/service-backups/"+backup.ID, nil, &afterRestart)
+	if afterRestart.RestoredAt == nil {
+		t.Fatal("successful restore did not record backup evidence")
+	}
+	c.must(http.StatusNoContent, http.MethodDelete, "/api/v1/service-restores/"+restored.ID, nil, nil)
+	c.must(http.StatusNoContent, http.MethodDelete, "/api/v1/service-restores/"+restored.ID, nil, nil)
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/service-restores/"+restored.ID, nil, &restored)
+	if restored.Status != "deleted" || restored.VerifiedAt == nil {
+		t.Fatalf("cleanup lost restore evidence: %+v", restored)
+	}
+	remaining := fixtureCommand(t, "docker", "--host", "unix://"+socket, "volume", "ls", "-q", "--filter", "label=loomplane.instance="+cloneID.String())
+	if remaining != "" {
+		t.Fatalf("recovery volume survived cleanup: %s", remaining)
+	}
+
+	// Let the real persisted Dispatch cron request the due backup after restart.
+	var scheduled struct {
+		Backups []recovery.Backup `json:"backups"`
+	}
+	deadline = time.Now().Add(90 * time.Second)
+	for {
+		c.must(http.StatusOK, http.MethodGet, base+"/service-backups", nil, &scheduled)
+		completed := false
+		for _, point := range scheduled.Backups {
+			if point.ID != backup.ID && point.Status == "succeeded" {
+				completed = true
+			}
+		}
+		if completed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("persisted schedule did not create a backup: %+v", scheduled)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	var policies struct {
+		Policies []recovery.Policy `json:"policies"`
+	}
+	c.must(http.StatusOK, http.MethodGet, base+"/backup-policies", nil, &policies)
+	if len(policies.Policies) != 1 || policies.Policies[0].LastError != "" || !policies.Policies[0].NextAt.After(time.Now()) {
+		t.Fatalf("schedule advancement: %+v", policies)
+	}
+	c.must(http.StatusOK, http.MethodPut, base+"/backup-policies", map[string]any{"environment": "production", "resource": "database", "every_hours": 24, "enabled": false}, &policy)
+	if policy.Enabled {
+		t.Fatal("schedule remained enabled")
 	}
 
 	outsider := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
@@ -167,6 +259,9 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 	outsider.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": otherOrg.ID}, nil)
 	outsider.must(http.StatusNotFound, http.MethodGet, "/api/v1/service-backups/"+backup.ID, nil, nil)
 	outsider.must(http.StatusNotFound, http.MethodPost, base+"/service-backups", request, nil)
+	outsider.must(http.StatusNotFound, http.MethodGet, "/api/v1/service-restores/"+restored.ID, nil, nil)
+	outsider.must(http.StatusNotFound, http.MethodPost, "/api/v1/service-backups/"+backup.ID+"/restore", restoreRequest, nil)
 	t.Logf("backup %s survived application restart with %d verified bytes", backup.ID, backup.Bytes)
 	t.Logf("API plan %s deployed standalone PostgreSQL through checked SSH target; application writes and restricted role verified", plan.ID)
+	holdCatalogBrowser(t, running.srv.URL, project.ID, connection.ID)
 }

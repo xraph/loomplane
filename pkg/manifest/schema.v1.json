@@ -252,6 +252,7 @@
       "additionalProperties": false,
       "properties": {
         "kind": { "$ref": "#/$defs/kind" },
+        "target": { "$ref": "#/$defs/connection" },
         "provider": { "$ref": "#/$defs/provider" },
         "region": { "$ref": "#/$defs/region" },
         "version": {

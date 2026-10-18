@@ -16,7 +16,7 @@ func (denied) Require(context.Context, security.Principal, security.Permission, 
 func TestDeniedBackupCannotReadOrEnqueueSource(t *testing.T) {
 	service := Service{Authz: denied{}}
 	// All other dependencies are nil: permission denial must precede source reads.
-	if _, err := service.Create(t.Context(), security.Principal{OrgID: "other"}, "project", CreateInput{Environment: "production", Resource: "db", RequestID: "retry-123"}); !errors.Is(err, security.ErrForbidden) {
+	if _, err := service.Create(t.Context(), security.Principal{OrgID: "other"}, "project", BackupCreateInput{Environment: "production", Resource: "db", RequestID: "retry-123"}); !errors.Is(err, security.ErrForbidden) {
 		t.Fatalf("authorization: %v", err)
 	}
 	if _, err := service.List(t.Context(), security.Principal{}, "project"); !errors.Is(err, security.ErrForbidden) {

@@ -22,6 +22,8 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
+const restoreJob = "loomplane.service.restore"
+
 const backupJob = "loomplane.service.backup"
 const reconcileBackupsJob = "loomplane.service.backup.reconcile"
 
@@ -48,10 +50,14 @@ func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects
 	if bucket == "" {
 		bucket = "loomplane-backups"
 	}
-	e.backups = &recovery.Service{Audit: audit, Store: recovery.NewPgStore(pg), Projects: prj, Bindings: plans, Authz: authz, Backend: target, Files: &backupfiles.Store{Trove: files, Bucket: bucket}, Enqueue: func(ctx context.Context, org, id string) error {
+	e.backups = &recovery.Service{Policies: recovery.NewPgStore(pg), Restores: recovery.NewPgStore(pg), RestoreBackend: target, EnqueueRestore: func(ctx context.Context, org, id string) error {
+		_, err := engine.Enqueue(ctx, e.engineOf(), restoreJob, backupPayload{OrgID: org, ID: id}, job.WithQueue(orchestration.Queue), job.WithMaxRetries(0), job.WithTimeout(45*time.Minute))
+		return err
+	}, Audit: audit, Store: recovery.NewPgStore(pg), Projects: prj, Bindings: plans, Authz: authz, Backend: target, Files: &backupfiles.Store{Trove: files, Bucket: bucket}, Enqueue: func(ctx context.Context, org, id string) error {
 		_, err := engine.Enqueue(ctx, e.engineOf(), backupJob, backupPayload{OrgID: org, ID: id}, job.WithQueue(orchestration.Queue), job.WithMaxRetries(2), job.WithTimeout(45*time.Minute))
 		return err
 	}}
+	engine.Register(e.engineOf(), job.NewDefinition(restoreJob, func(ctx context.Context, in backupPayload) error { return e.backups.RunRestore(ctx, in.OrgID, in.ID) }))
 	engine.Register(e.engineOf(), job.NewDefinition(backupJob, func(ctx context.Context, in backupPayload) error { return e.backups.Run(ctx, in.OrgID, in.ID) }))
 	engine.Register(e.engineOf(), job.NewDefinition(reconcileBackupsJob, func(ctx context.Context, _ orchestration.DriftPayload) error { return e.backups.Reconcile(ctx) }))
 	return nil
@@ -66,13 +72,19 @@ func (e *Extension) backupRoutes(router forge.Router, guard identity.Guard) erro
 	if err := group.GET("/projects/:id/service-backups", e.listBackups, forge.WithName("serviceBackups.list"), forge.WithResponseSchema(http.StatusOK, "Database recovery points", BackupList{})); err != nil {
 		return err
 	}
-	if err := group.POST("/projects/:id/service-backups", e.createBackup, forge.WithName("serviceBackups.create"), forge.WithRequestSchema(recovery.CreateInput{}), forge.WithResponseSchema(http.StatusAccepted, "Queued database backup", recovery.Backup{})); err != nil {
+	if err := group.POST("/projects/:id/service-backups", e.createBackup, forge.WithName("serviceBackups.create"), forge.WithRequestSchema(recovery.BackupCreateInput{}), forge.WithResponseSchema(http.StatusAccepted, "Queued database backup", recovery.Backup{})); err != nil {
 		return err
 	}
 	if err := group.GET("/service-backups/:id", e.getBackup, forge.WithName("serviceBackups.get"), forge.WithResponseSchema(http.StatusOK, "Database recovery point", recovery.Backup{})); err != nil {
 		return err
 	}
-	return group.POST("/service-backups/:id/retry", e.retryBackup, forge.WithName("serviceBackups.retry"), forge.WithResponseSchema(http.StatusAccepted, "Retried database backup", recovery.Backup{}))
+	if err := group.POST("/service-backups/:id/retry", e.retryBackup, forge.WithName("serviceBackups.retry"), forge.WithResponseSchema(http.StatusAccepted, "Retried database backup", recovery.Backup{})); err != nil {
+		return err
+	}
+	if err := e.restoreRoutes(group); err != nil {
+		return err
+	}
+	return e.policyRoutes(group)
 }
 func (e *Extension) listBackups(c forge.Context) error {
 	p, err := principal(c)
@@ -90,7 +102,7 @@ func (e *Extension) createBackup(c forge.Context) error {
 	if err != nil {
 		return err
 	}
-	var input recovery.CreateInput
+	var input recovery.BackupCreateInput
 	if err = c.BindJSON(&input); err != nil {
 		return forge.NewHTTPError(http.StatusBadRequest, "provide environment, resource and request_id")
 	}
@@ -121,4 +133,109 @@ func (e *Extension) retryBackup(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusAccepted, record)
+}
+
+type RestoreList struct {
+	Restores []recovery.Restore `json:"restores"`
+}
+
+func (RestoreList) ForgeEnvelope() forge.EnvelopeDef {
+	return forge.EnvelopeDef{ItemsField: "restores"}
+}
+func (e *Extension) restoreRoutes(group forge.Router) error {
+	if err := group.POST("/service-backups/:id/restore", e.createRestore, forge.WithName("serviceRestores.create"), forge.WithRequestSchema(recovery.RestoreInput{}), forge.WithResponseSchema(http.StatusAccepted, "Queued isolated recovery copy", recovery.Restore{})); err != nil {
+		return err
+	}
+	if err := group.GET("/projects/:id/service-restores", e.listRestores, forge.WithName("serviceRestores.list"), forge.WithResponseSchema(http.StatusOK, "Isolated recovery copies", RestoreList{})); err != nil {
+		return err
+	}
+	if err := group.GET("/service-restores/:id", e.getRestore, forge.WithName("serviceRestores.get"), forge.WithResponseSchema(http.StatusOK, "Isolated recovery copy", recovery.Restore{})); err != nil {
+		return err
+	}
+	return group.DELETE("/service-restores/:id", e.deleteRestore, forge.WithName("serviceRestores.delete"))
+}
+func (e *Extension) createRestore(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var input recovery.RestoreInput
+	if err = c.BindJSON(&input); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "provide request_id")
+	}
+	r, err := e.backups.Restore(c.Request().Context(), p, c.Param("id"), input)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusAccepted, r)
+}
+func (e *Extension) getRestore(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	r, err := e.backups.GetRestore(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, r)
+}
+func (e *Extension) listRestores(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	list, err := e.backups.ListRestores(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, RestoreList{Restores: list})
+}
+func (e *Extension) deleteRestore(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	if err = e.backups.DeleteRestore(c.Request().Context(), p, c.Param("id")); err != nil {
+		return fail(err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+type PolicyList struct {
+	Policies []recovery.Policy `json:"policies"`
+}
+
+func (PolicyList) ForgeEnvelope() forge.EnvelopeDef { return forge.EnvelopeDef{ItemsField: "policies"} }
+func (e *Extension) policyRoutes(group forge.Router) error {
+	if err := group.GET("/projects/:id/backup-policies", e.listBackupPolicies, forge.WithName("backupPolicies.list"), forge.WithResponseSchema(http.StatusOK, "Scheduled backup policies", PolicyList{})); err != nil {
+		return err
+	}
+	return group.PUT("/projects/:id/backup-policies", e.setBackupPolicy, forge.WithName("backupPolicies.set"), forge.WithRequestSchema(recovery.PolicyInput{}), forge.WithResponseSchema(http.StatusOK, "Scheduled backup policy", recovery.Policy{}))
+}
+func (e *Extension) listBackupPolicies(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	list, err := e.backups.ListPolicies(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, PolicyList{Policies: list})
+}
+func (e *Extension) setBackupPolicy(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var input recovery.PolicyInput
+	if err = c.BindJSON(&input); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "provide environment, resource, every_hours and enabled")
+	}
+	r, err := e.backups.SetPolicy(c.Request().Context(), p, c.Param("id"), input)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, r)
 }

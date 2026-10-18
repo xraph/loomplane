@@ -58,6 +58,18 @@ Validation: Go lint, dashboard typecheck/lint and Go tests passed. The full dash
 
 Pending: durable restore/drill workflows, scheduled policies, retention, service dashboard controls, Kubernetes, PITR and production S3 acceptance. This slice qualifies the Docker deployment and backup API path, not the complete phase 2 release gate.
 
+### Isolated restore copies and backup schedules, 18 October 2026
+
+Implemented: scoped and idempotent restore requests, durable single-use restore claims, separate temporary instances and volumes, SQL verification records, explicit copy cleanup, and a 24-hour cleanup deadline. Interrupted restore workers become visible failures; the same operation is never silently replayed over an existing copy. Cleanup checks the organization, project, environment, connection and recovery identity before removing storage. Copies remain isolated and never replace a live service binding.
+
+Implemented: configurable full-backup schedules from hourly to weekly, persisted due times and idempotency keys, permission checks at execution, visible request failures, and enable/disable controls. `loomctl backups` and `loomctl restores` expose these workflows with reusable request IDs and explicit temporary-copy deletion. All recovery points are retained for now. No automatic retention or continuous recovery is implied by a schedule.
+
+Verified: the API exported a seeded database, deleted the source row, restored the row into a fresh isolated copy, and confirmed that the live source stayed empty. Duplicate restore requests reused one record. Cleanup removed the copy's volume while retaining its verification time. Cross-organization reads and restore requests failed. A daily policy survived restart; the real persisted Dispatch cron created its due backup, advanced the next run and accepted disabling the policy.
+
+Validation: full Go lint passed after concurrent federation edits settled. The full Go suite and all 232 dashboard tests passed. Targeted recovery, deployment, server, manifest and CLI tests passed. The optional browser fixture uses a disposable acceptance project and writes no credentials.
+
+Pending: publication/cutover, application-specific integrity probes, quotas, retention, credential rotation, Kubernetes and PITR. SQL verification establishes that the native restore completed and accepted queries; it is not an application-level recovery guarantee.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.

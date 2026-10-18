@@ -58,6 +58,8 @@ func Group() *migrate.Group {
 		statements("20261018000300", "federation_destination_references", federationLifecycleUp, federationLifecycleDown),
 		statements("20261018000200", "standalone_catalog_plans", catalogPlansUp, catalogPlansDown),
 		statements("20261018000201", "service_recovery", serviceRecoveryUp, serviceRecoveryDown),
+		statements("20261018000202", "service_restores", serviceRestoresUp, serviceRestoresDown),
+		statements("20261018000203", "backup_policies", backupPoliciesUp, backupPoliciesDown),
 	)
 	return g
 }
