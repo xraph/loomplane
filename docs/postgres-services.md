@@ -22,7 +22,9 @@ The current transfer path uses 8 MiB chunks, bounded retries and a SHA-256 diges
 
 ## Back up and test recovery
 
-In **Service recovery**, select your project, environment and database. **Back up now** queues a native custom-format PostgreSQL export. **Enable daily backups** sets a full backup every 24 hours. The API and CLI accept intervals from one to 168 hours. All recovery points are retained; automatic retention is not implemented.
+In **Service recovery**, select your project, environment and database. **Back up now** queues a native custom-format PostgreSQL export. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. All recovery points are retained; automatic retention is not implemented.
+
+The lists show recovery points and copies for the selected database and environment. If you remove the source service, its backup history and restore controls remain available. Backup creation and scheduling need a live source.
 
 A successful upload initially shows **Not tested**. **Test restore** creates an isolated copy with its own volume and credentials, verifies the file before restoring, runs PostgreSQL's restore command in a transaction, and checks SQL access. A successful copy records its verification time and duration. The live source and application bindings stay in place.
 
@@ -32,7 +34,14 @@ If a restore worker disappears, its operation becomes a failure after the lease 
 
 ## Use loomctl
 
-You can create a resource-only manifest without connecting a repository:
+You can prepare a PostgreSQL service without connecting a repository:
+
+```sh
+loomctl services create "Application database" --target conn_your_checked_server --json
+loomctl approve PLAN_ID --yes
+```
+
+The first command creates a project, saves its resource manifest and returns a plan for review. Approval starts deployment. You can also save a resource-only manifest yourself:
 
 ```yaml
 version: 1
@@ -56,16 +65,19 @@ loomctl approve PLAN_ID
 Manage recovery from the same project:
 
 ```sh
-loomctl backups create PROJECT_ID --resource database --request-id nightly-manual-1
+loomctl backups create PROJECT_ID --resource database --request-id nightly-manual-1 --wait --json
 loomctl backups PROJECT_ID
-loomctl backups show BACKUP_ID
+loomctl backups show BACKUP_ID --wait --json
 loomctl backups policy PROJECT_ID --resource database --every-hours 24
-loomctl restores create BACKUP_ID --request-id recovery-test-1
-loomctl restores show RESTORE_ID
+loomctl backups policies PROJECT_ID --json
+loomctl restores create BACKUP_ID --request-id recovery-test-1 --wait --json
+loomctl restores show RESTORE_ID --wait --json
 loomctl restores delete RESTORE_ID --yes
 ```
 
 Reuse a request ID after a lost response to recover the original operation. Use a new ID for a new backup or restore. Failed backups can be retried with `loomctl backups retry BACKUP_ID`. Add `--disable` to the policy command to stop its schedule.
+
+With `--wait`, the CLI follows the persisted operation for up to 45 minutes. Set `--timeout 10m` to change that limit. A timeout stops waiting; you can follow the same ID with `show --wait`. Failed operations return a nonzero exit status and retain their JSON result for inspection. `--json` outputs a single JSON value without a request-ID prefix; request errors include the reusable key.
 
 ## API and permissions
 

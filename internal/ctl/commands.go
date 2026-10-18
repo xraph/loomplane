@@ -19,6 +19,7 @@ func (a *App) commands() []cli.Command {
 		a.mcpCommand(),
 		a.backupCommand(),
 		a.restoreCommand(),
+		a.servicesCommand(),
 		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,
 			cli.WithUsage("login --url https://loomplane.example.com --key lp_live_..."),
 			cli.WithFlags(
