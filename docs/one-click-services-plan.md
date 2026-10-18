@@ -130,6 +130,12 @@ Implemented: connections accept an explicit `amd64` or `arm64` architecture, and
 
 Verified: tests first reproduced discarded architecture settings and hidden recovery-permission denials. They now cover each missing permission without blocking ordinary workloads, unsupported architectures and correct namespace/cluster scopes. A live restricted service-account token on the disposable cluster retained ordinary workload access, reported missing `pods/exec:create`, then reported recovery permissions ready after that explicit RBAC grant (3.59 seconds). Owned package lint, dashboard lint, all 267 dashboard tests and `make build` passed. Full Go tests and lint are blocked by a concurrently edited federation acceptance binary referencing a missing `qualifyPersisted` function. Catalog/API routing and rendered connection-form verification remain pending.
 
+### Recovery permission initialization, 18 October 2026
+
+The API restart drill exposed concurrent role-catalog replacements while the scheduler and API initialized the same organization. The authorizer now coalesces that initialization by organization within its process. Cancelled callers can leave without starting another catalog replacement; failed initialization is not marked complete.
+
+Verified: a controlled regression reproduced overlapping writes and 27 role replacements where the catalog requires four. It now passes alongside cancellation checks and the full security suite under Go's race detector. Owned security/recovery/planning-extension lint passed with zero issues. This change does not serialize initializers in separate processes; cross-process catalog convergence remains unqualified.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.

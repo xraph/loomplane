@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/assignment"
 	wardenid "github.com/xraph/warden/id"
@@ -51,7 +53,8 @@ type Authorizer struct {
 
 	// ensured remembers the tenants whose catalog this process has already
 	// written, so steady-state checks don't touch the catalog at all.
-	ensured sync.Map
+	ensured  sync.Map
+	ensuring singleflight.Group
 }
 
 // NewAuthorizer returns an Authorizer. members may be nil, which turns off
@@ -144,9 +147,28 @@ func (a *Authorizer) repair(ctx context.Context, p Principal) (bool, error) {
 // idempotent, and it brings an existing tenant's roles up to the current
 // catalog, so a Loomplane upgrade that grows a role reaches every org.
 func (a *Authorizer) EnsureTenant(ctx context.Context, orgID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if _, done := a.ensured.Load(orgID); done {
 		return nil
 	}
+	result := a.ensuring.DoChan(orgID, func() (any, error) {
+		// Another initializer may have finished after the caller's cache read.
+		if _, done := a.ensured.Load(orgID); done {
+			return nil, nil
+		}
+		return nil, a.ensureTenant(ctx, orgID)
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case complete := <-result:
+		return complete.Err
+	}
+}
+
+func (a *Authorizer) ensureTenant(ctx context.Context, orgID string) error {
 	now := a.now().UTC()
 	for _, perm := range AllPermissions() {
 		if err := a.ensurePermission(ctx, orgID, perm, now); err != nil {
