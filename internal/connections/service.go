@@ -185,6 +185,9 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	if err != nil {
 		return nil, err
 	}
+	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
+		return nil, identityErr
+	}
 	checker, err := s.checker(c.Cloud)
 	if err != nil {
 		return nil, err
@@ -195,13 +198,23 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	}
 	now := s.now().UTC()
 	res, err := s.check(ctx, c.Cloud, checker, cred, c.Details)
+	if err != nil && legacyPersonalVercel(c) {
+		// A failed legacy upgrade preserves the old row as well as its token.
+		return nil, err
+	}
 	switch {
 	case errors.Is(err, ErrInvalid):
 		c.Status, c.Message, c.CheckedAt, c.UpdatedAt = StatusFailed, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "), &now, now
 	case err != nil:
 		return nil, err
 	default:
-		if AccountIdentity(c.Cloud, c.Account, c.Details) != AccountIdentity(c.Cloud, res.Account, res.Details) {
+		before, after := AccountIdentity(c.Cloud, c.Account, c.Details), AccountIdentity(c.Cloud, res.Account, res.Details)
+		if legacyPersonalVercel(c) && verifiedPersonalVercel(res) {
+			// This check used the stored token, so its immutable user ID
+			// safely upgrades the connection even if its username changed.
+			before = after
+		}
+		if before == "" || after == "" || before != after {
 			return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
 		}
 		apply(c, res, now)
@@ -224,9 +237,27 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	if err != nil {
 		return nil, err
 	}
+	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
+		return nil, identityErr
+	}
 	checker, err := s.checker(c.Cloud)
 	if err != nil {
 		return nil, err
+	}
+	before := AccountIdentity(c.Cloud, c.Account, c.Details)
+	if legacyPersonalVercel(c) {
+		oldCredential, revealErr := s.secrets.Reveal(ctx, p.OrgID, c.ID)
+		if revealErr != nil {
+			return nil, revealErr
+		}
+		oldCheck, checkErr := s.check(ctx, c.Cloud, checker, oldCredential, c.Details)
+		if checkErr != nil {
+			return nil, fmt.Errorf("verify the existing Vercel token before replacement: %w", checkErr)
+		}
+		if !verifiedPersonalVercel(oldCheck) {
+			return nil, fmt.Errorf("%w: the existing Vercel token did not establish an immutable user identity", ErrInvalid)
+		}
+		before = AccountIdentity(c.Cloud, oldCheck.Account, oldCheck.Details)
 	}
 	settings := in.Settings
 	if settings == nil {
@@ -237,7 +268,8 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	if err != nil {
 		return nil, err
 	}
-	if AccountIdentity(c.Cloud, c.Account, c.Details) != AccountIdentity(c.Cloud, res.Account, res.Details) {
+	after := AccountIdentity(c.Cloud, res.Account, res.Details)
+	if before == "" || after == "" || before != after {
 		return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
 	}
 	if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {

@@ -115,7 +115,7 @@ func fakeVercel(t *testing.T, token string) *httptest.Server {
 		}
 		switch r.URL.Path {
 		case "/v2/user":
-			_, _ = w.Write([]byte(`{"user":{"username":"ada"}}`))
+			_, _ = w.Write([]byte(`{"user":{"id":"user_ada","username":"ada"}}`))
 		case "/v2/teams/team_acme":
 			_, _ = w.Write([]byte(`{"id":"team_acme","slug":"acme"}`))
 		default:

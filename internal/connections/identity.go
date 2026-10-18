@@ -3,6 +3,7 @@ package connections
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -11,7 +12,8 @@ import (
 
 // AccountIdentity fingerprints verified placement scope. Permission results,
 // timestamps, principals and credential material do not participate, so you can
-// rotate a token or service account within the same deployment account.
+// rotate a token or service account within the same deployment account. Missing
+// immutable Vercel, namespace or daemon identities return an empty fingerprint.
 func AccountIdentity(cloud, account string, details map[string]string) string {
 	scope := map[string]string{"cloud": cloud}
 	var keys []string
@@ -19,15 +21,28 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 	case GCP:
 		keys = []string{"project_id"}
 	case Vercel:
-		keys = []string{"team_id"}
+		if strings.TrimSpace(details["team_id"]) != "" {
+			keys = []string{"team_id"}
+		} else {
+			if strings.TrimSpace(details["user_id"]) == "" {
+				return ""
+			}
+			keys = []string{"user_id"}
+		}
 	case Render:
 		keys = []string{"owner_id"}
 	case AWS:
 		keys = []string{"region"}
 	case Kubernetes:
-		keys = []string{"endpoint", "namespace", "cluster_ca"}
+		if strings.TrimSpace(details["namespace_uid"]) == "" {
+			return ""
+		}
+		keys = []string{"endpoint", "namespace", "namespace_uid", "cluster_ca"}
 	case Server:
-		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host"}
+		if strings.TrimSpace(details["docker_id"]) == "" {
+			return ""
+		}
+		keys = []string{"host", "port", "user", "host_key", "docker_socket", "docker_id", "advertise_host"}
 	case Registry:
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
 	}
@@ -37,16 +52,15 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 		}
 	}
 	// The cloud's stable scope wins over mutable display names. AWS account
-	// numbers and personal Vercel usernames are carried in Account itself.
+	// numbers are carried in Account itself. Unknown immutable identities
+	// return an empty fingerprint and must be verified before use.
 	switch cloud {
 	case GCP:
 		if scope["project_id"] == "" {
 			scope["account"] = account
 		}
 	case Vercel:
-		if scope["team_id"] == "" {
-			scope["account"] = account
-		}
+		// User and team IDs already identify their scopes, including renames.
 	case Render:
 		if scope["owner_id"] == "" {
 			scope["account"] = account
@@ -77,4 +91,30 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// legacyPersonalVercel needs the stored token checked before a replacement can
+// establish its old user identity. Usernames cannot establish that identity.
+func legacyPersonalVercel(c *Connection) bool {
+	return c.Cloud == Vercel && strings.TrimSpace(c.Details["team_id"]) == "" && strings.TrimSpace(c.Details["user_id"]) == ""
+}
+
+func verifiedPersonalVercel(check Check) bool {
+	return strings.TrimSpace(check.Details["team_id"]) == "" && strings.TrimSpace(check.Details["user_id"]) != ""
+}
+
+// A working owned credential cannot prove a resource's historical identity:
+// namespaces and daemons can be recreated while the credential still works.
+func recordedOwnedIdentity(c *Connection) error {
+	key := ""
+	switch c.Cloud {
+	case Kubernetes:
+		key = "namespace_uid"
+	case Server:
+		key = "docker_id"
+	}
+	if key != "" && strings.TrimSpace(c.Details[key]) == "" {
+		return fmt.Errorf("%w: this connection has no recorded %s; create a new connection to verify the resource identity", ErrInvalid, key)
+	}
+	return nil
 }

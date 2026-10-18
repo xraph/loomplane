@@ -86,6 +86,11 @@ func (v VercelChecker) Check(ctx context.Context, credential []byte, settings ma
 		return Check{}, err
 	}
 	c.Account = acct.Name
+	if acct.TeamID != "" {
+		c.Details["team_id"] = acct.TeamID
+	} else {
+		c.Details["user_id"] = acct.UserID
+	}
 	return c, nil
 }
 

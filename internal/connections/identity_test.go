@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/security"
@@ -64,7 +65,7 @@ func TestIdentityProtection(t *testing.T) {
 	}{
 		{name: "different account", cloud: GCP, account: "project-a", nextAccount: "project-b", details: map[string]string{"project_id": "project-a"}, nextDetails: map[string]string{"project_id": "project-b"}},
 		{name: "Vercel team", cloud: Vercel, account: "team", nextAccount: "team", details: map[string]string{"team_id": "team_a"}, nextDetails: map[string]string{"team_id": "team_b"}},
-		{name: "Kubernetes namespace", cloud: Kubernetes, account: "context/default", nextAccount: "context/default", details: map[string]string{"endpoint": "https://cluster", "namespace": "a", "cluster_ca": "ca"}, nextDetails: map[string]string{"endpoint": "https://cluster", "namespace": "b", "cluster_ca": "ca"}},
+		{name: "Kubernetes namespace", cloud: Kubernetes, account: "context/default", nextAccount: "context/default", details: map[string]string{"endpoint": "https://cluster", "namespace": "a", "namespace_uid": "ns_a", "cluster_ca": "ca"}, nextDetails: map[string]string{"endpoint": "https://cluster", "namespace": "b", "namespace_uid": "ns_b", "cluster_ca": "ca"}},
 	} {
 		for _, operation := range []string{"replace", "recheck"} {
 			t.Run(tc.name+"/"+operation, func(t *testing.T) {
@@ -108,10 +109,11 @@ func TestAccountIdentity_stableScope(t *testing.T) {
 	}{
 		{GCP, "project", "project_id", map[string]string{"project_id": "project"}},
 		{Vercel, "team", "team_id", map[string]string{"team_id": "team_a"}},
+		{Vercel, "personal", "user_id", map[string]string{"user_id": "user_a"}},
 		{Render, "Workspace", "owner_id", map[string]string{"owner_id": "tea-a"}},
 		{AWS, "123456789012", "region", map[string]string{"region": "us-east-1"}},
-		{Kubernetes, "ctx/default", "namespace", map[string]string{"endpoint": "https://cluster", "namespace": "default", "cluster_ca": "ca"}},
-		{Server, "deploy@host:22", "docker_socket", map[string]string{"host": "host", "port": "22", "user": "deploy", "docker_socket": "/var/run/docker.sock", "host_key": "key"}},
+		{Kubernetes, "ctx/default", "namespace", map[string]string{"endpoint": "https://cluster", "namespace": "default", "namespace_uid": "ns_a", "cluster_ca": "ca"}},
+		{Server, "deploy@host:22", "docker_socket", map[string]string{"host": "host", "port": "22", "user": "deploy", "docker_socket": "/var/run/docker.sock", "host_key": "key", "docker_id": "daemon_a"}},
 		{Registry, "registry/repo", "repository", map[string]string{"endpoint": "https://registry", "repository": "repo"}},
 	} {
 		t.Run(tc.cloud, func(t *testing.T) {
@@ -134,7 +136,59 @@ func TestAccountIdentity_stableScope(t *testing.T) {
 	if AccountIdentity(AWS, "account-a", nil) == AccountIdentity(AWS, "account-b", nil) {
 		t.Fatal("AWS accounts collapsed")
 	}
-	if AccountIdentity(Vercel, "alice", nil) == AccountIdentity(Vercel, "bob", nil) {
-		t.Fatal("personal Vercel accounts collapsed")
+	if AccountIdentity(Vercel, "alice", nil) != "" {
+		t.Fatal("a personal Vercel username was treated as verified identity")
+	}
+	if AccountIdentity(Vercel, "renamed", map[string]string{"user_id": "user_a"}) != AccountIdentity(Vercel, "original", map[string]string{"user_id": "user_a"}) {
+		t.Fatal("username rename changed immutable identity")
+	}
+}
+
+func TestOwnedIdentityRecordedResource(t *testing.T) {
+	for _, tc := range []struct {
+		name, cloud, key, oldID, newID string
+		details                        map[string]string
+	}{
+		{"namespace recreated", Kubernetes, "namespace_uid", "namespace_old", "namespace_new", map[string]string{"endpoint": "https://cluster", "namespace": "default", "cluster_ca": "ca"}},
+		{"daemon replaced", Server, "docker_id", "daemon_old", "daemon_new", map[string]string{"host": "server", "user": "deploy", "port": "22", "docker_socket": "/var/run/docker.sock"}},
+		{"legacy namespace identity absent", Kubernetes, "namespace_uid", "", "namespace_new", map[string]string{"endpoint": "https://cluster", "namespace": "default", "cluster_ca": "ca"}},
+		{"legacy daemon identity absent", Server, "docker_id", "", "daemon_new", map[string]string{"host": "server", "user": "deploy", "port": "22", "docker_socket": "/var/run/docker.sock"}},
+		{"same namespace renewal", Kubernetes, "namespace_uid", "namespace_old", "namespace_old", map[string]string{"endpoint": "https://cluster", "namespace": "default", "cluster_ca": "ca"}},
+		{"same daemon renewal", Server, "docker_id", "daemon_old", "daemon_old", map[string]string{"host": "server", "user": "deploy", "port": "22", "docker_socket": "/var/run/docker.sock"}},
+	} {
+		for _, operation := range []string{"replace", "recheck"} {
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				old := maps.Clone(tc.details)
+				if tc.oldID != "" {
+					old[tc.key] = tc.oldID
+				}
+				checked := maps.Clone(tc.details)
+				checked[tc.key] = tc.newID
+				st := &identityStore{row: Connection{ID: "conn_1", OrgID: "org_1", Cloud: tc.cloud, Account: "same", Details: old, Status: StatusReady}}
+				vault := &identitySecrets{value: []byte("old")}
+				svc := NewService(st, vault, map[string]Checker{tc.cloud: identityChecker{Check{Account: "same", Details: checked}}}, identityAuthz{}, nil, nil)
+				var err error
+				if operation == "replace" {
+					_, err = svc.Replace(t.Context(), security.Principal{OrgID: "org_1"}, "conn_1", ReplaceInput{Credential: "new"})
+				} else {
+					_, err = svc.Recheck(t.Context(), security.Principal{OrgID: "org_1"}, "conn_1")
+				}
+				if tc.oldID == "" || tc.oldID != tc.newID {
+					if !errors.Is(err, ErrInvalid) {
+						t.Fatalf("resource replacement accepted: %v", err)
+					}
+					if vault.puts != 0 || string(vault.value) != "old" || st.writes != 0 {
+						t.Fatal("resource rejection changed secret or row")
+					}
+					if tc.oldID == "" && !strings.Contains(err.Error(), "create a new connection") {
+						t.Fatalf("legacy error needs recovery action: %v", err)
+					}
+					return
+				}
+				if err != nil || st.writes != 1 {
+					t.Fatalf("same resource renewal refused: %v writes=%d", err, st.writes)
+				}
+			})
+		}
 	}
 }

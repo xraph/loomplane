@@ -583,7 +583,7 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 	switch {
 	case p == "/v2/user":
-		reply(200, map[string]any{"user": map[string]any{"username": "ada"}})
+		reply(200, map[string]any{"user": map[string]any{"id": "user_ada", "username": "ada"}})
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v9/projects/"):
 		prj, ok := f.projects[strings.TrimPrefix(p, "/v9/projects/")]
 		if !ok {

@@ -159,6 +159,8 @@ func (c *Client) json(ctx context.Context, tok Token, method, path string, query
 type Account struct {
 	// Name is the team's slug, or the person's username.
 	Name string
+	// UserID is the verified immutable user ID for a personal account.
+	UserID string
 	// TeamID is the team's ID, empty for a personal account.
 	TeamID string
 }
@@ -177,15 +179,22 @@ func (c *Client) Check(ctx context.Context, tok Token) (Account, error) {
 			}
 			return Account{}, err
 		}
+		if team.ID != tok.TeamID {
+			return Account{}, fmt.Errorf("vercel team response did not confirm the requested team id")
+		}
 		return Account{Name: team.Slug, TeamID: team.ID}, nil
 	}
 	var me struct {
 		User struct {
+			ID       string `json:"id"`
 			Username string `json:"username"`
 		} `json:"user"`
 	}
 	if err := c.json(ctx, tok, http.MethodGet, "/v2/user", nil, nil, &me); err != nil {
 		return Account{}, err
 	}
-	return Account{Name: me.User.Username}, nil
+	if strings.TrimSpace(me.User.ID) == "" {
+		return Account{}, fmt.Errorf("vercel user response did not include an immutable user id")
+	}
+	return Account{Name: me.User.Username, UserID: me.User.ID}, nil
 }
