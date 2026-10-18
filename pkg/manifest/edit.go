@@ -22,6 +22,7 @@ type Placement struct {
 	Environment string    `json:"environment,omitempty"`
 	Provider    *string   `json:"provider,omitempty"`
 	Region      *string   `json:"region,omitempty"`
+	CloudTarget *string   `json:"cloud_target,omitempty"`
 	Target      *string   `json:"target,omitempty"`
 	HealthPath  *string   `json:"health_path,omitempty"`
 	Endpoint    *Endpoint `json:"endpoint,omitempty"`
@@ -36,11 +37,11 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		return nil, err
 	}
 	if !slices.Contains([]string{"services", "resources", "gateways"}, p.Section) ||
-		(p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil) {
+		(p.CloudTarget == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil) {
 		return nil, fmt.Errorf("%w: name a service, resource or gateway and its placement changes", ErrInvalid)
 	}
-	if p.Section != "services" && (p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil) {
-		return nil, fmt.Errorf("%w: target, endpoint, health_path and build edits need a service", ErrInvalid)
+	if p.Section != "services" && (p.CloudTarget != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil) {
+		return nil, fmt.Errorf("%w: cloud_target, target, endpoint, health_path and build edits need a service", ErrInvalid)
 	}
 	if p.Environment == "" && p.Section != "services" && p.Enabled != nil {
 		return nil, fmt.Errorf("%w: enabled on %s needs an environment", ErrInvalid, p.Section)
@@ -93,7 +94,7 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 	for _, field := range []struct {
 		key   string
 		value *string
-	}{{"provider", p.Provider}, {"region", p.Region}, {"target", p.Target}, {"health_path", p.HealthPath}} {
+	}{{"cloud_target", p.CloudTarget}, {"provider", p.Provider}, {"region", p.Region}, {"target", p.Target}, {"health_path", p.HealthPath}} {
 		if field.value != nil {
 			setPlacementField(target, field.key, scalar(*field.value), *field.value == "")
 		}

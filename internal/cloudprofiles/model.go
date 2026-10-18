@@ -45,6 +45,7 @@ type Target struct {
 
 // Assignment resolves an environment's desired Cloud and all of its targets.
 type Assignment struct {
+	CloudRevision int64    `json:"cloud_revision"`
 	OrgID         string   `json:"org_id"`
 	ProjectID     string   `json:"project_id"`
 	EnvironmentID string   `json:"environment_id"`

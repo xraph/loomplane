@@ -21,6 +21,7 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
+	CloudPlacements map[string]CloudPlacement
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput
 	// Environment is the environment's name, which picks the manifest's
@@ -43,6 +44,7 @@ type Input struct {
 
 // ConnectionOption is a cloud connection a plan could deploy with.
 type ConnectionOption struct {
+	Account   string
 	ID        string
 	Name      string
 	Cloud     string
@@ -226,26 +228,25 @@ func (p *planner) use(prov *provider.Provider) {
 // checkHTTPS warns about public services on ECS when the AWS connection
 // they deploy with has no certificate: they'll serve plain HTTP.
 func (p *planner) checkHTTPS(chosen map[string]string) {
-	id := chosen["aws"]
-	if id == "" {
-		return
-	}
-	i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
-	if i < 0 || p.in.Connections[i].HTTPS {
-		return
-	}
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
-		if a.Provider == ecsFargate && a.Service != nil && a.Service.Public && a.Service.Port > 0 {
-			path := "services." + name
-			if a.Service.Gateway != nil {
-				path = "gateways." + name
-			}
-			p.warn(Finding{
-				Code: "plain-http", Subject: ServiceSubject, Name: name, Path: path,
-				Message: fmt.Sprintf("%s will serve plain HTTP: %s has no certificate. Add an ACM certificate to the connection to serve HTTPS.", name, p.in.Connections[i].Name),
-			})
+		if a.Provider != ecsFargate || a.Service == nil || !a.Service.Public || a.Service.Port == 0 {
+			continue
 		}
+		id := a.ConnectionID
+		if id == "" {
+			id = chosen["aws"]
+		}
+		i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
+		if i < 0 || p.in.Connections[i].HTTPS {
+			continue
+		}
+		path := "services." + name
+		if a.Service.Gateway != nil {
+			path = "gateways." + name
+		}
+		p.warn(Finding{Code: "plain-http", Subject: ServiceSubject, Name: name, Path: path,
+			Message: fmt.Sprintf("%s will serve plain HTTP: %s has no certificate. Add an ACM certificate to the connection to serve HTTPS.", name, p.in.Connections[i].Name)})
 	}
 }
 
@@ -255,6 +256,9 @@ func (p *planner) checkHTTPS(chosen map[string]string) {
 func (p *planner) connect() map[string]string {
 	out := map[string]string{}
 	for _, cloud := range slices.Sorted(maps.Keys(p.clouds)) {
+		if p.allCloudActionsPinned(cloud) {
+			continue
+		}
 		title := cloudTitle(cloud)
 		var ready []ConnectionOption
 		for _, c := range p.in.Connections {
@@ -334,7 +338,11 @@ func (p *planner) checkRegions(chosen map[string]string) {
 		if err != nil || !connectionRegions[prov.Cloud] {
 			continue
 		}
-		i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == chosen[prov.Cloud] })
+		connectionID := a.ConnectionID
+		if connectionID == "" {
+			connectionID = chosen[prov.Cloud]
+		}
+		i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == connectionID })
 		if i < 0 {
 			continue
 		}
@@ -382,7 +390,16 @@ func (p *planner) place(subject Subject, name, path string, prov *provider.Provi
 	}
 	if region == "" {
 		// On a cloud whose connection decides the region, that's the one.
-		if c, ok := p.connection(prov.Cloud); ok && connectionRegions[prov.Cloud] && c.Region != "" {
+		c, ok := p.connection(prov.Cloud)
+		if placement, pinned := p.in.CloudPlacements[name]; pinned && subject == ServiceSubject {
+			for _, option := range p.in.Connections {
+				if option.ID == placement.ConnectionID {
+					c, ok = option, true
+					break
+				}
+			}
+		}
+		if ok && connectionRegions[prov.Cloud] && c.Region != "" {
 			return c.Region
 		}
 		return prov.DefaultRegion()
@@ -540,6 +557,10 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 		})
 		return nil
 	}
+	if set.CloudTarget != "" {
+		p.problem(Finding{Code: "cloud-target-unresolved", Subject: ServiceSubject, Name: name, Path: base + ".cloud_target", Message: "Resolve this service's named Cloud target before planning."})
+		return nil
+	}
 	workload := provider.Workload(kind)
 	able := p.in.Providers.Running(workload)
 	prov := p.lookup(ServiceSubject, name, base+".provider", set.Provider, able)
@@ -557,12 +578,16 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
 	p.buildContext(name, base, set.Build, gs, cfg)
 	p.configureTarget(name, base, prov, set, cfg)
+	if placement, ok := p.in.CloudPlacements[name]; ok {
+		placement.Region = cfg.Region
+		cfg.CloudPlacement = &placement
+	}
 	p.checkRender(name, base, cfg)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
 		Service:      cfg,
-		ConnectionID: cfg.Target,
+		ConnectionID: serviceConnection(cfg),
 	}
 }
 
@@ -659,7 +684,11 @@ func (p *planner) sameAddress(dep *Action) bool {
 		return false
 	}
 	prov, err := p.in.Providers.Get(cloudRun)
-	return err == nil && b.ConnectionID == p.connectionFor(prov.Cloud)
+	connectionID := dep.ConnectionID
+	if connectionID == "" && err == nil {
+		connectionID = p.connectionFor(prov.Cloud)
+	}
+	return err == nil && b.ConnectionID == connectionID
 }
 
 // connectionFor is the connection the plan deploys to cloud with, as
@@ -1042,6 +1071,9 @@ func (p *planner) kept(b *Binding, reason string) *Action {
 		cfg := ServiceConfig{Provider: b.Provider, Region: b.Region}
 		_ = json.Unmarshal(b.Config, &cfg) //nolint:errcheck // see above
 		a.Service = &cfg
+		if cfg.CloudPlacement != nil {
+			a.ConnectionID = b.ConnectionID
+		}
 	}
 	if prov, err := p.in.Providers.Get(b.Provider); err == nil {
 		p.use(prov)
@@ -1517,6 +1549,11 @@ func (p *planner) link(name string, a *Action) {
 				})
 				continue
 			}
+			if !OwnedCloud(p.cloud(a.Provider)) && a.Service.CloudPlacement != nil && !p.sameDeploymentAccount(a, dep) {
+				p.problem(Finding{Code: "resource-across-accounts", Subject: ServiceSubject, Name: name, Path: base, Message: fmt.Sprintf("%s and managed resource %s use different deployment accounts. Choose a target in the resource's account.", name, need)})
+				continue
+			}
+
 			a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
 			a.DependsOn = append(a.DependsOn, dep.ID)
 			continue
@@ -1553,7 +1590,10 @@ func (p *planner) link(name string, a *Action) {
 					Message: fmt.Sprintf("%s needs private service %s on another server or cluster namespace. Choose the same target or configure an externally reachable address through variables.", name, need)})
 				continue
 			}
-		case dep.Provider == ecsFargate && a.Provider == ecsFargate:
+		case !dep.Service.Public && !OwnedCloud(p.cloud(dep.Provider)) && p.cloud(dep.Provider) == p.cloud(a.Provider) && (a.Service.CloudPlacement != nil || dep.Service.CloudPlacement != nil) && (!p.sameDeploymentAccount(a, dep) || a.Region != dep.Region && dep.Provider == ecsFargate):
+			p.problem(Finding{Code: "private-across-accounts", Subject: ServiceSubject, Name: name, Path: base, Message: fmt.Sprintf("%s needs private service %s in another deployment account or network. Choose the same account and region, or expose a reachable endpoint.", name, need)})
+			continue
+		case dep.Provider == ecsFargate && a.Provider == ecsFargate && ((a.Service.CloudPlacement == nil && dep.Service.CloudPlacement == nil) || p.sameDeploymentAccount(a, dep) && a.Region == dep.Region):
 			// Both run in the environment's network, so traffic between
 			// them stays in it, public or not.
 			link.Address = fmt.Sprintf("http://%s:%d", need, dep.Service.Port)
@@ -1753,6 +1793,15 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 	default:
 		a.Op = Keep
 		a.Reason = "Unchanged."
+		if a.Service != nil && a.Service.CloudPlacement != nil {
+			var previous ServiceConfig
+			if json.Unmarshal(b.Config, &previous) == nil {
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Service.CloudPlacement
+				if a.AdoptCloudPlacement {
+					a.CloudAdoption = ReviewCloudAdoption(b)
+				}
+			}
+		}
 	}
 }
 
@@ -1857,6 +1906,8 @@ func changes(before json.RawMessage, after any) []Change {
 	if err := json.Unmarshal(data, &to); err != nil {
 		return nil
 	}
+	stripProviderMetadata(from)
+	stripProviderMetadata(to)
 	fields := map[string]bool{}
 	for k := range from {
 		fields[k] = true

@@ -59,6 +59,12 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 }
 
 func (p *planner) configureTarget(name, base string, prov *provider.Provider, set manifest.Settings, cfg *ServiceConfig) {
+	if placement, ok := p.in.CloudPlacements[name]; ok {
+		c := p.targetConnection(name, base+".cloud_target", "target", prov.Cloud, placement.ConnectionID)
+		if c != nil {
+			cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
+		}
+	}
 	if !OwnedCloud(prov.Cloud) {
 		if set.Target != "" || set.Endpoint != nil || (set.Build != nil && (set.Build.Builder != "" || set.Build.Registry != "" || set.Build.Image != "")) {
 			p.problem(Finding{Code: "target-unsupported", Subject: ServiceSubject, Name: name, Path: base,

@@ -17,6 +17,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/planning"
@@ -160,31 +161,33 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
-	store       Store
-	plans       Plans
-	credentials Credentials
-	variables   Variables
-	sources     Sources
-	providers   *provider.Registry
-	executors   map[string]Executor
-	resources   ResourceSecrets
-	telemetry   *telemetry.Recorder
-	logs        LogSink
-	http        *http.Client
-	now         func() time.Time
+	cloudProfiles cloudprofiles.Resolver
+	store         Store
+	plans         Plans
+	credentials   Credentials
+	variables     Variables
+	sources       Sources
+	providers     *provider.Registry
+	executors     map[string]Executor
+	resources     ResourceSecrets
+	telemetry     *telemetry.Recorder
+	logs          LogSink
+	http          *http.Client
+	now           func() time.Time
 	// verifyWait is how long a deployed service has to answer.
 	verifyWait time.Duration
 }
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
-	Logs        LogSink
-	Store       Store
-	Plans       Plans
-	Credentials Credentials
-	Variables   Variables
-	Sources     Sources
-	Providers   *provider.Registry
+	CloudProfiles cloudprofiles.Resolver
+	Logs          LogSink
+	Store         Store
+	Plans         Plans
+	Credentials   Credentials
+	Variables     Variables
+	Sources       Sources
+	Providers     *provider.Registry
 	// Executors carry out each provider's actions, by provider name.
 	Executors map[string]Executor
 	// Resources keeps provisioned resources' credentials. It may be nil
@@ -197,7 +200,7 @@ type RunnerDeps struct {
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
-		store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
+		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
 		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
@@ -216,6 +219,9 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 		return "", nil, nil
 	}
 	for _, action := range plan.Actions {
+		if validationErr := r.validateCloudPlacement(ctx, plan, action, nil); validationErr != nil {
+			return "", nil, validationErr
+		}
 		if action.Subject != planning.ServiceSubject && action.Subject != planning.ResourceSubject {
 			return "", nil, fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, action.Subject)
 		}
@@ -235,7 +241,7 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	}
 	var order [][]string
 	for _, a := range plan.Actions {
-		if a.Op == planning.Keep {
+		if a.Op == planning.Keep && !a.AdoptCloudPlacement {
 			continue
 		}
 		d.Steps = append(d.Steps, Step{
@@ -435,6 +441,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if a.Subject != planning.ServiceSubject && a.Subject != planning.ResourceSubject {
 		return fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, a.Subject)
 	}
+	if a.Op == planning.Keep && a.AdoptCloudPlacement {
+		return r.adoptCloudPlacement(ctx, d, plan, a, step, heartbeat)
+	}
 	exec, ok := r.executors[a.Provider]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrNoExecutor, a.Provider)
@@ -497,6 +506,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		if a.Service != nil && !reflect.DeepEqual(a.Service.TargetSettings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
 			return fmt.Errorf("the target settings for %s changed since this plan was reviewed; plan again", a.Name)
 		}
+	}
+	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
+		return validationErr
 	}
 	job := &Job{
 		BuildCredentials: r.credentials, Logs: r.logs, Attempt: logAttempt(ctx, d.Retries),

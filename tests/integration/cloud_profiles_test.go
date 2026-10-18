@@ -173,7 +173,7 @@ func TestCloudProfiles_scopesRevisionsAndDeletion(t *testing.T) {
 		t.Fatal("cross-project assignment accepted")
 	}
 	assignment, err = st.Resolve(ctx, "org_1", "proj_1", "env_1")
-	if err != nil || assignment == nil || assignment.CloudID != p.ID || len(assignment.Targets) != 1 || assignment.Targets[0].ID != target.ID {
+	if err != nil || assignment == nil || assignment.CloudID != p.ID || assignment.CloudRevision != p.Revision || len(assignment.Targets) != 1 || assignment.Targets[0].ID != target.ID {
 		t.Fatalf("assignment: %+v %v", assignment, err)
 	}
 	if _, err = st.Resolve(ctx, "org_2", "proj_1", "env_1"); !errors.Is(err, cloudprofiles.ErrNotFound) {

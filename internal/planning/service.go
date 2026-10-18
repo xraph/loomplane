@@ -11,6 +11,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
@@ -78,28 +79,30 @@ type Workflow interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
-	store     Store
-	projects  Projects
-	analyses  Analyses
-	manifests Manifests
-	providers *provider.Registry
-	clouds    Connections
-	authz     Authorizer
-	workflow  Workflow
-	audit     projects.Auditor
-	window    time.Duration
-	now       func() time.Time
-	warn      func(msg string, err error)
-	telemetry *telemetry.Recorder
+	cloudProfiles cloudprofiles.Resolver
+	store         Store
+	projects      Projects
+	analyses      Analyses
+	manifests     Manifests
+	providers     *provider.Registry
+	clouds        Connections
+	authz         Authorizer
+	workflow      Workflow
+	audit         projects.Auditor
+	window        time.Duration
+	now           func() time.Time
+	warn          func(msg string, err error)
+	telemetry     *telemetry.Recorder
 }
 
 // Deps are what a Service needs.
 type Deps struct {
-	Store     Store
-	Projects  Projects
-	Analyses  Analyses
-	Manifests Manifests
-	Providers *provider.Registry
+	CloudProfiles cloudprofiles.Resolver
+	Store         Store
+	Projects      Projects
+	Analyses      Analyses
+	Manifests     Manifests
+	Providers     *provider.Registry
 	// Connections are the organization's cloud accounts. Nil means none,
 	// so no plan that needs one is executable.
 	Connections Connections
@@ -122,7 +125,7 @@ func NewService(d Deps) *Service {
 		warn = func(string, error) {}
 	}
 	return &Service{
-		store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
+		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry,
 	}
@@ -537,11 +540,29 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
-	result := Compute(Input{
-		Federation:  federation,
-		Environment: plan.Environment, Graph: g, Manifest: rev.Manifest, Providers: s.providers, Bindings: bindings,
-		Connections: options, Chosen: chosen, Held: held,
-	})
+	resolutionManifest, needsCloud, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
+	var assignment *cloudprofiles.Assignment
+	if resolutionErr == nil && needsCloud && s.cloudProfiles != nil {
+		assignment, resolutionErr = s.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+		if resolutionErr == nil && assignment != nil && (assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.EnvironmentID != plan.EnvironmentID) {
+			resolutionErr = fmt.Errorf("cloud assignment is outside this organization, project or environment scope")
+		}
+	}
+	var placements map[string]CloudPlacement
+	var resolved *manifest.Manifest
+	if resolutionErr == nil {
+		resolved, placements, resolutionErr = ResolveCloudTargets(resolutionManifest, plan.Environment, assignment, options)
+	}
+	var result *Result
+	if resolutionErr != nil {
+		result = &Result{Problems: []Finding{{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}}, Actions: []Action{}, Connections: map[string]string{}}
+	} else {
+		result = Compute(Input{
+			Federation: federation, CloudPlacements: placements,
+			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
+			Connections: options, Chosen: chosen, Held: held,
+		})
+	}
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
@@ -570,7 +591,7 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	out := make([]ConnectionOption, 0, len(all))
 	for _, c := range all {
 		out = append(out, ConnectionOption{
-			ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
+			Account: c.Account, ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
 			PullReady: connections.RegistryPullReady(c),
 			HTTPS:     c.Details["certificate_arn"] != "", Region: c.Details["region"],
 			Details: maps.Clone(c.Details),

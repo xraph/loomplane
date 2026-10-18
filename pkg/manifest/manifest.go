@@ -155,8 +155,10 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
-	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
-	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
+	// CloudTarget names a target in the environment's assigned Cloud.
+	CloudTarget string `json:"cloud_target,omitempty" yaml:"cloud_target,omitempty"`
+	Provider    string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Region      string `json:"region,omitempty" yaml:"region,omitempty"`
 	// Target names the server or cluster connection for this service.
 	Target string `json:"target,omitempty" yaml:"target,omitempty"`
 	// Endpoint configures public access on owned infrastructure.
@@ -273,10 +275,11 @@ func (h Held) WarnSameAddress() bool { return h.SameAddress == SameAddressWarn }
 var serviceKinds = []string{"http-service", "web-app", "static-site", "worker"}
 
 var (
-	nameRE  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	envRE   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	tokenRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	kindRE  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	cloudTargetRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	envRE         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	tokenRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	kindRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
 	routeRE   = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$`)
@@ -520,6 +523,9 @@ func checkToken(add func(string, string, ...any), path, what, value string) {
 }
 
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
+	if s.CloudTarget != "" && (len(s.CloudTarget) > 48 || !cloudTargetRE.MatchString(s.CloudTarget)) {
+		add(path+".cloud_target", "must be a lowercase target slug of at most 48 characters")
+	}
 	checkToken(add, path+".provider", "provider", s.Provider)
 	checkToken(add, path+".region", "region", s.Region)
 	checkInfrastructure(add, path, s)
@@ -728,6 +734,9 @@ func (s Service) For(env string, d Defaults) Settings {
 		out.Endpoint = nil
 	}
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
+	if o.CloudTarget != "" {
+		out.CloudTarget = o.CloudTarget
+	}
 	if o.Target != "" {
 		out.Target = o.Target
 	}

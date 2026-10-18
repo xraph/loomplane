@@ -211,22 +211,23 @@ func (s *PgStore) DeleteTarget(ctx context.Context, orgID, projectID, cloudID, i
 // No assignment returns nil only when the environment exists in this scope.
 func (s *PgStore) Resolve(ctx context.Context, orgID, projectID, environmentID string) (*Assignment, error) {
 	var cloudID *string
-	var revision *int64
+	var revision, cloudRevision *int64
 	var targets []byte
-	err := s.db.QueryRow(ctx, `SELECT a.cloud_id,a.revision,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
+	err := s.db.QueryRow(ctx, `SELECT a.cloud_id,a.revision,c.revision,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
  FROM loomplane_environments e
  JOIN loomplane_projects p ON p.org_id=e.org_id AND p.id=e.project_id
  LEFT JOIN loomplane_cloud_assignments a ON a.org_id=e.org_id AND a.project_id=e.project_id AND a.environment_id=e.id
+ LEFT JOIN loomplane_cloud_profiles c ON c.org_id=a.org_id AND c.project_id=a.project_id AND c.id=a.cloud_id
  LEFT JOIN loomplane_cloud_targets t ON t.org_id=a.org_id AND t.project_id=a.project_id AND t.cloud_id=a.cloud_id
  WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$3
- GROUP BY e.id,a.cloud_id,a.revision`, orgID, projectID, environmentID).Scan(&cloudID, &revision, &targets)
+ GROUP BY e.id,a.cloud_id,a.revision,c.revision`, orgID, projectID, environmentID).Scan(&cloudID, &revision, &cloudRevision, &targets)
 	if err != nil {
 		return nil, storeError(err)
 	}
 	if cloudID == nil {
 		return nil, nil
 	}
-	a := &Assignment{OrgID: orgID, ProjectID: projectID, EnvironmentID: environmentID, CloudID: *cloudID, Revision: *revision}
+	a := &Assignment{OrgID: orgID, ProjectID: projectID, EnvironmentID: environmentID, CloudID: *cloudID, Revision: *revision, CloudRevision: *cloudRevision}
 	if err = json.Unmarshal(targets, &a.Targets); err != nil {
 		return nil, fmt.Errorf("decode assigned targets: %w", err)
 	}

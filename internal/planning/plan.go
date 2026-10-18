@@ -76,13 +76,16 @@ const (
 
 // Action is one step of a plan.
 type Action struct {
+	// AdoptCloudPlacement persists reviewed metadata without a provider call.
+	AdoptCloudPlacement bool           `json:"adopt_cloud_placement,omitempty"`
+	CloudAdoption       *CloudAdoption `json:"cloud_adoption,omitempty"`
 	// ID is stable for a subject: "service:api", "resource:db".
 	ID       string  `json:"id"`
 	Op       Op      `json:"op"`
 	Subject  Subject `json:"subject"`
 	Name     string  `json:"name"`
 	Provider string  `json:"provider"`
-	// ConnectionID pins an owned target independently of cloud defaults.
+	// ConnectionID pins a service target independently of cloud defaults.
 	ConnectionID string          `json:"connection_id,omitempty"`
 	Region       string          `json:"region,omitempty"`
 	Engine       provider.Engine `json:"engine"`
@@ -108,6 +111,7 @@ type Action struct {
 // ServiceConfig is everything a deployment of a service is made from. A
 // binding keeps the one last applied, and the next plan compares against it.
 type ServiceConfig struct {
+	CloudPlacement *CloudPlacement    `json:"cloud_placement,omitempty"`
 	Catalog        *recipes.Recipe    `json:"catalog,omitempty"`
 	Provider       string             `json:"provider"`
 	Region         string             `json:"region,omitempty"`
