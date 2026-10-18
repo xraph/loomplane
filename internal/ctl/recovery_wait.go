@@ -12,51 +12,49 @@ import (
 )
 
 func recoveryFlags() []cli.Flag {
-	return []cli.Flag{jsonFlag, cli.NewBoolFlag("wait", "w", "Wait for a terminal result", false), cli.NewDurationFlag("timeout", "", "Maximum wait time", 45*time.Minute)}
+	return []cli.Flag{jsonFlag, cli.NewBoolFlag("wait", "w", "Wait for a terminal result", false), timeoutFlag("Maximum wait time", 45*time.Minute)}
 }
 
-func recoveryContext(ctx cli.CommandContext) (context.Context, context.CancelFunc, error) {
+func recoveryContext(ctx cli.CommandContext) (context.Context, context.CancelFunc) {
 	if !ctx.Bool("wait") {
-		return ctxOf(ctx), func() {}, nil
+		return ctxOf(ctx), func() {}
 	}
-	duration := time.Duration(ctx.Duration("timeout"))
-	if duration <= 0 {
-		return nil, nil, errors.New("timeout must be greater than zero")
-	}
-	bounded, cancel := context.WithTimeout(ctxOf(ctx), duration)
-	return bounded, cancel, nil
+	return context.WithTimeout(ctxOf(ctx), time.Duration(ctx.Duration("timeout")))
 }
 
 func (a *App) backupResult(ctx cli.CommandContext, c *client.Client, b *client.ServiceBackup) error {
-	bounded, cancel, err := recoveryContext(ctx)
-	if err != nil {
-		return err
-	}
+	bounded, cancel := recoveryContext(ctx)
 	defer cancel()
 	if ctx.Bool("wait") {
 		id := b.ID
-		b, err = c.WaitServiceBackup(bounded, id)
+		result, err := c.WaitServiceBackup(bounded, id)
 		if err != nil {
-			return fmt.Errorf("follow backup %s with loomctl backups show: %w", id, err)
+			return a.recoveryFollowError(ctx, b, "backup", id, err)
 		}
+		b = result
 	}
 	return a.recoveryResult(ctx, b, b.ID, b.Status, b.Error)
 }
 
 func (a *App) restoreResult(ctx cli.CommandContext, c *client.Client, r *client.ServiceRestore) error {
-	bounded, cancel, err := recoveryContext(ctx)
-	if err != nil {
-		return err
-	}
+	bounded, cancel := recoveryContext(ctx)
 	defer cancel()
 	if ctx.Bool("wait") {
 		id := r.ID
-		r, err = c.WaitServiceRestore(bounded, id)
+		result, err := c.WaitServiceRestore(bounded, id)
 		if err != nil {
-			return fmt.Errorf("follow restore %s with loomctl restores show: %w", id, err)
+			return a.recoveryFollowError(ctx, r, "restore", id, err)
 		}
+		r = result
 	}
 	return a.recoveryResult(ctx, r, r.ID, r.Status, r.Error)
+}
+
+func (a *App) recoveryFollowError(ctx cli.CommandContext, record any, kind, id string, cause error) error {
+	if ctx.Bool("json") {
+		cause = errors.Join(cause, a.json(record))
+	}
+	return fmt.Errorf("follow %s %s with loomctl %ss show: %w", kind, id, kind, cause)
 }
 
 func (a *App) recoveryResult(ctx cli.CommandContext, record any, id, status, detail string) error {

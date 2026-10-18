@@ -18,7 +18,7 @@ func (a *App) servicesCommand() cli.Command {
 	return cli.NewCommand("services", "Prepare catalog services without a repository", nil,
 		cli.WithSubcommand(cli.NewCommand("create", "Plan a standalone PostgreSQL 17 service", a.createCatalogService,
 			cli.WithUsage("services create <project-name> --target <server-connection-id> [--env production] [--json]"),
-			cli.WithFlags(jsonFlag, cli.NewStringFlag("target", "", "Checked Docker server connection", ""), cli.NewStringFlag("env", "e", "Environment", "production"), cli.NewDurationFlag("timeout", "", "Maximum time to prepare the plan", 5*time.Minute)))))
+			cli.WithFlags(jsonFlag, cli.NewStringFlag("target", "", "Checked Docker server connection", ""), cli.NewStringFlag("env", "e", "Environment", "production"), timeoutFlag("Maximum time to prepare the plan", 5*time.Minute)))))
 }
 
 func (a *App) createCatalogService(ctx cli.CommandContext) error {
@@ -28,9 +28,6 @@ func (a *App) createCatalogService(ctx cli.CommandContext) error {
 		return errors.New("provide a project name and --target with a checked Docker server connection")
 	}
 	duration := time.Duration(ctx.Duration("timeout"))
-	if duration <= 0 {
-		return errors.New("timeout must be greater than zero")
-	}
 	bounded, cancel := context.WithTimeout(ctxOf(ctx), duration)
 	defer cancel()
 	c, err := a.client()

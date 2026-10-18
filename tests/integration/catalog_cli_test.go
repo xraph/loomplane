@@ -96,9 +96,25 @@ func TestAcceptanceCatalogCLIRecovery(t *testing.T) {
 	sql := func(instance id.ID, query string) string {
 		return fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(instance), "psql", "-U", "app", "-d", "database", "-At", "-v", "ON_ERROR_STOP=1", "-c", query)
 	}
+	followAfterTimeout := func(kind, subject, request string) string {
+		t.Helper()
+		if _, rejected := lc.run("", kind, "create", subject, "--request-id", "invalid-timeout", "--wait", "--timeout", "0", "--json"); rejected == nil {
+			t.Fatal("invalid wait timeout was accepted")
+		}
+		var before []json.RawMessage
+		if decodeErr := json.Unmarshal([]byte(lc.must(kind, plan.ProjectID, "--json")), &before); decodeErr != nil || len(before) != 0 {
+			t.Fatalf("invalid timeout queued %s: %+v %v", kind, before, decodeErr)
+		}
+		out, expired := lc.run("", kind, "create", subject, "--request-id", request, "--wait", "--timeout", "1ns", "--json")
+		var accepted struct{ ID string }
+		if expired == nil || json.Unmarshal([]byte(out), &accepted) != nil || accepted.ID == "" {
+			t.Fatalf("lost %s operation on wait timeout: %v %s", kind, expired, out)
+		}
+		return lc.must(kind, "show", accepted.ID, "--wait", "--json")
+	}
 	sql(sourceID, "CREATE TABLE cli_probe(value text); INSERT INTO cli_probe VALUES ('restored-through-cli')")
 	var backup lpclient.ServiceBackup
-	if err = json.Unmarshal([]byte(lc.must("backups", "create", plan.ProjectID, "--request-id", "cli-backup", "--wait", "--json")), &backup); err != nil || backup.Status != "succeeded" || backup.Bytes == 0 {
+	if err = json.Unmarshal([]byte(followAfterTimeout("backups", plan.ProjectID, "cli-backup")), &backup); err != nil || backup.Status != "succeeded" || backup.Bytes == 0 {
 		t.Fatalf("CLI backup: %+v %v", backup, err)
 	}
 	var repeated lpclient.ServiceBackup
@@ -120,7 +136,7 @@ func TestAcceptanceCatalogCLIRecovery(t *testing.T) {
 	}
 	sql(sourceID, "DELETE FROM cli_probe")
 	var restored lpclient.ServiceRestore
-	if err = json.Unmarshal([]byte(lc.must("restores", "create", backup.ID, "--request-id", "cli-restore", "--wait", "--json")), &restored); err != nil || restored.Status != "succeeded" || restored.VerifiedAt == nil {
+	if err = json.Unmarshal([]byte(followAfterTimeout("restores", backup.ID, "cli-restore")), &restored); err != nil || restored.Status != "succeeded" || restored.VerifiedAt == nil {
 		t.Fatalf("CLI restore: %+v %v", restored, err)
 	}
 	copyID, err := id.Parse(restored.ExternalID)
@@ -146,5 +162,5 @@ func TestAcceptanceCatalogCLIRecovery(t *testing.T) {
 	if volumes := fixtureCommand(t, "docker", "--host", "unix://"+socket, "volume", "ls", "-q", "--filter", "label=loomplane.instance="+copyID.String()); volumes != "" {
 		t.Fatalf("copy volume remains: %s", volumes)
 	}
-	t.Logf("CLI catalog plan %s, backup %s and verified restore %s passed; temporary copy removed", plan.ID, backup.ID, restored.ID)
+	t.Logf("CLI catalog plan %s, backup %s and verified restore %s passed, including timeout resumption; temporary copy removed", plan.ID, backup.ID, restored.ID)
 }

@@ -13,6 +13,10 @@ Verified on 18 October 2026. You can deploy PostgreSQL 17 on a checked Docker se
 - Save a six-hour policy, list its persisted cadence, and disable it.
 - Delete the temporary copy through the CLI. Its volume is gone and its verification record remains readable.
 
+The timeout regression rejects zero and negative durations before any API request for backup creation, retry and inspection, restore creation and inspection, and catalog project creation. A real Docker/PostgreSQL repeat rejected zero-duration backup/restore requests without creating records, then used a one-nanosecond wait to force both accepted operations to time out locally. Their JSON IDs remained available; `show --wait` followed the same jobs through successful backup and SQL-verified restore. The live source stayed unchanged and copy cleanup passed.
+
+The timeout fix passed CLI/client lint and tests. Full-repository reruns at this checkpoint were blocked by concurrent Cloud target contracts and notification UI/extension work. Those files are outside this fix.
+
 Run it with your test database and Docker socket:
 
 ```sh

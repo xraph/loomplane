@@ -29,6 +29,67 @@ func recoveryCLI(t *testing.T, handler http.HandlerFunc) (*App, *bytes.Buffer) {
 	return app, &out
 }
 
+func TestRecoveryInvalidTimeoutDoesNotContactTheAPI(t *testing.T) {
+	commands := [][]string{
+		{"backups", "create", "database"},
+		{"backups", "retry", "backup_1"},
+		{"backups", "show", "backup_1"},
+		{"restores", "create", "backup_1"},
+		{"restores", "show", "restore_1"},
+		{"services", "create", "Database", "--target", "conn_1"},
+	}
+	for _, command := range commands {
+		for _, timeout := range []string{"0", "-1s"} {
+			t.Run(strings.Join(command[:2], "-")+"/"+timeout, func(t *testing.T) {
+				requests := 0
+				app, _ := recoveryCLI(t, func(w http.ResponseWriter, r *http.Request) {
+					requests++
+					if r.URL.Path == "/api/v1/projects" {
+						_, _ = w.Write([]byte(`{"projects":[{"id":"p","slug":"database"}]}`))
+						return
+					}
+					_, _ = w.Write([]byte(`{"id":"operation","status":"queued"}`))
+				})
+				args := append(append([]string{}, command...), "--timeout", timeout)
+				if command[0] != "services" {
+					args = append(args, "--wait")
+				}
+				if err := app.Run(args); err == nil || !strings.Contains(err.Error(), "timeout") || requests != 0 {
+					t.Fatalf("invalid timeout: err=%v, requests=%d", err, requests)
+				}
+			})
+		}
+	}
+}
+
+func TestRecoveryWaitTimeoutRetainsAcceptedOperationJSON(t *testing.T) {
+	previous := client.Every
+	client.Every = time.Millisecond
+	t.Cleanup(func() { client.Every = previous })
+	for _, kind := range []string{"backups", "restores"} {
+		t.Run(kind, func(t *testing.T) {
+			app, out := recoveryCLI(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/projects" {
+					_, _ = w.Write([]byte(`{"projects":[{"id":"p","slug":"database"}]}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"id":"accepted_operation","status":"running"}`))
+			})
+			arg := "database"
+			if kind == "restores" {
+				arg = "backup_1"
+			}
+			err := app.Run([]string{kind, "create", arg, "--wait", "--timeout", "20ms", "--json"})
+			var record struct {
+				ID string `json:"id"`
+			}
+			if err == nil || !strings.Contains(err.Error(), "accepted_operation") || json.Unmarshal(out.Bytes(), &record) != nil || record.ID != "accepted_operation" {
+				t.Fatalf("lost accepted operation after wait timeout: err=%v output=%s", err, out)
+			}
+		})
+	}
+}
+
 func TestBackupCreateWaitReturnsTerminalJSON(t *testing.T) {
 	previous := client.Every
 	client.Every = time.Millisecond
