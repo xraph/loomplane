@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_Restore: Codec = {"kind": "object", "fields": {"backup_id": {"ts": "backupId"}, "created_at": {"ts": "createdAt"}, "created_by": {"ts": "createdBy"}, "duration_ms": {"ts": "durationMs"}, "error": {"ts": "error"}, "expires_at": {"ts": "expiresAt"}, "external_id": {"ts": "externalId"}, "id": {"ts": "id"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "status": {"ts": "status"}, "verified_at": {"ts": "verifiedAt"}}, "required": ["backup_id", "created_at", "created_by", "duration_ms", "expires_at", "id", "org_id", "project_id", "status"]};

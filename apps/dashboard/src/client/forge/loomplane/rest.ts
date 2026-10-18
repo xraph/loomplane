@@ -153,6 +153,41 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly backupPolicies = {
+    /**
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PolicyList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/backup-policies`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PolicyList"],
+      };
+
+      return this.request<types.PolicyList>(config);
+    },
+
+    /**
+     */
+    set: async (id: string, body: types.PolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Policy> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/backup-policies`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["PolicyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Policy"],
+      };
+
+      return this.request<types.Policy>(config);
+    },
+
+  };
+
   public readonly bindings = {
     /**
      * What runs each of the project's services and resources in an environment
@@ -1120,6 +1155,136 @@ export class RESTClient extends Client {
       };
 
       await this.request(config);
+    },
+
+  };
+
+  public readonly serviceBackups = {
+    /**
+     */
+    create: async (id: string, body: types.BackupCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Backup> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/service-backups`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["BackupCreateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Backup"],
+      };
+
+      return this.request<types.Backup>(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Backup> => {
+      let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Backup"],
+      };
+
+      return this.request<types.Backup>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BackupList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/service-backups`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BackupList"],
+      };
+
+      return this.request<types.BackupList>(config);
+    },
+
+    /**
+     */
+    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Backup> => {
+      let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Backup"],
+      };
+
+      return this.request<types.Backup>(config);
+    },
+
+  };
+
+  public readonly serviceRestores = {
+    /**
+     */
+    create: async (id: string, body: types.RestoreInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Restore> => {
+      let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/restore`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RestoreInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Restore"],
+      };
+
+      return this.request<types.Restore>(config);
+    },
+
+    /**
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/service-restores/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Restore> => {
+      let __path = `/api/v1/service-restores/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Restore"],
+      };
+
+      return this.request<types.Restore>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RestoreList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/service-restores`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RestoreList"],
+      };
+
+      return this.request<types.RestoreList>(config);
     },
 
   };

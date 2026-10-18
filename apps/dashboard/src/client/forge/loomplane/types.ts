@@ -99,6 +99,33 @@ export interface AnalysisList {
   analyses: Analysis[];
 }
 
+export interface Backup {
+  attempt: number;
+  bytes: number;
+  completedAt?: string;
+  createdAt: string;
+  createdBy: string;
+  environmentId: string;
+  error?: string;
+  id: string;
+  name: string;
+  orgId: string;
+  projectId: string;
+  restoredAt?: string;
+  sha256?: string;
+  status: string;
+}
+
+export interface BackupCreateInputBody {
+  environment: string;
+  requestId: string;
+  resource: string;
+}
+
+export interface BackupList {
+  backups: Backup[];
+}
+
 export interface Binding {
   commitSha: string;
   config: string;
@@ -247,6 +274,7 @@ export interface CreateInvitationInputBody {
 }
 
 export interface CreatePlanInputBody {
+  catalog?: boolean;
   environment: string;
   scope?: string[];
 }
@@ -573,6 +601,7 @@ export interface Package {
 
 export interface Plan {
   actions: Action[];
+  catalog: boolean;
   connections: Record<string, any>;
   createdAt: string;
   createdBy: string;
@@ -628,6 +657,31 @@ export interface PlanningSummary {
   keep: number;
   replace: number;
   update: number;
+}
+
+export interface Policy {
+  createdBy: string;
+  enabled: boolean;
+  environment: string;
+  environmentId: string;
+  everyHours: number;
+  id: string;
+  lastError?: string;
+  nextAt: string;
+  orgId: string;
+  projectId: string;
+  resource: string;
+}
+
+export interface PolicyInputBody {
+  enabled: boolean;
+  environment: string;
+  everyHours: number;
+  resource: string;
+}
+
+export interface PolicyList {
+  policies: Policy[];
 }
 
 export interface Project {
@@ -729,6 +783,16 @@ export interface RealtimeSend {
   projectIds?: string[];
 }
 
+export interface Recipe {
+  architecture: string;
+  backupFormat: string;
+  id: string;
+  image: string;
+  mountPath: string;
+  productVersion: string;
+  revision: string;
+}
+
 export interface ReplaceInputBody {
   credential: string;
   settings?: Record<string, any>;
@@ -763,10 +827,36 @@ export interface Resource {
 }
 
 export interface ResourceConfig {
+  catalog?: Recipe;
   kind: string;
   provider: string;
   region?: string;
+  target?: string;
+  targetSettings?: Record<string, any>;
   version?: string;
+}
+
+export interface Restore {
+  backupId: string;
+  createdAt: string;
+  createdBy: string;
+  durationMs: number;
+  error?: string;
+  expiresAt: string;
+  externalId?: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  status: string;
+  verifiedAt?: string;
+}
+
+export interface RestoreInputBody {
+  requestId: string;
+}
+
+export interface RestoreList {
+  restores: Restore[];
 }
 
 export interface Revision {
@@ -844,6 +934,7 @@ export interface Service {
 export interface ServiceConfig {
   build?: string;
   buildTarget?: BuildTarget;
+  catalog?: Recipe;
   commitSha?: string;
   context?: string;
   ecosystem: string;

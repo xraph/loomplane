@@ -14,6 +14,7 @@ import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
+import { Route as ServicesRouteImport } from "./routes/services"
 import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
 import { Route as VariablesRouteImport } from "./routes/variables"
@@ -50,6 +51,11 @@ const InfrastructureRoute = InfrastructureRouteImport.update({
 const MembersRoute = MembersRouteImport.update({
   id: "/members",
   path: "/members",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ServicesRoute = ServicesRouteImport.update({
+  id: "/services",
+  path: "/services",
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInRoute = SignInRouteImport.update({
@@ -119,6 +125,7 @@ export interface FileRoutesByFullPath {
   "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
@@ -138,6 +145,7 @@ export interface FileRoutesByTo {
   "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
@@ -158,6 +166,7 @@ export interface FileRoutesById {
   "/api-keys": typeof ApiKeysRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
@@ -179,6 +188,7 @@ export interface FileRouteTypes {
     | "/api-keys"
     | "/infrastructure"
     | "/members"
+    | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
@@ -198,6 +208,7 @@ export interface FileRouteTypes {
     | "/api-keys"
     | "/infrastructure"
     | "/members"
+    | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
@@ -217,6 +228,7 @@ export interface FileRouteTypes {
     | "/api-keys"
     | "/infrastructure"
     | "/members"
+    | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
@@ -237,6 +249,7 @@ export interface RootRouteChildren {
   ApiKeysRoute: typeof ApiKeysRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
+  ServicesRoute: typeof ServicesRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   VariablesRoute: typeof VariablesRoute
@@ -286,6 +299,13 @@ declare module "@tanstack/react-router" {
       path: "/members"
       fullPath: "/members"
       preLoaderRoute: typeof MembersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/services": {
+      id: "/services"
+      path: "/services"
+      fullPath: "/services"
+      preLoaderRoute: typeof ServicesRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/sign-in": {
@@ -381,6 +401,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiKeysRoute: ApiKeysRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
+  ServicesRoute: ServicesRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   VariablesRoute: VariablesRoute,

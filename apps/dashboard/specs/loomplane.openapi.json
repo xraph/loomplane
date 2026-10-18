@@ -1073,6 +1073,77 @@
         }
       }
     },
+    "/api/v1/projects/{id}/backup-policies": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "backupPolicies.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scheduled backup policies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "backupPolicies.set",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Scheduled backup policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Policy"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/bindings": {
       "get": {
         "tags": [
@@ -1739,6 +1810,108 @@
         }
       }
     },
+    "/api/v1/projects/{id}/service-backups": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceBackups.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Database recovery points",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceBackups.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupCreateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued database backup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backup"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/service-restores": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceRestores.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Isolated recovery copies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/sources": {
       "get": {
         "tags": [
@@ -2187,6 +2360,163 @@
           {
             "name": "cursor",
             "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/service-backups/{id}": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceBackups.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Database recovery point",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backup"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/service-backups/{id}/restore": {
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceRestores.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued isolated recovery copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Restore"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/service-backups/{id}/retry": {
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceBackups.retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Retried database backup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backup"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/service-restores/{id}": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceRestores.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Isolated recovery copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Restore"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceRestores.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
             "schema": {
               "type": "string"
             }
@@ -2661,6 +2991,101 @@
         "type": "object",
         "x-forge-envelope": "analyses"
       },
+      "Backup": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "name",
+          "status",
+          "attempt",
+          "bytes",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "completed_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "restored_at": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "BackupCreateInputBody": {
+        "type": "object",
+        "required": [
+          "environment",
+          "resource",
+          "request_id"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
+      "BackupList": {
+        "properties": {
+          "backups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Backup"
+            }
+          }
+        },
+        "required": [
+          "backups"
+        ],
+        "type": "object",
+        "x-forge-envelope": "backups"
+      },
       "Binding": {
         "type": "object",
         "required": [
@@ -3116,6 +3541,9 @@
           "environment"
         ],
         "properties": {
+          "catalog": {
+            "type": "boolean"
+          },
           "environment": {
             "type": "string"
           },
@@ -4238,6 +4666,7 @@
       "Plan": {
         "type": "object",
         "required": [
+          "catalog",
           "id",
           "org_id",
           "project_id",
@@ -4266,6 +4695,9 @@
             "items": {
               "$ref": "#/components/schemas/Action"
             }
+          },
+          "catalog": {
+            "type": "boolean"
           },
           "connections": {
             "type": "object",
@@ -4461,6 +4893,96 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
+      },
+      "Policy": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "resource",
+          "every_hours",
+          "enabled",
+          "next_at",
+          "created_by"
+        ],
+        "properties": {
+          "created_by": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "every_hours": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "next_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
+      "PolicyInputBody": {
+        "type": "object",
+        "required": [
+          "environment",
+          "resource",
+          "every_hours",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "every_hours": {
+            "type": "integer"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
+      "PolicyList": {
+        "properties": {
+          "policies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Policy"
+            }
+          }
+        },
+        "required": [
+          "policies"
+        ],
+        "type": "object",
+        "x-forge-envelope": "policies"
       },
       "Project": {
         "type": "object",
@@ -4702,6 +5224,41 @@
           }
         }
       },
+      "Recipe": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "product_version",
+          "image",
+          "architecture",
+          "mount_path",
+          "backup_format"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "backup_format": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "mount_path": {
+            "type": "string"
+          },
+          "product_version": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
       "ReplaceInputBody": {
         "type": "object",
         "required": [
@@ -4822,6 +5379,9 @@
           "kind"
         ],
         "properties": {
+          "catalog": {
+            "$ref": "#/components/schemas/Recipe"
+          },
           "kind": {
             "type": "string"
           },
@@ -4831,10 +5391,98 @@
           "region": {
             "type": "string"
           },
+          "target": {
+            "type": "string"
+          },
+          "target_settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "version": {
             "type": "string"
           }
         }
+      },
+      "Restore": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "backup_id",
+          "status",
+          "created_by",
+          "created_at",
+          "expires_at",
+          "duration_ms"
+        ],
+        "properties": {
+          "backup_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "verified_at": {
+            "type": "string"
+          }
+        }
+      },
+      "RestoreInputBody": {
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RestoreList": {
+        "properties": {
+          "restores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Restore"
+            }
+          }
+        },
+        "required": [
+          "restores"
+        ],
+        "type": "object",
+        "x-forge-envelope": "restores"
       },
       "Revision": {
         "type": "object",
@@ -5101,6 +5749,9 @@
           },
           "build_target": {
             "$ref": "#/components/schemas/BuildTarget"
+          },
+          "catalog": {
+            "$ref": "#/components/schemas/Recipe"
           },
           "commit_sha": {
             "type": "string"

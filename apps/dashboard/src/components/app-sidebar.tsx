@@ -5,6 +5,7 @@ import { useAuth } from "@authsome/ui-react"
 import { useRouterState } from "@tanstack/react-router"
 import {
   ActivityIcon,
+  DatabaseIcon,
   CopyIcon,
   FolderGit2Icon,
   KeyboardIcon,
@@ -120,6 +121,12 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       icon: <LayoutGridIcon />,
       link: <Link to="/projects" />,
       isActive: path === "/projects",
+    },
+    {
+      title: "Services",
+      icon: <DatabaseIcon />,
+      link: <Link to="/services" />,
+      isActive: path === "/services",
     },
     {
       title: "Infrastructure",

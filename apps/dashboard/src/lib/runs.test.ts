@@ -16,6 +16,7 @@ const action = (id: string, step: number, op = "create"): Action => ({
 })
 
 const plan = (status: string, extra: Partial<Plan> = {}): Plan => ({
+  catalog: false,
   id: "plan_1",
   orgId: "org_1",
   projectId: "proj_1",

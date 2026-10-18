@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_Policy: Codec = {"kind": "object", "fields": {"created_by": {"ts": "createdBy"}, "enabled": {"ts": "enabled"}, "environment": {"ts": "environment"}, "environment_id": {"ts": "environmentId"}, "every_hours": {"ts": "everyHours"}, "id": {"ts": "id"}, "last_error": {"ts": "lastError"}, "next_at": {"ts": "nextAt"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "resource": {"ts": "resource"}}, "required": ["created_by", "enabled", "environment", "environment_id", "every_hours", "id", "next_at", "org_id", "project_id", "resource"]};

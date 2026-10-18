@@ -1150,6 +1150,41 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
       },
+      "Recipe": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "product_version",
+          "image",
+          "architecture",
+          "mount_path",
+          "backup_format"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "backup_format": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "mount_path": {
+            "type": "string"
+          },
+          "product_version": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
       "ResourceConfig": {
         "type": "object",
         "required": [
@@ -1157,6 +1192,9 @@
           "kind"
         ],
         "properties": {
+          "catalog": {
+            "$ref": "#/components/schemas/Recipe"
+          },
           "kind": {
             "type": "string"
           },
@@ -1165,6 +1203,13 @@
           },
           "region": {
             "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "target_settings": {
+            "type": "object",
+            "additionalProperties": true
           },
           "version": {
             "type": "string"
@@ -1225,6 +1270,9 @@
           },
           "build_target": {
             "$ref": "#/components/schemas/BuildTarget"
+          },
+          "catalog": {
+            "$ref": "#/components/schemas/Recipe"
           },
           "commit_sha": {
             "type": "string"
@@ -1964,6 +2012,7 @@
       "Plan": {
         "type": "object",
         "required": [
+          "catalog",
           "id",
           "org_id",
           "project_id",
@@ -1992,6 +2041,9 @@
             "items": {
               "$ref": "#/components/schemas/Action"
             }
+          },
+          "catalog": {
+            "type": "boolean"
           },
           "connections": {
             "type": "object",
@@ -3283,6 +3335,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "catalog",
             "id",
             "org_id",
             "project_id",
@@ -3311,6 +3364,9 @@
               "items": {
                 "$ref": "#/components/schemas/Action"
               }
+            },
+            "catalog": {
+              "type": "boolean"
             },
             "connections": {
               "type": "object",
@@ -3404,6 +3460,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "catalog",
             "id",
             "org_id",
             "project_id",
@@ -3432,6 +3489,9 @@
               "items": {
                 "$ref": "#/components/schemas/Action"
               }
+            },
+            "catalog": {
+              "type": "boolean"
             },
             "connections": {
               "type": "object",

@@ -70,6 +70,22 @@ Validation: full Go lint passed after concurrent federation edits settled. The f
 
 Pending: publication/cutover, application-specific integrity probes, quotas, retention, credential rotation, Kubernetes and PITR. SQL verification establishes that the native restore completed and accepted queries; it is not an application-level recovery guarantee.
 
+### Recovery cleanup review, 18 October 2026
+
+The final source review found two cleanup defects. Manual removal now uses the authorized administrator who requested it, so removal can finish after the original creator loses access. Automatic cleanup retains the creator's current permissions and records a visible failure when access is revoked. Failed cleanups persist a one-hour retry delay and sort by their next eligible time, so ten unreachable copies cannot permanently block later copies. Administrators can retry immediately.
+
+Verified: the caller regression failed before the fix and passed afterward. A real PostgreSQL store test reproduced starvation with ten failed cleanups, then verified that the eleventh copy proceeds, retry timing survives reopening the store, manual retry works during backoff, and deleted copies are excluded. The live catalog API acceptance passed again after these fixes, including restore cleanup and scheduled backups. Recovery-package lint and the full Go suite passed; the final full-repo lint run reported formatting and a signed-to-unsigned conversion in concurrently edited `internal/runtimecatalog` files. Those files are outside this slice.
+
+### PostgreSQL dashboard and client workflow, 18 October 2026
+
+Implemented: a compact Services page with checked-target selection, one-click creation of a dedicated PostgreSQL project, strict plan-shape approval, manual backups, daily scheduling, isolated restore tests, verification timestamps, and copy cleanup confirmation. The page uses generated Forge clients and the shared ZeroState. Recovery polling remains active independently of the general realtime connection because recovery jobs do not yet publish realtime events.
+
+Verified: a real browser deployed PostgreSQL, enabled daily backups, created a backup of a seeded SQL row, and started an isolated restore. The copy contained the row after it was deleted from the live source; the live source remained empty. The page showed SQL verification and the cleanup dialog; cancelling the dialog preserved the copy. API cleanup is covered by the earlier acceptance test. Desktop and 390 px layouts were inspected; recovery actions remain visible and the narrow document has no horizontal overflow.
+
+Validation: generated-client drift checks, `tsc --noEmit`, `tsc -b`, and dashboard lint passed. All 235 dashboard tests passed with two workers, including catalog read failure/retry and denied recovery access. An earlier default-parallel run timed out in the existing deployment-target test.
+
+Scope: this is the Docker single-instance logical-backup profile. The remaining phase 0-2 gates below are still open. The broader catalog, Kubernetes, PITR, retention, upgrades and binding cutover are not advertised as supported. The [PostgreSQL guide](postgres-services.md) documents the UI, CLI, API and Trove configuration.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.
