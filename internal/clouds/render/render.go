@@ -327,6 +327,9 @@ func (c *Client) DeployCommit(ctx context.Context, key Key, id, commit string) (
 	if err := c.do(ctx, key, http.MethodPost, "/services/"+url.PathEscape(id)+"/deploys", nil, body, &d); err != nil {
 		return nil, err
 	}
+	if d.ID == "" {
+		return nil, errors.New("render accepted the deploy without a deployment ID")
+	}
 	return &d, nil
 }
 
@@ -338,6 +341,9 @@ func (c *Client) CancelDeploy(ctx context.Context, key Key, id, deploy string) e
 // WaitDeploy polls a deploy until it's live, and fails if it doesn't get
 // there.
 func (c *Client) WaitDeploy(ctx context.Context, key Key, id, deploy string) (*Deploy, error) {
+	if id == "" || deploy == "" {
+		return nil, errors.New("render deployment polling requires service and deployment IDs")
+	}
 	for {
 		var d Deploy
 		if err := c.do(ctx, key, http.MethodGet, "/services/"+url.PathEscape(id)+"/deploys/"+url.PathEscape(deploy), nil, nil, &d); err != nil {

@@ -117,9 +117,17 @@ func (r *running) stop() {
 
 type client struct {
 	t     *testing.T
+	ctx   context.Context
 	base  string
 	token string
 	key   string
+}
+
+func (c *client) context() context.Context {
+	if c.ctx != nil {
+		return c.ctx
+	}
+	return c.t.Context()
 }
 
 func (c *client) do(method, path string, body any, out any) int {
@@ -132,7 +140,7 @@ func (c *client) do(method, path string, body any, out any) int {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(c.t.Context(), method, c.base+path, rd)
+	req, err := http.NewRequestWithContext(c.context(), method, c.base+path, rd)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -143,7 +151,7 @@ func (c *client) do(method, path string, body any, out any) int {
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		c.t.Fatalf("GET %s: %v", path, err)
+		c.t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(res.Body)
@@ -164,7 +172,7 @@ func (c *client) do(method, path string, body any, out any) int {
 // raw returns a GET's body as text, whatever its status.
 func (c *client) raw(path string) string {
 	c.t.Helper()
-	req, err := http.NewRequestWithContext(c.t.Context(), http.MethodGet, c.base+path, http.NoBody)
+	req, err := http.NewRequestWithContext(c.context(), http.MethodGet, c.base+path, http.NoBody)
 	if err != nil {
 		c.t.Fatal(err)
 	}

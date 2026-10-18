@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -10,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/deployments"
+	"github.com/xraph/loomplane/internal/planning"
 )
 
 // The acceptance run deploys a real repository to real clouds, checks it
@@ -56,6 +60,7 @@ func TestAcceptance_aRealDeploymentAnswersAndIsTakenDown(t *testing.T) {
 	}
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Acceptance", "repository_url": "https://github.com/" + repo}, &proj)
 	base := "/api/v1/projects/" + proj.ID
+	t.Logf("isolated acceptance project %s", proj.ID)
 	analyze(t, cfg, c, proj.ID)
 
 	connect := func(cloud, credential string, settings map[string]string) {
@@ -91,6 +96,35 @@ func TestAcceptance_aRealDeploymentAnswersAndIsTakenDown(t *testing.T) {
 	if k := acceptanceEnv("RENDER_API_KEY"); k != "" {
 		connect("render", k, map[string]string{"owner_id": acceptanceEnv("RENDER_OWNER_ID")})
 	}
+	renderServices := make(map[string]bool)
+	// Failed creates may precede the binding write. Track only create actions
+	// from this fresh project, so cleanup can also remove those test services.
+	t.Cleanup(func() {
+		if acceptanceEnv("KEEP") == "1" || len(renderServices) == 0 {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		provider := render.New(cfg.Clouds.RenderEndpoint)
+		key := render.Key{Value: acceptanceEnv("RENDER_API_KEY"), OwnerID: acceptanceEnv("RENDER_OWNER_ID")}
+		for name := range renderServices {
+			service, findErr := provider.FindService(ctx, key, name)
+			if findErr != nil {
+				t.Errorf("find recorded test service %s: %v", name, findErr)
+				continue
+			}
+			if service == nil {
+				continue
+			}
+			if service.Repo != "https://github.com/"+repo {
+				t.Errorf("refuse cleanup of test name %s with an unexpected repository", name)
+				continue
+			}
+			if deleteErr := provider.DeleteService(ctx, key, service.ID); deleteErr != nil {
+				t.Errorf("remove recorded test service %s: %v", name, deleteErr)
+			}
+		}
+	})
 
 	// deploy plans what manifest says and carries it out.
 	deploy := func(what string, yaml string) deploymentBody {
@@ -103,6 +137,10 @@ func TestAcceptance_aRealDeploymentAnswersAndIsTakenDown(t *testing.T) {
 		}
 		for _, a := range plan.Actions {
 			t.Logf("%s: %s %s on %s", what, a.Op, a.ID, a.Provider)
+			if a.Provider == "render" && a.Op == "create" && strings.HasPrefix(a.ID, "service:") {
+				name := deployments.RenderName(&deployments.Job{Action: planning.Action{Name: a.Name}, Deployment: &deployments.Deployment{ProjectID: proj.ID, Environment: "production"}})
+				renderServices[name] = true
+			}
 		}
 		c.must(http.StatusOK, http.MethodPost, "/api/v1/plans/"+plan.ID+"/approve", map[string]string{"revision": plan.Revision}, nil)
 		var d deploymentBody
@@ -128,6 +166,11 @@ func TestAcceptance_aRealDeploymentAnswersAndIsTakenDown(t *testing.T) {
 			t.Log("LOOMPLANE_ACCEPTANCE_KEEP is set: what was deployed is still running, and still costing money")
 			return
 		}
+		// testing cancels t.Context before running cleanups. Teardown still
+		// needs to remove resources it created, on a fresh bounded context.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), timeout)
+		defer cancel()
+		c.ctx = cleanupCtx
 		d := deploy("teardown", "version: 1\n")
 		if d.Status != "succeeded" {
 			t.Errorf("the teardown %s: %s. Check both clouds' consoles for what's left", d.Status, d.Error)
