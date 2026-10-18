@@ -65,12 +65,16 @@ import { useOrganization } from "@/lib/organization"
 import { deployPostgres } from "@/lib/catalog"
 import { Link } from "@/lib/router"
 import { formatDate } from "@/lib/format"
+import { recoverySelection } from "@/lib/service-recovery"
+import { BackupSchedule } from "@/components/backup-schedule"
+import { useDeploymentWrites } from "@/lib/deployment-writes"
 
 export function ServiceCatalog() {
   const { can } = useOrganization()
   const projects = useQuery(useProjectsList)
   const [project, setProject] = useState("")
   const selected = project || projects.data?.projects[0]?.id || ""
+  const { busy: projectBusy } = useDeploymentWrites(selected)
   return (
     <>
       <SiteHeader crumbs={[{ label: "Services" }]} />
@@ -93,6 +97,7 @@ export function ServiceCatalog() {
           >
             <SelectTrigger
               aria-label="Recovery project"
+              disabled={projectBusy}
               className="w-full sm:w-64"
             >
               <SelectValue placeholder="Choose a project">
@@ -325,25 +330,16 @@ function ServiceRecovery({ project }: { project: string }) {
   const deleteRestore = useMutation(useServiceRestoresDelete)
   const policySet = useMutation(useBackupPoliciesSet)
   const [deleting, setDeleting] = useState<Restore | null>(null)
-  const [busy, setBusy] = useState(false)
+  const { busy, onPendingChange } = useDeploymentWrites(project)
   const requests = useRef<Record<string, string>>({})
-  const databases =
-    bindings.data?.bindings.filter(
-      (b) => b.subject === "resource" && b.provider === "server"
-    ) ?? []
   const [resource, setResource] = useState("")
-  const selected = databases.some((b) => b.name === resource)
-    ? resource
-    : (databases[0]?.name ?? "")
-  const points =
-    backups.data?.backups.filter(
-      (b) =>
-        b.name === selected &&
-        b.environmentId ===
-          environments.data?.environments.find((e) => e.name === environment)
-            ?.id
-    ) ?? []
-  const copies = restores.data?.restores ?? []
+  const { resources, selected, live, points, copies } = recoverySelection(
+    bindings.data?.bindings ?? [],
+    backups.data?.backups ?? [],
+    restores.data?.restores ?? [],
+    environments.data?.environments.find((e) => e.name === environment)?.id,
+    resource
+  )
   const policy = policies.data?.policies.find(
     (p) => p.environment === environment && p.resource === selected
   )
@@ -381,7 +377,7 @@ function ServiceRecovery({ project }: { project: string }) {
     run: (requestId: string) => Promise<unknown>
   ) {
     if (busy) return
-    setBusy(true)
+    onPendingChange(true)
     const requestId = (requests.current[key] ??= crypto.randomUUID())
     try {
       await run(requestId)
@@ -397,9 +393,16 @@ function ServiceRecovery({ project }: { project: string }) {
         messageOf(error, "The operation could not finish. You can retry.")
       )
     } finally {
-      setBusy(false)
+      onPendingChange(false)
     }
   }
+  const backupNow = () =>
+    void action(`backup:${environment}:${selected}`, (requestId) =>
+      createBackup.mutateAsync({
+        path: { id: project },
+        body: { environment, resource: selected, requestId },
+      })
+    )
   const failed = [environments, bindings, backups, restores, policies].find(
     (query) => query.status === "error"
   )
@@ -422,6 +425,7 @@ function ServiceRecovery({ project }: { project: string }) {
       <div className="flex flex-wrap items-center gap-2">
         <Select
           value={environment}
+          disabled={busy}
           onValueChange={(value) => setEnvironment(value ?? "production")}
         >
           <SelectTrigger aria-label="Recovery environment" className="w-44">
@@ -435,61 +439,47 @@ function ServiceRecovery({ project }: { project: string }) {
             ))}
           </SelectContent>
         </Select>
-        {databases.length > 0 && (
+        {resources.length > 0 && (
           <Select
             value={selected}
+            disabled={busy}
             onValueChange={(value) => setResource(value ?? "")}
           >
             <SelectTrigger aria-label="Database" className="w-44">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {databases.map((b) => (
-                <SelectItem key={b.id} value={b.name}>
-                  {b.name}
+              {resources.map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         )}
-        {selected && can("service_backup:manage") && (
+        {selected && live && can("service_backup:manage") && (
           <>
-            <Button
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                void action(`backup:${environment}:${selected}`, (requestId) =>
-                  createBackup.mutateAsync({
-                    path: { id: project },
-                    body: { environment, resource: selected, requestId },
-                  })
-                )
-              }
-            >
+            <Button size="sm" disabled={busy} onClick={backupNow}>
               Back up now
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
+            <BackupSchedule
+              key={`${environment}:${selected}:${policy?.everyHours}:${policy?.enabled}`}
+              policy={policy}
               disabled={busy}
-              onClick={() =>
+              save={(everyHours, enabled) =>
                 void action("policy", () =>
                   policySet.mutateAsync({
                     path: { id: project },
                     body: {
                       environment,
                       resource: selected,
-                      everyHours: 24,
-                      enabled: !policy?.enabled,
+                      everyHours,
+                      enabled,
                     },
                   })
                 )
               }
-            >
-              {policy?.enabled
-                ? "Pause backup schedule"
-                : "Enable daily backups"}
-            </Button>
+            />
           </>
         )}
       </div>
@@ -500,6 +490,12 @@ function ServiceRecovery({ project }: { project: string }) {
         />
       ) : (
         <>
+          {!live && (
+            <p className="text-sm text-muted-foreground">
+              The source service has been removed. Recovery points and test
+              copies remain available.
+            </p>
+          )}
           <div className="text-sm text-muted-foreground">
             {policy?.enabled
               ? `Backups every ${policy.everyHours} hours. Next: ${formatDate(policy.nextAt)}.`
@@ -514,21 +510,8 @@ function ServiceRecovery({ project }: { project: string }) {
               title="No recovery points yet"
               description="Create a native backup before testing recovery. A local volume alone cannot recover from host loss."
             >
-              {can("service_backup:manage") && (
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  onClick={() =>
-                    void action(
-                      `backup:${environment}:${selected}`,
-                      (requestId) =>
-                        createBackup.mutateAsync({
-                          path: { id: project },
-                          body: { environment, resource: selected, requestId },
-                        })
-                    )
-                  }
-                >
+              {live && can("service_backup:manage") && (
+                <Button size="sm" disabled={busy} onClick={backupNow}>
                   Create first backup
                 </Button>
               )}
