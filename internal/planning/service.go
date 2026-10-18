@@ -533,7 +533,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
+	federation, err := s.federationInput(ctx, plan, rev.Manifest)
+	if err != nil {
+		return nil, "", err
+	}
 	result := Compute(Input{
+		Federation:  federation,
 		Environment: plan.Environment, Graph: g, Manifest: rev.Manifest, Providers: s.providers, Bindings: bindings,
 		Connections: options, Chosen: chosen, Held: held,
 	})

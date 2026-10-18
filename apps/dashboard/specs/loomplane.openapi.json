@@ -3661,6 +3661,31 @@
           }
         }
       },
+      "Federation": {
+        "type": "object",
+        "properties": {
+          "access_grants": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "destinations": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "network_links": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "placements": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "service_exports": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
       "Finding": {
         "type": "object",
         "required": [
@@ -3975,6 +4000,9 @@
         "properties": {
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
+          },
+          "federation": {
+            "$ref": "#/components/schemas/Federation"
           },
           "gateways": {
             "type": "object",
@@ -4922,6 +4950,9 @@
             "properties": {
               "defaults": {
                 "$ref": "#/components/schemas/Defaults"
+              },
+              "federation": {
+                "$ref": "#/components/schemas/Federation"
               },
               "gateways": {
                 "type": "object",

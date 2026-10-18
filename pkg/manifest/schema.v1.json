@@ -1,0 +1,358 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loomplane.dev/schemas/loomplane.v1.json",
+  "title": "loomplane.yaml",
+  "description": "What an application deploys with Loomplane, where, and what it needs. Version 1.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "The manifest version. This schema is version 1.",
+      "const": 1
+    },
+    "defaults": {
+      "description": "Apply to every service and resource that doesn't set its own. The default region only comes with the default provider.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "region": { "$ref": "#/$defs/region" }
+      }
+    },
+    "services": {
+      "description": "What the application runs, by name.",
+      "type": "object",
+      "maxProperties": 100,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/service" }
+    },
+    "resources": {
+      "description": "Backing services the application needs, such as Postgres, by name. A resource can't share a service's name.",
+      "type": "object",
+      "maxProperties": 100,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/resource" }
+    },
+    "gateways": {
+      "description": "Public entry points that route requests to services by path, by name. Loomplane builds each one on Bastion and runs it like a service. A gateway can't share a service's or resource's name.",
+      "type": "object",
+      "maxProperties": 10,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/gateway" }
+    },
+    "links": {
+      "description": "Private network links between two clouds, by name: an HA VPN between a Google Cloud project's default network and an AWS account's default VPC, so services on Google Cloud reach private services and databases on AWS. Each environment gets its own, billed by the hour on both clouds.",
+      "type": "object",
+      "maxProperties": 5,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/link" }
+    },
+    "ignore": {
+      "description": "What repository analysis found that the application doesn't use.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resources": {
+          "description": "Resource kinds, such as mysql.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/kind" }
+        }
+      }
+    },
+    "held": {
+      "description": "How a plan that holds some repositories back treats their services, which keep running with the links they were deployed with.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "same_address": {
+          "description": "What a plan does when a held service uses a Cloud Run service it creates again, after it was deleted outside Loomplane, with the name, region and connection it had, so at the same address. block, the default, refuses the plan until the held repository is in scope. warn lets it through with a warning. Anything that gets a new address is refused either way.",
+          "enum": ["block", "warn"]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,39}$"
+    },
+    "kind": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,39}$",
+      "examples": [
+        "postgres",
+        "mysql",
+        "redis",
+        "mongodb",
+        "kafka",
+        "rabbitmq",
+        "nats",
+        "object-storage",
+        "search",
+        "memcached",
+        "clickhouse"
+      ]
+    },
+    "provider": {
+      "description": "Where it runs, by the provider's name in Loomplane's registry, such as cloud-run, ecs-fargate, vercel or render.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "region": {
+      "description": "The provider's region, such as us-central1 or eu-west-1.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "connection": {
+      "description": "A connection ID from this organization's infrastructure inventory.",
+      "type": "string",
+      "pattern": "^conn_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "hostname": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$"
+        },
+        "ingress_class": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$"
+        },
+        "tls_secret": {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+        }
+      }
+    },
+    "build": {
+      "description": "Build the approved source on a connected builder, or use a digest-pinned image.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "description": "The build directory from the repository root. Use . for the root itself.",
+          "type": "string",
+          "pattern": "^(?:\\.|(?!\\.\\.?(?:/|$))[A-Za-z0-9._@+-]+(?:/(?!\\.\\.?(?:/|$))[A-Za-z0-9._@+-]+)*)$"
+        },
+        "builder": { "$ref": "#/$defs/connection" },
+        "registry": { "$ref": "#/$defs/connection" },
+        "image": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^[a-z0-9][a-z0-9.:/_-]*@sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "region": { "$ref": "#/$defs/region" },
+        "target": { "$ref": "#/$defs/connection" },
+        "endpoint": { "$ref": "#/$defs/endpoint" },
+        "health_path": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^/(?!/)[A-Za-z0-9/._~%+-]*$"
+        },
+        "build": { "$ref": "#/$defs/build" },
+        "port": {
+          "description": "The port the service listens on. Without it, the one its Dockerfile exposes.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "scale": {
+          "description": "How many instances run.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "type": "integer", "minimum": 0 },
+            "max": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        },
+        "size": {
+          "description": "What each instance gets.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory"],
+          "properties": {
+            "cpu": {
+              "description": "Virtual CPUs, such as 0.5 or 2.",
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 8
+            },
+            "memory": {
+              "description": "MiB.",
+              "type": "integer",
+              "minimum": 128,
+              "maximum": 32768
+            }
+          }
+        },
+        "public": {
+          "description": "Whether the service gets an address on the internet. Without it, yes for anything serving HTTP and no for a worker.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "False leaves the service out.",
+          "type": "boolean"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["source"],
+      "unevaluatedProperties": false,
+      "allOf": [{ "$ref": "#/$defs/settings" }],
+      "properties": {
+        "repo": {
+          "description": "The alias of the repository the service is in. A project with one repository can leave it out.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+        },
+        "source": {
+          "description": "Where the service's code is, as repository analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's, Python project's or JVM module's directory, or a Dockerfile. Prefix the ecosystem (go:, rust:, node:, python:, jvm:, container:) when two have a service at the same path.",
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "description": "Corrects what analysis decided the service is.",
+          "enum": ["http-service", "web-app", "static-site", "worker"]
+        },
+        "needs": {
+          "description": "Resources and other services this one talks to. Each one it names gets the service its address, in a variable.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/name" }
+        },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": {
+            "unevaluatedProperties": false,
+            "allOf": [{ "$ref": "#/$defs/settings" }]
+          }
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/kind" },
+        "provider": { "$ref": "#/$defs/provider" },
+        "region": { "$ref": "#/$defs/region" },
+        "version": {
+          "description": "The engine's version, such as \"17\" for Postgres. Without it, the provider chooses.",
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$"
+        },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "$ref": "#/$defs/provider" },
+              "region": { "$ref": "#/$defs/region" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "required": ["routes"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "region": { "$ref": "#/$defs/region" },
+        "routes": {
+          "description": "Paths and the services they go to. The longest path that matches a request wins, so / catches whatever the others don't.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/route" }
+        },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "$ref": "#/$defs/provider" },
+              "region": { "$ref": "#/$defs/region" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": ["between"],
+      "additionalProperties": false,
+      "properties": {
+        "between": {
+          "description": "The two clouds the link joins: gcp and aws.",
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["gcp", "aws"] }
+        },
+        "region": {
+          "$ref": "#/$defs/region",
+          "description": "Where the Google Cloud side runs, such as us-central1."
+        },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "region": { "$ref": "#/$defs/region" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": ["path", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "A path prefix, such as /api. It matches /api and anything under /api/.",
+          "type": "string",
+          "pattern": "^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$"
+        },
+        "to": { "$ref": "#/$defs/name" },
+        "strip_prefix": {
+          "description": "Remove the path before the request reaches the service, so /api/users arrives as /users.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

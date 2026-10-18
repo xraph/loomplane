@@ -63,6 +63,7 @@ type AccessGrant struct {
 	Metadata
 	Source           WorkloadSelector `json:"source"`
 	ExportID         string           `json:"export_id"`
+	ExportRevision   string           `json:"export_revision"`
 	Port             uint16           `json:"port"`
 	Protocol         Protocol         `json:"protocol"`
 	HTTPMethods      []string         `json:"http_methods,omitempty"`
@@ -77,16 +78,17 @@ type AccessGrant struct {
 // Endpoint is a leased observation of a service placement.
 type Endpoint struct {
 	Metadata
-	ExportID    string    `json:"export_id"`
-	PlacementID string    `json:"placement_id"`
-	BindingID   string    `json:"binding_id"`
-	ObserverID  string    `json:"observer_id"`
-	Address     string    `json:"address"`
-	Port        uint16    `json:"port"`
-	Zone        string    `json:"zone"`
-	Readiness   Readiness `json:"readiness"`
-	ObservedAt  time.Time `json:"observed_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	DestinationID string    `json:"destination_id"`
+	ExportID      string    `json:"export_id"`
+	PlacementID   string    `json:"placement_id"`
+	BindingID     string    `json:"binding_id"`
+	ObserverID    string    `json:"observer_id"`
+	Address       string    `json:"address"`
+	Port          uint16    `json:"port"`
+	Zone          string    `json:"zone"`
+	Readiness     Readiness `json:"readiness"`
+	ObservedAt    time.Time `json:"observed_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
 }
 
 // AgentIdentity binds an agent to a destination and restore/revocation epoch.

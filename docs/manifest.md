@@ -2,7 +2,7 @@
 
 `loomplane.yaml` says what your application deploys, where, and what it needs. Loomplane drafts one from a project's analysis; you review it, edit it in the dashboard or with `loomctl manifest save`, and every save is a new revision. A plan names the revision it was made from.
 
-Nothing in it is Forge, or Go. Point a YAML language server at `pkg/manifest/schema.json` (its `$id` is `https://loomplane.dev/schemas/loomplane.v1.json`) and you get completion and checks as you type.
+Nothing in it is Forge, or Go. Point a YAML language server at `pkg/manifest/schema.json` (its `$id` is `https://loomplane.dev/schemas/loomplane.json`) and you get completion and checks as you type.
 
 ## Choose managed deployment targets
 
@@ -25,8 +25,8 @@ services:
   api:
     source: go:services/api
     needs: [db, cache]
-    scale: {min: 1, max: 5}
-    size: {cpu: 1, memory: 512}
+    scale: { min: 1, max: 5 }
+    size: { cpu: 1, memory: 512 }
   worker:
     source: services/worker/cmd/worker
     provider: ecs-fargate
@@ -51,8 +51,8 @@ resources:
 gateways:
   edge:
     routes:
-      - {path: /api, to: api, strip_prefix: true}
-      - {path: /, to: web}
+      - { path: /api, to: api, strip_prefix: true }
+      - { path: /, to: web }
 
 ignore:
   resources: [kafka]
@@ -60,7 +60,7 @@ ignore:
 
 ## version
 
-Always `1`. Loomplane refuses a manifest of another version, so a newer format can never be half read.
+Existing workflows use `1`. Version `2` adds the optional federation intent described below. Loomplane rejects unsupported versions and unknown fields; federation plans remain blocked until their runtime gates are qualified.
 
 ## defaults
 
@@ -70,19 +70,19 @@ Always `1`. Loomplane refuses a manifest of another version, so a newer format c
 
 What the application runs, by name. Names are lower case letters, digits and hyphens, starting with a letter, at most 40 long, and they're how services, resources and gateways refer to each other.
 
-| Field | What it does |
-|---|---|
-| `source` | Where the service's code is, as analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's, Python project's or JVM module's directory, or a Dockerfile. A Python project's Procfile process other than `web` is the project's directory, `/Procfile/` and its name: `shop/Procfile/worker`. When two ecosystems have a service at one path, prefix it: `go:services/api`, `python:services/api`. Required. |
-| `kind` | Corrects what analysis decided the service is: `http-service`, `web-app`, `static-site` or `worker`. |
-| `build` | `{context}`: the directory its Dockerfile builds from, from the repository's root (`.` is the root). Without it, the context a Compose file gives the Dockerfile, or the Dockerfile's own directory. |
-| `provider`, `region` | Where it runs. |
-| `port` | The port it listens on. Without it, the port in its Dockerfile, or 8080 with a warning. |
-| `public` | Whether it gets an address on the internet. Yes for anything that serves HTTP, no for a worker, unless you say. |
-| `scale` | `{min, max}` instances, on targets that let you choose. |
-| `size` | `{cpu, memory}`: virtual CPUs, such as 0.5 or 2, and MiB. |
-| `needs` | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them. |
-| `enabled` | `false` leaves it out. |
-| `environments` | Overrides by environment name: any of the fields above but `source`, `kind`, `build` and `needs`. |
+| Field                | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `source`             | Where the service's code is, as analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's, Python project's or JVM module's directory, or a Dockerfile. A Python project's Procfile process other than `web` is the project's directory, `/Procfile/` and its name: `shop/Procfile/worker`. When two ecosystems have a service at one path, prefix it: `go:services/api`, `python:services/api`. Required. |
+| `kind`               | Corrects what analysis decided the service is: `http-service`, `web-app`, `static-site` or `worker`.                                                                                                                                                                                                                                                                                                                                             |
+| `build`              | `{context}`: the directory its Dockerfile builds from, from the repository's root (`.` is the root). Without it, the context a Compose file gives the Dockerfile, or the Dockerfile's own directory.                                                                                                                                                                                                                                             |
+| `provider`, `region` | Where it runs.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `port`               | The port it listens on. Without it, the port in its Dockerfile, or 8080 with a warning.                                                                                                                                                                                                                                                                                                                                                          |
+| `public`             | Whether it gets an address on the internet. Yes for anything that serves HTTP, no for a worker, unless you say.                                                                                                                                                                                                                                                                                                                                  |
+| `scale`              | `{min, max}` instances, on targets that let you choose.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `size`               | `{cpu, memory}`: virtual CPUs, such as 0.5 or 2, and MiB.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `needs`              | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them.                                                                                                                                                                                                                                                                                                                           |
+| `enabled`            | `false` leaves it out.                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build` and `needs`.                                                                                                                                                                                                                                                                                                                                                |
 
 A Dockerfile that copies from across the repository, such as a Go service that needs the module's `go.mod` at the root, has to build from the root:
 
@@ -90,7 +90,7 @@ A Dockerfile that copies from across the repository, such as a Go service that n
 services:
   api:
     source: services/api
-    build: {context: .}
+    build: { context: . }
 ```
 
 Loomplane passes the Dockerfile to the build by its path from the context, so it can sit anywhere. A service without a Dockerfile is built from its source, and a `build` on it is ignored with a warning.
@@ -105,12 +105,12 @@ How a service reaches another depends on where both run. Two services on ECS in 
 
 Backing services the application needs, by name. A resource can't share a service's name.
 
-| Field | What it does |
-|---|---|
-| `kind` | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required. |
-| `provider`, `region` | Where it's provisioned. |
-| `version` | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest. |
-| `environments` | `provider`, `region` or `enabled` by environment name. |
+| Field                | What it does                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.            |
+| `provider`, `region` | Where it's provisioned.                                                               |
+| `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest. |
+| `environments`       | `provider`, `region` or `enabled` by environment name.                                |
 
 A managed resource is only reachable from services on its own cloud. A Vercel app that needs a Cloud SQL database is a problem on the plan.
 
@@ -118,11 +118,11 @@ A managed resource is only reachable from services on its own cloud. A Vercel ap
 
 One public address in front of several services, routing each request by its path. Loomplane builds each gateway on Bastion and runs it on Cloud Run or ECS like a service; your traffic never passes through Loomplane.
 
-| Field | What it does |
-|---|---|
-| `provider`, `region` | Where it runs: `cloud-run` or `ecs-fargate`. |
-| `routes` | `{path, to, strip_prefix}`: a path prefix such as `/api`, which matches `/api` and anything under `/api/`; the service it goes to; and whether to remove the prefix first, so `/api/users` arrives as `/users`. The longest matching path wins, so `/` catches the rest. |
-| `environments` | `provider`, `region` or `enabled` by environment name. |
+| Field                | What it does                                                                                                                                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `provider`, `region` | Where it runs: `cloud-run` or `ecs-fargate`.                                                                                                                                                                                                                             |
+| `routes`             | `{path, to, strip_prefix}`: a path prefix such as `/api`, which matches `/api` and anything under `/api/`; the service it goes to; and whether to remove the prefix first, so `/api/users` arrives as `/users`. The longest matching path wins, so `/` catches the rest. |
+| `environments`       | `provider`, `region` or `enabled` by environment name.                                                                                                                                                                                                                   |
 
 A gateway gets the addresses it routes to and none of the project's variables. On ECS it reaches private services inside the environment; elsewhere a route to a private service is a problem, since a gateway can't present Cloud Run's ID token.
 
@@ -137,11 +137,11 @@ links:
     region: us-central1
 ```
 
-| Field | What it does |
-|---|---|
-| `between` | The two clouds it joins: `gcp` and `aws`. Required. |
-| `region` | Where the Google Cloud side runs. Put it where the Cloud Run services that use it run. |
-| `environments` | `region` or `enabled` by environment name. |
+| Field          | What it does                                                                           |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `between`      | The two clouds it joins: `gcp` and `aws`. Required.                                    |
+| `region`       | Where the Google Cloud side runs. Put it where the Cloud Run services that use it run. |
+| `environments` | `region` or `enabled` by environment name.                                             |
 
 Each environment gets its own link: an HA VPN gateway and a Cloud Router on the project's default network, a virtual private gateway on the account's default VPC, and four IPsec tunnels between them, each carrying a BGP session, so losing an endpoint on either side keeps the link up. The default network (`10.128.0.0/9`) and VPC (`172.31.0.0/16`) don't overlap, so their routes need no translating. Both clouds bill a VPN by the hour, whether or not anything uses it, so turn a link off in environments that don't need it.
 
@@ -168,19 +168,19 @@ held:
 
 ## Targets
 
-| Provider | Cloud | Runs | Provisions |
-|---|---|---|---|
-| `vercel` | Vercel | web apps, static sites | |
-| `cloud-run` | Google Cloud | HTTP services, web apps | |
-| `cloud-sql` | Google Cloud | | Postgres 17, 16, 15; MySQL 8.4, 8.0 |
-| `memorystore` | Google Cloud | | Redis |
-| `cloud-storage` | Google Cloud | | Object storage |
-| `ecs-fargate` | AWS | HTTP services, web apps, workers | |
-| `rds` | AWS | | Postgres 17, 16, 15; MySQL 8.4, 8.0 |
-| `elasticache` | AWS | | Redis |
-| `s3` | AWS | | Object storage |
-| `cross-cloud-vpn` | Google Cloud and AWS | | [Links](#links) between them |
-| `render` | Render | HTTP services, web apps, workers, static sites | Postgres 17, 16, 15; Key Value (Redis) |
+| Provider          | Cloud                | Runs                                           | Provisions                             |
+| ----------------- | -------------------- | ---------------------------------------------- | -------------------------------------- |
+| `vercel`          | Vercel               | web apps, static sites                         |                                        |
+| `cloud-run`       | Google Cloud         | HTTP services, web apps                        |                                        |
+| `cloud-sql`       | Google Cloud         |                                                | Postgres 17, 16, 15; MySQL 8.4, 8.0    |
+| `memorystore`     | Google Cloud         |                                                | Redis                                  |
+| `cloud-storage`   | Google Cloud         |                                                | Object storage                         |
+| `ecs-fargate`     | AWS                  | HTTP services, web apps, workers               |                                        |
+| `rds`             | AWS                  |                                                | Postgres 17, 16, 15; MySQL 8.4, 8.0    |
+| `elasticache`     | AWS                  |                                                | Redis                                  |
+| `s3`              | AWS                  |                                                | Object storage                         |
+| `cross-cloud-vpn` | Google Cloud and AWS |                                                | [Links](#links) between them           |
+| `render`          | Render               | HTTP services, web apps, workers, static sites | Postgres 17, 16, 15; Key Value (Redis) |
 
 Buckets are private on both clouds, and services reach them as their own identity, so `STORAGE_URL` carries no credentials: `s3://bucket?region=...` for an ECS task's environment role, `gs://bucket` for Cloud Run's runtime account. Redis gets an auth token in `REDIS_URL`: `rediss://...` on ElastiCache, which also encrypts in transit and at rest, and `redis://...` on Memorystore, which only has an address on the project's default network, so Cloud Run services that need it send their private traffic there.
 
@@ -195,3 +195,54 @@ Provider plugins add targets of their own ([providers.md](providers.md)). An ope
 Every project has `production` and `preview`, and you can add others. A plan is for one environment, and each field's environment override applies there. `enabled: false` in an environment leaves a service, resource or gateway out of it, and removes it if it was deployed.
 
 Choosing another connection for an environment moves its services: each one starts again through the new connection, and the old one is removed once it's up, so what uses it gets the new address. Resources don't move, since their data would stay behind. A plan that would provision one through another connection than the one it was provisioned through has a problem until you choose that connection again.
+
+## Version 2 federation intent
+
+Version 2 records federation proposals. Its plans remain blocked until the destination agents, network drivers and policy enforcement pass qualification. A version change does not make private traffic available.
+
+Use `pkg/manifest/schema.json` (`https://loomplane.dev/schemas/loomplane.json`) for the combined editor schema. `schema.v1.json` retains the original version 1 schema. Generated manifests still use version 1. To convert an existing file, review its destinations and public exposure first, change `version` explicitly, add the federation section, and review the resulting blocked plan. Keep the original file for rollback. The editor never upgrades it automatically.
+
+```yaml
+version: 2
+services:
+  api: { source: cmd/api, provider: kubernetes }
+  worker: { source: cmd/worker, provider: kubernetes }
+federation:
+  destinations:
+    east: { id: dest_01m4va49zwe9pvk24sm9h8v0ta }
+    west:
+      id: dest_01m4va49zwe9pvk24sm9h8v0tb
+      environments:
+        preview: dest_01m4va49zwe9pvk24sm9h8v0tc
+  network_links:
+    east-west: { from: east, to: west, transport: imported }
+  service_exports:
+    worker-http:
+      service: worker
+      destination: west
+      exposure: private
+      port: 8080
+      protocol: http
+      identity: workload
+  access_grants:
+    api-worker:
+      source_service: api
+      source_destination: east
+      export: worker-http
+      methods: [GET]
+      paths: [/health]
+      expires_at: "2027-01-01T00:00:00Z"
+  placements:
+    api-east: { service: api, destination: east }
+    worker-west: { service: worker, destination: west }
+```
+
+Destination IDs must resolve in the selected organization, project and environment. Overrides select a separately registered destination for that environment. Cross-environment and cross-organization grants are rejected by this initial format. Connections supply credentials through Vault; manifests contain no tokens, kubeconfigs or certificate keys.
+
+Exports require explicit private exposure. Remove public endpoints and gateway routes before exporting a service. HTTP selectors are exact paths and methods; gRPC selectors use `/package.Service/Method`; opaque TCP accepts neither. UDP is unavailable. Every export and source grant needs a matching placement. Runtime call relationships belong in access proposals, so two services can propose calling each other without creating a deployment dependency cycle. Existing `needs` still controls configuration and startup ordering and grants no access.
+
+The five federation maps each allow at most 100 entries. A grant allows 16 HTTP methods, 32 paths of at most 1024 bytes, or 32 gRPC methods of at most 256 bytes. The existing 256 KiB manifest limit also applies. An expiry must be RFC3339; execution must reject an expired grant even if its manifest still parses.
+
+Version 2 is the shared transition for federation and the one-click services workstream. Federation owns the optional `federation` section. Recipe sources, storage and protection will add separately typed optional sections as their implementations land; unsupported fields are rejected today. Neither workstream implicitly converts existing version 1 files.
+
+Destination management is an internal service registered with the API process. Set `federation.enabled: true` in the local configuration to enable authorized in-process management; the default is false. This flag does not enable traffic or add public management routes. Those routes and the dashboard follow the runtime qualification milestones.

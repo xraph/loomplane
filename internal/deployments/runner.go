@@ -215,6 +215,11 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	if plan.Status != planning.StatusApproved || !plan.Executable {
 		return "", nil, nil
 	}
+	for _, action := range plan.Actions {
+		if action.Subject != planning.ServiceSubject && action.Subject != planning.ResourceSubject {
+			return "", nil, fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, action.Subject)
+		}
+	}
 	id, err := typeid.Generate("dep")
 	if err != nil {
 		return "", nil, fmt.Errorf("generate deployment id: %w", err)
@@ -427,6 +432,9 @@ func doneMessage(s *Step) string {
 func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action, step *Step,
 	resume []byte, heartbeat func([]byte) error, progress func(string, string),
 ) error {
+	if a.Subject != planning.ServiceSubject && a.Subject != planning.ResourceSubject {
+		return fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, a.Subject)
+	}
 	exec, ok := r.executors[a.Provider]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrNoExecutor, a.Provider)

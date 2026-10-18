@@ -413,6 +413,14 @@ export interface Evidence {
   source?: string;
 }
 
+export interface Federation {
+  accessGrants?: Record<string, any>;
+  destinations?: Record<string, any>;
+  networkLinks?: Record<string, any>;
+  placements?: Record<string, any>;
+  serviceExports?: Record<string, any>;
+}
+
 export interface Finding {
   code: string;
   evidence?: Evidence[];
@@ -496,6 +504,7 @@ export interface LogPage {
 
 export interface Manifest {
   defaults?: Defaults;
+  federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
   ignore?: Ignore;
@@ -793,6 +802,7 @@ export interface SaveInputBody {
   baseRevision?: number;
   manifest?: {
   defaults?: Defaults;
+  federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
   ignore?: Ignore;

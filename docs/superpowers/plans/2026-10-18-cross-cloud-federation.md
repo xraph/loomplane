@@ -1,5 +1,7 @@
 # Cross-cloud Federation Implementation Plan
 
+Implementation checkpoint: [foundation contracts and blocked previews](../../qualification/federation-foundation.md). Tasks 0 through 3 remain open for the explicitly listed runtime and lifecycle gates.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deploy and operate private services across independent clouds and clusters, with stable discovery, enforced communication grants and a verified Miget integration.

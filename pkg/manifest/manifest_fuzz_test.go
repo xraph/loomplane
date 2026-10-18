@@ -1,6 +1,9 @@
 package manifest
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // FuzzParse checks a manifest anyone can save never crashes the parser,
 // and that anything it accepts writes back out and reads in the same.
@@ -10,6 +13,9 @@ func FuzzParse(f *testing.F) {
 		"version: 1\nservices:\n  web: {source: apps/web}\ngateways:\n  edge: {routes: [{path: /api, to: web, strip_prefix: true}]}\n",
 		"version: 1\ndefaults: {provider: render}\nservices:\n  a: {source: x, needs: [b]}\n  b: {source: y, needs: [a]}\n",
 		"version: 2\n",
+		federationExample,
+		strings.Replace(federationExample, "paths: [/health]", "paths: [/"+strings.Repeat("a", 1025)+"]", 1),
+		"version: 2\nfederation: {destinations: {a: {id: {nested: true}}}}\n",
 		"{}",
 		"version: 1\nservices:\n  api:\n    source: x\n    environments:\n      preview: {enabled: false, scale: {min: 3, max: 1}}\n",
 		"\x00\xff",

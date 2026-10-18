@@ -77,7 +77,7 @@ func (s *Service) CreateDestination(ctx context.Context, p security.Principal, i
 		return nil, err
 	}
 	now := s.now().UTC()
-	physical, err := verifiedIdentity(conn, now)
+	physical, err := ConnectionIdentity(conn, now)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (s *Service) GetDestination(ctx context.Context, p security.Principal, id s
 	if err != nil {
 		return nil, err
 	}
-	physical, identityErr := verifiedIdentity(conn, s.now())
+	physical, identityErr := ConnectionIdentity(conn, s.now())
 	if identityErr != nil || physical != d.Identity || d.Quarantined {
 		d.Capabilities = domain.CapabilitySet{}
 	}
@@ -132,7 +132,7 @@ func (s *Service) RefreshCapabilities(ctx context.Context, p security.Principal,
 		return nil, err
 	}
 	now := s.now().UTC()
-	physical, identityErr := verifiedIdentity(conn, now)
+	physical, identityErr := ConnectionIdentity(conn, now)
 	previous := d.Generation
 	d.Generation++
 	d.UpdatedAt = now
@@ -162,9 +162,9 @@ func (s *Service) connection(ctx context.Context, org, id string) (*connections.
 	return c, err
 }
 
-// Existing connection checks pin a Kubernetes namespace UID or Docker daemon ID.
+// ConnectionIdentity reads a fresh checked Kubernetes namespace UID or Docker daemon ID.
 // Other providers need a qualified adapter before they can become destinations.
-func verifiedIdentity(c *connections.Connection, now time.Time) (domain.PhysicalIdentity, error) {
+func ConnectionIdentity(c *connections.Connection, now time.Time) (domain.PhysicalIdentity, error) {
 	if c == nil || c.CheckedAt == nil || c.CheckedAt.After(now) || !c.CheckedAt.Add(5*time.Minute).After(now) || c.Status != connections.StatusReady {
 		return domain.PhysicalIdentity{}, ErrUnverified
 	}

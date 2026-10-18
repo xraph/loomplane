@@ -74,7 +74,7 @@ func TestParse_rejects(t *testing.T) {
 	}{
 		{"empty", "  \n", "it's empty"},
 		{"no version", "services: {}", "version: is missing"},
-		{"later version", "version: 2", "version: is 2; this Loomplane reads version 1"},
+		{"later version", "version: 3", "version: is 3; this Loomplane reads version 1"},
 		{"version as text", "version: one", "version: must be the number 1"},
 		{"unknown field", "version: 1\nservice: {}", "field service not found"},
 		{"unknown nested field", "version: 1\nservices:\n  api: {source: x, replicas: 3}", "field replicas not found"},
@@ -257,6 +257,12 @@ func TestSchema_matchesTypes(t *testing.T) {
 		schema []string
 		typ    any
 	}{
+		{"federation", props(defs["federation"]), Federation{}},
+		{"destinationRef", props(defs["destinationRef"]), DestinationRef{}},
+		{"federationLink", props(defs["federationLink"]), FederationLink{}},
+		{"federationExport", props(defs["federationExport"]), FederationExport{}},
+		{"federationGrant", props(defs["federationGrant"]), FederationGrant{}},
+		{"federationPlacement", props(defs["federationPlacement"]), FederationPlacement{}},
 		{"manifest", props(schema), Manifest{}},
 		{"defaults", props(schema["properties"].(map[string]any)["defaults"]), Defaults{}},
 		{"ignore", props(schema["properties"].(map[string]any)["ignore"]), Ignore{}},

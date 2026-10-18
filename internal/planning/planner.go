@@ -21,6 +21,8 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
+	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
+	Federation *FederationInput
 	// Environment is the environment's name, which picks the manifest's
 	// overrides.
 	Environment string
@@ -92,6 +94,9 @@ var envKeys = map[string]string{
 // deterministic: the same input gives the same result, so a plan's
 // revision is reproducible.
 func Compute(in Input) *Result {
+	if in.Manifest != nil && in.Manifest.Version == manifest.FederationVersion {
+		return federationResult(in)
+	}
 	p := &planner{
 		in:        in,
 		resources: map[string]*Action{},

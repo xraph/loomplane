@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,10 +16,16 @@ import (
 // federation TLS is safe. A dependency fix must change this qualification.
 func TestQualificationTLSReloadMissingCA(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(path, []byte("invalid CA"), 0600); err != nil {
+	server := httptest.NewTLSServer(http.NotFoundHandler())
+	defer server.Close()
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(path, certificate, 0600); err != nil {
 		t.Fatal(err)
 	}
 	manager := security.NewTLSManager(security.TLSConfig{Enabled: true, CACertFile: path}, forge.NewNoopLogger())
+	if manager.GlobalTLSConfig().RootCAs == nil {
+		t.Fatal("fixture did not establish private trust before reload")
+	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}

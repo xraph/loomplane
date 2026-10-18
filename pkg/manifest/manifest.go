@@ -4,8 +4,8 @@
 // nothing about how Loomplane is built: an application deployed with
 // Loomplane never needs Forge, or Go.
 //
-// A manifest is versioned. Version 1 is the only one so far; Parse refuses
-// any other, and refuses fields it doesn't know, so a typo is an error
+// A manifest is versioned. Parse reads versions 1 and 2 and refuses
+// fields it does not know, so a typo is an error
 // instead of a setting silently ignored.
 package manifest
 
@@ -25,7 +25,7 @@ import (
 // FileName is the manifest's name in a repository.
 const FileName = "loomplane.yaml"
 
-// Version is the manifest version this package reads and writes.
+// Version is the default manifest version for existing workflows.
 const Version = 1
 
 // MaxSize is the largest manifest Parse reads, in bytes.
@@ -54,11 +54,12 @@ var ErrInvalid = errors.New("invalid manifest")
 
 // Manifest is one version of an application's loomplane.yaml.
 type Manifest struct {
-	Version   int                 `json:"version" yaml:"version"`
-	Defaults  Defaults            `json:"defaults,omitzero" yaml:"defaults,omitempty" optional:"true"`
-	Services  map[string]Service  `json:"services,omitempty" yaml:"services,omitempty"`
-	Resources map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
-	Gateways  map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
+	Federation *Federation         `json:"federation,omitempty" yaml:"federation,omitempty"`
+	Version    int                 `json:"version" yaml:"version"`
+	Defaults   Defaults            `json:"defaults,omitzero" yaml:"defaults,omitempty" optional:"true"`
+	Services   map[string]Service  `json:"services,omitempty" yaml:"services,omitempty"`
+	Resources  map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Gateways   map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
 	// Links join two clouds' private networks, so services on one reach
 	// what's private on the other.
 	Links  map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
@@ -322,7 +323,8 @@ func Parse(data []byte) (*Manifest, error) {
 	// Read the version first, so a manifest from a later Loomplane fails
 	// on its version, not on whichever new field comes first.
 	var head struct {
-		Version any `yaml:"version"`
+		Version    any       `yaml:"version"`
+		Federation yaml.Node `yaml:"federation"`
 	}
 	if err := yaml.Unmarshal(data, &head); err != nil {
 		return nil, yamlProblems(err)
@@ -331,13 +333,16 @@ func Parse(data []byte) (*Manifest, error) {
 	case nil:
 		return nil, Problems{{Path: "version", Message: fmt.Sprintf("is missing; this Loomplane reads version %d", Version)}}
 	case int:
-		if v != Version {
+		if v != Version && v != FederationVersion {
 			return nil, Problems{{Path: "version", Message: fmt.Sprintf("is %d; this Loomplane reads version %d", v, Version)}}
 		}
 	default:
 		return nil, Problems{{Path: "version", Message: fmt.Sprintf("must be the number %d", Version)}}
 	}
 
+	if head.Federation.Kind != 0 && (head.Version == Version || head.Federation.Tag == "!!null") {
+		return nil, Problems{{Path: "federation", Message: "requires a version 2 object"}}
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	var m Manifest
@@ -395,7 +400,7 @@ func (m *Manifest) Validate() error {
 	add := func(path, format string, args ...any) {
 		ps = append(ps, Problem{Path: path, Message: fmt.Sprintf(format, args...)})
 	}
-	if m.Version != Version {
+	if m.Version != Version && m.Version != FederationVersion {
 		add("version", "is %d; this Loomplane reads version %d", m.Version, Version)
 	}
 	if m.Defaults.Provider != "" && !tokenRE.MatchString(m.Defaults.Provider) {
@@ -501,6 +506,7 @@ func (m *Manifest) Validate() error {
 	if a := m.Held.SameAddress; a != "" && !slices.Contains(sameAddressChoices, a) {
 		add("held.same_address", "%q isn't a choice; use %s", a, strings.Join(sameAddressChoices, " or "))
 	}
+	ps = append(ps, ValidateFederation(m)...)
 	if len(ps) > 0 {
 		return ps
 	}
