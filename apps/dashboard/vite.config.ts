@@ -45,5 +45,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
     css: false,
+    // Bound jsdom workers so local Go builds don't starve UI interactions.
+    maxWorkers: 4,
   },
 })

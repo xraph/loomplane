@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,23 @@ import (
 func TestRealtime_slowWebSocketReleasesItsSubscription(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
-	r := start(t, cfg)
+	r := start(t, cfg, func(srv *httptest.Server) {
+		// Linux can buffer the entire snapshot. Bound the sender before the
+		// handshake so a client that stops reading blocks the Forge write.
+		srv.Config.ConnState = func(conn net.Conn, state http.ConnState) {
+			if state != http.StateNew {
+				return
+			}
+			tcp, ok := conn.(*net.TCPConn)
+			if !ok {
+				t.Errorf("expected TCP connection, got %T", conn)
+				return
+			}
+			if err := tcp.SetWriteBuffer(1024); err != nil {
+				t.Errorf("bound server send buffer: %v", err)
+			}
+		}
+	})
 	defer r.stop()
 	c, org := realtimeUser(t, cfg, r)
 	var project struct {

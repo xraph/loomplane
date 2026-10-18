@@ -4,7 +4,19 @@ Date: October 18, 2026
 
 You can push to a connected repository's default branch and get a new application graph without pressing Analyze. This run used the existing Loomplane GitHub App and xraph installation. App permissions and its webhook destination were unchanged.
 
-## Live evidence
+## Normal development stack verification
+
+The follow-up run used the normal API on port 8780 and the normal analysis worker on port 8781, with no source overlay or verification replica. Both `/_/health/live` endpoints returned HTTP 200. The existing Smee relay forwarded the App's original signed deliveries to port 8780.
+
+Push `2bd6f9ba71dad9e7342967e292126dcc8465e50e` arrived as delivery `8f79d0bc-cb0f-11f1-8ddf-5d7f0079d6bd`. The API returned HTTP 202 with `analyses_started: 1`. Analysis `anl_01m57wxgp4ehe8ces1hv29peqk` completed at that exact commit with `created_by: github-push`, six services and five deployable services. A forged signature returned HTTP 401.
+
+The full `make test` run passed, including all 235 dashboard tests. A separate `go test -race -count=1 ./...` run passed too. The full integration race suite passed in 411.479 seconds, and the focused GitHub/webhook race tests passed in 14.603 seconds. `make build` built the dashboard, API, worker and CLI. Generated-client checks passed for 404 Loomplane files and 65 Authsome files. Go lint reported zero issues with integration tags enabled; dashboard type-check and ESLint passed. This repository uses `make lint` rather than `make l`; formatting uses `goimports -local github.com/xraph/loomplane` for the edited Go files and `pnpm --dir apps/dashboard format` because there is no `make f` target. The Go lint run used `--allow-serial-runners` to wait for other checkouts using the shared linter lock.
+
+One intermittent UI failure reproduced while Go builds and tests were running: the placement test exceeded its five-second limit when Vitest started its default worker pool. Limiting jsdom workers to four reduced contention, but peak host load still exceeded that limit. The two-service placement test has a 15-second budget; other tests retain their default timeout. Test isolation and placement assertions are unchanged.
+
+The hosted integration job at commit `2bd6f9b` exposed a platform assumption in the slow-WebSocket test. Linux could buffer its entire 2 MiB snapshot, so the write never had to block. The test now limits the accepted TCP connection's send buffer before the handshake. It still exercises the real Forge route, five-second write deadline and subscription cleanup within eight seconds. Five consecutive race runs passed in 88.306 seconds.
+
+## Earlier live evidence
 
 The xraph installation is `171098538`, connected to Loomplane organization `aorg_01m4smcd0fehg8k3050gr3y46b`. The existing project is `proj_01m4va49zwe9pvk24sm9h8v0ty`, with source `src_01m4va4axges683fdtgc1qxx25` tracking `xraph/loomplane`'s default branch.
 
@@ -30,7 +42,7 @@ The private-repository integration test now advances a fixture repository to a d
 
 Go and dashboard CI use `xraph/workflows` v1.19.0, pinned to `adbc00609c913abaabd7b38d11533e0a44b92432`. Integration, parser fuzzing, generated-client drift and container builds retain their repository-specific jobs. Integration-tagged Go files remain included in lint through `.golangci.yml`. The existing configured gosec rules still gate lint; the shared standalone scan reports additional findings. Reachable vulnerability checks remain blocking.
 
-## Verification and limits
+## Earlier verification and limits
 
 Formatting, `make lint` (zero issues), `actionlint`, shared-workflow input validation and generated-client checks passed. The initial focused GitHub/webhook race run passed in 13.109 seconds; the final focused race run against the committed-source overlay passed in 35.328 seconds. The full integration suite passed in 298.370 seconds. `make build` passed after the concurrent dashboard type error was corrected.
 

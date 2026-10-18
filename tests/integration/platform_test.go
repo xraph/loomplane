@@ -83,7 +83,7 @@ type running struct {
 	app interface{ Stop(context.Context) error }
 }
 
-func start(t *testing.T, cfg config.Config) *running {
+func start(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
 	t.Helper()
 	app, err := platform.New(cfg)
 	if err != nil {
@@ -95,7 +95,12 @@ func start(t *testing.T, cfg config.Config) *running {
 	if err := app.Start(context.Background()); err != nil {
 		t.Fatalf("start app: %v", err)
 	}
-	return &running{t: t, srv: httptest.NewServer(app.Router().Handler()), app: app}
+	srv := httptest.NewUnstartedServer(app.Router().Handler())
+	for _, option := range configure {
+		option(srv)
+	}
+	srv.Start()
+	return &running{t: t, srv: srv, app: app}
 }
 
 // stop shuts the app down the way a signal would, and fails the test if

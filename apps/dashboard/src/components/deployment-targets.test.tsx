@@ -166,7 +166,7 @@ it("saves an owned target, builder and registry while preserving the build conte
       target: "conn_builder",
     }),
   })
-})
+}, 15_000)
 
 it("keeps unsaved YAML when a placement revision arrives and prevents overwriting it", async () => {
   const project = {
