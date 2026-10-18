@@ -18,38 +18,25 @@ env:
   FORGE_CLI: github.com/xraph/forge/cmd/forge@v0.0.0-20261013234600-b0f1622a9bcf
 
 jobs:
-  lint:
-    name: Go lint
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.12.2
-          args: --timeout=10m --build-tags=integration
-
-  test:
-    name: Go unit tests
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - run: go test -race -count=1 ./...
-
-  vuln:
-    name: Known vulnerabilities
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+  go:
+    name: Go
+    uses: xraph/workflows/.github/workflows/go-ci.yml@adbc00609c913abaabd7b38d11533e0a44b92432 # v1.19.0
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      go-versions: '["1.26.9"]'
+      primary-go-version: "1.26.9"
+      os: '["ubuntu-latest"]'
+      # Root make test also runs the dashboard, which has its own job.
+      prefer-makefile: false
+      coverage: false
+      golangci-lint-version: v2.12.2
+      golangci-lint-timeout: 10m
+      govulncheck-version: v1.8.0
+      # Configured gosec rules gate in lint. The extra standalone scan reports
+      # findings without overriding this repository's documented exclusions.
+      gosec-fail-on-findings: false
 
   fuzz:
     name: Fuzz the parsers
@@ -91,26 +78,11 @@ jobs:
 
   dashboard:
     name: Dashboard
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: apps/dashboard
-    steps:
-      - uses: actions/checkout@v7
-      # Reads the version from packageManager in package.json.
-      - uses: pnpm/action-setup@v6
-        with:
-          package_json_file: apps/dashboard/package.json
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: apps/dashboard/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm test
-      - run: pnpm build
+    uses: xraph/workflows/.github/workflows/node-ci.yml@adbc00609c913abaabd7b38d11533e0a44b92432 # v1.19.0
+    with:
+      working-directory: apps/dashboard
+      node-version: "24"
+      scripts: '["typecheck","lint","test","build"]'
 
   client:
     name: Generated clients
