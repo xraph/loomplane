@@ -3,18 +3,25 @@
 package integration
 
 import (
+	"bytes"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/discovery"
+	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/platform"
 )
 
@@ -22,9 +29,10 @@ const installationToken = "ghs_private_repo"
 
 // fakePrivateGitHub serves acme/private only to an installation token, and
 // plays the App side of connecting installation 42.
-func fakePrivateGitHub(t *testing.T) *httptest.Server {
+func fakePrivateGitHub(t *testing.T, head *atomic.Pointer[string]) *httptest.Server {
 	t.Helper()
 	tgz := exampleTarball(t)
+	pushedTarball := tarball(t, "acme-private-pushed", siteFiles)
 	token := func(r *http.Request) bool { return r.Header.Get("Authorization") == "Bearer "+installationToken }
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app/installations/42", func(w http.ResponseWriter, _ *http.Request) {
@@ -55,14 +63,22 @@ func fakePrivateGitHub(t *testing.T) *httptest.Server {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = w.Write([]byte(exampleSHA))
+		_, _ = w.Write([]byte(*head.Load()))
 	})
-	mux.HandleFunc("GET /repos/acme/private/tarball/"+exampleSHA, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/acme/private/tarball/{sha}", func(w http.ResponseWriter, r *http.Request) {
 		if !token(r) {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = w.Write(tgz)
+		if sha := r.PathValue("sha"); sha != exampleSHA && sha != *head.Load() {
+			http.NotFound(w, r)
+			return
+		}
+		if r.PathValue("sha") == exampleSHA {
+			_, _ = w.Write(tgz)
+		} else {
+			_, _ = w.Write(pushedTarball)
+		}
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -74,7 +90,10 @@ func TestGitHub_aConnectedInstallationReadsPrivateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gh := fakePrivateGitHub(t)
+	var head atomic.Pointer[string]
+	initialSHA := exampleSHA
+	head.Store(&initialSHA)
+	gh := fakePrivateGitHub(t, &head)
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Orchestration.PollInterval = 100 * time.Millisecond
@@ -83,6 +102,7 @@ func TestGitHub_aConnectedInstallationReadsPrivateRepositories(t *testing.T) {
 		APIURL: gh.URL, WebURL: gh.URL, AppID: 99, AppSlug: "loomplane-it",
 		PrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})),
 		ClientID:   "Iv1.it", ClientSecret: "shh",
+		WebhookSecret: "github-push-integration-secret",
 	}
 	r := start(t, cfg)
 	defer r.stop()
@@ -142,16 +162,8 @@ func TestGitHub_aConnectedInstallationReadsPrivateRepositories(t *testing.T) {
 		ID string `json:"id"`
 	}
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Private", "repository_url": "https://github.com/acme/private"}, &project)
-	analyze := func() analysisBody {
+	waitFor := func(a discovery.Analysis) discovery.Analysis {
 		t.Helper()
-		var queued struct {
-			Analyses []analysisBody `json:"analyses"`
-		}
-		c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+project.ID+"/analyses", nil, &queued)
-		if len(queued.Analyses) != 1 {
-			t.Fatalf("queued %+v", queued)
-		}
-		a := queued.Analyses[0]
 		deadline := time.Now().Add(readyTimeout)
 		for a.Status != "succeeded" && a.Status != "failed" {
 			if time.Now().After(deadline) {
@@ -162,8 +174,87 @@ func TestGitHub_aConnectedInstallationReadsPrivateRepositories(t *testing.T) {
 		}
 		return a
 	}
-	if a := analyze(); a.Status != "succeeded" || a.Summary.Services != 7 {
-		t.Fatalf("analysis of the private repository %+v", a)
+	analyze := func() discovery.Analysis {
+		t.Helper()
+		var queued struct {
+			Analyses []discovery.Analysis `json:"analyses"`
+		}
+		c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+project.ID+"/analyses", nil, &queued)
+		if len(queued.Analyses) != 1 {
+			t.Fatalf("queued %+v", queued)
+		}
+		return waitFor(queued.Analyses[0])
+	}
+	first := analyze()
+	if first.Status != "succeeded" || first.Summary.Services != 7 || first.CommitSHA != exampleSHA {
+		t.Fatalf("analysis of the private repository %+v", first)
+	}
+
+	// Only a signed push starts this second analysis. No manual Analyze
+	// request is made after the private repository's default branch moves.
+	pushedSHA := "0123456789abcdef0123456789abcdef01234567"
+	head.Store(&pushedSHA)
+	body, err := json.Marshal(map[string]any{
+		"ref": "refs/heads/main", "after": pushedSHA,
+		"repository":   map[string]any{"full_name": "acme/private", "default_branch": "main", "private": true},
+		"installation": map[string]int{"id": 42},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, []byte(cfg.GitHub.WebhookSecret))
+	mac.Write(body)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, r.srv.URL+"/api/v1/github/webhook", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var delivery struct {
+		Started int `json:"analyses_started"`
+	}
+	if err = json.NewDecoder(res.Body).Decode(&delivery); err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusAccepted || delivery.Started != 1 {
+		t.Fatalf("push delivery: status %d, started %d", res.StatusCode, delivery.Started)
+	}
+	var list struct {
+		Analyses []discovery.Analysis `json:"analyses"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+project.ID+"/analyses", nil, &list)
+	if len(list.Analyses) != 2 || list.Analyses[0].CreatedBy != "github-push" {
+		t.Fatalf("push did not create a distinct automatic analysis: %+v", list)
+	}
+	automatic := waitFor(list.Analyses[0])
+	if automatic.Status != "succeeded" || automatic.CommitSHA != pushedSHA || automatic.Summary.Services != 1 {
+		t.Fatalf("automatic private analysis: %+v", automatic)
+	}
+	var view discovery.ProjectView
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+project.ID+"/graph", nil, &view)
+	if view.Graph == nil || len(view.Graph.Sources) != 1 || view.Graph.Sources[0].AnalysisID != automatic.ID || view.Graph.Sources[0].CommitSHA != pushedSHA {
+		t.Fatalf("project graph still uses the previous analysis: %+v", view.Graph)
+	}
+	if len(view.Graph.Services) != 1 || view.Graph.Services[0].Name != "site" {
+		t.Fatalf("push did not replace the previous graph's services: %+v", view.Graph.Services)
+	}
+	var previous discovery.Analysis
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/analyses/"+first.ID, nil, &previous)
+	if previous.CommitSHA != exampleSHA || previous.Status != "succeeded" {
+		t.Fatalf("push rewrote the earlier analysis: %+v", previous)
+	}
+	var historical struct {
+		Graph graph.Graph `json:"graph"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/analyses/"+first.ID+"/graph", nil, &historical)
+	if len(historical.Graph.Services) != 7 {
+		t.Fatalf("push changed the historical graph: %+v", historical.Graph.Services)
 	}
 
 	// Disconnected, the organization can't read it any more.

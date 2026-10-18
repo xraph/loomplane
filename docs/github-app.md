@@ -88,3 +88,9 @@ npx smee-client --url https://smee.io/YOUR_CHANNEL --target http://localhost:878
 Keep it running. Set the same webhook secret in GitHub and Loomplane, and select Push under the App's Permissions & events settings. The channel receives push metadata for the repositories your App can access, including commit messages and authors.
 
 With Smee, GitHub's Recent Deliveries shows the relay's response. Check the client's terminal for Loomplane's HTTP 202 response, then confirm the new analysis in the dashboard. An accepted relay delivery alone does not prove Loomplane received the original body and signature.
+
+The analysis worker must be running too. `make dev` starts it with the API and dashboard; `make dev-api` runs only the API. If Loomplane accepts a push but its analysis stays queued, check the worker's health at `http://localhost:8781/_/health` and its database connection.
+
+If the API was restarting when Smee forwarded the event, wait for the API to become healthy, then redeliver the push from GitHub. Smee's HTTP 200 means it accepted the delivery even when the local forwarding request failed. You can also use GitHub's [App delivery API](https://docs.github.com/en/rest/apps/webhooks#redeliver-a-delivery-for-an-app-webhook) with the existing App's JWT. Keep private keys and webhook secrets out of shell arguments and diagnostic output.
+
+A redelivered older push analyzes the source's current tracked branch. For a fresh push, compare the finished analysis's `commit_sha` with that push's commit and confirm `created_by` is `github-push`. Earlier successful analyses keep their original commits and graphs.
