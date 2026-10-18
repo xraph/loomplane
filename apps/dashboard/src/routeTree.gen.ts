@@ -19,6 +19,7 @@ import { Route as SignUpRouteImport } from "./routes/sign-up"
 import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as DeploymentsIndexRouteImport } from "./routes/deployments.index"
 import { Route as DeploymentsIdRouteImport } from "./routes/deployments.$id"
+import { Route as DesignDeploymentRouteImport } from "./routes/design.deployment"
 import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
@@ -75,6 +76,11 @@ const DeploymentsIdRoute = DeploymentsIdRouteImport.update({
   path: "/deployments/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
+const DesignDeploymentRoute = DesignDeploymentRouteImport.update({
+  id: "/design/deployment",
+  path: "/design/deployment",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
   id: "/integrations/",
   path: "/integrations/",
@@ -111,6 +117,7 @@ export interface FileRoutesByFullPath {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/deployments/$id": typeof DeploymentsIdRoute
+  "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/deployments/": typeof DeploymentsIndexRoute
@@ -128,6 +135,7 @@ export interface FileRoutesByTo {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/deployments/$id": typeof DeploymentsIdRoute
+  "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/deployments": typeof DeploymentsIndexRoute
@@ -146,6 +154,7 @@ export interface FileRoutesById {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/deployments/$id": typeof DeploymentsIdRoute
+  "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/deployments/": typeof DeploymentsIndexRoute
@@ -165,6 +174,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/deployments/$id"
+    | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
     | "/deployments/"
@@ -182,6 +192,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/deployments/$id"
+    | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
     | "/deployments"
@@ -199,6 +210,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/deployments/$id"
+    | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
     | "/deployments/"
@@ -217,6 +229,7 @@ export interface RootRouteChildren {
   SignUpRoute: typeof SignUpRoute
   VariablesRoute: typeof VariablesRoute
   DeploymentsIdRoute: typeof DeploymentsIdRoute
+  DesignDeploymentRoute: typeof DesignDeploymentRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
@@ -297,6 +310,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof DeploymentsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/design/deployment": {
+      id: "/design/deployment"
+      path: "/design/deployment"
+      fullPath: "/design/deployment"
+      preLoaderRoute: typeof DesignDeploymentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/integrations/": {
       id: "/integrations/"
       path: "/integrations"
@@ -345,6 +365,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignUpRoute: SignUpRoute,
   VariablesRoute: VariablesRoute,
   DeploymentsIdRoute: DeploymentsIdRoute,
+  DesignDeploymentRoute: DesignDeploymentRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,
