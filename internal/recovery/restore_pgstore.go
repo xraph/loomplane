@@ -101,7 +101,11 @@ func (s *PgStore) FinishCleanup(ctx context.Context, r *Restore, cause error) er
 	if cause != nil {
 		status, message = "cleanup_failed", "The temporary copy could not be removed. Check the target and retry cleanup."
 	}
-	result, err := s.db.Exec(ctx, `UPDATE loomplane_service_restores SET status=$3,error=$4,lease_until=NULL WHERE org_id=$1 AND id=$2 AND status='deleting'`, r.OrgID, r.ID, status, message)
+	// Failed cleanup uses the persisted lease as its next automatic retry time.
+	// Manual claims can retry sooner; oldest failures must not monopolize batches.
+	result, err := s.db.Exec(ctx, `UPDATE loomplane_service_restores SET status=$3,error=$4,
+ lease_until=CASE WHEN $3='cleanup_failed' THEN now()+interval '1 hour' ELSE NULL END
+ WHERE org_id=$1 AND id=$2 AND status='deleting'`, r.OrgID, r.ID, status, message)
 	if err != nil {
 		return err
 	}
@@ -122,5 +126,7 @@ func (s *PgStore) PendingRestores(ctx context.Context) ([]Restore, error) {
 	return s.queryRestores(ctx, `SELECT `+restoreColumns+` FROM loomplane_service_restores WHERE status='queued' ORDER BY created_at LIMIT 100`)
 }
 func (s *PgStore) ExpiredRestores(ctx context.Context) ([]Restore, error) {
-	return s.queryRestores(ctx, `SELECT `+restoreColumns+` FROM loomplane_service_restores WHERE (expires_at<=now() AND status IN ('succeeded','failed','cleanup_failed')) OR (status='deleting' AND lease_until<now()) ORDER BY expires_at LIMIT 10`)
+	return s.queryRestores(ctx, `SELECT `+restoreColumns+` FROM loomplane_service_restores
+ WHERE (expires_at<=now() AND (status IN ('succeeded','failed') OR (status='cleanup_failed' AND (lease_until IS NULL OR lease_until<=now()))))
+ OR (status='deleting' AND lease_until<now()) ORDER BY COALESCE(lease_until,expires_at),id LIMIT 10`)
 }

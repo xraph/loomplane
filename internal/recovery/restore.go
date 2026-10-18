@@ -136,9 +136,9 @@ func (s *Service) DeleteRestore(ctx context.Context, p security.Principal, id st
 	if r.Status == "deleted" {
 		return nil
 	}
-	return s.cleanupRestore(ctx, r)
+	return s.cleanupRestore(ctx, p, r)
 }
-func (s *Service) cleanupRestore(ctx context.Context, r *Restore) error {
+func (s *Service) cleanupRestore(ctx context.Context, p security.Principal, r *Restore) error {
 	r, err := s.Restores.ClaimCleanup(ctx, r.OrgID, r.ID)
 	if err != nil {
 		return err
@@ -147,7 +147,7 @@ func (s *Service) cleanupRestore(ctx context.Context, r *Restore) error {
 	defer cancel()
 	b, err := s.Store.Get(ctx, r.OrgID, r.BackupID)
 	if err == nil {
-		err = s.RestoreBackend.DeleteRecovery(ctx, security.Principal{OrgID: r.OrgID, UserID: r.CreatedBy}, &b.Source, r.ID)
+		err = s.RestoreBackend.DeleteRecovery(ctx, p, &b.Source, r.ID)
 	}
 	finish, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer stop()
@@ -169,7 +169,10 @@ func (s *Service) reconcileRestores(ctx context.Context) error {
 	}
 	var failures []error
 	for _, r := range expired {
-		if checkErr := s.cleanupRestore(ctx, &r); checkErr != nil && !errors.Is(checkErr, ErrConflict) {
+		// Scheduled cleanup retains the creator's permissions. A revoked creator
+		// produces a visible failure that another authorized administrator can retry.
+		p := security.Principal{OrgID: r.OrgID, UserID: r.CreatedBy}
+		if checkErr := s.cleanupRestore(ctx, p, &r); checkErr != nil && !errors.Is(checkErr, ErrConflict) {
 			failures = append(failures, checkErr)
 		}
 	}
