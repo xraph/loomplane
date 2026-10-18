@@ -38,6 +38,16 @@ Validation: server package tests passed. Full lint and test runs encountered con
 
 Pending: Kubernetes PVC support, capacity monitoring, retained-volume inventory and explicit destruction, cross-host recovery, catalog wiring and database-aware rollout protection. Container persistence alone does not qualify PostgreSQL end to end.
 
+### PostgreSQL native recovery adapter, 18 October 2026
+
+Implemented: PostgreSQL protocol readiness, native custom-format exports streamed through Trove, checked native command exit status, isolated restore networks without published ports or external egress, integrity verification before pg_restore, transactional restore and a SQL probe. Diagnostics cannot enter backup bytes. Temporary restore dumps are removed after each attempt. The adapter reconstructs a separate application role without superuser, database-creation or role-creation privileges and verifies password authentication over TCP.
+
+Verified: a real PostgreSQL 17.11 database exported to the isolated MinIO endpoint and restored its row into a fresh instance. A corrupt object was rejected before restore; the live source refused restore; command failure was detected. The recovery network was separate and internal. These are adapter acceptance tests, not yet dashboard/API workflow acceptance.
+
+Validation: focused server lint and tests passed. Dashboard lint passed on the shared checkout. Full checks were rerun while catalog contracts and concurrent federation work were changing; the complete suite is not yet qualified for this slice.
+
+Pending: durable recovery records and retry reconciliation, scheduled backups, authorization, API/CLI/dashboard integration, production S3 acceptance and recovery objectives. Only database contents are exported; server roles and global settings are not part of this format.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.

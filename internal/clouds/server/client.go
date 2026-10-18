@@ -98,7 +98,7 @@ func (c *Client) RequestHeaders(ctx context.Context, method, resource string, bo
 	if headers != nil {
 		req.Header = headers.Clone()
 	}
-	if body != nil {
+	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return c.HTTP.Do(req)

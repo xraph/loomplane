@@ -40,6 +40,14 @@ type Runtime struct {
 var _ owned.Backend = (*Runtime)(nil)
 
 func ContainerName(iid id.ID) string { return "lp-" + strings.ReplaceAll(iid.String(), "_", "-") }
+func runtimeNetwork(labels map[string]string) string {
+	env := labels[owned.LabelEnvironment]
+	if recovery := labels[LabelRecovery]; recovery != "" {
+		env += "/recovery/" + recovery
+	}
+	return NetworkName(labels[owned.LabelOrg], env)
+}
+
 func NetworkName(org, environment string) string {
 	sum := sha256.Sum256([]byte(org + "/" + environment))
 	return fmt.Sprintf("lp-env-%x", sum[:12])
@@ -76,14 +84,15 @@ func (r *Runtime) inspect(ctx context.Context, c *Client, name string, iid id.ID
 }
 
 func (r *Runtime) network(ctx context.Context, c *Client, labels map[string]string) (string, error) {
-	name := NetworkName(labels[owned.LabelOrg], labels[owned.LabelEnvironment])
+	name := runtimeNetwork(labels)
 	var existing struct {
-		ID     string
-		Labels map[string]string
+		Internal bool
+		ID       string
+		Labels   map[string]string
 	}
 	err := dockerJSON(ctx, c, http.MethodGet, "/networks/"+name, nil, &existing)
 	if err == nil {
-		if existing.Labels[owned.LabelOrg] != labels[owned.LabelOrg] || existing.Labels[owned.LabelEnvironment] != labels[owned.LabelEnvironment] {
+		if existing.Labels[owned.LabelOrg] != labels[owned.LabelOrg] || existing.Labels[owned.LabelEnvironment] != labels[owned.LabelEnvironment] || existing.Internal != (labels[LabelRecovery] != "") {
 			return "", ErrOwned
 		}
 		return name, nil
@@ -92,7 +101,7 @@ func (r *Runtime) network(ctx context.Context, c *Client, labels map[string]stri
 		return "", err
 	}
 	var result struct{ ID string }
-	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/networks/create", map[string]any{"Name": name, "Driver": "bridge", "Labels": map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelEnvironment: labels[owned.LabelEnvironment]}}, &result); checkErr != nil {
+	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/networks/create", map[string]any{"Name": name, "Driver": "bridge", "Internal": labels[LabelRecovery] != "", "Labels": map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelEnvironment: labels[owned.LabelEnvironment]}}, &result); checkErr != nil {
 		return "", checkErr
 	}
 	return name, nil
@@ -124,6 +133,9 @@ func (r *Runtime) reconcilePorts(ctx context.Context, c *Client, iid id.ID, labe
 func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (out *cpprovider.ProvisionResult, err error) {
 	if checkErr := validateVolumes(spec.Volumes); checkErr != nil {
 		return nil, checkErr
+	}
+	if labels[LabelRecovery] != "" && labels[owned.LabelPublic] == "true" {
+		return nil, errors.New("recovery instances cannot publish ports")
 	}
 	c, err := r.Session(ctx, labels)
 	if err != nil {
@@ -276,6 +288,11 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		variables = append(variables, key+"="+env[key])
 	}
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
+	for _, key := range []string{LabelDatabase, LabelRecovery} {
+		if labels[key] != "" {
+			containerLabels[key] = labels[key]
+		}
+	}
 	ports := map[string]any{}
 	exposed := map[string]any{}
 	for _, port := range spec.Ports {
@@ -288,7 +305,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		if labels[owned.LabelPublic] == "true" {
 			host, hostPort = "0.0.0.0", strconv.Itoa(reservation.Port)
 		}
-		ports[key] = []map[string]string{{"HostIp": host, "HostPort": hostPort}}
+		if labels[LabelRecovery] == "" {
+			ports[key] = []map[string]string{{"HostIp": host, "HostPort": hostPort}}
+		}
 	}
 	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": map[string]any{"Mounts": mounts, "RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
 	if len(spec.Command) > 0 {
@@ -342,6 +361,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 
 func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) []cpprovider.Endpoint {
 	out := make([]cpprovider.Endpoint, 0, len(spec.Ports))
+	if labels[LabelRecovery] != "" {
+		return out
+	}
 	for _, port := range spec.Ports {
 		public := labels[owned.LabelPublic] == "true"
 		host := ContainerName(iid)
@@ -350,7 +372,11 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 			host = c.Config.Details["advertise_host"]
 			value = labelPort(labels[owned.LabelHostPort])
 		}
-		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: "http://" + net.JoinHostPort(host, strconv.Itoa(value)), Port: value, Protocol: "http", Public: public})
+		protocol := "http"
+		if labels[LabelDatabase] != "" {
+			protocol = "postgresql"
+		}
+		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value)), Port: value, Protocol: protocol, Public: public})
 	}
 	return out
 }
@@ -367,19 +393,25 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 			return err
 		}
 		if info.State.Running {
-			if labels[owned.LabelHealth] == "" {
+			if db := labels[LabelDatabase]; db != "" {
+				if probeErr := PostgresReady(ctx, c, name, db); probeErr == nil {
+					return nil
+				}
+			} else if labels[owned.LabelHealth] == "" {
 				return nil
 			}
-			probe := r.Probe
-			if probe == nil {
-				probe = probeServer
-			}
-			for _, ports := range info.NetworkSettings.Ports {
-				for _, port := range ports {
-					value, parseErr := strconv.Atoi(port.HostPort)
-					if parseErr == nil && value > 0 {
-						if err = probe(ctx, c, value, labels[owned.LabelHealth]); err == nil {
-							return nil
+			if labels[LabelDatabase] == "" {
+				probe := r.Probe
+				if probe == nil {
+					probe = probeServer
+				}
+				for _, ports := range info.NetworkSettings.Ports {
+					for _, port := range ports {
+						value, parseErr := strconv.Atoi(port.HostPort)
+						if parseErr == nil && value > 0 {
+							if err = probe(ctx, c, value, labels[owned.LabelHealth]); err == nil {
+								return nil
+							}
 						}
 					}
 				}
@@ -450,7 +482,7 @@ func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]strin
 			return checkErr
 		}
 	}
-	network := NetworkName(labels[owned.LabelOrg], labels[owned.LabelEnvironment])
+	network := runtimeNetwork(labels)
 	var netInfo struct {
 		Labels     map[string]string
 		Containers map[string]any
@@ -484,6 +516,12 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 	state, ready := cpprovider.StateStopped, false
 	if info.State.Running {
 		state, ready = cpprovider.StateRunning, true
+		if db := labels[LabelDatabase]; db != "" {
+			ready = PostgresReady(ctx, c, ContainerName(iid), db) == nil
+			if !ready {
+				state = cpprovider.StateStarting
+			}
+		}
 		if labels[owned.LabelHealth] != "" {
 			ready = false
 			probe := r.Probe
