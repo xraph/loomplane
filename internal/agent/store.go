@@ -84,12 +84,13 @@ func OpenStore(path string) (*Store, error) {
 // Activate accepts only the identity returned by a successful enrollment
 // handshake. Reopening a state file never restores this in-memory authority.
 func (s *Store) Activate(identity domain.AgentIdentity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active = false
 	parsed, err := workloadidentity.ParseAgentURI(identity.URI)
 	if err != nil || parsed != identity || identity.Epoch > math.MaxInt64 {
 		return ErrClosed
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var epoch int64
