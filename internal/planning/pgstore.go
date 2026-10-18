@@ -34,7 +34,7 @@ var _ Store = (*PgStore)(nil)
 
 const planColumns = `id, org_id, project_id, environment_id, environment, status, revision,
 	manifest_id, manifest_revision, result, executable, error,
-	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note`
+	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note, catalog`
 
 // open lists the statuses of a plan that hasn't been settled.
 const open = `('planning', 'ready')`
@@ -44,7 +44,7 @@ func scanPlan(row pgx.Row) (*Plan, error) {
 	var result []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Environment, &p.Status, &p.Revision,
 		&p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
-		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote, &p.Catalog); err != nil {
 		return nil, err
 	}
 	if len(result) > 0 {
@@ -83,10 +83,10 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 		return nil, err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status,
-		manifest_id, manifest_revision, created_by, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		manifest_id, manifest_revision, created_by, created_at, catalog)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
-		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt)
+		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return nil, ErrConflict

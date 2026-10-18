@@ -19,6 +19,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/page"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -107,6 +108,7 @@ type Action struct {
 // ServiceConfig is everything a deployment of a service is made from. A
 // binding keeps the one last applied, and the next plan compares against it.
 type ServiceConfig struct {
+	Catalog        *recipes.Recipe    `json:"catalog,omitempty"`
 	Provider       string             `json:"provider"`
 	Region         string             `json:"region,omitempty"`
 	Target         string             `json:"target,omitempty"`
@@ -202,10 +204,13 @@ type EnvLink struct {
 
 // ResourceConfig is everything a resource is provisioned from.
 type ResourceConfig struct {
-	Provider string `json:"provider"`
-	Region   string `json:"region,omitempty"`
-	Kind     string `json:"kind"`
-	Version  string `json:"version,omitempty"`
+	Target         string            `json:"target,omitempty"`
+	TargetSettings map[string]string `json:"target_settings,omitempty"`
+	Catalog        *recipes.Recipe   `json:"catalog,omitempty"`
+	Provider       string            `json:"provider"`
+	Region         string            `json:"region,omitempty"`
+	Kind           string            `json:"kind"`
+	Version        string            `json:"version,omitempty"`
 }
 
 // Change is one setting an update changes.
@@ -292,6 +297,7 @@ type DeployedRepository struct {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
+	Catalog       bool   `json:"catalog"`
 	ID            string `json:"id" forge:"id"`
 	OrgID         string `json:"org_id"`
 	ProjectID     string `json:"project_id"`

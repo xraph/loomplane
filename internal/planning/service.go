@@ -132,6 +132,8 @@ var _ orchestration.Planner = (*Service)(nil)
 
 // CreatePlanInput asks for a plan of one environment.
 type CreatePlanInput struct {
+	// Catalog explicitly plans standalone resources without a repository lockset.
+	Catalog bool `json:"catalog,omitempty"`
 	// Environment is the environment's name.
 	Environment string `json:"environment"`
 	// Scope names the repositories the plan moves. Empty means all of
@@ -168,9 +170,16 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err != nil {
 		return nil, err
 	}
-	pinned, err := s.pin(ctx, p.OrgID, projectID, env, in.Scope)
-	if err != nil {
-		return nil, err
+	var pinned []PlanSource
+	if in.Catalog {
+		if len(in.Scope) > 0 || !catalogOnly(rev.Manifest) {
+			return nil, fmt.Errorf("%w: standalone catalog plans contain resources only", ErrInvalid)
+		}
+	} else {
+		pinned, err = s.pin(ctx, p.OrgID, projectID, env, in.Scope)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	id, err := typeid.Generate("plan")
@@ -179,7 +188,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	}
 	plan := &Plan{
 		ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
-		Status: StatusPlanning, Sources: pinned,
+		Status: StatusPlanning, Sources: pinned, Catalog: in.Catalog,
 		ManifestID: rev.ID, ManifestRevision: rev.Revision, CreatedBy: p.UserID, CreatedAt: s.now().UTC(),
 	}
 	plan.normalize()
@@ -476,7 +485,7 @@ type deployedRef struct {
 func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, error) {
 	// An older plan the backfill couldn't pin would plan from an empty
 	// graph, so it fails instead of proposing to tear down what's deployed.
-	if len(plan.Sources) == 0 {
+	if len(plan.Sources) == 0 && !plan.Catalog {
 		return nil, "", fmt.Errorf("%w: this plan pins no repositories; plan again", ErrInvalid)
 	}
 	parts := make([]graph.Part, 0, len(plan.Sources))
@@ -505,6 +514,16 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	bindings, err := s.store.ListBindings(ctx, plan.OrgID, plan.EnvironmentID)
 	if err != nil {
 		return nil, "", err
+	}
+	if plan.Catalog {
+		if !catalogOnly(rev.Manifest) || len(plan.Sources) > 0 {
+			return nil, "", fmt.Errorf("%w: standalone catalog plan contains repository content", ErrInvalid)
+		}
+		for _, b := range bindings {
+			if b.Subject != ResourceSubject {
+				return nil, "", fmt.Errorf("%w: standalone catalog plan cannot change an environment with source services", ErrInvalid)
+			}
+		}
 	}
 	options, err := s.connectionOptions(ctx, plan.OrgID)
 	if err != nil {

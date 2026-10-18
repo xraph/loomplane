@@ -210,6 +210,7 @@
       "additionalProperties": false,
       "properties": {
         "kind": { "$ref": "#/$defs/kind" },
+        "target": { "type": "string", "description": "Checked server connection for a catalog resource." },
         "provider": { "$ref": "#/$defs/provider" },
         "region": { "$ref": "#/$defs/region" },
         "version": {

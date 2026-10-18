@@ -416,6 +416,7 @@ func (c *Client) Plans(ctx context.Context, projectID string) ([]Plan, error) {
 // NewPlan is a plan to make: for an environment, moving the repositories
 // in Scope, by alias, or all of them when it's empty.
 type NewPlan struct {
+	Catalog     bool     `json:"catalog,omitempty"`
 	Environment string   `json:"environment"`
 	Scope       []string `json:"scope,omitempty"`
 }

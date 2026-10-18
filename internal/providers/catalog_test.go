@@ -44,7 +44,7 @@ func TestRegistry_capabilities(t *testing.T) {
 		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "server", "kubernetes"}},
 		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "server", "kubernetes"}},
 		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "server", "kubernetes"}},
-		{"postgres", names(r.Provisioning("postgres")), []string{"render", "cloud-sql", "rds"}},
+		{"postgres", names(r.Provisioning("postgres")), []string{"render", "cloud-sql", "rds", "server"}},
 		{"redis", names(r.Provisioning("redis")), []string{"render", "memorystore", "elasticache"}},
 		{"kafka", names(r.Provisioning("kafka")), nil},
 	}

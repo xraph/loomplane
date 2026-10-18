@@ -439,6 +439,7 @@ func (p *planner) planResources() {
 			Provider: prov.Name, Region: cfg.Region, Engine: provider.ResourceEngine, Creates: offer.Creates,
 			Resource: cfg, Step: 1,
 		}
+		p.configureCatalog(name, base, r, cfg, a)
 		p.diff(a, cfg, cfg.Provider, cfg.Region)
 		p.resources[name] = a
 		p.actions = append(p.actions, a)
@@ -1489,6 +1490,13 @@ func (p *planner) link(name string, a *Action) {
 					})
 				}
 				continue
+			}
+			if dep.Resource != nil && dep.Resource.Catalog != nil {
+				resourceTarget := &ServiceConfig{Target: dep.Resource.Target, TargetSettings: dep.Resource.TargetSettings}
+				if !sameTargetNetwork(a.Service, resourceTarget, p.cloud(a.Provider), p.cloud(dep.Provider)) {
+					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: "The private database and its dependent service must run on the same checked target network."})
+					continue
+				}
 			}
 			if rc, sc := p.cloud(dep.Provider), p.cloud(a.Provider); rc != sc {
 				if l := p.reachOver(sc, rc); l != nil {

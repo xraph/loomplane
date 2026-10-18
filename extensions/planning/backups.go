@@ -1,0 +1,124 @@
+package planning
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/xraph/dispatch/cron"
+	"github.com/xraph/dispatch/engine"
+	"github.com/xraph/dispatch/job"
+	"github.com/xraph/forge"
+	"github.com/xraph/grove/drivers/pgdriver"
+	troveext "github.com/xraph/trove/extension"
+
+	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/backupfiles"
+	"github.com/xraph/loomplane/internal/deployments"
+	"github.com/xraph/loomplane/internal/orchestration"
+	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/recovery"
+	"github.com/xraph/loomplane/internal/security"
+)
+
+const backupJob = "loomplane.service.backup"
+const reconcileBackupsJob = "loomplane.service.backup.reconcile"
+
+type backupPayload struct {
+	OrgID string `json:"org_id"`
+	ID    string `json:"id"`
+}
+type BackupList struct {
+	Backups []recovery.Backup `json:"backups"`
+}
+
+func (BackupList) ForgeEnvelope() forge.EnvelopeDef { return forge.EnvelopeDef{ItemsField: "backups"} }
+
+func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects.PgStore, plans *planning.PgStore, authz *security.Authorizer, target *deployments.OwnedTarget, audit projects.Auditor) error {
+	manager, err := forge.InjectType[*troveext.TroveManager](app.Container())
+	if err != nil {
+		return err
+	}
+	files, err := manager.Get("backups")
+	if err != nil {
+		return err
+	}
+	bucket := e.cfg.Storage.BackupBucket
+	if bucket == "" {
+		bucket = "loomplane-backups"
+	}
+	e.backups = &recovery.Service{Audit: audit, Store: recovery.NewPgStore(pg), Projects: prj, Bindings: plans, Authz: authz, Backend: target, Files: &backupfiles.Store{Trove: files, Bucket: bucket}, Enqueue: func(ctx context.Context, org, id string) error {
+		_, err := engine.Enqueue(ctx, e.engineOf(), backupJob, backupPayload{OrgID: org, ID: id}, job.WithQueue(orchestration.Queue), job.WithMaxRetries(2), job.WithTimeout(45*time.Minute))
+		return err
+	}}
+	engine.Register(e.engineOf(), job.NewDefinition(backupJob, func(ctx context.Context, in backupPayload) error { return e.backups.Run(ctx, in.OrgID, in.ID) }))
+	engine.Register(e.engineOf(), job.NewDefinition(reconcileBackupsJob, func(ctx context.Context, _ orchestration.DriftPayload) error { return e.backups.Reconcile(ctx) }))
+	return nil
+}
+
+func (e *Extension) scheduleBackupReconciliation(ctx context.Context) error {
+	return engine.RegisterCron(ctx, e.engineOf(), &cron.Definition[orchestration.DriftPayload]{Name: reconcileBackupsJob, JobName: reconcileBackupsJob, Schedule: "@every 1m", Queue: orchestration.Queue})
+}
+
+func (e *Extension) backupRoutes(router forge.Router, guard identity.Guard) error {
+	group := router.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Service backups"))
+	if err := group.GET("/projects/:id/service-backups", e.listBackups, forge.WithName("serviceBackups.list"), forge.WithResponseSchema(http.StatusOK, "Database recovery points", BackupList{})); err != nil {
+		return err
+	}
+	if err := group.POST("/projects/:id/service-backups", e.createBackup, forge.WithName("serviceBackups.create"), forge.WithRequestSchema(recovery.CreateInput{}), forge.WithResponseSchema(http.StatusAccepted, "Queued database backup", recovery.Backup{})); err != nil {
+		return err
+	}
+	if err := group.GET("/service-backups/:id", e.getBackup, forge.WithName("serviceBackups.get"), forge.WithResponseSchema(http.StatusOK, "Database recovery point", recovery.Backup{})); err != nil {
+		return err
+	}
+	return group.POST("/service-backups/:id/retry", e.retryBackup, forge.WithName("serviceBackups.retry"), forge.WithResponseSchema(http.StatusAccepted, "Retried database backup", recovery.Backup{}))
+}
+func (e *Extension) listBackups(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	list, err := e.backups.List(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, BackupList{Backups: list})
+}
+func (e *Extension) createBackup(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var input recovery.CreateInput
+	if err = c.BindJSON(&input); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "provide environment, resource and request_id")
+	}
+	record, err := e.backups.Create(c.Request().Context(), p, c.Param("id"), input)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusAccepted, record)
+}
+func (e *Extension) getBackup(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	record, err := e.backups.Get(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, record)
+}
+func (e *Extension) retryBackup(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	record, err := e.backups.Retry(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusAccepted, record)
+}

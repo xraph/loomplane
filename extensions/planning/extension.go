@@ -56,6 +56,7 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/recovery"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -78,6 +79,7 @@ type Extension struct {
 	deploys        *deployments.Service
 	activity       *activity.Service
 	artifacts      *artifacts.Store
+	backups        *recovery.Service
 	restoreTargets func(context.Context) error
 }
 
@@ -241,6 +243,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	serverTarget := &deployments.OwnedTarget{Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
 	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets}
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
+	if err := e.setupBackups(fapp, pg, prj, planStore, authz, serverTarget, auditor); err != nil {
+		return err
+	}
 	e.restoreTargets = func(ctx context.Context) error {
 		// Restore provider keys after central migrations have run.
 		rows, err := pg.Query(ctx, "SELECT org_id,id,cloud FROM loomplane_cloud_connections WHERE cloud IN ('server','kubernetes')")
@@ -283,6 +288,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}))
+	if err := e.backupRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
 	return e.routes(fapp.Router(), guard)
 }
 
@@ -303,6 +311,9 @@ func (e *Extension) Start(ctx context.Context) error {
 			return fmt.Errorf("schedule the drift check: %w", err)
 		}
 	}
+	if err := e.scheduleBackupReconciliation(ctx); err != nil {
+		return err
+	}
 	e.MarkStarted()
 	return nil
 }
@@ -321,17 +332,17 @@ func (e *Extension) Stop(ctx context.Context) error {
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
-	case errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
+	case errors.Is(err, recovery.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
 		errors.Is(err, deployments.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
+	case errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph),
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
-	case errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid):
+	case errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

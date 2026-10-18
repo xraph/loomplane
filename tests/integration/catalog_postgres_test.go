@@ -1,0 +1,172 @@
+//go:build integration
+
+package integration
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/xraph/ctrlplane/id"
+
+	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/recovery"
+)
+
+func TestAcceptanceCatalogPostgres(t *testing.T) {
+	socket := os.Getenv("LOOMPLANE_TEST_DOCKER_SOCKET")
+	if socket == "" {
+		t.Skip("set LOOMPLANE_TEST_DOCKER_SOCKET for real catalog deployment")
+	}
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}}
+	defer transport.CloseIdleConnections()
+	proxy := &httputil.ReverseProxy{Director: func(r *http.Request) { r.URL.Scheme = "http"; r.URL.Host = "docker" }, Transport: transport, FlushInterval: -1}
+	docker := httptest.NewServer(proxy)
+	defer docker.Close()
+	address, _ := url.Parse(docker.URL)
+	_, port, _ := net.SplitHostPort(address.Host)
+	number, _ := strconv.Atoi(port)
+	credential, settings := fixtureSSH(t, infrastructureState{DaemonPort: number})
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.Storage.URL = "file://" + t.TempDir()
+	running := start(t, cfg)
+	defer func() { running.stop() }()
+	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, c)
+	var connection struct{ ID, Status string }
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections", map[string]any{"cloud": "server", "name": "Catalog acceptance", "credential": credential, "settings": settings}, &connection)
+	if connection.Status != "ready" {
+		t.Fatal(connection.Status)
+	}
+	var project struct{ ID string }
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Standalone databases"}, &project)
+	t.Cleanup(func() {
+		// Only this test's project is eligible, even if deployment failed before binding.
+		ids := strings.Fields(fixtureCommand(t, "docker", "--host", "unix://"+socket, "ps", "-aq", "--filter", "label=loomplane.project="+project.ID))
+		networks := map[string]bool{}
+		for _, container := range ids {
+			raw := fixtureCommand(t, "docker", "--host", "unix://"+socket, "inspect", container, "--format", `{{json .NetworkSettings.Networks}}`)
+			var attached map[string]any
+			if err := json.Unmarshal([]byte(raw), &attached); err != nil {
+				t.Error(err)
+			}
+			for network := range attached {
+				networks[network] = true
+			}
+			fixtureCommand(t, "docker", "--host", "unix://"+socket, "rm", "-f", container)
+		}
+		volumes := strings.Fields(fixtureCommand(t, "docker", "--host", "unix://"+socket, "volume", "ls", "-q", "--filter", "label=loomplane.project="+project.ID))
+		for _, volume := range volumes {
+			fixtureCommand(t, "docker", "--host", "unix://"+socket, "volume", "rm", volume)
+		}
+		for network := range networks {
+			fixtureCommand(t, "docker", "--host", "unix://"+socket, "network", "rm", network)
+		}
+	})
+	waitReady(t, c, project.ID)
+	base := "/api/v1/projects/" + project.ID
+	yaml := fmt.Sprintf("version: 1\nresources:\n  database: {kind: postgres, provider: server, version: '17', target: %s}\n", connection.ID)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": yaml}, nil)
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]any{"environment": "production", "catalog": true}, &plan)
+	waitPlanned(t, c, &plan)
+	if !plan.Executable || len(plan.Sources) != 0 {
+		t.Fatalf("catalog plan: %+v", plan)
+	}
+	c.must(http.StatusOK, http.MethodPost, "/api/v1/plans/"+plan.ID+"/approve", map[string]string{"revision": plan.Revision}, nil)
+	deadline := time.Now().Add(3 * time.Minute)
+	var deployment deploymentBody
+	for {
+		status := c.do(http.MethodGet, "/api/v1/plans/"+plan.ID+"/deployment", nil, &deployment)
+		if status == http.StatusOK && deployment.Status != "running" && deployment.Status != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deployment did not settle: %+v", deployment)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if deployment.Status != "succeeded" {
+		t.Fatalf("catalog deployment: %+v", deployment)
+	}
+	var bindings struct {
+		Bindings []planning.Binding `json:"bindings"`
+	}
+	c.must(http.StatusOK, http.MethodGet, base+"/bindings?environment=production", nil, &bindings)
+	if len(bindings.Bindings) != 1 {
+		t.Fatalf("bindings: %+v", bindings)
+	}
+	binding := bindings.Bindings[0]
+	iid, err := id.Parse(binding.ExternalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output := fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(iid), "psql", "-U", "app", "-d", "database", "-At", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE catalog_probe(value text); INSERT INTO catalog_probe VALUES ('from-api'); SELECT value FROM catalog_probe")
+	if !strings.Contains(output, "from-api") {
+		t.Fatal(output)
+	}
+	privileges := fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(iid), "psql", "-U", "postgres", "-d", "database", "-At", "-c", "SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication FROM pg_roles WHERE rolname='app'")
+	if privileges != "f" {
+		t.Fatalf("application role is privileged: %s", privileges)
+	}
+
+	var backup, replayed recovery.Backup
+	request := map[string]string{"environment": "production", "resource": "database", "request_id": "acceptance-backup-1"}
+	c.must(http.StatusAccepted, http.MethodPost, base+"/service-backups", request, &backup)
+	c.must(http.StatusAccepted, http.MethodPost, base+"/service-backups", request, &replayed)
+	if backup.ID != replayed.ID {
+		t.Fatal("duplicate request created another recovery point")
+	}
+	deadline = time.Now().Add(time.Minute)
+	for backup.Status == "queued" || backup.Status == "running" {
+		if time.Now().After(deadline) {
+			t.Fatalf("backup did not finish: %+v", backup)
+		}
+		time.Sleep(100 * time.Millisecond)
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/service-backups/"+backup.ID, nil, &backup)
+	}
+	if backup.Status != "succeeded" || backup.Bytes == 0 || backup.RestoredAt != nil {
+		t.Fatalf("backup evidence: %+v", backup)
+	}
+	running.stop()
+	running = start(t, cfg)
+	c.base = running.srv.URL
+	var afterRestart recovery.Backup
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/service-backups/"+backup.ID, nil, &afterRestart)
+	if afterRestart.Status != "succeeded" || afterRestart.SHA256 != backup.SHA256 {
+		t.Fatalf("lost recovery point after restart: %+v", afterRestart)
+	}
+
+	outsider := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	outsider.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "other-backup@example.test", "password": "Correct-horse-battery-9"}, &auth)
+	outsider.token = auth.SessionToken
+	var otherOrg struct {
+		ID string `json:"id"`
+	}
+	outsider.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Other backups", "slug": "other-backups"}, &otherOrg)
+	outsider.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": otherOrg.ID}, nil)
+	outsider.must(http.StatusNotFound, http.MethodGet, "/api/v1/service-backups/"+backup.ID, nil, nil)
+	outsider.must(http.StatusNotFound, http.MethodPost, base+"/service-backups", request, nil)
+	t.Logf("backup %s survived application restart with %d verified bytes", backup.ID, backup.Bytes)
+	t.Logf("API plan %s deployed standalone PostgreSQL through checked SSH target; application writes and restricted role verified", plan.ID)
+}

@@ -172,6 +172,7 @@ func Catalog() []provider.Provider {
 			Description: "Runs a service container on the Docker daemon of the SSH server you choose.",
 			Model:       provider.Instance,
 			Runs:        containerWorkloads("Docker container"),
+			Provisions:  []provider.Provisions{{Kind: "postgres", Creates: "Persistent PostgreSQL container", Versions: []string{"17"}}},
 			Available:   true,
 		},
 		{

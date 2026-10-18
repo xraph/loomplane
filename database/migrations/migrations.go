@@ -56,6 +56,7 @@ func Group() *migrate.Group {
 		statements("20261016000006", "reserve_owned_target_ports", ownedReservationsUp, []string{`DROP TABLE IF EXISTS loomplane_host_ports`}),
 		statements("20261018000100", "create_federation_destinations", federationUp, federationDown),
 		statements("20261018000200", "standalone_catalog_plans", catalogPlansUp, catalogPlansDown),
+		statements("20261018000201", "service_recovery", serviceRecoveryUp, serviceRecoveryDown),
 	)
 	return g
 }

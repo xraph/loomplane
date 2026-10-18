@@ -45,10 +45,11 @@ func (a *App) commands() []cli.Command {
 				cli.WithUsage("manifest save <project> -f loomplane.yaml"),
 				cli.WithFlag(cli.NewStringFlag("file", "f", "The file; - reads standard input", "loomplane.yaml"))))),
 		cli.NewCommand("plan", "Plan a project's manifest for an environment", a.plan,
-			cli.WithUsage("plan <project> --env production [--scope web]"),
+			cli.WithUsage("plan <project> --env production [--scope web] [--catalog]"),
 			cli.WithFlags(
 				cli.NewStringFlag("env", "e", "The environment", "production"),
 				cli.NewStringSliceFlag("scope", "", "A repository the plan moves, by alias; every one if none, and the rest stay as deployed", nil),
+				cli.NewBoolFlag("catalog", "", "Plan standalone resources without a repository", false),
 				cli.NewBoolFlag("no-wait", "", "Start planning and return", false), jsonFlag)),
 		cli.NewCommand("plans", "List a project's plans", a.plans, cli.WithUsage("plans <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("show", "Show a plan: what it would do, and anything in the way", a.show,
@@ -323,7 +324,7 @@ func (a *App) plan(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	plan, err := c.CreatePlan(ctxOf(ctx), p.ID, client.NewPlan{Environment: ctx.String("env"), Scope: ctx.StringSlice("scope")})
+	plan, err := c.CreatePlan(ctxOf(ctx), p.ID, client.NewPlan{Environment: ctx.String("env"), Scope: ctx.StringSlice("scope"), Catalog: ctx.Bool("catalog")})
 	if err != nil {
 		return err
 	}

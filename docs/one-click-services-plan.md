@@ -48,6 +48,16 @@ Validation: focused server lint and tests passed. Dashboard lint passed on the s
 
 Pending: durable recovery records and retry reconciliation, scheduled backups, authorization, API/CLI/dashboard integration, production S3 acceptance and recovery objectives. Only database contents are exported; server roles and global settings are not part of this format.
 
+### Standalone PostgreSQL API and durable backups, 18 October 2026
+
+Implemented: explicit catalog plans for repository-free projects; PostgreSQL 17.11 digest pins for checked amd64/arm64 Docker targets; persistent private instances; separate restricted application credentials held in Vault; scoped, idempotent backup requests; durable attempt leases and reconciliation through Dispatch; backup read/manage permissions and audit events. `loomctl plan --catalog` selects this planning path. Recipe changes and target moves fail review rather than silently creating an empty replacement.
+
+Verified: the real API created a project, saved its resource manifest, approved and deployed a plan, wrote SQL using the application role, uploaded a native backup through Trove, and recovered its backup record after a full control-plane restart. Repeating the same request returned the same backup. Another organization could neither read the recovery point nor request a backup of the source project. The application role has no superuser, role-creation or database-creation privileges.
+
+Validation: Go lint, dashboard typecheck/lint and Go tests passed. The full dashboard suite first had one 5-second timeout in the concurrently updated deployment-target test; rerunning the suite passed all 232 tests. Native S3-compatible recovery remains covered by the earlier isolated MinIO test; this API test uses local Trove storage.
+
+Pending: durable restore/drill workflows, scheduled policies, retention, service dashboard controls, Kubernetes, PITR and production S3 acceptance. This slice qualifies the Docker deployment and backup API path, not the complete phase 2 release gate.
+
 ## 1. Proposed catalog
 
 This is a coverage list, not a market-share ranking. PostgreSQL, MySQL, Redis, MariaDB, MongoDB, SQL Server, and Elasticsearch are priorities informed by the [Stack Overflow database survey](https://survey.stackoverflow.co/2026/technology/data/databases). Fabriq and Octopus are explicit product priorities. Other entries cover common infrastructure needs and require their own qualification before release.

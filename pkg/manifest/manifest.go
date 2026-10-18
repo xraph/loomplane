@@ -195,6 +195,7 @@ type Resource struct {
 	// repository analysis uses.
 	Kind     string `json:"kind" yaml:"kind"`
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Target   string `json:"target,omitempty" yaml:"target,omitempty"`
 	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
 	// Version is the engine's version, such as "17" for Postgres. Empty
 	// lets the provider choose.
