@@ -32,6 +32,8 @@ func clusterFixture(t *testing.T, denySecret bool) (*httptest.Server, *[]string,
 		switch {
 		case r.URL.Path == "/version":
 			_, _ = w.Write([]byte(`{"major":"1","minor":"36","gitVersion":"v1.36.1"}`))
+		case r.URL.Path == "/apis/storage.k8s.io/v1/storageclasses/retained":
+			_, _ = w.Write([]byte(`{"kind":"StorageClass","apiVersion":"storage.k8s.io/v1","metadata":{"name":"retained","uid":"class-identity"},"provisioner":"example.csi","reclaimPolicy":"Retain","volumeBindingMode":"WaitForFirstConsumer","allowVolumeExpansion":true}`))
 		case strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/"):
 			ns := strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/")
 			_ = json.NewEncoder(w).Encode(map[string]any{"kind": "Namespace", "apiVersion": "v1", "metadata": map[string]string{"name": ns, "uid": "uid-" + ns}})
@@ -43,7 +45,7 @@ func clusterFixture(t *testing.T, denySecret bool) (*httptest.Server, *[]string,
 				return
 			}
 			attrs := review.Spec.ResourceAttributes
-			if attrs == nil || attrs.Namespace == "" {
+			if attrs == nil || attrs.Namespace == "" && attrs.Resource != "persistentvolumes" {
 				t.Error("unscoped object permission check")
 				w.WriteHeader(400)
 				return
@@ -60,6 +62,33 @@ func clusterFixture(t *testing.T, denySecret bool) (*httptest.Server, *[]string,
 	}))
 	t.Cleanup(s.Close)
 	return s, &paths, mu
+}
+
+func TestClientChecksSelectedPersistentStorage(t *testing.T) {
+	s, paths, mu := clusterFixture(t, false)
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.Certificate().Raw})
+	cfg, err := ParseConfig(kubeconfig(t, s.URL, ca), map[string]string{"namespace": "production", "storage_class": "retained"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := c.Check(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Details["storage_class"] != "retained" || result.Details["storage_class_uid"] != "class-identity" || result.Details["persistent_storage"] != "ready" || result.Details["storage_expansion"] != "true" {
+		t.Fatalf("storage was not checked: %+v", result)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, want := range []string{"production:statefulsets:create", "production:statefulsets:delete", "production:persistentvolumeclaims:create", "production:persistentvolumeclaims:list", ":persistentvolumes:get"} {
+		if !slices.Contains(*paths, want) {
+			t.Fatalf("unchecked lifecycle permission %s", want)
+		}
+	}
 }
 
 func TestClient_namespacePermissionsRemainIsolated(t *testing.T) {

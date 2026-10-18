@@ -50,6 +50,7 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		if activate && labels[owned.LabelScaleMin] != labels[owned.LabelScaleMax] && result.Details["hpa"] != "ready" {
 			return nil, errors.New("this workload needs HPA permissions and the metrics API")
 		}
+		client.Config.Details = result.Details
 		return client, nil
 	}
 }

@@ -2,12 +2,8 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
-	"fmt"
 	"net/http"
-	"path"
-	"regexp"
 	"strings"
 
 	"github.com/xraph/ctrlplane/id"
@@ -16,9 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/owned"
 )
 
-const labelVolumeRole = "loomplane.volume.role"
-
-var volumeRole = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+const labelVolumeRole = owned.LabelVolumeRole
 
 type volumeMount struct {
 	Type          string
@@ -30,32 +24,17 @@ type volumeMount struct {
 // VolumeName stays the same across runtime revisions. A different instance
 // gets different storage, including when restoring into a fresh instance.
 func VolumeName(iid id.ID, role string) string {
-	sum := sha256.Sum256([]byte(iid.String() + "/" + role))
-	return fmt.Sprintf("lpv-%x", sum[:20])
+	return owned.PersistentVolumeName(iid, role)
 }
 
 func validateVolumes(volumes []cpprovider.VolumeSpec) error {
-	if len(volumes) > 16 {
-		return errors.New("too many persistent volumes")
+	if err := owned.ValidatePersistentVolumes(volumes); err != nil {
+		return err
 	}
-	names, mounts := map[string]bool{}, map[string]bool{}
 	for _, v := range volumes {
-		if v.Type != "persistent" || !volumeRole.MatchString(v.Name) || v.MountPath == "/" || !strings.HasPrefix(v.MountPath, "/") || path.Clean(v.MountPath) != v.MountPath || strings.ContainsAny(v.MountPath, "\\\x00") {
-			return errors.New("volume needs a persistent role and a clean absolute mount path")
-		}
-		// Docker's local driver shares host capacity; it cannot promise a disk quota.
 		if v.SizeMB != 0 {
 			return errors.New("docker local volumes use shared host capacity; size quotas are unsupported")
 		}
-		if names[v.Name] || mounts[v.MountPath] {
-			return errors.New("duplicate volume role or mount")
-		}
-		for mount := range mounts {
-			if strings.HasPrefix(mount, v.MountPath+"/") || strings.HasPrefix(v.MountPath, mount+"/") {
-				return errors.New("overlapping volume mounts")
-			}
-		}
-		names[v.Name], mounts[v.MountPath] = true, true
 	}
 	return nil
 }

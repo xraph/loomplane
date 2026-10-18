@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,10 +17,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kuberuntime "k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
 )
@@ -44,6 +41,9 @@ func objectLabels(iid id.ID, labels map[string]string) map[string]string {
 	return map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String()}
 }
 func checkOwner(object metav1.Object, iid id.ID, labels map[string]string) error {
+	if labels[owned.LabelStateful] == "true" && (labels[owned.LabelConnection] == "" || object.GetLabels()[owned.LabelConnection] != labels[owned.LabelConnection]) {
+		return ErrOwned
+	}
 	for key, value := range objectLabels(iid, labels) {
 		if value == "" || object.GetLabels()[key] != value {
 			return ErrOwned
@@ -54,6 +54,7 @@ func checkOwner(object metav1.Object, iid id.ID, labels map[string]string) error
 
 type workloadObjects struct {
 	deployment    *appsv1.Deployment
+	stateful      *appsv1.StatefulSet
 	service       *corev1.Service
 	runtime, pull *corev1.Secret
 	ingress       *networkingv1.Ingress
@@ -79,6 +80,15 @@ func (r *Runtime) objects(ctx context.Context, c *Client, iid id.ID, labels map[
 	}
 	if err != nil {
 		o.deployment = nil
+	}
+	if labels[owned.LabelStateful] == "true" {
+		o.stateful, err = c.Kube.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+		if checkErr := accept(o.stateful, err); checkErr != nil {
+			return nil, checkErr
+		}
+		if err != nil {
+			o.stateful = nil
+		}
 	}
 	o.service, err = c.Kube.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{})
 	if checkErr := accept(o.service, err); checkErr != nil {
@@ -123,6 +133,12 @@ func (r *Runtime) objects(ctx context.Context, c *Client, iid id.ID, labels map[
 }
 
 func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (result *cpprovider.ProvisionResult, err error) {
+	if len(spec.Volumes) > 0 {
+		return r.applyPersistent(ctx, iid, spec, labels)
+	}
+	if labels[owned.LabelStateful] == "true" {
+		return nil, errors.New("a stateful workload cannot drop its persistent volumes")
+	}
 	c, err := r.Session(ctx, owned.ForOperation(labels, "apply"))
 	if err != nil {
 		return nil, err
@@ -135,8 +151,8 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
-	if len(spec.Volumes) > 0 {
-		return nil, errors.New("kubernetes volumes need an explicit supported mount configuration")
+	if old.runtime != nil && old.runtime.Annotations[owned.LabelStateful] == "true" {
+		return nil, errors.New("a stateful workload cannot become a Deployment")
 	}
 	mutated := false
 	defer func() {
@@ -185,39 +201,12 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		}
 	}
 
-	env := []corev1.EnvVar{}
-	for _, key := range slices.Sorted(maps.Keys(spec.Env)) {
-		if _, secret := values.Env[key]; !secret {
-			env = append(env, corev1.EnvVar{Name: key, Value: spec.Env[key]})
-		}
+	template, servicePorts, err := runtimePod(spec, labels, values, runtimeSecret, pulls)
+	if err != nil {
+		return nil, err
 	}
-	for _, key := range slices.Sorted(maps.Keys(values.Env)) {
-		env = append(env, corev1.EnvVar{Name: key, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: runtimeSecret.Name}, Key: key}}})
-	}
-	ports := []corev1.ContainerPort{}
-	servicePorts := []corev1.ServicePort{}
-	for index, port := range spec.Ports {
-		if port.Container < 1 || port.Container > 65535 {
-			return nil, errors.New("invalid Kubernetes container port")
-		}
-		portName := "http-" + strconv.Itoa(index)
-		ports = append(ports, corev1.ContainerPort{Name: portName, ContainerPort: int32(port.Container)})
-		servicePorts = append(servicePorts, corev1.ServicePort{Name: portName, Port: int32(port.Container), TargetPort: intstr.FromInt(port.Container)})
-	}
-	container := corev1.Container{Name: spec.Name, Image: spec.Image, ImagePullPolicy: corev1.PullIfNotPresent, Env: env, Ports: ports, Command: spec.Command, Args: spec.Args}
-	if spec.Resources.CPUMillis > 0 || spec.Resources.MemoryMB > 0 {
-		limits := corev1.ResourceList{}
-		if spec.Resources.CPUMillis > 0 {
-			limits[corev1.ResourceCPU] = *resource.NewMilliQuantity(int64(spec.Resources.CPUMillis), resource.DecimalSI)
-		}
-		if spec.Resources.MemoryMB > 0 {
-			limits[corev1.ResourceMemory] = *resource.NewQuantity(int64(spec.Resources.MemoryMB)*(1<<20), resource.BinarySI)
-		}
-		container.Resources = corev1.ResourceRequirements{Requests: limits.DeepCopy(), Limits: limits}
-	}
-	if health := labels[owned.LabelHealth]; health != "" && len(ports) > 0 {
-		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(int(ports[0].ContainerPort))}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}
-	}
+	template.Labels = maps.Clone(identity)
+
 	replicas := int32(1)
 	if raw := labels[owned.LabelReplicas]; raw != "" {
 		n, parseErr := strconv.ParseInt(raw, 10, 32)
@@ -226,10 +215,8 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		}
 		replicas = int32(n)
 	}
-	deployment := &appsv1.Deployment{ObjectMeta: meta(name), Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: maps.Clone(identity)}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: maps.Clone(identity), Annotations: map[string]string{owned.LabelRevision: labels[owned.LabelRevision]}}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}, ImagePullSecrets: pulls}}}}
-	if architecture := labels[owned.LabelArchitecture]; architecture != "" {
-		deployment.Spec.Template.Spec.NodeSelector = map[string]string{"kubernetes.io/arch": architecture}
-	}
+	deployment := &appsv1.Deployment{ObjectMeta: meta(name), Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: maps.Clone(identity)}, Template: *template}}
+
 	if len(servicePorts) > 0 {
 		service := &corev1.Service{ObjectMeta: meta(name), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: maps.Clone(identity), Ports: servicePorts}}
 		if old.service != nil {
@@ -372,6 +359,9 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 	if err != nil {
 		return nil, err
 	}
+	if labels[owned.LabelStateful] == "true" {
+		return r.persistentStatus(ctx, c, iid, labels)
+	}
 	d, err := c.Kube.AppsV1().Deployments(c.Config.Namespace).Get(ctx, WorkloadName(iid), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return &cpprovider.InstanceStatus{State: cpprovider.StateStopped, Metadata: map[string]string{"exists": "false"}}, nil
@@ -412,6 +402,17 @@ func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]strin
 		return err
 	}
 	ns, name := c.Config.Namespace, WorkloadName(iid)
+	if objects.stateful != nil {
+		policy := metav1.DeletePropagationForeground
+		options := deleteOwnedOptions(objects.stateful)
+		options.PropagationPolicy = &policy
+		if err := c.Kube.AppsV1().StatefulSets(ns).Delete(ctx, name, options); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		if err := r.waitPersistentRemoved(ctx, c, iid, labels); err != nil {
+			return err
+		}
+	}
 	remove := func(err error) error {
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -517,6 +518,9 @@ func (r *Runtime) Scale(ctx context.Context, iid id.ID, labels map[string]string
 	if err != nil {
 		return err
 	}
+	if labels[owned.LabelStateful] == "true" {
+		return r.scalePersistent(ctx, c, iid, labels, spec.Replicas)
+	}
 	d, err := c.Kube.AppsV1().Deployments(c.Config.Namespace).Get(ctx, WorkloadName(iid), metav1.GetOptions{})
 	if err != nil {
 		return err
@@ -572,6 +576,11 @@ func restoreOne(ctx context.Context, iid id.ID, labels map[string]string, old ma
 }
 
 func (r *Runtime) restore(ctx context.Context, c *Client, iid id.ID, labels map[string]string, old *workloadObjects) error {
+	if labels[owned.LabelStateful] == "true" {
+		if err := r.restorePersistent(ctx, c, iid, labels, old.stateful); err != nil {
+			return err
+		}
+	}
 	ns, name := c.Config.Namespace, WorkloadName(iid)
 	var failures error
 	for _, entry := range []struct {

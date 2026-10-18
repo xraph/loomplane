@@ -124,13 +124,19 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := c.checkPersistentStorage(ctx, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
 func (c *Client) allowed(ctx context.Context, group, resource, verb string) (bool, error) {
+	return c.allowedIn(ctx, c.Config.Namespace, group, resource, verb)
+}
+func (c *Client) allowedIn(ctx context.Context, namespace, group, resource, verb string) (bool, error) {
 	review, err := c.Kube.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{
 		Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authv1.ResourceAttributes{
-			Namespace: c.Config.Namespace, Group: group, Resource: resource, Verb: verb,
+			Namespace: namespace, Group: group, Resource: resource, Verb: verb,
 		}},
 	}, metav1.CreateOptions{})
 	if apierrors.IsUnauthorized(err) {
