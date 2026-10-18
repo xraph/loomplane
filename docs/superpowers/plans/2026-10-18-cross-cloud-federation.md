@@ -1,6 +1,6 @@
 # Cross-cloud Federation Implementation Plan
 
-Implementation checkpoint: [foundation contracts and blocked previews](../../qualification/federation-foundation.md). Tasks 0 through 3 remain open for the explicitly listed runtime and lifecycle gates.
+Implementation checkpoint: [foundation contracts and blocked previews](../../qualification/federation-foundation.md). Task 1 is implemented and verified. Task 0 and the remaining Task 2/3 gates stay open as listed in the checkpoint.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -113,12 +113,12 @@ Dependencies: Task 0 contract names. Gate: schema and tenant isolation.
 
 **Interfaces:** `Service.CreateDestination(ctx context.Context, p security.Principal, in federation.Destination) (*federation.Destination, error)`; `Service.RefreshCapabilities(ctx context.Context, p security.Principal, destinationID string) (*federation.CapabilitySet, error)`. Server derives scope from authorized resources, not input `OrgID`. `CapabilitySet` carries revision, checked time, expiry, identity profiles, protocols, DNS/network modes, lifecycle operations and reason per unavailable capability.
 
-- [ ] Write `TestDestinationScope` to assert a foreign connection/project is not found, duplicate physical cluster aliases remain recognizable, and an imported destination causes no provider mutation. Write `TestCapabilitiesExpireClosed` and interrupted-migration rerun tests.
-- [ ] Run `go test ./internal/federation ./database/migrations -run 'TestDestinationScope|TestCapabilitiesExpireClosed|TestFederationMigration' -count=1`; verify missing behavior fails.
-- [ ] Implement scoped stores and Warden permissions. Pin cluster UID/namespace UID or provider account/resource identity and invalidate observations when identity changes. Add connection deletion references, including cleanup and trust issuer uses.
-- [ ] Implement additive, rerunnable migration statements and explicit feature flags defaulting off. Advertise observed capabilities separately from static provider catalog support; keep legacy plugin capabilities empty by default.
-- [ ] Rerun unit tests and `go test -tags=integration ./tests/integration -run TestFederationDestinations -count=1` with the isolated database. Verify old schemas upgrade and old APIs still read existing bindings.
-- [ ] Complete the verification procedure and commit `feat: add scoped federation destinations`.
+- [x] Write `TestDestinationScope` to assert a foreign connection/project is not found, duplicate physical cluster aliases remain recognizable, and an imported destination causes no provider mutation. Write `TestCapabilitiesExpireClosed` and interrupted-migration rerun tests.
+- [x] Run `go test ./internal/federation ./database/migrations -run 'TestDestinationScope|TestCapabilitiesExpireClosed|TestFederationMigration' -count=1`; verify missing behavior fails.
+- [x] Implement scoped stores and Warden permissions. Pin cluster UID/namespace UID or provider account/resource identity and invalidate observations when identity changes. Add connection deletion references, including cleanup and trust issuer uses.
+- [x] Implement additive, rerunnable migration statements and explicit feature flags defaulting off. Advertise observed capabilities separately from static provider catalog support; keep legacy plugin capabilities empty by default.
+- [x] Rerun unit tests and `go test -tags=integration ./tests/integration -run TestFederationDestinations -count=1` with the isolated database. Verify old schemas upgrade and old APIs still read existing bindings.
+- [x] Complete the verification procedure and commit `feat: add scoped federation destinations`.
 
 ### Task 2: Define version 2 manifest intent and compatibility
 

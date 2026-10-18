@@ -14,6 +14,10 @@ func TestFederationMigration(t *testing.T) {
 		exec(t, conn, federationUp[:i+1]...)
 	}
 	exec(t, conn, federationUp...)
+	for i := range federationLifecycleUp {
+		exec(t, conn, federationLifecycleUp[:i+1]...)
+	}
+	exec(t, conn, federationLifecycleUp...)
 	exec(t, conn, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('p','o','project','project','ready','u',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('e','o','p','prod','production',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_cloud_connections(id,org_id,cloud,name,account,status,created_by,created_at,updated_at) VALUES('c','o','server','server','daemon','ready','u',now(),now())`)

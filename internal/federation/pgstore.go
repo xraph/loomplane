@@ -35,16 +35,22 @@ func (s *PgStore) Create(ctx context.Context, d *domain.Destination) error {
 
 // Get reads a destination only in the caller's organization.
 func (s *PgStore) Get(ctx context.Context, orgID, id string) (*domain.Destination, error) {
+	return scanDestination(s.db.QueryRow(ctx, `SELECT `+columns+` FROM loomplane_federation_destinations WHERE org_id=$1 AND id=$2`, orgID, id))
+}
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanDestination(row rowScanner) (*domain.Destination, error) {
 	var d domain.Destination
 	var identity, capabilities []byte
-	err := s.db.QueryRow(ctx, `SELECT `+columns+` FROM loomplane_federation_destinations WHERE org_id=$1 AND id=$2`, orgID, id).Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.EnvironmentID, &d.Name, &d.ConnectionID, &d.Ownership, &identity, &d.Generation, &capabilities, &d.Quarantined, &d.CreatedAt, &d.UpdatedAt)
+	err := row.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.EnvironmentID, &d.Name, &d.ConnectionID, &d.Ownership, &identity, &d.Generation, &capabilities, &d.Quarantined, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return nil, storeError(err)
 	}
-	if err = json.Unmarshal(identity, &d.Identity); err != nil {
+	if err := json.Unmarshal(identity, &d.Identity); err != nil {
 		return nil, fmt.Errorf("decode destination identity: %w", err)
 	}
-	if err = json.Unmarshal(capabilities, &d.Capabilities); err != nil {
+	if err := json.Unmarshal(capabilities, &d.Capabilities); err != nil {
 		return nil, fmt.Errorf("decode destination capabilities: %w", err)
 	}
 	return &d, nil

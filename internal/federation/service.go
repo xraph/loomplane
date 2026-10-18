@@ -103,13 +103,8 @@ func (s *Service) GetDestination(ctx context.Context, p security.Principal, id s
 	if err != nil {
 		return nil, err
 	}
-	conn, err := s.connection(ctx, p.OrgID, d.ConnectionID)
-	if err != nil {
+	if err := s.invalidateCapabilities(ctx, d); err != nil {
 		return nil, err
-	}
-	physical, identityErr := ConnectionIdentity(conn, s.now())
-	if identityErr != nil || physical != d.Identity || d.Quarantined {
-		d.Capabilities = domain.CapabilitySet{}
 	}
 	return d, nil
 }

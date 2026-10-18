@@ -3,6 +3,8 @@ package federation
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,4 +162,44 @@ func TestDestinationStaleConnection(t *testing.T) {
 	if _, err := svc.CreateDestination(t.Context(), p, in); !errors.Is(err, ErrUnverified) {
 		t.Fatalf("got %v", err)
 	}
+}
+
+func (s *memoryStore) List(_ context.Context, scope domain.Scope, after string, limit int) ([]*domain.Destination, error) {
+	out := []*domain.Destination{}
+	for _, d := range s.rows {
+		if d.Scope == scope && d.ID > after {
+			item := d
+			out = append(out, &item)
+		}
+	}
+	slices.SortFunc(out, func(a, b *domain.Destination) int { return strings.Compare(a.ID, b.ID) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+func (s *memoryStore) Rename(ctx context.Context, org, id, name string, generation int64, now time.Time) (*domain.Destination, error) {
+	d, err := s.Get(ctx, org, id)
+	if err != nil {
+		return nil, err
+	}
+	if d.Generation != generation {
+		return nil, ErrConflict
+	}
+	d.Name = name
+	d.Generation++
+	d.UpdatedAt = now
+	s.rows[id] = *d
+	return d, nil
+}
+func (s *memoryStore) Delete(ctx context.Context, org, id string, generation int64) error {
+	d, err := s.Get(ctx, org, id)
+	if err != nil {
+		return err
+	}
+	if d.Generation != generation {
+		return ErrConflict
+	}
+	delete(s.rows, id)
+	return nil
 }
