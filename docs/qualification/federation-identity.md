@@ -50,9 +50,21 @@ The default in-memory registry isolates certificate verification from persistenc
 
 ## Attestation constraints
 
-Kubernetes registration pins namespace, service account, pod UID and container name, with the namespace UID checked against the destination record before registration. These selector names follow the [SPIRE Kubernetes attestor](https://github.com/spiffe/spire/blob/v1.15.4/doc/plugin_agent_workloadattestor_k8s.md). The Kubernetes profile still needs live qualification and a controller that produces the verified binding.
+Kubernetes registration pins namespace, service account, pod UID and container name, with the namespace UID checked against the destination record before registration. These selector names follow the [SPIRE Kubernetes attestor](https://github.com/spiffe/spire/blob/v1.15.4/doc/plugin_agent_workloadattestor_k8s.md). The Kubernetes profile still needs live qualification and production controller wiring.
 
 Unix registration requires a verified parent node, UID, executable path and SHA256. The [Unix attestor](https://github.com/spiffe/spire/blob/v1.15.4/doc/plugin_agent_workloadattestor_unix.md) must enable workload-path discovery. Keys remain in the local Workload API source. The public agent state database stores no private keys or reusable bootstrap credentials.
+
+## Kubernetes binding resolver
+
+The resolver takes an operator-owned installation profile and explicit embedded Kubernetes credentials. The profile pins organization, project, environment, destination, connection, physical identity revision, pod UID, service account and container. Enrollment callers cannot supply it. A replacement pod needs a fresh installation record.
+
+Before returning a binding, the resolver reads the namespace, workload pod and node, then queries SPIRE for that node's active parent identity. It checks the parent attestation type, expiry, ban state, cluster selector and SPIRE service account. It also reads the SPIRE pod to confirm its UID and node placement. A denied API read fails enrollment; cached evidence does not replace it.
+
+This implementation supports SPIRE's default node-UID `k8s_psat` profile. You must configure the profile's SPIRE cluster name against the same Kubernetes cluster. Pod-UID parent profiles and aliases are not supported here. Parent paths and selectors follow the pinned [SPIRE node attestor documentation](https://github.com/spiffe/spire/blob/v1.15.4/doc/plugin_server_nodeattestor_k8s_psat.md).
+
+The enrollment controller needs `get` on the selected namespace and node, the installed workload pod, and the SPIRE pod in its namespace. SPIRE needs its own TokenReview permissions. These permissions belong to enrollment and node attestation, not to the runtime EndpointSlice observer.
+
+Resolver tests use a fake Kubernetes API and SPIRE node reader. They cover replacement, foreign scope, parent revocation/expiry, conflicting selectors, permission denial and cancellation. They do not establish live Kubernetes attestation.
 
 ## Persisted enrollment
 
@@ -99,6 +111,6 @@ The final live SPIRE rerun, package race tests, scoped lint and proposed-tree Go
 
 ## Remaining Task 5 work
 
-Wire the runtime listener and outbound agent executable, connect configuration and namespace-scoped Kubernetes permissions, and implement the verified binding resolver and cleanup scheduler. Qualify Kubernetes workload attestation and ambiguous SPIRE create/delete timeouts, then verify the production launcher and management flows.
+Wire the runtime listener and outbound agent executable, connect configuration and namespace-scoped Kubernetes permissions, and connect the Kubernetes binding resolver and cleanup worker. Implement the verified server binding resolver. Qualify Kubernetes workload attestation and ambiguous SPIRE create/delete timeouts, then verify the production launcher and management flows.
 
 The managed-runtime identity profile remains unqualified. Miget activation still requires the test project, credential location, spending limit and live qualification evidence from the [Miget runbook](miget.md).
