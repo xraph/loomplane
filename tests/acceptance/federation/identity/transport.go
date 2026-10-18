@@ -102,16 +102,9 @@ func qualifyRuntime(ctx context.Context, conn grpc.ClientConnInterface, source *
 		defer cancel()
 		err = errors.Join(err, issuer.Revoke(cleanup, controlEntryID))
 	}()
-	var control *workloadidentity.Source
-	var sourceErr error
-	ready, stopReady := context.WithTimeout(ctx, 20*time.Second)
-	readinessErr := until(ready, func() bool {
-		control, sourceErr = workloadidentity.OpenSource(ready, socket, controlURI)
-		return sourceErr == nil
-	})
-	stopReady()
-	if readinessErr != nil {
-		return fmt.Errorf("control Workload API propagation: %w", errors.Join(readinessErr, sourceErr))
+	control, err := readySource(ctx, socket, controlURI)
+	if err != nil {
+		return err
 	}
 	defer func() { err = errors.Join(err, control.Close()) }()
 	authority := &runtimeAuthority{identity: binding.Agent}
@@ -119,34 +112,12 @@ func qualifyRuntime(ctx context.Context, conn grpc.ClientConnInterface, source *
 	if err != nil {
 		return err
 	}
-	config, err := control.ServerTLS(control)
+	endpoint, closeServer, err := startRuntime(ctx, handler, control)
 	if err != nil {
 		return err
 	}
-	server, err := runtimeapi.NewServer("127.0.0.1:0", handler, config)
-	if err != nil {
-		return err
-	}
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-	served := make(chan error, 1)
-	go func() { served <- server.ServeTLS(listener, "", "") }()
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		shutdownErr := server.Shutdown(cleanup)
-		if shutdownErr != nil {
-			shutdownErr = errors.Join(shutdownErr, server.Close())
-		}
-		serveErr := <-served
-		if errors.Is(serveErr, http.ErrServerClosed) {
-			serveErr = nil
-		}
-		err = errors.Join(err, shutdownErr, serveErr)
-	}()
-	client, err := agent.NewTransport("https://"+listener.Addr().String(), controlURI, source, binding.Agent)
+	defer func() { err = errors.Join(err, closeServer()) }()
+	client, err := agent.NewTransport(endpoint, controlURI, source, binding.Agent)
 	if err != nil {
 		return err
 	}
@@ -176,5 +147,50 @@ func qualifyRuntime(ctx context.Context, conn grpc.ClientConnInterface, source *
 		return errors.Join(errors.New("revoked observer was not denied"), deniedErr)
 	}
 	fmt.Println("PASS real SPIRE mTLS agent enrollment, replay denial, observation, snapshot transport and revocation")
-	return nil
+	return qualifyPersisted(ctx, issuer, binding, socket, control)
+}
+
+func readySource(ctx context.Context, socket, uri string) (*workloadidentity.Source, error) {
+	var source *workloadidentity.Source
+	var sourceErr error
+	ready, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	err := until(ready, func() bool {
+		source, sourceErr = workloadidentity.OpenSource(ready, socket, uri)
+		return sourceErr == nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("workload API propagation: %w", errors.Join(err, sourceErr))
+	}
+	return source, nil
+}
+func startRuntime(ctx context.Context, handler *runtimeapi.Handler, control *workloadidentity.Source) (endpoint string, cleanup func() error, err error) {
+	config, err := control.ServerTLS(control)
+	if err != nil {
+		return "", nil, err
+	}
+	server, err := runtimeapi.NewServer("127.0.0.1:0", handler, config)
+	if err != nil {
+		return "", nil, err
+	}
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, err
+	}
+	served := make(chan error, 1)
+	go func() { served <- server.ServeTLS(listener, "", "") }()
+	closeServer := func() error {
+		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		shutdownErr := server.Shutdown(cleanup)
+		if shutdownErr != nil {
+			shutdownErr = errors.Join(shutdownErr, server.Close())
+		}
+		serveErr := <-served
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = nil
+		}
+		return errors.Join(shutdownErr, serveErr)
+	}
+	return "https://" + listener.Addr().String(), closeServer, nil
 }

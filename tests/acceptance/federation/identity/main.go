@@ -284,6 +284,13 @@ plugins {
 	if err := qualifyRuntime(ctx, conn, source, binding, "unix://"+filepath.Join(dir, "agent", "agent.sock")); err != nil {
 		return err
 	}
+	fresh, runErr = source.GetX509SVID()
+	if runErr != nil {
+		return runErr
+	}
+	if _, err := verifier.VerifyPeer(ctx, fresh.Certificates, "loomplane.test"); err != nil {
+		return err
+	}
 	registered.active = false
 	if _, err := verifier.VerifyPeer(ctx, fresh.Certificates, "loomplane.test"); err == nil {
 		return errors.New("revoked live identity accepted")

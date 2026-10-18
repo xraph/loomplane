@@ -1,6 +1,6 @@
 # Workload identity qualification
 
-Status: identity primitives, persisted enrollment, and the isolated Unix/SPIRE fixture are implemented. Task 5 remains open. You cannot enroll a production destination or start an authenticated Loomplane agent from this checkpoint alone.
+Status: identity primitives, persisted enrollment, outbound runtime transport, and joined PostgreSQL/SPIRE acceptance are implemented. Task 5 remains open. You cannot enroll a production destination or start an authenticated Loomplane agent from this checkpoint alone.
 
 ## Run the local fixture
 
@@ -10,7 +10,15 @@ You need Docker and the repository's Go toolchain:
 python3 tests/acceptance/federation/identity/run.py
 ```
 
-The runner builds for your Docker host's architecture, creates a temporary image from the pinned SPIRE images, and runs with `--network none`. It exposes no host ports. The build context contains only the fixture binary and Dockerfile, and cleanup selects only that run's random container and image names.
+To exercise persisted enrollment and endpoint discovery through live SPIRE credentials, add PostgreSQL:
+
+```sh
+python3 tests/acceptance/federation/identity/run.py --postgres
+```
+
+That mode creates an internal Docker network and a pinned PostgreSQL 17.11 container with a temporary memory-backed data directory. It exposes no host ports. The runner removes its own database container and network after the fixture exits.
+
+The runner builds for your Docker host's architecture, creates a temporary image from the pinned SPIRE images, and uses `--network none` for the default SPIRE-only mode. It exposes no host ports. The build context contains only the fixture binary and Dockerfile, and cleanup selects only that run's random container and image names.
 
 ## Pinned dependencies
 
@@ -36,7 +44,7 @@ The live fixture passed on Linux arm64 in a disposable container:
 
 Unit and race tests cover foreign roots, removal of old roots during rotation, malformed trust replacement, caller-selected identity fields, exact control-plane audience and restored public state. Agent state uses transactional sequence reservation. Every process starts closed, the same epoch cannot reactivate restored state, and a newer epoch prevents an older process from reserving more observations.
 
-The in-memory registry used by the live fixture isolates certificate verification from the enrollment database. Its revocation result does not prove persisted Loomplane enrollment or fleet-wide revocation.
+The default in-memory registry isolates certificate verification from persistence. The optional PostgreSQL mode joins those paths; neither mode establishes fleet-wide revocation during a partition.
 
 `make build` passed. The exact proposed Go tree passed `go test ./...`, and the identity packages passed the race detector. Full shared-checkout tests and lint encountered concurrent Kubernetes storage changes while that work was incomplete; those files are preserved. Identity package lint is checked separately. This checkpoint does not close the full-repository lint gate.
 
@@ -56,7 +64,16 @@ The management controller requires destination-management and trust-management p
 
 Enrollment race tests, migration reruns, focused package lint, dashboard lint/typecheck, the full build, and all Go tests against the exact proposed commit tree passed. Full shared-checkout lint currently reports formatting in a concurrent Kubernetes PostgreSQL test; this checkpoint preserves that file.
 
-The PostgreSQL tests use a fake issuer to inject failures. They do not establish distributed SPIRE timeout behavior. The live fixture still uses its in-memory registry, so complete enrollment over the runtime transport remains unverified.
+The PostgreSQL integration tests use a fake issuer to inject failures. The joined live fixture now uses the actual enrollment store, runtime catalog, agent transport and SPIRE issuer together. It verifies:
+
+- A fresh store instance reads the persisted enrollment and safely repeats issuance.
+- The authenticated enrollment handle can be consumed once.
+- An observation is persisted and returned as a complete scoped snapshot.
+- A second local state-store process starts closed and cannot reuse the old epoch.
+- A fresh enrollment advances the persisted epoch, activates the replacement and fences both the older SQLite process and its still-valid SVID.
+- Confirmed SPIRE revocation removes local authority and releases the retained trust reference.
+
+The runner pins PostgreSQL to `postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24`. This test does not establish ambiguous remote create/delete timeout behavior or private application routing.
 
 ## Runtime transport
 
@@ -64,7 +81,7 @@ The separate runtime handler implements enrollment consumption, observation batc
 
 Read and write deadlines bound slow peers. Mutation contexts end no later than the certificate chain expires. Each agent gets one watch, the handler admits at most 128 concurrent requests, and streams close within 30 seconds so reconnects can pick up rotated credentials. Requests are limited to 2 MiB and snapshots to 16 MiB. The handler has no management routes.
 
-A real local TLS test reuses one connection and confirms that registry revocation denies its next request. Other tests cover actual certificate expiry during a stream, body size and deadline enforcement, bootstrap replay, strict JSON decoding, control-plane organization checks, and request deadlines capped by credential expiry. The local TLS tests use generated certificates. The SPIRE fixture now also exercises the actual agent transport and runtime handler with live Workload API sources on both sides. Enrollment, replay denial, observation, a complete snapshot and revocation passed over mutual TLS. That fixture uses an in-memory enrollment registry; PostgreSQL remains a separate test.
+A real local TLS test reuses one connection and confirms that registry revocation denies its next request. Other tests cover actual certificate expiry during a stream, body size and deadline enforcement, bootstrap replay, strict JSON decoding, control-plane organization checks, and request deadlines capped by credential expiry. The local TLS tests use generated certificates. The SPIRE fixture now also exercises the actual agent transport and runtime handler with live Workload API sources on both sides. Enrollment, replay denial, observation, a complete snapshot and revocation passed over mutual TLS. The optional PostgreSQL mode also exercises the persisted enrollment and endpoint catalog behind that handler.
 
 Runtime and identity race tests passed, along with the full build, dashboard lint/typecheck, and all Go tests against the proposed commit and its pinned module files. The shared full-repository lint gate remains open because of concurrent recovery and connection edits.
 
@@ -82,6 +99,6 @@ The final live SPIRE rerun, package race tests, scoped lint and proposed-tree Go
 
 ## Remaining Task 5 work
 
-Wire the runtime listener and outbound agent executable, connect configuration and namespace-scoped Kubernetes permissions, and implement the verified binding resolver and cleanup scheduler. Prove the complete path with real enrollment records, including replay, restore denial, and ambiguous SPIRE create/delete timeouts.
+Wire the runtime listener and outbound agent executable, connect configuration and namespace-scoped Kubernetes permissions, and implement the verified binding resolver and cleanup scheduler. Qualify Kubernetes workload attestation and ambiguous SPIRE create/delete timeouts, then verify the production launcher and management flows.
 
 The managed-runtime identity profile remains unqualified. Miget activation still requires the test project, credential location, spending limit and live qualification evidence from the [Miget runbook](miget.md).
