@@ -21,7 +21,10 @@ import (
 	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
-type enrollmentIssuer struct{ fail bool }
+type enrollmentIssuer struct {
+	fail      bool
+	failEntry string
+}
 
 func (i *enrollmentIssuer) Register(_ context.Context, b workloadidentity.Binding) (*spiretypes.Entry, error) {
 	if i.fail {
@@ -29,8 +32,8 @@ func (i *enrollmentIssuer) Register(_ context.Context, b workloadidentity.Bindin
 	}
 	return &spiretypes.Entry{Id: b.EntryID}, nil
 }
-func (i *enrollmentIssuer) Revoke(context.Context, string) error {
-	if i.fail {
+func (i *enrollmentIssuer) Revoke(_ context.Context, entry string) error {
+	if i.fail || entry == i.failEntry {
 		return errors.New("issuer unavailable")
 	}
 	return nil
@@ -156,6 +159,14 @@ func TestEnrollmentCannotBeReplayed(t *testing.T) {
 	if err != nil || !slices.Contains(candidates, first.ID) || slices.Contains(candidates, second.ID) {
 		t.Fatalf("incorrect cleanup candidates: %v %v", candidates, err)
 	}
+	// Cleanup must leave the current active observer intact.
+	result, cleanupErr := store.Cleanup(ctx, "o", 100, issuer)
+	if cleanupErr != nil || result.Deleted != 1 || result.Failed != 0 {
+		t.Fatalf("superseded cleanup: %+v %v", result, cleanupErr)
+	}
+	if err = catalog.CheckAgent(ctx, second.Binding.Agent); err != nil {
+		t.Fatalf("cleanup revoked active observer: %v", err)
+	}
 	issuer.fail = true
 	if err = store.Revoke(ctx, "o", second.ID, issuer); err == nil {
 		t.Fatal("issuer outage hidden")
@@ -170,9 +181,14 @@ func TestEnrollmentCannotBeReplayed(t *testing.T) {
 	if err = store.Issue(ctx, "o", second.ID, issuer); err == nil {
 		t.Fatal("revoked enrollment reissued")
 	}
+	result, cleanupErr = store.Cleanup(ctx, "o", 100, issuer)
+	if cleanupErr == nil || result.Failed != 1 || result.Deleted != 0 {
+		t.Fatalf("cleanup hid failed revocation: %+v %v", result, cleanupErr)
+	}
 	issuer.fail = false
-	if err = store.Revoke(ctx, "o", second.ID, issuer); err != nil {
-		t.Fatal(err)
+	result, cleanupErr = store.Cleanup(ctx, "o", 100, issuer)
+	if cleanupErr != nil || result.Deleted != 1 {
+		t.Fatalf("retry cleanup: %+v %v", result, cleanupErr)
 	}
 	if err = conn.QueryRow(ctx, `SELECT count(*) FROM loomplane_federation_destination_refs WHERE kind='trust' AND owner_id=$1`, second.ID).Scan(&refs); err != nil || refs != 0 {
 		t.Fatalf("cleanup reference stuck: %d %v", refs, err)
@@ -191,11 +207,11 @@ func TestEnrollmentCannotBeReplayed(t *testing.T) {
 	if err = store.Consume(ctx, expired.ID, expired.Binding.Agent); err == nil {
 		t.Fatal("expired enrollment consumed")
 	}
-	if err = store.Revoke(ctx, "foreign", first.ID, issuer); err != nil {
+	if err = store.Revoke(ctx, "foreign", expired.ID, issuer); err != nil {
 		t.Fatal(err)
 	}
 	var retained int
-	if err = conn.QueryRow(ctx, `SELECT count(*) FROM loomplane_federation_enrollments WHERE id=$1`, first.ID).Scan(&retained); err != nil || retained != 1 {
+	if err = conn.QueryRow(ctx, `SELECT count(*) FROM loomplane_federation_enrollments WHERE id=$1`, expired.ID).Scan(&retained); err != nil || retained != 1 {
 		t.Fatalf("foreign revoke changed enrollment: %d %v", retained, err)
 	}
 
@@ -211,6 +227,14 @@ func TestEnrollmentCannotBeReplayed(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	candidates, err = store.CleanupCandidates(ctx, "o", 100)
+	if err != nil || !slices.Contains(candidates, superseded.ID) || slices.Contains(candidates, third.ID) {
+		t.Fatalf("abandoned pending enrollment: %v %v", candidates, err)
+	}
+	result, cleanupErr = store.Cleanup(ctx, "foreign", 100, issuer)
+	if cleanupErr != nil || result.Attempted != 0 {
+		t.Fatalf("foreign cleanup reached enrollment: %+v %v", result, cleanupErr)
+	}
 	if err = store.Consume(ctx, superseded.ID, superseded.Binding.Agent); err == nil {
 		t.Fatal("older pending epoch activated")
 	}
@@ -222,5 +246,16 @@ func TestEnrollmentCannotBeReplayed(t *testing.T) {
 	}
 	if err = store.Consume(ctx, third.ID, third.Binding.Agent); err == nil {
 		t.Fatal("quarantined destination activated")
+	}
+	// A failed remote deletion must not stop the rest of the bounded sweep.
+	issuer.failEntry = expired.Binding.EntryID
+	result, cleanupErr = store.Cleanup(ctx, "o", 100, issuer)
+	if cleanupErr == nil || result.Failed != 1 || result.Deleted != 2 {
+		t.Fatalf("quarantine cleanup stopped on one failed entry: %+v %v", result, cleanupErr)
+	}
+	issuer.failEntry = ""
+	result, cleanupErr = store.Cleanup(ctx, "o", 100, issuer)
+	if cleanupErr != nil || result.Deleted != 1 {
+		t.Fatalf("expired enrollment retry: %+v %v", result, cleanupErr)
 	}
 }

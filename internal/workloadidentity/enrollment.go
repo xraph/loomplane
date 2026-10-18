@@ -240,13 +240,16 @@ func (s *EnrollmentStore) Revoke(ctx context.Context, org, id string, issuer Enr
 	if issuer == nil {
 		return ErrIdentity
 	}
-	r, err := s.beginRevoke(ctx, org, id)
+	r, err := s.beginRevoke(ctx, org, id, false)
 	if err != nil {
 		return err
 	}
 	if r == nil {
 		return nil
 	}
+	return s.completeRevoke(ctx, r, issuer)
+}
+func (s *EnrollmentStore) completeRevoke(ctx context.Context, r *EnrollmentRecord, issuer EnrollmentIssuer) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if stepErr := issuer.Revoke(ctx, r.Binding.EntryID); stepErr != nil {
@@ -254,7 +257,7 @@ func (s *EnrollmentStore) Revoke(ctx context.Context, org, id string, issuer Enr
 	}
 	return s.finishRevoke(ctx, r)
 }
-func (s *EnrollmentStore) beginRevoke(ctx context.Context, org, id string) (record *EnrollmentRecord, err error) {
+func (s *EnrollmentStore) beginRevoke(ctx context.Context, org, id string, onlyEligible bool) (record *EnrollmentRecord, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -266,6 +269,15 @@ func (s *EnrollmentStore) beginRevoke(ctx context.Context, org, id string) (reco
 	}
 	if err != nil {
 		return nil, err
+	}
+	if onlyEligible {
+		var eligible bool
+		if queryErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_federation_enrollments e WHERE e.org_id=$1 AND e.id=$2 AND `+cleanupEligible+`)`, org, id).Scan(&eligible); queryErr != nil {
+			return nil, queryErr
+		}
+		if !eligible {
+			return nil, tx.Commit()
+		}
 	}
 	if stepErr := runtimecatalog.DeactivateTx(ctx, tx, org, r.Binding.Agent.DestinationID, r.Binding.Agent.AgentID); stepErr != nil {
 		return nil, stepErr
@@ -308,7 +320,7 @@ func (s *EnrollmentStore) CleanupCandidates(ctx context.Context, org string, lim
 	if org == "" || limit < 1 || limit > 100 {
 		return nil, ErrIdentity
 	}
-	rows, err := s.db.Query(ctx, `SELECT e.id FROM loomplane_federation_enrollments e WHERE e.org_id=$1 AND (e.phase='revoking' OR (e.phase IN ('pending','ready') AND e.expires_at<=clock_timestamp()) OR (e.phase='consumed' AND NOT EXISTS (SELECT 1 FROM loomplane_federation_observers a JOIN loomplane_federation_destinations d ON d.id=a.destination_id AND d.org_id=a.org_id WHERE a.org_id=e.org_id AND a.agent_id=e.agent_id AND a.active AND NOT d.quarantined AND a.destination_generation=d.generation))) ORDER BY e.created_at,e.id LIMIT $2`, org, limit)
+	rows, err := s.db.Query(ctx, `SELECT e.id FROM loomplane_federation_enrollments e WHERE e.org_id=$1 AND `+cleanupEligible+` ORDER BY e.updated_at,e.id LIMIT $2`, org, limit)
 	if err != nil {
 		return nil, err
 	}
