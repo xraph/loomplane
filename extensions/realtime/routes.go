@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
@@ -43,6 +44,10 @@ func streamBindings() forge.RouteOption {
 		forge.Emits[planning.Binding]("binding.updated").As(forge.StreamUpsert).Invalidates("Binding[]", "Instance[]"), forge.Emits[planning.Binding]("binding.deleted"),
 		forge.Emits[connections.Connection]("connection.updated").As(forge.StreamUpsert), forge.Emits[connections.Connection]("connection.deleted"),
 		forge.Emits[deployments.Deployment]("deployment.updated").As(forge.StreamUpsert).Invalidates("Deployment[]", "Instance[]"), forge.Emits[deployments.Deployment]("deployment.deleted"),
+		forge.Emits[cloudprofiles.Profile]("cloud.updated").As(forge.StreamUpsert), forge.Emits[cloudprofiles.Profile]("cloud.deleted"),
+		forge.Emits[cloudprofiles.Target]("cloud_target.updated").As(forge.StreamUpsert), forge.Emits[cloudprofiles.Target]("cloud_target.deleted"),
+		forge.Emits[cloudprofiles.EnvironmentCloudEvent]("environment_cloud.updated").Invalidates("EnvironmentCloud"),
+		forge.Emits[cloudprofiles.CloudSyncEvent]("cloud_sync.updated").Invalidates("Sync", "Sync[]", "EnvironmentCloud"),
 		forge.Emits[store.Log]("build.log").As(forge.StreamUpsert), forge.Emits[store.Collection]("build.collection").As(forge.StreamUpsert),
 	)
 }
@@ -66,6 +71,8 @@ func (e *Extension) routes(router forge.Router) error {
 		"manifest.updated": manifests.Revision{}, "manifest.deleted": manifests.Revision{}, "plan.updated": planning.Plan{}, "plan.deleted": planning.Plan{},
 		"binding.updated": planning.Binding{}, "binding.deleted": planning.Binding{}, "connection.updated": connections.Connection{}, "connection.deleted": connections.Connection{},
 		"deployment.updated": deployments.Deployment{}, "deployment.deleted": deployments.Deployment{}, "build.log": store.Log{}, "build.collection": store.Collection{},
+		"cloud.updated": cloudprofiles.Profile{}, "cloud.deleted": cloudprofiles.Profile{}, "cloud_target.updated": cloudprofiles.Target{}, "cloud_target.deleted": cloudprofiles.Target{},
+		"environment_cloud.updated": cloudprofiles.EnvironmentCloudEvent{}, "cloud_sync.updated": cloudprofiles.CloudSyncEvent{},
 		"realtime.snapshot": Snapshot{}, forge.EventResumed: forge.ResumedPayload{}, forge.EventGap: forge.GapPayload{}, "realtime.status": Status{},
 	}), streamBindings())
 }

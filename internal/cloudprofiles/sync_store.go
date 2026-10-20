@@ -9,6 +9,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/xraph/loomplane/internal/page"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
 )
@@ -467,4 +469,17 @@ func (s *PgStore) FindAccepted(ctx context.Context, org, project, key, preview s
 		return nil, ErrConflict
 	}
 	return sync, nil
+}
+
+// ListSyncPage reads a bounded keyset page without truncating project history.
+func (s *PgStore) ListSyncPage(ctx context.Context, org, project string, before page.Cursor, limit int) ([]*Sync, page.Cursor, error) {
+	if limit < 1 || limit > page.Max {
+		return nil, page.Cursor{}, page.ErrBadLimit
+	}
+	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND ($3='' OR (created_at,id)<($4,$3)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1)
+	if err != nil {
+		return nil, page.Cursor{}, err
+	}
+	rows, next := page.Trim(rows, limit, func(v *Sync) page.Cursor { return page.Cursor{At: v.CreatedAt, ID: v.ID} })
+	return rows, next, nil
 }

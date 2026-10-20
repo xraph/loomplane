@@ -69,6 +69,9 @@ func (s *Service) PreviewCloudRevert(ctx context.Context, p security.Principal, 
 
 // ApplyCloudRevert uses the same revision-bound acceptance contract as a switch.
 func (s *Service) ApplyCloudRevert(ctx context.Context, p security.Principal, project, previewID, revision, key string) (*cloudprofiles.Sync, error) {
+	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
+		return nil, err
+	}
 	st, err := s.syncStore()
 	if err != nil {
 		return nil, err

@@ -38,3 +38,16 @@ func TestFilter_requiresDeploymentReadForLogsAndLimitsSelectedProjects(t *testin
 		t.Fatalf("global subscription included unselected build output: %+v %v", got, err)
 	}
 }
+
+func TestFilterCloudEventsRequireTheirResourcePermissions(t *testing.T) {
+	input := []store.Event{{ProjectID: "proj_a", Type: "cloud.updated"}, {ProjectID: "proj_a", Type: "cloud_target.updated"}, {ProjectID: "proj_a", Type: "environment_cloud.updated"}, {ProjectID: "proj_a", Type: "cloud_sync.updated"}, {ProjectID: "proj_b", Type: "cloud_sync.updated"}}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	sub := Subscription{ProjectIDs: []string{"proj_a"}}
+	for denied, want := range map[security.Permission]int{security.CloudAccountRead: 1, security.DeploymentRead: 3} {
+		e := &Extension{authz: permissionFixture{denied: denied}}
+		got, err := e.filter(t.Context(), p, sub, input)
+		if err != nil || len(got) != want {
+			t.Fatalf("denied %s: %+v %v", denied, got, err)
+		}
+	}
+}

@@ -39,6 +39,7 @@ import (
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/artifacts"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
@@ -70,18 +71,22 @@ const Name = "loomplane-planning"
 // Extension serves the manifest and plan API.
 type Extension struct {
 	*forge.BaseExtension
-	cfg            config.Config
-	engineOf       func() *engine.Engine
-	ctrlplane      func() *app.CtrlPlane
-	deployments    *orchestration.Deployments
-	plugins        *plugins.Set
-	manifests      *manifests.Service
-	plans          *planning.Service
-	deploys        *deployments.Service
-	activity       *activity.Service
-	artifacts      *artifacts.Store
-	backups        *recovery.Service
-	restoreTargets func(context.Context) error
+	cfg                 config.Config
+	engineOf            func() *engine.Engine
+	ctrlplane           func() *app.CtrlPlane
+	deployments         *orchestration.Deployments
+	plugins             *plugins.Set
+	manifests           *manifests.Service
+	plans               *planning.Service
+	deploys             *deployments.Service
+	activity            *activity.Service
+	artifacts           *artifacts.Store
+	backups             *recovery.Service
+	restoreTargets      func(context.Context) error
+	cloudProfiles       *cloudprofiles.Service
+	cloudStore          *cloudprofiles.PgStore
+	cloudRecoveryCancel context.CancelFunc
+	cloudRecoveryDone   chan struct{}
 }
 
 // New returns the extension. engineOf returns the dispatch extension's
@@ -170,9 +175,12 @@ func (e *Extension) Register(fapp forge.App) error {
 	auditor := projectsext.NewAuditor(audit, e.cfg.Identity.AppID, log)
 	prj := projects.NewPgStore(pg)
 	planStore := planning.NewPgStore(pg)
+	e.cloudStore = cloudprofiles.NewPgStore(pg)
+	e.cloudProfiles = cloudprofiles.NewService(cloudprofiles.Deps{Store: e.cloudStore, Projects: prj, Connections: clouds, Providers: catalog, Authz: authz, Audit: auditor})
 	e.manifests = manifests.NewService(manifests.NewPgStore(pg), prj, authz, auditor)
 	e.plans = planning.NewService(planning.Deps{
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
+		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
 		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
@@ -274,7 +282,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		return nil
 	}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
-		Logs:  logStore,
+		Logs:          logStore,
+		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
@@ -284,13 +293,18 @@ func (e *Extension) Register(fapp forge.App) error {
 		Resources: resourceSecrets,
 		Telemetry: metrics,
 	})
+	e.plans.BindCloudSyncRunner(runner, runner)
 	e.deployments.Bind(e.plans, runner, e.engineOf)
+	e.deployments.BindCloudSync(e.plans)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
 		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}))
 	if err := e.backupRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	if err := e.cloudRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
 	return e.routes(fapp.Router(), guard)
@@ -316,12 +330,23 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := e.scheduleBackupReconciliation(ctx); err != nil {
 		return err
 	}
+	if err := e.startCloudRecovery(ctx, 30*time.Second); err != nil {
+		return err
+	}
 	e.MarkStarted()
 	return nil
 }
 
 // Stop closes the artifact storage.
 func (e *Extension) Stop(ctx context.Context) error {
+	if e.cloudRecoveryCancel != nil {
+		e.cloudRecoveryCancel()
+		select {
+		case <-e.cloudRecoveryDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if e.artifacts != nil {
 		if err := e.artifacts.Close(ctx); err != nil {
 			return fmt.Errorf("close artifact storage: %w", err)
@@ -334,17 +359,17 @@ func (e *Extension) Stop(ctx context.Context) error {
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
-	case errors.Is(err, recovery.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
+	case errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, recovery.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
 		errors.Is(err, deployments.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
+	case errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph),
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
-	case errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid):
+	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

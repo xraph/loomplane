@@ -68,6 +68,7 @@ func Group() *migrate.Group {
 		statements("20261018000400", "create_cloud_profiles", cloudProfilesUp, cloudProfilesDown),
 		statements("20261018000401", "cloud_sync", cloudSyncUp, cloudSyncDown),
 		statements("20261020000400", "cloud_sync_recovery_guards", cloudSyncRecoveryGuardsUp, cloudSyncRecoveryGuardsDown),
+		statements("20261020000401", "cloud_events", cloudEventsUp, cloudEventsDown),
 		statements("20261019000100", "plan_source_refs", planSourceRefsUp, planSourceRefsDown),
 		NotificationsMigration(),
 	)

@@ -49,11 +49,11 @@ func permission(event string) security.Permission {
 	switch strings.SplitN(event, ".", 2)[0] {
 	case "environment":
 		return security.EnvironmentRead
-	case "plan", "deployment", "build":
+	case "plan", "deployment", "build", "cloud_sync":
 		return security.DeploymentRead
 	case "binding":
 		return security.InfrastructureRead
-	case "connection":
+	case "connection", "cloud", "cloud_target", "environment_cloud":
 		return security.CloudAccountRead
 	default:
 		return security.ProjectRead

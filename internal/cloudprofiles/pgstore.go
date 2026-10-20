@@ -210,6 +210,12 @@ func (s *PgStore) DeleteTarget(ctx context.Context, orgID, projectID, cloudID, i
 // Resolve reads the environment, assignment and targets in a single snapshot.
 // No assignment returns nil only when the environment exists in this scope.
 func (s *PgStore) Resolve(ctx context.Context, orgID, projectID, environmentID string) (*Assignment, error) {
+	assignment, _, err := s.EnvironmentCloud(ctx, orgID, projectID, environmentID)
+	return assignment, err
+}
+
+// EnvironmentCloud reads the nullable assignment and its generation atomically.
+func (s *PgStore) EnvironmentCloud(ctx context.Context, orgID, projectID, environmentID string) (*Assignment, int64, error) {
 	var cloudID *string
 	var revision, cloudRevision *int64
 	var targets []byte
@@ -222,14 +228,17 @@ func (s *PgStore) Resolve(ctx context.Context, orgID, projectID, environmentID s
  WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$3
  GROUP BY e.id,a.cloud_id,a.revision,c.revision`, orgID, projectID, environmentID).Scan(&cloudID, &revision, &cloudRevision, &targets)
 	if err != nil {
-		return nil, storeError(err)
+		return nil, 0, storeError(err)
 	}
 	if cloudID == nil {
-		return nil, nil
+		if revision != nil {
+			return nil, *revision, nil
+		}
+		return nil, 0, nil
 	}
 	a := &Assignment{OrgID: orgID, ProjectID: projectID, EnvironmentID: environmentID, CloudID: *cloudID, Revision: *revision, CloudRevision: *cloudRevision}
 	if err = json.Unmarshal(targets, &a.Targets); err != nil {
-		return nil, fmt.Errorf("decode assigned targets: %w", err)
+		return nil, 0, fmt.Errorf("decode assigned targets: %w", err)
 	}
-	return a, nil
+	return a, *revision, nil
 }

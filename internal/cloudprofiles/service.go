@@ -306,3 +306,17 @@ func (s *Service) DeleteTarget(ctx context.Context, p security.Principal, projec
 	s.record(ctx, p, projectID, "cloud_target.delete", map[string]any{"cloud_id": cloudID, "target_id": id})
 	return nil
 }
+
+// EnvironmentCloud returns the assignment and generation, including tombstones.
+func (s *Service) EnvironmentCloud(ctx context.Context, p security.Principal, projectID, environmentID string) (*Assignment, int64, error) {
+	if err := s.scope(ctx, p, projectID, security.CloudAccountRead); err != nil {
+		return nil, 0, err
+	}
+	reader, ok := s.store.(interface {
+		EnvironmentCloud(context.Context, string, string, string) (*Assignment, int64, error)
+	})
+	if !ok {
+		return nil, 0, fmt.Errorf("%w: assignment storage unavailable", ErrInvalid)
+	}
+	return reader.EnvironmentCloud(ctx, p.OrgID, projectID, environmentID)
+}

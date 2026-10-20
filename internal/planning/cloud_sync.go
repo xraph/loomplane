@@ -12,6 +12,8 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/page"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -334,6 +336,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 			s.warn("Cloud sync is pending recovery", e)
 		}
 	}
+	s.recordCloudSync(ctx, p, sync, "cloud_sync.apply")
 	return sync, nil
 }
 
@@ -429,6 +432,7 @@ func (s *Service) RetryCloudSync(ctx context.Context, p security.Principal, proj
 			s.warn("Cloud sync retry is pending recovery", e)
 		}
 	}
+	s.recordCloudSync(ctx, p, sync, "cloud_sync.retry")
 	return sync, nil
 }
 
@@ -468,6 +472,7 @@ func (s *Service) CompleteCloudRouting(ctx context.Context, p security.Principal
 			s.warn("Cloud cleanup is pending recovery", e)
 		}
 	}
+	s.recordCloudSync(ctx, p, sync, "cloud_sync.routing")
 	return sync, nil
 }
 
@@ -486,4 +491,40 @@ func decodeCloudBindings(raw []byte) ([]*Binding, error) {
 		out = append(out, &binding)
 	}
 	return out, nil
+}
+
+// CloudSyncPage returns persisted operations after enforcing the full project scope.
+func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, project string, before page.Cursor, limit int) ([]*cloudprofiles.Sync, page.Cursor, error) {
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, project); err != nil {
+		return nil, page.Cursor{}, err
+	}
+	if _, err := s.projects.GetProject(ctx, p.OrgID, project); err != nil {
+		return nil, page.Cursor{}, err
+	}
+	st, ok := s.cloudProfiles.(interface {
+		ListSyncPage(context.Context, string, string, page.Cursor, int) ([]*cloudprofiles.Sync, page.Cursor, error)
+	})
+	if !ok {
+		return nil, page.Cursor{}, errors.New("cloud sync pagination unavailable")
+	}
+	return st.ListSyncPage(ctx, p.OrgID, project, before, limit)
+}
+
+func (s *Service) recordCloudSync(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, action string) {
+	if s.audit != nil {
+		s.audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", ProjectID: sync.ProjectID, Principal: p, Attributes: map[string]any{"sync_id": sync.ID, "status": sync.Status, "cloud_id": sync.CloudID, "target_id": sync.TargetID, "attempt": sync.Attempt, "reverts": sync.Reverts}})
+	}
+}
+
+// CloudPreview reads an immutable review without returning its private snapshot.
+func (s *Service) CloudPreview(ctx context.Context, p security.Principal, project, id string) (*cloudprofiles.Preview, error) {
+	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
+		return nil, err
+	}
+	st, err := s.syncStore()
+	if err != nil {
+		return nil, err
+	}
+	preview, _, err := st.GetPreview(ctx, p.OrgID, project, id)
+	return preview, err
 }
