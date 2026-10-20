@@ -20,9 +20,10 @@ Then create the stack in Miget:
 2. On the review step Miget asks for `LOOMPLANE_SECRET_KEY` and fills in a
    random value. Replace it with your key. Loomplane only accepts 32 bytes
    encoded as base64, and it won't start with anything else.
-3. Pick a Resource with room for the stack. It asks for 3 GB of RAM (1 GB each
-   for the API, the worker and the database), a 5 GB artifact volume and 5 GB
-   of database storage.
+3. Pick a Resource with room for the stack. It asks for 1.5 GB of RAM (512 MB
+   each for the API, the worker and the database), a 2 GB artifact volume and
+   2 GB of database storage. If analysis of a big repository runs out of
+   memory, raise the worker's `ram` in `compose.miget.yaml` first.
 4. Deploy, wait for both builds, and open the `loomplane` app's URL.
 
 Create your account and organization, then connect a repository.

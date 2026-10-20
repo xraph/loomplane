@@ -59,6 +59,42 @@ jobs:
       - run: make lint-dashboard test
       - run: go test -race -count=1 -tags=integration ./tests/integration/
 
+  binaries:
+    name: Binaries, Homebrew and Scoop
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: apps/dashboard/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: apps/dashboard/pnpm-lock.yaml
+      # Appends archives to this release. Homebrew and Scoop update only when
+      # HOMEBREW_TAP_GITHUB_TOKEN can push to xraph/homebrew-tap and
+      # xraph/scoop-bucket; the default token can't reach other repositories.
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GORELEASER_CURRENT_TAG: ${{ github.event.release.tag_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
   image:
     name: Build and smoke test (${{ matrix.arch }})
     needs: checks

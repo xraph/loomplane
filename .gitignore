@@ -57,3 +57,6 @@ docs/qualification/
 docs/plan.md
 docs/one-click-services-plan.md
 docs/catalog-recovery-verification.md
+
+# GoReleaser output
+/dist/

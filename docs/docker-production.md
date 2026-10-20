@@ -199,3 +199,21 @@ exact version tag, so an older release or prerelease cannot move a `latest`
 tag that an operator might be using. Wait for the workflow to finish before
 announcing that an image is available. Your repository must have Actions
 enabled, Linux ARM64 runner access and permission to write GHCR packages.
+
+The same release gets binaries from GoReleaser. `loomctl`, the CLI, ships
+for macOS, Linux and Windows, and installs with `brew install xraph/tap/loomctl`
+or from the `xraph` Scoop bucket. The `loomplane_*` archives carry the API,
+the worker, `config.yaml` and the built dashboard for Linux and macOS. Unpack
+one, set `LOOMPLANE_DASHBOARD_DIR=./dashboard` and run `./loomplane` from that
+directory. Homebrew and Scoop update only when the repository has a
+`HOMEBREW_TAP_GITHUB_TOKEN` secret that can push to `xraph/homebrew-tap` and
+`xraph/scoop-bucket`. Without it, the archives still publish.
+
+You don't need a release to run the latest code. Once CI passes on `main`,
+the Docker workflow publishes AMD64 and ARM64 images as
+`ghcr.io/xraph/loomplane:main`, which moves with `main`, and
+`ghcr.io/xraph/loomplane:sha-<commit>`, which never moves. Pin the `sha-`
+tag in `LOOMPLANE_IMAGE` so a restart doesn't pull a newer build you haven't
+read. Those images skip the release checks and the ARM64 smoke test, so keep
+them for staging and early trials. Add `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN` secrets to mirror both tags to Docker Hub as well.

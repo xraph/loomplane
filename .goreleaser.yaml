@@ -1,0 +1,130 @@
+# GoReleaser builds Loomplane's binaries when a release is published. The
+# release workflow (.github/workflows/release.yml) runs it against the
+# release's tag and appends the archives to that release, next to the image
+# and the Docker bundle.
+#
+#   loomctl      the CLI, for macOS, Linux and Windows. Homebrew and Scoop
+#                install this one.
+#   loomplane    the API with its dashboard and config.yaml, plus
+#                loomplane-worker, as one archive for Linux and macOS.
+#
+# Try it without publishing: goreleaser release --snapshot --clean
+version: 2
+
+project_name: loomplane
+
+before:
+  hooks:
+    - go mod download
+    # The server archive carries the built dashboard.
+    - pnpm --dir apps/dashboard install --frozen-lockfile
+    - pnpm --dir apps/dashboard build
+
+builds:
+  - id: loomctl
+    main: ./cmd/loomctl
+    binary: loomctl
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/xraph/loomplane/internal/buildinfo.Version={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: loomplane
+    main: ./cmd/loomplane
+    binary: loomplane
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/xraph/loomplane/internal/buildinfo.Version={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: loomplane-worker
+    main: ./cmd/loomplane-worker
+    binary: loomplane-worker
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/xraph/loomplane/internal/buildinfo.Version={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: loomctl
+    ids: [loomctl]
+    name_template: "loomctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md]
+
+  # Unpack it, set LOOMPLANE_DASHBOARD_DIR=./dashboard and run ./loomplane
+  # from that directory, where it finds config.yaml.
+  - id: server
+    ids: [loomplane, loomplane-worker]
+    name_template: "loomplane_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - config.yaml
+      # A directory keeps its layout (index.html beside assets/); a glob
+      # flattens it.
+      - src: apps/dashboard/dist
+        dst: dashboard
+
+checksum:
+  # release.yml already uploads SHA256SUMS for the Docker bundle.
+  name_template: binaries-checksums.txt
+
+# The release already has its notes; GoReleaser only adds files to it.
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing
+
+homebrew_casks:
+  - name: loomctl
+    ids: [loomctl]
+    binaries: [loomctl]
+    repository:
+      owner: xraph
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # Without a token that can push to the tap, release everything else.
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ else }}auto{{ end }}'
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    homepage: https://github.com/xraph/loomplane
+    description: "Plan, approve and follow Loomplane deployments from your terminal"
+    license: AGPL-3.0-only
+    caveats: "Run 'loomctl login --url https://your-loomplane --key lp_live_...' to get started"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/loomctl"]
+          end
+
+scoops:
+  - name: loomctl
+    ids: [loomctl]
+    repository:
+      owner: xraph
+      name: scoop-bucket
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ else }}auto{{ end }}'
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    homepage: https://github.com/xraph/loomplane
+    description: "Plan, approve and follow Loomplane deployments from your terminal"
+    license: AGPL-3.0-only
