@@ -161,6 +161,7 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
+	cloudSyncAuth CloudSyncAuthorizer
 	cloudProfiles cloudprofiles.Resolver
 	store         Store
 	plans         Plans
@@ -180,6 +181,7 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	CloudSyncAuth CloudSyncAuthorizer
 	CloudProfiles cloudprofiles.Resolver
 	Logs          LogSink
 	Store         Store
@@ -200,6 +202,7 @@ type RunnerDeps struct {
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
+		cloudSyncAuth: d.CloudSyncAuth,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
 		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
@@ -217,6 +220,14 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	}
 	if plan.Status != planning.StatusApproved || !plan.Executable {
 		return "", nil, nil
+	}
+	if available, e := r.ReleaseAvailable(ctx, orgID, planID); e != nil {
+		return "", nil, e
+	} else if !available {
+		return "", nil, cloudprofiles.ErrBusy
+	}
+	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
+		return "", nil, authErr
 	}
 	for _, action := range plan.Actions {
 		if validationErr := r.validateCloudPlacement(ctx, plan, action, nil); validationErr != nil {
@@ -402,6 +413,22 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			action = a
 		}
 	}
+	if err := r.authorizeSync(ctx, plan); err != nil {
+		return err
+	}
+	if plan.CloudSyncID != "" {
+		if len(step.Checkpoint) > 0 {
+			resume = step.Checkpoint
+		}
+		durableHeartbeat := heartbeat
+		heartbeat = func(raw []byte) error {
+			step.Checkpoint = append([]byte(nil), raw...)
+			if e := r.store.UpdateStep(ctx, orgID, d.ID, *step); e != nil {
+				return e
+			}
+			return durableHeartbeat(raw)
+		}
+	}
 	now := r.now().UTC()
 	step.StartedAt, step.FinishedAt, step.Warnings = &now, nil, nil
 	progress := func(status, message string) {
@@ -438,6 +465,9 @@ func doneMessage(s *Step) string {
 func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action, step *Step,
 	resume []byte, heartbeat func([]byte) error, progress func(string, string),
 ) error {
+	if plan.CloudSyncID != "" {
+		ctx = planning.WithCloudSyncMutation(ctx, plan.CloudSyncID)
+	}
 	if a.Subject != planning.ServiceSubject && a.Subject != planning.ResourceSubject {
 		return fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, a.Subject)
 	}
@@ -510,6 +540,10 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
 	}
+	if captureErr := r.captureAppliedVariables(ctx, d, &a); captureErr != nil {
+		return captureErr
+	}
+	pinAppliedSource(d, plan, &a)
 	job := &Job{
 		BuildCredentials: r.credentials, Logs: r.logs, Attempt: logAttempt(ctx, d.Retries),
 		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
@@ -576,6 +610,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		// redeploy it. A step that replaced what's bound now, as a retry
 		// after later deployments moved the action back can find, isn't
 		// one of these.
+		if plan.CloudSyncID != "" {
+			return nil
+		}
 		if rerr := r.removeReplaced(ctx, job, current, step.Replaced, warn, rc, heartbeat); rerr != nil {
 			return rerr
 		}
@@ -617,13 +654,8 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	if a.Service != nil {
 		if a.Service.Gateway == nil {
-			repo := a.Service.Repo
 			job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
-				key, serr := sourceFor(d, repo)
-				if serr != nil {
-					return nil, 0, serr
-				}
-				return r.sources.Open(ctx, key)
+				return r.appliedSource(ctx, d, a)
 			}
 		}
 		if job.Env, job.Secrets, err = r.env(ctx, d, a, byName, resources); err != nil {
@@ -666,6 +698,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	bound, err := r.bind(ctx, d, a, current, out, connID, old)
 	if err != nil {
 		return err
+	}
+	if plan.CloudSyncID != "" {
+		return nil
 	}
 	if rerr := r.removeReplaced(ctx, job, bound, step.Replaced, warn, rc, heartbeat); rerr != nil {
 		return rerr
@@ -866,6 +901,9 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 		}
 	}
 	conn, cred, err := r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	if errors.Is(err, connections.ErrNotFound) && job.Plan.CloudSyncID != "" {
+		return false, err
+	}
 	if errors.Is(err, connections.ErrNotFound) {
 		// Nothing can reach it again, so keeping the record would fail
 		// every deployment of the action from now on.
@@ -878,6 +916,18 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	}
 	if err != nil {
 		return false, err
+	}
+	if job.Plan.CloudSyncID != "" {
+		var cfg planning.ServiceConfig
+		if err := json.Unmarshal(old.Config, &cfg); err != nil {
+			return false, err
+		}
+		if conn == nil || conn.ID != old.ConnectionID || conn.Status != connections.StatusReady {
+			return false, errors.New("original cleanup connection is unavailable")
+		}
+		if cfg.CloudPlacement != nil && (cfg.CloudPlacement.AccountIdentity == "" || connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details) != cfg.CloudPlacement.AccountIdentity) {
+			return false, errors.New("original cleanup account identity changed")
+		}
 	}
 	gone := *job
 	gone.Action.Provider, gone.Action.Region = old.Provider, old.Region
@@ -936,10 +986,31 @@ func placement(prov, region string) string {
 // each thing it needs. A variable someone set wins over an address
 // Loomplane would set, so you can point a service elsewhere.
 func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services, resources map[string]*planning.Binding) (env map[string]string, secret map[string]bool, err error) {
+	resourceValues := map[string]string{}
 	if a.Service.Gateway != nil {
 		// A gateway gets the addresses it routes to and nothing else: none
 		// of the project's variables, and so none of its secrets.
 		env, secret = map[string]string{}, map[string]bool{}
+	} else if a.Service.AppliedInputs != nil && a.Service.AppliedInputs.Variables != "" {
+		if r.resources == nil {
+			return nil, nil, errors.New("applied variable snapshot store is unavailable")
+		}
+		raw, snapshotErr := r.resources.Get(ctx, a.Service.AppliedInputs.Variables)
+		if snapshotErr != nil {
+			return nil, nil, fmt.Errorf("read applied variables: %w", snapshotErr)
+		}
+		var snapshot appliedVariables
+		if snapshotErr := json.Unmarshal(raw, &snapshot); snapshotErr != nil {
+			return nil, nil, snapshotErr
+		}
+		env, secret = snapshot.Values, snapshot.Secrets
+		resourceValues = snapshot.ResourceValues
+		if env == nil {
+			env = map[string]string{}
+		}
+		if secret == nil {
+			secret = map[string]bool{}
+		}
 	} else if env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service); err != nil {
 		return nil, nil, fmt.Errorf("resolve variables: %w", err)
 	}
@@ -948,6 +1019,13 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			continue
 		}
 		if link.Subject == planning.ResourceSubject {
+			if pinned, ok := resourceValues[link.Key]; ok {
+				env[link.Key], secret[link.Key] = pinned, true
+				continue
+			}
+			if a.Service.AppliedInputs != nil && a.Service.AppliedInputs.Variables != "" {
+				return nil, nil, errors.New("applied resource credential snapshot is missing")
+			}
 			// A resource's address holds its credentials, so it's secret.
 			if resources[link.From] == nil || r.resources == nil {
 				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
@@ -1092,6 +1170,9 @@ func (r *Runner) recordDeployed(ctx context.Context, d *Deployment, at time.Time
 	plan, err := r.plans.GetPlan(ctx, d.OrgID, d.PlanID)
 	if err != nil {
 		return err
+	}
+	if plan.CloudSyncID != "" {
+		return nil
 	}
 	for _, ps := range plan.Sources {
 		if !ps.InScope {

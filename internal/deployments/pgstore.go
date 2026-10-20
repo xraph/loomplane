@@ -193,6 +193,17 @@ func (s *PgStore) Finish(ctx context.Context, orgID, id, status, reason string, 
 // Reopen implements Store, in one transaction, so of two retries at once
 // one reopens the deployment and the other finds it running.
 func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err error) {
+	if allowed, ok := ctx.Value(cloudRetryKey{}).(bool); !ok || !allowed {
+		var syncID string
+		e := s.db.QueryRow(ctx, `SELECT coalesce(p.result->>'cloud_sync_id','') FROM loomplane_deployments d JOIN loomplane_plans p ON p.id=d.plan_id WHERE d.org_id=$1 AND d.id=$2`, orgID, id).Scan(&syncID)
+		if e != nil {
+			return false, e
+		}
+		if syncID != "" {
+			return false, errors.New("retry this deployment through its Cloud sync operation")
+		}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin: %w", err)
@@ -238,6 +249,7 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 // storedStep is a step as it's stored: with what it replaces, which the
 // API leaves out, since it's only there for a retry.
 type storedStep struct {
+	Checkpoint []byte `json:"checkpoint,omitempty"`
 	Step
 	Replaced *planning.Binding `json:"replaced,omitempty"`
 }
@@ -245,7 +257,7 @@ type storedStep struct {
 func encodeSteps(steps []Step) ([]byte, error) {
 	out := make([]storedStep, len(steps))
 	for i, s := range steps {
-		out[i] = storedStep{Step: s, Replaced: s.Replaced}
+		out[i] = storedStep{Step: s, Replaced: s.Replaced, Checkpoint: s.Checkpoint}
 	}
 	return json.Marshal(out)
 }
@@ -259,6 +271,7 @@ func decodeSteps(raw []byte) ([]Step, error) {
 	for i, s := range in {
 		out[i] = s.Step
 		out[i].Replaced = s.Replaced
+		out[i].Checkpoint = s.Checkpoint
 	}
 	return out, nil
 }

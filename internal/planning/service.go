@@ -79,30 +79,35 @@ type Workflow interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
-	cloudProfiles cloudprofiles.Resolver
-	store         Store
-	projects      Projects
-	analyses      Analyses
-	manifests     Manifests
-	providers     *provider.Registry
-	clouds        Connections
-	authz         Authorizer
-	workflow      Workflow
-	audit         projects.Auditor
-	window        time.Duration
-	now           func() time.Time
-	warn          func(msg string, err error)
-	telemetry     *telemetry.Recorder
+	cloudSyncRunner   CloudSyncDeployer
+	appliedInputs     AppliedInputReader
+	cloudSyncWorkflow CloudSyncWorkflow
+	cloudProfiles     cloudprofiles.Resolver
+	store             Store
+	projects          Projects
+	analyses          Analyses
+	manifests         Manifests
+	providers         *provider.Registry
+	clouds            Connections
+	authz             Authorizer
+	workflow          Workflow
+	audit             projects.Auditor
+	window            time.Duration
+	now               func() time.Time
+	warn              func(msg string, err error)
+	telemetry         *telemetry.Recorder
 }
 
 // Deps are what a Service needs.
 type Deps struct {
-	CloudProfiles cloudprofiles.Resolver
-	Store         Store
-	Projects      Projects
-	Analyses      Analyses
-	Manifests     Manifests
-	Providers     *provider.Registry
+	AppliedInputs     AppliedInputReader
+	CloudSyncWorkflow CloudSyncWorkflow
+	CloudProfiles     cloudprofiles.Resolver
+	Store             Store
+	Projects          Projects
+	Analyses          Analyses
+	Manifests         Manifests
+	Providers         *provider.Registry
 	// Connections are the organization's cloud accounts. Nil means none,
 	// so no plan that needs one is executable.
 	Connections Connections
@@ -125,6 +130,7 @@ func NewService(d Deps) *Service {
 		warn = func(string, error) {}
 	}
 	return &Service{
+		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
 		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry,

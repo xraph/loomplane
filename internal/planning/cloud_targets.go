@@ -120,6 +120,7 @@ func SameProviderConfig(before json.RawMessage, after *ServiceConfig) bool {
 
 func stripProviderMetadata(config map[string]any) {
 	delete(config, "cloud_placement")
+	delete(config, "applied_inputs")
 }
 
 // CloudAdoption identifies the serving binding reviewed for metadata adoption.

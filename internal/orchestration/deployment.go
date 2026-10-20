@@ -162,10 +162,11 @@ var ErrNotRunning = errors.New("the plan's workflow has finished")
 // registers. Nothing runs before then: Dispatch only takes work once every
 // extension has started.
 type Deployments struct {
-	mu       sync.RWMutex
-	planner  Planner
-	deployer Deployer
-	engineOf func() *engine.Engine
+	cloudSync CloudReconciler
+	mu        sync.RWMutex
+	planner   Planner
+	deployer  Deployer
+	engineOf  func() *engine.Engine
 }
 
 // NewDeployments returns the workflow, unbound.
@@ -203,9 +204,10 @@ func (d *Deployments) Options(owner string, concurrency int) drt.Options {
 	return drt.Options{
 		Namespace: DurableNamespace, Queue: DurableQueue, BuildID: DeploymentBuild, Owner: owner,
 		Concurrency: concurrency,
-		Workflows:   map[string]drt.WorkflowFunc{WorkflowDeployment: d.workflow, WorkflowRetry: d.retry},
+		Workflows:   map[string]drt.WorkflowFunc{WorkflowDeployment: d.workflow, WorkflowRetry: d.retry, cloudSyncWorkflow: d.syncWorkflow, resumeReleaseWorkflow: d.resumeRelease},
 		Activities: map[string]drt.ActivityFunc{
-			ActivityPlan:   d.plan,
+			ActivityPlan:      d.plan,
+			cloudSyncActivity: d.syncActivity, releaseAvailableActivity: d.releaseAvailable,
 			ActivityDecide: d.decide,
 			ActivityExpire: d.expire,
 			ActivityFail:   d.fail,
@@ -222,6 +224,7 @@ func (d *Deployments) Options(owner string, concurrency int) drt.Options {
 // read and write goes through an activity, and command IDs depend only on
 // what came before.
 func (d *Deployments) workflow(w *drt.Workflow, input []byte) ([]byte, error) {
+	w.SetQueryHandler("execution-state", func([]byte) ([]byte, error) { return []byte("{}"), nil })
 	var in DeploymentInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, fmt.Errorf("decode deployment input: %w", err)

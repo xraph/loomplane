@@ -79,6 +79,7 @@ type SourceArtifact struct {
 
 // Step is one action of the plan, as it's carried out.
 type Step struct {
+	Checkpoint []byte `json:"-"`
 	// ActionID is the plan action's ID, such as "service:api".
 	ActionID string `json:"action_id"`
 	Name     string `json:"name"`

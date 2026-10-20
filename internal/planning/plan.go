@@ -110,7 +110,14 @@ type Action struct {
 
 // ServiceConfig is everything a deployment of a service is made from. A
 // binding keeps the one last applied, and the next plan compares against it.
+type AppliedInputs struct {
+	Variables   string      `json:"variables,omitempty"`
+	Source      *PlanSource `json:"source,omitempty"`
+	ArtifactKey string      `json:"artifact_key,omitempty"`
+}
+
 type ServiceConfig struct {
+	AppliedInputs  *AppliedInputs     `json:"applied_inputs,omitempty"`
 	CloudPlacement *CloudPlacement    `json:"cloud_placement,omitempty"`
 	Catalog        *recipes.Recipe    `json:"catalog,omitempty"`
 	Provider       string             `json:"provider"`
@@ -248,10 +255,11 @@ type Summary struct {
 
 // Result is what the planner decides.
 type Result struct {
-	Actions  []Action  `json:"actions"`
-	Problems []Finding `json:"problems"`
-	Warnings []Finding `json:"warnings"`
-	Summary  Summary   `json:"summary"`
+	CloudSyncID string    `json:"cloud_sync_id,omitempty"`
+	Actions     []Action  `json:"actions"`
+	Problems    []Finding `json:"problems"`
+	Warnings    []Finding `json:"warnings"`
+	Summary     Summary   `json:"summary"`
 	// Executable says whether Loomplane could carry the plan out: no
 	// problems, and an adapter for every provider it uses.
 	Executable bool `json:"executable"`
@@ -301,6 +309,7 @@ type DeployedRepository struct {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
+	CloudSyncID   string `json:"cloud_sync_id,omitempty"`
 	Catalog       bool   `json:"catalog"`
 	ID            string `json:"id" forge:"id"`
 	OrgID         string `json:"org_id"`
@@ -338,6 +347,7 @@ type Plan struct {
 func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == StatusReady }
 
 func (p *Plan) setResult(r *Result) {
+	p.CloudSyncID = r.CloudSyncID
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
 	p.Summary, p.Executable, p.Connections = r.Summary, r.Executable, r.Connections
 }

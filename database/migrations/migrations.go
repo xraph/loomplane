@@ -65,6 +65,7 @@ func Group() *migrate.Group {
 		statements("20261018000202", "service_restores", serviceRestoresUp, serviceRestoresDown),
 		statements("20261018000203", "backup_policies", backupPoliciesUp, backupPoliciesDown),
 		statements("20261018000400", "create_cloud_profiles", cloudProfilesUp, cloudProfilesDown),
+		statements("20261018000401", "cloud_sync", cloudSyncUp, cloudSyncDown),
 		NotificationsMigration(),
 	)
 	return g

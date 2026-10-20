@@ -239,7 +239,8 @@ func (s *PgStore) RecordDeployed(ctx context.Context, orgID string, d *DeployedS
 // FinishPlanning implements Store.
 func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
 	result, err := json.Marshal(Result{
-		Actions: p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
+		CloudSyncID: p.CloudSyncID,
+		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
 		Connections: p.Connections,
 	})
 	if err != nil {
@@ -362,6 +363,25 @@ func (s *PgStore) RecordDrift(ctx context.Context, orgID, id, drift, message str
 // PutBinding implements Store: it records what runs a service or resource
 // in an environment, replacing what was recorded before.
 func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
+	id := syncMutation(ctx)
+	if id == "" {
+		return putBinding(ctx, s.db, b)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
+	if err := putBinding(ctx, tx, b); err != nil {
+		return err
+	}
+	if err := s.checkpointCloudBinding(ctx, tx, id, b.OrgID, b.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {
 	cfg := []byte(b.Config)
 	if len(cfg) == 0 {
 		cfg = []byte("{}")
@@ -370,7 +390,7 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
+	_, err = db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 		ON CONFLICT (environment_id, subject, name) DO UPDATE SET
 			provider = EXCLUDED.provider, region = EXCLUDED.region, engine = EXCLUDED.engine,
