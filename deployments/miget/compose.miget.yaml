@@ -6,24 +6,26 @@ x-production: &production
   LOOMPLANE_DATABASE_URL: ${{db.url}}
 
 services:
+  # Idle use is around 50 MiB for the API and 100 MiB for the worker; the
+  # worker needs the headroom while it analyzes a repository.
   loomplane:
     x-miget:
-      ram: "1Gi"
+      ram: "512Mi"
     environment: *production
 
   loomplane-worker:
     x-miget:
-      ram: "1Gi"
+      ram: "512Mi"
       private: true
     environment: *production
 
   db:
     x-miget:
       managed: postgres
-      cpu: "500m"
-      ram: "1Gi"
-      storage: "5Gi"
+      cpu: "250m"
+      ram: "512Mi"
+      storage: "2Gi"
 
 volumes:
   artifacts:
-    x-miget: { size: "5Gi", type: RWO }
+    x-miget: { size: "2Gi", type: RWO }
