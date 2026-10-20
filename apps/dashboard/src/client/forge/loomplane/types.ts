@@ -27,7 +27,9 @@ export interface APIKeyList {
 }
 
 export interface Action {
+  adoptCloudPlacement?: boolean;
   changes?: Change[];
+  cloudAdoption?: CloudAdoption;
   connectionId?: string;
   creates: string;
   dependsOn?: string[];
@@ -97,6 +99,12 @@ export interface AnalysisGraph {
 
 export interface AnalysisList {
   analyses: Analysis[];
+}
+
+export interface AppliedInputs {
+  artifactKey?: string;
+  source?: PlanSource;
+  variables?: string;
 }
 
 export interface Backup {
@@ -186,6 +194,14 @@ export interface ChooseConnectionInputBody {
   connectionId: string;
 }
 
+export interface CloudAdoption {
+  bindingId: string;
+  configDigest: string;
+  externalId: string;
+  planId: string;
+  revision: string;
+}
+
 export interface CloudForm {
   builtin: boolean;
   cloud: string;
@@ -197,6 +213,19 @@ export interface CloudForm {
 
 export interface CloudList {
   clouds: CloudForm[];
+}
+
+export interface CloudPlacement {
+  accountIdentity: string;
+  assignmentRevision: number;
+  cloudId: string;
+  cloudRevision: number;
+  connectionId: string;
+  provider: string;
+  region?: string;
+  targetId: string;
+  targetName: string;
+  targetRevision: number;
 }
 
 export interface Collection {
@@ -406,6 +435,7 @@ export interface EditInputBody {
   ignore?: string;
   placement?: {
   build?: Build;
+  cloudTarget?: string;
   enabled?: boolean;
   endpoint?: Endpoint;
   environment?: string;
@@ -640,6 +670,7 @@ export interface Package {
 export interface Plan {
   actions: Action[];
   catalog: boolean;
+  cloudSyncId?: string;
   connections: Record<string, any>;
   createdAt: string;
   createdBy: string;
@@ -684,6 +715,7 @@ export interface PlanSource {
   analysisId: string;
   commitSha: string;
   inScope: boolean;
+  ref?: string;
   repository: string;
   root: string;
   sourceId: string;
@@ -838,6 +870,7 @@ export interface Recipe {
   mountPath: string;
   productVersion: string;
   revision: string;
+  volumeSizeMb?: number;
 }
 
 export interface ReplaceInputBody {
@@ -979,9 +1012,11 @@ export interface Service {
 }
 
 export interface ServiceConfig {
+  appliedInputs?: AppliedInputs;
   build?: string;
   buildTarget?: BuildTarget;
   catalog?: Recipe;
+  cloudPlacement?: CloudPlacement;
   commitSha?: string;
   context?: string;
   ecosystem: string;

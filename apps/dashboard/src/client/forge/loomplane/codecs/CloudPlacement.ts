@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_CloudPlacement: Codec = {"kind": "object", "fields": {"account_identity": {"ts": "accountIdentity"}, "assignment_revision": {"ts": "assignmentRevision"}, "cloud_id": {"ts": "cloudId"}, "cloud_revision": {"ts": "cloudRevision"}, "connection_id": {"ts": "connectionId"}, "provider": {"ts": "provider"}, "region": {"ts": "region"}, "target_id": {"ts": "targetId"}, "target_name": {"ts": "targetName"}, "target_revision": {"ts": "targetRevision"}}, "required": ["account_identity", "assignment_revision", "cloud_id", "cloud_revision", "connection_id", "provider", "target_id", "target_name", "target_revision"]};

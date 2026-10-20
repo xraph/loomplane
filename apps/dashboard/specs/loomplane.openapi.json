@@ -3051,11 +3051,17 @@
           "step"
         ],
         "properties": {
+          "adopt_cloud_placement": {
+            "type": "boolean"
+          },
           "changes": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Change"
             }
+          },
+          "cloud_adoption": {
+            "$ref": "#/components/schemas/CloudAdoption"
           },
           "connection_id": {
             "type": "string"
@@ -3294,6 +3300,20 @@
         ],
         "type": "object",
         "x-forge-envelope": "analyses"
+      },
+      "AppliedInputs": {
+        "type": "object",
+        "properties": {
+          "artifact_key": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PlanSource"
+          },
+          "variables": {
+            "type": "string"
+          }
+        }
       },
       "Backup": {
         "type": "object",
@@ -3589,6 +3609,33 @@
           }
         }
       },
+      "CloudAdoption": {
+        "type": "object",
+        "required": [
+          "binding_id",
+          "external_id",
+          "revision",
+          "plan_id",
+          "config_digest"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "config_digest": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
       "CloudForm": {
         "type": "object",
         "required": [
@@ -3631,6 +3678,52 @@
             "items": {
               "$ref": "#/components/schemas/CloudForm"
             }
+          }
+        }
+      },
+      "CloudPlacement": {
+        "type": "object",
+        "required": [
+          "cloud_id",
+          "cloud_revision",
+          "assignment_revision",
+          "target_id",
+          "target_revision",
+          "target_name",
+          "provider",
+          "connection_id",
+          "account_identity"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "assignment_revision": {
+            "type": "integer"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "cloud_revision": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "target_revision": {
+            "type": "integer"
           }
         }
       },
@@ -4292,6 +4385,9 @@
             "properties": {
               "build": {
                 "$ref": "#/components/schemas/Build"
+              },
+              "cloud_target": {
+                "type": "string"
               },
               "enabled": {
                 "type": "boolean"
@@ -5136,6 +5232,9 @@
           "catalog": {
             "type": "boolean"
           },
+          "cloud_sync_id": {
+            "type": "string"
+          },
           "connections": {
             "type": "object",
             "additionalProperties": true
@@ -5291,6 +5390,9 @@
           },
           "in_scope": {
             "type": "boolean"
+          },
+          "ref": {
+            "type": "string"
           },
           "repository": {
             "type": "string"
@@ -5719,6 +5821,9 @@
           },
           "revision": {
             "type": "string"
+          },
+          "volume_size_mb": {
+            "type": "integer"
           }
         }
       },
@@ -6207,6 +6312,9 @@
           "public"
         ],
         "properties": {
+          "applied_inputs": {
+            "$ref": "#/components/schemas/AppliedInputs"
+          },
           "build": {
             "type": "string"
           },
@@ -6215,6 +6323,9 @@
           },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
+          },
+          "cloud_placement": {
+            "$ref": "#/components/schemas/CloudPlacement"
           },
           "commit_sha": {
             "type": "string"
