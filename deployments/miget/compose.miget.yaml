@@ -1,0 +1,29 @@
+# Miget layers this onto compose.yaml at deploy time. Plain docker compose
+# ignores it. Reference: https://docs.miget.com/deployments/docker-compose-stacks
+x-production: &production
+  LOOMPLANE_ENVIRONMENT: production
+  LOOMPLANE_PUBLIC_URL: ${{loomplane.public_url}}
+  LOOMPLANE_DATABASE_URL: ${{db.url}}
+
+services:
+  loomplane:
+    x-miget:
+      ram: "1Gi"
+    environment: *production
+
+  loomplane-worker:
+    x-miget:
+      ram: "1Gi"
+      private: true
+    environment: *production
+
+  db:
+    x-miget:
+      managed: postgres
+      cpu: "500m"
+      ram: "1Gi"
+      storage: "5Gi"
+
+volumes:
+  artifacts:
+    x-miget: { size: "5Gi", type: RWO }
