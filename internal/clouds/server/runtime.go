@@ -310,7 +310,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			ports[key] = []map[string]string{{"HostIp": host, "HostPort": hostPort}}
 		}
 	}
-	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": map[string]any{"Mounts": mounts, "RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
+	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": map[string]any{"Init": true, "Mounts": mounts, "RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
 	if len(spec.Command) > 0 {
 		body["Entrypoint"] = spec.Command
 	}

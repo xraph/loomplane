@@ -69,7 +69,7 @@ func TestNativeRecovery(t *testing.T) {
 					}
 				})
 				runArgs := make([]string, 0, 32)
-				runArgs = append(runArgs, "run", "--detach", "--name", name, "--network", "none", "--mount", "type=volume,source="+volume+",target=/var/lib/mysql", "--env", "MYSQL_DATABASE=app_db", "--env", "MYSQL_ROOT_PASSWORD="+password, "--env", "MARIADB_DATABASE=app_db", "--env", "MARIADB_ROOT_PASSWORD="+password, "--env", "LOOMPLANE_APP_PASSWORD="+password, recipe.Image)
+				runArgs = append(runArgs, "run", "--init", "--detach", "--name", name, "--network", "none", "--mount", "type=volume,source="+volume+",target=/var/lib/mysql", "--env", "MYSQL_DATABASE=app_db", "--env", "MYSQL_ROOT_PASSWORD="+password, "--env", "MARIADB_DATABASE=app_db", "--env", "MARIADB_ROOT_PASSWORD="+password, "--env", "LOOMPLANE_APP_PASSWORD="+password, recipe.Image)
 				docker(append(runArgs, recipe.RuntimeArgs(suffix == "-copy")...)...)
 				db := Database{Engine: engine, Name: "app_db", Recovery: suffix == "-copy", Run: func(ctx context.Context, args []string, out io.Writer) error {
 					command := exec.CommandContext(ctx, "docker", append([]string{"--host", "unix://" + os.Getenv("LOOMPLANE_TEST_DOCKER_SOCKET"), "exec", name}, args...)...)

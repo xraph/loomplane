@@ -111,6 +111,10 @@ func TestRuntime_injectsSecretsThroughDockerAndKeepsPrivateAddress(t *testing.T)
 	if strings.Contains(string(encoded), "private-runtime-token") {
 		t.Fatal("runtime secret entered lifecycle labels")
 	}
+	host, ok := create["HostConfig"].(map[string]any)
+	if !ok || host["Init"] != true {
+		t.Fatal("managed containers need an init process to reap orphaned children")
+	}
 }
 
 // The fixture applies a mutation before returning an error, like a lost daemon response.
