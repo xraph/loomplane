@@ -41,13 +41,13 @@ func TestRegistry_capabilities(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "server", "kubernetes"}},
-		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "server", "kubernetes"}},
-		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "server", "kubernetes"}},
-		{"postgres", names(r.Provisioning("postgres")), []string{"render", "cloud-sql", "rds", "server", "kubernetes"}},
-		{"mysql", names(r.Provisioning("mysql")), []string{"cloud-sql", "rds", "server"}},
+		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "server", "kubernetes"}},
+		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "server", "kubernetes"}},
+		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "server", "kubernetes"}},
+		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "server", "kubernetes"}},
+		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "server"}},
 		{"mariadb", names(r.Provisioning("mariadb")), []string{"server"}},
-		{"redis", names(r.Provisioning("redis")), []string{"render", "memorystore", "elasticache"}},
+		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache"}},
 		{"kafka", names(r.Provisioning("kafka")), nil},
 	}
 	for _, tt := range tests {

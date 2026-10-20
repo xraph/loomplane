@@ -37,6 +37,17 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 			return ""
 		}
 		keys = []string{"owner_id"}
+	case DigitalOcean:
+		// A token belongs to one team; an account outside any team is
+		// its own scope.
+		if strings.TrimSpace(details["team_uuid"]) != "" {
+			keys = []string{"team_uuid"}
+		} else {
+			if strings.TrimSpace(details["account_uuid"]) == "" {
+				return ""
+			}
+			keys = []string{"account_uuid"}
+		}
 	case AWS:
 		if strings.TrimSpace(account) == "" || strings.TrimSpace(details["region"]) == "" {
 			return ""
@@ -70,6 +81,8 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 		// User and team IDs already identify their scopes, including renames.
 	case Render:
 		// The verified owner ID identifies this workspace.
+	case DigitalOcean:
+		// The verified team or account UUID identifies this scope.
 	case Kubernetes:
 		if scope["endpoint"] == "" || scope["namespace"] == "" {
 			scope["account"] = account

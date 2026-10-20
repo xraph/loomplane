@@ -105,6 +105,7 @@ describe("cloudCatalogue", () => {
       "aws",
       "vercel",
       "render",
+      "digitalocean",
     ])
   })
 })

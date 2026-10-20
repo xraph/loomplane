@@ -19,6 +19,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/clouds/aws"
+	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
@@ -92,13 +93,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	log := e.Logger()
 	checkers := map[string]connections.Checker{
-		connections.GCP:        connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
-		connections.Vercel:     connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
-		connections.AWS:        connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
-		connections.Render:     connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
-		connections.Server:     connections.ServerChecker{},
-		connections.Kubernetes: connections.KubernetesChecker{},
-		connections.Registry:   connections.RegistryChecker{},
+		connections.GCP:          connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
+		connections.Vercel:       connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		connections.AWS:          connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
+		connections.Render:       connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
+		connections.DigitalOcean: connections.DigitalOceanChecker{Client: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)},
+		connections.Server:       connections.ServerChecker{},
+		connections.Kubernetes:   connections.KubernetesChecker{},
+		connections.Registry:     connections.RegistryChecker{},
 	}
 	// A provider plugin's cloud is connected through the plugin.
 	plugs, err := e.plugins.Plugins()

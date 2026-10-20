@@ -15,13 +15,14 @@ import (
 // catalog (internal/providers), so a target's cloud names the connection
 // it deploys with.
 const (
-	GCP        = "gcp"
-	Vercel     = "vercel"
-	AWS        = "aws"
-	Render     = "render"
-	Server     = "server"
-	Kubernetes = "kubernetes"
-	Registry   = "registry"
+	GCP          = "gcp"
+	Vercel       = "vercel"
+	AWS          = "aws"
+	Render       = "render"
+	DigitalOcean = "digitalocean"
+	Server       = "server"
+	Kubernetes   = "kubernetes"
+	Registry     = "registry"
 )
 
 // Statuses. A connection is checked when it's made and whenever someone

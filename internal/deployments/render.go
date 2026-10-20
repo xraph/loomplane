@@ -166,7 +166,7 @@ func repositoryFor(job *Job) (string, error) {
 		}
 	}
 	if found == "" {
-		return "", errors.New("render builds from the repository, and the deployment doesn't say which one this service is in")
+		return "", errors.New("this target builds from the repository, and the deployment doesn't say which one this service is in")
 	}
 	return found, nil
 }

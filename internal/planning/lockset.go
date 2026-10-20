@@ -27,7 +27,7 @@ func lockset(sources []*discovery.Source, latest map[string]*discovery.Analysis,
 	}
 	out := make([]PlanSource, 0, len(sources))
 	for _, s := range sources {
-		ps := PlanSource{SourceID: s.ID, Alias: s.Alias, Repository: s.Repository, Root: s.Root, InScope: len(moves) == 0 || moves[s.Alias]}
+		ps := PlanSource{SourceID: s.ID, Alias: s.Alias, Repository: s.Repository, Root: s.Root, Ref: s.Ref, InScope: len(moves) == 0 || moves[s.Alias]}
 		if ps.InScope {
 			a := latest[s.ID]
 			if a == nil {

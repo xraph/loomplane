@@ -26,6 +26,9 @@ var (
 		"eu-central-1", "eu-north-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1",
 	}
 	renderRegions = []string{"oregon", "ohio", "virginia", "frankfurt", "singapore"}
+	// App Platform's regions. Managed Databases go in each one's
+	// datacenter.
+	digitalOceanRegions = []string{"nyc", "sfo", "tor", "atl", "ams", "fra", "lon", "blr", "sgp", "syd"}
 )
 
 // Catalog returns the built-in targets, in the order a person choosing one
@@ -91,6 +94,25 @@ func Catalog() []provider.Provider {
 				{Kind: "redis", Creates: "Render Key Value instance"},
 			},
 			Regions: renderRegions, Scaling: true,
+			Available: true,
+		},
+		{
+			Name: "digitalocean", Title: "DigitalOcean App Platform", Cloud: "digitalocean",
+			BuildLogs: "unavailable", LogNote: "App Platform's build logs are on the app's Activity tab in DigitalOcean; progress remains available.",
+			Description: "Builds and runs services, workers and static sites from your repository on App Platform, checking each build is the commit you approved, and provisions Managed PostgreSQL, MySQL and Valkey alongside them.",
+			Model:       provider.Build,
+			Runs: []provider.Runs{
+				{Workload: provider.HTTPService, Execution: provider.Container, Creates: "App Platform app"},
+				{Workload: provider.WebApp, Execution: provider.Container, Creates: "App Platform app"},
+				{Workload: provider.Worker, Execution: provider.Container, Creates: "App Platform app with a worker"},
+				{Workload: provider.StaticSite, Execution: provider.Static, Creates: "App Platform static site"},
+			},
+			Provisions: []provider.Provisions{
+				{Kind: "postgres", Creates: "Managed PostgreSQL cluster", Versions: []string{"17", "16", "15"}},
+				{Kind: "mysql", Creates: "Managed MySQL cluster", Versions: []string{"8"}},
+				{Kind: "redis", Creates: "Managed Valkey cluster"},
+			},
+			Regions: digitalOceanRegions, Scaling: true,
 			Available: true,
 		},
 		{

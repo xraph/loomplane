@@ -96,9 +96,9 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 	}
 	for _, ps := range p.Sources {
 		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_plan_sources
-			(plan_id, source_id, alias, repository, root, analysis_id, commit_sha, in_scope)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			p.ID, ps.SourceID, ps.Alias, ps.Repository, ps.Root, ps.AnalysisID, ps.CommitSHA, ps.InScope); err != nil {
+			(plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			p.ID, ps.SourceID, ps.Alias, ps.Repository, ps.Root, ps.Ref, ps.AnalysisID, ps.CommitSHA, ps.InScope); err != nil {
 			return nil, fmt.Errorf("insert plan source %s: %w", ps.Alias, err)
 		}
 	}
@@ -185,7 +185,7 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 		ids[i], by[p.ID] = p.ID, p
 		p.Sources = []PlanSource{}
 	}
-	rows, err := s.db.Query(ctx, `SELECT plan_id, source_id, alias, repository, root, analysis_id, commit_sha, in_scope
+	rows, err := s.db.Query(ctx, `SELECT plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope
 		FROM loomplane_plan_sources WHERE plan_id = ANY($1) ORDER BY plan_id, alias COLLATE "C"`, ids)
 	if err != nil {
 		return fmt.Errorf("load plan sources: %w", err)
@@ -194,7 +194,7 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 	for rows.Next() {
 		var planID string
 		var ps PlanSource
-		if err := rows.Scan(&planID, &ps.SourceID, &ps.Alias, &ps.Repository, &ps.Root, &ps.AnalysisID, &ps.CommitSHA, &ps.InScope); err != nil {
+		if err := rows.Scan(&planID, &ps.SourceID, &ps.Alias, &ps.Repository, &ps.Root, &ps.Ref, &ps.AnalysisID, &ps.CommitSHA, &ps.InScope); err != nil {
 			return fmt.Errorf("scan plan source: %w", err)
 		}
 		by[planID].Sources = append(by[planID].Sources, ps)

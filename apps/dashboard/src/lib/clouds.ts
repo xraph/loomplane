@@ -37,6 +37,11 @@ export const clouds = {
     credential: "API key",
     account: "Workspace",
   },
+  digitalocean: {
+    label: "DigitalOcean",
+    credential: "API token",
+    account: "Team",
+  },
 } as const
 
 export type Cloud = keyof typeof clouds

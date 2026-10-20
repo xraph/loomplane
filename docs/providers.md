@@ -1,6 +1,6 @@
 # Writing a provider
 
-A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel, ECS on Fargate, Render, SSH/Docker servers and Kubernetes for services, and Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage and S3 for resources. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
+A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel, ECS on Fargate, Render, DigitalOcean App Platform, SSH/Docker servers and Kubernetes for services, and Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage, S3 and DigitalOcean Managed Databases for resources. The [DigitalOcean guide](digitalocean.md) covers how App Platform deploys an approved commit when it can only build a branch. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
 
 ## Your servers and clusters
 
@@ -52,6 +52,7 @@ Replace those connection IDs with the ones you saved. Forge HTTP apps without a 
 | Cloud Run | Polled Cloud Build entries from Cloud Logging |
 | ECS on Fargate | Polled CodeBuild output from its exact CloudWatch log stream |
 | Render | Progress only; its published log API cannot isolate one concurrent deployment |
+| DigitalOcean App Platform | Progress only; build logs stay on the app's Activity tab |
 | Provider plugin | Optional operation logs through the SDK |
 
 Log access is independent of deployment access. A denied or interrupted collector shows unavailable or incomplete output while the deployment keeps its own status. Logs retain source, action and attempt IDs; retries preserve earlier output. Repeated provider records use stable IDs so reconnects do not duplicate them.

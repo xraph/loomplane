@@ -242,6 +242,8 @@ type CloudsConfig struct {
 	AWSEndpoint string
 	// RenderEndpoint replaces Render's API.
 	RenderEndpoint string
+	// DigitalOceanEndpoint replaces DigitalOcean's API.
+	DigitalOceanEndpoint string
 }
 
 // Bounds on the approval window: long enough to reach a person, short
@@ -369,6 +371,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.GoogleEndpoint, "clouds.google_endpoint")
 	r.str(&c.Clouds.VercelEndpoint, "clouds.vercel_endpoint")
 	r.str(&c.Clouds.RenderEndpoint, "clouds.render_endpoint")
+	r.str(&c.Clouds.DigitalOceanEndpoint, "clouds.digitalocean_endpoint")
 	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")

@@ -58,6 +58,10 @@ func (e *Extension) clouds() (CloudList, error) {
 			Help:     "Create one in Render under Account settings, API keys. Render builds from your repositories through its own GitHub connection, so give it access to them there too. The workspace ID is only needed when the key reaches more than one.",
 			Settings: []sdk.Setting{{Key: "owner_id", Label: "Workspace ID"}},
 		},
+		{
+			Cloud: connections.DigitalOcean, Title: "DigitalOcean", Credential: "API token",
+			Help: "Create a personal access token in DigitalOcean under API, Tokens, with read and write access to App Platform and Databases. App Platform builds from your repositories through DigitalOcean's own GitHub connection, so give it access to them under Settings, GitHub. The token's team is where everything is made.",
+		},
 	}}
 	plugs, err := e.plugins.Plugins()
 	if err != nil {

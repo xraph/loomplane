@@ -85,10 +85,11 @@ export const cloudPurposes: Record<string, string> = {
   aws: "ECS on Fargate, RDS, ElastiCache and S3",
   vercel: "Web apps and static sites",
   render: "Web services, workers, Postgres and Key Value",
+  digitalocean: "App Platform, Managed PostgreSQL, MySQL and Valkey",
 }
 
 // The built-in clouds, for while the API's list is on its way.
-const builtinClouds = ["gcp", "aws", "vercel", "render"]
+const builtinClouds = ["gcp", "aws", "vercel", "render", "digitalocean"]
 
 /**
  * cloudCatalogue is a tile for each cloud a connection can be made to, in

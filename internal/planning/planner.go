@@ -67,7 +67,7 @@ type ConnectionOption struct {
 var connectionRegions = map[string]bool{"aws": true}
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {

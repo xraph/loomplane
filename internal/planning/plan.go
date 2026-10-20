@@ -277,6 +277,10 @@ type PlanSource struct {
 	Root       string `json:"root"`
 	AnalysisID string `json:"analysis_id"`
 	CommitSHA  string `json:"commit_sha"`
+	// Ref is the branch the project reads this repository from, "" for
+	// its default branch. Targets that build from a branch, not a commit,
+	// such as DigitalOcean App Platform, need it.
+	Ref string `json:"ref,omitempty"`
 	// InScope says whether the plan moves this repository. One it holds
 	// stays at what's deployed.
 	InScope bool `json:"in_scope"`

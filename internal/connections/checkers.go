@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
+	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/registry"
@@ -148,13 +149,48 @@ func (r RenderChecker) Check(ctx context.Context, credential []byte, settings ma
 	return Check{}, fmt.Errorf("%w: the key reaches %d workspaces, %s; set owner_id to the one to deploy in", ErrInvalid, len(owners), strings.Join(names, ", "))
 }
 
+// DigitalOceanChecker checks DigitalOcean API tokens. It needs no
+// settings: a token belongs to one team, and that's where it deploys.
+type DigitalOceanChecker struct{ Client *digitalocean.Client }
+
+// Parse implements Checker.
+func (d DigitalOceanChecker) Parse(credential []byte, _ map[string]string) (Check, error) {
+	if err := digitalocean.CheckToken(string(credential)); err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return Check{Details: map[string]string{}}, nil
+}
+
+// Check implements Checker: it asks DigitalOcean whose token it is. A
+// locked account can't create anything, so it's refused.
+func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
+	c, err := d.Parse(credential, settings)
+	if err != nil {
+		return Check{}, err
+	}
+	a, err := d.Client.Account(ctx, strings.TrimSpace(string(credential)))
+	if err != nil {
+		return Check{}, err
+	}
+	if a.Status == "locked" {
+		return Check{}, fmt.Errorf("%w: the account %s is locked", digitalocean.ErrRejected, a.Email)
+	}
+	c.Account, c.Details["account_uuid"] = a.Email, a.UUID
+	if a.Team != nil && a.Team.UUID != "" {
+		c.Account, c.Details["team_uuid"] = a.Team.Name, a.Team.UUID
+	}
+	return c, nil
+}
+
 // rejected reports whether a check failed because the cloud refused the
 // credential, as opposed to the cloud being unreachable.
 func rejected(err error) bool {
 	var ge *gcp.APIError
 	var ve *vercel.APIError
 	var re *render.APIError
-	return errors.Is(err, render.ErrRejected) || errors.As(err, &re) || errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
+	var de *digitalocean.APIError
+	return errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
+		errors.Is(err, digitalocean.ErrRejected) || errors.As(err, &de) || errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
 		errors.Is(err, server.ErrRejected) || errors.Is(err, kubernetes.ErrRejected) || errors.Is(err, registry.ErrRejected) ||
 		errors.Is(err, aws.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
 		errors.As(err, &ge) || errors.As(err, &ve)
