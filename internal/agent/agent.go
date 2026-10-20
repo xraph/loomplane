@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/runtimecatalog"
 	"github.com/xraph/loomplane/internal/workloadidentity"
 	domain "github.com/xraph/loomplane/pkg/federation"
@@ -120,7 +121,12 @@ func (a *Agent) watch(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if applyErr != nil {
-			return applyErr
+			if terminal(applyErr) || (!errors.Is(applyErr, access.ErrSnapshot) && !errors.Is(applyErr, access.ErrPolicy) && !errors.Is(applyErr, access.ErrPolicyReplay)) {
+				return applyErr
+			}
+			// Rejected policy cannot extend the installed lease. Reconnect for a
+			// fresh snapshot while the receiver keeps its bounded previous state.
+			err = ErrUnavailable
 		}
 		if terminal(err) {
 			return err

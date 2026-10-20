@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/sqlitedriver"
 
+	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/workloadidentity"
 	domain "github.com/xraph/loomplane/pkg/federation"
 )
@@ -25,11 +26,16 @@ var ErrClosed = errors.New("agent requires fresh authenticated enrollment")
 // Store reserves observation numbers durably before publication. SQLite's write
 // lock also serializes separate processes; a newer epoch fences an older process.
 type Store struct {
-	mu       sync.Mutex
-	db       *sqlitedriver.SqliteDB
-	identity domain.AgentIdentity
-	active   bool
-	epoch    int64
+	mu                  sync.Mutex
+	db                  *sqlitedriver.SqliteDB
+	identity            domain.AgentIdentity
+	active              bool
+	epoch               int64
+	policy              *access.PolicyState
+	policyTrust         *access.SnapshotTrust
+	policyStop          chan struct{}
+	policyWatchers      sync.WaitGroup
+	policyCheckInterval time.Duration
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -86,7 +92,7 @@ func OpenStore(path string) (*Store, error) {
 func (s *Store) Activate(identity domain.AgentIdentity) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.active = false
+	s.deactivateLocked()
 	parsed, err := workloadidentity.ParseAgentURI(identity.URI)
 	if err != nil || parsed != identity || identity.Epoch > math.MaxInt64 {
 		return ErrClosed
@@ -112,29 +118,31 @@ func (s *Store) NextSequence(ctx context.Context) (uint64, error) {
 	var sequence int64
 	err := s.db.QueryRow(ctx, `UPDATE agent_state SET sequence=sequence+1 WHERE id=1 AND epoch=? AND identity_uri=? AND sequence<? RETURNING sequence`, s.epoch, s.identity.URI, int64(math.MaxInt64)).Scan(&sequence)
 	if errors.Is(err, sql.ErrNoRows) {
-		s.active = false
+		s.deactivateLocked()
 		return 0, ErrClosed
 	}
 	if err != nil {
-		s.active = false
+		s.deactivateLocked()
 		return 0, err
 	}
 	if sequence < 1 {
-		s.active = false
+		s.deactivateLocked()
 		return 0, ErrClosed
 	}
 	return uint64(sequence), nil
 }
 func (s *Store) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.active = false
-	return s.db.Close()
+	s.deactivateLocked()
+	err := s.db.Close()
+	s.mu.Unlock()
+	s.policyWatchers.Wait()
+	return err
 }
 
 // Deactivate closes process-local authority without changing durable sequence or epoch.
 func (s *Store) Deactivate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.active = false
+	s.deactivateLocked()
 }
