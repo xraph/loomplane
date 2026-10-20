@@ -202,7 +202,7 @@ func (v VerifiedSnapshot) Deadline() time.Time { return v.deadline }
 // Version 1 signs compact encoding/json output of Snapshot with Signature=nil.
 // The fixed schema and domain separator are shared by both Go protocol peers.
 func snapshotPayload(snapshot domain.Snapshot, now time.Time) ([]byte, error) {
-	if !snapshot.Valid() || !domain.ValidIdentitySegment(snapshot.DestinationID) || snapshot.Epoch == 0 || snapshot.Sequence == 0 || !snapshot.Full || snapshot.NextCursor != "" || !validRevision(snapshot.Revision) || !validRevision(snapshot.Policy.Revision) || len(snapshot.Endpoints)+len(snapshot.Tombstones) > domain.MaxSnapshotRecords || len(snapshot.Policy.Grants) > domain.MaxSnapshotRecords {
+	if !snapshot.Valid() || !domain.ValidIdentitySegment(snapshot.DestinationID) || snapshot.Epoch == 0 || snapshot.Sequence == 0 || !snapshot.Full || snapshot.NextCursor != "" || !validRevision(snapshot.Revision) || !validRevision(snapshot.Policy.Revision) || len(snapshot.Endpoints)+len(snapshot.Tombstones) > domain.MaxSnapshotRecords || len(snapshot.Policy.Grants)+len(snapshot.Policy.Exports) > domain.MaxSnapshotRecords || snapshot.Policy.Scope != snapshot.Scope || snapshot.Policy.Generation == 0 {
 		return nil, ErrSnapshot
 	}
 	if !validSnapshotWindow(snapshot.IssuedAt, snapshot.ExpiresAt, now) || !validSnapshotWindow(snapshot.IssuedAt, snapshot.Policy.ExpiresAt, now) {
@@ -216,6 +216,11 @@ func snapshotPayload(snapshot domain.Snapshot, now time.Time) ([]byte, error) {
 	}
 	for _, tombstone := range snapshot.Tombstones {
 		if !sameOrganization(tombstone.Scope) {
+			return nil, ErrSnapshot
+		}
+	}
+	for _, export := range snapshot.Policy.Exports {
+		if !sameOrganization(export.Scope) {
 			return nil, ErrSnapshot
 		}
 	}

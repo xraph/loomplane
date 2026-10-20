@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
 
 	domain "github.com/xraph/loomplane/pkg/federation"
@@ -74,7 +73,6 @@ type FederationPlacement struct {
 }
 
 var destinationRE = regexp.MustCompile(`^dest_[0-7][0-9a-hjkmnp-tv-z]{25}$`)
-var grpcMethodRE = regexp.MustCompile(`^/[A-Za-z_][A-Za-z0-9_.]*/[A-Za-z_][A-Za-z0-9_]*$`)
 
 // ValidateFederation checks bounded references and protocol-specific selectors.
 // Cross-environment and cross-organization grants are unavailable in this format;
@@ -209,17 +207,17 @@ func ValidateFederation(m *Manifest) Problems {
 			add(path, "gRPC selectors require protocol grpc")
 		}
 		for _, method := range g.Methods {
-			if !slices.Contains([]string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"}, method) {
+			if !domain.ValidHTTPMethod(method) {
 				add(path+".methods", "invalid HTTP method")
 			}
 		}
 		for _, p := range g.Paths {
-			if len(p) > 1024 || !probePathRE.MatchString(p) || strings.HasPrefix(p, "//") {
+			if !domain.ValidHTTPPath(p) {
 				add(path+".paths", "must be exact absolute paths of at most 1024 bytes")
 			}
 		}
 		for _, method := range g.GRPCMethods {
-			if len(method) > 256 || !grpcMethodRE.MatchString(method) {
+			if !domain.ValidGRPCMethod(method) {
 				add(path+".grpc_methods", "must be exact /package.Service/Method names")
 			}
 		}

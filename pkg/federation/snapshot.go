@@ -210,13 +210,17 @@ type CleanupOperation struct {
 // PolicyInput contains scoped exports and explicit grants for compilation.
 type PolicyInput struct {
 	Scope
-	Exports []ServiceExport `json:"exports"`
-	Grants  []AccessGrant   `json:"grants"`
+	Generation uint64          `json:"generation"`
+	Exports    []ServiceExport `json:"exports"`
+	Grants     []AccessGrant   `json:"grants"`
 }
 
 // PolicyBundle carries a versioned policy with a bounded lifetime.
 type PolicyBundle struct {
-	Revision  string        `json:"revision"`
-	ExpiresAt time.Time     `json:"expires_at"`
-	Grants    []AccessGrant `json:"grants"`
+	Scope
+	Generation uint64          `json:"generation"`
+	Exports    []ServiceExport `json:"exports"`
+	Revision   string          `json:"revision"`
+	ExpiresAt  time.Time       `json:"expires_at"`
+	Grants     []AccessGrant   `json:"grants"`
 }

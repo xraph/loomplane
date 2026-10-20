@@ -29,7 +29,7 @@ func snapshotFixture(t *testing.T) (*SnapshotSigner, *SnapshotTrust, domain.Snap
 		t.Fatal(err)
 	}
 	agent := domain.AgentIdentity{Scope: scope, DestinationID: "destination", AgentID: "agent", Epoch: 2, URI: "spiffe://example.test/loomplane/org/o/project/p/environment/e/destination/destination/agent/agent/epoch/2"}
-	snapshot := domain.Snapshot{Scope: scope, DestinationID: agent.DestinationID, Epoch: agent.Epoch, Sequence: 3, Revision: "revision", Full: true, IssuedAt: now, ExpiresAt: now.Add(time.Minute), Policy: domain.PolicyBundle{Revision: "policy", ExpiresAt: now.Add(time.Minute), Grants: []domain.AccessGrant{{Metadata: domain.Metadata{Scope: scope, ID: "grant", Generation: 1}, ExportID: "export", Source: domain.WorkloadSelector{Scope: scope, DestinationID: "source", ServiceID: "caller"}, Port: 443, Protocol: domain.HTTP, HTTPMethods: []string{"GET"}}}}, Endpoints: []domain.Endpoint{{Metadata: domain.Metadata{Scope: scope, ID: "endpoint", Generation: 1}, Address: "10.20.0.2", Port: 443}}}
+	snapshot := domain.Snapshot{Scope: scope, DestinationID: agent.DestinationID, Epoch: agent.Epoch, Sequence: 3, Revision: "revision", Full: true, IssuedAt: now, ExpiresAt: now.Add(time.Minute), Policy: domain.PolicyBundle{Scope: scope, Generation: 1, Revision: "policy", ExpiresAt: now.Add(time.Minute), Grants: []domain.AccessGrant{{Metadata: domain.Metadata{Scope: scope, ID: "grant", Generation: 1}, ExportID: "export", Source: domain.WorkloadSelector{Scope: scope, DestinationID: "source", ServiceID: "caller"}, Port: 443, Protocol: domain.HTTP, HTTPMethods: []string{"GET"}}}}, Endpoints: []domain.Endpoint{{Metadata: domain.Metadata{Scope: scope, ID: "endpoint", Generation: 1}, Address: "10.20.0.2", Port: 443}}}
 	return signer, trust, snapshot, agent, now
 }
 func TestSnapshotSignatureCoversPayload(t *testing.T) {
@@ -346,4 +346,22 @@ func TestSnapshotTrustConcurrentRefresh(t *testing.T) {
 		}
 	}
 	readers.Wait()
+}
+
+func TestSnapshotRejectsUnscopedPolicyContracts(t *testing.T) {
+	for _, mutate := range []func(*domain.Snapshot){
+		func(s *domain.Snapshot) { s.Policy.ProjectID = "other" },
+		func(s *domain.Snapshot) { s.Policy.Generation = 0 },
+		func(s *domain.Snapshot) {
+			s.Policy.Exports = []domain.ServiceExport{{Metadata: domain.Metadata{Scope: domain.Scope{OrgID: "foreign", ProjectID: "p", EnvironmentID: "e"}}}}
+		},
+	} {
+		signer, _, snapshot, _, now := snapshotFixture(t)
+		snapshot.Policy.Scope = snapshot.Scope
+		snapshot.Policy.Generation = 1
+		mutate(&snapshot)
+		if _, err := signer.Sign(snapshot, now); err == nil {
+			t.Fatal("unscoped policy signed")
+		}
+	}
 }
