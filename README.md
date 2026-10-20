@@ -125,7 +125,7 @@ Start with [config.yaml](config.yaml); your own overrides go in `config.local.ya
 
 | Variable | Default | |
 |---|---|---|
-| `LOOMPLANE_DATABASE_URL` | required | PostgreSQL |
+| `LOOMPLANE_DATABASE_URL` | required | PostgreSQL. Falls back to `DATABASE_URL`, which platforms like App Platform and Render set for you |
 | `LOOMPLANE_SECRET_KEY` | development key | 32 random bytes, base64 (`openssl rand -base64 32`). Every credential and secret is encrypted with keys derived from it, so keep it safe and away from backups. |
 | `LOOMPLANE_PUBLIC_URL` | `http://localhost:8780` | Where people reach Loomplane; https in production |
 | `LOOMPLANE_ENVIRONMENT` | `development` | `development`, `staging` or `production` |

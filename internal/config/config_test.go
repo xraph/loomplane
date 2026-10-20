@@ -141,3 +141,16 @@ func TestFromSource_pausedTargetsAsAListOrAString(t *testing.T) {
 		t.Fatal("a number named targets")
 	}
 }
+
+func TestFromSource_fallsBackToThePlatformsDatabaseURL(t *testing.T) {
+	// Heroku, Render, DigitalOcean and Miget hand an app DATABASE_URL.
+	t.Setenv("DATABASE_URL", "postgres://doadmin:pw@db.example.com:25060/defaultdb?sslmode=require")
+	c, err := FromSource(mapGetter{"database.url": ""})
+	if err != nil || c.Database.URL != "postgres://doadmin:pw@db.example.com:25060/defaultdb?sslmode=require" {
+		t.Fatalf("got %q, %v", c.Database.URL, err)
+	}
+	// LOOMPLANE_DATABASE_URL, through database.url, still wins.
+	if c, err = FromSource(mapGetter{"database.url": testDSN}); err != nil || c.Database.URL != testDSN {
+		t.Fatalf("got %q, %v", c.Database.URL, err)
+	}
+}

@@ -264,6 +264,16 @@ func TestDigitalOcean_workersPrivateServicesAndStaticSites(t *testing.T) {
 	}
 }
 
+func TestDigitalOcean_aDockerfileThatBuildsFromTheRoot(t *testing.T) {
+	// Loomplane's own: deployments/docker/Dockerfile, built from the root.
+	cfg := &planning.ServiceConfig{Source: ".", Image: "deployments/docker/Dockerfile", Context: ".", Port: 8780, Public: true,
+		Workload: provider.HTTPService, Execution: provider.Container}
+	svc := doAppSpec(doJob(cfg, ""), cfg, "xraph/loomplane", "main").Services[0]
+	if svc.SourceDir != "/" || svc.DockerfilePath != "deployments/docker/Dockerfile" || svc.HTTPPort != 8780 {
+		t.Fatalf("service %+v", svc)
+	}
+}
+
 func TestDigitalOceanName_fitsAppPlatform(t *testing.T) {
 	valid := regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}[a-z0-9]$`)
 	a := doName("checkout-service-with-a-long-name-staging-0123abcd")

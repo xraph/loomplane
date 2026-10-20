@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -331,6 +332,11 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.SecretKey, "secret_key")
 
 	r.str(&c.Database.URL, "database.url")
+	if c.Database.URL == "" {
+		// Platforms that provision the database, such as Heroku, Render,
+		// DigitalOcean App Platform and Miget, hand the app DATABASE_URL.
+		c.Database.URL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	}
 	r.integer(&c.Database.PoolSize, "database.pool_size")
 
 	r.str(&c.Identity.BasePath, "identity.base_path")
@@ -399,7 +405,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("secret_key must be %d bytes, base64 encoded (openssl rand -base64 32)", secretKeyBytes))
 	}
 	if c.Database.URL == "" {
-		errs = append(errs, errors.New("database.url is required (LOOMPLANE_DATABASE_URL)"))
+		errs = append(errs, errors.New("database.url is required (LOOMPLANE_DATABASE_URL, or DATABASE_URL)"))
 	}
 	if c.Database.PoolSize < 0 {
 		errs = append(errs, errors.New("database.pool_size can't be negative"))

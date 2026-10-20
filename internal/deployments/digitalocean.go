@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -298,7 +299,7 @@ func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digit
 		comp.InstanceCount = max(1, cfg.Scale.Min)
 	}
 	if cfg.Image != "" {
-		comp.DockerfilePath, comp.SourceDir = cfg.Image, "/"+strings.Trim(cfg.ContextDir(), "/")
+		comp.DockerfilePath, comp.SourceDir = cfg.Image, path.Clean("/"+cfg.ContextDir())
 	} else {
 		// App Platform's buildpacks build Node, Go, Python, Ruby, PHP and
 		// more from the source directory; a start command overrides theirs.

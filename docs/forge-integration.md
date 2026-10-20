@@ -91,7 +91,7 @@ Loomplane registers the official extension: `groveext.New` with `WithDSN`, a dri
 
 Limits: migrations aren't transactional, so each Loomplane statement is safe to re-run. Versions are fourteen digits.
 
-Config: `database.url` (`LOOMPLANE_DATABASE_URL`, required), `database.pool_size`.
+Config: `database.url` (`LOOMPLANE_DATABASE_URL`, or `DATABASE_URL` when that's unset; required), `database.pool_size`.
 
 Tests: the integration tests migrate a fresh database, then start again on it and expect nothing to apply.
 
