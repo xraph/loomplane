@@ -90,7 +90,13 @@ func (r *Recipe) RuntimeArgs(recovery bool) []string {
 	}
 	args := []string{"--skip-log-bin"}
 	if recovery {
-		args = append(args, "--event-scheduler=DISABLED")
+		scheduler := "DISABLED"
+		if r.Engine() == "mariadb" {
+			// MariaDB refuses event DDL with DISABLED. OFF permits import;
+			// enabling it still requires global privileges the app lacks.
+			scheduler = "OFF"
+		}
+		args = append(args, "--event-scheduler="+scheduler)
 	}
 	return args
 }

@@ -1,6 +1,8 @@
-# PostgreSQL services
+# Database services
 
 Open **Services** to deploy PostgreSQL 17 on a checked Docker server. Choose a project name and target, leave daily backups enabled if you want them, then select **Deploy PostgreSQL**. Loomplane creates a repository-free project, checks its plan, and approves only the single database creation you requested. Unexpected actions or warnings require normal plan review.
+
+You can also choose **MySQL 8.4** or **MariaDB 11.8** in the database engine selector. Each engine uses its own pinned image and native backup client. The same recovery controls and CLI commands apply to all three Docker profiles.
 
 This profile runs one private PostgreSQL instance with a digest-pinned image, a retained Docker volume and a separate application role. That role cannot create databases or roles and is not a superuser. Database credentials stay in Vault. Applications deployed in the same environment on the same target receive the resource URL through the existing resource binding workflow.
 
@@ -22,11 +24,11 @@ The current transfer path uses 8 MiB chunks, bounded retries and a SHA-256 diges
 
 ## Back up and test recovery
 
-In **Service recovery**, select your project, environment and database. **Back up now** queues a native custom-format PostgreSQL export. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. All recovery points are retained; automatic retention is not implemented.
+In **Service recovery**, select your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. All recovery points are retained; automatic retention is not implemented.
 
 The lists show recovery points and copies for the selected database and environment. If you remove the source service, its backup history and restore controls remain available. Backup creation and scheduling need a live source.
 
-A successful upload initially shows **Not tested**. **Test restore** creates an isolated copy with its own volume and credentials, verifies the file before restoring, runs PostgreSQL's restore command in a transaction, and checks SQL access. A successful copy records its verification time and duration. The live source and application bindings stay in place.
+A successful upload initially shows **Not tested**. **Test restore** creates an isolated copy with its own volume and credentials, verifies the file before restoring, runs the matching restore client, and checks SQL access. PostgreSQL imports run in one transaction; MySQL and MariaDB imports can leave a partial copy on failure, as described below. A successful copy records its verification time and duration. The live source and application bindings stay in place.
 
 Copies have no published ports and use an internal network. They expire after 24 hours; cleanup failures remain visible and retry automatically after an hour. An authorized administrator can retry sooner with **Remove copy**. Scheduled cleanup uses the creator's current permissions; if that access has been revoked, another administrator must finish removal. Removing a copy deletes its temporary volume while preserving the backup and verification record. SQL verification does not establish that your application can recover correctly.
 
@@ -41,7 +43,16 @@ loomctl services create "Application database" --target conn_your_checked_server
 loomctl approve PLAN_ID --yes
 ```
 
-The first command creates a project, saves its resource manifest and returns a plan for review. Approval starts deployment. You can also save a resource-only manifest yourself:
+Select MySQL or MariaDB when you create the service project:
+
+```sh
+loomctl services create "Orders MySQL" --kind mysql --target conn_your_checked_server --json
+loomctl services create "Orders MariaDB" --kind mariadb --target conn_your_checked_server --json
+```
+
+Each command returns a plan for you to review and approve. MySQL uses version `8.4`, and MariaDB uses `11.8`. These choices also work as a resource manifest's `kind` and `version`, with `provider: server`. Changing the engine, image or target of an existing database requires a tested migration into a fresh service.
+
+Service creation saves the resource manifest and returns a plan for review. Approval starts deployment. You can also save a resource-only manifest yourself:
 
 ```yaml
 version: 1
@@ -95,3 +106,11 @@ Backup creation accepts `environment`, `resource` and `request_id`. Restore crea
 ## Qualification boundary
 
 The verified profile is PostgreSQL 17.11 on a checked Docker target, with native logical backups, private recovery copies, and local Trove or the tested isolated MinIO endpoint. AWS S3 acceptance, Kubernetes catalog recovery, high availability, point-in-time recovery, deliberate data destruction, automatic retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
+
+## MySQL and MariaDB recovery
+
+The Docker recipes pin MySQL 8.4.11 and MariaDB 11.8.9. Application credentials grant access to the selected database, without global user-management privileges. Backups use the matching `mysqldump` or `mariadb-dump` client and include database tables, views, routines, triggers and events. Server users and global settings are outside the backup.
+
+Logical snapshots require InnoDB tables. Backup creation refuses other table engines; you must also avoid schema changes while a dump runs because a consistent transaction does not protect concurrent DDL. The profiles disable binary logging and do not provide replication or point-in-time recovery. See the native [MySQL dump guidance](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html) and [MariaDB dump guidance](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump).
+
+A test restore uses a fresh private container, volume and credentials. It verifies the backup bytes before SQL import and imports as the database-scoped application user. Scheduled events remain disabled in the recovery copy, including after restart. MySQL and MariaDB imports can leave a partial copy after an SQL error; the operation records a failure, and you can remove the copy before starting another test. The live source and its application bindings stay in place.

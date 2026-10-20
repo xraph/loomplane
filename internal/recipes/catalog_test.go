@@ -39,7 +39,11 @@ func TestMySQLRecoveryDisablesTimersWithoutBroaderApplicationGrants(t *testing.T
 			t.Fatal(err)
 		}
 		live, recovery := strings.Join(recipe.RuntimeArgs(false), " "), strings.Join(recipe.RuntimeArgs(true), " ")
-		if !strings.Contains(live, "--skip-log-bin") || strings.Contains(live, "event-scheduler") || !strings.Contains(recovery, "--event-scheduler=DISABLED") {
+		scheduler := "DISABLED"
+		if kind == "mariadb" {
+			scheduler = "OFF"
+		}
+		if !strings.Contains(live, "--skip-log-bin") || strings.Contains(live, "event-scheduler") || !strings.Contains(recovery, "--event-scheduler="+scheduler) {
 			t.Fatalf("unsafe native profile arguments: %s, %s", live, recovery)
 		}
 	}

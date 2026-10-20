@@ -3,6 +3,7 @@
 package mysql
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -73,7 +74,13 @@ func TestNativeRecovery(t *testing.T) {
 				db := Database{Engine: engine, Name: "app_db", Recovery: suffix == "-copy", Run: func(ctx context.Context, args []string, out io.Writer) error {
 					command := exec.CommandContext(ctx, "docker", append([]string{"--host", "unix://" + os.Getenv("LOOMPLANE_TEST_DOCKER_SOCKET"), "exec", name}, args...)...)
 					command.Stdout = out
-					return command.Run()
+					var diagnostic bytes.Buffer
+					command.Stderr = &diagnostic
+					command.WaitDelay = 5 * time.Second
+					if err := command.Run(); err != nil {
+						return fmt.Errorf("native %s: %w: %s", args[0], err, diagnostic.String())
+					}
+					return nil
 				}, Upload: func(ctx context.Context, path string, size int64, write func(io.Writer) error) error {
 					local := filepath.Join(t.TempDir(), path)
 					file, err := os.OpenFile(local, os.O_CREATE|os.O_WRONLY, 0o600)
@@ -161,8 +168,26 @@ func TestNativeRecovery(t *testing.T) {
 			if got := query(restored, "CALL read_probe()"); got != "native-recovery" {
 				t.Fatalf("restored procedure: %s", got)
 			}
-			if got := query(restored, "SELECT @@event_scheduler"); got != "DISABLED" {
+			scheduler := "DISABLED"
+			if engine == "mariadb" {
+				scheduler = "OFF"
+			}
+			if got := query(restored, "SELECT @@event_scheduler"); got != scheduler {
 				t.Fatalf("recovery can execute scheduled events: %s", got)
+			}
+			if err := restored.Run(ctx, restored.command(true, "", restored.client(), "--protocol=tcp", "--host=127.0.0.1", "--user=app", "--execute", "SET GLOBAL event_scheduler=ON"), io.Discard); err == nil {
+				t.Fatal("recovery application user can enable timers")
+			}
+			docker("restart", prefix+"-copy")
+			for restored.Ready(ctx) != nil {
+				select {
+				case <-ctx.Done():
+					t.Fatal("recovery restart did not become ready")
+				case <-time.After(time.Second):
+				}
+			}
+			if got := query(restored, "SELECT @@event_scheduler"); got != scheduler {
+				t.Fatalf("restart enabled recovery timers: %s", got)
 			}
 			if got := query(restored, "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema='app_db'"); got != "1" {
 				t.Fatalf("restored trigger: %s", got)
