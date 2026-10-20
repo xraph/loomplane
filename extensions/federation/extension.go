@@ -13,6 +13,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
+	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	domain "github.com/xraph/loomplane/internal/federation"
@@ -59,6 +60,9 @@ func (e *Extension) Register(app forge.App) error {
 	svc := domain.NewService(domain.NewPgStore(pg), connections.NewPgStore(pg), projects.NewPgStore(pg), authz, projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()), e.cfg.Federation.Enabled)
 	if err = forge.ProvideValue(c, svc); err != nil {
 		return fmt.Errorf("provide federation service: %w", err)
+	}
+	if err = forge.ProvideValue(c, domain.NewAccessService(svc, access.NewPolicyStore(pg))); err != nil {
+		return fmt.Errorf("provide federation access service: %w", err)
 	}
 	return nil
 }

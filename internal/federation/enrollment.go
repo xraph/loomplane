@@ -41,22 +41,11 @@ func (s *EnrollmentService) Enroll(ctx context.Context, p security.Principal, re
 	if stepErr := s.destinations.authorize(ctx, p, security.TrustManage, request.DestinationID); stepErr != nil {
 		return nil, stepErr
 	}
-	d, err := s.destinations.store.Get(ctx, p.OrgID, request.DestinationID)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := s.destinations.connection(ctx, p.OrgID, d.ConnectionID)
+	d, err := s.destinations.verifiedDestination(ctx, p.OrgID, request.DestinationID)
 	if err != nil {
 		return nil, err
 	}
 	now := s.destinations.now()
-	identity, err := ConnectionIdentity(conn, now)
-	if err != nil {
-		return nil, err
-	}
-	if d.Quarantined || identity != d.Identity {
-		return nil, ErrIdentityChanged
-	}
 	if !d.Capabilities.Supports(domain.WorkloadAttestation, d.Identity.Revision(), now) {
 		return nil, ErrUnverified
 	}

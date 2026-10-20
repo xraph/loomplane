@@ -197,3 +197,30 @@ func (s *Service) record(ctx context.Context, p security.Principal, action strin
 		s.audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", ProjectID: d.ProjectID, Principal: p, Attributes: map[string]any{"destination_id": d.ID, "generation": d.Generation, "quarantined": d.Quarantined}})
 	}
 }
+
+// verifiedDestination checks identity without writing capabilities. Policy guards
+// call it while holding a policy transaction, so it must remain read-only.
+func (s *Service) verifiedDestination(ctx context.Context, org, id string) (*domain.Destination, error) {
+	if s.store == nil || s.connections == nil {
+		return nil, ErrUnverified
+	}
+	d, err := s.store.Get(ctx, org, id)
+	if err != nil {
+		return nil, err
+	}
+	if d == nil || d.OrgID != org {
+		return nil, ErrNotFound
+	}
+	conn, err := s.connection(ctx, org, d.ConnectionID)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := ConnectionIdentity(conn, s.now())
+	if err != nil {
+		return nil, err
+	}
+	if d.Quarantined || identity != d.Identity {
+		return nil, ErrIdentityChanged
+	}
+	return d, nil
+}
