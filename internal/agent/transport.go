@@ -192,7 +192,7 @@ func (t *Transport) Watch(ctx context.Context, receive func(context.Context, dom
 			return runtimecatalog.ErrInvalid
 		}
 		now := time.Now()
-		if !snapshot.Full || snapshot.NextCursor != "" || snapshot.Scope != t.agent.Scope || snapshot.DestinationID != t.agent.DestinationID || snapshot.Epoch != t.agent.Epoch || !snapshot.ExpiresAt.After(now) || snapshot.IssuedAt.After(now.Add(30*time.Second)) || !snapshot.ExpiresAt.After(snapshot.IssuedAt) || snapshot.ExpiresAt.Sub(snapshot.IssuedAt) > runtimecatalog.EndpointLease || len(snapshot.Endpoints)+len(snapshot.Tombstones) > runtimecatalog.MaxSnapshot {
+		if !snapshot.Full || snapshot.NextCursor != "" || snapshot.Scope != t.agent.Scope || snapshot.DestinationID != t.agent.DestinationID || snapshot.Epoch != t.agent.Epoch || !snapshot.ExpiresAt.After(now) || snapshot.IssuedAt.After(now.Add(domain.MaxClockSkew)) || !snapshot.ExpiresAt.After(snapshot.IssuedAt) || snapshot.ExpiresAt.Sub(snapshot.IssuedAt) > runtimecatalog.EndpointLease || len(snapshot.Endpoints)+len(snapshot.Tombstones) > runtimecatalog.MaxSnapshot {
 			return runtimecatalog.ErrInvalid
 		}
 		delivery, stop := context.WithDeadline(response.Request.Context(), snapshot.ExpiresAt)

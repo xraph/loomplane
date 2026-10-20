@@ -9,5 +9,8 @@ const (
 	RuntimeWatchPath       = "/runtime/v1/watch"
 	MaxObservationBytes    = 2 << 20
 	MaxSnapshotBytes       = 16 << 20
+	MaxSnapshotRecords     = 10000
+	MaxPolicyLease         = 5 * time.Minute
+	MaxClockSkew           = 5 * time.Second
 	RuntimeStreamLifetime  = 30 * time.Second
 )

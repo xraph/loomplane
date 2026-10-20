@@ -122,7 +122,7 @@ func (i *SPIREIssuer) entry(b Binding) (*spiretypes.Entry, error) {
 	selectors := []*spiretypes.Selector{}
 	switch b.Method {
 	case "kubernetes":
-		if b.Destination.Identity.Provider != "kubernetes" || b.NamespaceUID == "" || b.NamespaceUID != b.Destination.Identity.NamespaceUID || len(validation.IsDNS1123Label(b.Namespace)) != 0 || len(validation.IsDNS1123Subdomain(b.ServiceAccount)) != 0 || !identitySegment.MatchString(b.PodUID) || len(validation.IsDNS1123Label(b.Container)) != 0 {
+		if b.Destination.Identity.Provider != "kubernetes" || b.NamespaceUID == "" || b.NamespaceUID != b.Destination.Identity.NamespaceUID || len(validation.IsDNS1123Label(b.Namespace)) != 0 || len(validation.IsDNS1123Subdomain(b.ServiceAccount)) != 0 || !domain.ValidIdentitySegment(b.PodUID) || len(validation.IsDNS1123Label(b.Container)) != 0 {
 			return nil, ErrIdentity
 		}
 		for _, value := range []string{"ns:" + b.Namespace, "sa:" + b.ServiceAccount, "pod-uid:" + b.PodUID, "container-name:" + b.Container} {

@@ -113,10 +113,14 @@ func TestAgentWatchBoundsAndScope(t *testing.T) {
 	}
 	large := snapshot
 	large.Revision = strings.Repeat("x", domain.MaxSnapshotBytes)
+	future := snapshot
+	future.IssuedAt = time.Now().Add(domain.MaxClockSkew + 10*time.Second)
+	future.ExpiresAt = future.IssuedAt.Add(time.Second)
 	cases := []struct {
 		name, body string
 		want       int
 	}{
+		{"future beyond clock bound", encode(future), 0},
 		{"complete", encode(snapshot), 1},
 		{"unknown field", `{"foreign":true}` + "\n", 0},
 		{"too large", encode(large), 0},

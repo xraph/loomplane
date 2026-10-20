@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,8 +20,6 @@ import (
 
 const MaxCredentialLifetime = time.Hour
 
-var identitySegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
-
 // AgentURI is derived from the enrollment record, never from a requested selector.
 func AgentURI(trustDomain string, a domain.AgentIdentity) (string, error) {
 	td, err := spiffeid.TrustDomainFromString(trustDomain)
@@ -30,7 +27,7 @@ func AgentURI(trustDomain string, a domain.AgentIdentity) (string, error) {
 		return "", ErrIdentity
 	}
 	for _, part := range []string{a.OrgID, a.ProjectID, a.EnvironmentID, a.DestinationID, a.AgentID} {
-		if !identitySegment.MatchString(part) {
+		if !domain.ValidIdentitySegment(part) {
 			return "", ErrIdentity
 		}
 	}

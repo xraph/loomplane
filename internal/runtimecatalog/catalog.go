@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,7 +25,7 @@ const (
 	EndpointLease = 30 * time.Second
 	MaxBatch      = 1000
 	MaxRecords    = 10000
-	MaxSnapshot   = 10000
+	MaxSnapshot   = domain.MaxSnapshotRecords
 	MaxPage       = 100
 )
 
@@ -217,11 +216,9 @@ func checkAgent(state *AgentState, agent domain.AgentIdentity) error {
 	return nil
 }
 
-var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
-
-func validID(id string) bool { return identifier.MatchString(id) }
+func validID(id string) bool { return domain.ValidIdentitySegment(id) }
 func validScope(scope domain.Scope) bool {
-	return validID(scope.OrgID) && validID(scope.ProjectID) && validID(scope.EnvironmentID)
+	return scope.Valid()
 }
 func recordGeneration(r Record) int64 {
 	if r.Tombstone != nil {

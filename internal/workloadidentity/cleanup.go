@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
 // Eligibility is rechecked while holding the enrollment row lock. Reserving a
@@ -74,7 +76,7 @@ type CleanupWorker struct {
 }
 
 func (w *CleanupWorker) Run(ctx context.Context) error {
-	if !identitySegment.MatchString(w.OrgID) || w.Store == nil || w.Issuer == nil || w.Interval < 0 {
+	if !domain.ValidIdentitySegment(w.OrgID) || w.Store == nil || w.Issuer == nil || w.Interval < 0 {
 		return ErrIdentity
 	}
 	interval := w.Interval

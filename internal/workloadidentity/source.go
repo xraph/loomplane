@@ -15,6 +15,8 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
+
+	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
 // Source follows Workload API rotation without writing private keys to disk.
@@ -99,7 +101,7 @@ func (s *Source) Domain() string { return s.expected.TrustDomain().Name() }
 func (s *Source) ServerTLS(bundles x509bundle.Source) (*tls.Config, error) {
 	const prefix = controlPathPrefix
 	path := s.expected.Path()
-	if bundles == nil || !strings.HasPrefix(path, prefix) || !identitySegment.MatchString(strings.TrimPrefix(path, prefix)) {
+	if bundles == nil || !strings.HasPrefix(path, prefix) || !domain.ValidIdentitySegment(strings.TrimPrefix(path, prefix)) {
 		return nil, ErrIdentity
 	}
 	org := strings.TrimPrefix(path, prefix)
