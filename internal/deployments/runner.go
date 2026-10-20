@@ -695,10 +695,16 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	old := job.Replaces
 	if old != nil {
-		if out.ExternalID != "" && out.ExternalID == old.ExternalID && old.ConnectionID == connID && (old.Provider != a.Provider || old.Region != a.Region) {
-			return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed", a.Provider, a.Name, placement(a.Provider, a.Region), old.ExternalID)
-		}
 		destination := &planning.Binding{Provider: a.Provider, Region: a.Region, ConnectionID: connID, ExternalID: out.ExternalID}
+		if out.ExternalID != "" && out.ExternalID == old.ExternalID && old.Provider == a.Provider {
+			sameAccount, identityErr := r.sameBindingAccount(ctx, d.OrgID, old, destination)
+			if identityErr != nil {
+				return identityErr
+			}
+			if sameAccount && old.Region != a.Region {
+				return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed", a.Provider, a.Name, placement(a.Provider, a.Region), old.ExternalID)
+			}
+		}
 		same, identityErr := r.sameBindingResource(ctx, d.OrgID, old, destination)
 		if identityErr != nil {
 			return identityErr

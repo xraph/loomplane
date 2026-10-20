@@ -79,3 +79,53 @@ func TestRunnerRemovalCheckpointsPreserveLegacyProgressAndScopeNewProgress(t *te
 		})
 	}
 }
+
+func TestRunnerRegionChangeThroughSameAccountAliasRetainsOriginalResource(t *testing.T) {
+	for _, sameAccount := range []bool{true, false} {
+		t.Run(map[bool]string{true: "same account alias", false: "different accounts"}[sameAccount], func(t *testing.T) {
+			log := &moveLog{}
+			exec := &placed{provider: "vercel", log: log, url: answering(t, http.StatusOK), externalID: "scoped-id"}
+			plan := apiMoves()
+			plan.Actions[0].Op = planning.Replace
+			plan.Actions[0].Region = "new-region"
+			old := &planning.Binding{ID: "bind_api", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject, Name: "api", Provider: "vercel", Region: "old-region", ExternalID: "scoped-id", ConnectionID: "conn_old"}
+			runner, store, plans, _ := moveRunner(t, plan, old, map[string]Executor{"vercel": exec})
+			runner.credentials = bindingIdentityCredentials{sameAccount: sameAccount}
+			id, err := runAll(t, runner, plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			deployment, _ := store.GetDeployment(t.Context(), "org_1", id)
+			bound := plans.bindings["service:api"]
+			if sameAccount {
+				if deployment.Status != StatusFailed || len(exec.removes) != 0 || bound.ConnectionID != "conn_old" || bound.Region != "old-region" {
+					t.Fatalf("retained resource was changed: deployment %+v binding %+v removals %+v", deployment, bound, exec.removes)
+				}
+			} else {
+				if deployment.Status != StatusSucceeded || len(exec.removes) != 1 || exec.removes[0].Connection.ID != "conn_old" || bound.ConnectionID != "conn_v" || bound.Region != "new-region" {
+					t.Fatalf("cross-account move: deployment %+v binding %+v removals %+v", deployment, bound, exec.removes)
+				}
+			}
+		})
+	}
+}
+
+func TestRunnerCleanupNeverDeletesRetainedResourceThroughRegionAlias(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "vercel", log: log}
+	plan := apiMoves()
+	original := &planning.Binding{ID: "bind_api", Provider: "vercel", Region: "old-region", ConnectionID: "conn_old", ExternalID: "scoped-id", Name: "api", Subject: planning.ServiceSubject}
+	serving := *original
+	serving.ConnectionID = "conn_v"
+	serving.Region = "new-region"
+	serving.Replaced = []planning.Binding{*original}
+	runner, _, plans, _ := moveRunner(t, plan, &serving, map[string]Executor{"vercel": exec})
+	runner.credentials = bindingIdentityCredentials{sameAccount: true}
+	job := &Job{Deployment: &Deployment{OrgID: "org_1"}, Plan: plan, Action: plan.Actions[0]}
+	if err := runner.removeReplaced(t.Context(), job, &serving, original, nil, &replaceCheckpoint{}, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(exec.removes) != 0 || len(plans.bindings["service:api"].Replaced) != 0 {
+		t.Fatalf("retained resource cleanup: removes %+v binding %+v", exec.removes, plans.bindings["service:api"])
+	}
+}

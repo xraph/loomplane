@@ -15,8 +15,20 @@ func bindingIdentity(b *planning.Binding) string {
 	v, _ := json.Marshal([]string{b.Provider, b.Region, b.ConnectionID, b.ExternalID}) //nolint:errcheck // A slice of strings always marshals.
 	return string(v)
 }
+
+// Provider outcomes identify retained resources independently of requested region.
+// A region change that returns the original identity is rejected before binding.
 func (r *Runner) sameBindingResource(ctx context.Context, org string, a, b *planning.Binding) (bool, error) {
-	if a == nil || b == nil || a.Provider != b.Provider || a.Region != b.Region || a.ExternalID == "" || a.ExternalID != b.ExternalID {
+	if a == nil || b == nil || a.Provider != b.Provider || a.ExternalID == "" || a.ExternalID != b.ExternalID {
+		return false, nil
+	}
+	return r.sameBindingAccount(ctx, org, a, b)
+}
+
+// sameBindingAccount ignores requested region so aliases cannot disguise an
+// executor retaining the original resource during a move to another region.
+func (r *Runner) sameBindingAccount(ctx context.Context, org string, a, b *planning.Binding) (bool, error) {
+	if a.Provider != b.Provider {
 		return false, nil
 	}
 	if a.ConnectionID == b.ConnectionID {
