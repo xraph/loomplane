@@ -37,4 +37,4 @@ Regression tests cover wrong daemon/namespace identity, foreign ownership, proje
 
 Dashboard typecheck (`tsc -b` and `tsc --noEmit`), lint, all 243 UI tests, generated-client drift checks, the database integration suite and the complete app/CLI build passed. Targeted inventory Go tests passed. Full-repository reruns encountered concurrent native Kubernetes recovery changes outside this slice, first unfinished tests/formatting and then missing module checksums for `k8s.io/streaming` and `github.com/gorilla/websocket`. The inventory files have no reported lint diagnostics. Formatting uses `golangci-lint fmt` on owned Go files and `pnpm --dir apps/dashboard format`; this repository has no `make f` or `make l` aliases.
 
-Managed-provider snapshot inventory, deliberate data destruction, storage expansion and capacity alerts remain separate work in the [service plan](one-click-services-plan.md).
+Managed-provider snapshot inventory, deliberate data destruction, storage expansion and capacity alerts remain separate work.

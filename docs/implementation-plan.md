@@ -1,6 +1,6 @@
 # Implementation plan
 
-Where each milestone in the [brief](plan.md) stands, and what's next. [architecture.md](architecture.md) has the design these steps follow.
+Where each milestone stands, and what's next. [architecture.md](architecture.md) has the design these steps follow.
 
 ## Milestone 0: Forge ecosystem evaluation
 

@@ -95,5 +95,3 @@ Backup creation accepts `environment`, `resource` and `request_id`. Restore crea
 ## Qualification boundary
 
 The verified profile is PostgreSQL 17.11 on a checked Docker target, with native logical backups, private recovery copies, and local Trove or the tested isolated MinIO endpoint. AWS S3 acceptance, Kubernetes catalog recovery, high availability, point-in-time recovery, deliberate data destruction, automatic retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
-
-See the [implementation plan](one-click-services-plan.md) for the exact verification ledger and remaining catalog work.

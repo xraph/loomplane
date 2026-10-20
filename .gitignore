@@ -47,3 +47,12 @@ config.local.yml
 
 # Local artifact storage in development
 .loomplane/
+
+# AI assistant working files. Plans, specs and session records stay local.
+.claude/
+.superpowers/
+docs/superpowers/
+docs/qualification/
+docs/plan.md
+docs/one-click-services-plan.md
+docs/catalog-recovery-verification.md
