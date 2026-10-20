@@ -3,6 +3,7 @@ package planning
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/xraph/dispatch/cron"
@@ -77,6 +78,9 @@ func (e *Extension) backupRoutes(router forge.Router, guard identity.Guard) erro
 	if err := group.GET("/service-backups/:id", e.getBackup, forge.WithName("serviceBackups.get"), forge.WithResponseSchema(http.StatusOK, "Database recovery point", recovery.Backup{})); err != nil {
 		return err
 	}
+	if err := group.GET("/service-backups/:id/retention-preview", e.previewBackupRetention, forge.WithName("serviceBackups.previewRetention"), forge.WithQuerySchema(recovery.RetentionInput{}), forge.WithResponseSchema(http.StatusOK, "Read-only full-backup retention preview", recovery.RetentionPreview{})); err != nil {
+		return err
+	}
 	if err := group.POST("/service-backups/:id/retry", e.retryBackup, forge.WithName("serviceBackups.retry"), forge.WithResponseSchema(http.StatusAccepted, "Retried database backup", recovery.Backup{})); err != nil {
 		return err
 	}
@@ -84,6 +88,26 @@ func (e *Extension) backupRoutes(router forge.Router, guard identity.Guard) erro
 		return err
 	}
 	return e.policyRoutes(group)
+}
+
+func (e *Extension) previewBackupRetention(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	days, err := strconv.Atoi(c.Query("older_than_days"))
+	if err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "provide older_than_days as an integer from 1 to 3650")
+	}
+	keep, err := strconv.Atoi(c.Query("keep_last"))
+	if err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "provide keep_last as an integer from 1 to 1000")
+	}
+	preview, err := e.backups.PreviewRetention(c.Request().Context(), p, c.Param("id"), recovery.RetentionInput{OlderThanDays: days, KeepLast: keep})
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, preview)
 }
 func (e *Extension) listBackups(c forge.Context) error {
 	p, err := principal(c)

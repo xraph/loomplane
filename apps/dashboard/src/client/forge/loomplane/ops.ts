@@ -776,6 +776,13 @@ export const ops = {
     bodyCodec: CODECS['RestoreInputBody'],
     responseCodec: CODECS['Restore'],
   },
+  'serviceBackups.previewRetention': {
+    method: 'GET',
+    path: '/api/v1/service-backups/{id}/retention-preview',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['RetentionPreview'],
+  },
   'serviceBackups.retry': {
     method: 'POST',
     path: '/api/v1/service-backups/{id}/retry',

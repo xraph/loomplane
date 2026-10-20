@@ -45,6 +45,10 @@ type Backup struct {
 	Token         string             `json:"-"`
 }
 
+func (b *Backup) objectKey() string {
+	return fmt.Sprintf("%s/%s/%s/%s/%s.dump", b.OrgID, b.ProjectID, b.EnvironmentID, b.ID, b.Token)
+}
+
 type BackupCreateInput struct {
 	Environment string `json:"environment"`
 	Resource    string `json:"resource"`
@@ -220,8 +224,7 @@ func (s *Service) Run(ctx context.Context, org, id string) error {
 	}
 	var object backupfiles.Object
 	if err == nil {
-		key := fmt.Sprintf("%s/%s/%s/%s/%s.dump", org, record.ProjectID, record.EnvironmentID, record.ID, record.Token)
-		object, err = s.Backend.BackupDatabase(ctx, principal, &record.Source, s.Files, key)
+		object, err = s.Backend.BackupDatabase(ctx, principal, &record.Source, s.Files, record.objectKey())
 	}
 	cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancelCleanup()

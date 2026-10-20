@@ -939,6 +939,21 @@ export interface RestoreList {
   restores: Restore[];
 }
 
+export interface RetentionPoint {
+  backupId: string;
+  bytes: number;
+  eligible: boolean;
+  reason: string;
+}
+
+export interface RetentionPreview {
+  asOf: string;
+  complete: boolean;
+  eligibleBytes: number;
+  eligibleCount: number;
+  points: RetentionPoint[];
+}
+
 export interface Revision {
   createdAt: string;
   createdBy: string;

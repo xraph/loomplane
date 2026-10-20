@@ -1401,6 +1401,28 @@ export class RESTClient extends Client {
 
     /**
      */
+    previewRetention: async (id: string, olderThanDays?: number, keepLast?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPreview> => {
+      let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retention-preview`;
+      const queryParams: Record<string, any> = {};
+      queryParams['older_than_days'] = olderThanDays;
+      queryParams['keep_last'] = keepLast;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPreview"],
+      };
+
+      return this.request<types.RetentionPreview>(config);
+    },
+
+    /**
+     */
     retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Backup> => {
       let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retry`;
       const config: RequestConfig = {

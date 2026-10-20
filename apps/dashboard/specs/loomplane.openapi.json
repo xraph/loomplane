@@ -2749,6 +2749,53 @@
         }
       }
     },
+    "/api/v1/service-backups/{id}/retention-preview": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceBackups.previewRetention",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "older_than_days",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "keep_last",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read-only full-backup retention preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPreview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/service-backups/{id}/retry": {
       "post": {
         "tags": [
@@ -6051,6 +6098,60 @@
         ],
         "type": "object",
         "x-forge-envelope": "restores"
+      },
+      "RetentionPoint": {
+        "type": "object",
+        "required": [
+          "backup_id",
+          "bytes",
+          "eligible",
+          "reason"
+        ],
+        "properties": {
+          "backup_id": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "RetentionPreview": {
+        "type": "object",
+        "required": [
+          "as_of",
+          "complete",
+          "eligible_count",
+          "eligible_bytes",
+          "points"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "eligible_bytes": {
+            "type": "integer"
+          },
+          "eligible_count": {
+            "type": "integer"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionPoint"
+            }
+          }
+        }
       },
       "Revision": {
         "type": "object",

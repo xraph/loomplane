@@ -17,10 +17,12 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
 const columns = `id,org_id,project_id,environment_id,name,status,attempt,error,created_by,created_at,completed_at,restored_at,request_id,source,object,token`
 
-func scan(row pgx.Row) (*Backup, error) {
+func scan(row pgx.Row, extra ...any) (*Backup, error) {
 	var b Backup
 	var source, object []byte
-	if err := row.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Name, &b.Status, &b.Attempt, &b.Error, &b.CreatedBy, &b.CreatedAt, &b.CompletedAt, &b.RestoredAt, &b.RequestID, &source, &object, &b.Token); err != nil {
+	fields := make([]any, 0, 16+len(extra))
+	fields = append(fields, &b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Name, &b.Status, &b.Attempt, &b.Error, &b.CreatedBy, &b.CreatedAt, &b.CompletedAt, &b.RestoredAt, &b.RequestID, &source, &object, &b.Token)
+	if err := row.Scan(append(fields, extra...)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}

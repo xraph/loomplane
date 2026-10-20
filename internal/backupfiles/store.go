@@ -31,6 +31,16 @@ type Object struct {
 	VersionID string `json:"version_id,omitempty"`
 }
 
+// Validate checks captured key and integrity metadata without accessing storage.
+// It does not establish that the stored bytes match the recorded checksum.
+func (o Object) Validate() error {
+	if err := validateKey(o.Key); err != nil {
+		return err
+	}
+	_, err := o.integrity()
+	return err
+}
+
 func (o Object) integrity() ([]byte, error) {
 	expected, err := hex.DecodeString(o.SHA256)
 	if err != nil || len(expected) != sha256.Size || o.Size < 0 || o.Size > maxBytes {
@@ -49,6 +59,10 @@ func (s *Store) validate(key string) error {
 	if s.Trove == nil || s.Bucket == "" {
 		return errors.New("backup storage is not configured")
 	}
+	return validateKey(key)
+}
+
+func validateKey(key string) error {
 	if key == "" || path.Clean(key) != key || strings.HasPrefix(key, "/") || key == "." || key == ".." || strings.HasPrefix(key, "../") || strings.ContainsAny(key, "\\\x00") {
 		return errors.New("invalid backup object key")
 	}

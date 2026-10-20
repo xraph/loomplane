@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, Policy, PolicyList, Preferences, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Variable, VariableList, WebhookEndpointList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, Policy, PolicyList, Preferences, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPreview, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Variable, VariableList, WebhookEndpointList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -93,6 +93,7 @@ export const useRealtimeSnapshot = query<Snapshot>(ops['realtime.snapshot']);
 export const useRealtimeWs = query(ops['realtime.ws']);
 export const useServiceBackupsGet = query<Backup>(ops['serviceBackups.get']);
 export const useServiceRestoresCreate = mutation<Restore, Restore>(ops['serviceRestores.create']);
+export const useServiceBackupsPreviewRetention = query<RetentionPreview>(ops['serviceBackups.previewRetention']);
 export const useServiceBackupsRetry = mutation<Backup, Backup>(ops['serviceBackups.retry']);
 export const useServiceRestoresGet = query<Restore>(ops['serviceRestores.get']);
 export const useServiceRestoresDelete = mutation(ops['serviceRestores.delete']);
