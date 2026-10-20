@@ -17,12 +17,18 @@ var ErrPolicy = errors.New("invalid federation policy")
 // Compile builds default-deny policy from trusted, server-owned approval records.
 // A revision hash binds approval to content; it does not authenticate the approver.
 func Compile(in domain.PolicyInput) (domain.PolicyBundle, error) {
+	if !in.EvaluatedAt.IsZero() {
+		return CompileAt(in, in.EvaluatedAt)
+	}
 	return CompileAt(in, time.Now())
 }
 
 // CompileAt permits deterministic compilation using the controller's current time.
 func CompileAt(in domain.PolicyInput, now time.Time) (domain.PolicyBundle, error) {
 	denied := domain.PolicyBundle{}
+	if !in.EvaluatedAt.IsZero() && !in.EvaluatedAt.Equal(now) {
+		return denied, ErrPolicy
+	}
 	if !in.Valid() || in.Generation == 0 || now.IsZero() || len(in.Exports)+len(in.Grants) > domain.MaxSnapshotRecords {
 		return denied, ErrPolicy
 	}

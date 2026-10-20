@@ -228,3 +228,22 @@ func TestPolicyRejectsMalformedRules(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyUsesPersistedEvaluationTime(t *testing.T) {
+	in, now := policyFixture(t)
+	in.EvaluatedAt = now
+	first, err := Compile(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := CompileAt(in, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("compilation moved the persisted evaluation time")
+	}
+	if _, err := CompileAt(in, now.Add(time.Second)); err == nil {
+		t.Fatal("same policy generation evaluated at another time")
+	}
+}
