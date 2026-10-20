@@ -51,3 +51,31 @@ func TestRunnerSameExternalIDInDifferentAccountsCleansOnlyTheOriginal(t *testing
 		})
 	}
 }
+
+func TestRunnerRemovalCheckpointsPreserveLegacyProgressAndScopeNewProgress(t *testing.T) {
+	for _, test := range []struct{ name, scope, want string }{
+		{name: "legacy checkpoint", want: "delete-operation"},
+		{name: "matching scope", scope: bindingIdentity(&planning.Binding{Provider: "vercel", ConnectionID: "conn_old", ExternalID: "scoped-id"}), want: "delete-operation"},
+		{name: "another account", scope: bindingIdentity(&planning.Binding{Provider: "vercel", ConnectionID: "conn_other", ExternalID: "scoped-id"}), want: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			log := &moveLog{}
+			exec := &placed{provider: "vercel", log: log}
+			runner := &Runner{credentials: bindingIdentityCredentials{}, executors: map[string]Executor{"vercel": exec}}
+			old := &planning.Binding{Provider: "vercel", ConnectionID: "conn_old", ExternalID: "scoped-id"}
+			job := &Job{Deployment: &Deployment{OrgID: "org_1"}, Plan: &planning.Plan{}, Action: planning.Action{Name: "api", Provider: "vercel"}, Progress: func(string, string) {}}
+			checkpoint := &replaceCheckpoint{Replace: true, Removing: "scoped-id", RemovingScope: test.scope, Remove: []byte("delete-operation")}
+			done, err := runner.removeOne(t.Context(), job, old, checkpoint, func([]byte) error { return nil })
+			if err != nil || !done {
+				t.Fatalf("cleanup %v %v", done, err)
+			}
+			if len(exec.removes) != 1 || string(exec.removes[0].Resume) != test.want {
+				t.Fatalf("removal resume %+v", exec.removes)
+			}
+			stored := readReplaceCheckpoint(checkpoint.encode())
+			if stored.Removing != "scoped-id" || stored.RemovingScope != bindingIdentity(old) || string(stored.Remove) != "rm-vercel" {
+				t.Fatalf("unscoped persisted checkpoint %+v", stored)
+			}
+		})
+	}
+}

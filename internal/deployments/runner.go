@@ -778,6 +778,7 @@ type replaceCheckpoint struct {
 	Apply           []byte `json:"apply,omitempty"`
 	Remove          []byte `json:"remove,omitempty"`
 	Removing        string `json:"removing,omitempty"`
+	RemovingScope   string `json:"removing_scope,omitempty"`
 }
 
 // readReplaceCheckpoint reads what an earlier attempt at an action saved.
@@ -950,11 +951,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	gone.Action.Provider, gone.Action.Region = old.Provider, old.Region
 	gone.Connection, gone.Credential = conn, cred
 	gone.Binding, gone.Replaces, gone.Resume = old, nil, nil
-	if rc.Removing == bindingIdentity(old) || rc.Removing == "" {
+	if rc.Removing == "" || (rc.Removing == old.ExternalID && (rc.RemovingScope == "" || rc.RemovingScope == bindingIdentity(old))) {
 		gone.Resume = rc.Remove
 	}
 	gone.Checkpoint = func(data []byte) error {
-		rc.Remove, rc.Removing = data, bindingIdentity(old)
+		rc.Remove, rc.Removing, rc.RemovingScope = data, old.ExternalID, bindingIdentity(old)
 		return heartbeat(rc.encode())
 	}
 	gone.Keep = func(context.Context, string, []byte) error {
