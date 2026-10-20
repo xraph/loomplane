@@ -186,10 +186,17 @@ backup and persistence across container recreation. It removes only that
 project's containers and volumes. Public certificate issuance, mail delivery,
 GitHub App installation and real cloud deployment need separate live checks.
 
-To publish, create a GitHub release for a `vMAJOR.MINOR.PATCH` tag on `main`.
+To publish, push a `vMAJOR.MINOR.PATCH` tag that's on `main`, or run the
+Release workflow from the Actions tab with the version you want. A manual run
+tags the commit you started it from, so start it from `main`:
+
+```bash
+gh workflow run release.yml --ref main -f version=v1.2.3
+```
+
 Prerelease suffixes such as `-rc.1` are accepted. The release workflow runs
-lint, unit and integration tests, then builds and smoke-tests native AMD64
-and ARM64 images. Both must pass before the multi-platform version tag is
+lint, unit and integration tests and creates the GitHub release, then builds
+and smoke-tests native AMD64 and ARM64 images. Both must pass before the multi-platform version tag is
 published to `ghcr.io/xraph/loomplane` with provenance and SBOM attestations.
 This follows Docker's [multi-platform GitHub Actions workflow](https://docs.docker.com/build/ci/github-actions/multi-platform/).
 
@@ -214,6 +221,15 @@ one, set `LOOMPLANE_DASHBOARD_DIR=./dashboard` and run `./loomplane` from that
 directory. Homebrew and Scoop update only when the repository has a
 `HOMEBREW_TAP_GITHUB_TOKEN` secret that can push to `xraph/homebrew-tap` and
 `xraph/scoop-bucket`. Without it, the archives still publish.
+
+When one part of a release fails, you don't need a new version. Run the
+Release workflow again with the same version and set `target` to `cli` or
+`docker`. Only that part publishes, from the existing tag, into the existing
+release. Tick `skip-tests` if that tag already passed them:
+
+```bash
+gh workflow run release.yml -f version=v1.2.3 -f target=docker -f skip-tests=true
+```
 
 You don't need a release to run the latest code. Once CI passes on `main`,
 the Docker workflow publishes AMD64 and ARM64 images as
