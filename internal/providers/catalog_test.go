@@ -47,7 +47,8 @@ func TestRegistry_capabilities(t *testing.T) {
 		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "server", "kubernetes"}},
 		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "server"}},
 		{"mariadb", names(r.Provisioning("mariadb")), []string{"server"}},
-		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache"}},
+		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache", "server"}},
+		{"valkey", names(r.Provisioning("valkey")), []string{"server"}},
 		{"kafka", names(r.Provisioning("kafka")), nil},
 	}
 	for _, tt := range tests {

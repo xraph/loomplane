@@ -23,6 +23,7 @@ const (
 	LabelConnection    = "loomplane.connection"
 	LabelSettings      = "loomplane.target.settings"
 	LabelRuntime       = "loomplane.runtime.ref"
+	LabelImage         = "loomplane.image.ref"
 	LabelPublic        = "loomplane.public"
 	LabelHostPort      = "loomplane.host.port"
 	LabelHealth        = "loomplane.health.path"

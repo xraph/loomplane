@@ -198,6 +198,8 @@ func Catalog() []provider.Provider {
 				{Kind: "postgres", Creates: "Persistent PostgreSQL container", Versions: []string{"17"}},
 				{Kind: "mysql", Creates: "Persistent MySQL container", Versions: []string{"8.4"}},
 				{Kind: "mariadb", Creates: "Persistent MariaDB container", Versions: []string{"11.8"}},
+				{Kind: "redis", Creates: "Persistent Redis container", Versions: []string{"8.2"}},
+				{Kind: "valkey", Creates: "Persistent Valkey container", Versions: []string{"8.1"}},
 			},
 			Available: true,
 		},

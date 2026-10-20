@@ -6,6 +6,7 @@ import (
 
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -32,6 +33,9 @@ func databaseService(cfg *planning.ResourceConfig) (*planning.ServiceConfig, err
 }
 
 func databaseEnvironment(kind, name, application, admin string) (env map[string]string, secrets map[string]bool) {
+	if nativecache.ValidEngine(kind) {
+		return map[string]string{"LOOMPLANE_CACHE_ADMIN_PASSWORD": admin, "LOOMPLANE_APP_PASSWORD": application}, map[string]bool{"LOOMPLANE_CACHE_ADMIN_PASSWORD": true, "LOOMPLANE_APP_PASSWORD": true}
+	}
 	if kind == "postgres" {
 		return map[string]string{"POSTGRES_DB": name, "POSTGRES_PASSWORD": admin}, map[string]bool{"POSTGRES_PASSWORD": true}
 	}
@@ -45,6 +49,10 @@ func databaseEnvironment(kind, name, application, admin string) (env map[string]
 func databaseLabels(labels map[string]string, recipe *recipes.Recipe, name string) {
 	labels[owned.LabelStateful] = "true"
 	labels[labelImage] = recipe.Image
+	if recipe.Cache() {
+		labels[nativecache.LabelEngine] = recipe.Engine()
+		return
+	}
 	if recipe.Engine() == "postgres" {
 		labels[server.LabelDatabase] = name
 		return

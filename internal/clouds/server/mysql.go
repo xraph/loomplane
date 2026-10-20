@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/loomplane/internal/backupfiles"
 	native "github.com/xraph/loomplane/internal/clouds/mysql"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 )
 
 func (r *Runtime) mysqlSession(ctx context.Context, iid id.ID, labels map[string]string) (*Client, error) {
@@ -53,12 +54,18 @@ func (r *Runtime) ConfigureMySQL(ctx context.Context, iid id.ID, labels map[stri
 }
 
 func (r *Runtime) ConfigureDatabase(ctx context.Context, iid id.ID, labels map[string]string, password string) error {
+	if labels[nativecache.LabelEngine] != "" {
+		return r.configureCache(ctx, iid, labels, password)
+	}
 	if labels[native.LabelDatabase] != "" {
 		return r.ConfigureMySQL(ctx, iid, labels, password)
 	}
 	return r.ConfigurePostgres(ctx, iid, labels, password)
 }
 func (r *Runtime) BackupDatabase(ctx context.Context, iid id.ID, labels map[string]string, files *backupfiles.Store, key string) (backupfiles.Object, error) {
+	if labels[nativecache.LabelEngine] != "" {
+		return r.backupCache(ctx, iid, labels, files, key)
+	}
 	if labels[native.LabelDatabase] == "" {
 		return r.BackupPostgres(ctx, iid, labels, files, key)
 	}
@@ -70,6 +77,9 @@ func (r *Runtime) BackupDatabase(ctx context.Context, iid id.ID, labels map[stri
 	return nativeMySQL(c, ContainerName(iid), labels).Export(ctx, files, key)
 }
 func (r *Runtime) RestoreDatabase(ctx context.Context, iid id.ID, labels map[string]string, files *backupfiles.Store, object backupfiles.Object) error {
+	if labels[nativecache.LabelEngine] != "" {
+		return r.restoreCache(ctx, iid, labels, files, object)
+	}
 	if labels[native.LabelDatabase] == "" {
 		return r.RestorePostgres(ctx, iid, labels, files, object)
 	}
@@ -91,6 +101,9 @@ func (r *Runtime) RestoreDatabase(ctx context.Context, iid id.ID, labels map[str
 	return nativeMySQL(c, ContainerName(iid), labels).Restore(ctx, files, object)
 }
 func (r *Runtime) DatabaseProbe(ctx context.Context, iid id.ID, labels map[string]string) error {
+	if labels[nativecache.LabelEngine] != "" {
+		return r.cacheProbe(ctx, iid, labels)
+	}
 	if labels[native.LabelDatabase] == "" {
 		return r.RestoreProbe(ctx, iid, labels)
 	}
@@ -103,11 +116,14 @@ func (r *Runtime) DatabaseProbe(ctx context.Context, iid id.ID, labels map[strin
 }
 
 func databaseReady(ctx context.Context, c *Client, container string, labels map[string]string) error {
+	if labels[nativecache.LabelEngine] != "" {
+		return nativeCache(c, container, labels).Ready(ctx)
+	}
 	if labels[native.LabelDatabase] != "" {
 		return nativeMySQL(c, container, labels).Ready(ctx)
 	}
 	return PostgresReady(ctx, c, container, labels[LabelDatabase])
 }
 func isDatabase(labels map[string]string) bool {
-	return labels[LabelDatabase] != "" || labels[native.LabelDatabase] != ""
+	return labels[LabelDatabase] != "" || labels[native.LabelDatabase] != "" || labels[nativecache.LabelEngine] != ""
 }

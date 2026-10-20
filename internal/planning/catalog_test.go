@@ -12,7 +12,7 @@ import (
 )
 
 func TestCatalogMySQLFamilyUsesMatchingPinsAndRejectsEngineChanges(t *testing.T) {
-	for _, kind := range []string{"mysql", "mariadb"} {
+	for _, kind := range []string{"mysql", "mariadb", "redis", "valkey"} {
 		t.Run(kind, func(t *testing.T) {
 			doc := parse(t, "version: 1\nresources:\n  database: {kind: "+kind+", provider: server, target: "+targetA+"}\n")
 			connections := infrastructureConnections(t)

@@ -36,6 +36,9 @@ func databaseAddress(cfg *planning.ResourceConfig, iid id.ID, name, password str
 	if cfg.Catalog.Engine() == "postgres" {
 		scheme, suffix = "postgresql", "?sslmode=disable"
 	}
+	if cfg.Catalog.Cache() {
+		scheme, name = "redis", "0"
+	}
 	return fmt.Sprintf("%s://%s@%s:%d/%s%s", scheme, url.UserPassword(sqlUser, password).String(), host, cfg.Catalog.Port(), name, suffix), nil
 }
 

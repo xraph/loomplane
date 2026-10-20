@@ -19,7 +19,7 @@ func (a *App) servicesCommand() cli.Command {
 	return cli.NewCommand("services", "Prepare catalog services without a repository", nil,
 		cli.WithSubcommand(cli.NewCommand("create", "Plan a standalone database service", a.createCatalogService,
 			cli.WithUsage("services create <project-name> --target <connection-id> [--provider server|kubernetes] [--env production] [--json]"),
-			cli.WithFlags(jsonFlag, cli.NewStringFlag("kind", "", "Database engine: postgres, mysql or mariadb", "postgres"), cli.NewStringFlag("provider", "", "Database target: server or kubernetes (PostgreSQL only)", "server"), cli.NewStringFlag("target", "", "Checked server or Kubernetes connection", ""), cli.NewStringFlag("env", "e", "Environment", "production"), timeoutFlag("Maximum time to prepare the plan", 5*time.Minute)))))
+			cli.WithFlags(jsonFlag, cli.NewStringFlag("kind", "", "Database engine: postgres, mysql, mariadb, redis or valkey", "postgres"), cli.NewStringFlag("provider", "", "Database target: server or kubernetes (PostgreSQL only)", "server"), cli.NewStringFlag("target", "", "Checked server or Kubernetes connection", ""), cli.NewStringFlag("env", "e", "Environment", "production"), timeoutFlag("Maximum time to prepare the plan", 5*time.Minute)))))
 }
 
 func (a *App) createCatalogService(ctx cli.CommandContext) error {
@@ -31,7 +31,7 @@ func (a *App) createCatalogService(ctx cli.CommandContext) error {
 	kind := ctx.String("kind")
 	version := recipes.DefaultVersion(kind)
 	if version == "" {
-		return errors.New("choose --kind postgres, mysql or mariadb")
+		return errors.New("choose --kind postgres, mysql, mariadb, redis or valkey")
 	}
 	targetProvider := ctx.String("provider")
 	if targetProvider != "server" && targetProvider != "kubernetes" {

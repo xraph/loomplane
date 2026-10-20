@@ -58,7 +58,7 @@ func TestCatalogCommandPreparesRepositoryFreePostgresPlan(t *testing.T) {
 }
 
 func TestCatalogCommandSelectsDatabaseKindBeforeCreatingProject(t *testing.T) {
-	for _, kind := range []string{"mysql", "mariadb", "unsupported"} {
+	for _, kind := range []string{"mysql", "mariadb", "redis", "valkey", "unsupported"} {
 		t.Run(kind, func(t *testing.T) {
 			requests := 0
 			app, _ := recoveryCLI(t, func(w http.ResponseWriter, r *http.Request) {

@@ -250,7 +250,7 @@ function DatabaseDeployment({
       <p className="mb-4 text-sm text-muted-foreground">
         {targetProvider === "kubernetes"
           ? `Private endpoint, restricted application role and a 10 GiB retained PVC on ${selectedTarget?.details.storage_class}. Restore copies require an enforcing NetworkPolicy CNI. Keep backups outside this cluster.`
-          : "Private endpoint, restricted application role and a retained local volume. Host loss needs a backup stored elsewhere."}{" "}
+          : recipe.description}{" "}
         Point-in-time recovery is not available in this profile.
       </p>
       {connections.status === "error" ? (
@@ -599,7 +599,7 @@ function ServiceRecovery({ project }: { project: string }) {
                           <Badge variant="secondary">{b.status}</Badge>
                           <span>
                             {b.restoredAt
-                              ? `SQL verified ${formatDate(b.restoredAt)}`
+                              ? `Restore verified ${formatDate(b.restoredAt)}`
                               : "Restore not tested"}
                           </span>
                           {b.error && (
@@ -617,7 +617,9 @@ function ServiceRecovery({ project }: { project: string }) {
                       </TableCell>
                       <TableCell className="hidden sm:table-cell">
                         {b.restoredAt ? (
-                          <span>SQL verified {formatDate(b.restoredAt)}</span>
+                          <span>
+                            Restore verified {formatDate(b.restoredAt)}
+                          </span>
                         ) : (
                           <span className="text-muted-foreground">
                             Not tested
@@ -674,8 +676,8 @@ function ServiceRecovery({ project }: { project: string }) {
         <h3 className="mb-2 text-sm font-semibold">Isolated recovery copies</h3>
         <p className="mb-3 text-sm text-muted-foreground">
           Copies use a private network, never replace a live database, and are
-          scheduled for removal after 24 hours. SQL verification does not test
-          your application.
+          scheduled for removal after 24 hours. Database checks do not test your
+          application.
         </p>
         {!copies.length ? (
           <CatalogEmpty
@@ -713,7 +715,8 @@ function ServiceRecovery({ project }: { project: string }) {
                       </div>
                       {r.verifiedAt && (
                         <div className="text-xs text-muted-foreground">
-                          SQL verified in {(r.durationMs / 1000).toFixed(1)}s
+                          Restore verified in {(r.durationMs / 1000).toFixed(1)}
+                          s
                         </div>
                       )}
                     </TableCell>

@@ -32,7 +32,7 @@ import (
 
 const labelRegistry = "loomplane.registry"
 const labelRegistrySettings = "loomplane.registry.settings"
-const labelImage = "loomplane.image.ref"
+const labelImage = owned.LabelImage
 
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.

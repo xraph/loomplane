@@ -8,7 +8,7 @@ import (
 )
 
 func TestRecoveryProfilesRequireMatchingEngineAndSupportedTarget(t *testing.T) {
-	for _, kind := range []string{"postgres", "mysql", "mariadb"} {
+	for _, kind := range []string{"postgres", "mysql", "mariadb", "redis", "valkey"} {
 		recipe, err := recipes.Lookup(kind, recipes.DefaultVersion(kind), "arm64")
 		if err != nil {
 			t.Fatal(err)
@@ -22,7 +22,7 @@ func TestRecoveryProfilesRequireMatchingEngineAndSupportedTarget(t *testing.T) {
 			t.Fatalf("unqualified Kubernetes profile accepted: %s", kind)
 		}
 		cfg.Provider = "server"
-		cfg.Kind = "redis"
+		cfg.Kind = "unreviewed-engine"
 		if supportsRecovery(&cfg) {
 			t.Fatal("recipe accepted for a different engine")
 		}

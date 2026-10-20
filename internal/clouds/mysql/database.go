@@ -9,7 +9,6 @@ import (
 	"io"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/clouds/dbexec"
@@ -23,10 +22,7 @@ var identifier = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
 func ValidDatabase(name string) bool { return identifier.MatchString(name) }
 func ValidEngine(engine string) bool { return engine == "mysql" || engine == "mariadb" }
 func ValidatePassword(password string) error {
-	if len(password) < 26 || len(password) > 4096 || !utf8.ValidString(password) || strings.ContainsAny(password, "\x00\r\n") {
-		return errors.New("database application password is invalid")
-	}
-	return nil
+	return dbexec.ValidatePassword(password)
 }
 
 // Run and Upload must already be bound to an owned runtime. Upload creates

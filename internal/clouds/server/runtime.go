@@ -23,6 +23,7 @@ import (
 
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 )
 
 var ErrOwned = errors.New("the matching Docker resource is not owned by this service")
@@ -289,7 +290,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		variables = append(variables, key+"="+env[key])
 	}
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
-	for _, key := range []string{LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine} {
+	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}
@@ -379,6 +380,9 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 		}
 		if labels[nativemysql.LabelDatabase] != "" {
 			protocol = "mysql"
+		}
+		if labels[nativecache.LabelEngine] != "" {
+			protocol = "redis"
 		}
 		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value)), Port: value, Protocol: protocol, Public: public})
 	}

@@ -94,7 +94,7 @@ func retentionScope(b *Backup) (recoveryScope, error) {
 		return recoveryScope{}, fmt.Errorf("%w: retention requires a consistent database recovery source", ErrInvalid)
 	}
 	// WAL and incremental chains require a separate dependency-aware planner.
-	fullFormat := map[string]string{"postgres": "pg-dump-custom-v1", "mysql": "mysqldump-sql-v1", "mariadb": "mariadb-dump-sql-v1"}
+	fullFormat := map[string]string{"postgres": "pg-dump-custom-v1", "mysql": "mysqldump-sql-v1", "mariadb": "mariadb-dump-sql-v1", "redis": "redis-rdb-v1", "valkey": "valkey-rdb-v1"}
 	if cfg.Catalog.BackupFormat != fullFormat[cfg.Kind] {
 		return recoveryScope{}, fmt.Errorf("%w: retention requires independent full backups", ErrInvalid)
 	}

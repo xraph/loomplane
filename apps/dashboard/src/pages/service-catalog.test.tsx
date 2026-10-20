@@ -119,6 +119,75 @@ it("selects the database engine in the shared deployment form", async () => {
   )
   expect(screen.getByRole("button", { name: "Deploy MySQL" })).toBeEnabled()
   expect(screen.getByLabelText("Project name")).toHaveValue("MySQL")
+  for (const [engine, name] of [
+    ["Redis 8.2", "Redis"],
+    ["Valkey 8.1", "Valkey"],
+  ]) {
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Database engine" })
+    )
+    await userEvent.click(await screen.findByRole("option", { name: engine }))
+    expect(screen.getByRole("button", { name: `Deploy ${name}` })).toBeEnabled()
+    expect(screen.getByLabelText("Project name")).toHaveValue(name)
+  }
+})
+
+it("shows verified cache restores without claiming SQL verification", async () => {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.endsWith("/projects"))
+      return response({ projects: [{ id: "p", name: "Cache" }] })
+    if (path.endsWith("/environments"))
+      return response({ environments: [{ id: "prod", name: "production" }] })
+    if (path.includes("/bindings"))
+      return response({
+        bindings: [
+          {
+            id: "binding",
+            name: "database",
+            subject: "resource",
+            provider: "server",
+            environment_id: "prod",
+            config: { kind: "redis", catalog: { id: "redis-8.2" } },
+          },
+        ],
+      })
+    if (path.endsWith("/service-backups"))
+      return response({
+        backups: [
+          {
+            id: "backup",
+            name: "database",
+            environment_id: "prod",
+            status: "succeeded",
+            bytes: 512,
+            created_at: "2026-10-20T12:00:00Z",
+            restored_at: "2026-10-20T12:01:00Z",
+          },
+        ],
+      })
+    if (path.endsWith("/service-restores"))
+      return response({
+        restores: [
+          {
+            id: "restore",
+            backup_id: "backup",
+            status: "succeeded",
+            duration_ms: 1000,
+            created_at: "2026-10-20T12:00:00Z",
+            verified_at: "2026-10-20T12:01:00Z",
+            expires_at: "2026-10-21T12:00:00Z",
+          },
+        ],
+      })
+    return response({ connections: [], policies: [] })
+  })
+  mount()
+  expect(
+    await screen.findByRole("button", { name: "Back up now" })
+  ).toBeEnabled()
+  expect(screen.getAllByText(/Restore verified/).length).toBeGreaterThan(0)
+  expect(screen.queryByText(/SQL verified/)).not.toBeInTheDocument()
 })
 
 it("offers a checked Kubernetes PostgreSQL target and removes it for other engines", async () => {

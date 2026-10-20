@@ -2,9 +2,9 @@
 
 Open **Services** to deploy PostgreSQL 17 on a checked Docker server or Kubernetes cluster. Choose a project name and target, leave daily backups enabled if you want them, then select **Deploy PostgreSQL**. Loomplane creates a repository-free project, checks its plan, and approves only the single database creation you requested. Unexpected actions or warnings require normal plan review.
 
-You can also choose **MySQL 8.4** or **MariaDB 11.8** in the database engine selector. Each engine uses its own pinned image and native backup client. The same recovery controls and CLI commands apply to all three Docker profiles.
+You can also choose **MySQL 8.4** or **MariaDB 11.8** in the database engine selector. Each engine uses its own pinned image and native backup client. You can also deploy **Redis 8.2** or **Valkey 8.1** on a checked Docker server. All five engines share the recovery controls and CLI commands.
 
-These profiles run one private PostgreSQL instance with a digest-pinned image, retained storage and a separate application role. That role cannot create databases or roles and is not a superuser. Database credentials stay in Vault. Applications deployed in the same environment on the same target receive the resource URL through the existing resource binding workflow.
+The PostgreSQL profiles run one private instance with a digest-pinned image, retained storage and a separate application role. That role cannot create databases or roles and is not a superuser. Database credentials stay in Vault. Applications deployed in the same environment on the same target receive the resource URL through the existing resource binding workflow.
 
 ## Persistence and backup storage
 
@@ -34,9 +34,9 @@ In **Service recovery**, select your project, environment and database. **Back u
 
 The lists show recovery points and copies for the selected database and environment. If you remove the source service, its backup history and restore controls remain available. Backup creation and scheduling need a live source.
 
-A successful upload initially shows **Not tested**. **Test restore** creates an isolated copy with its own volume and credentials, verifies the file before restoring, runs the matching restore client, and checks SQL access. PostgreSQL imports run in one transaction; MySQL and MariaDB imports can leave a partial copy on failure, as described below. A successful copy records its verification time and duration. The live source and application bindings stay in place.
+A successful upload initially shows **Not tested**. **Test restore** creates an isolated copy with its own volume and credentials, verifies the file before restoring, runs the matching restore client, and checks application access. PostgreSQL imports run in one transaction; MySQL and MariaDB imports can leave a partial copy on failure, as described below. A successful copy records its verification time and duration. The live source and application bindings stay in place.
 
-Copies have no published ports. Docker copies use an internal network; Kubernetes copies use independently enforced deny-all network policies. They expire after 24 hours; cleanup failures remain visible and retry automatically after an hour. An authorized administrator can retry sooner with **Remove copy**. Scheduled cleanup uses the creator's current permissions; if that access has been revoked, another administrator must finish removal. Removing a copy deletes its temporary volume while preserving the backup and verification record. SQL verification does not establish that your application can recover correctly.
+Copies have no published ports. Docker copies use an internal network; Kubernetes copies use independently enforced deny-all network policies. They expire after 24 hours; cleanup failures remain visible and retry automatically after an hour. An authorized administrator can retry sooner with **Remove copy**. Scheduled cleanup uses the creator's current permissions; if that access has been revoked, another administrator must finish removal. Removing a copy deletes its temporary volume while preserving the backup and verification record. A verified restore does not establish that your application can recover correctly.
 
 If a restore worker disappears, its operation becomes a failure after the lease expires. Remove the temporary copy and request a new restore. Each restore runs once; an interrupted command is not replayed over a possibly changed database.
 
@@ -112,7 +112,7 @@ You can inspect which independent full backups meet an age and minimum-count rul
 loomctl backups retention BACKUP_ID --older-than-days 30 --keep-last 7 --json
 ```
 
-Use any recovery point from the database history you want to inspect. The preview keeps at least the newest requested count and the newest SQL-tested point. It also protects backups linked to copies that have not been removed. Without a tested point, none qualify for retirement. Age is measured from completion, and a backup exactly on the age boundary stays.
+Use any recovery point from the database history you want to inspect. The preview keeps at least the newest requested count and the newest restore-tested point. It also protects backups linked to copies that have not been removed. Without a tested point, none qualify for retirement. Age is measured from completion, and a backup exactly on the age boundary stays.
 
 This command only reads metadata. It does not delete files, save a policy or change your backup schedule. Incomplete inventories select nothing; the current preview covers up to 1,000 points from one physical database source. The result reports each decision and the bytes that meet the rule. Actual deletion still needs a qualified storage capability, current permission checks and protection against concurrent restores.
 
@@ -143,3 +143,22 @@ The Docker recipes pin MySQL 8.4.11 and MariaDB 11.8.9. Application credentials 
 Logical snapshots require InnoDB tables. Backup creation refuses other table engines; you must also avoid schema changes while a dump runs because a consistent transaction does not protect concurrent DDL. The profiles disable binary logging and do not provide replication or point-in-time recovery. See the native [MySQL dump guidance](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html) and [MariaDB dump guidance](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump).
 
 A test restore uses a fresh private container, volume and credentials. It verifies the backup bytes before SQL import and imports as the database-scoped application user. Scheduled events remain disabled in the recovery copy, including after restart. MySQL and MariaDB imports can leave a partial copy after an SQL error; the operation records a failure, and you can remove the copy before starting another test. The live source and its application bindings stay in place.
+
+## Redis and Valkey recovery
+
+Choose Redis 8.2 or Valkey 8.1 in Services, or prepare a service with the CLI:
+
+```sh
+loomctl services create "Application Redis" --kind redis --target conn_your_checked_server --json
+loomctl services create "Application Valkey" --kind valkey --target conn_your_checked_server --json
+```
+
+Review and approve the returned plan. The Docker recipes pin Redis 8.2.10 and Valkey 8.1.10 by architecture. Both expose a private `redis://` application binding on port 6379, with database zero and separate administrative and application credentials in Vault. The application role cannot change server configuration, manage users or run dangerous administrative commands.
+
+You get one instance with retained `/data`, AOF persistence and an fsync interval of one second. A sudden host failure can lose recent writes; this is not a zero-loss profile. The dataset limit is 128 MiB with eviction disabled, inside a 512 MiB container. Once it reaches the limit, writes that need more memory fail. Plan capacity before using it as a cache or primary store.
+
+Backups use each engine's native RDB snapshot format. A restore verifies the saved bytes and the native RDB structure before loading an empty isolated copy. The copy uses new credentials and a read-only application role. AOF and automatic snapshots are disabled in that copy so restarting it keeps the checked RDB. Strings, hashes, lists, streams and expiring keys are covered by the native recovery drill.
+
+Use the same **Back up now**, **Test restore** and schedule controls, or the backup and restore commands above. A successful test shows **Restore verified**. It checks database access; you still need to test your application's recovery.
+
+Redis and Valkey backups stay within their recorded engine and recipe. Cross-engine restores, upgrades, replication, failover, point-in-time recovery, credential rotation and automatic application cutover are outside these profiles. Kubernetes currently accepts PostgreSQL only. The native Redis and Valkey drills run on arm64; the amd64 manifests are pinned but have not passed live acceptance here.

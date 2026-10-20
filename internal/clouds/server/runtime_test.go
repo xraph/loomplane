@@ -95,7 +95,7 @@ func TestRuntime_injectsSecretsThroughDockerAndKeepsPrivateAddress(t *testing.T)
 	}, Values: func(context.Context, map[string]string) (owned.RuntimeValues, error) {
 		return owned.RuntimeValues{Env: map[string]string{"TOKEN": "private-runtime-token"}}, nil
 	}}
-	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelProject: "proj_fixture", owned.LabelConnection: "conn_fixture", owned.LabelRuntime: "vault_reference"}
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelProject: "proj_fixture", owned.LabelConnection: "conn_fixture", owned.LabelRuntime: "vault_reference", owned.LabelPublic: "false"}
 	result, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:" + strings.Repeat("a", 64), Env: map[string]string{"MODE": "production"}, Ports: []cpprovider.PortSpec{{Container: 8080}}}, labels)
 	if err != nil {
 		t.Fatal(err)
@@ -108,6 +108,9 @@ func TestRuntime_injectsSecretsThroughDockerAndKeepsPrivateAddress(t *testing.T)
 		t.Fatalf("runtime value absent: %s", encoded)
 	}
 	encoded, _ = json.Marshal(create["Labels"])
+	if create["Labels"].(map[string]any)[owned.LabelPublic] != "false" {
+		t.Fatalf("container lost its reviewed private identity: %s", encoded)
+	}
 	if strings.Contains(string(encoded), "private-runtime-token") {
 		t.Fatal("runtime secret entered lifecycle labels")
 	}

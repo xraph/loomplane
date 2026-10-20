@@ -29,6 +29,8 @@ import (
 func TestAcceptanceCatalogCLIRecovery(t *testing.T)        { catalogCLIRecovery(t, "postgres") }
 func TestAcceptanceMySQLCatalogCLIRecovery(t *testing.T)   { catalogCLIRecovery(t, "mysql") }
 func TestAcceptanceMariaDBCatalogCLIRecovery(t *testing.T) { catalogCLIRecovery(t, "mariadb") }
+func TestAcceptanceRedisCatalogCLIRecovery(t *testing.T)   { catalogCLIRecovery(t, "redis") }
+func TestAcceptanceValkeyCatalogCLIRecovery(t *testing.T)  { catalogCLIRecovery(t, "valkey") }
 
 func catalogCLIRecovery(t *testing.T, kind string) {
 	socket := os.Getenv("LOOMPLANE_TEST_DOCKER_SOCKET")
@@ -97,7 +99,25 @@ func catalogCLIRecovery(t *testing.T, kind string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql := func(instance id.ID, query string) string {
+	data := func(instance id.ID, operation string) string {
+		t.Helper()
+		if kind == "redis" || kind == "valkey" {
+			args := map[string][]string{
+				"seed":   {"SET", "cli_probe", "restored-through-cli"},
+				"remove": {"DEL", "cli_probe"},
+				"value":  {"GET", "cli_probe"},
+				"count":  {"EXISTS", "cli_probe"},
+			}[operation]
+			command := make([]string, 0, 15+len(args))
+			command = append(command, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(instance), "sh", "-c", `export REDISCLI_AUTH="$LOOMPLANE_APP_PASSWORD"; exec "$@"`, "loomplane-probe", kind+"-cli", "--no-auth-warning", "-e", "--raw", "--user", "app")
+			return fixtureCommand(t, append(command, args...)...)
+		}
+		query := map[string]string{
+			"seed":   "CREATE TABLE cli_probe(value text); INSERT INTO cli_probe VALUES ('restored-through-cli')",
+			"remove": "DELETE FROM cli_probe",
+			"value":  "SELECT value FROM cli_probe",
+			"count":  "SELECT count(*) FROM cli_probe",
+		}[operation]
 		if kind == "postgres" {
 			return fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(instance), "psql", "-U", "app", "-d", "database", "-At", "-v", "ON_ERROR_STOP=1", "-c", query)
 		}
@@ -123,7 +143,7 @@ func catalogCLIRecovery(t *testing.T, kind string) {
 		}
 		return lc.must(kind, "show", accepted.ID, "--wait", "--json")
 	}
-	sql(sourceID, "CREATE TABLE cli_probe(value text); INSERT INTO cli_probe VALUES ('restored-through-cli')")
+	data(sourceID, "seed")
 	var backup lpclient.ServiceBackup
 	if err = json.Unmarshal([]byte(followAfterTimeout("backups", plan.ProjectID, "cli-backup")), &backup); err != nil || backup.Status != "succeeded" || backup.Bytes == 0 {
 		t.Fatalf("CLI backup: %+v %v", backup, err)
@@ -145,7 +165,7 @@ func catalogCLIRecovery(t *testing.T, kind string) {
 			t.Fatalf("read-only CLI accepted %v: %v", args, denied)
 		}
 	}
-	sql(sourceID, "DELETE FROM cli_probe")
+	data(sourceID, "remove")
 	var restored lpclient.ServiceRestore
 	if err = json.Unmarshal([]byte(followAfterTimeout("restores", backup.ID, "cli-restore")), &restored); err != nil || restored.Status != "succeeded" || restored.VerifiedAt == nil {
 		t.Fatalf("CLI restore: %+v %v", restored, err)
@@ -154,10 +174,10 @@ func catalogCLIRecovery(t *testing.T, kind string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := sql(copyID, "SELECT value FROM cli_probe"); got != "restored-through-cli" {
+	if got := data(copyID, "value"); got != "restored-through-cli" {
 		t.Fatalf("copy contents: %s", got)
 	}
-	if got := sql(sourceID, "SELECT count(*) FROM cli_probe"); got != "0" {
+	if got := data(sourceID, "count"); got != "0" {
 		t.Fatalf("restore changed live source: %s", got)
 	}
 	lc.must("backups", "policy", plan.ProjectID, "--resource", "database", "--every-hours", "6")

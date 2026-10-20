@@ -27,6 +27,10 @@ func DefaultVersion(kind string) string {
 		return "8.4"
 	case "mariadb":
 		return "11.8"
+	case "redis":
+		return "8.2"
+	case "valkey":
+		return "8.1"
 	default:
 		return ""
 	}
@@ -36,6 +40,9 @@ func DefaultVersion(kind string) string {
 func Lookup(kind, version, architecture string) (*Recipe, error) {
 	if kind == "postgres" {
 		return Postgres(version, architecture)
+	}
+	if kind == "redis" || kind == "valkey" {
+		return cacheRecipe(kind, version, architecture)
 	}
 	var product, format string
 	var digests map[string]string
@@ -67,6 +74,10 @@ func (r *Recipe) Engine() string {
 		return "mariadb"
 	case strings.HasPrefix(r.ID, "mysql-"):
 		return "mysql"
+	case strings.HasPrefix(r.ID, "redis-"):
+		return "redis"
+	case strings.HasPrefix(r.ID, "valkey-"):
+		return "valkey"
 	default:
 		return ""
 	}
@@ -77,6 +88,8 @@ func (r *Recipe) Port() int {
 		return 5432
 	case "mysql", "mariadb":
 		return 3306
+	case "redis", "valkey":
+		return 6379
 	default:
 		return 0
 	}
@@ -85,6 +98,9 @@ func (r *Recipe) Port() int {
 // RuntimeArgs belongs to recipe revision 1's single-instance logical profile.
 // Binary logs are unused here; copies must never execute restored timers.
 func (r *Recipe) RuntimeArgs(recovery bool) []string {
+	if r.Cache() {
+		return r.cacheArgs(recovery)
+	}
 	if r.Engine() != "mysql" && r.Engine() != "mariadb" {
 		return nil
 	}
