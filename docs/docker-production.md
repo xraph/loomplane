@@ -194,10 +194,16 @@ published to `ghcr.io/xraph/loomplane` with provenance and SBOM attestations.
 This follows Docker's [multi-platform GitHub Actions workflow](https://docs.docker.com/build/ci/github-actions/multi-platform/).
 
 The workflow attaches a Docker deployment bundle, checksum, manifest details
-and immutable image reference to the GitHub release. It publishes only the
-exact version tag, so an older release or prerelease cannot move a `latest`
-tag that an operator might be using. Wait for the workflow to finish before
-announcing that an image is available. Your repository must have Actions
+and immutable image reference to the GitHub release. A release of `v1.2.3`
+publishes `v1.2.3` and `1.2.3`, and moves `1.2`, `1` and `latest` only while
+it's the newest release in each of those lines. Rerunning or patching an
+older release can't drag `latest` backwards, and a prerelease moves nothing.
+A `0.x` release skips the major tag. You can check what a tag would publish
+with `bash scripts/release-image-tags.sh v1.2.3`. With the Docker Hub secrets
+below, every one of those tags is mirrored there too. Pin the exact version
+or the digest from `image.txt` in production; the moving tags are for trying
+things out. Wait for the workflow to finish before announcing that an image
+is available. Your repository must have Actions
 enabled, Linux ARM64 runner access and permission to write GHCR packages.
 
 The same release gets binaries from GoReleaser. `loomctl`, the CLI, ships
