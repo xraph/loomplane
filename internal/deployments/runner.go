@@ -605,7 +605,15 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	// removes the old one, through the executor that deployed it. The step
 	// records the old one too, before anything starts, so a retry of this
 	// step knows its new one is up once the binding names something else.
-	if step.Replaced != nil && current != nil && !moves(current, a, connID) && step.Replaced.ExternalID != current.ExternalID {
+	replacementDifferent := false
+	if step.Replaced != nil && current != nil && !moves(current, a, connID) {
+		same, identityErr := r.sameBindingResource(ctx, d.OrgID, step.Replaced, current)
+		if identityErr != nil {
+			return identityErr
+		}
+		replacementDifferent = !same
+	}
+	if replacementDifferent {
 		// The new one is up and bound already, so removing what's left is
 		// all there is to do. Starting the new one again would only
 		// redeploy it. A step that replaced what's bound now, as a retry
@@ -686,18 +694,18 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		}
 	}
 	old := job.Replaces
-	if old != nil && out.ExternalID != "" && out.ExternalID == old.ExternalID {
-		// An executor that answers with what it was to replace didn't
-		// start another one, so removing the old one would remove the new
-		// one too.
-		if old.Provider != a.Provider || old.Region != a.Region {
-			return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed",
-				a.Provider, a.Name, placement(a.Provider, a.Region), old.ExternalID)
+	if old != nil {
+		if out.ExternalID != "" && out.ExternalID == old.ExternalID && old.ConnectionID == connID && (old.Provider != a.Provider || old.Region != a.Region) {
+			return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed", a.Provider, a.Name, placement(a.Provider, a.Region), old.ExternalID)
 		}
-		// Through another connection it found the very one it replaces,
-		// such as a project in a team both connections reach, so nothing
-		// else runs it.
-		old = nil
+		destination := &planning.Binding{Provider: a.Provider, Region: a.Region, ConnectionID: connID, ExternalID: out.ExternalID}
+		same, identityErr := r.sameBindingResource(ctx, d.OrgID, old, destination)
+		if identityErr != nil {
+			return identityErr
+		}
+		if same {
+			old = nil
+		}
 	}
 	bound, err := r.bind(ctx, d, a, current, out, connID, old)
 	if err != nil {
@@ -842,10 +850,14 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 	var errs []error
 	for _, old := range bound.Replaced {
 		done := true
-		if old.Provider != bound.Provider || old.ExternalID != bound.ExternalID {
+		same, identityErr := r.sameBindingResource(ctx, job.Deployment.OrgID, &old, bound)
+		if identityErr != nil {
+			return identityErr
+		}
+		if !same {
 			var err error
 			done, err = r.removeOne(ctx, job, &old, rc, heartbeat)
-			mine := own != nil && own.Provider == old.Provider && own.ExternalID == old.ExternalID
+			mine := own != nil && bindingIdentity(own) == bindingIdentity(&old)
 			switch {
 			case err == nil:
 			case mine || warn == nil:
@@ -858,7 +870,7 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 			continue
 		}
 		left = slices.DeleteFunc(left, func(b planning.Binding) bool {
-			return b.Provider == old.Provider && b.ExternalID == old.ExternalID
+			return bindingIdentity(&b) == bindingIdentity(&old)
 		})
 		if err := r.plans.SetReplaced(ctx, job.Deployment.OrgID, bound.ID, left); err != nil {
 			return errors.Join(append(errs, err)...)
@@ -938,11 +950,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	gone.Action.Provider, gone.Action.Region = old.Provider, old.Region
 	gone.Connection, gone.Credential = conn, cred
 	gone.Binding, gone.Replaces, gone.Resume = old, nil, nil
-	if rc.Removing == old.ExternalID || rc.Removing == "" {
+	if rc.Removing == bindingIdentity(old) || rc.Removing == "" {
 		gone.Resume = rc.Remove
 	}
 	gone.Checkpoint = func(data []byte) error {
-		rc.Remove, rc.Removing = data, old.ExternalID
+		rc.Remove, rc.Removing = data, bindingIdentity(old)
 		return heartbeat(rc.encode())
 	}
 	gone.Keep = func(context.Context, string, []byte) error {
@@ -1126,8 +1138,12 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 		left = append(left, old)
 	}
 	for _, old := range left {
-		same := func(o planning.Binding) bool { return o.Provider == old.Provider && o.ExternalID == old.ExternalID }
-		if same(*b) || slices.ContainsFunc(b.Replaced, same) {
+		same, identityErr := r.sameBindingResource(ctx, d.OrgID, &old, b)
+		if identityErr != nil {
+			return nil, identityErr
+		}
+		duplicate := slices.ContainsFunc(b.Replaced, func(o planning.Binding) bool { return bindingIdentity(&o) == bindingIdentity(&old) })
+		if same || duplicate {
 			continue
 		}
 		b.Replaced = append(b.Replaced, old)

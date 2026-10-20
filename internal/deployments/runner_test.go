@@ -929,6 +929,7 @@ func TestRunner_aServiceOnAnotherConnectionThatsTheSameOneRemovesNothing(t *test
 		Name: "api", Provider: "vercel", ExternalID: "prj_1", ConnectionID: "conn_old",
 	}
 	r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{"vercel": exec})
+	r.credentials = bindingIdentityCredentials{sameAccount: true}
 
 	id, err := runAll(t, r, plan)
 	if err != nil {
@@ -1049,6 +1050,7 @@ func TestRunner_aRetryNeverRemovesWhatsBound(t *testing.T) {
 		},
 	}
 	r, store, plans, _ := moveRunner(t, plan, bound, map[string]Executor{"vercel": exec})
+	r.credentials = bindingIdentityCredentials{sameAccount: true}
 	ctx := t.Context()
 	id := startMove(t, r, plan)
 	d, _ := store.GetDeployment(ctx, "org_1", id)
