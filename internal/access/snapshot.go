@@ -88,6 +88,7 @@ type SnapshotTrust struct {
 	scope      domain.Scope
 	generation uint64
 	keys       map[string]SnapshotKey
+	changed    chan struct{}
 }
 
 func NewSnapshotTrust(scope domain.Scope, generation uint64, keys []SnapshotKey) (*SnapshotTrust, error) {
@@ -106,6 +107,10 @@ func (t *SnapshotTrust) Replace(scope domain.Scope, generation uint64, keys []Sn
 	if scope != t.scope || generation <= t.generation {
 		return ErrSnapshot
 	}
+	if t.changed != nil {
+		close(t.changed)
+	}
+	t.changed = make(chan struct{})
 	t.generation = generation
 	t.keys = nil
 	if len(keys) > maxSnapshotKeys {
@@ -247,4 +252,20 @@ func signatureMessage(payload []byte) []byte {
 
 func validSnapshotWindow(issuedAt, expiresAt, now time.Time) bool {
 	return !issuedAt.IsZero() && !issuedAt.After(now.Add(domain.MaxClockSkew)) && expiresAt.After(now) && expiresAt.After(issuedAt) && expiresAt.Sub(issuedAt) <= domain.MaxPolicyLease
+}
+
+// watchDeadline captures the current trust update signal before checking validity,
+// so replacement cannot be lost between checking a key and waiting for changes.
+func (v VerifiedSnapshot) watchDeadline() (deadline time.Time, updates <-chan struct{}) {
+	v.trust.mu.RLock()
+	defer v.trust.mu.RUnlock()
+	deadline = v.deadline
+	key, ok := v.trust.keys[v.keyID]
+	if !ok {
+		return time.Time{}, v.trust.changed
+	}
+	if keyDeadline := key.NotAfter.Add(-domain.MaxClockSkew); keyDeadline.Before(deadline) {
+		deadline = keyDeadline
+	}
+	return deadline, v.trust.changed
 }
