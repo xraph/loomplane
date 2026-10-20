@@ -42,8 +42,9 @@ config.local.yml
 # forge dev build output
 .forge/
 
-# Playwright CLI scratch output
+# Playwright CLI scratch output and screenshots
 .playwright-cli/
+/output/
 
 # Local artifact storage in development
 .loomplane/
