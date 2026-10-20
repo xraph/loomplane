@@ -62,6 +62,7 @@ import {
   AlertDialogAction,
 } from "@/components/ui/alert-dialog"
 import { useOrganization } from "@/lib/organization"
+import { databaseTargetProvider } from "@/lib/catalog-targets"
 import { deployDatabase } from "@/lib/catalog"
 import {
   databaseRecipes,
@@ -152,14 +153,11 @@ function DatabaseDeployment({
 }) {
   const { can } = useOrganization()
   const connections = useQuery(useConnectionsList)
-  const targets =
-    connections.data?.connections.filter(
-      (c) =>
-        c.cloud === "server" &&
-        c.status === "ready" &&
-        ["amd64", "arm64"].includes(c.details.architecture)
-    ) ?? []
   const [kind, setKind] = useState<DatabaseKind>("postgres")
+  const targets =
+    connections.data?.connections.filter((connection) =>
+      databaseTargetProvider(connection, kind)
+    ) ?? []
   const recipe = databaseRecipes[kind]
   const [name, setName] = useState<string>("PostgreSQL")
   const [target, setTarget] = useState("")
@@ -174,9 +172,17 @@ function DatabaseDeployment({
     "deployment:create",
     "deployment:approve",
   ].every(can)
-  const selected = target || targets[0]?.id || ""
+  const selected = targets.some((connection) => connection.id === target)
+    ? target
+    : (targets[0]?.id ?? "")
+  const selectedTarget = targets.find(
+    (connection) => connection.id === selected
+  )
+  const targetProvider = selectedTarget
+    ? databaseTargetProvider(selectedTarget, kind)
+    : undefined
   async function deploy() {
-    if (pending) return
+    if (pending || !targetProvider) return
     setPending(true)
     setError("")
     setCreated("")
@@ -186,6 +192,8 @@ function DatabaseDeployment({
           kind,
           name: name.trim(),
           target: selected,
+          provider: targetProvider,
+          targetSettings: selectedTarget?.details,
           daily: daily && can("service_backup:manage"),
         },
         setProgress,
@@ -234,12 +242,16 @@ function DatabaseDeployment({
           </Select>
         </div>
 
-        <Badge variant="secondary">Single instance · Docker</Badge>
+        <Badge variant="secondary">
+          Single instance ·{" "}
+          {targetProvider === "kubernetes" ? "Kubernetes" : "Docker"}
+        </Badge>
       </div>
       <p className="mb-4 text-sm text-muted-foreground">
-        Private endpoint, restricted application role and a retained local
-        volume. Host loss needs a backup stored elsewhere. Point-in-time
-        recovery is not available in this profile.
+        {targetProvider === "kubernetes"
+          ? `Private endpoint, restricted application role and a 10 GiB retained PVC on ${selectedTarget?.details.storage_class}. Restore copies require an enforcing NetworkPolicy CNI. Keep backups outside this cluster.`
+          : "Private endpoint, restricted application role and a retained local volume. Host loss needs a backup stored elsewhere."}{" "}
+        Point-in-time recovery is not available in this profile.
       </p>
       {connections.status === "error" ? (
         <QueryError
@@ -251,8 +263,16 @@ function DatabaseDeployment({
         <p role="status">Loading checked targets…</p>
       ) : !targets.length ? (
         <CatalogEmpty
-          title="Connect a Docker server"
-          description="Add and check an SSH server connection before deploying a database."
+          title={
+            kind === "postgres"
+              ? "Connect a database target"
+              : "Connect a Docker server"
+          }
+          description={
+            kind === "postgres"
+              ? "Check a Docker server or a Kubernetes namespace with a retained storage class, architecture and recovery permissions."
+              : "Add and check an SSH server connection before deploying a database."
+          }
         >
           <Button
             variant="outline"
@@ -270,7 +290,7 @@ function DatabaseDeployment({
           }}
           className="flex flex-wrap items-end gap-3"
         >
-          <div className="grid min-w-40 flex-1 gap-1.5">
+          <div className="grid min-w-0 basis-full gap-1.5 sm:min-w-40 sm:flex-1 sm:basis-0">
             <Label htmlFor="database-name">Project name</Label>
             <Input
               id="database-name"
@@ -281,8 +301,8 @@ function DatabaseDeployment({
               onChange={(e) => setName(e.target.value)}
             />
           </div>
-          <div className="grid min-w-48 flex-1 gap-1.5">
-            <Label htmlFor="database-target">Docker target</Label>
+          <div className="grid min-w-0 basis-full gap-1.5 sm:min-w-48 sm:flex-1 sm:basis-0">
+            <Label htmlFor="database-target">Deployment target</Label>
             <Select
               value={selected}
               disabled={pending || !allowed}

@@ -9,6 +9,11 @@ import {
   useBackupPoliciesSet as setPolicy,
 } from "@/client/forge/loomplane/hooks"
 import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
+import {
+  isKubernetesPostgresRecipe,
+  sameDatabasePlacement,
+  type DatabaseProvider,
+} from "@/lib/catalog-targets"
 import { statusOf } from "@/client/errors"
 import type { Plan } from "@/client/forge/loomplane/types"
 
@@ -19,11 +24,14 @@ export function assertDatabasePlan(
   project: string,
   manifest: string,
   target: string,
-  kind: DatabaseKind = "postgres"
+  kind: DatabaseKind = "postgres",
+  provider: DatabaseProvider = "server",
+  expectedPlacement?: Record<string, unknown>
 ) {
   const action = plan.actions[0]
   if (
     !plan.catalog ||
+    !!plan.cloudSyncId ||
     !plan.executable ||
     plan.status !== "ready" ||
     plan.projectId !== project ||
@@ -31,17 +39,34 @@ export function assertDatabasePlan(
     plan.environment !== "production" ||
     plan.sources.length ||
     plan.problems.length ||
-    plan.warnings.some((w) => w.code !== "shared-host-storage") ||
+    plan.warnings.some(
+      (w) =>
+        w.code !==
+        (provider === "kubernetes"
+          ? "retained-cluster-storage"
+          : "shared-host-storage")
+    ) ||
     plan.actions.length !== 1 ||
     action.op !== "create" ||
+    !!action.adoptCloudPlacement ||
+    !!action.cloudAdoption ||
     action.subject !== "resource" ||
-    action.provider !== "server" ||
+    action.provider !== provider ||
     action.name !== "database" ||
     action.connectionId !== target ||
     action.resource?.kind !== kind ||
     action.resource.version !== databaseRecipes[kind].version ||
     action.resource.target !== target ||
-    !action.resource.catalog?.image
+    !action.resource.catalog?.image ||
+    (provider === "kubernetes" &&
+      (kind !== "postgres" ||
+        action.resource.provider !== provider ||
+        !isKubernetesPostgresRecipe(action.resource.catalog) ||
+        (expectedPlacement &&
+          !sameDatabasePlacement(
+            action.resource.targetSettings,
+            expectedPlacement
+          ))))
   ) {
     throw new Error(
       `The plan differs from this ${databaseRecipes[kind].title} deployment. Open the project to review it.`
@@ -71,11 +96,21 @@ async function waitFor<T>(
   }
 }
 export async function deployDatabase(
-  input: { name: string; target: string; daily: boolean; kind: DatabaseKind },
+  input: {
+    name: string
+    target: string
+    daily: boolean
+    kind: DatabaseKind
+    provider?: DatabaseProvider
+    targetSettings?: Record<string, unknown>
+  },
   progress: (message: string) => void,
   created: (project: string) => void
 ) {
   const recipe = databaseRecipes[input.kind]
+  const provider = input.provider ?? "server"
+  if (provider === "kubernetes" && input.kind !== "postgres")
+    throw new Error("Kubernetes currently supports PostgreSQL only.")
   progress("Creating the service project…")
   const project = await createProject({
     body: {
@@ -94,7 +129,7 @@ export async function deployDatabase(
   const manifest = await saveManifest({
     path: { id: project.id },
     body: {
-      yaml: `version: 1\nresources:\n  database:\n    kind: ${input.kind}\n    provider: server\n    version: "${recipe.version}"\n    target: ${JSON.stringify(input.target)}\n`,
+      yaml: `version: 1\nresources:\n  database:\n    kind: ${input.kind}\n    provider: ${provider}\n    version: "${recipe.version}"\n    target: ${JSON.stringify(input.target)}\n`,
     },
   })
   let plan = await createPlan({
@@ -107,7 +142,15 @@ export async function deployDatabase(
     (p) => p.status !== "planning",
     "Planning"
   )
-  assertDatabasePlan(plan, project.id, manifest.id, input.target, input.kind)
+  assertDatabasePlan(
+    plan,
+    project.id,
+    manifest.id,
+    input.target,
+    input.kind,
+    provider,
+    input.targetSettings
+  )
   progress(`Deploying ${recipe.title} with persistent storage…`)
   await approvePlan({
     path: { id: plan.id },

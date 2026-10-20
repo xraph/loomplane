@@ -12,7 +12,7 @@ export function recoverySelection(
   const deployed = bindings.filter((binding) => {
     if (
       binding.subject !== "resource" ||
-      binding.provider !== "server" ||
+      !["server", "kubernetes"].includes(binding.provider) ||
       binding.environmentId !== environment
     )
       return false
@@ -26,6 +26,7 @@ export function recoverySelection(
         config !== null &&
         "kind" in config &&
         isDatabaseKind(config.kind) &&
+        (binding.provider === "server" || config.kind === "postgres") &&
         "catalog" in config &&
         typeof config.catalog === "object" &&
         config.catalog !== null

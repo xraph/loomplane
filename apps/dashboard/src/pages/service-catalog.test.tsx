@@ -60,7 +60,7 @@ it("keeps empty projects distinct from a failed read and offers retry", async ()
   failed = false
   await userEvent.click(screen.getByRole("button", { name: "Retry" }))
   expect(await screen.findByText("No service projects yet")).toBeInTheDocument()
-  expect(screen.getByText("Connect a Docker server")).toBeInTheDocument()
+  expect(screen.getByText("Connect a database target")).toBeInTheDocument()
   expect(
     screen.getByRole("combobox", { name: "Database engine" })
   ).toBeEnabled()
@@ -114,7 +114,56 @@ it("selects the database engine in the shared deployment form", async () => {
   await userEvent.click(
     screen.getByRole("combobox", { name: "Database engine" })
   )
-  await userEvent.click(screen.getByRole("option", { name: "MySQL 8.4" }))
+  await userEvent.click(
+    await screen.findByRole("option", { name: "MySQL 8.4" })
+  )
   expect(screen.getByRole("button", { name: "Deploy MySQL" })).toBeEnabled()
   expect(screen.getByLabelText("Project name")).toHaveValue("MySQL")
+})
+
+it("offers a checked Kubernetes PostgreSQL target and removes it for other engines", async () => {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+    response(
+      String(input).endsWith("/projects")
+        ? { projects: [] }
+        : {
+            connections: [
+              {
+                id: "cluster",
+                name: "Cluster acceptance",
+                cloud: "kubernetes",
+                status: "ready",
+                details: {
+                  architecture: "arm64",
+                  namespace: "databases",
+                  namespace_uid: "namespace-identity",
+                  storage_class: "retained",
+                  storage_class_uid: "class-identity",
+                  storage_reclaim: "Retain",
+                  persistent_storage: "ready",
+                  postgres_recovery_permissions: "ready",
+                },
+              },
+            ],
+          }
+    )
+  )
+  mount()
+  expect(
+    await screen.findByRole("button", { name: "Deploy PostgreSQL" })
+  ).toBeEnabled()
+  expect(
+    screen.getByRole("combobox", { name: "Deployment target" })
+  ).toHaveTextContent("Cluster acceptance")
+  expect(screen.getByText(/10 GiB retained PVC/)).toBeInTheDocument()
+  await userEvent.click(
+    screen.getByRole("combobox", { name: "Database engine" })
+  )
+  await userEvent.click(
+    await screen.findByRole("option", { name: "MySQL 8.4" })
+  )
+  expect(
+    screen.queryByRole("button", { name: "Deploy MySQL" })
+  ).not.toBeInTheDocument()
+  expect(screen.getByText("Connect a Docker server")).toBeInTheDocument()
 })
