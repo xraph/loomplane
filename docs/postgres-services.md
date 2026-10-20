@@ -24,6 +24,10 @@ Supply the URL through the deployment's secret configuration, not a committed fi
 
 The current transfer path uses 8 MiB chunks, bounded retries and a SHA-256 digest. It caps a backup at about 78 GiB. A process crash can leave incomplete multipart uploads; configure provider-side incomplete-upload cleanup until durable multipart reconciliation is available. Do not configure expiry of completed recovery objects behind Loomplane's records.
 
+New recovery points also record a destination identity derived from the configured driver, local directory or S3 region/endpoint, and explicit bucket. Credentials are excluded, so rotating a backup access key does not change that identity. Changing the directory, endpoint or bucket does not migrate existing points: reconnect their original destination to read them. S3 endpoints must be absolute HTTP or HTTPS URLs without query strings or fragments.
+
+The pin describes the configured namespace, not a physical disk or cloud account. Legacy points without a pin remain readable with checksum verification, but cannot be retired through the deletion helper. Automatic retention is still unavailable.
+
 ## Back up and test recovery
 
 In **Service recovery**, select your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. All recovery points are retained; automatic retention is not implemented.

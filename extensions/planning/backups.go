@@ -11,7 +11,6 @@ import (
 	"github.com/xraph/dispatch/job"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove/drivers/pgdriver"
-	troveext "github.com/xraph/trove/extension"
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/backupfiles"
@@ -38,22 +37,14 @@ type BackupList struct {
 func (BackupList) ForgeEnvelope() forge.EnvelopeDef { return forge.EnvelopeDef{ItemsField: "backups"} }
 
 func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects.PgStore, plans *planning.PgStore, authz *security.Authorizer, target recovery.Targets, audit projects.Auditor) error {
-	manager, err := forge.InjectType[*troveext.TroveManager](app.Container())
+	files, err := forge.InjectType[*backupfiles.Store](app.Container())
 	if err != nil {
 		return err
-	}
-	files, err := manager.Get("backups")
-	if err != nil {
-		return err
-	}
-	bucket := e.cfg.Storage.BackupBucket
-	if bucket == "" {
-		bucket = "loomplane-backups"
 	}
 	e.backups = &recovery.Service{Policies: recovery.NewPgStore(pg), Restores: recovery.NewPgStore(pg), RestoreBackend: target, EnqueueRestore: func(ctx context.Context, org, id string) error {
 		_, err := engine.Enqueue(ctx, e.engineOf(), restoreJob, backupPayload{OrgID: org, ID: id}, job.WithQueue(orchestration.Queue), job.WithMaxRetries(0), job.WithTimeout(45*time.Minute))
 		return err
-	}, Audit: audit, Store: recovery.NewPgStore(pg), Projects: prj, Bindings: plans, Authz: authz, Backend: target, Files: &backupfiles.Store{Trove: files, Bucket: bucket}, Enqueue: func(ctx context.Context, org, id string) error {
+	}, Audit: audit, Store: recovery.NewPgStore(pg), Projects: prj, Bindings: plans, Authz: authz, Backend: target, Files: files, Enqueue: func(ctx context.Context, org, id string) error {
 		_, err := engine.Enqueue(ctx, e.engineOf(), backupJob, backupPayload{OrgID: org, ID: id}, job.WithQueue(orchestration.Queue), job.WithMaxRetries(2), job.WithTimeout(45*time.Minute))
 		return err
 	}}

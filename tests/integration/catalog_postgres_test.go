@@ -153,6 +153,10 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close(context.Background())
+	var destinationID string
+	if err = db.QueryRow(t.Context(), "SELECT object->>'destination_id' FROM loomplane_service_backups WHERE id=$1 AND project_id=$2", backup.ID, project.ID).Scan(&destinationID); err != nil || len(destinationID) != 64 {
+		t.Fatalf("backup destination was not persisted: %q %v", destinationID, err)
+	}
 	if _, err = db.Exec(t.Context(), "UPDATE loomplane_backup_policies SET next_at=now()-interval '1 second' WHERE id=$1", policy.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +167,10 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/service-backups/"+backup.ID, nil, &afterRestart)
 	if afterRestart.Status != "succeeded" || afterRestart.SHA256 != backup.SHA256 {
 		t.Fatalf("lost recovery point after restart: %+v", afterRestart)
+	}
+	var persistedDestination string
+	if err = db.QueryRow(t.Context(), "SELECT object->>'destination_id' FROM loomplane_service_backups WHERE id=$1 AND project_id=$2", backup.ID, project.ID).Scan(&persistedDestination); err != nil || persistedDestination != destinationID {
+		t.Fatalf("restart lost the backup destination: %q %v", persistedDestination, err)
 	}
 
 	// Delete the source row after backup. The recovered copy must contain it,

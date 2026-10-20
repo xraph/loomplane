@@ -17,6 +17,9 @@ func (s *Store) Delete(ctx context.Context, ref Object) error {
 	if err := ref.Validate(); err != nil {
 		return err
 	}
+	if err := s.checkDestination(ref, true); err != nil {
+		return err
+	}
 	drv := s.Trove.DriverFor(s.Bucket, ref.Key)
 	var err error
 	switch {

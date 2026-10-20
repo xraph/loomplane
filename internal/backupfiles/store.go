@@ -25,10 +25,11 @@ const maxBytes = int64(partSize) * maxParts
 
 // Object pins bytes for a recovery point. Persist it only after Put succeeds.
 type Object struct {
-	Key       string `json:"key"`
-	Size      int64  `json:"size"`
-	SHA256    string `json:"sha256"`
-	VersionID string `json:"version_id,omitempty"`
+	Key           string `json:"key"`
+	Size          int64  `json:"size"`
+	SHA256        string `json:"sha256"`
+	VersionID     string `json:"version_id,omitempty"`
+	DestinationID string `json:"destination_id,omitempty"`
 }
 
 // Validate checks captured key and integrity metadata without accessing storage.
@@ -37,22 +38,33 @@ func (o Object) Validate() error {
 	if err := validateKey(o.Key); err != nil {
 		return err
 	}
+	if o.DestinationID != "" {
+		if _, valid := decodeDigest(o.DestinationID); !valid {
+			return errors.New("invalid backup destination identity")
+		}
+	}
 	_, err := o.integrity()
 	return err
 }
 
 func (o Object) integrity() ([]byte, error) {
-	expected, err := hex.DecodeString(o.SHA256)
-	if err != nil || len(expected) != sha256.Size || o.Size < 0 || o.Size > maxBytes {
+	expected, valid := decodeDigest(o.SHA256)
+	if !valid || o.Size < 0 || o.Size > maxBytes {
 		return nil, errors.New("invalid backup integrity metadata")
 	}
 	return expected, nil
 }
 
+func decodeDigest(value string) ([]byte, bool) {
+	expected, err := hex.DecodeString(value)
+	return expected, err == nil && len(expected) == sha256.Size
+}
+
 // Store borrows the extension's backups store; its owner handles shutdown.
 type Store struct {
-	Trove  *trove.Trove
-	Bucket string
+	Trove       *trove.Trove
+	Bucket      string
+	destination *destination
 }
 
 func (s *Store) validate(key string) error {
@@ -75,11 +87,14 @@ func (s *Store) Put(ctx context.Context, key string, source io.Reader) (Object, 
 	if err := s.validate(key); err != nil {
 		return Object{}, err
 	}
+	destinationID, err := s.destinationID(key)
+	if err != nil {
+		return Object{}, err
+	}
 	hash := sha256.New()
 	input := io.TeeReader(&contextReader{ctx: ctx, r: &boundedReader{r: source, remaining: maxBytes}}, hash)
 	drv := s.Trove.DriverFor(s.Bucket, key)
 	var info *driver.ObjectInfo
-	var err error
 	if multipart, ok := drv.(driver.MultipartDriver); ok {
 		info, err = s.multipart(ctx, multipart, key, input)
 	} else if drv.Name() == "local" || drv.Name() == "mem" {
@@ -94,7 +109,7 @@ func (s *Store) Put(ctx context.Context, key string, source io.Reader) (Object, 
 	if info == nil || info.Size < 0 || info.Size > maxBytes {
 		return Object{}, errors.New("invalid completed backup metadata")
 	}
-	return Object{Key: key, Size: info.Size, SHA256: hex.EncodeToString(hash.Sum(nil)), VersionID: info.VersionID}, nil
+	return Object{Key: key, Size: info.Size, SHA256: hex.EncodeToString(hash.Sum(nil)), VersionID: info.VersionID, DestinationID: destinationID}, nil
 }
 
 func (s *Store) multipart(ctx context.Context, drv driver.MultipartDriver, key string, input io.Reader) (info *driver.ObjectInfo, err error) {
@@ -168,6 +183,9 @@ func (s *Store) multipart(ctx context.Context, drv driver.MultipartDriver, key s
 // isolated until this returns nil, since corruption can be detected at EOF.
 func (s *Store) CopyVerified(ctx context.Context, ref Object, dst io.Writer) error {
 	if err := s.validate(ref.Key); err != nil {
+		return err
+	}
+	if err := s.checkDestination(ref, false); err != nil {
 		return err
 	}
 	expected, err := ref.integrity()

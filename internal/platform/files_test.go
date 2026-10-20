@@ -2,6 +2,8 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/xraph/trove"
 
 	"github.com/xraph/loomplane/internal/artifacts"
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/config"
 )
 
@@ -61,6 +64,82 @@ func TestFilesExtensionPreservesArtifacts(t *testing.T) {
 		if err = files.Stop(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestFilesExtensionProvidesPinnedBackupStore(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Storage.URL = "file://" + t.TempDir()
+	replacement := "file://" + t.TempDir()
+	var captured backupfiles.Object
+	for attempt := range 3 {
+		if !t.Run(fmt.Sprintf("open-%d", attempt), func(t *testing.T) {
+			current := cfg
+			if attempt == 2 {
+				current.Storage.BackupURL = replacement
+			}
+			files := newFiles(current)
+			app := forge.New(forge.WithAppName("pinned-backup-test"))
+			if err := files.Register(app); err != nil {
+				t.Fatal(err)
+			}
+			if err := files.Start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = files.Stop(context.Background()) })
+			store, err := forge.InjectType[*backupfiles.Store](app.Container())
+			if err != nil {
+				t.Fatal("production backup store is not provided by Trove", err)
+			}
+			if store.Bucket != "loomplane-backups" {
+				t.Fatalf("backup bucket fallback changed: %q", store.Bucket)
+			}
+			if attempt != 1 {
+				point, putErr := store.Put(t.Context(), "org/point", strings.NewReader("persistent backup"))
+				if putErr != nil || point.DestinationID == "" {
+					t.Fatalf("unpinned backup: %+v %v", point, putErr)
+				}
+				if attempt == 0 {
+					raw, marshalErr := json.Marshal(point)
+					if marshalErr != nil {
+						t.Fatal(marshalErr)
+					}
+					if err = json.Unmarshal(raw, &captured); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			var output strings.Builder
+			err = store.CopyVerified(t.Context(), captured, &output)
+			if attempt < 2 && (err != nil || output.String() != "persistent backup") {
+				t.Fatalf("restart lost the pinned backup: %q %v", output.String(), err)
+			}
+			if attempt == 2 && (err == nil || output.Len() != 0) {
+				t.Fatal("changed backup directory accepted the previous recovery point", err)
+			}
+		}) {
+			return
+		}
+	}
+}
+
+func TestFilesExtensionClosesStoresWhenBackupRegistrationFails(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Storage.URL = "file://" + t.TempDir()
+	files := newFiles(cfg)
+	app := forge.New(forge.WithAppName("failed-backup-registration"))
+	if err := forge.ProvideValue(app.Container(), &backupfiles.Store{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Register(app); err == nil {
+		t.Fatal("duplicate backup service did not fail registration")
+	}
+	backups, err := files.Manager().Get("backups")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = backups.Driver().Ping(t.Context()); err == nil {
+		t.Fatal("failed backup registration leaked its open driver")
 	}
 }
 

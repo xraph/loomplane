@@ -15,7 +15,8 @@ import (
 
 func TestRoundTripAndCorruption(t *testing.T) {
 	drv := localdriver.New()
-	if err := drv.Open(t.Context(), "file://"+t.TempDir()); err != nil {
+	backupDSN := "file://" + t.TempDir()
+	if err := drv.Open(t.Context(), backupDSN); err != nil {
 		t.Fatal(err)
 	}
 	files, err := trove.Open(drv)
@@ -26,7 +27,7 @@ func TestRoundTripAndCorruption(t *testing.T) {
 	if err = files.CreateBucket(t.Context(), "backups"); err != nil {
 		t.Fatal(err)
 	}
-	store := Store{Trove: files, Bucket: "backups"}
+	store := configuredStore(t, files, "backups", backupDSN)
 	ref, err := store.Put(t.Context(), "org/env/run/data", strings.NewReader("abc"))
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +92,8 @@ func TestMultipartBoundsAndFailureCleanup(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{false: "bounded", true: "abort"}[fail], func(t *testing.T) {
 			local := localdriver.New()
-			if err := local.Open(t.Context(), "file://"+t.TempDir()); err != nil {
+			backupDSN := "file://" + t.TempDir()
+			if err := local.Open(t.Context(), backupDSN); err != nil {
 				t.Fatal(err)
 			}
 			drv := &multipartStore{Driver: local, fail: fail}
@@ -103,7 +105,7 @@ func TestMultipartBoundsAndFailureCleanup(t *testing.T) {
 			if err = files.CreateBucket(t.Context(), "backups"); err != nil {
 				t.Fatal(err)
 			}
-			store := Store{Trove: files, Bucket: "backups"}
+			store := configuredStore(t, files, "backups", backupDSN)
 			ref, err := store.Put(t.Context(), "org/env/run/data", io.LimitReader(zeroReader{}, 21<<20))
 			if fail {
 				if err == nil || !drv.aborted {
@@ -133,7 +135,8 @@ func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 
 func TestInterruptedSourceDoesNotPublishObject(t *testing.T) {
 	drv := localdriver.New()
-	if err := drv.Open(t.Context(), "file://"+t.TempDir()); err != nil {
+	backupDSN := "file://" + t.TempDir()
+	if err := drv.Open(t.Context(), backupDSN); err != nil {
 		t.Fatal(err)
 	}
 	files, err := trove.Open(drv)
@@ -144,7 +147,7 @@ func TestInterruptedSourceDoesNotPublishObject(t *testing.T) {
 	if err = files.CreateBucket(t.Context(), "backups"); err != nil {
 		t.Fatal(err)
 	}
-	store := Store{Trove: files, Bucket: "backups"}
+	store := configuredStore(t, files, "backups", backupDSN)
 	if _, err = store.Put(t.Context(), "org/env/run/data", io.MultiReader(strings.NewReader("partial"), brokenReader{})); err == nil {
 		t.Fatal("accepted truncated input")
 	}
@@ -170,4 +173,23 @@ func TestBackupSizeLimitRejectsRatherThanTruncates(t *testing.T) {
 			t.Fatalf("input %q: data %q error %v", input, data, err)
 		}
 	}
+}
+
+func configuredStore(t *testing.T, files *trove.Trove, bucket, dsn string) *Store {
+	t.Helper()
+	store, err := New(files, bucket, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func pinnedRef(t *testing.T, store *Store, ref Object) Object {
+	t.Helper()
+	id, err := store.destinationID(ref.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref.DestinationID = id
+	return ref
 }

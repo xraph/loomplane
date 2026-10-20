@@ -17,7 +17,8 @@ import (
 func testFiles(t *testing.T) *backupfiles.Store {
 	t.Helper()
 	driver := localdriver.New()
-	if err := driver.Open(t.Context(), "file://"+t.TempDir()); err != nil {
+	backupDSN := "file://" + t.TempDir()
+	if err := driver.Open(t.Context(), backupDSN); err != nil {
 		t.Fatal(err)
 	}
 	files, err := trove.Open(driver)
@@ -25,14 +26,18 @@ func testFiles(t *testing.T) *backupfiles.Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := files.Close(context.Background()); err != nil {
-			t.Error(err)
+		if closeErr := files.Close(context.Background()); closeErr != nil {
+			t.Error(closeErr)
 		}
 	})
-	if err := files.CreateBucket(t.Context(), "backups"); err != nil {
+	if bucketErr := files.CreateBucket(t.Context(), "backups"); bucketErr != nil {
+		t.Fatal(bucketErr)
+	}
+	store, err := backupfiles.New(files, "backups", backupDSN)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return &backupfiles.Store{Trove: files, Bucket: "backups"}
+	return store
 }
 
 func TestExportUsesMatchingNativeClientAndRejectsPartialDump(t *testing.T) {

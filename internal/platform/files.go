@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/xraph/forge"
 	groveext "github.com/xraph/grove/extension"
 	"github.com/xraph/trove/driver"
 	_ "github.com/xraph/trove/drivers/localdriver" // registers local file storage
@@ -16,16 +17,41 @@ import (
 	troveext "github.com/xraph/trove/extension"
 
 	"github.com/xraph/loomplane/internal/artifacts"
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/config"
 )
 
 // filesExtension keeps Trove in the central migration and lifecycle order.
 type filesExtension struct {
 	*troveext.Extension
-	buckets map[string]string
+	buckets   map[string]string
+	backupURL string
 }
 
 func (e *filesExtension) Dependencies() []string { return []string{groveext.ExtensionName} }
+
+func (e *filesExtension) Register(app forge.App) (err error) {
+	if registerErr := e.Extension.Register(app); registerErr != nil {
+		return registerErr
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = errors.Join(err, e.Stop(cleanup))
+	}()
+	files, err := e.Manager().Get("backups")
+	if err != nil {
+		return err
+	}
+	backups, err := backupfiles.New(files, e.buckets["backups"], e.backupURL)
+	if err != nil {
+		return err
+	}
+	return forge.ProvideValue(app.Container(), backups)
+}
 
 func (e *filesExtension) Start(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -80,6 +106,7 @@ func newFiles(cfg config.Config) *filesExtension {
 				{Name: "backups", StorageDriver: backupURL, DefaultBucket: backupBucket},
 			}, Default: "artifacts",
 		})),
-		buckets: map[string]string{"artifacts": artifactBucket, "backups": backupBucket},
+		buckets:   map[string]string{"artifacts": artifactBucket, "backups": backupBucket},
+		backupURL: backupURL,
 	}
 }

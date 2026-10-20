@@ -49,7 +49,8 @@ func TestAcceptanceKubernetesNativePostgresRecovery(t *testing.T) {
 		t.Fatal(got)
 	}
 	driver := localdriver.New()
-	if err := driver.Open(ctx, "file://"+t.TempDir()); err != nil {
+	backupDSN := "file://" + t.TempDir()
+	if err := driver.Open(ctx, backupDSN); err != nil {
 		t.Fatal(err)
 	}
 	files, err := trove.Open(driver)
@@ -64,7 +65,10 @@ func TestAcceptanceKubernetesNativePostgresRecovery(t *testing.T) {
 	if err = files.CreateBucket(ctx, "backups"); err != nil {
 		t.Fatal(err)
 	}
-	store := &backupfiles.Store{Trove: files, Bucket: "backups"}
+	store, err := backupfiles.New(files, "backups", backupDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
 	object, err := runtime.BackupPostgres(ctx, source, labels, store, "recovery/database.dump")
 	if err != nil {
 		t.Fatal(err)

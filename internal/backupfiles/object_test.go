@@ -15,6 +15,7 @@ func TestObjectValidateDoesNotNeedStorage(t *testing.T) {
 		func(o *Object) { o.Size = -1 },
 		func(o *Object) { o.Size = maxBytes + 1 },
 		func(o *Object) { o.SHA256 = "not-a-checksum" },
+		func(o *Object) { o.DestinationID = "not-a-destination" },
 	} {
 		object := valid
 		change(&object)

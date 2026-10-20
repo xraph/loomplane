@@ -31,7 +31,7 @@ func TestS3LargeBackupRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { files.DeleteBucket(context.Background(), bucket) })
-	store := Store{Trove: files, Bucket: bucket}
+	store := configuredStore(t, files, bucket, dsn)
 	const size = 129 << 20
 	ref, err := store.Put(t.Context(), "org/env/large-backup", io.LimitReader(zeroReader{}, size))
 	if err != nil {

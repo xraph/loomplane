@@ -13,7 +13,8 @@ import (
 
 func TestDeleteLocalBackupKeepsOtherObjectsAndCanRetry(t *testing.T) {
 	drv := localdriver.New()
-	if err := drv.Open(t.Context(), "file://"+t.TempDir()); err != nil {
+	backupDSN := "file://" + t.TempDir()
+	if err := drv.Open(t.Context(), backupDSN); err != nil {
 		t.Fatal(err)
 	}
 	files, err := trove.Open(drv)
@@ -24,7 +25,7 @@ func TestDeleteLocalBackupKeepsOtherObjectsAndCanRetry(t *testing.T) {
 	if err = files.CreateBucket(t.Context(), "backups"); err != nil {
 		t.Fatal(err)
 	}
-	store := Store{Trove: files, Bucket: "backups"}
+	store := configuredStore(t, files, "backups", backupDSN)
 	point, err := store.Put(t.Context(), "org/project/point/attempt.dump", strings.NewReader("first"))
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +52,7 @@ type deletionDriver struct {
 	deleted bool
 }
 
-func (*deletionDriver) Name() string { return "remote" }
+func (*deletionDriver) Name() string { return "s3" }
 func (d *deletionDriver) Delete(context.Context, string, string, ...driver.DeleteOption) error {
 	d.deleted = true
 	return nil
@@ -75,8 +76,8 @@ func TestDeleteBackupRequiresExactVersionCapability(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		store := Store{Trove: files, Bucket: "backups"}
-		ref := Object{Key: "org/point", Size: 3, SHA256: strings.Repeat("a", 64), VersionID: version}
+		store := configuredStore(t, files, "backups", "s3://us-east-1/backups")
+		ref := pinnedRef(t, store, Object{Key: "org/point", Size: 3, SHA256: strings.Repeat("a", 64), VersionID: version})
 		if err = store.Delete(t.Context(), ref); err == nil || drv.deleted {
 			t.Fatalf("unsafe fallback for version %q: deleted=%v, err=%v", version, drv.deleted, err)
 		}
@@ -91,8 +92,8 @@ func TestDeleteBackupPinsVersionAndPreservesRetentionRefusal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		store := Store{Trove: files, Bucket: "backups"}
-		err = store.Delete(t.Context(), Object{Key: "org/point", Size: 3, SHA256: strings.Repeat("a", 64), VersionID: "old-version"})
+		store := configuredStore(t, files, "backups", "s3://us-east-1/backups")
+		err = store.Delete(t.Context(), pinnedRef(t, store, Object{Key: "org/point", Size: 3, SHA256: strings.Repeat("a", 64), VersionID: "old-version"}))
 		if drv.deleted || drv.version != "old-version" {
 			t.Fatalf("did not select the captured version: %+v", drv)
 		}
@@ -111,7 +112,7 @@ func TestDeleteBackupRejectsMalformedReferenceBeforeStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := Store{Trove: files, Bucket: "backups"}
+	store := configuredStore(t, files, "backups", "s3://us-east-1/backups")
 	for _, ref := range []Object{
 		{Key: "../point", Size: 3, SHA256: strings.Repeat("a", 64), VersionID: "v"},
 		{Key: "point", Size: -1, SHA256: strings.Repeat("a", 64), VersionID: "v"},

@@ -100,15 +100,17 @@ func TestDockerPostgresPersistentLifecycle(t *testing.T) {
 
 	var files *trove.Trove
 	var err error
-	if dsn := os.Getenv("LOOMPLANE_TEST_BACKUP_S3_URL"); dsn != "" {
+	backupDSN := os.Getenv("LOOMPLANE_TEST_BACKUP_S3_URL")
+	if backupDSN != "" {
 		drv := s3driver.New()
-		if err = drv.Open(ctx, dsn); err != nil {
+		if err = drv.Open(ctx, backupDSN); err != nil {
 			t.Fatal(err)
 		}
 		files, err = trove.Open(drv)
 	} else {
 		drv := localdriver.New()
-		if err = drv.Open(ctx, "file://"+t.TempDir()); err != nil {
+		backupDSN = "file://" + t.TempDir()
+		if err = drv.Open(ctx, backupDSN); err != nil {
 			t.Fatal(err)
 		}
 		files, err = trove.Open(drv)
@@ -121,7 +123,10 @@ func TestDockerPostgresPersistentLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { files.DeleteBucket(context.Background(), bucket); files.Close(context.Background()) })
-	store := &backupfiles.Store{Trove: files, Bucket: bucket}
+	store, err := backupfiles.New(files, bucket, backupDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
 	object, err := runtime.BackupPostgres(ctx, iid, labels, store, iid.String()+"/database.dump")
 	if err != nil {
 		t.Fatal(err)

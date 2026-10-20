@@ -16,7 +16,8 @@ import (
 
 func TestExportPropagatesNativeFailureWithoutPublishing(t *testing.T) {
 	driver := localdriver.New()
-	if err := driver.Open(t.Context(), "file://"+t.TempDir()); err != nil {
+	backupDSN := "file://" + t.TempDir()
+	if err := driver.Open(t.Context(), backupDSN); err != nil {
 		t.Fatal(err)
 	}
 	files, err := trove.Open(driver)
@@ -31,7 +32,10 @@ func TestExportPropagatesNativeFailureWithoutPublishing(t *testing.T) {
 	if err = files.CreateBucket(t.Context(), "backup"); err != nil {
 		t.Fatal(err)
 	}
-	store := &backupfiles.Store{Trove: files, Bucket: "backup"}
+	store, err := backupfiles.New(files, "backup", backupDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
 	db := Database{Name: "database", Run: func(_ context.Context, args []string, out io.Writer) error {
 		if args[0] != "pg_dump" {
 			t.Fatalf("unexpected tool: %v", args)
