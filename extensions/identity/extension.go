@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	authsome "github.com/xraph/authsome"
@@ -34,6 +35,7 @@ import (
 	authmw "github.com/xraph/authsome/middleware"
 	"github.com/xraph/authsome/plugins/organization"
 	"github.com/xraph/authsome/plugins/password"
+	"github.com/xraph/authsome/ratelimit"
 	"github.com/xraph/authsome/settings"
 	authstore "github.com/xraph/authsome/store"
 	authpg "github.com/xraph/authsome/store/postgres"
@@ -51,6 +53,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
@@ -78,15 +81,17 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg config.Config
 
-	store     *authpg.Store
-	orgs      *organization.Plugin
-	warden    *warden.Engine
-	authz     *security.Authorizer
-	audit     *chronicle.Chronicle
-	engine    *authsome.Engine
-	keys      *apikeys.Service
-	telemetry *telemetry.Recorder
-	router    forge.Router
+	store         *authpg.Store
+	orgs          *organization.Plugin
+	warden        *warden.Engine
+	authz         *security.Authorizer
+	audit         *chronicle.Chronicle
+	engine        *authsome.Engine
+	keys          *apikeys.Service
+	telemetry     *telemetry.Recorder
+	notifications *notifications.Service
+	resetBusy     atomic.Bool
+	router        forge.Router
 }
 
 // New returns the identity extension.
@@ -99,7 +104,9 @@ func New(cfg config.Config) *Extension {
 
 // Dependencies implements forge.Extension. The grove extension owns the
 // database handle and, with central migrations, every table used here.
-func (e *Extension) Dependencies() []string { return []string{groveext.ExtensionName} }
+func (e *Extension) Dependencies() []string {
+	return []string{groveext.ExtensionName, "loomplane-notification-delivery"}
+}
 
 // Register builds the engines. Nothing here touches the database: with
 // Forge's central migrations the schema only exists once every extension
@@ -111,6 +118,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	db, err := forge.InjectType[*grove.DB](fapp.Container())
 	if err != nil {
 		return fmt.Errorf("identity needs the grove extension: %w", err)
+	}
+	e.notifications, err = forge.InjectType[*notifications.Service](fapp.Container())
+	if err != nil {
+		return fmt.Errorf("identity needs notification delivery: %w", err)
 	}
 	e.store = authpg.New(db)
 	wstore := wardenpg.New(db)
@@ -160,6 +171,7 @@ func (e *Extension) buildEngine() (*authsome.Engine, error) {
 		authsome.WithLogger(e.Logger()),
 		authsome.WithChronicle(chronicleadapter.New(categorized{Emitter: e.audit, category: authAuditCategory})),
 		authsome.WithTokenEncryptor(tokens),
+		authsome.WithRateLimiter(routeLimiter{Limiter: ratelimit.NewKVLimiter(e.store)}),
 		authsome.WithWarden(e.warden),
 		// The grove extension migrates authsome's tables with everything
 		// else (database/migrations).
@@ -174,7 +186,9 @@ func (e *Extension) buildEngine() (*authsome.Engine, error) {
 			authsome.WithSkipDefaultEnvs(),
 			authsome.WithInitialOwnerCount(0),
 		),
+		authsome.WithHerald(e.notifications.AuthBridge()),
 		authsome.WithPlugin(password.New()),
+		authsome.WithPlugin(recoveryNotifications(e.cfg)),
 		authsome.WithPlugin(e.orgs),
 		authsome.WithPlugin(security.NewSync(e.authz)),
 	)
@@ -229,6 +243,8 @@ func (e *Extension) setting(ctx context.Context, key string, value any) error {
 // middleware and routes stay out of Loomplane's API.
 func (e *Extension) mount(ctx context.Context) error {
 	r := forge.NewRouter()
+	r.Use(rateLimitScope)
+	r.Use(e.resetFence())
 	r.Use(e.sessionMiddleware()...)
 	if err := api.New(e.engine, r).RegisterRoutes(r); err != nil {
 		return fmt.Errorf("authsome routes: %w", err)

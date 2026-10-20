@@ -107,3 +107,22 @@ resources:
 ```
 
 For a link, put a Cloud Run service and a private ECS service or an RDS database in the same manifest with `links: {vpn: {between: [gcp, aws]}}`, and expect the run to take longer: an HA VPN takes several minutes to come up.
+
+## Notifications and account recovery
+
+The October 18 run delivered invitation and password-reset email through a real Mailpit container and redeemed the reset link.
+
+To repeat the Mailpit acceptance test, start a local Mailpit instance as described in [operations.md](operations.md#email-and-deployment-notifications), then run:
+
+```sh
+LOOMPLANE_ACCEPTANCE_MAILPIT_URL=http://127.0.0.1:8025 \
+LOOMPLANE_ACCEPTANCE_SMTP_HOST=127.0.0.1 \
+LOOMPLANE_ACCEPTANCE_SMTP_PORT=1025 \
+LOOMPLANE_TEST_DATABASE_URL=postgres://loomplane:loomplane@localhost:55532/loomplane?sslmode=disable \
+go test -tags=integration,acceptance -count=1 -timeout=90s \
+  -run '^TestAcceptanceMailpitInvitationsAndRecovery$' ./tests/integration
+```
+
+The test creates an isolated database and synthetic accounts. It selects mail by its unique recipient rather than clearing a shared inbox. Keep Mailpit on loopback. The ordinary integration suite uses its own SMTP receiver, so hosted CI does not depend on Mailpit or production mail credentials.
+
+Render static-site live qualification also passed on October 18: approved create, HTTP 200, approved removal and provider inventory confirmation. Its other workload and datastore paths remain fixture-tested. Google Cloud and AWS acceptance still require their own account runs.

@@ -304,6 +304,8 @@ export interface CreateVariableInputBody {
 
 export interface CreatedInvitation {
   acceptPath: string;
+  emailMessage: string;
+  emailStatus: string;
   invitation: OrgInvitation;
 }
 
@@ -320,6 +322,21 @@ export interface DecideInputBody {
 export interface Defaults {
   provider?: string;
   region?: string;
+}
+
+export interface Delivery {
+  attempts: number;
+  createdAt: string;
+  deliveredAt?: string;
+  eventType: string;
+  id: string;
+  nextRetryAt?: string;
+  status: string;
+  statusCode: number;
+}
+
+export interface DeliveryList {
+  items: Delivery[];
 }
 
 export interface DeployedList {
@@ -561,6 +578,27 @@ export interface Note {
   source?: string;
 }
 
+export interface Notification {
+  actionUrl: string;
+  body: string;
+  createdAt: string;
+  emailStatus: string;
+  id: string;
+  projectId: string;
+  read: boolean;
+  status: string;
+  title: string;
+}
+
+export interface NotificationList {
+  items: Notification[];
+  mailEnabled: boolean;
+}
+
+export interface OK {
+  ok: boolean;
+}
+
 export interface OrgInvitation {
   createdAt: string;
   email: string;
@@ -682,6 +720,15 @@ export interface PolicyInputBody {
 
 export interface PolicyList {
   policies: Policy[];
+}
+
+export interface PreferenceInputBody {
+  deploymentEmail: boolean;
+}
+
+export interface Preferences {
+  deploymentEmail: boolean;
+  mailEnabled: boolean;
 }
 
 export interface Project {
@@ -1108,6 +1155,28 @@ export interface Variable {
 
 export interface VariableList {
   variables: Variable[];
+}
+
+export interface WebhookEndpoint {
+  createdAt: string;
+  description: string;
+  enabled: boolean;
+  id: string;
+  url: string;
+}
+
+export interface WebhookEndpointInputBody {
+  description: string;
+  url: string;
+}
+
+export interface WebhookEndpointList {
+  items: WebhookEndpoint[];
+}
+
+export interface WebhookEndpointSecret {
+  endpoint: WebhookEndpoint;
+  secret: string;
 }
 
 export interface Workspace {

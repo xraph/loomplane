@@ -731,6 +731,278 @@
         }
       }
     },
+    "/api/v1/notifications": {
+      "get": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Recent deployment notifications",
+        "operationId": "notifications.list",
+        "responses": {
+          "200": {
+            "description": "Recent deployment notifications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/preferences": {
+      "get": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Your deployment email preference",
+        "operationId": "notifications.preferences.get",
+        "responses": {
+          "200": {
+            "description": "Your deployment email preference",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Change your deployment email preference",
+        "operationId": "notifications.preferences.update",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferenceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Change your deployment email preference",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/retry": {
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Retry exhausted notification deliveries for the organization",
+        "operationId": "notifications.retry",
+        "responses": {
+          "200": {
+            "description": "Retry exhausted notification deliveries for the organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OK"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/webhooks": {
+      "get": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Organization deployment webhooks",
+        "operationId": "notifications.webhooks.list",
+        "responses": {
+          "200": {
+            "description": "Organization deployment webhooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpointList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Create a signed deployment webhook",
+        "operationId": "notifications.webhooks.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEndpointInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Create a signed deployment webhook",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpointSecret"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/webhooks/{id}": {
+      "delete": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Delete a webhook endpoint",
+        "operationId": "notifications.webhooks.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delete a webhook endpoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OK"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/webhooks/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Recent webhook delivery outcomes",
+        "operationId": "notifications.webhooks.deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent webhook delivery outcomes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/webhooks/{id}/rotate": {
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Rotate the signing secret",
+        "operationId": "notifications.webhooks.rotate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rotate the signing secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpointSecret"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/{id}/read": {
+      "put": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Mark your notification read",
+        "operationId": "notifications.read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Mark your notification read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OK"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/plans/{id}": {
       "get": {
         "tags": [
@@ -3664,10 +3936,18 @@
         "type": "object",
         "required": [
           "invitation",
-          "accept_path"
+          "accept_path",
+          "email_status",
+          "email_message"
         ],
         "properties": {
           "accept_path": {
+            "type": "string"
+          },
+          "email_message": {
+            "type": "string"
+          },
+          "email_status": {
             "type": "string"
           },
           "invitation": {
@@ -3709,6 +3989,58 @@
           },
           "region": {
             "type": "string"
+          }
+        }
+      },
+      "Delivery": {
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "status",
+          "attempts",
+          "created_at",
+          "status_code"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "delivered_at": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "next_retry_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "status_code": {
+            "type": "integer"
+          }
+        }
+      },
+      "DeliveryList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Delivery"
+            }
           }
         }
       },
@@ -4552,6 +4884,79 @@
           }
         }
       },
+      "Notification": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "body",
+          "action_url",
+          "read",
+          "created_at",
+          "project_id",
+          "status",
+          "email_status"
+        ],
+        "properties": {
+          "action_url": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email_status": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "NotificationList": {
+        "type": "object",
+        "required": [
+          "items",
+          "mail_enabled"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Notification"
+            }
+          },
+          "mail_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OK": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
       "OrgInvitation": {
         "type": "object",
         "required": [
@@ -5015,6 +5420,32 @@
         ],
         "type": "object",
         "x-forge-envelope": "policies"
+      },
+      "PreferenceInputBody": {
+        "type": "object",
+        "required": [
+          "deployment_email"
+        ],
+        "properties": {
+          "deployment_email": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Preferences": {
+        "type": "object",
+        "required": [
+          "deployment_email",
+          "mail_enabled"
+        ],
+        "properties": {
+          "deployment_email": {
+            "type": "boolean"
+          },
+          "mail_enabled": {
+            "type": "boolean"
+          }
+        }
       },
       "Project": {
         "type": "object",
@@ -6368,6 +6799,78 @@
         ],
         "type": "object",
         "x-forge-envelope": "variables"
+      },
+      "WebhookEndpoint": {
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "description",
+          "enabled",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "WebhookEndpointInputBody": {
+        "type": "object",
+        "required": [
+          "url",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "WebhookEndpointList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookEndpoint"
+            }
+          }
+        }
+      },
+      "WebhookEndpointSecret": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "secret"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/WebhookEndpoint"
+          },
+          "secret": {
+            "type": "string"
+          }
+        }
       },
       "Workspace": {
         "type": "object",

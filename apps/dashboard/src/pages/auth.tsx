@@ -34,6 +34,8 @@ export function AuthPage({
           title="Welcome back"
           description="Sign in to your projects and environments."
           signUpUrl="/sign-up"
+          forgotPasswordUrl="/forgot-password"
+          verifyEmailUrl="/verify-email"
           logo={<BrandLogo />}
           align="center"
           variant="borderless"

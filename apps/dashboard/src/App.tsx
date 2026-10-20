@@ -17,6 +17,7 @@ import { Onboarding } from "@/pages/onboarding"
 import { RealtimeProvider } from "@/lib/realtime-provider"
 
 const authPaths = ["/sign-in", "/sign-up"]
+const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 
 export function App() {
   const { isLoading, isAuthenticated } = useAuth()
@@ -25,6 +26,7 @@ export function App() {
   const invite = usePendingInvite()
 
   if (isLoading) return <PageLoading />
+  if (recoveryPaths.includes(path)) return <Outlet />
   if (!isAuthenticated) {
     return (
       <AuthPage

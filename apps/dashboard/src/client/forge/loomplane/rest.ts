@@ -798,6 +798,179 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly notifications = {
+    /**
+     * Recent deployment notifications
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NotificationList> => {
+      let __path = `/api/v1/notifications`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NotificationList"],
+      };
+
+      return this.request<types.NotificationList>(config);
+    },
+
+    preferences: {
+      /**
+       * Your deployment email preference
+       */
+      get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Preferences> => {
+        let __path = `/api/v1/notifications/preferences`;
+        const config: RequestConfig = {
+          method: 'GET',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["Preferences"],
+        };
+
+        return this.request<types.Preferences>(config);
+      },
+
+      /**
+       * Change your deployment email preference
+       */
+      update: async (body: types.PreferenceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Preferences> => {
+        let __path = `/api/v1/notifications/preferences`;
+        const config: RequestConfig = {
+          method: 'PUT',
+          url: __path,
+          body,
+          bodyCodec: CODECS["PreferenceInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["Preferences"],
+        };
+
+        return this.request<types.Preferences>(config);
+      },
+
+    },
+
+    /**
+     * Mark your notification read
+     */
+    read: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OK> => {
+      let __path = `/api/v1/notifications/${encodeURIComponent(String(id))}/read`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OK"],
+      };
+
+      return this.request<types.OK>(config);
+    },
+
+    /**
+     * Retry exhausted notification deliveries for the organization
+     */
+    retry: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OK> => {
+      let __path = `/api/v1/notifications/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OK"],
+      };
+
+      return this.request<types.OK>(config);
+    },
+
+    webhooks: {
+      /**
+       * Create a signed deployment webhook
+       */
+      create: async (body: types.WebhookEndpointInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.WebhookEndpointSecret> => {
+        let __path = `/api/v1/notifications/webhooks`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          body,
+          bodyCodec: CODECS["WebhookEndpointInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["WebhookEndpointSecret"],
+        };
+
+        return this.request<types.WebhookEndpointSecret>(config);
+      },
+
+      /**
+       * Delete a webhook endpoint
+       */
+      delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OK> => {
+        let __path = `/api/v1/notifications/webhooks/${encodeURIComponent(String(id))}`;
+        const config: RequestConfig = {
+          method: 'DELETE',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["OK"],
+        };
+
+        return this.request<types.OK>(config);
+      },
+
+      /**
+       * Recent webhook delivery outcomes
+       */
+      deliveries: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeliveryList> => {
+        let __path = `/api/v1/notifications/webhooks/${encodeURIComponent(String(id))}/deliveries`;
+        const config: RequestConfig = {
+          method: 'GET',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["DeliveryList"],
+        };
+
+        return this.request<types.DeliveryList>(config);
+      },
+
+      /**
+       * Organization deployment webhooks
+       */
+      list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.WebhookEndpointList> => {
+        let __path = `/api/v1/notifications/webhooks`;
+        const config: RequestConfig = {
+          method: 'GET',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["WebhookEndpointList"],
+        };
+
+        return this.request<types.WebhookEndpointList>(config);
+      },
+
+      /**
+       * Rotate the signing secret
+       */
+      rotate: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.WebhookEndpointSecret> => {
+        let __path = `/api/v1/notifications/webhooks/${encodeURIComponent(String(id))}/rotate`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["WebhookEndpointSecret"],
+        };
+
+        return this.request<types.WebhookEndpointSecret>(config);
+      },
+
+    },
+
+  };
+
   public readonly plans = {
     /**
      * Approve a ready plan, naming the revision you reviewed

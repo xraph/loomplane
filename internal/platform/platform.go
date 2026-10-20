@@ -34,6 +34,7 @@ import (
 	federationext "github.com/xraph/loomplane/extensions/federation"
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
+	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
@@ -129,7 +130,9 @@ func Extensions(cfg config.Config) []forge.Extension {
 		newSchemaGuard(cfg),
 		db,
 		newFiles(cfg),
+		notificationsext.NewDelivery(cfg),
 		identity.New(cfg),
+		notificationsext.New(cfg),
 		jobs,
 		ctrl,
 		projectsext.New(cfg, jobs.Engine),

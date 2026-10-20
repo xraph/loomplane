@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, OrgInvitationList, OrgMemberList, Plan, PlanList, Policy, PolicyList, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Variable, VariableList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudList, ConnectedRepositoryList, Connection, ConnectionList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, Policy, PolicyList, Preferences, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Variable, VariableList, WebhookEndpointList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -37,6 +37,16 @@ export const useInfrastructureGet = query<InfrastructureStatus>(ops['infrastruct
 export const useInvitationsList = query<OrgInvitationList>(ops['invitations.list']);
 export const useInvitationsCreate = mutation(ops['invitations.create']);
 export const useMembersList = query<OrgMemberList>(ops['members.list']);
+export const useNotificationsList = query<NotificationList>(ops['notifications.list']);
+export const useNotificationsPreferencesGet = query<Preferences>(ops['notifications.preferences.get']);
+export const useNotificationsPreferencesUpdate = mutation(ops['notifications.preferences.update']);
+export const useNotificationsRetry = mutation(ops['notifications.retry']);
+export const useNotificationsWebhooksList = query<WebhookEndpointList>(ops['notifications.webhooks.list']);
+export const useNotificationsWebhooksCreate = mutation(ops['notifications.webhooks.create']);
+export const useNotificationsWebhooksDelete = mutation(ops['notifications.webhooks.delete']);
+export const useNotificationsWebhooksDeliveries = query<DeliveryList>(ops['notifications.webhooks.deliveries']);
+export const useNotificationsWebhooksRotate = mutation(ops['notifications.webhooks.rotate']);
+export const useNotificationsRead = mutation(ops['notifications.read']);
 export const usePlansGet = query<Plan>(ops['plans.get']);
 export const usePlansApprove = mutation<Plan, Plan>(ops['plans.approve']);
 export const useDeploymentsForPlan = query<Deployment>(ops['deployments.forPlan']);

@@ -29,23 +29,25 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.9.0
 	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/xraph/authsome v1.7.3-0.20261013045248-b3fd5f9edebc
-	github.com/xraph/chronicle v1.8.0
-	github.com/xraph/confy v1.0.3
-	github.com/xraph/ctrlplane v1.7.1-0.20261013050604-236f4beb621f
-	github.com/xraph/dispatch v1.8.1-0.20261013040216-46004e7c0445
-	github.com/xraph/forge v1.12.9-0.20261013040932-c8f5fcc38b7c
-	github.com/xraph/forge/extensions/conduit v1.12.9-0.20261013144741-80d916b595c9
-	github.com/xraph/go-utils v1.3.0
-	github.com/xraph/grove v1.7.3
-	github.com/xraph/grove/drivers/pgdriver v1.7.3
-	github.com/xraph/grove/drivers/sqlitedriver v1.7.3
-	github.com/xraph/grove/extension v1.7.4-0.20261013042516-c28fa000e1b3
+	github.com/xraph/chronicle v1.9.0
+	github.com/xraph/confy v1.1.0
+	github.com/xraph/ctrlplane v1.8.0
+	github.com/xraph/dispatch v1.9.1
+	github.com/xraph/forge v1.12.9
+	github.com/xraph/forge/extensions/conduit v1.12.9
+	github.com/xraph/go-utils v1.4.1
+	github.com/xraph/grove v1.8.0
+	github.com/xraph/grove/drivers/pgdriver v1.8.0
+	github.com/xraph/grove/drivers/sqlitedriver v1.8.0
+	github.com/xraph/grove/extension v1.8.0
+	github.com/xraph/herald v1.8.0
 	github.com/xraph/keysmith v1.7.1
+	github.com/xraph/relay v1.8.0
 	github.com/xraph/trove v1.7.1
 	github.com/xraph/trove/drivers/s3driver v1.7.1
 	github.com/xraph/trove/extension v1.7.1
 	github.com/xraph/vault v1.7.1
-	github.com/xraph/warden v1.7.2
+	github.com/xraph/warden v1.8.0
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
@@ -79,6 +81,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
+	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
@@ -87,9 +90,10 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/fatih/color v1.19.0 // indirect
+	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
@@ -121,7 +125,10 @@ require (
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
+	github.com/grafana/pyroscope-go v1.4.3 // indirect
+	github.com/grafana/pyroscope-go/godeltaprof v0.1.11 // indirect
 	github.com/grandcat/zeroconf v1.0.0 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/hashicorp/consul/api v1.34.4 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
@@ -164,6 +171,7 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/segmentio/kafka-go v0.4.51 // indirect
@@ -178,10 +186,10 @@ require (
 	github.com/xlab/treeprint v1.2.0 // indirect
 	github.com/xraph/farp v1.3.1 // indirect
 	github.com/xraph/farp/discovery v1.3.1 // indirect
-	github.com/xraph/forge/extensions/auth v1.12.7 // indirect
-	github.com/xraph/forge/extensions/discovery v1.12.3 // indirect
-	github.com/xraph/grove/drivers/mongodriver v1.7.3 // indirect
-	github.com/xraph/grove/kv v1.7.3 // indirect
+	github.com/xraph/forge/extensions/auth v1.12.9 // indirect
+	github.com/xraph/forge/extensions/discovery v1.12.9 // indirect
+	github.com/xraph/grove/drivers/mongodriver v1.8.0 // indirect
+	github.com/xraph/grove/kv v1.8.0 // indirect
 	github.com/xraph/ledger v1.7.0 // indirect
 	github.com/xraph/vessel v1.0.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
@@ -192,10 +200,18 @@ require (
 	go.etcd.io/etcd/client/v3 v3.5.17 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.9.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.70.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.45.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.46.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
+	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect

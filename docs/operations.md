@@ -100,3 +100,32 @@ providers:
 ```
 
 or set `LOOMPLANE_PAUSED_PROVIDERS=render,cloud-run`. Plans that use a paused target are still made, and can be reviewed and approved, but they say they're for review only, and approving one deploys nothing. What already runs there keeps running, and drift checks still read it. A name that isn't a target stops Loomplane from starting, so a typo can't leave a target running that you meant to pause. Restart Loomplane to pause or unpause one.
+
+## Email and deployment notifications
+
+Open Notifications to read deployment results, change your deployment email preference and, as an owner or admin, manage signed webhooks. Deployment mail goes to the person who started the deployment. Loomplane checks their current organization membership and project access before delivery. Account recovery and verification mail do not follow that deployment preference.
+
+An empty SMTP host disables email. Invitations then show a manual link and explicitly report that email is disabled. To test delivery with Mailpit:
+
+```sh
+docker run --rm --name loomplane-mailpit \
+  -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 \
+  axllent/mailpit:v1.30.0
+```
+
+Set these values in your environment before starting the API:
+
+```sh
+export LOOMPLANE_NOTIFICATIONS_SMTP_HOST=127.0.0.1
+export LOOMPLANE_NOTIFICATIONS_SMTP_PORT=1025
+export LOOMPLANE_NOTIFICATIONS_FROM=accounts@example.com
+export LOOMPLANE_NOTIFICATIONS_SMTP_TLS=false
+```
+
+Open Mailpit at `http://127.0.0.1:8025`. Set `public_url` to the dashboard address you use; recovery and invitation links come from this trusted setting. Production requires implicit SMTP TLS, commonly port 465, and a valid sender address. Set `LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME` and `LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD` together when the server requires authentication. Keep the password outside committed configuration.
+
+Herald stores encrypted SMTP credentials and sanitized delivery outcomes. It does not retain recipient addresses, rendered security mail, reset tokens or invitation links in its message history. Invitations report `sent`, `disabled` or `failed` independently of creation, so a delivery failure does not discard a valid invitation. Password reset always returns the same public response for known and unknown addresses; inspect sanitized server diagnostics when delivery fails.
+
+A database trigger captures each future terminal deployment attempt in the transaction that writes it. Notification processing retries up to ten times, then marks its health check unhealthy. Retry notification processing on the Notifications page after fixing the cause. Replay keeps completed channels and Relay's durable acceptance identity, so it does not create another webhook event. SMTP has at-least-once delivery: a crash after the mail server accepts a message but before Loomplane records success can produce a duplicate.
+
+Webhook endpoints require public HTTPS on port 443. Loomplane blocks private and reserved addresses, resolves again when connecting and refuses redirects. The signing secret appears once after creation or rotation. Store it in your receiver's secret manager and verify Relay's `X-Relay-Signature` against the exact request body and `X-Relay-Timestamp`, with a receiver-side timestamp tolerance. Relay owns HTTP retries and durable delivery history; the page shows attempts, HTTP status and the next retry without retaining response bodies in the public API. A receiver that returns 410 disables its endpoint.

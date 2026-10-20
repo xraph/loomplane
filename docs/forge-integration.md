@@ -6,18 +6,21 @@ If you change a pin, update this file in the same commit.
 
 ## Versions
 
-Go 1.26 (the `go` directive is `1.26.0`; it's tested on go1.26.3).
+Go 1.26.9 is pinned in `go.mod` and in CI. The versions below were checked against the module proxy and downloaded source on October 18, 2026.
 
 | Library | Module | Pinned | License at that version |
 |---|---|---|---|
-| Forge | `github.com/xraph/forge` | v1.12.9-0.20261013040932-c8f5fcc38b7c (main) | Apache-2.0 file; see the note below |
-| Grove | `github.com/xraph/grove`, `.../drivers/pgdriver`, `.../extension` | v1.7.3; the extension at v1.7.4-0.20261013042516-c28fa000e1b3 (main) | MIT |
+| Forge | `github.com/xraph/forge` | v1.12.9 | Apache-2.0 file; see the note below |
+| Grove | `github.com/xraph/grove`, `.../drivers/pgdriver`, `.../extension` | v1.8.0 | MIT |
 | Authsome | `github.com/xraph/authsome` | v1.7.3-0.20261013045248-b3fd5f9edebc (main) | no license file; README says all rights reserved |
-| Warden | `github.com/xraph/warden` | v1.7.2 | Apache-2.0 |
-| Chronicle | `github.com/xraph/chronicle` | v1.8.0 | no license file |
-| Dispatch | `github.com/xraph/dispatch` | v1.8.1-0.20261013040216-46004e7c0445 (main) | no license file (its SDKs say MIT) |
-| Ctrl Plane | `github.com/xraph/ctrlplane` | v1.7.1-0.20261013050604-236f4beb621f (main) | Apache-2.0 |
-| Confy | `github.com/xraph/confy` | v1.0.3 | MIT per README, no license file |
+| Warden | `github.com/xraph/warden` | v1.8.0 | Apache-2.0 |
+| Chronicle | `github.com/xraph/chronicle` | v1.9.0 | no license file |
+| Dispatch | `github.com/xraph/dispatch` | v1.9.1 | no license file (its SDKs say MIT) |
+| Ctrl Plane | `github.com/xraph/ctrlplane` | v1.8.0 | Apache-2.0 |
+| Confy | `github.com/xraph/confy` | v1.1.0 | MIT per README, no license file |
+| Conduit | `github.com/xraph/forge/extensions/conduit` | v1.12.9 | Apache-2.0 |
+| Herald | `github.com/xraph/herald` | v1.8.0 | no license file |
+| Relay | `github.com/xraph/relay` | v1.8.0 | no license file |
 
 The dashboard (`apps/dashboard`) pins:
 
@@ -32,13 +35,13 @@ The dashboard (`apps/dashboard`) pins:
 
 pnpm 11 refuses any package published in the last 24 hours, and the dashboard keeps that policy on. The Forge client sat at 1.12.7 for a day because of it, since 1.12.8 was too new when the lockfile was made; it's on 1.12.8 now. Expect the same wait whenever you take a Forge release on the day it ships. The `packageManager` field makes any pnpm switch to 11.5.0, so everyone resolves under the same policy.
 
-There are no `replace` directives. tap builds against local checkouts of Forge and authsome; at the time of writing both of those checkouts sit exactly on the commits pinned above, so Loomplane gets the same code from the module proxy.
+There are no `replace` directives. Loomplane resolves these versions through the module proxy. Forge, Conduit, Grove, Dispatch and CtrlPlane use released versions; Authsome remains on the commit listed above. The indirect `mimetype` dependency is v1.4.16 because its author retracted v1.4.15 for quadratic processing of crafted CDF files.
 
 Authsome is pinned to a commit on its `main` because its latest tag, v1.7.2, imports `forge/extensions/dashboard/contributor`, a package Forge removed in v1.12.0. Nothing in released authsome compiles against Forge 1.12. Move to a tag as soon as authsome cuts one.
 
 ### Licenses
 
-This needs sorting out before Loomplane is published as open source. Authsome's README says "Copyright (c) Xraph. All rights reserved." and the module ships no license, which means nobody outside Xraph may legally redistribute it. Dispatch, Chronicle and Confy ship no license file at these versions either. Forge's `LICENSE` is Apache-2.0, while its `LICENSE_FAQ.md` describes MIT for the core and a commercial license for the AI extension. Loomplane uses no Forge AI extension, so the commercial part doesn't touch it, but the two documents should agree.
+This needs sorting out before Loomplane is published as open source. Authsome's README says "Copyright (c) Xraph. All rights reserved." and the module ships no license, so its redistribution terms need upstream clarification. Dispatch, Chronicle, Confy, Herald and Relay ship no license file at these versions either. Forge's `LICENSE` is Apache-2.0, while its `LICENSE_FAQ.md` describes MIT for the core and a commercial license for the AI extension. Loomplane uses no Forge AI extension, so the commercial part doesn't touch it, but the two documents should agree.
 
 ## How the pieces fit
 
@@ -47,7 +50,9 @@ Loomplane is one Forge app (`internal/platform`). Library code runs inside Forge
 | Extension | From | Depends on | Owns |
 |---|---|---|---|
 | `grove` | `grove/extension` | | The Postgres pool, and the single migration pass |
-| `loomplane-identity` | `extensions/identity` | grove | authsome, Warden, Chronicle; the request guard |
+| `loomplane-notification-delivery` | `extensions/notifications` | grove | Herald, SMTP configuration and account-mail templates |
+| `loomplane-identity` | `extensions/identity` | grove, notification delivery | authsome, Warden, Chronicle; the request guard |
+| `loomplane-notifications` | `extensions/notifications` | identity, notification delivery | Deployment outbox, inbox, preferences and Relay webhooks |
 | `dispatch` | `dispatch/extension` | grove | The job engine |
 | `ctrlplane` | `ctrlplane/extension` | grove | Instance and deployment lifecycle |
 | `loomplane-projects` | `extensions/projects` | identity, dispatch | The project API and its jobs |
@@ -70,7 +75,7 @@ What we found:
 
 - Forge's router is forgemux, and `Router.Handle("/", h)` mounts only the wildcard `/*`, which doesn't match `/` itself (`internal/router/forgemux/mux.go:84` trims the trailing slash, then fails to parse the empty base). Fixed in Forge (c96a1075), so `extensions/web` mounts its catch-all with `Handle("/")` alone.
 - Vessel starts a lazily provided service that has a `Start` method the first time anything resolves it (`vessel/type_registry.go:213`). Dispatch provides its engine and Ctrl Plane its `*app.CtrlPlane` that way. Resolve either from DI while extensions register and you start their workers before the migration pass has made their tables. Loomplane takes them from the extensions' own accessors (`dispatchext.Extension.Engine`, `cpext.Extension.CtrlPlane`).
-- The CLI's `migrate` commands look for a `CentralMigrator`, and the grove extension contributes a `MigrationRegistry`, so with central migrations on they report nothing to do. `cmd/loomplane` turns them off. Migrations run on every start.
+- Grove v1.8.0 provides its registry as Forge's `CentralMigrator`. Loomplane keeps its own operational migration and restore commands in `internal/ops`, and disables Forge's overlapping command names. Migrations also run on every API start.
 - A middleware that was nil during Register (authsome builds its own only when its engine starts) made `app.Start` hang instead of failing.
 - The client generator types a Go slice of pointers as `T | null[]`, which TypeScript reads as `T | (null[])`. List responses use value slices to avoid it.
 
@@ -94,7 +99,7 @@ Tests: the integration tests migrate a fresh database, then start again on it an
 
 authsome handles accounts, sign-in, sessions, organizations and invitations. An organization in authsome is an organization in Loomplane, and a request acts in the session's active organization, which only a member can switch to.
 
-`extensions/identity` builds authsome's engine itself, the way tap's identity extension does, and mounts its API at `/authsome` on a router of its own. It doesn't register authsome's Forge extension, which requires separate Chronicle and Warden extensions in DI, probes DI for Keysmith, Relay, Vault, Ledger and Herald, and runs its own migrations and config loading. The engine starts in Forge's Start phase, after the migration pass, and the seed step creates Loomplane's authsome app on first start. Plugins: password, organization, and Loomplane's Warden sync (`internal/security/sync.go`).
+`extensions/identity` builds authsome's engine itself, the way tap's identity extension does, and mounts its API at `/authsome` on a router of its own. It doesn't register authsome's Forge extension, which requires separate Chronicle and Warden extensions in DI, probes DI for Keysmith, Relay, Vault, Ledger and Herald, and runs its own migrations and config loading. The engine starts in Forge's Start phase, after the migration pass, and the seed step creates Loomplane's authsome app on first start. Plugins: password, organization, Herald notifications for recovery and verification, and Loomplane's Warden sync (`internal/security/sync.go`).
 
 The guard on Loomplane's routes is authsome's session chain as authsome's own extension builds it: authenticate, rotate a token near expiry, slide the session on activity (`extensions/identity/sessions.go`). Without the last two a dashboard login would die at the token's one-hour lifetime.
 
@@ -106,7 +111,7 @@ What we found:
 - `engine.AuthMiddleware()` is nil until the engine starts, so the guard looks it up per request.
 - Most of authsome's hook events (`session.create`, `device.register`, `org.create`, `rbac.role.assign`, `org.invitation.accept`) carry no audit category, and Chronicle refuses an event without one. Every one of them was logged as `audit record failed` and never stored. `extensions/identity/audit.go` hands authsome an emitter that files them under `auth`; an event that names its own category keeps it.
 - Sign-up doesn't sign you in; the dashboard sends you to sign in afterwards.
-- authsome's own invitation endpoint sets no expiry, so its links never lapse. Loomplane creates invitations itself instead (`POST /api/v1/invitations` in `extensions/identity/members.go`): a week's expiry, no role above your own (authsome checks that too), and the link handed back to you, because nothing sends mail yet.
+- authsome's own invitation endpoint sets no expiry, so its links never lapse. Loomplane creates invitations itself (`POST /api/v1/invitations` in `extensions/identity/members.go`) with a week's expiry and no role above your own. Herald sends the invitation when SMTP is configured. You also get a manual link and an explicit delivery outcome.
 - Accepting (`POST /authsome/v1/orgs/invitations/accept`) adds the account with the invited email, whoever is signed in. The dashboard asks before accepting and tells you when the invitation went to a different account.
 - Removing a member leaves their session alone, still naming the organization. `GET /api/v1/session` answers 403 for someone who isn't a member any more, which the dashboard treats like a session with no organization.
 
@@ -237,7 +242,6 @@ authsome has API keys of its own, backed by Keysmith when it's given one, but th
 
 | Library | When |
 |---|---|
-| Relay, Herald | When deployments exist to notify about |
 | FARP | Live API discovery, if gateways ever route by schema instead of by path |
 | Forge dashboard extension | Possibly, for an operator view of Dispatch and Ctrl Plane. The product dashboard is `apps/dashboard`. |
 
@@ -255,3 +259,14 @@ Two things to know when you add an endpoint:
 - The generator only types a mutation's result when the result is the entity. `invitations.create` returns the invitation plus its link (`forge.WithoutEntity`), so its binding returns `unknown` and the dashboard casts it to `CreatedInvitation`.
 
 CI installs the forge CLI at a pinned commit (`FORGE_CLI` in `.github/workflows/ci.yml`), because the CLI has no tags yet. Move the pin when you regenerate with a newer CLI.
+
+
+## Herald and Relay
+
+`extensions/notifications` composes Herald v1.8.0 and Relay v1.8.0 around Loomplane's existing identity and PostgreSQL lifecycle. The delivery extension prepares Herald before Authsome starts; the authenticated extension starts the outbox and Relay after identity is ready. Their stores join the central migration pass. Loomplane exposes its own organization-scoped routes rather than either library's unrestricted administration API.
+
+Herald delivers SMTP account mail and deployment alerts and stores the user inbox. Its `Send` result can report a failed delivery with no Go error, so the Authsome bridge checks the result status as well. A store wrapper redacts security mail before persistence. Deployment email preferences belong to Loomplane and cannot suppress account security mail.
+
+Relay's reliable acceptance atomically records an event, stable source identity and complete recipient set. Endpoint application and organization scope must match the acceptance request; the adapter sets both when creating an endpoint. A store wrapper encrypts signing secrets and preserves the reliable-acceptance capability. Relay signs, retries and records HTTP delivery. Loomplane supplies the public-destination HTTP transport and authorized controls.
+
+Delivery lifecycle methods are `Run` and `Shutdown`, called by the owning extension. A DI-provided service with `Start` would also be started when Forge finalizes its container, leaving duplicate loops and hanging shutdown. A full-app lifecycle regression test guards this boundary.

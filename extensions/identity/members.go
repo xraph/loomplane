@@ -84,12 +84,13 @@ type CreateInvitationInput struct {
 }
 
 // CreatedInvitation is the new invitation and the path that accepts it.
-// The path carries the invitation's secret, and this is the only time
-// Loomplane hands it out: Loomplane sends no email yet, so whoever invites
-// passes the link on.
+// The path carries the invitation's secret. It is returned once so the
+// inviter can share the link when mail is unavailable.
 type CreatedInvitation struct {
-	Invitation OrgInvitation `json:"invitation"`
-	AcceptPath string        `json:"accept_path"`
+	Invitation   OrgInvitation `json:"invitation"`
+	AcceptPath   string        `json:"accept_path"`
+	EmailStatus  string        `json:"email_status"`
+	EmailMessage string        `json:"email_message"`
 }
 
 func (e *Extension) memberRoutes(v1 forge.Router) error {
@@ -238,9 +239,11 @@ func (e *Extension) createInvitation(c forge.Context) error {
 		Meta("role", role).Record(); err != nil {
 		e.Logger().Error("record audit event", forge.F("action", "member.invite"), forge.F("error", err.Error()))
 	}
+	acceptPath := "/invitations/accept?token=" + url.QueryEscape(token)
+	status, message := e.deliverInvitation(ctx, p.OrgID, inv.Email, acceptPath, role)
 	return c.JSON(http.StatusCreated, CreatedInvitation{
-		Invitation: e.invitation(ctx, inv),
-		AcceptPath: "/invitations/accept?token=" + url.QueryEscape(token),
+		Invitation: e.invitation(ctx, inv), AcceptPath: acceptPath,
+		EmailStatus: status, EmailMessage: message,
 	})
 }
 
@@ -279,4 +282,25 @@ func (e *Extension) profile(ctx context.Context, userID authid.UserID) (email, n
 		return "", ""
 	}
 	return u.Email, strings.TrimSpace(u.Name())
+}
+
+// Delivery is separate from creation: a failed sender must not make a durable
+// invitation disappear or encourage a duplicate invitation on retry.
+func (e *Extension) deliverInvitation(ctx context.Context, orgID, email, path, role string) (status, message string) {
+	if !e.notifications.MailEnabled() {
+		return "disabled", "Email is disabled. Share the invitation link yourself."
+	}
+	orgName := "your organization"
+	if oid, err := authid.ParseOrgID(orgID); err == nil {
+		if org, err := e.store.GetOrganization(ctx, oid); err == nil {
+			orgName = org.Name
+		}
+	}
+	link := strings.TrimRight(e.cfg.PublicURL, "/") + path
+	if err := e.notifications.SendInvitation(ctx, orgID, email, link, orgName, role); err != nil {
+		// Provider errors may contain addresses or token-bearing requests.
+		e.Logger().Warn("invitation email delivery failed", forge.F("org_id", orgID))
+		return "failed", "The invitation was created, but email delivery failed. Share the link or check the mail provider."
+	}
+	return "sent", "Invitation email sent."
 }

@@ -35,6 +35,16 @@ identity:
   # a different name, or each signs the other out.
   session_cookie: "${LOOMPLANE_SESSION_COOKIE:-loomplane_session}"
 
+notifications:
+  # Empty host disables email. For local Mailpit use 127.0.0.1:1025.
+  smtp_host: "${LOOMPLANE_NOTIFICATIONS_SMTP_HOST:-}"
+  smtp_port: "${LOOMPLANE_NOTIFICATIONS_SMTP_PORT:-1025}"
+  smtp_username: "${LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME:-}"
+  smtp_password: "${LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD:-}"
+  from: "${LOOMPLANE_NOTIFICATIONS_FROM:-}"
+  # Implicit TLS, commonly on port 465. Production requires this.
+  smtp_tls: "${LOOMPLANE_NOTIFICATIONS_SMTP_TLS:-false}"
+
 dashboard:
   # The built dashboard (pnpm --dir apps/dashboard build).
   dir: "${LOOMPLANE_DASHBOARD_DIR:-}"

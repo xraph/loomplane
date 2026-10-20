@@ -12,12 +12,16 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
+import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
+import { Route as NotificationsRouteImport } from "./routes/notifications"
+import { Route as ResetPasswordRouteImport } from "./routes/reset-password"
 import { Route as ServicesRouteImport } from "./routes/services"
 import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
 import { Route as VariablesRouteImport } from "./routes/variables"
+import { Route as VerifyEmailRouteImport } from "./routes/verify-email"
 import { Route as DeploymentsIndexRouteImport } from "./routes/deployments.index"
 import { Route as DeploymentsIdRouteImport } from "./routes/deployments.$id"
 import { Route as DeploymentsNewRouteImport } from "./routes/deployments.new"
@@ -43,6 +47,11 @@ const ApiKeysRoute = ApiKeysRouteImport.update({
   path: "/api-keys",
   getParentRoute: () => rootRouteImport,
 } as any)
+const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
+  id: "/forgot-password",
+  path: "/forgot-password",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const InfrastructureRoute = InfrastructureRouteImport.update({
   id: "/infrastructure",
   path: "/infrastructure",
@@ -51,6 +60,16 @@ const InfrastructureRoute = InfrastructureRouteImport.update({
 const MembersRoute = MembersRouteImport.update({
   id: "/members",
   path: "/members",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: "/notifications",
+  path: "/notifications",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: "/reset-password",
+  path: "/reset-password",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ServicesRoute = ServicesRouteImport.update({
@@ -71,6 +90,11 @@ const SignUpRoute = SignUpRouteImport.update({
 const VariablesRoute = VariablesRouteImport.update({
   id: "/variables",
   path: "/variables",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VerifyEmailRoute = VerifyEmailRouteImport.update({
+  id: "/verify-email",
+  path: "/verify-email",
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeploymentsIndexRoute = DeploymentsIndexRouteImport.update({
@@ -123,12 +147,16 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/notifications": typeof NotificationsRoute
+  "/reset-password": typeof ResetPasswordRoute
   "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
+  "/verify-email": typeof VerifyEmailRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
@@ -143,12 +171,16 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/notifications": typeof NotificationsRoute
+  "/reset-password": typeof ResetPasswordRoute
   "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
+  "/verify-email": typeof VerifyEmailRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
@@ -164,12 +196,16 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/notifications": typeof NotificationsRoute
+  "/reset-password": typeof ResetPasswordRoute
   "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
+  "/verify-email": typeof VerifyEmailRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
@@ -186,12 +222,16 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/forgot-password"
     | "/infrastructure"
     | "/members"
+    | "/notifications"
+    | "/reset-password"
     | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
+    | "/verify-email"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
@@ -206,12 +246,16 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/forgot-password"
     | "/infrastructure"
     | "/members"
+    | "/notifications"
+    | "/reset-password"
     | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
+    | "/verify-email"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
@@ -226,12 +270,16 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/forgot-password"
     | "/infrastructure"
     | "/members"
+    | "/notifications"
+    | "/reset-password"
     | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
+    | "/verify-email"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
@@ -247,12 +295,16 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
+  ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
+  NotificationsRoute: typeof NotificationsRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   ServicesRoute: typeof ServicesRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   VariablesRoute: typeof VariablesRoute
+  VerifyEmailRoute: typeof VerifyEmailRoute
   DeploymentsIdRoute: typeof DeploymentsIdRoute
   DeploymentsNewRoute: typeof DeploymentsNewRoute
   DesignDeploymentRoute: typeof DesignDeploymentRoute
@@ -287,6 +339,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ApiKeysRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/forgot-password": {
+      id: "/forgot-password"
+      path: "/forgot-password"
+      fullPath: "/forgot-password"
+      preLoaderRoute: typeof ForgotPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/infrastructure": {
       id: "/infrastructure"
       path: "/infrastructure"
@@ -299,6 +358,20 @@ declare module "@tanstack/react-router" {
       path: "/members"
       fullPath: "/members"
       preLoaderRoute: typeof MembersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/notifications": {
+      id: "/notifications"
+      path: "/notifications"
+      fullPath: "/notifications"
+      preLoaderRoute: typeof NotificationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/reset-password": {
+      id: "/reset-password"
+      path: "/reset-password"
+      fullPath: "/reset-password"
+      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/services": {
@@ -327,6 +400,13 @@ declare module "@tanstack/react-router" {
       path: "/variables"
       fullPath: "/variables"
       preLoaderRoute: typeof VariablesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/verify-email": {
+      id: "/verify-email"
+      path: "/verify-email"
+      fullPath: "/verify-email"
+      preLoaderRoute: typeof VerifyEmailRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/deployments/": {
@@ -399,12 +479,16 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
+  ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
+  NotificationsRoute: NotificationsRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   ServicesRoute: ServicesRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   VariablesRoute: VariablesRoute,
+  VerifyEmailRoute: VerifyEmailRoute,
   DeploymentsIdRoute: DeploymentsIdRoute,
   DeploymentsNewRoute: DeploymentsNewRoute,
   DesignDeploymentRoute: DesignDeploymentRoute,

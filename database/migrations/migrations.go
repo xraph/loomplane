@@ -15,7 +15,9 @@ import (
 	dispatchpg "github.com/xraph/dispatch/store/postgres"
 	conduitpg "github.com/xraph/forge/extensions/conduit/providers/postgres"
 	"github.com/xraph/grove/migrate"
+	heraldpg "github.com/xraph/herald/store/postgres"
 	kspg "github.com/xraph/keysmith/store/postgres"
+	relaypg "github.com/xraph/relay/store/postgres"
 	trovepg "github.com/xraph/trove/extension/store/postgres"
 	vaultpg "github.com/xraph/vault/store/postgres"
 	wardenpg "github.com/xraph/warden/store/postgres"
@@ -63,6 +65,7 @@ func Group() *migrate.Group {
 		statements("20261018000202", "service_restores", serviceRestoresUp, serviceRestoresDown),
 		statements("20261018000203", "backup_policies", backupPoliciesUp, backupPoliciesDown),
 		statements("20261018000400", "create_cloud_profiles", cloudProfilesUp, cloudProfilesDown),
+		NotificationsMigration(),
 	)
 	return g
 }
@@ -82,6 +85,8 @@ func All() []*migrate.Group {
 		vaultpg.Migrations,
 		kspg.Migrations,
 		trovepg.Migrations,
+		heraldpg.Migrations,
+		relaypg.Migrations,
 	}
 }
 

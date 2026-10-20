@@ -60,7 +60,13 @@ import { Link, usePath } from "@/lib/router"
 import { isLive, type Run } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
 
-const settingsPaths = ["/members", "/variables", "/integrations", "/api-keys"]
+const settingsPaths = [
+  "/members",
+  "/variables",
+  "/integrations",
+  "/api-keys",
+  "/notifications",
+]
 
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
@@ -145,6 +151,11 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       icon: <Settings2Icon />,
       isActive: settingsPaths.some((p) => path.startsWith(p)),
       items: [
+        {
+          title: "Notifications",
+          link: <Link to="/notifications" />,
+          isActive: path.startsWith("/notifications"),
+        },
         {
           title: "Members",
           link: <Link to="/members" />,

@@ -57,6 +57,7 @@ type Config struct {
 
 	Database      DatabaseConfig
 	Identity      IdentityConfig
+	Notifications NotificationsConfig
 	Dashboard     DashboardConfig
 	Orchestration OrchestrationConfig
 	GitHub        GitHubConfig
@@ -268,7 +269,8 @@ func Defaults() Config {
 			PublishableKey: "pk_test_loomplane_dev",
 			SessionCookie:  "loomplane_session",
 		},
-		Dashboard: DashboardConfig{Dir: "apps/dashboard/dist"},
+		Notifications: NotificationsConfig{SMTPPort: 1025},
+		Dashboard:     DashboardConfig{Dir: "apps/dashboard/dist"},
 		Orchestration: OrchestrationConfig{
 			Concurrency:  4,
 			PollInterval: time.Second,
@@ -334,6 +336,12 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.PublishableKey, "identity.publishable_key")
 	r.boolean(&c.Identity.RequireEmailVerification, "identity.require_email_verification")
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
+	r.str(&c.Notifications.SMTPHost, "notifications.smtp_host")
+	r.integer(&c.Notifications.SMTPPort, "notifications.smtp_port")
+	r.str(&c.Notifications.SMTPUsername, "notifications.smtp_username")
+	r.str(&c.Notifications.SMTPPassword, "notifications.smtp_password")
+	r.str(&c.Notifications.From, "notifications.from")
+	r.boolean(&c.Notifications.SMTPTLS, "notifications.smtp_tls")
 
 	r.str(&c.Dashboard.Dir, "dashboard.dir")
 
@@ -378,6 +386,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
+	errs = append(errs, c.Notifications.Validate(c.Environment))
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:

@@ -376,6 +376,7 @@ function InviteDialog({
   const [error, setError] = useState("")
   const [link, setLink] = useState("")
   const [copied, setCopied] = useState(false)
+  const [emailStatus, setEmailStatus] = useState("")
 
   const close = (next: boolean) => {
     if (!next) {
@@ -384,6 +385,7 @@ function InviteDialog({
       setError("")
       setLink("")
       setCopied(false)
+      setEmailStatus("")
       create.reset()
     }
     onOpenChange(next)
@@ -399,6 +401,7 @@ function InviteDialog({
         body: { email: email.trim(), role },
       })) as CreatedInvitation
       setLink(`${window.location.origin}${created.acceptPath}`)
+      setEmailStatus(created.emailStatus)
     } catch (err) {
       setError(messageOf(err, "The invitation wasn't created. Try again."))
     }
@@ -415,11 +418,18 @@ function InviteDialog({
         {link ? (
           <>
             <DialogHeader>
-              <DialogTitle>Send them this link</DialogTitle>
+              <DialogTitle>
+                {emailStatus === "sent"
+                  ? "Invitation sent"
+                  : "Share the invitation link"}
+              </DialogTitle>
               <DialogDescription>
-                Loomplane doesn't send email yet, so pass the link to {email}{" "}
-                yourself. It works once, for a week, and they need to sign in
-                with that address to use it.
+                {emailStatus === "sent"
+                  ? `An invitation email was sent to ${email}. You can also share this link.`
+                  : emailStatus === "failed"
+                    ? `Email delivery failed. Share this link with ${email}, or check the mail provider.`
+                    : `Email is disabled. Share this link with ${email}.`}{" "}
+                It works once, for a week. They must sign in with that address.
               </DialogDescription>
             </DialogHeader>
             <div className="flex gap-2">
@@ -447,8 +457,8 @@ function InviteDialog({
             <DialogHeader>
               <DialogTitle>Invite someone</DialogTitle>
               <DialogDescription>
-                You'll get a link to send them. They open it, sign in with this
-                address, and accept.
+                The invitation is emailed when mail is configured. You also get
+                a link to share. They sign in with this address, and accept.
               </DialogDescription>
             </DialogHeader>
             <FieldGroup className="py-4">

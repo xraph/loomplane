@@ -41,10 +41,8 @@ func main() {
 		Name("loomplane").
 		Version(buildinfo.Version).
 		Description("Loomplane: your infrastructure, woven together").
-		// Migrations run on every start, in one pass between registering
-		// and starting the extensions (internal/platform). Forge's migrate
-		// commands look for a CentralMigrator, which the grove extension
-		// doesn't provide, so they'd only report nothing to do.
+		// Loomplane's operational commands below own migration and restore
+		// handling. Disable Forge's overlapping command names.
 		DisableMigrationCommands().
 		WithExtraCommands(ops.Commands(settings)...).
 		Run()

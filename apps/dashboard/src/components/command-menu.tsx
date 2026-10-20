@@ -1,6 +1,7 @@
 // The command menu (⌘K): go anywhere, open any project, run an action.
 import {
   ActivityIcon,
+  BellIcon,
   BracesIcon,
   FolderGit2Icon,
   FolderPlusIcon,
@@ -248,6 +249,13 @@ export function CommandMenu({
               <UsersIcon />
               Members
               <CommandShortcut>G M</CommandShortcut>
+            </CommandItem>
+            <CommandItem
+              value="notifications inbox email webhooks"
+              onSelect={run(() => void navigate({ to: "/notifications" }))}
+            >
+              <BellIcon />
+              Notifications
             </CommandItem>
             <CommandItem
               value="integrations github"
