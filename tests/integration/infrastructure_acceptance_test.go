@@ -48,17 +48,6 @@ type infrastructureState struct {
 	ServicePort         int    `json:"service_port"`
 }
 
-func fixtureCommand(t *testing.T, args ...string) string {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 3*time.Minute)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("fixture command %s: %v\n%s", args[0], err, output)
-	}
-	return strings.TrimSpace(string(output))
-}
-
 // fixtureSSH forwards authenticated SSH channels to the disposable real Docker
 // daemon. Neither its Engine API nor its build/rollout responses are mocked.
 func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]string) {
