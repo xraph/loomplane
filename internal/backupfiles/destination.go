@@ -39,6 +39,10 @@ func destinationLocator(dsn string) (destination, error) {
 	if err != nil {
 		return destination{}, errors.New("invalid backup destination configuration")
 	}
+	params, queryErr := url.ParseQuery(u.RawQuery)
+	if queryErr != nil {
+		return destination{}, errors.New("invalid backup destination query parameters")
+	}
 	switch u.Scheme {
 	case "file", "local":
 		root := u.Path
@@ -61,7 +65,7 @@ func destinationLocator(dsn string) (destination, error) {
 		if strings.TrimPrefix(u.Path, "/") == "" {
 			return destination{}, errors.New("backup destination requires an S3 default bucket")
 		}
-		endpoint := u.Query().Get("endpoint")
+		endpoint := params.Get("endpoint")
 		if endpoint != "" {
 			parsed, parseErr := url.Parse(endpoint)
 			if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {

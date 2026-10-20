@@ -66,6 +66,7 @@ func TestDestinationLocatorNormalizesLocalPathsAndRedactsErrors(t *testing.T) {
 		"s3://KEY:SECRET%zz@us-east-1/bucket",
 		"https://KEY:SECRET@unsupported.example.com",
 		"s3://KEY:SECRET@us-east-1/bucket?endpoint=https://storage.example.com?token=SECRET",
+		"s3://KEY:SECRET@us-east-1/bucket?endpoint=%zz",
 	} {
 		if _, err = destinationLocator(dsn); err == nil || strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), "KEY") {
 			t.Fatalf("destination error exposed credentials or accepted an unsupported configuration: %v", err)
