@@ -225,7 +225,7 @@ jobs:
     permissions:
       contents: write
       packages: write
-    uses: xraph/workflows/.github/workflows/go-binary-release.yml@v1.20.0
+    uses: xraph/workflows/.github/workflows/go-binary-release.yml@4cfa392ef6078a0163b69fade13c2e48cebb0cc6 # v1.20.0
     with:
       ref: ${{ needs.plan.outputs.tag }}
       go-version-file: go.mod
