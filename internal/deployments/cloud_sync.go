@@ -152,7 +152,8 @@ func (r *Runner) CleanupCloudPlan(ctx context.Context, org, planID string, heart
 				}
 				return heartbeat(raw)
 			}
-			job := &Job{Deployment: d, Plan: plan, Action: a, Binding: b, Checkpoint: checkpoint}
+			// removeOne reports progress, but a cleanup has no live step to show it on.
+			job := &Job{Deployment: d, Plan: plan, Action: a, Binding: b, Checkpoint: checkpoint, Progress: func(string, string) {}}
 			if err = r.removeReplaced(ctx, job, b, step.Replaced, nil, rc, checkpoint); err != nil {
 				return fmt.Errorf("cleanup %s: %w", a.Name, err)
 			}
