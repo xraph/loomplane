@@ -1,0 +1,170 @@
+name: Publish (Docker)
+
+# The container half of a release. release.yml calls it with a tag that
+# already exists and already has a GitHub release.
+#
+# Each architecture builds on its own native runner and runs the production
+# smoke test before anything is pushed. Only a build that passed is pushed,
+# by digest. The publish job then joins the digests into one multi-platform
+# manifest, tags it with what scripts/release-image-tags.sh picks, and
+# attaches the Docker deployment bundle to the release.
+#
+# Set the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets to mirror every tag
+# to Docker Hub (vars.DOCKERHUB_REPO, default xraph/loomplane).
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build and publish, e.g. v1.2.3.
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    name: Build and smoke test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Build for smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: loomplane:release-test
+          build-args: VERSION=${{ inputs.tag }}
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.arch }}
+      - run: bash scripts/test-production.sh loomplane:release-test
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested build by digest
+        id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: VERSION=${{ inputs.tag }}
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ inputs.tag }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish manifest and deployment bundle
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          # Every tag, to tell whether this release is the newest in its line.
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker Hub
+        id: hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO || 'xraph/loomplane' }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "image=docker.io/${DOCKERHUB_REPO}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN aren't both set, so this publishes to GHCR only."
+          fi
+      - if: steps.hub.outputs.image != ''
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Choose version tags
+        id: tags
+        env:
+          TAG: ${{ inputs.tag }}
+        run: bash scripts/release-image-tags.sh "$TAG" >> "$GITHUB_OUTPUT"
+      - name: Publish version tags and attach deployment files
+        env:
+          TAG: ${{ inputs.tag }}
+          HUB: ${{ steps.hub.outputs.image }}
+          VERSION_TAGS: ${{ steps.tags.outputs.tags }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          refs=()
+          for digest in digests/*; do refs+=("${IMAGE}@sha256:${digest##*/}"); done
+          tags=()
+          for image in "$IMAGE" ${HUB:+"$HUB"}; do
+            for t in $VERSION_TAGS; do tags+=(--tag "${image}:${t}"); done
+          done
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}" > image-manifest.txt
+          digest=$(awk '$1 == "Digest:" {print $2; exit}' image-manifest.txt)
+          test -n "$digest"
+          printf '%s@%s\n' "$IMAGE" "$digest" > image.txt
+          mkdir -p bundle
+          cp deployments/production/compose.yaml deployments/production/Caddyfile deployments/production/.env.example bundle/
+          cp docs/docker-production.md bundle/README.md
+          cp image.txt bundle/
+          sed -i "s|^LOOMPLANE_IMAGE=.*|LOOMPLANE_IMAGE=${IMAGE}@${digest}|" bundle/.env.example
+          tar -czf "loomplane-${TAG}-docker.tar.gz" -C bundle .
+          sha256sum "loomplane-${TAG}-docker.tar.gz" > SHA256SUMS
+          gh release upload "$TAG" "loomplane-${TAG}-docker.tar.gz" image.txt image-manifest.txt SHA256SUMS --clobber

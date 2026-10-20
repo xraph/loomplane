@@ -1,19 +1,160 @@
-name: Release containers
+name: Release
+
+# Cuts and publishes a Loomplane release. There are two ways in.
+#
+#   git push origin v1.2.3
+#       Releases a tag you pushed. Everything publishes.
+#
+#   Actions > Release > Run workflow, or
+#   gh workflow run release.yml -f version=v1.2.3 [-f target=cli]
+#       target "all" tags the commit you ran it from, which must be on
+#       main, and publishes everything. No PAT is needed: the tag, the
+#       GitHub release and every publish job happen in this one run.
+#       target "cli" or "docker" re-publishes one part of a release that
+#       already exists, from its tag, wherever you run it from.
+#
+# What a release publishes:
+#
+#   release   the tag and the GitHub release, through xraph/workflows
+#             go-release.yml
+#   cli       GoReleaser through xraph/workflows go-binary-release.yml:
+#             loomctl for macOS, Linux and Windows with Homebrew and Scoop,
+#             and the loomplane_* server archives with the dashboard
+#   docker    publish-docker.yml: smoke-tested AMD64 and ARM64 images on
+#             GHCR (and Docker Hub with its secrets), plus the deployment
+#             bundle on the release
+#
+# Lint, unit and integration tests gate all of it unless you tick
+# skip-tests, which is for re-publishing a tag that passed them already.
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag, e.g. v1.2.3 or v1.3.0-rc.1
+        required: true
+        type: string
+      target:
+        description: all cuts a new release. cli or docker re-publishes one part of an existing one.
+        required: true
+        type: choice
+        default: all
+        options: [all, cli, docker]
+      skip-tests:
+        description: Skip lint and tests (only for a tag that passed them)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.release.tag_name }}
+  group: release-${{ inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      create-release: ${{ steps.plan.outputs.create-release }}
+      cli: ${{ steps.plan.outputs.cli }}
+      docker: ${{ steps.plan.outputs.docker }}
+      skip-tests: ${{ steps.plan.outputs.skip-tests }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Every branch and tag, to check the tag and where it points.
+          fetch-depth: 0
+      - name: Work out what to release
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ inputs.target }}
+          SKIP_TESTS: ${{ inputs.skip-tests }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            tag=$GITHUB_REF_NAME target=all SKIP_TESTS=false
+          else
+            tag=v${VERSION#v} target=$TARGET
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$tag isn't vMAJOR.MINOR.PATCH with an optional -prerelease suffix."
+            exit 1
+          fi
+
+          tagged=$(git rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)
+          released=false
+          if gh release view "$tag" --json tagName >/dev/null 2>&1; then released=true; fi
+
+          if [ "$EVENT" = workflow_dispatch ] && [ "$target" = all ]; then
+            if [ -n "$tagged" ]; then
+              echo "::error::$tag already exists at ${tagged::7}. Pick a new version, or run with target cli or docker to re-publish part of it."
+              exit 1
+            fi
+            commit=$GITHUB_SHA ref=$GITHUB_SHA create=true
+          else
+            if [ -z "$tagged" ]; then
+              echo "::error::$tag doesn't exist. Run with target all to cut it."
+              exit 1
+            fi
+            commit=$tagged ref=refs/tags/$tag
+            # A tag pushed by hand gets its release here. One made in the
+            # Releases page already has it, so this only publishes into it.
+            create=false
+            if [ "$EVENT" = push ] && [ "$released" = false ]; then create=true; fi
+            if [ "$create" = false ] && [ "$released" = false ]; then
+              echo "::error::$tag has no GitHub release to publish into. Push the tag again, or create the release first."
+              exit 1
+            fi
+          fi
+
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::${commit::7} isn't on main. Releases are cut from main only."
+            exit 1
+          fi
+
+          cli=false docker=false
+          case "$target" in
+            all) cli=true docker=true ;;
+            cli) cli=true ;;
+            docker) docker=true ;;
+          esac
+          {
+            echo "tag=$tag"
+            echo "ref=$ref"
+            echo "create-release=$create"
+            echo "cli=$cli"
+            echo "docker=$docker"
+            echo "skip-tests=$SKIP_TESTS"
+          } | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### Releasing \`$tag\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${commit::7}\` |"
+            echo "| New GitHub release | $create |"
+            echo "| CLI and archives | $cli |"
+            echo "| Docker | $docker |"
+            echo "| Tests | $([ "$SKIP_TESTS" = true ] && echo skipped || echo run) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   checks:
     name: Release checks
+    needs: plan
+    if: needs.plan.outputs.skip-tests != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
@@ -32,14 +173,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name }}
-          fetch-depth: 0
-      - name: Verify release tag belongs to main
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          git merge-base --is-ancestor HEAD origin/main
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -59,178 +193,65 @@ jobs:
       - run: make lint-dashboard test
       - run: go test -race -count=1 -tags=integration ./tests/integration/
 
-  binaries:
-    name: Binaries, Homebrew and Scoop
-    needs: checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+  release:
+    name: Tag and GitHub release
+    needs: [plan, checks]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.create-release == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.checks.result)
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.release.tag_name }}
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - uses: pnpm/action-setup@v6
-        with:
-          package_json_file: apps/dashboard/package.json
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: apps/dashboard/pnpm-lock.yaml
-      # Appends archives to this release. Homebrew and Scoop update only when
-      # HOMEBREW_TAP_GITHUB_TOKEN can push to xraph/homebrew-tap and
-      # xraph/scoop-bucket; the default token can't reach other repositories.
-      - uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
-        env:
-          GORELEASER_CURRENT_TAG: ${{ github.event.release.tag_name }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+    uses: xraph/workflows/.github/workflows/go-release.yml@adbc00609c913abaabd7b38d11533e0a44b92432 # v1.19.0
+    with:
+      # Empty on a tag push, where go-release.yml reads the pushed tag. A
+      # version makes it tag github.sha first.
+      version: ${{ github.event_name == 'workflow_dispatch' && needs.plan.outputs.tag || '' }}
+      # The checks job above already ran them, with Postgres.
+      run-tests: false
+      # A changelog commit would move the tag off the commit plan checked.
+      update-changelog: false
+      # examples/ and tests/ hold go.mod files that aren't modules we ship.
+      skip-nested-modules: true
 
-  image:
-    name: Build and smoke test (${{ matrix.arch }})
-    needs: checks
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.release.tag_name }}
-      - uses: docker/setup-buildx-action@v4
-      - name: Build for smoke test
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: deployments/docker/Dockerfile
-          platforms: linux/${{ matrix.arch }}
-          load: true
-          tags: loomplane:release-test
-          build-args: VERSION=${{ github.event.release.tag_name }}
-          cache-from: type=gha,scope=release-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=release-${{ matrix.arch }}
-      - run: bash scripts/test-production.sh loomplane:release-test
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish tested build by digest
-        id: image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: deployments/docker/Dockerfile
-          platforms: linux/${{ matrix.arch }}
-          build-args: VERSION=${{ github.event.release.tag_name }}
-          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
-          provenance: mode=max
-          sbom: true
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ github.event.release.tag_name }}
-            org.opencontainers.image.licenses=AGPL-3.0-only
-      - name: Export digest
-        env:
-          DIGEST: ${{ steps.image.outputs.digest }}
-        run: |
-          mkdir -p digests
-          touch "digests/${DIGEST#sha256:}"
-      - uses: actions/upload-artifact@v6
-        with:
-          name: digest-${{ matrix.arch }}
-          path: digests/*
-          retention-days: 1
-
-  publish:
-    name: Publish release manifest and deployment bundle
-    needs: image
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+  cli:
+    name: CLI and archives
+    needs: [plan, checks, release]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.cli == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release.result)
     permissions:
       contents: write
       packages: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.release.tag_name }}
-          # Every tag, to tell whether this release is the newest in its line.
-          fetch-depth: 0
-      - uses: actions/download-artifact@v7
-        with:
-          pattern: digest-*
-          path: digests
-          merge-multiple: true
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Docker Hub
-        id: hub
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO || 'xraph/loomplane' }}
-        run: |
-          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
-            echo "image=docker.io/${DOCKERHUB_REPO}" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN aren't both set, so this publishes to GHCR only."
-          fi
-      - if: steps.hub.outputs.image != ''
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Choose version tags
-        id: tags
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: bash scripts/release-image-tags.sh "$TAG" >> "$GITHUB_OUTPUT"
-      - name: Publish version tags and attach deployment files
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-          IMAGE: ghcr.io/${{ github.repository }}
-          HUB: ${{ steps.hub.outputs.image }}
-          VERSION_TAGS: ${{ steps.tags.outputs.tags }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          refs=()
-          for digest in digests/*; do refs+=("${IMAGE}@sha256:${digest##*/}"); done
-          tags=()
-          for image in "$IMAGE" ${HUB:+"$HUB"}; do
-            for t in $VERSION_TAGS; do tags+=(--tag "${image}:${t}"); done
-          done
-          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
-          docker buildx imagetools inspect "${IMAGE}:${TAG}" > image-manifest.txt
-          digest=$(awk '$1 == "Digest:" {print $2; exit}' image-manifest.txt)
-          test -n "$digest"
-          printf '%s@%s\n' "$IMAGE" "$digest" > image.txt
-          mkdir -p bundle
-          cp deployments/production/compose.yaml deployments/production/Caddyfile deployments/production/.env.example bundle/
-          cp docs/docker-production.md bundle/README.md
-          cp image.txt bundle/
-          sed -i "s|^LOOMPLANE_IMAGE=.*|LOOMPLANE_IMAGE=${IMAGE}@${digest}|" bundle/.env.example
-          tar -czf "loomplane-${TAG}-docker.tar.gz" -C bundle .
-          sha256sum "loomplane-${TAG}-docker.tar.gz" > SHA256SUMS
-          gh release upload "$TAG" "loomplane-${TAG}-docker.tar.gz" image.txt image-manifest.txt SHA256SUMS --clobber
+    uses: xraph/workflows/.github/workflows/go-binary-release.yml@4cfa392ef6078a0163b69fade13c2e48cebb0cc6 # v1.20.0
+    with:
+      ref: ${{ needs.plan.outputs.tag }}
+      go-version-file: go.mod
+      # The server archives carry the built dashboard.
+      node-version: "24"
+      pnpm-directory: apps/dashboard
+    secrets:
+      # One token pushes to both xraph/homebrew-tap and xraph/scoop-bucket.
+      # Without it the archives still publish.
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      SCOOP_BUCKET_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  docker:
+    name: Docker
+    needs: [plan, checks, release]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.docker == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release.result)
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/publish-docker.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

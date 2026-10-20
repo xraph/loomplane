@@ -1,7 +1,8 @@
-# GoReleaser builds Loomplane's binaries when a release is published. The
-# release workflow (.github/workflows/release.yml) runs it against the
-# release's tag and appends the archives to that release, next to the image
-# and the Docker bundle.
+# GoReleaser builds Loomplane's binaries for every release. The release
+# workflow (.github/workflows/release.yml) runs it through xraph/workflows
+# go-binary-release.yml, against the release's tag, once the GitHub release
+# exists. It appends the archives to that release, next to the image and the
+# Docker bundle.
 #
 #   loomctl      the CLI, for macOS, Linux and Windows. Homebrew and Scoop
 #                install this one.
@@ -80,7 +81,7 @@ archives:
         dst: dashboard
 
 checksum:
-  # release.yml already uploads SHA256SUMS for the Docker bundle.
+  # publish-docker.yml already uploads SHA256SUMS for the Docker bundle.
   name_template: binaries-checksums.txt
 
 # The release already has its notes; GoReleaser only adds files to it.
@@ -97,9 +98,9 @@ homebrew_casks:
     repository:
       owner: xraph
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     # Without a token that can push to the tap, release everything else.
-    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ else }}auto{{ end }}'
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_TOKEN "" }}true{{ else }}auto{{ end }}'
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
@@ -120,8 +121,8 @@ scoops:
     repository:
       owner: xraph
       name: scoop-bucket
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ else }}auto{{ end }}'
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    skip_upload: '{{ if eq .Env.SCOOP_BUCKET_TOKEN "" }}true{{ else }}auto{{ end }}'
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
