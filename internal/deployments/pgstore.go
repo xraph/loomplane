@@ -249,7 +249,8 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 // storedStep is a step as it's stored: with what it replaces, which the
 // API leaves out, since it's only there for a retry.
 type storedStep struct {
-	Checkpoint []byte `json:"checkpoint,omitempty"`
+	Checkpoint           []byte `json:"checkpoint,omitempty"`
+	CloudCleanupComplete bool   `json:"cloud_cleanup_complete,omitempty"`
 	Step
 	Replaced *planning.Binding `json:"replaced,omitempty"`
 }
@@ -257,7 +258,7 @@ type storedStep struct {
 func encodeSteps(steps []Step) ([]byte, error) {
 	out := make([]storedStep, len(steps))
 	for i, s := range steps {
-		out[i] = storedStep{Step: s, Replaced: s.Replaced, Checkpoint: s.Checkpoint}
+		out[i] = storedStep{Step: s, Replaced: s.Replaced, Checkpoint: s.Checkpoint, CloudCleanupComplete: s.CloudCleanupComplete}
 	}
 	return json.Marshal(out)
 }
@@ -272,6 +273,7 @@ func decodeSteps(raw []byte) ([]Step, error) {
 		out[i] = s.Step
 		out[i].Replaced = s.Replaced
 		out[i].Checkpoint = s.Checkpoint
+		out[i].CloudCleanupComplete = s.CloudCleanupComplete
 	}
 	return out, nil
 }

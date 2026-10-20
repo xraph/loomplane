@@ -112,6 +112,9 @@ func (r *Render) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, err
 	}
 	state.ServiceID = svc.ID
+	if checkpointErr := checkpointCloudIdentity(job, state); checkpointErr != nil {
+		return nil, checkpointErr
+	}
 	if state.DeployID == "" {
 		d, derr := r.Client.DeployCommit(ctx, key, svc.ID, job.CommitSHA)
 		if derr != nil {

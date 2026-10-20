@@ -102,6 +102,9 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, err
 	}
 	state.ProjectID = project.ID
+	if checkpointErr := checkpointCloudIdentity(job, state); checkpointErr != nil {
+		return nil, checkpointErr
+	}
 	if serr := v.Client.SetEnv(ctx, tok, project.ID, job.Env, job.Secrets); serr != nil {
 		return nil, serr
 	}

@@ -51,6 +51,7 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
+	cleanupSyncID    string
 	BuildCredentials Credentials
 	Logs             LogSink
 	Attempt          string
@@ -764,10 +765,11 @@ func moves(b *planning.Binding, a planning.Action, connID string) bool {
 // its own. Removing is the external ID of what Remove's progress is for,
 // since an action can have more than one old one to remove.
 type replaceCheckpoint struct {
-	Replace  bool   `json:"replace"`
-	Apply    []byte `json:"apply,omitempty"`
-	Remove   []byte `json:"remove,omitempty"`
-	Removing string `json:"removing,omitempty"`
+	PendingResource string `json:"pending_resource,omitempty"`
+	Replace         bool   `json:"replace"`
+	Apply           []byte `json:"apply,omitempty"`
+	Remove          []byte `json:"remove,omitempty"`
+	Removing        string `json:"removing,omitempty"`
 }
 
 // readReplaceCheckpoint reads what an earlier attempt at an action saved.
@@ -950,7 +952,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	// is the replacement's now.
 	gone.Forget = func(context.Context) error { return nil }
 	job.Progress(StepDeploying, "Removing the one it replaces on "+placement(old.Provider, old.Region))
-	if authErr := r.authorizeSync(ctx, job.Plan); authErr != nil {
+	if authErr := r.authorizeCloudRemoval(ctx, job); authErr != nil {
 		return false, authErr
 	}
 	if err := exec.Remove(ctx, &gone, old); err != nil {

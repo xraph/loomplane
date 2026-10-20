@@ -210,17 +210,22 @@ func (syncVars) Values(context.Context, string, string, string, string) (map[str
 }
 
 type syncExecutor struct {
-	url             string
-	failStage       bool
-	failCleanup     bool
-	calls           map[string]int
-	removed         []string
-	contents        map[string]string
-	resumed         bool
-	badSecret       bool
-	afterCheckpoint func() error
-	tokens          map[string]string
-	endpoints       map[string]string
+	url                   string
+	failStage             bool
+	failCleanup           bool
+	calls                 map[string]int
+	removed               []string
+	contents              map[string]string
+	resumed               bool
+	badSecret             bool
+	afterCheckpoint       func() error
+	tokens                map[string]string
+	endpoints             map[string]string
+	trackPending          bool
+	pendingResources      map[string]bool
+	pendingCleanupFail    bool
+	pendingDeleteThenFail bool
+	pendingTail           bool
 }
 
 func (e *syncExecutor) Apply(ctx context.Context, job *deployments.Job) (*deployments.Outcome, error) {
@@ -229,7 +234,16 @@ func (e *syncExecutor) Apply(ctx context.Context, job *deployments.Job) (*deploy
 	if len(job.Resume) > 0 {
 		e.resumed = true
 	}
-	if err := job.Checkpoint([]byte(`{"operation":"exact-provider-operation"}`)); err != nil {
+	checkpoint := []byte(`{"operation":"exact-provider-operation"}`)
+	if e.trackPending {
+		id := job.Connection.ID + "-" + key
+		if e.pendingResources == nil {
+			e.pendingResources = map[string]bool{}
+		}
+		e.pendingResources[id] = true
+		checkpoint, _ = json.Marshal(map[string]string{"operation": "exact-provider-operation", "external_id": id})
+	}
+	if err := job.Checkpoint(checkpoint); err != nil {
 		return nil, err
 	}
 	if e.tokens == nil {
@@ -263,13 +277,39 @@ func (e *syncExecutor) Apply(ctx context.Context, job *deployments.Job) (*deploy
 	return &deployments.Outcome{ExternalID: job.Connection.ID + "-" + key, URL: e.url, Revision: job.Connection.ID + "-revision"}, nil
 }
 func (e *syncExecutor) Remove(_ context.Context, job *deployments.Job, b *planning.Binding) error {
+	if e.pendingCleanupFail && b.ExternalID == "new-stage/api" {
+		return errors.New("pending destination cleanup unavailable")
+	}
 	if e.failCleanup {
 		e.failCleanup = false
 		return errors.New("cleanup temporarily unavailable")
 	}
+	delete(e.pendingResources, b.ExternalID)
+	if b.ExternalID == "new-stage/api" && e.pendingDeleteThenFail {
+		e.pendingDeleteThenFail = false
+		e.pendingTail = true
+		return errors.New("resource deleted but provider tail cleanup failed")
+	}
+	if b.ExternalID == "new-stage/api" {
+		e.pendingTail = false
+	}
 	e.removed = append(e.removed, job.Connection.ID+":"+b.ExternalID)
 	return nil
 }
+func (e *syncExecutor) PendingCloudResource(_ context.Context, job *deployments.Job) (string, error) {
+	var state struct {
+		ExternalID string `json:"external_id"`
+	}
+	if err := json.Unmarshal(job.Resume, &state); err != nil {
+		return "", err
+	}
+
+	if e.trackPending && state.ExternalID != "" && !e.pendingResources[state.ExternalID] {
+		return "", nil
+	}
+	return state.ExternalID, nil
+}
+
 func (e *syncExecutor) Observe(context.Context, *connections.Connection, []byte, *planning.Binding) (*deployments.Observation, error) {
 	return &deployments.Observation{Exists: true}, nil
 }
@@ -477,6 +517,9 @@ func TestCloudSyncRevertOwnsRemainingWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = f.conn.Exec(ctx, `INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,manifest_id,manifest_revision,created_by,created_at) VALUES('queued-behind-forward','org','proj','env','production','approved','manifest',1,'usr',now())`); err != nil {
+		t.Fatal(err)
+	}
 	heartbeat := func([]byte) error { return nil }
 	if err = f.service.ReconcileCloudSync(ctx, "org", "proj", forward.ID, heartbeat); err == nil {
 		t.Fatal("expected partial failure")
@@ -508,6 +551,9 @@ func TestCloudSyncRevertOwnsRemainingWork(t *testing.T) {
 	compensation, err := f.service.ApplyCloudRevert(ctx, actor, "proj", revert.ID, revert.Revision, "compensate")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if available, e := f.newRunner().ReleaseAvailable(ctx, "org", "queued-behind-forward"); e != nil || available {
+		t.Fatalf("queued release escaped compensation guard: %v %v", available, e)
 	}
 	// An already delivered original activity must not revive forward migration.
 	if err = f.service.ReconcileCloudSync(ctx, "org", "proj", forward.ID, heartbeat); err != nil {
@@ -541,6 +587,9 @@ func TestCloudSyncRevertOwnsRemainingWork(t *testing.T) {
 	retired, err = f.service.CloudSync(ctx, actor, "proj", forward.ID)
 	if err != nil || retired.Status != cloudprofiles.SyncReverted {
 		t.Fatalf("forward status: %+v %v", retired, err)
+	}
+	if available, e := f.newRunner().ReleaseAvailable(ctx, "org", "queued-behind-forward"); e != nil || !available {
+		t.Fatalf("queued release did not resume after revert: %v %v", available, e)
 	}
 	bindings, err := planning.NewPgStore(f.db).ListBindings(ctx, "org", "env")
 	if err != nil {
@@ -905,5 +954,172 @@ func TestCloudSyncApprovalAcceptanceRace(t *testing.T) {
 		if _, err = conn.Exec(ctx, `UPDATE loomplane_plans SET status='rejected' WHERE id=$1`, id); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+type interleavedCompensationStore struct {
+	*planning.PgStore
+	afterCheck func() error
+}
+
+func (s *interleavedCompensationStore) CheckCloudCompensation(ctx context.Context, org, id, env string, before json.RawMessage) error {
+	if err := s.PgStore.CheckCloudCompensation(ctx, org, id, env, before); err != nil {
+		return err
+	}
+	if s.afterCheck != nil {
+		fn := s.afterCheck
+		s.afterCheck = nil
+		return fn()
+	}
+	return nil
+}
+
+func TestCloudSyncRevertRejectsOwnershipChangeBeforeSnapshot(t *testing.T) {
+	f := newSyncFixture(t)
+	ctx := t.Context()
+	actor := security.Principal{OrgID: "org", UserID: "usr"}
+	preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward, err := f.service.ApplyCloudChange(ctx, actor, "proj", preview.ID, preview.Revision, "interleave-forward")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.service.ReconcileCloudSync(ctx, "org", "proj", forward.ID, func([]byte) error { return nil }); err == nil {
+		t.Fatal("expected partial failure")
+	}
+	store := &interleavedCompensationStore{PgStore: planning.NewPgStore(f.db), afterCheck: func() error {
+		_, e := f.conn.Exec(ctx, `UPDATE loomplane_bindings SET revision='outside-edit-between-check-and-snapshot' WHERE id='binding-env-api'`)
+		return e
+	}}
+	service := planning.NewService(planning.Deps{Store: store, Projects: projects.NewPgStore(f.db), CloudProfiles: f.store, Connections: f.accounts, Providers: providers.Registry(), Authz: f.auth})
+	runner := f.newRunner()
+	service.BindCloudSyncRunner(runner, runner)
+	revert, err := service.PreviewCloudRevert(ctx, actor, "proj", forward.ID)
+	if err != nil {
+		return
+	} // A consistent preview is also allowed to reject the interleaving.
+	if _, err = service.ApplyCloudRevert(ctx, actor, "proj", revert.ID, revert.Revision, "interleave-revert"); err == nil {
+		t.Fatal("external mutation became owned compensation")
+	}
+	target, err := f.store.GetTarget(ctx, "org", "proj", "cloud", "target")
+	if err != nil || target.ConnectionID != "new" || target.Revision != 2 {
+		t.Fatalf("rejected compensation changed target: %+v %v", target, err)
+	}
+}
+
+func TestCloudSyncRevertCleansUnpublishedProviderResources(t *testing.T) {
+	f := newSyncFixture(t)
+	ctx := t.Context()
+	actor := security.Principal{OrgID: "org", UserID: "usr"}
+	f.executor.trackPending = true
+	preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward, err := f.service.ApplyCloudChange(ctx, actor, "proj", preview.ID, preview.Revision, "unready-forward")
+	if err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := func([]byte) error { return nil }
+	if err = f.service.ReconcileCloudSync(ctx, "org", "proj", forward.ID, heartbeat); err == nil {
+		t.Fatal("expected readiness failure after resource creation")
+	}
+	if !f.executor.pendingResources["new-stage/api"] {
+		t.Fatal("fixture did not create destination before readiness failure")
+	}
+	bindings, err := planning.NewPgStore(f.db).ListBindings(ctx, "org", "stage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bindings {
+		if b.ConnectionID != "old" {
+			t.Fatal("unready destination became serving")
+		}
+	}
+	revert, err := f.service.PreviewCloudRevert(ctx, actor, "proj", forward.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compensation, err := f.service.ApplyCloudRevert(ctx, actor, "proj", revert.ID, revert.Revision, "unready-revert")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.service.ReconcileCloudSync(ctx, "org", "proj", compensation.ID, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	f.executor.pendingCleanupFail = true
+	status, err := f.service.CloudSync(ctx, actor, "proj", compensation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range status.Environments {
+		if !env.ExternalRouting {
+			continue
+		}
+		if _, err = f.service.CompleteCloudRouting(ctx, actor, "proj", compensation.ID, env.EnvironmentID, "routing restored"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = f.service.ReconcileCloudSync(ctx, "org", "proj", compensation.ID, heartbeat); err == nil {
+		t.Fatal("unpublished provider resource cleanup failure was ignored")
+	}
+	status, err = f.service.CloudSync(ctx, actor, "proj", compensation.ID)
+	if err != nil || status.Status != cloudprofiles.SyncCleanup {
+		t.Fatalf("pending cleanup state: %+v %v", status, err)
+	}
+	original, _, err := f.store.GetSync(ctx, "org", "proj", forward.ID)
+	if err != nil || original.Status != cloudprofiles.SyncReverting {
+		t.Fatalf("original retired before pending resource cleanup: %+v %v", original, err)
+	}
+	var refs int
+	if err = f.conn.QueryRow(ctx, `SELECT count(*) FROM loomplane_cloud_sync_connections WHERE sync_id=$1`, forward.ID).Scan(&refs); err != nil || refs == 0 {
+		t.Fatalf("original cleanup credentials were released: %d %v", refs, err)
+	}
+	if !f.executor.pendingResources["new-stage/api"] {
+		t.Fatal("failed cleanup forgot the destination")
+	}
+	for _, env := range original.Environments {
+		if env.PlanID == "" {
+			continue
+		}
+		if e := f.newRunner().CleanupRevertedCloudPlan(ctx, "org", env.PlanID, forward.ID, heartbeat); e == nil {
+			t.Fatal("original operation granted its own unrelated cleanup authority")
+		}
+	}
+	f.executor.pendingCleanupFail = false
+	f.executor.pendingDeleteThenFail = true
+	restarted := f.newRunner()
+	f.service.BindCloudSyncRunner(restarted, restarted)
+	if _, err = f.service.RetryCloudSync(ctx, actor, "proj", compensation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.service.ReconcileCloudSync(ctx, "org", "proj", compensation.ID, heartbeat); err == nil {
+		t.Fatal("provider tail cleanup failure was lost")
+	}
+	if f.executor.pendingResources["new-stage/api"] || !f.executor.pendingTail {
+		t.Fatal("fixture did not delete resource before tail failure")
+	}
+	restarted = f.newRunner()
+	f.service.BindCloudSyncRunner(restarted, restarted)
+	if _, err = f.service.RetryCloudSync(ctx, actor, "proj", compensation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.service.ReconcileCloudSync(ctx, "org", "proj", compensation.ID, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if f.executor.pendingTail {
+		t.Fatal("retry forgot saved resource identity after provider deletion")
+	}
+	if f.executor.pendingResources["new-stage/api"] {
+		t.Fatal("retry left the unready destination running")
+	}
+	original, _, err = f.store.GetSync(ctx, "org", "proj", forward.ID)
+	if err != nil || original.Status != cloudprofiles.SyncReverted {
+		t.Fatalf("original did not retire after cleanup: %+v %v", original, err)
+	}
+	if err = f.conn.QueryRow(ctx, `SELECT count(*) FROM loomplane_cloud_sync_connections WHERE sync_id=$1`, forward.ID).Scan(&refs); err != nil || refs != 0 {
+		t.Fatalf("finished cleanup retained credentials: %d %v", refs, err)
 	}
 }

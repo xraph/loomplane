@@ -169,6 +169,9 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 			return nil, aerr
 		}
 		state.AppID = app.ID
+		if checkpointErr := checkpointCloudIdentity(job, state); checkpointErr != nil {
+			return nil, checkpointErr
+		}
 		if app.ActiveDeployment != nil {
 			state.Previous = app.ActiveDeployment.ID
 		}

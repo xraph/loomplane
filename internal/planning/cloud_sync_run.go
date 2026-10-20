@@ -13,6 +13,7 @@ import (
 type CloudSyncDeployer interface {
 	ReconcileCloudPlan(context.Context, string, string, func([]byte) error) (string, error)
 	CleanupCloudPlan(context.Context, string, string, func([]byte) error) error
+	CleanupRevertedCloudPlan(context.Context, string, string, string, func([]byte) error) error
 }
 
 // BindCloudSyncRunner resolves the planning/runner dependency after construction.
@@ -177,6 +178,21 @@ func (s *Service) reconcileCloudSync(ctx context.Context, st cloudprofiles.SyncS
 			return errors.Join(err, st.SaveSync(context.WithoutCancel(ctx), sync, snapshot))
 		}
 	}
+	if sync.Reverts != "" {
+		original, _, readErr := st.GetSync(ctx, org, project, sync.Reverts)
+		if readErr != nil {
+			return readErr
+		}
+		for _, env := range original.Environments {
+			if env.PlanID == "" {
+				continue
+			}
+			if cleanupErr := s.cloudSyncRunner.CleanupRevertedCloudPlan(ctx, org, env.PlanID, sync.ID, heartbeat); cleanupErr != nil {
+				sync.Error = fmt.Sprintf("%s unfinished forward operation: %v", env.Environment, cleanupErr)
+				return errors.Join(cleanupErr, st.SaveSync(context.WithoutCancel(ctx), sync, snapshot))
+			}
+		}
+	}
 	sync.Status = cloudprofiles.SyncSucceeded
 	sync.Error = ""
 	return st.SaveSync(ctx, sync, snapshot)
@@ -219,4 +235,61 @@ func (s *Service) RecoverCloudSyncs(ctx context.Context) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// ValidateCloudSyncCleanup grants only cleanup of a reverted operation's exact
+// stored plans, under the current compensation actor and retained account pins.
+func (s *Service) ValidateCloudSyncCleanup(ctx context.Context, plan *Plan, compensationID string) error {
+	st, err := s.syncStore()
+	if err != nil {
+		return err
+	}
+	compensation, snapshot, err := st.GetSync(ctx, plan.OrgID, plan.ProjectID, compensationID)
+	if err != nil {
+		return err
+	}
+	if compensation.Status != cloudprofiles.SyncCleanup || compensation.Reverts != plan.CloudSyncID {
+		return cloudprofiles.ErrConflict
+	}
+	if authErr := s.authorizeCloudSync(ctx, snapshot.Actor, plan.ProjectID); authErr != nil {
+		return authErr
+	}
+	included := false
+	for _, env := range snapshot.Environments {
+		if env.EnvironmentID == plan.EnvironmentID {
+			included = true
+		}
+	}
+	if !included {
+		return cloudprofiles.ErrNotFound
+	}
+	original, retained, err := st.GetSync(ctx, plan.OrgID, plan.ProjectID, plan.CloudSyncID)
+	if err != nil {
+		return err
+	}
+	if original.Status != cloudprofiles.SyncReverting {
+		return cloudprofiles.ErrConflict
+	}
+	for _, env := range retained.Environments {
+		if env.EnvironmentID != plan.EnvironmentID {
+			continue
+		}
+		var expected Plan
+		if decodeErr := json.Unmarshal(env.Plan, &expected); decodeErr != nil {
+			return decodeErr
+		}
+		want, e := Digest(expected.Actions)
+		if e != nil {
+			return e
+		}
+		got, e := Digest(plan.Actions)
+		if e != nil {
+			return e
+		}
+		if want != got || plan.ID != migrationPlanID(original.ID, env.EnvironmentID) {
+			return cloudprofiles.ErrConflict
+		}
+		return s.validateSnapshotConnections(ctx, plan.OrgID, retained)
+	}
+	return cloudprofiles.ErrNotFound
 }

@@ -116,6 +116,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	if storedRevision != p.Revision {
 		return nil, ErrConflict
 	}
+	var originalSnapshot *Snapshot
 	if p.Reverts != "" {
 		// A running cleanup owns the same lock. Review again once it settles.
 		var acquired bool
@@ -125,13 +126,14 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if !acquired {
 			return nil, ErrBusy
 		}
-		var status string
-		if err = tx.QueryRow(ctx, `SELECT status FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Reverts).Scan(&status); err != nil {
-			return nil, storeError(err)
+		original, retained, readErr := readSync(tx.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Reverts))
+		if readErr != nil {
+			return nil, readErr
 		}
-		if status != SyncFailed && status != SyncRouting && status != SyncCleanup && status != SyncSucceeded {
+		if original.Status != SyncFailed && original.Status != SyncRouting && original.Status != SyncCleanup && original.Status != SyncSucceeded {
 			return nil, ErrConflict
 		}
+		originalSnapshot = retained
 	}
 
 	for _, id := range slices.Sorted(maps.Keys(snapshot.ProfileRevisions)) {
@@ -188,7 +190,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			return nil, storeError(err)
 		}
 		var active bool
-		if queryErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_environment_sync_guards WHERE org_id=$1 AND environment_id=$2 AND sync_id<>$3) OR EXISTS(SELECT 1 FROM loomplane_deployments WHERE org_id=$1 AND environment_id=$2 AND status='running') OR EXISTS(SELECT 1 FROM loomplane_plans p WHERE p.org_id=$1 AND p.environment_id=$2 AND p.status='approved' AND coalesce(p.result->>'cloud_sync_id','')='' AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.plan_id=p.id))`, p.OrgID, env.EnvironmentID, p.Reverts).Scan(&active); queryErr != nil {
+		if queryErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_environment_sync_guards WHERE org_id=$1 AND environment_id=$2 AND sync_id<>$3) OR EXISTS(SELECT 1 FROM loomplane_deployments WHERE org_id=$1 AND environment_id=$2 AND status='running') OR (NOT EXISTS(SELECT 1 FROM loomplane_environment_sync_guards WHERE org_id=$1 AND environment_id=$2 AND sync_id=$3) AND EXISTS(SELECT 1 FROM loomplane_plans p WHERE p.org_id=$1 AND p.environment_id=$2 AND p.status='approved' AND coalesce(p.result->>'cloud_sync_id','')='' AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.plan_id=p.id)))`, p.OrgID, env.EnvironmentID, p.Reverts).Scan(&active); queryErr != nil {
 			return nil, queryErr
 		}
 		if active {
@@ -201,12 +203,32 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if generation != env.AssignmentRevision {
 			return nil, ErrConflict
 		}
+		if _, lockErr := tx.Exec(ctx, `SELECT id FROM loomplane_bindings WHERE org_id=$1 AND environment_id=$2 ORDER BY id FOR UPDATE`, p.OrgID, env.EnvironmentID); lockErr != nil {
+			return nil, lockErr
+		}
 		var equal bool
 		if queryErr := tx.QueryRow(ctx, `SELECT coalesce(jsonb_agg(to_jsonb(b)-'observed_at'-'drift_message' ORDER BY b.id),'[]'::jsonb)=$3::jsonb FROM loomplane_bindings b WHERE org_id=$1 AND environment_id=$2`, p.OrgID, env.EnvironmentID, []byte(env.Bindings)).Scan(&equal); queryErr != nil {
 			return nil, queryErr
 		}
 		if !equal {
 			return nil, ErrConflict
+		}
+		if originalSnapshot != nil {
+			var original *EnvironmentSnapshot
+			for i := range originalSnapshot.Environments {
+				if originalSnapshot.Environments[i].EnvironmentID == env.EnvironmentID {
+					original = &originalSnapshot.Environments[i]
+				}
+			}
+			if original == nil {
+				return nil, ErrConflict
+			}
+			if compareErr := tx.QueryRow(ctx, CompareCompensationSQL, p.OrgID, p.Reverts, []byte(original.Bindings), env.EnvironmentID).Scan(&equal); compareErr != nil {
+				return nil, compareErr
+			}
+			if !equal {
+				return nil, ErrConflict
+			}
 		}
 	}
 	if p.Input.TargetID != "" {
