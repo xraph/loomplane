@@ -2,6 +2,7 @@ package planning
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/manifests"
@@ -9,6 +10,31 @@ import (
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/providers"
 )
+
+func TestCatalogMySQLFamilyUsesMatchingPinsAndRejectsEngineChanges(t *testing.T) {
+	for _, kind := range []string{"mysql", "mariadb"} {
+		t.Run(kind, func(t *testing.T) {
+			doc := parse(t, "version: 1\nresources:\n  database: {kind: "+kind+", provider: server, target: "+targetA+"}\n")
+			connections := infrastructureConnections(t)
+			connections[0].Details["architecture"] = "arm64"
+			in := Input{Environment: "production", Graph: &graph.Graph{}, Manifest: doc, Providers: providers.Registry(), Connections: connections}
+			result := Compute(in)
+			if !result.Executable || len(result.Actions) != 1 || result.Actions[0].Resource.Catalog == nil || result.Actions[0].Resource.Catalog.Engine() != kind {
+				t.Fatalf("catalog plan: %+v", result)
+			}
+			old := *result.Actions[0].Resource
+			old.Kind = "postgres"
+			raw, err := json.Marshal(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in.Bindings = []*Binding{{ID: "binding", Name: "database", Subject: ResourceSubject, Provider: "server", ConnectionID: targetA, ExternalID: "instance", Config: raw}}
+			if Compute(in).Executable {
+				t.Fatal("engine change reused a persistent database")
+			}
+		})
+	}
+}
 
 func TestCatalogPostgresPinsRuntimeAndTarget(t *testing.T) {
 	doc := parse(t, "version: 1\nresources:\n  database:\n    kind: postgres\n    provider: server\n    version: '17'\n    target: "+targetA+"\n")

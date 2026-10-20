@@ -1,5 +1,7 @@
 import type { Backup, Binding, Restore } from "@/client/forge/loomplane/types"
 
+import { isDatabaseKind } from "@/lib/catalog-recipes"
+
 export function recoverySelection(
   bindings: Binding[],
   backups: Backup[],
@@ -23,7 +25,7 @@ export function recoverySelection(
         typeof config === "object" &&
         config !== null &&
         "kind" in config &&
-        config.kind === "postgres" &&
+        isDatabaseKind(config.kind) &&
         "catalog" in config &&
         typeof config.catalog === "object" &&
         config.catalog !== null

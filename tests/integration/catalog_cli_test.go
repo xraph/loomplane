@@ -26,7 +26,11 @@ import (
 	lpclient "github.com/xraph/loomplane/pkg/client"
 )
 
-func TestAcceptanceCatalogCLIRecovery(t *testing.T) {
+func TestAcceptanceCatalogCLIRecovery(t *testing.T)        { catalogCLIRecovery(t, "postgres") }
+func TestAcceptanceMySQLCatalogCLIRecovery(t *testing.T)   { catalogCLIRecovery(t, "mysql") }
+func TestAcceptanceMariaDBCatalogCLIRecovery(t *testing.T) { catalogCLIRecovery(t, "mariadb") }
+
+func catalogCLIRecovery(t *testing.T, kind string) {
 	socket := os.Getenv("LOOMPLANE_TEST_DOCKER_SOCKET")
 	if socket == "" {
 		t.Skip("set LOOMPLANE_TEST_DOCKER_SOCKET for real CLI deployment and recovery")
@@ -58,7 +62,7 @@ func TestAcceptanceCatalogCLIRecovery(t *testing.T) {
 	lpclient.Every = 100 * time.Millisecond
 	t.Cleanup(func() { lpclient.Every = previous })
 	var plan lpclient.Plan
-	if err := json.Unmarshal([]byte(lc.must("services", "create", "CLI acceptance", "--target", connection.ID, "--json")), &plan); err != nil || !plan.Executable || plan.ProjectID == "" {
+	if err := json.Unmarshal([]byte(lc.must("services", "create", "CLI acceptance", "--kind", kind, "--target", connection.ID, "--json")), &plan); err != nil || !plan.Executable || plan.ProjectID == "" {
 		t.Fatalf("catalog CLI plan: %+v %v", plan, err)
 	}
 	t.Cleanup(func() {
@@ -94,7 +98,14 @@ func TestAcceptanceCatalogCLIRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	sql := func(instance id.ID, query string) string {
-		return fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(instance), "psql", "-U", "app", "-d", "database", "-At", "-v", "ON_ERROR_STOP=1", "-c", query)
+		if kind == "postgres" {
+			return fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(instance), "psql", "-U", "app", "-d", "database", "-At", "-v", "ON_ERROR_STOP=1", "-c", query)
+		}
+		tool := "mysql"
+		if kind == "mariadb" {
+			tool = "mariadb"
+		}
+		return fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(instance), "sh", "-c", `export MYSQL_PWD="$LOOMPLANE_APP_PASSWORD"; exec "$@"`, "loomplane-probe", tool, "--protocol=tcp", "--host=127.0.0.1", "--user=app", "--database=database", "--batch", "--skip-column-names", "--execute", query)
 	}
 	followAfterTimeout := func(kind, subject, request string) string {
 		t.Helper()

@@ -61,6 +61,9 @@ it("keeps empty projects distinct from a failed read and offers retry", async ()
   await userEvent.click(screen.getByRole("button", { name: "Retry" }))
   expect(await screen.findByText("No service projects yet")).toBeInTheDocument()
   expect(screen.getByText("Connect a Docker server")).toBeInTheDocument()
+  expect(
+    screen.getByRole("combobox", { name: "Database engine" })
+  ).toBeEnabled()
 })
 it("does not request recovery data or show deployment controls without grants", async () => {
   permissions.allowed = false
@@ -84,4 +87,34 @@ it("does not request recovery data or show deployment controls without grants", 
   expect(
     screen.queryByRole("button", { name: "Deploy PostgreSQL" })
   ).not.toBeInTheDocument()
+})
+
+it("selects the database engine in the shared deployment form", async () => {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+    response(
+      String(input).endsWith("/projects")
+        ? { projects: [] }
+        : {
+            connections: [
+              {
+                id: "target",
+                name: "Docker acceptance",
+                cloud: "server",
+                status: "ready",
+                details: { architecture: "arm64" },
+              },
+            ],
+          }
+    )
+  )
+  mount()
+  expect(
+    await screen.findByRole("button", { name: "Deploy PostgreSQL" })
+  ).toBeEnabled()
+  await userEvent.click(
+    screen.getByRole("combobox", { name: "Database engine" })
+  )
+  await userEvent.click(screen.getByRole("option", { name: "MySQL 8.4" }))
+  expect(screen.getByRole("button", { name: "Deploy MySQL" })).toBeEnabled()
+  expect(screen.getByLabelText("Project name")).toHaveValue("MySQL")
 })

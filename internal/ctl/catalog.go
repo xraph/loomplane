@@ -10,15 +10,16 @@ import (
 	"github.com/xraph/forge/cli"
 	"gopkg.in/yaml.v3"
 
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/client"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 func (a *App) servicesCommand() cli.Command {
 	return cli.NewCommand("services", "Prepare catalog services without a repository", nil,
-		cli.WithSubcommand(cli.NewCommand("create", "Plan a standalone PostgreSQL 17 service", a.createCatalogService,
+		cli.WithSubcommand(cli.NewCommand("create", "Plan a standalone database service", a.createCatalogService,
 			cli.WithUsage("services create <project-name> --target <server-connection-id> [--env production] [--json]"),
-			cli.WithFlags(jsonFlag, cli.NewStringFlag("target", "", "Checked Docker server connection", ""), cli.NewStringFlag("env", "e", "Environment", "production"), timeoutFlag("Maximum time to prepare the plan", 5*time.Minute)))))
+			cli.WithFlags(jsonFlag, cli.NewStringFlag("kind", "", "Database engine: postgres, mysql or mariadb", "postgres"), cli.NewStringFlag("target", "", "Checked Docker server connection", ""), cli.NewStringFlag("env", "e", "Environment", "production"), timeoutFlag("Maximum time to prepare the plan", 5*time.Minute)))))
 }
 
 func (a *App) createCatalogService(ctx cli.CommandContext) error {
@@ -27,6 +28,11 @@ func (a *App) createCatalogService(ctx cli.CommandContext) error {
 	if name == "" || target == "" {
 		return errors.New("provide a project name and --target with a checked Docker server connection")
 	}
+	kind := ctx.String("kind")
+	version := recipes.DefaultVersion(kind)
+	if version == "" {
+		return errors.New("choose --kind postgres, mysql or mariadb")
+	}
 	duration := time.Duration(ctx.Duration("timeout"))
 	bounded, cancel := context.WithTimeout(ctxOf(ctx), duration)
 	defer cancel()
@@ -34,14 +40,14 @@ func (a *App) createCatalogService(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	project, err := c.CreateProject(bounded, client.NewProject{Name: name, Description: "Standalone PostgreSQL service"})
+	project, err := c.CreateProject(bounded, client.NewProject{Name: name, Description: "Standalone " + kind + " service"})
 	if err != nil {
 		return err
 	}
 	if _, err = c.WaitProjectReady(bounded, project.ID); err != nil {
 		return fmt.Errorf("project %s created; setup is not ready: %w", project.ID, err)
 	}
-	raw, err := yaml.Marshal(manifest.Manifest{Version: manifest.Version, Resources: map[string]manifest.Resource{"database": {Kind: "postgres", Provider: "server", Version: "17", Target: target}}})
+	raw, err := yaml.Marshal(manifest.Manifest{Version: manifest.Version, Resources: map[string]manifest.Resource{"database": {Kind: kind, Provider: "server", Version: version, Target: target}}})
 	if err != nil {
 		return err
 	}

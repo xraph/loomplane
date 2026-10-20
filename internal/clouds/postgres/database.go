@@ -10,12 +10,12 @@ import (
 	"io"
 	"regexp"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/xraph/ctrlplane/id"
 
 	"github.com/xraph/loomplane/internal/backupfiles"
+	"github.com/xraph/loomplane/internal/clouds/dbexec"
 )
 
 const LabelDatabase = "loomplane.postgres.database"
@@ -57,36 +57,21 @@ func (d Database) validate() error {
 	return nil
 }
 func (d Database) cleanup(ctx context.Context, names ...string) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	args := make([]string, 2, 2+len(names))
-	args[0], args[1] = "rm", "-f"
-	for _, name := range names {
-		args = append(args, "/tmp/"+name)
-	}
-	return d.Run(ctx, args, io.Discard)
+	return dbexec.Cleanup(ctx, d.Run, names...)
 }
 func (d Database) text(ctx context.Context, name, value string) error {
-	return d.Upload(ctx, name, int64(len(value)), func(w io.Writer) error { _, err := io.Copy(w, strings.NewReader(value)); return err })
+	return dbexec.Text(ctx, d.Upload, name, value)
 }
+
 func (d Database) Export(ctx context.Context, files *backupfiles.Store, key string) (backupfiles.Object, error) {
 	if err := d.validate(); err != nil {
 		return backupfiles.Object{}, err
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	reader, writer := io.Pipe()
-	done := make(chan error, 1)
-	go func() {
-		err := d.Run(ctx, []string{"pg_dump", "-U", "postgres", "-d", d.Name, "--format=custom", "--no-owner", "--no-acl"}, writer)
-		writer.CloseWithError(err)
-		done <- err
-	}()
-	object, err := files.Put(ctx, key, reader)
-	reader.CloseWithError(err)
-	cancel()
-	return object, errors.Join(err, <-done)
+	return dbexec.Export(ctx, files, key, func(ctx context.Context, out io.Writer) error {
+		return d.Run(ctx, []string{"pg_dump", "-U", "postgres", "-d", d.Name, "--format=custom", "--no-owner", "--no-acl"}, out)
+	})
 }
+
 func (d Database) Restore(ctx context.Context, files *backupfiles.Store, object backupfiles.Object) (err error) {
 	if !d.Recovery {
 		return errors.New("restore requires an isolated recovery instance")

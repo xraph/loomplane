@@ -1,7 +1,10 @@
 // Package recipes pins the executable catalog separately from provider targets.
 package recipes
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Recipe is an immutable runtime and recovery contract recorded in a plan.
 // Adding another image requires a new revision and qualification evidence.
@@ -13,6 +16,83 @@ type Recipe struct {
 	Architecture   string `json:"architecture"`
 	MountPath      string `json:"mount_path"`
 	BackupFormat   string `json:"backup_format"`
+	VolumeSizeMB   int    `json:"volume_size_mb,omitempty"`
+}
+
+func DefaultVersion(kind string) string {
+	switch kind {
+	case "postgres":
+		return "17"
+	case "mysql":
+		return "8.4"
+	case "mariadb":
+		return "11.8"
+	default:
+		return ""
+	}
+}
+
+// Lookup resolves only qualified engine/version pairs, never a mutable tag.
+func Lookup(kind, version, architecture string) (*Recipe, error) {
+	if kind == "postgres" {
+		return Postgres(version, architecture)
+	}
+	var product, format string
+	var digests map[string]string
+	switch {
+	case kind == "mysql" && version == "8.4":
+		product, format = "8.4.11", "mysqldump-sql-v1"
+		digests = map[string]string{"amd64": "sha256:1f8411cc085d2f2f92060fca926746cbf97f87b76c3008e9741ad62e604c4ffa", "arm64": "sha256:88b9c60a44c8864787b96e8254cd050c4af5e82fea6edf08225546f447b43a31"}
+	case kind == "mariadb" && version == "11.8":
+		product, format = "11.8.9", "mariadb-dump-sql-v1"
+		digests = map[string]string{"amd64": "sha256:d689f65e09e887e96db5c40ca3957dd9f4e3fad3516baec96d7726c78a5fc2ee", "arm64": "sha256:3607e75203fd9f69fb7e0829ec2d8fe55c30ec9d8aa266f7580719711bb4a4e1"}
+	default:
+		return nil, fmt.Errorf("%s %s has no supported recipe", kind, version)
+	}
+	digest, ok := digests[architecture]
+	if !ok {
+		return nil, fmt.Errorf("%s recipe requires a checked amd64 or arm64 target, got %q", kind, architecture)
+	}
+	return &Recipe{ID: kind + "-" + version, Revision: "1", ProductVersion: product, Image: "docker.io/library/" + kind + "@" + digest, Architecture: architecture, MountPath: "/var/lib/mysql", BackupFormat: format}, nil
+}
+
+func (r *Recipe) Engine() string {
+	if r == nil {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(r.ID, "postgresql-"):
+		return "postgres"
+	case strings.HasPrefix(r.ID, "mariadb-"):
+		return "mariadb"
+	case strings.HasPrefix(r.ID, "mysql-"):
+		return "mysql"
+	default:
+		return ""
+	}
+}
+func (r *Recipe) Port() int {
+	switch r.Engine() {
+	case "postgres":
+		return 5432
+	case "mysql", "mariadb":
+		return 3306
+	default:
+		return 0
+	}
+}
+
+// RuntimeArgs belongs to recipe revision 1's single-instance logical profile.
+// Binary logs are unused here; copies must never execute restored timers.
+func (r *Recipe) RuntimeArgs(recovery bool) []string {
+	if r.Engine() != "mysql" && r.Engine() != "mariadb" {
+		return nil
+	}
+	args := []string{"--skip-log-bin"}
+	if recovery {
+		args = append(args, "--event-scheduler=DISABLED")
+	}
+	return args
 }
 
 // Postgres pins the official PostgreSQL 17.11 Alpine image. These manifests

@@ -56,3 +56,49 @@ func TestCatalogCommandPreparesRepositoryFreePostgresPlan(t *testing.T) {
 		t.Fatalf("reviewable plan: %s, %v, approved %v", out, err, approved)
 	}
 }
+
+func TestCatalogCommandSelectsDatabaseKindBeforeCreatingProject(t *testing.T) {
+	for _, kind := range []string{"mysql", "mariadb", "unsupported"} {
+		t.Run(kind, func(t *testing.T) {
+			requests := 0
+			app, _ := recoveryCLI(t, func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				switch r.URL.Path {
+				case "/api/v1/projects":
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(`{"id":"p","status":"ready"}`))
+				case "/api/v1/projects/p":
+					_, _ = w.Write([]byte(`{"id":"p","status":"ready"}`))
+				case "/api/v1/projects/p/manifest":
+					var body map[string]string
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					parsed, err := manifest.Parse([]byte(body["yaml"]))
+					if err != nil || parsed.Resources["database"].Kind != kind {
+						t.Fatalf("wrong recipe manifest: %s %v", body["yaml"], err)
+					}
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(`{"id":"manifest"}`))
+				case "/api/v1/projects/p/plans":
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(`{"id":"plan","status":"ready"}`))
+				case "/api/v1/plans/plan":
+					_, _ = w.Write([]byte(`{"id":"plan","status":"ready"}`))
+				default:
+					http.NotFound(w, r)
+				}
+			})
+			err := app.Run([]string{"services", "create", "Orders", "--kind", kind, "--target", "conn_1", "--json"})
+			if kind == "unsupported" {
+				if err == nil || requests != 0 {
+					t.Fatalf("unsupported recipe made writes: %v %d", err, requests)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

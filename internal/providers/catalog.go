@@ -172,16 +172,21 @@ func Catalog() []provider.Provider {
 			Description: "Runs a service container on the Docker daemon of the SSH server you choose.",
 			Model:       provider.Instance,
 			Runs:        containerWorkloads("Docker container"),
-			Provisions:  []provider.Provisions{{Kind: "postgres", Creates: "Persistent PostgreSQL container", Versions: []string{"17"}}},
-			Available:   true,
+			Provisions: []provider.Provisions{
+				{Kind: "postgres", Creates: "Persistent PostgreSQL container", Versions: []string{"17"}},
+				{Kind: "mysql", Creates: "Persistent MySQL container", Versions: []string{"8.4"}},
+				{Kind: "mariadb", Creates: "Persistent MariaDB container", Versions: []string{"11.8"}},
+			},
+			Available: true,
 		},
 		{
 			Name: "kubernetes", Title: "Kubernetes", Cloud: "kubernetes",
 			BuildLogs:   "streamed",
 			Description: "Runs service containers in the namespace of the cluster you choose.",
 			Model:       provider.Instance, Scaling: true,
-			Runs:      containerWorkloads("Kubernetes Deployment"),
-			Available: true,
+			Runs:       containerWorkloads("Kubernetes Deployment"),
+			Provisions: []provider.Provisions{{Kind: "postgres", Creates: "Retained PostgreSQL StatefulSet", Versions: []string{"17"}}},
+			Available:  true,
 		},
 	}
 }

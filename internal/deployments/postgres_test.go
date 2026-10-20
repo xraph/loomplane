@@ -16,7 +16,7 @@ func TestPostgresRecipeKeepsPasswordOutOfPersistentSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	resource := &planning.ResourceConfig{Provider: "server", Kind: "postgres", Version: "17", Target: "target", TargetSettings: map[string]string{"architecture": "arm64"}, Catalog: recipe}
-	cfg, err := postgresService(resource)
+	cfg, err := databaseService(resource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestPostgresRecipeKeepsPasswordOutOfPersistentSpec(t *testing.T) {
 		t.Fatalf("unsafe database spec: %+v %+v", spec, labels)
 	}
 	recipe.Image = "unreviewed-image"
-	if _, err = postgresService(resource); err == nil {
+	if _, err = databaseService(resource); err == nil {
 		t.Fatal("accepted a modified image pin")
 	}
 }

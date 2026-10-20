@@ -21,6 +21,7 @@ import (
 	"github.com/xraph/ctrlplane/id"
 	cpprovider "github.com/xraph/ctrlplane/provider"
 
+	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 )
 
@@ -288,7 +289,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		variables = append(variables, key+"="+env[key])
 	}
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
-	for _, key := range []string{LabelDatabase, LabelRecovery} {
+	for _, key := range []string{LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}
@@ -376,6 +377,9 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 		if labels[LabelDatabase] != "" {
 			protocol = "postgresql"
 		}
+		if labels[nativemysql.LabelDatabase] != "" {
+			protocol = "mysql"
+		}
 		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value)), Port: value, Protocol: protocol, Public: public})
 	}
 	return out
@@ -393,14 +397,14 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 			return err
 		}
 		if info.State.Running {
-			if db := labels[LabelDatabase]; db != "" {
-				if probeErr := PostgresReady(ctx, c, name, db); probeErr == nil {
+			if isDatabase(labels) {
+				if probeErr := databaseReady(ctx, c, name, labels); probeErr == nil {
 					return nil
 				}
 			} else if labels[owned.LabelHealth] == "" {
 				return nil
 			}
-			if labels[LabelDatabase] == "" {
+			if !isDatabase(labels) {
 				probe := r.Probe
 				if probe == nil {
 					probe = probeServer
@@ -516,8 +520,8 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 	state, ready := cpprovider.StateStopped, false
 	if info.State.Running {
 		state, ready = cpprovider.StateRunning, true
-		if db := labels[LabelDatabase]; db != "" {
-			ready = PostgresReady(ctx, c, ContainerName(iid), db) == nil
+		if isDatabase(labels) {
+			ready = databaseReady(ctx, c, ContainerName(iid), labels) == nil
 			if !ready {
 				state = cpprovider.StateStarting
 			}

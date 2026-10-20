@@ -73,7 +73,7 @@ func (s *Service) SetPolicy(ctx context.Context, p security.Principal, project s
 	for _, b := range bindings {
 		if b.ProjectID == project && b.Subject == planning.ResourceSubject && b.Name == in.Resource {
 			var cfg planning.ResourceConfig
-			if json.Unmarshal(b.Config, &cfg) == nil && cfg.Provider == "server" && cfg.Kind == "postgres" && cfg.Catalog != nil {
+			if json.Unmarshal(b.Config, &cfg) == nil && supportsRecovery(&cfg) {
 				found = true
 			}
 		}

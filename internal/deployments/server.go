@@ -206,7 +206,7 @@ type ownedState struct {
 
 func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err error) {
 	if job.Action.Resource != nil {
-		return e.applyPostgres(ctx, job)
+		return e.applyDatabase(ctx, job)
 	}
 	if job.Action.Service == nil || job.Connection == nil || job.Deployment == nil {
 		return nil, ErrNoExecutor
@@ -408,11 +408,12 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelHealth] = ""
 	}
 	if cfg.Catalog != nil {
-		sp.Volumes = []cpprovider.VolumeSpec{{Name: "data", Type: "persistent", MountPath: cfg.Catalog.MountPath}}
-		labels[server.LabelDatabase] = databaseName(job.Action.Name)
+		sp.Args = cfg.Catalog.RuntimeArgs(false)
+		sp.Volumes = []cpprovider.VolumeSpec{databaseVolume(cfg.Catalog)}
+		databaseLabels(labels, cfg.Catalog, databaseName(job.Action.Name))
 		labels[owned.LabelArchitecture] = cfg.Catalog.Architecture
 		sp.Resources = cpprovider.ResourceSpec{CPUMillis: 1000, MemoryMB: 512}
-		sp.Ports = []cpprovider.PortSpec{{Container: 5432, Protocol: "tcp"}}
+		sp.Ports = []cpprovider.PortSpec{{Container: cfg.Catalog.Port(), Protocol: "tcp"}}
 	}
 	labels[labelImage] = image
 	if image == "" && cfg.BuildTarget != nil {
@@ -580,7 +581,7 @@ func (e *OwnedTarget) Observe(ctx context.Context, c *connections.Connection, _ 
 		if decodeErr := json.Unmarshal(b.Config, &resource); decodeErr != nil {
 			return nil, decodeErr
 		}
-		converted, convertErr := postgresService(&resource)
+		converted, convertErr := databaseService(&resource)
 		if convertErr != nil {
 			return nil, convertErr
 		}

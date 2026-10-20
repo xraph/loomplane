@@ -28,7 +28,7 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-function recoveryFixture({ removed = false, everyHours = 6 } = {}) {
+function recoveryFixture({ removed = false, everyHours = 6, kind = "postgres" } = {}) {
   const writes: { url: string; body: Record<string, unknown> }[] = []
   let enabled = true
   let cadence = everyHours
@@ -67,7 +67,7 @@ function recoveryFixture({ removed = false, everyHours = 6 } = {}) {
                   provider: "server",
                   environment_id: "prod",
                   config: {
-                    kind: "postgres",
+                    kind,
                     provider: "server",
                     catalog: { id: "postgresql-17" },
                   },
@@ -223,4 +223,10 @@ it("saves a changed cadence without pausing an enabled schedule", async () => {
       enabled: true,
     },
   })
+})
+
+it.each(["mysql", "mariadb"])("offers recovery controls for a deployed %s recipe", async (kind) => {
+  recoveryFixture({kind})
+  expect(await screen.findByRole("button", {name:"Back up now"})).toBeEnabled()
+  expect(screen.getByRole("button", {name:"Pause backup schedule"})).toBeEnabled()
 })

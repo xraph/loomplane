@@ -126,7 +126,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, project stri
 		return nil, ErrNotFound
 	}
 	var cfg planning.ResourceConfig
-	if json.Unmarshal(source.Config, &cfg) != nil || cfg.Catalog == nil || cfg.Kind != "postgres" || cfg.Provider != "server" {
+	if json.Unmarshal(source.Config, &cfg) != nil || !supportsRecovery(&cfg) {
 		return nil, fmt.Errorf("%w: the resource has no supported database backup adapter", ErrInvalid)
 	}
 	key, err := typeid.Generate("backup")

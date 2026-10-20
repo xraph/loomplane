@@ -62,7 +62,12 @@ import {
   AlertDialogAction,
 } from "@/components/ui/alert-dialog"
 import { useOrganization } from "@/lib/organization"
-import { deployPostgres } from "@/lib/catalog"
+import { deployDatabase } from "@/lib/catalog"
+import {
+  databaseRecipes,
+  isDatabaseKind,
+  type DatabaseKind,
+} from "@/lib/catalog-recipes"
 import { Link } from "@/lib/router"
 import { formatDate } from "@/lib/format"
 import { recoverySelection } from "@/lib/service-recovery"
@@ -81,9 +86,9 @@ export function ServiceCatalog() {
       <Page className="gap-5">
         <PageHeading
           title="Services"
-          description="Deploy PostgreSQL with persistent storage and native backups."
+          description="Deploy databases with persistent storage and native backups."
         />
-        <PostgresDeployment
+        <DatabaseDeployment
           onCreated={(id) => {
             setProject(id)
             void projects.refetch()
@@ -125,7 +130,7 @@ export function ServiceCatalog() {
         ) : !selected ? (
           <CatalogEmpty
             title="No service projects yet"
-            description="Deploy PostgreSQL above to create a project with persistent storage."
+            description="Deploy a database above to create a project with persistent storage."
           />
         ) : !can("service_backup:read") ? (
           <Alert>
@@ -140,7 +145,7 @@ export function ServiceCatalog() {
     </>
   )
 }
-function PostgresDeployment({
+function DatabaseDeployment({
   onCreated,
 }: {
   onCreated: (id: string) => void
@@ -154,7 +159,9 @@ function PostgresDeployment({
         c.status === "ready" &&
         ["amd64", "arm64"].includes(c.details.architecture)
     ) ?? []
-  const [name, setName] = useState("PostgreSQL")
+  const [kind, setKind] = useState<DatabaseKind>("postgres")
+  const recipe = databaseRecipes[kind]
+  const [name, setName] = useState<string>("PostgreSQL")
   const [target, setTarget] = useState("")
   const [daily, setDaily] = useState(true)
   const [pending, setPending] = useState(false)
@@ -174,8 +181,9 @@ function PostgresDeployment({
     setError("")
     setCreated("")
     try {
-      await deployPostgres(
+      await deployDatabase(
         {
+          kind,
           name: name.trim(),
           target: selected,
           daily: daily && can("service_backup:manage"),
@@ -186,7 +194,7 @@ function PostgresDeployment({
           onCreated(id)
         }
       )
-      toast.success("PostgreSQL deployed")
+      toast.success(`${recipe.title} deployed`)
     } catch (cause) {
       setError(messageOf(cause, "Deployment could not finish"))
     } finally {
@@ -194,10 +202,38 @@ function PostgresDeployment({
     }
   }
   return (
-    <section className="rounded-xl border p-4" aria-label="Deploy PostgreSQL">
+    <section className="rounded-xl border p-4" aria-label="Deploy database">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <DatabaseIcon className="size-5" />
-        <h2 className="font-semibold">PostgreSQL 17</h2>
+        <h2 className="font-semibold">Database</h2>
+        <div className="min-w-40">
+          <Label className="sr-only" htmlFor="database-engine">
+            Database engine
+          </Label>
+          <Select
+            value={kind}
+            disabled={pending}
+            onValueChange={(value) => {
+              if (!isDatabaseKind(value)) return
+              if (name === recipe.title) setName(databaseRecipes[value].title)
+              setKind(value)
+            }}
+          >
+            <SelectTrigger id="database-engine" className="w-full">
+              <SelectValue>
+                {recipe.title} {recipe.version}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(databaseRecipes).map(([value, entry]) => (
+                <SelectItem key={value} value={value}>
+                  {entry.title} {entry.version}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         <Badge variant="secondary">Single instance · Docker</Badge>
       </div>
       <p className="mb-4 text-sm text-muted-foreground">
@@ -281,7 +317,7 @@ function PostgresDeployment({
             type="submit"
             disabled={pending || !allowed || !name.trim() || !selected}
           >
-            {pending ? "Deploying…" : "Deploy PostgreSQL"}
+            {pending ? "Deploying…" : `Deploy ${recipe.title}`}
           </Button>
         </form>
       )}
@@ -485,7 +521,7 @@ function ServiceRecovery({ project }: { project: string }) {
       </div>
       {!selected ? (
         <CatalogEmpty
-          title="No PostgreSQL service in this environment"
+          title="No catalog database in this environment"
           description="Deploy a database above, or choose the environment where it runs."
         />
       ) : (

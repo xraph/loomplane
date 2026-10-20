@@ -30,14 +30,17 @@ func recoveryIdentity(b *planning.Binding, operation string) (name, runtimeRef s
 }
 func (e *OwnedTarget) RestoreDatabase(ctx context.Context, p security.Principal, b *planning.Binding, files *backupfiles.Store, object backupfiles.Object, operation string) (string, error) {
 	ctx = infrastructure.WithPrincipal(ctx, p)
-	if p.OrgID != b.OrgID || b.Subject != planning.ResourceSubject {
+	if b == nil || p.OrgID != b.OrgID || b.Subject != planning.ResourceSubject {
 		return "", ctrlplane.ErrForbidden
 	}
 	var cfg planning.ResourceConfig
 	if err := json.Unmarshal(b.Config, &cfg); err != nil {
 		return "", err
 	}
-	if _, err := postgresService(&cfg); err != nil {
+	if err := e.checkDatabaseBinding(b, &cfg); err != nil {
+		return "", err
+	}
+	if _, err := databaseService(&cfg); err != nil {
 		return "", err
 	}
 	name, ref, err := recoveryIdentity(b, operation)
@@ -51,7 +54,8 @@ func (e *OwnedTarget) RestoreDatabase(ctx context.Context, p security.Principal,
 		return "", errors.New("recovery instance already exists; remove it before requesting another restore")
 	}
 	settings, _ := json.Marshal(cfg.TargetSettings) //nolint:errcheck // string maps always encode
-	labels := map[string]string{owned.LabelOrg: b.OrgID, owned.LabelProject: b.ProjectID, owned.LabelEnvironment: b.EnvironmentID, owned.LabelConnection: b.ConnectionID, owned.LabelService: name, owned.LabelRuntime: ref, owned.LabelPublic: "false", owned.LabelSettings: string(settings), owned.LabelArchitecture: cfg.Catalog.Architecture, owned.LabelRevision: operation, server.LabelDatabase: databaseName(b.Name), server.LabelRecovery: operation}
+	labels := map[string]string{owned.LabelOrg: b.OrgID, owned.LabelProject: b.ProjectID, owned.LabelEnvironment: b.EnvironmentID, owned.LabelConnection: b.ConnectionID, owned.LabelService: name, owned.LabelRuntime: ref, owned.LabelPublic: "false", owned.LabelSettings: string(settings), owned.LabelArchitecture: cfg.Catalog.Architecture, owned.LabelRevision: operation, server.LabelRecovery: operation}
+	databaseLabels(labels, cfg.Catalog, databaseName(b.Name))
 	if checkErr := e.validateTarget(ctx, labels); checkErr != nil {
 		return "", checkErr
 	}
@@ -60,35 +64,53 @@ func (e *OwnedTarget) RestoreDatabase(ctx context.Context, p security.Principal,
 	if err != nil {
 		return "", err
 	}
-	native, ok := backend.(*server.Runtime)
+	native, ok := backend.(owned.DatabaseBackend)
 	if !ok {
 		return "", errors.New("target has no recovery adapter")
 	}
 	password := rand.Text() + rand.Text()
-	runtimeValues, _ := json.Marshal(map[string]string{"POSTGRES_PASSWORD": rand.Text() + rand.Text(), "LOOMPLANE_APP_PASSWORD": password}) //nolint:errcheck // string maps always encode
+	environment, secrets := databaseEnvironment(cfg.Kind, databaseName(b.Name), password, rand.Text()+rand.Text())
+	values := map[string]string{}
+	publicEnv := map[string]string{}
+	for name, value := range environment {
+		if secrets[name] {
+			values[name] = value
+		} else {
+			publicEnv[name] = value
+		}
+	}
+	values["LOOMPLANE_APP_PASSWORD"] = password
+	runtimeValues, _ := json.Marshal(values) //nolint:errcheck // string maps always encode
 	if checkErr := e.Secrets.Put(ctx, ref, runtimeValues); checkErr != nil {
 		return "", checkErr
 	}
-	sp := cpprovider.ServiceSpec{Name: mainService, Image: cfg.Catalog.Image, Env: map[string]string{"POSTGRES_DB": databaseName(b.Name)}, Ports: []cpprovider.PortSpec{{Container: 5432, Protocol: "tcp"}}, Volumes: []cpprovider.VolumeSpec{{Name: "data", Type: "persistent", MountPath: cfg.Catalog.MountPath}}, Resources: cpprovider.ResourceSpec{CPUMillis: 1000, MemoryMB: 512}}
+	sp := cpprovider.ServiceSpec{Name: mainService, Image: cfg.Catalog.Image, Args: cfg.Catalog.RuntimeArgs(true), Env: publicEnv, Ports: []cpprovider.PortSpec{{Container: cfg.Catalog.Port(), Protocol: "tcp"}}, Volumes: []cpprovider.VolumeSpec{databaseVolume(cfg.Catalog)}, Resources: cpprovider.ResourceSpec{CPUMillis: 1000, MemoryMB: 512}}
 	inst, err := e.Ctrl.Instances.Create(ctx, instance.CreateRequest{Name: name, ProviderName: key, Services: []cpprovider.ServiceSpec{sp}, Labels: labels})
 	if err != nil {
 		return "", err
 	}
-	if checkErr := native.ConfigurePostgres(ctx, inst.ID, labels, password); checkErr != nil {
+	if checkErr := native.ConfigureDatabase(ctx, inst.ID, labels, password); checkErr != nil {
 		return inst.ID.String(), checkErr
 	}
-	if checkErr := native.RestorePostgres(ctx, inst.ID, labels, files, object); checkErr != nil {
+	if checkErr := native.RestoreDatabase(ctx, inst.ID, labels, files, object); checkErr != nil {
 		return inst.ID.String(), checkErr
 	}
-	return inst.ID.String(), native.RestoreProbe(ctx, inst.ID, labels)
+	return inst.ID.String(), native.DatabaseProbe(ctx, inst.ID, labels)
 }
 
 // DeleteRecovery is confined to the named temporary copy, including its volume.
 // The deterministic slug also finds a create that finished before a worker crash.
 func (e *OwnedTarget) DeleteRecovery(ctx context.Context, p security.Principal, b *planning.Binding, operation string) error {
 	ctx = infrastructure.WithPrincipal(ctx, p)
-	if p.OrgID != b.OrgID {
+	if b == nil || p.OrgID != b.OrgID {
 		return ctrlplane.ErrForbidden
+	}
+	var cfg planning.ResourceConfig
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		return err
+	}
+	if err := e.checkDatabaseBinding(b, &cfg); err != nil {
+		return err
 	}
 	name, ref, err := recoveryIdentity(b, operation)
 	if err != nil {
@@ -109,7 +131,7 @@ func (e *OwnedTarget) DeleteRecovery(ctx context.Context, p security.Principal, 
 	if err != nil {
 		return err
 	}
-	native, ok := backend.(*server.Runtime)
+	native, ok := backend.(owned.DatabaseBackend)
 	if !ok {
 		return errors.New("target has no recovery cleanup")
 	}

@@ -19,14 +19,17 @@ import (
 // again; a backup cannot follow a binding that moved to another tenant or target.
 func (e *OwnedTarget) BackupDatabase(ctx context.Context, p security.Principal, b *planning.Binding, files *backupfiles.Store, key string) (backupfiles.Object, error) {
 	ctx = infrastructure.WithPrincipal(ctx, p)
-	if b.OrgID != p.OrgID || b.Subject != planning.ResourceSubject {
+	if b == nil || b.OrgID != p.OrgID || b.Subject != planning.ResourceSubject {
 		return backupfiles.Object{}, errors.New("database is outside the requested scope")
 	}
 	var cfg planning.ResourceConfig
 	if err := json.Unmarshal(b.Config, &cfg); err != nil {
 		return backupfiles.Object{}, err
 	}
-	if _, err := postgresService(&cfg); err != nil {
+	if err := e.checkDatabaseBinding(b, &cfg); err != nil {
+		return backupfiles.Object{}, err
+	}
+	if _, err := databaseService(&cfg); err != nil {
 		return backupfiles.Object{}, err
 	}
 	iid, err := id.Parse(b.ExternalID)
@@ -47,9 +50,9 @@ func (e *OwnedTarget) BackupDatabase(ctx context.Context, p security.Principal, 
 	if err != nil {
 		return backupfiles.Object{}, err
 	}
-	native, ok := backend.(*server.Runtime)
+	native, ok := backend.(owned.DatabaseBackend)
 	if !ok {
 		return backupfiles.Object{}, errors.New("database target does not support backups")
 	}
-	return native.BackupPostgres(ctx, iid, inst.Labels, files, key)
+	return native.BackupDatabase(ctx, iid, inst.Labels, files, key)
 }

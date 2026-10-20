@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -36,6 +37,11 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		}
 		if len(result.Missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, result.Details), planning.ReviewedConnectionSettings(e.Cloud, c.Details)) {
 			return nil, errors.New("cluster identity or namespace permissions changed; check the connection and plan again")
+		}
+		// Planning checks these when you review a database. A cluster admin can
+		// revoke them afterwards, so every session against the database checks again.
+		if labels[nativepg.LabelDatabase] != "" && result.Details["postgres_recovery_permissions"] != "ready" {
+			return nil, errors.New("this database needs pod exec, network-policy and temporary-volume cleanup permissions; check the connection and plan again")
 		}
 		operation := labels[owned.LabelOperation]
 		activate := operation == "" || operation == "apply" || operation == "start"

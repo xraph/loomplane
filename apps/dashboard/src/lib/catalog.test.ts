@@ -1,6 +1,6 @@
 import { expect, it } from "vitest"
 import type { Plan } from "@/client/forge/loomplane/types"
-import { assertPostgresPlan } from "@/lib/catalog"
+import { assertDatabasePlan } from "@/lib/catalog"
 
 const plan = {
   catalog: true,
@@ -30,7 +30,7 @@ const plan = {
 } as unknown as Plan
 it("approves only the single PostgreSQL creation the user requested", () => {
   expect(() =>
-    assertPostgresPlan(plan, "project", "manifest", "target")
+    assertDatabasePlan(plan, "project", "manifest", "target")
   ).not.toThrow()
   for (const changed of [
     {
@@ -44,6 +44,24 @@ it("approves only the single PostgreSQL creation the user requested", () => {
     { ...plan, executable: false },
   ])
     expect(() =>
-      assertPostgresPlan(changed as Plan, "project", "manifest", "target")
+      assertDatabasePlan(changed as Plan, "project", "manifest", "target")
     ).toThrow()
+})
+
+it("approves only the selected MySQL or MariaDB recipe", () => {
+  for (const [kind, version] of [
+    ["mysql", "8.4"],
+    ["mariadb", "11.8"],
+  ] as const) {
+    const selected = structuredClone(plan)
+    selected.actions[0].resource!.kind = kind
+    selected.actions[0].resource!.version = version
+    expect(() =>
+      assertDatabasePlan(selected, "project", "manifest", "target", kind)
+    ).not.toThrow()
+    selected.actions[0].resource!.kind = "postgres"
+    expect(() =>
+      assertDatabasePlan(selected, "project", "manifest", "target", kind)
+    ).toThrow()
+  }
 })

@@ -8,16 +8,18 @@ import {
   useDeploymentsForPlan as getDeployment,
   useBackupPoliciesSet as setPolicy,
 } from "@/client/forge/loomplane/hooks"
+import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
 import { statusOf } from "@/client/errors"
 import type { Plan } from "@/client/forge/loomplane/types"
 
 // The Deploy action authorizes one known recipe. A changed plan goes through
 // the ordinary review screen instead of acquiring broader approval here.
-export function assertPostgresPlan(
+export function assertDatabasePlan(
   plan: Plan,
   project: string,
   manifest: string,
-  target: string
+  target: string,
+  kind: DatabaseKind = "postgres"
 ) {
   const action = plan.actions[0]
   if (
@@ -36,13 +38,13 @@ export function assertPostgresPlan(
     action.provider !== "server" ||
     action.name !== "database" ||
     action.connectionId !== target ||
-    action.resource?.kind !== "postgres" ||
-    action.resource.version !== "17" ||
+    action.resource?.kind !== kind ||
+    action.resource.version !== databaseRecipes[kind].version ||
     action.resource.target !== target ||
     !action.resource.catalog?.image
   ) {
     throw new Error(
-      "The plan differs from this PostgreSQL deployment. Open the project to review it."
+      `The plan differs from this ${databaseRecipes[kind].title} deployment. Open the project to review it.`
     )
   }
 }
@@ -68,16 +70,17 @@ async function waitFor<T>(
     await delay()
   }
 }
-export async function deployPostgres(
-  input: { name: string; target: string; daily: boolean },
+export async function deployDatabase(
+  input: { name: string; target: string; daily: boolean; kind: DatabaseKind },
   progress: (message: string) => void,
   created: (project: string) => void
 ) {
+  const recipe = databaseRecipes[input.kind]
   progress("Creating the service project…")
   const project = await createProject({
     body: {
       name: input.name,
-      description: "Standalone PostgreSQL service",
+      description: `Standalone ${recipe.title} service`,
       icon: "database",
     },
   })
@@ -91,7 +94,7 @@ export async function deployPostgres(
   const manifest = await saveManifest({
     path: { id: project.id },
     body: {
-      yaml: `version: 1\nresources:\n  database:\n    kind: postgres\n    provider: server\n    version: "17"\n    target: ${JSON.stringify(input.target)}\n`,
+      yaml: `version: 1\nresources:\n  database:\n    kind: ${input.kind}\n    provider: server\n    version: "${recipe.version}"\n    target: ${JSON.stringify(input.target)}\n`,
     },
   })
   let plan = await createPlan({
@@ -104,13 +107,13 @@ export async function deployPostgres(
     (p) => p.status !== "planning",
     "Planning"
   )
-  assertPostgresPlan(plan, project.id, manifest.id, input.target)
-  progress("Deploying PostgreSQL with persistent storage…")
+  assertDatabasePlan(plan, project.id, manifest.id, input.target, input.kind)
+  progress(`Deploying ${recipe.title} with persistent storage…`)
   await approvePlan({
     path: { id: plan.id },
     body: {
       revision: plan.revision,
-      note: "Deploy the selected standalone PostgreSQL recipe",
+      note: `Deploy the selected standalone ${recipe.title} recipe`,
     },
   })
   const deployment = await waitFor(
@@ -136,6 +139,6 @@ export async function deployPostgres(
       },
     })
   }
-  progress("PostgreSQL is ready.")
+  progress(`${recipe.title} is ready.`)
   return project.id
 }
