@@ -1,0 +1,134 @@
+name: loomplane-production
+
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app: &app
+  image: ${LOOMPLANE_IMAGE:?Set LOOMPLANE_IMAGE to a release tag or digest}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 45s
+  pids_limit: 256
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,noexec,size=1g,mode=1777
+  logging: *logging
+  networks: [backend, egress]
+
+x-environment: &environment
+  LOOMPLANE_ENVIRONMENT: production
+  LOOMPLANE_PUBLIC_URL: https://${LOOMPLANE_DOMAIN:?Set LOOMPLANE_DOMAIN to your hostname}
+  LOOMPLANE_SECRET_KEY: ${LOOMPLANE_SECRET_KEY:?Generate a key with openssl rand -base64 32}
+  # Generate a hex password so it is safe in a PostgreSQL URL.
+  LOOMPLANE_DATABASE_URL: postgres://loomplane:${POSTGRES_PASSWORD:?Generate a password with openssl rand -hex 32}@postgres:5432/loomplane?sslmode=disable
+  LOOMPLANE_GITHUB_API_URL: ${LOOMPLANE_GITHUB_API_URL:-https://api.github.com}
+  LOOMPLANE_GITHUB_WEB_URL: ${LOOMPLANE_GITHUB_WEB_URL:-https://github.com}
+  LOOMPLANE_GITHUB_APP_ID: ${LOOMPLANE_GITHUB_APP_ID:-}
+  LOOMPLANE_GITHUB_APP_SLUG: ${LOOMPLANE_GITHUB_APP_SLUG:-}
+  LOOMPLANE_GITHUB_PRIVATE_KEY: ${LOOMPLANE_GITHUB_PRIVATE_KEY:-}
+  LOOMPLANE_GITHUB_CLIENT_ID: ${LOOMPLANE_GITHUB_CLIENT_ID:-}
+  LOOMPLANE_GITHUB_CLIENT_SECRET: ${LOOMPLANE_GITHUB_CLIENT_SECRET:-}
+  LOOMPLANE_GITHUB_WEBHOOK_SECRET: ${LOOMPLANE_GITHUB_WEBHOOK_SECRET:-}
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: loomplane
+      POSTGRES_DB: loomplane
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U loomplane -d loomplane"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 60s
+    shm_size: 256mb
+    mem_limit: 1g
+    logging: *logging
+
+  loomplane:
+    <<: *app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *environment
+      LOOMPLANE_HTTP_ADDR: :8780
+      LOOMPLANE_STORAGE_URL: file:///var/lib/loomplane
+      LOOMPLANE_PAUSED_PROVIDERS: ${LOOMPLANE_PAUSED_PROVIDERS:-}
+      LOOMPLANE_BACKUP_URL: ${LOOMPLANE_BACKUP_URL:-}
+      LOOMPLANE_BACKUP_BUCKET: ${LOOMPLANE_BACKUP_BUCKET:-loomplane-backups}
+      LOOMPLANE_NOTIFICATIONS_SMTP_HOST: ${LOOMPLANE_NOTIFICATIONS_SMTP_HOST:-}
+      LOOMPLANE_NOTIFICATIONS_SMTP_PORT: ${LOOMPLANE_NOTIFICATIONS_SMTP_PORT:-465}
+      LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME: ${LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME:-}
+      LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD: ${LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD:-}
+      LOOMPLANE_NOTIFICATIONS_FROM: ${LOOMPLANE_NOTIFICATIONS_FROM:-}
+      LOOMPLANE_NOTIFICATIONS_SMTP_TLS: "true"
+    volumes:
+      - artifact-data:/var/lib/loomplane
+    mem_limit: 2g
+    healthcheck:
+      test: [CMD, wget, -qO, /dev/null, "http://127.0.0.1:8780/_/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+  loomplane-worker:
+    <<: *app
+    entrypoint: [loomplane-worker]
+    depends_on:
+      loomplane:
+        condition: service_healthy
+    environment:
+      <<: *environment
+      LOOMPLANE_WORKER_HTTP_ADDR: :8781
+    mem_limit: 2g
+    healthcheck:
+      test: [CMD, wget, -qO, /dev/null, "http://127.0.0.1:8781/_/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    restart: unless-stopped
+    depends_on:
+      loomplane:
+        condition: service_healthy
+    environment:
+      LOOMPLANE_DOMAIN: ${LOOMPLANE_DOMAIN:?Set LOOMPLANE_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL for certificate renewal notices}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [egress]
+    mem_limit: 256m
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+networks:
+  backend:
+    internal: true
+  egress:
+
+volumes:
+  postgres-data:
+  artifact-data:
+  caddy-data:
+  caddy-config:

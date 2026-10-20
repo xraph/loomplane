@@ -1,0 +1,14 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$LOOMPLANE_DOMAIN} {
+	# Health and metrics are available inside the Docker network only.
+	@internal path /_/health /_/health/* /_/metrics /_/metrics/* /debug/*
+	respond @internal 404
+
+	reverse_proxy loomplane:8780 {
+		# Flush events immediately; WebSocket upgrades are automatic.
+		flush_interval -1
+	}
+}

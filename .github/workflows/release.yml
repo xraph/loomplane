@@ -1,0 +1,170 @@
+name: Release containers
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Release checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: loomplane
+          POSTGRES_PASSWORD: loomplane
+          POSTGRES_DB: loomplane
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U loomplane -d loomplane"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      LOOMPLANE_TEST_DATABASE_URL: postgres://loomplane:loomplane@localhost:5432/loomplane?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - name: Verify release tag belongs to main
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          git merge-base --is-ancestor HEAD origin/main
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: apps/dashboard/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: apps/dashboard/pnpm-lock.yaml
+      - run: pnpm --dir apps/dashboard install --frozen-lockfile
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --build-tags=integration --timeout=10m ./...
+      - run: make lint-dashboard test
+      - run: go test -race -count=1 -tags=integration ./tests/integration/
+
+  image:
+    name: Build and smoke test (${{ matrix.arch }})
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Build for smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: loomplane:release-test
+          build-args: VERSION=${{ github.event.release.tag_name }}
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.arch }}
+      - run: bash scripts/test-production.sh loomplane:release-test
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested build by digest
+        id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: VERSION=${{ github.event.release.tag_name }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.event.release.tag_name }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          retention-days: 1
+
+  publish:
+    name: Publish release manifest and deployment bundle
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish exact version and attach deployment files
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          refs=()
+          for digest in digests/*; do refs+=("${IMAGE}@sha256:${digest##*/}"); done
+          docker buildx imagetools create --tag "${IMAGE}:${TAG}" "${refs[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}" > image-manifest.txt
+          digest=$(awk '$1 == "Digest:" {print $2; exit}' image-manifest.txt)
+          test -n "$digest"
+          printf '%s@%s\n' "$IMAGE" "$digest" > image.txt
+          mkdir -p bundle
+          cp deployments/production/compose.yaml deployments/production/Caddyfile deployments/production/.env.example bundle/
+          cp docs/docker-production.md bundle/README.md
+          cp image.txt bundle/
+          sed -i "s|^LOOMPLANE_IMAGE=.*|LOOMPLANE_IMAGE=${IMAGE}@${digest}|" bundle/.env.example
+          tar -czf "loomplane-${TAG}-docker.tar.gz" -C bundle .
+          sha256sum "loomplane-${TAG}-docker.tar.gz" > SHA256SUMS
+          gh release upload "$TAG" "loomplane-${TAG}-docker.tar.gz" image.txt image-manifest.txt SHA256SUMS --clobber

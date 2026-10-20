@@ -18,7 +18,7 @@ ARG GO_VERSION=1.26.9
 ARG NODE_VERSION=24
 ARG ALPINE_VERSION=3.22
 
-FROM node:${NODE_VERSION}-alpine AS dashboard
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS dashboard
 # The version package.json's packageManager names.
 RUN npm install --global pnpm@11.5.0
 WORKDIR /src/apps/dashboard
@@ -32,7 +32,7 @@ RUN --mount=type=cache,id=loomplane-pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store
 RUN pnpm build
 
-FROM golang:${GO_VERSION}-alpine AS api
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS api
 WORKDIR /src
 ENV CGO_ENABLED=0
 COPY go.mod go.sum ./
@@ -44,20 +44,27 @@ COPY extensions ./extensions
 COPY internal ./internal
 COPY pkg ./pkg
 ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
+# Bound compiler memory on small builders that also build the dashboard.
+ARG GO_BUILD_PARALLELISM=2
 RUN --mount=type=cache,id=loomplane-gomod,target=/go/pkg/mod \
     --mount=type=cache,id=loomplane-gobuild,target=/root/.cache/go-build \
-    go build -trimpath \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -p ${GO_BUILD_PARALLELISM} -trimpath \
       -ldflags "-s -w -X github.com/xraph/loomplane/internal/buildinfo.Version=${VERSION}" \
       -o /out/ ./cmd/loomplane ./cmd/loomplane-worker
 
 FROM alpine:${ALPINE_VERSION}
 RUN apk add --no-cache ca-certificates tzdata \
- && adduser -D -H -u 10001 loomplane
+ && adduser -D -H -u 10001 loomplane \
+ && mkdir -p /var/lib/loomplane \
+ && chown loomplane:loomplane /var/lib/loomplane
 COPY --from=api /out/loomplane /out/loomplane-worker /usr/local/bin/
 COPY --from=dashboard /src/apps/dashboard/dist /usr/share/loomplane/dashboard
 COPY config.yaml /etc/loomplane/config.yaml
 ENV LOOMPLANE_CONFIG_DIR=/etc/loomplane \
     LOOMPLANE_DASHBOARD_DIR=/usr/share/loomplane/dashboard \
+    LOOMPLANE_STORAGE_URL=file:///var/lib/loomplane \
     LOOMPLANE_HTTP_ADDR=:8780
 WORKDIR /etc/loomplane
 USER loomplane
