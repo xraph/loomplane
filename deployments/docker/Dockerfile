@@ -2,7 +2,7 @@
 
 # Loomplane in one image: the API with the dashboard it serves, and the
 # analysis worker. The image runs the API; run the worker from the same
-# image with `--entrypoint loomplane-worker`.
+# image with LOOMPLANE_PROCESS=worker or `--entrypoint loomplane-worker`.
 #
 #   docker build -f deployments/docker/Dockerfile -t loomplane .
 #
@@ -61,6 +61,7 @@ RUN apk add --no-cache ca-certificates tzdata \
  && chown loomplane:loomplane /var/lib/loomplane
 COPY --from=api /out/loomplane /out/loomplane-worker /usr/local/bin/
 COPY --from=dashboard /src/apps/dashboard/dist /usr/share/loomplane/dashboard
+COPY --chmod=0755 deployments/docker/entrypoint.sh /usr/local/bin/loomplane-entrypoint
 COPY config.yaml /etc/loomplane/config.yaml
 ENV LOOMPLANE_CONFIG_DIR=/etc/loomplane \
     LOOMPLANE_DASHBOARD_DIR=/usr/share/loomplane/dashboard \
@@ -73,4 +74,4 @@ EXPOSE 8780
 # you'll want to change this too.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
   CMD wget -qO /dev/null http://127.0.0.1:8780/_/health/live || exit 1
-ENTRYPOINT ["loomplane"]
+ENTRYPOINT ["loomplane-entrypoint"]
