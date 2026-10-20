@@ -67,7 +67,7 @@ func (d *Deployments) StartCloudSync(ctx context.Context, org, project, id strin
 		return err
 	}
 	request := fmt.Sprintf("%s.attempt.%d", id, attempt)
-	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}, RequestID: "start:" + request, WorkflowType: cloudSyncWorkflow, BuildID: DeploymentBuild, Queue: DurableQueue, Input: input})
+	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}, RequestID: "start:" + request, WorkflowType: cloudSyncWorkflow, BuildID: DeploymentBuild, Queue: DurableQueue, Input: input, RetryPolicy: recoveryRetryPolicy()})
 	return err
 }
 
@@ -92,22 +92,42 @@ func (d *Deployments) ResumeRelease(ctx context.Context, org, planID string) err
 	if err != nil {
 		return err
 	}
-	result, err := eng.QueryDurableWorkflow(ctx, drt.QueryRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID}, BuildID: DeploymentBuild, Name: "execution-state"})
-	if err == nil && result.State == durable.StateRunning {
-		return nil
-	}
-	if err != nil && !errors.Is(err, durable.ErrNotFound) {
-		return err
+	return resumeReleaseOn(ctx, eng, org, planID)
+}
+
+type releaseRecoveryEngine interface {
+	QueryDurableWorkflow(context.Context, drt.QueryRequest) (drt.QueryResult, error)
+	StartDurableWorkflow(context.Context, durable.StartRequest) (durable.Receipt, error)
+}
+
+// Dispatch persists successor run IDs and backoff after infrastructure failures.
+// Business failures stay in the deployment/sync record and require its retry API.
+func recoveryRetryPolicy() *durable.WorkflowRetryPolicy {
+	return &durable.WorkflowRetryPolicy{InitialInterval: time.Second, MaximumInterval: time.Minute}
+}
+
+func resumeReleaseOn(ctx context.Context, eng releaseRecoveryEngine, org, planID string) error {
+	for _, id := range []string{planID, "resume-release:" + planID} {
+		result, err := eng.QueryDurableWorkflow(ctx, drt.QueryRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: id, RunID: runID}, BuildID: DeploymentBuild, Name: "execution-state"})
+		if err == nil && result.State == durable.StateRunning {
+			return nil
+		}
+		if err != nil && !errors.Is(err, durable.ErrNotFound) {
+			return err
+		}
 	}
 	input, err := json.Marshal(DeploymentInput{OrgID: org, PlanID: planID})
 	if err != nil {
 		return err
 	}
-	request := "resume-release:" + planID
-	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}, RequestID: request, WorkflowType: resumeReleaseWorkflow, BuildID: DeploymentBuild, Queue: DurableQueue, Input: input})
+	// Older recovery runs had no retry policy. A stable new identity recovers
+	// their closed histories without changing an accepted request's fingerprint.
+	request := "resume-release-v2:" + planID
+	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}, RequestID: request, WorkflowType: resumeReleaseWorkflow, BuildID: DeploymentBuild, Queue: DurableQueue, Input: input, RetryPolicy: recoveryRetryPolicy()})
 	return err
 }
 func (d *Deployments) resumeRelease(w *drt.Workflow, input []byte) ([]byte, error) {
+	w.SetQueryHandler("execution-state", func([]byte) ([]byte, error) { return []byte("{}"), nil })
 	var in DeploymentInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err

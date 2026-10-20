@@ -31,7 +31,7 @@ func (s *Service) PreviewCloudRevert(ctx context.Context, p security.Principal, 
 		if !ok {
 			return nil, errors.New("the Cloud compensation comparisons are unavailable")
 		}
-		if compensationErr := checked.CheckCloudCompensation(ctx, p.OrgID, id, env.Bindings); compensationErr != nil {
+		if compensationErr := checked.CheckCloudCompensation(ctx, p.OrgID, id, env.EnvironmentID, env.Bindings); compensationErr != nil {
 			return nil, compensationErr
 		}
 	}
@@ -84,5 +84,5 @@ func (s *Service) ApplyCloudRevert(ctx context.Context, p security.Principal, pr
 }
 
 type cloudCompensationStore interface {
-	CheckCloudCompensation(context.Context, string, string, json.RawMessage) error
+	CheckCloudCompensation(context.Context, string, string, string, json.RawMessage) error
 }

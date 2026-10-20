@@ -178,7 +178,11 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			preview.Blockers = append(preview.Blockers, env.Name+": "+finding.Name+": "+finding.Message)
 		}
 		change := cloudprofiles.EnvironmentChange{EnvironmentID: env.ID, Environment: env.Name, Services: []string{}, Status: cloudprofiles.SyncPending}
+		change.Summary = cloudprofiles.PlanSummary{Create: plan.Summary.Create, Update: plan.Summary.Update, Replace: plan.Summary.Replace, Delete: plan.Summary.Delete, Keep: plan.Summary.Keep}
 		for _, a := range plan.Actions {
+			if a.AdoptCloudPlacement {
+				change.Summary.Adopt++
+			}
 			if a.Op == Keep && !a.AdoptCloudPlacement {
 				continue
 			}
@@ -296,6 +300,23 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 	// Revalidate account identity against every reviewed action, including adoption.
 	if connErr := s.validateSnapshotConnections(ctx, p.OrgID, snapshot); connErr != nil {
 		return nil, connErr
+	}
+	for _, env := range snapshot.Environments {
+		var plan Plan
+		if decodeErr := json.Unmarshal(env.Plan, &plan); decodeErr != nil {
+			return nil, decodeErr
+		}
+		for _, action := range plan.Actions {
+			if action.Op == Keep || action.Service == nil || action.Service.Gateway != nil {
+				continue
+			}
+			if s.appliedInputs == nil {
+				return nil, errors.New("applied input verification is unavailable")
+			}
+			if inputErr := s.appliedInputs.CheckAppliedInputs(ctx, p.OrgID, env.EnvironmentID, action.Service); inputErr != nil {
+				return nil, inputErr
+			}
+		}
 	}
 	id, err := typeid.Generate("csync")
 	if err != nil {

@@ -25,15 +25,26 @@ type ChangeInput struct {
 
 // EnvironmentChange describes the reviewed work in one environment.
 type EnvironmentChange struct {
-	EnvironmentID   string   `json:"environment_id"`
-	Environment     string   `json:"environment"`
-	Services        []string `json:"services"`
-	PlanID          string   `json:"plan_id,omitempty"`
-	DeploymentID    string   `json:"deployment_id,omitempty"`
-	Status          string   `json:"status"`
-	Error           string   `json:"error,omitempty"`
-	ExternalRouting bool     `json:"external_routing"`
-	RoutingEvidence string   `json:"routing_evidence,omitempty"`
+	EnvironmentID   string      `json:"environment_id"`
+	Environment     string      `json:"environment"`
+	Services        []string    `json:"services"`
+	Summary         PlanSummary `json:"summary"`
+	PlanID          string      `json:"plan_id,omitempty"`
+	DeploymentID    string      `json:"deployment_id,omitempty"`
+	Status          string      `json:"status"`
+	Error           string      `json:"error,omitempty"`
+	ExternalRouting bool        `json:"external_routing"`
+	RoutingEvidence string      `json:"routing_evidence,omitempty"`
+}
+
+// PlanSummary counts the reviewed provider changes and metadata adoptions.
+type PlanSummary struct {
+	Create  int `json:"create"`
+	Update  int `json:"update"`
+	Replace int `json:"replace"`
+	Delete  int `json:"delete"`
+	Keep    int `json:"keep"`
+	Adopt   int `json:"adopt"`
 }
 
 // Preview is immutable. Snapshot references and actor identity remain server-side.

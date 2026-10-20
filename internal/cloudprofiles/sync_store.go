@@ -116,6 +116,23 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	if storedRevision != p.Revision {
 		return nil, ErrConflict
 	}
+	if p.Reverts != "" {
+		// A running cleanup owns the same lock. Review again once it settles.
+		var acquired bool
+		if lockErr := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, "cloud-sync/"+p.Reverts).Scan(&acquired); lockErr != nil {
+			return nil, lockErr
+		}
+		if !acquired {
+			return nil, ErrBusy
+		}
+		var status string
+		if err = tx.QueryRow(ctx, `SELECT status FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Reverts).Scan(&status); err != nil {
+			return nil, storeError(err)
+		}
+		if status != SyncFailed && status != SyncRouting && status != SyncCleanup && status != SyncSucceeded {
+			return nil, ErrConflict
+		}
+	}
 
 	for _, id := range slices.Sorted(maps.Keys(snapshot.ProfileRevisions)) {
 		var revision int64

@@ -82,7 +82,7 @@ func (s *Service) reconcileCloudSync(ctx context.Context, st cloudprofiles.SyncS
 	if err != nil {
 		return err
 	}
-	if sync.Status == cloudprofiles.SyncSucceeded || sync.Status == cloudprofiles.SyncReverted || sync.Status == cloudprofiles.SyncRouting || sync.Status == cloudprofiles.SyncFailed {
+	if sync.Status == cloudprofiles.SyncSucceeded || sync.Status == cloudprofiles.SyncReverted || sync.Status == cloudprofiles.SyncReverting || sync.Status == cloudprofiles.SyncRouting || sync.Status == cloudprofiles.SyncFailed {
 		return nil
 	}
 	fail := func(cause error) error {
