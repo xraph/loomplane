@@ -1,0 +1,30 @@
+name: Ignored files
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ignored:
+    name: No ignored files tracked
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # .gitignore keeps AI plans, specs and session notes out of a plain
+      # git add. It can't stop git add -f, or a branch that started before
+      # those paths were ignored, so this step fails the PR.
+      - name: Check for tracked files that .gitignore excludes
+        run: |
+          tracked=$(git ls-files --cached --ignored --exclude-standard)
+          if [ -z "$tracked" ]; then
+            exit 0
+          fi
+          while IFS= read -r path; do
+            echo "::error file=${path}::${path} is tracked, but .gitignore excludes it. Run: git rm --cached \"${path}\""
+          done <<< "$tracked"
+          exit 1
