@@ -31,6 +31,14 @@ type Object struct {
 	VersionID string `json:"version_id,omitempty"`
 }
 
+func (o Object) integrity() ([]byte, error) {
+	expected, err := hex.DecodeString(o.SHA256)
+	if err != nil || len(expected) != sha256.Size || o.Size < 0 || o.Size > maxBytes {
+		return nil, errors.New("invalid backup integrity metadata")
+	}
+	return expected, nil
+}
+
 // Store borrows the extension's backups store; its owner handles shutdown.
 type Store struct {
 	Trove  *trove.Trove
@@ -148,9 +156,9 @@ func (s *Store) CopyVerified(ctx context.Context, ref Object, dst io.Writer) err
 	if err := s.validate(ref.Key); err != nil {
 		return err
 	}
-	expected, err := hex.DecodeString(ref.SHA256)
-	if err != nil || len(expected) != sha256.Size || ref.Size < 0 || ref.Size > maxBytes {
-		return errors.New("invalid backup integrity metadata")
+	expected, err := ref.integrity()
+	if err != nil {
+		return err
 	}
 	object, err := s.Trove.Get(ctx, s.Bucket, ref.Key, driver.WithVersionID(ref.VersionID))
 	if err != nil {
