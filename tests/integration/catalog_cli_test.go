@@ -174,4 +174,5 @@ func catalogCLIRecovery(t *testing.T, kind string) {
 		t.Fatalf("copy volume remains: %s", volumes)
 	}
 	t.Logf("CLI catalog plan %s, backup %s and verified restore %s passed, including timeout resumption; temporary copy removed", plan.ID, backup.ID, restored.ID)
+	holdCatalogBrowser(t, running.srv.URL, plan.ProjectID, connection.ID)
 }

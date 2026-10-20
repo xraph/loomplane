@@ -24,6 +24,10 @@ func holdCatalogBrowser(t *testing.T, base, project, connection string) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	marker := filepath.Join(directory, "done")
+	if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	raw, err := json.Marshal(map[string]string{"url": base, "project": project, "connection": connection})
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +40,7 @@ func holdCatalogBrowser(t *testing.T, base, project, connection string) {
 	t.Log("catalog browser fixture is ready")
 	deadline := time.Now().Add(30 * time.Minute)
 	for time.Now().Before(deadline) {
-		if _, err = os.Stat(filepath.Join(directory, "done")); err == nil {
+		if _, err = os.Stat(marker); err == nil {
 			return
 		}
 		time.Sleep(time.Second)
