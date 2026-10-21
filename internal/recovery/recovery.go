@@ -79,6 +79,7 @@ type Backend interface {
 	BackupDatabase(context.Context, security.Principal, *planning.Binding, *backupfiles.Store, string) (backupfiles.Object, error)
 }
 type Service struct {
+	RetentionPolicies RetentionPolicyStore
 	Retirements       RetirementStore
 	EnqueueRetirement func(context.Context, string, string) error
 	Policies          PolicyStore
@@ -254,6 +255,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 	if s.Retirements != nil {
 		failures = append(failures, s.reconcileRetirements(ctx))
+	}
+	if s.RetentionPolicies != nil {
+		failures = append(failures, s.reconcileRetentionPolicies(ctx))
 	}
 	return errors.Join(failures...)
 }

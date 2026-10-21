@@ -130,28 +130,62 @@ func (s *PgStore) PutRetentionPolicy(ctx context.Context, in *RetentionPolicy, e
 	return result, tx.Commit()
 }
 
-// Advance uses both the observed due time and policy revision, so a delayed
-// scheduler cannot overwrite a newer owner's decision or another pass's result.
-func (s *PgStore) AdvanceRetentionPolicy(ctx context.Context, p *RetentionPolicy, retirement string, cause error) error {
-	if p == nil {
+// Advance resolves an accepted evaluation under the same source and policy locks
+// as admission. Otherwise a lost response or empty concurrent preview could
+// advance the request identity without linking its committed retirement.
+func (s *PgStore) AdvanceRetentionPolicy(ctx context.Context, p *RetentionPolicy, retirement string, cause error) (err error) {
+	if p == nil || p.SourceKey == "" {
 		return ErrInvalid
 	}
-	if retirement != "" {
-		r, err := s.GetRetirement(ctx, p.OrgID, retirement)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
 		if err != nil {
-			return err
+			err = errors.Join(err, tx.Rollback())
 		}
-		if r.ProjectID != p.ProjectID || r.SourceKey != p.SourceKey || r.RetentionPolicyID != p.ID || r.RetentionRevision != p.Revision {
+	}()
+	if checkErr := lockRetirementSource(ctx, tx, p.SourceKey); checkErr != nil {
+		return checkErr
+	}
+	current, err := scanRetentionPolicy(tx.QueryRow(ctx, `SELECT `+retentionPolicyColumns+` FROM loomplane_retention_policies WHERE org_id=$1 AND id=$2 FOR UPDATE`, p.OrgID, p.ID))
+	if err != nil {
+		return err
+	}
+	if current.ProjectID != p.ProjectID || current.SourceKey != p.SourceKey {
+		return ErrConflict
+	}
+	if !current.Enabled || current.Revision != p.Revision || !current.NextAt.Equal(p.NextAt) {
+		return tx.Commit()
+	}
+	var accepted *Retirement
+	if retirement != "" {
+		accepted, err = scanRetirement(tx.QueryRow(ctx, `SELECT `+retirementColumns+` FROM loomplane_backup_retirements WHERE org_id=$1 AND id=$2`, p.OrgID, retirement))
+	} else {
+		accepted, err = scanRetirement(tx.QueryRow(ctx, `SELECT `+retirementColumns+` FROM loomplane_backup_retirements WHERE org_id=$1 AND project_id=$2 AND request_id=$3`, p.OrgID, p.ProjectID, retentionPolicyRequestKey(p)))
+		if errors.Is(err, ErrNotFound) {
+			err = nil
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if accepted != nil {
+		if accepted.ProjectID != p.ProjectID || accepted.SourceKey != p.SourceKey || accepted.RetentionPolicyID != p.ID || accepted.RetentionRevision != p.Revision || accepted.CreatedBy != p.AuthorizedBy || accepted.Policy != p.Policy {
 			return ErrConflict
 		}
+		retirement = accepted.ID
 	}
 	seconds, message := 60, ""
 	if cause != nil {
 		seconds, message = 3600, "Automatic retention could not be applied. Check policy authority, the retained recovery point and storage; retry in one hour."
 	}
-	_, err := s.db.Exec(ctx, `UPDATE loomplane_retention_policies SET next_at=now()+($5*interval '1 second'),last_error=$6,last_retirement_id=COALESCE(NULLIF($7,''),last_retirement_id)
- WHERE org_id=$1 AND id=$2 AND revision=$3 AND next_at=$4 AND enabled=true`, p.OrgID, p.ID, p.Revision, p.NextAt, seconds, message, retirement)
-	return err
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_retention_policies SET next_at=now()+($5*interval '1 second'),last_error=$6,last_retirement_id=COALESCE(NULLIF($7,''),last_retirement_id)
+ WHERE org_id=$1 AND id=$2 AND revision=$3 AND next_at=$4 AND enabled=true`, p.OrgID, p.ID, p.Revision, p.NextAt, seconds, message, retirement); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func checkRetentionGrant(ctx context.Context, tx driver.Tx, in *Retirement, sourceKey string) error {
@@ -165,7 +199,7 @@ func checkRetentionGrant(ctx context.Context, tx driver.Tx, in *Retirement, sour
 	if err != nil {
 		return err
 	}
-	if !p.Enabled || p.ProjectID != in.ProjectID || p.SourceKey != sourceKey || p.Revision != in.RetentionRevision || p.AuthorizedBy != in.CreatedBy || p.Policy != in.Policy {
+	if !p.Enabled || p.ProjectID != in.ProjectID || p.SourceKey != sourceKey || p.Revision != in.RetentionRevision || !p.NextAt.Equal(in.RetentionExpectedAt) || p.AuthorizedBy != in.CreatedBy || p.Policy != in.Policy {
 		return ErrConflict
 	}
 	return nil

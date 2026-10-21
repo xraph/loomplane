@@ -79,7 +79,7 @@ func retirementSourceKey(b *Backup) (string, error) {
 }
 
 func (s *PgStore) BeginRetirement(ctx context.Context, in *Retirement, guard RetirementGuard) (result *Retirement, err error) {
-	if in == nil || (in.RetentionPolicyID == "") != (in.RetentionRevision == 0) || in.RetentionRevision < 0 || in.ID == "" || in.OrgID == "" || in.ProjectID == "" || in.CreatedBy == "" || !requestKey.MatchString(in.RequestID) || guard == nil {
+	if in == nil || (in.RetentionPolicyID == "") != (in.RetentionRevision == 0) || in.RetentionRevision < 0 || in.RetentionPolicyID != "" && in.RetentionExpectedAt.IsZero() || in.ID == "" || in.OrgID == "" || in.ProjectID == "" || in.CreatedBy == "" || !requestKey.MatchString(in.RequestID) || guard == nil {
 		return nil, ErrInvalid
 	}
 	if checkErr := in.Policy.Validate(); checkErr != nil {
@@ -265,4 +265,11 @@ func (s *PgStore) FinishRetirement(ctx context.Context, r *Retirement, cause err
 func lockRetirementSource(ctx context.Context, tx driver.Tx, key string) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "loomplane-backup-retirement:"+key)
 	return err
+}
+
+func (s *PgStore) RetirementByRequest(ctx context.Context, org, project, key string) (*Retirement, error) {
+	return scanRetirement(s.db.QueryRow(ctx, `SELECT `+retirementColumns+` FROM loomplane_backup_retirements WHERE org_id=$1 AND project_id=$2 AND request_id=$3`, org, project, key))
+}
+func (s *PgStore) ActiveRetirement(ctx context.Context, org, source string) (*Retirement, error) {
+	return scanRetirement(s.db.QueryRow(ctx, `SELECT `+retirementColumns+` FROM loomplane_backup_retirements WHERE org_id=$1 AND source_key=$2 AND status<>'succeeded'`, org, source))
 }

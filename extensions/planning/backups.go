@@ -45,7 +45,7 @@ func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects
 	}
 	records := recovery.NewPgStore(pg)
 	e.backups = &recovery.Service{
-		Policies: records, Restores: records, Retirements: records, Store: records,
+		RetentionPolicies: records, Policies: records, Restores: records, Retirements: records, Store: records,
 		RestoreBackend: target, Backend: target, Projects: prj, Bindings: plans, Authz: authz, Audit: audit, Files: files,
 		Enqueue: e.enqueueRecovery(backupJob, 2), EnqueueRestore: e.enqueueRecovery(restoreJob, 0), EnqueueRetirement: e.enqueueRecovery(retirementJob, 0),
 	}

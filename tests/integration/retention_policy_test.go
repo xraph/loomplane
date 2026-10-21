@@ -129,6 +129,7 @@ func TestRetentionPolicyAdmissionRejectsPausedAndChangedGrants(t *testing.T) {
 			}
 			request := retirementRequest()
 			request.RetentionPolicyID, request.RetentionRevision = policy.ID, policy.Revision
+			request.RetentionExpectedAt = policy.NextAt
 			switch change {
 			case "paused":
 				input.Enabled = false
@@ -169,6 +170,7 @@ func TestRetentionPolicyAcceptedIntentSurvivesPauseWithoutGrantingAnother(t *tes
 	}
 	request := retirementRequest()
 	request.RetentionPolicyID, request.RetentionRevision = policy.ID, policy.Revision
+	request.RetentionExpectedAt = policy.NextAt
 	accepted, err := store.BeginRetirement(t.Context(), request, retentionGuard)
 	if err != nil || accepted.RetentionPolicyID != policy.ID || accepted.RetentionRevision != policy.Revision {
 		t.Fatalf("policy provenance missing: %+v %v", accepted, err)
@@ -231,6 +233,7 @@ func TestRetentionPolicyPauseAndAdmissionSerialize(t *testing.T) {
 	}
 	request := retirementRequest()
 	request.RetentionPolicyID, request.RetentionRevision = policy.ID, policy.Revision
+	request.RetentionExpectedAt = policy.NextAt
 	admission := make(chan error, 1)
 	go func() { _, beginErr := store.BeginRetirement(ctx, request, retentionGuard); admission <- beginErr }()
 	deadline := time.Now().Add(5 * time.Second)

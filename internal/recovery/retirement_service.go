@@ -26,6 +26,8 @@ type RetirementRetryInput struct {
 }
 
 type RetirementStore interface {
+	RetirementByRequest(context.Context, string, string, string) (*Retirement, error)
+	ActiveRetirement(context.Context, string, string) (*Retirement, error)
 	ListRetirements(context.Context, string, string, RetirementListInput) (*RetirementPage, error)
 	RetryRetirement(context.Context, string, string, string, string, RetirementGuard) (*Retirement, error)
 	RetirementHistory(context.Context, string, string, RetirementHistoryInput) (*RetirementHistory, error)
@@ -37,6 +39,10 @@ type RetirementStore interface {
 }
 
 func (s *Service) Retire(ctx context.Context, p security.Principal, id string, in RetirementInput) (*Retirement, error) {
+	return s.retire(ctx, p, id, in, nil)
+}
+
+func (s *Service) retire(ctx context.Context, p security.Principal, id string, in RetirementInput, policy *RetentionPolicy) (*Retirement, error) {
 	b, err := s.Store.Get(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
@@ -58,7 +64,12 @@ func (s *Service) Retire(ctx context.Context, p security.Principal, id string, i
 	if err != nil {
 		return nil, err
 	}
-	r, err := s.Retirements.BeginRetirement(ctx, &Retirement{ID: key.String(), OrgID: p.OrgID, ProjectID: b.ProjectID, BackupID: id, RequestID: in.RequestID, Policy: in.Policy, CreatedBy: p.UserID}, guard)
+	record := &Retirement{ID: key.String(), OrgID: p.OrgID, ProjectID: b.ProjectID, BackupID: id, RequestID: in.RequestID, Policy: in.Policy, CreatedBy: p.UserID}
+	if policy != nil {
+		record.RetentionPolicyID, record.RetentionRevision = policy.ID, policy.Revision
+		record.RetentionExpectedAt = policy.NextAt
+	}
+	r, err := s.Retirements.BeginRetirement(ctx, record, guard)
 	if err != nil {
 		return nil, err
 	}
@@ -89,11 +100,11 @@ func (s *Service) RetryRetirement(ctx context.Context, p security.Principal, id 
 
 func (s *Service) retirementGuard(p security.Principal, project string, ref backupfiles.Object) RetirementGuard {
 	return func(ctx context.Context) error {
-		if p.OrgID == "" || p.UserID == "" {
-			return security.ErrForbidden
-		}
-		if err := s.Authz.Require(ctx, p, security.BackupRetire, project); err != nil {
+		if err := s.requireRetirementOwner(ctx, p, project); err != nil {
 			return err
+		}
+		if s.Files == nil {
+			return fmt.Errorf("%w: backup storage is unavailable", ErrInvalid)
 		}
 		if err := s.Files.CanDelete(ref); err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -221,4 +232,11 @@ func (s *Service) auditRetirement(ctx context.Context, p security.Principal, r *
 		severity, outcome = "warning", "failure"
 	}
 	s.Audit.Record(ctx, projects.AuditEvent{Action: "service.backup.retirement." + action, Severity: severity, Outcome: outcome, ProjectID: r.ProjectID, Principal: p, Attributes: map[string]any{"retirement_id": r.ID, "backup_id": r.BackupID, "witness_id": r.WitnessID, "attempt": r.Attempt, "requested_by": r.CreatedBy, "failed": failed}})
+}
+
+func (s *Service) requireRetirementOwner(ctx context.Context, p security.Principal, project string) error {
+	if p.OrgID == "" || p.UserID == "" {
+		return security.ErrForbidden
+	}
+	return s.Authz.Require(ctx, p, security.BackupRetire, project)
 }
