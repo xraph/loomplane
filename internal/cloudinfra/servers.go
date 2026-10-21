@@ -70,32 +70,33 @@ type ServerInput struct {
 // Operation retains the immutable review and public execution checkpoints.
 // Bootstrap credentials are stored only in Vault, keyed by this operation ID.
 type Operation struct {
-	EstimatedHourlyUSD float64                         `json:"estimated_hourly_usd"`
-	StateRevision      int64                           `json:"state_revision"`
-	ID                 string                          `json:"id" forge:"id"`
-	OrgID              string                          `json:"org_id"`
-	CloudID            string                          `json:"cloud_id"`
-	ServerID           string                          `json:"server_id"`
-	Review             string                          `json:"review"`
-	Input              ServerInput                     `json:"input"`
-	Provider           string                          `json:"provider"`
-	AccountID          string                          `json:"account_id"`
-	ConnectionID       string                          `json:"connection_id"`
-	ConnectionRevision time.Time                       `json:"connection_revision"`
-	Ownership          string                          `json:"ownership"`
-	ResourceID         string                          `json:"resource_id"`
-	Status             string                          `json:"status"`
-	Message            string                          `json:"message"`
-	Attempt            int                             `json:"attempt"`
-	Attempted          bool                            `json:"attempted"`
-	Actions            []provider.InfrastructureAction `json:"actions"`
-	PublicIPv4         []string                        `json:"public_ipv4"`
-	HostKey            string                          `json:"host_key,omitempty"`
-	Enrolled           bool                            `json:"enrolled"`
-	BootstrapExpiresAt time.Time                       `json:"bootstrap_expires_at"`
-	CreatedAt          time.Time                       `json:"created_at"`
-	ExpiresAt          time.Time                       `json:"expires_at"`
-	UpdatedAt          time.Time                       `json:"updated_at"`
+	EstimatedHourlyUSD   float64                         `json:"estimated_hourly_usd"`
+	StateRevision        int64                           `json:"state_revision"`
+	ID                   string                          `json:"id" forge:"id"`
+	OrgID                string                          `json:"org_id"`
+	CloudID              string                          `json:"cloud_id"`
+	ServerID             string                          `json:"server_id"`
+	Review               string                          `json:"review"`
+	Input                ServerInput                     `json:"input"`
+	Provider             string                          `json:"provider"`
+	AccountID            string                          `json:"account_id"`
+	ConnectionID         string                          `json:"connection_id"`
+	ConnectionGeneration int64                           `json:"connection_generation,omitempty"`
+	ConnectionRevision   time.Time                       `json:"connection_revision"`
+	Ownership            string                          `json:"ownership"`
+	ResourceID           string                          `json:"resource_id"`
+	Status               string                          `json:"status"`
+	Message              string                          `json:"message"`
+	Attempt              int                             `json:"attempt"`
+	Attempted            bool                            `json:"attempted"`
+	Actions              []provider.InfrastructureAction `json:"actions"`
+	PublicIPv4           []string                        `json:"public_ipv4"`
+	HostKey              string                          `json:"host_key,omitempty"`
+	Enrolled             bool                            `json:"enrolled"`
+	BootstrapExpiresAt   time.Time                       `json:"bootstrap_expires_at"`
+	CreatedAt            time.Time                       `json:"created_at"`
+	ExpiresAt            time.Time                       `json:"expires_at"`
+	UpdatedAt            time.Time                       `json:"updated_at"`
 	// Principal is private persisted approval identity, rechecked before new work.
 	Principal security.Principal `json:"-"`
 }

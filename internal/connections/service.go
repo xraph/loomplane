@@ -18,6 +18,8 @@ import (
 
 const maxName = 60
 
+const replacementInProgressMessage = "Credential replacement is in progress. Retry replacement if it did not finish."
+
 // ErrUnavailable is a check that couldn't reach the cloud. Nothing
 // changes; try again.
 var ErrUnavailable = errors.New("the cloud couldn't be reached to check the credential; try again")
@@ -185,6 +187,9 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	if err != nil {
 		return nil, err
 	}
+	if c.Message == replacementInProgressMessage {
+		return nil, ErrUnavailable
+	}
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
 	}
@@ -272,13 +277,27 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	if before == "" || after == "" || before != after {
 		return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
 	}
-	if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
-		return nil, err
+	// Persistent stores serialize secret writes and invalidate old approvals first.
+	replace := func() error {
+		if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
+			return err
+		}
+		apply(c, res, s.now().UTC())
+		return s.store.UpdateConnection(ctx, c)
 	}
-	apply(c, res, s.now().UTC())
-	if err := s.store.UpdateConnection(ctx, c); err != nil {
-		return nil, err
+	if versioned, ok := s.store.(interface {
+		WithCredentialReplacement(context.Context, *Connection, func() error) error
+	}); ok {
+		if err := versioned.WithCredentialReplacement(ctx, c, replace); err != nil {
+			return nil, err
+		}
+	} else {
+		c.Generation++
+		if err := replace(); err != nil {
+			return nil, err
+		}
 	}
+
 	s.record(ctx, "cloud_connection.replace", p, c)
 	return c, nil
 }
@@ -317,6 +336,14 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	cred, err := s.secrets.Reveal(ctx, orgID, id)
 	if err != nil {
 		return nil, nil, err
+	}
+	// A replacement may start between reading the row and reading Vault.
+	current, err := s.store.GetConnection(ctx, orgID, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if current.Generation != c.Generation || current.Status != c.Status {
+		return nil, nil, ErrChanged
 	}
 	return c, cred, nil
 }

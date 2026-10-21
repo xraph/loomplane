@@ -105,7 +105,7 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 		return nil, err
 	}
 	now := s.now().UTC()
-	o := &Operation{ID: opID, OrgID: p.OrgID, CloudID: cloud, ServerID: serverID, Review: review, Input: in, Provider: conn.Cloud, ConnectionID: conn.ID, ConnectionRevision: conn.UpdatedAt, Status: "preview", Ownership: "managed", Principal: p, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(15 * time.Minute), Actions: []provider.InfrastructureAction{}, PublicIPv4: []string{}}
+	o := &Operation{ID: opID, OrgID: p.OrgID, CloudID: cloud, ServerID: serverID, Review: review, Input: in, Provider: conn.Cloud, ConnectionID: conn.ID, ConnectionRevision: conn.UpdatedAt, ConnectionGeneration: conn.Generation, Status: "preview", Ownership: "managed", Principal: p, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(15 * time.Minute), Actions: []provider.InfrastructureAction{}, PublicIPv4: []string{}}
 	if in.Kind == "adopt" || in.Kind == "disconnect" {
 		if conn.Cloud != connections.Server || (!in.ConfirmAdoption && in.Kind == "adopt") {
 			return nil, fmt.Errorf("%w: explicitly confirm the existing pinned SSH runtime", ErrInvalid)
@@ -180,6 +180,13 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 	return o, nil
 }
 
+func connectionMatches(o *Operation, c *connections.Connection) bool {
+	if o.ConnectionGeneration == 0 {
+		return c.UpdatedAt.Equal(o.ConnectionRevision)
+	}
+	return c.Generation == o.ConnectionGeneration
+}
+
 func (s *Service) validateConnection(ctx context.Context, o *Operation) (*connections.Connection, []byte, error) {
 	var conn *connections.Connection
 	var raw []byte
@@ -192,7 +199,7 @@ func (s *Service) validateConnection(ctx context.Context, o *Operation) (*connec
 	if err != nil {
 		return nil, nil, err
 	}
-	if conn.OrgID != o.OrgID || conn.Cloud != o.Provider || !conn.UpdatedAt.Equal(o.ConnectionRevision) {
+	if conn.OrgID != o.OrgID || conn.Cloud != o.Provider || !connectionMatches(o, conn) {
 		return nil, nil, ErrConflict
 	}
 	if o.Ownership == "managed" {
@@ -357,8 +364,12 @@ func (s *Service) RecoverInfrastructure(ctx context.Context) error {
 }
 
 func (s *Service) execute(ctx context.Context, o *Operation) error {
-	if checkErr := s.Authz.Require(ctx, o.Principal, security.OrganizationCloudManage, o.OrgID); checkErr != nil {
-		return checkErr
+	// Accepted cleanup keeps its recorded authority and exact resource target.
+	// New capacity still requires the original manager's current permission.
+	if o.Input.Kind != "delete" && o.Input.Kind != "disconnect" {
+		if checkErr := s.Authz.Require(ctx, o.Principal, security.OrganizationCloudManage, o.OrgID); checkErr != nil {
+			return checkErr
+		}
 	}
 	if !o.Attempted {
 		profile, scopeErr := s.Clouds.GetProfile(ctx, o.OrgID, "", o.CloudID)
@@ -374,7 +385,7 @@ func (s *Service) execute(ctx context.Context, o *Operation) error {
 		return err
 	}
 	v, err := s.Store.GetServer(ctx, o.OrgID, o.CloudID, o.ServerID)
-	if errors.Is(err, ErrNotFound) && (o.Input.Kind == "create" || o.Input.Kind == "adopt") {
+	if errors.Is(err, ErrNotFound) && o.Input.Kind == "create" {
 		v = &Server{CreationOperationID: o.ID, ID: o.ServerID, OrgID: o.OrgID, CloudID: o.CloudID, Name: o.Input.Name, Ownership: o.Ownership, Provider: o.Provider, ConnectionID: o.ConnectionID, AccountID: o.AccountID, ResourceID: o.ResourceID, Region: o.Input.Region, Size: o.Input.Size, Revision: 1, Status: "provisioning", CreatedAt: o.CreatedAt, UpdatedAt: s.now().UTC()}
 		err = s.Store.SaveServer(ctx, v)
 	}
@@ -616,6 +627,19 @@ func (s *Service) CancelOperation(ctx context.Context, p security.Principal, clo
 			return provider.ErrInfrastructureAmbiguous
 		}
 
+		if o.Input.Kind == "adopt" {
+			v, getErr := s.Store.GetServer(ctx, o.OrgID, o.CloudID, o.ServerID)
+			if getErr != nil && !errors.Is(getErr, ErrNotFound) {
+				return getErr
+			}
+			if v != nil && v.Status != "ready" {
+				v.Status = "disconnected"
+				v.Revision++
+				if saveErr := s.Store.SaveServer(ctx, v); saveErr != nil {
+					return saveErr
+				}
+			}
+		}
 		if !o.Attempted && o.ResourceID == "" && o.Input.Kind == "create" {
 			v, getErr := s.Store.GetServer(ctx, o.OrgID, o.CloudID, o.ServerID)
 			if getErr != nil && !errors.Is(getErr, ErrNotFound) {

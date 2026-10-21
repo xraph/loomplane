@@ -100,10 +100,11 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 		return ErrConflict
 	}
 	var connectionRevision time.Time
-	if checkErr := tx.QueryRow(ctx, `SELECT updated_at FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND (status='ready' OR $3='disconnect') FOR UPDATE`, o.OrgID, o.ConnectionID, o.Input.Kind).Scan(&connectionRevision); checkErr != nil {
+	var connectionGeneration int64
+	if checkErr := tx.QueryRow(ctx, `SELECT updated_at,generation FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND (status='ready' OR $3='disconnect') FOR UPDATE`, o.OrgID, o.ConnectionID, o.Input.Kind).Scan(&connectionRevision, &connectionGeneration); checkErr != nil {
 		return storeError(checkErr)
 	}
-	if !connectionRevision.Equal(o.ConnectionRevision) {
+	if (o.ConnectionGeneration == 0 && !connectionRevision.Equal(o.ConnectionRevision)) || (o.ConnectionGeneration != 0 && connectionGeneration != o.ConnectionGeneration) {
 		return ErrConflict
 	}
 	if o.Input.Kind != "create" && o.Input.Kind != "adopt" {
@@ -113,6 +114,24 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 		}
 		if revision != o.Input.ServerRevision {
 			return ErrConflict
+		}
+	}
+	if o.Input.Kind == "adopt" {
+		var used bool
+		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_connection_uses WHERE org_id=$1 AND connection_id=$2 AND kind NOT IN ('cloud_server','infrastructure_operation'))`, o.OrgID, o.ConnectionID).Scan(&used); checkErr != nil {
+			return checkErr
+		}
+		if used {
+			return ErrConflict
+		}
+		v := &Server{CreationOperationID: o.ID, ID: o.ServerID, OrgID: o.OrgID, CloudID: o.CloudID, Name: o.Input.Name, Ownership: o.Ownership, Provider: o.Provider, ConnectionID: o.ConnectionID, RuntimeConnectionID: o.ConnectionID, AccountID: o.AccountID, ResourceID: o.ResourceID, Revision: 1, StateRevision: 1, Status: "provisioning", CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
+		body, marshalErr := json.Marshal(v)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		// The connection row lock serializes this claim with workload admission.
+		if _, insertErr := tx.Exec(ctx, `INSERT INTO loomplane_cloud_servers(id,org_id,cloud_id,connection_id,runtime_connection_id,provider,account_id,resource_id,ownership,revision,status,body) VALUES($1,$2,$3,$4,$4,$5,$6,$7,'adopted',1,'provisioning',$8)`, v.ID, v.OrgID, v.CloudID, v.ConnectionID, v.Provider, v.AccountID, v.ResourceID, body); insertErr != nil {
+			return storeError(insertErr)
 		}
 	}
 	raw, err := json.Marshal(o)

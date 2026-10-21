@@ -136,7 +136,7 @@ func fail(err error) error {
 	switch {
 	case errors.Is(err, connections.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, connections.ErrExists), errors.Is(err, connections.ErrInUse):
+	case errors.Is(err, connections.ErrExists), errors.Is(err, connections.ErrInUse), errors.Is(err, connections.ErrChanged):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, connections.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())

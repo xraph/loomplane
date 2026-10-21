@@ -37,6 +37,7 @@ const (
 
 // Errors.
 var (
+	ErrChanged  = errors.New("cloud connection changed during the operation")
 	ErrNotFound = errors.New("cloud connection not found")
 	ErrInvalid  = errors.New("invalid cloud connection")
 	ErrExists   = errors.New("this organization already has a connection with that name")
@@ -48,10 +49,12 @@ var (
 
 // Connection is one cloud account an organization deploys to.
 type Connection struct {
-	ID    string `json:"id" forge:"id"`
-	OrgID string `json:"org_id"`
-	Cloud string `json:"cloud"`
-	Name  string `json:"name"`
+	// Generation changes with credentials or verified placement configuration, not health checks.
+	Generation int64  `json:"generation"`
+	ID         string `json:"id" forge:"id"`
+	OrgID      string `json:"org_id"`
+	Cloud      string `json:"cloud"`
+	Name       string `json:"name"`
 	// Account is what the credential acts as: a Google Cloud project, or
 	// a Vercel team or username.
 	Account string `json:"account"`
@@ -73,6 +76,9 @@ type Connection struct {
 }
 
 func (c *Connection) normalize() {
+	if c.Generation == 0 {
+		c.Generation = 1
+	}
 	c.AccountIdentity = AccountIdentity(c.Cloud, c.Account, c.Details)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	if c.CheckedAt != nil {

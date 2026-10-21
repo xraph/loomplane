@@ -48,10 +48,13 @@ func (s *infraSecrets) Delete(_ context.Context, org, id string) error {
 	return nil
 }
 
-type infraAuth struct{ denied bool }
+type infraAuth struct {
+	denied      bool
+	revokedUser string
+}
 
 func (a *infraAuth) Require(_ context.Context, p security.Principal, permission security.Permission, resource string) error {
-	if a.denied || p.OrgID != "org" || p.UserID != "manager" || permission != security.OrganizationCloudManage || resource != "org" {
+	if a.denied || p.UserID == a.revokedUser || p.OrgID != "org" || (p.UserID != "manager" && p.UserID != "manager-2") || permission != security.OrganizationCloudManage || resource != "org" {
 		return security.ErrForbidden
 	}
 	return nil
@@ -71,13 +74,17 @@ func (w *infraWorkflow) StartInfrastructure(context.Context, string, string, int
 }
 
 type infraRuntime struct {
-	reject bool
-	calls  int
-	vacant bool
+	beforeInspect func()
+	reject        bool
+	calls         int
+	vacant        bool
 }
 
 func (r *infraRuntime) Inspect(_ context.Context, _ []byte, settings map[string]string, vacant bool) (cloudinfra.RuntimeHealth, error) {
 	r.calls++
+	if r.beforeInspect != nil {
+		r.beforeInspect()
+	}
 	r.vacant = vacant
 	if r.reject || settings["host_key"] == "" {
 		return cloudinfra.RuntimeHealth{}, errors.New("pinned runtime unavailable")
@@ -374,6 +381,18 @@ func TestCloudInfrastructureResizeAndManagedDeletion(t *testing.T) {
 	if preview.Status != "waiting" {
 		t.Fatal("provider accepted delete marked complete")
 	}
+	f.auth.revokedUser = f.p.UserID
+	if _, retryErr := f.svc.RetryOperation(t.Context(), f.p, "cloud", preview.ID); !errors.Is(retryErr, security.ErrForbidden) {
+		t.Fatalf("revoked public retry: %v", retryErr)
+	}
+	if _, cancelErr := f.svc.CancelOperation(t.Context(), f.p, "cloud", preview.ID); !errors.Is(cancelErr, security.ErrForbidden) {
+		t.Fatalf("revoked public cancellation: %v", cancelErr)
+	}
+	replacementManager := f.p
+	replacementManager.UserID = "manager-2"
+	if _, retryErr := f.svc.RetryOperation(t.Context(), replacementManager, "cloud", preview.ID); retryErr != nil {
+		t.Fatal(retryErr)
+	}
 	preview = f.reconcile(t, preview)
 	if preview.Status != "succeeded" || f.provider.deletes != 1 {
 		t.Fatalf("delete: %+v", preview)
@@ -435,12 +454,36 @@ func TestCloudInfrastructureAdoptionNeverDeletesProvider(t *testing.T) {
 	if _, err = f.svc.ApplyServerOperation(t.Context(), f.p, "cloud", o.ID, cloudinfra.ApplyInput{Review: o.Review}); err != nil {
 		t.Fatal(err)
 	}
+	f.auth.revokedUser = f.p.UserID
 	o = f.reconcile(t, o)
+	f.auth.revokedUser = ""
 	if o.Status != "succeeded" || f.provider.deletes != 0 {
 		t.Fatal("disconnect deleted provider")
 	}
 	if _, err = f.connections.GetConnection(t.Context(), "org", conn.ID); err != nil {
 		t.Fatal("adopted connection deleted")
+	}
+	// Terminal history must permit direct use and a subsequent adoption.
+	if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_connection_uses(org_id,connection_id,kind,owner_id) VALUES('org',$1,'plan','reuse')`, conn.ID); err != nil {
+		t.Fatalf("direct reuse after disconnect: %v", err)
+	}
+	if _, err = f.sql.Exec(t.Context(), `DELETE FROM loomplane_connection_uses WHERE owner_id='reuse'`); err != nil {
+		t.Fatal(err)
+	}
+	f.runtime.reject = false
+	o, err = f.svc.PreviewServer(t.Context(), f.p, "cloud", cloudinfra.ServerInput{Kind: "adopt", Name: "Re-adopt", ConnectionID: conn.ID, CloudRevision: 1, ConfirmAdoption: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.svc.ApplyServerOperation(t.Context(), f.p, "cloud", o.ID, cloudinfra.ApplyInput{Review: o.Review}); err != nil {
+		t.Fatal(err)
+	}
+	o = f.reconcile(t, o)
+	if o.Status != "succeeded" {
+		t.Fatalf("re-adoption: %+v", o)
+	}
+	if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_connection_uses(org_id,connection_id,kind,owner_id) VALUES('org',$1,'plan','after-readopt')`, conn.ID); err != nil {
+		t.Fatalf("use after re-adoption: %v", err)
 	}
 }
 
