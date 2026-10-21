@@ -29,9 +29,29 @@ RDS retries require the original password in Vault. They cannot reset it implici
 
 Cloud SQL deployments save the account, region, resource settings and each native operation before moving to the next setup step. A retry follows the captured operation for instance creation, database creation, user setup or protected removal. Checkpoint failures stop further work. If a request may have reached Google but its operation ID was not saved, Loomplane blocks replay and asks you to reconcile the original operation. Older operation-only checkpoints also need reconciliation. Automatic discovery for these uncertain requests is still pending.
 
-A resumed user operation requires its original password in Vault; it cannot publish a newly generated password that Google never received. A new service also refuses an already existing instance with no saved operation or binding. Identity is currently pinned to the native connection name, not an immutable instance incarnation. Provider-native backup inventory and recovery controls remain pending. The [Cloud SQL operation reference](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/operations) describes the native operation identities used by this flow.
+A resumed user operation requires its original password in Vault; it cannot publish a newly generated password that Google never received. A new service also refuses an already existing instance with no saved operation or binding. Identity is currently pinned to the native connection name, not an immutable instance incarnation. Cloud SQL backup inventory and recovery controls remain pending. The [Cloud SQL operation reference](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/operations) describes the native operation identities used by this flow.
 
-Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane's managed backup inventory, isolated restore controls and live cloud recovery qualification remain pending.
+Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane's Cloud SQL inventory, isolated native restore controls and live cloud recovery qualification remain pending.
+
+## Native cloud snapshot history
+
+Open **Cloud snapshots** under **Service recovery** to inspect captured RDS histories in the selected environment. Choose the physical database history, then select **Refresh cloud snapshots**. This reads manual and automated snapshots from the original checked account and region. It does not create or remove a snapshot.
+
+The history stays after you remove a service binding. Each saved point keeps its native reference and creation time, so a reused snapshot name gets a separate record. A complete scan can mark earlier points **No longer observed**. A partial scan cannot prove that a point disappeared, and a failed refresh preserves the last successful observations. Check the observation time and completeness before relying on the list.
+
+You need service backup read access. The saved managed account review must still match the connection; a changed account or unready credential blocks refresh. Old unpinned databases and Cloud SQL do not yet have qualified inventory. RDS discovery follows up to ten pages of 100 snapshots per refresh, reports an incomplete scan when more exist, and excludes shared and public snapshots.
+
+You can read and refresh the same history with the CLI:
+
+```sh
+loomctl backups native-sources PROJECT_ID --json
+loomctl backups native-inventory SOURCE_ID --limit 50 --json
+loomctl backups native-refresh SOURCE_ID --json
+```
+
+Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. Isolated native restore, PITR, deletion and retention controls remain unavailable in Loomplane; use your provider's controls until those paths are qualified.
+
+Live AWS snapshot and recovery qualification remain pending.
 
 ## Persistence and backup storage
 

@@ -50,8 +50,8 @@ export function ManagedDatabaseSettings({
       </dl>
       <p className="text-xs text-muted-foreground">
         These settings are creation requests, not proof of a successful restore.
-        Managed recovery controls are not yet available in Loomplane. Review
-        provider charges before deploying.
+        Native restore and PITR controls are not yet available in Loomplane.
+        Review provider charges before deploying.
       </p>
     </div>
   )

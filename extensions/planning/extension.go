@@ -84,6 +84,7 @@ type Extension struct {
 	activity            *activity.Service
 	artifacts           *artifacts.Store
 	backups             *recovery.Service
+	nativeBackups       *recovery.NativeService
 	restoreTargets      func(context.Context) error
 	cloudProfiles       *cloudprofiles.Service
 	cloudStore          *cloudprofiles.PgStore
@@ -255,7 +256,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	serverTarget := &deployments.OwnedTarget{Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
 	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg)}
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
-	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, auditor); err != nil {
+	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Credentials: clouds}, auditor); err != nil {
 		return err
 	}
 	e.restoreTargets = func(ctx context.Context) error {

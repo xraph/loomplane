@@ -519,6 +519,7 @@ export interface DrainReview {
   review: string;
   serverId: string;
   serverRevision: number;
+  usage?: ServerUsage;
 }
 
 export interface DriftCounts {
@@ -797,6 +798,51 @@ export interface MoveReview {
   placement: Placement;
   review: string;
   sourceServerId: string;
+}
+
+export interface NativeInventory {
+  nextBefore?: string;
+  points: NativePoint[];
+  source: NativeSource;
+}
+
+export interface NativePoint {
+  createdAt: string;
+  encrypted: boolean;
+  engine: string;
+  id: string;
+  kind: string;
+  kmsKey?: string;
+  lastSeenAt: string;
+  name: string;
+  present: boolean;
+  providerId: string;
+  sourceId: string;
+  status: string;
+  version: string;
+}
+
+export interface NativeRecoverySources {
+  nextBefore?: string;
+  sources: NativeSource[];
+}
+
+export interface NativeSource {
+  capturedAt: string;
+  checkedAt?: string;
+  complete: boolean;
+  connectionId: string;
+  environmentId: string;
+  error?: string;
+  id: string;
+  name: string;
+  observedAt?: string;
+  orgId: string;
+  physicalId: string;
+  projectId: string;
+  provider: string;
+  region: string;
+  state: string;
 }
 
 export interface NewKeyBody {
@@ -1202,6 +1248,12 @@ export interface Recipe {
   volumeSizeMb?: number;
 }
 
+export interface RecoveryInputBody {
+  planId: string;
+  review?: string;
+  service: string;
+}
+
 export interface ReplaceInputBody {
   credential: string;
   settings?: Record<string, any>;
@@ -1212,6 +1264,18 @@ export interface Requirement {
   git?: string;
   name: string;
   version?: string;
+}
+
+export interface ReservationRecovery {
+  active: boolean;
+  phase: string;
+  planId: string;
+  review: string;
+  revision: number;
+  serverId: string;
+  service: string;
+  started: boolean;
+  storageRetained: boolean;
 }
 
 export interface Resolution {
@@ -1267,6 +1331,13 @@ export interface RestoreInputBody {
 
 export interface RestoreList {
   restores: Restore[];
+}
+
+export interface RetainedPoolStorage {
+  environmentId: string;
+  planId: string;
+  projectId: string;
+  service: string;
 }
 
 export interface RetentionInput {
@@ -1530,6 +1601,30 @@ export interface ServerSize {
   memoryMib: number;
   monthlyUsd: number;
   regions: string[];
+}
+
+export interface ServerUsage {
+  draining: boolean;
+  reservedCpuMillis: number;
+  reservedMemoryBytes: number;
+  retainedStorage: RetainedPoolStorage[];
+  serverId: string;
+  workloads: ServerWorkload[];
+}
+
+export interface ServerWorkload {
+  active: boolean;
+  bindingId?: string;
+  cpuMillis: number;
+  deploymentId?: string;
+  environmentId: string;
+  executionRevision: number;
+  memoryBytes: number;
+  phase: string;
+  planId: string;
+  poolId: string;
+  projectId: string;
+  service: string;
 }
 
 export interface Service {

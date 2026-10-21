@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_ServerWorkload: Codec = {"kind": "object", "fields": {"active": {"ts": "active"}, "binding_id": {"ts": "bindingId"}, "cpu_millis": {"ts": "cpuMillis"}, "deployment_id": {"ts": "deploymentId"}, "environment_id": {"ts": "environmentId"}, "execution_revision": {"ts": "executionRevision"}, "memory_bytes": {"ts": "memoryBytes"}, "phase": {"ts": "phase"}, "plan_id": {"ts": "planId"}, "pool_id": {"ts": "poolId"}, "project_id": {"ts": "projectId"}, "service": {"ts": "service"}}, "required": ["active", "cpu_millis", "environment_id", "execution_revision", "memory_bytes", "phase", "plan_id", "pool_id", "project_id", "service"]};

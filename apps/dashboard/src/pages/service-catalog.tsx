@@ -82,6 +82,7 @@ import {
   isManagedDatabaseProvider,
   managedDatabaseProfile,
 } from "@/lib/managed-catalog"
+import { NativeRecovery } from "@/components/native-recovery"
 import { ManagedDatabaseSettings } from "@/components/managed-database-settings"
 
 export function ServiceCatalog() {
@@ -489,6 +490,7 @@ function DatabaseDeployment({
   )
 }
 function ServiceRecovery({ project }: { project: string }) {
+  const [showNative, setShowNative] = useState(false)
   const { can } = useOrganization()
   const environments = useQuery(useEnvironmentsList, { path: { id: project } })
   const [environment, setEnvironment] = useState("production")
@@ -614,6 +616,14 @@ function ServiceRecovery({ project }: { project: string }) {
             ))}
           </SelectContent>
         </Select>
+        <Button
+          size="sm"
+          variant="outline"
+          aria-expanded={showNative}
+          onClick={() => setShowNative((current) => !current)}
+        >
+          Cloud snapshots
+        </Button>
         {resources.length > 0 && (
           <Select
             value={selected}
@@ -666,10 +676,17 @@ function ServiceRecovery({ project }: { project: string }) {
           />
         )}
       </div>
+      {showNative && (
+        <NativeRecovery
+          key={`${project}:${environmentID}`}
+          project={project}
+          environment={environmentID}
+        />
+      )}
       {managedRecovery ? (
         <CatalogEmpty
           title="Managed database recovery"
-          description="Manage backups and restores in your cloud account. Loomplane's managed recovery controls are not available yet."
+          description="Open Cloud snapshots to inspect captured RDS history. Restore and PITR controls remain in your cloud account."
         >
           <Button
             variant="outline"

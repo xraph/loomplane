@@ -12,7 +12,9 @@ import (
 )
 
 func (a *App) backupCommand() cli.Command {
+	native := a.nativeRecoveryCommands()
 	return cli.NewCommand("backups", "List a project's database recovery points", a.backups, cli.WithUsage("backups <project>"), cli.WithFlag(jsonFlag),
+		cli.WithSubcommand(native[0]), cli.WithSubcommand(native[1]), cli.WithSubcommand(native[2]),
 		cli.WithSubcommand(cli.NewCommand("create", "Queue a native database backup", a.createBackup, cli.WithUsage("backups create <project> --resource database [--env production] [--request-id ...] [--wait] [--json]"), cli.WithFlags(append(recoveryFlags(), cli.NewStringFlag("resource", "", "Deployed resource name", "database"), cli.NewStringFlag("env", "e", "Environment", "production"), cli.NewStringFlag("request-id", "", "Stable key to reuse after a lost response", ""))...))),
 		cli.WithSubcommand(cli.NewCommand("show", "Show backup status and verification evidence", a.showBackup, cli.WithUsage("backups show <backup-id> [--wait]"), cli.WithFlags(recoveryFlags()...))),
 		cli.WithSubcommand(cli.NewCommand("retry", "Retry a failed backup", a.retryBackup, cli.WithUsage("backups retry <backup-id> [--wait]"), cli.WithFlags(recoveryFlags()...))),

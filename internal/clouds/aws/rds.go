@@ -9,7 +9,6 @@ import (
 	"time"
 
 	sdk "github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -233,12 +232,7 @@ func (s *Session) GetDBSnapshot(ctx context.Context, id string) (*DBSnapshot, er
 	if len(out.DBSnapshots) != 1 || sdk.ToString(out.DBSnapshots[0].DBSnapshotIdentifier) != id {
 		return nil, errors.New("RDS returned a different snapshot identity")
 	}
-	in := out.DBSnapshots[0]
-	point := &DBSnapshot{ID: sdk.ToString(in.DBSnapshotIdentifier), ARN: sdk.ToString(in.DBSnapshotArn), InstanceID: sdk.ToString(in.DBInstanceIdentifier), ResourceID: sdk.ToString(in.DbiResourceId), Status: sdk.ToString(in.Status), Type: sdk.ToString(in.SnapshotType), Engine: sdk.ToString(in.Engine), EngineVersion: sdk.ToString(in.EngineVersion), Encrypted: sdk.ToBool(in.Encrypted), KMSKey: sdk.ToString(in.KmsKeyId)}
-	if in.SnapshotCreateTime != nil {
-		point.CreatedAt = in.SnapshotCreateTime.UTC()
-	}
-	return point, nil
+	return readDBSnapshot(out.DBSnapshots[0]), nil
 }
 
 // DBRemovalSpec pins both the original database and its required final snapshot.
@@ -252,9 +246,10 @@ type DBRemoval struct {
 }
 
 func (s *Session) checkFinalSnapshot(point *DBSnapshot, spec DBRemovalSpec) error {
-	identity, err := arn.Parse(point.ARN)
-	if err != nil || identity.Service != "rds" || identity.AccountID != s.account || identity.Region != s.region || identity.Resource != "snapshot:"+spec.SnapshotID ||
-		point.ID != spec.SnapshotID || point.ResourceID != spec.ResourceID || point.InstanceID != spec.ID || point.Type != "manual" {
+	if err := s.checkSnapshotIdentity(point, spec.ResourceID); err != nil {
+		return err
+	}
+	if point.ID != spec.SnapshotID || point.InstanceID != spec.ID || point.Type != "manual" {
 		return errors.New("RDS final snapshot does not match the original physical database and account")
 	}
 	if point.Status != "available" && point.Status != "creating" {

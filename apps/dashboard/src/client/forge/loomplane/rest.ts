@@ -305,6 +305,40 @@ export class RESTClient extends Client {
       return this.request<types.MoveReview>(config);
     },
 
+    /**
+     */
+    previewRecovery: async (cloudId: string, body: types.RecoveryInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReservationRecovery> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/placements/preview-recovery`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RecoveryInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReservationRecovery"],
+      };
+
+      return this.request<types.ReservationRecovery>(config);
+    },
+
+    /**
+     */
+    recover: async (cloudId: string, body: types.RecoveryInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReservationRecovery> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/placements/recover`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RecoveryInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReservationRecovery"],
+      };
+
+      return this.request<types.ReservationRecovery>(config);
+    },
+
   };
 
   public readonly cloudPools = {
@@ -461,6 +495,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.DrainReview>(config);
+    },
+
+    /**
+     * cloudServers.usage
+     */
+    usage: async (cloudId: string, serverId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ServerUsage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/servers/${encodeURIComponent(String(serverId))}/usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ServerUsage"],
+      };
+
+      return this.request<types.ServerUsage>(config);
     },
 
   };
@@ -1477,6 +1527,54 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.OrgMemberList>(config);
+    },
+
+  };
+
+  public readonly nativeRecoverySources = {
+    /**
+     */
+    inventory: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeInventory"],
+      };
+
+      return this.request<types.NativeInventory>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-sources`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRecoverySources"],
+      };
+
+      return this.request<types.NativeRecoverySources>(config);
+    },
+
+    /**
+     */
+    refresh: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/refresh`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeInventory"],
+      };
+
+      return this.request<types.NativeInventory>(config);
     },
 
   };

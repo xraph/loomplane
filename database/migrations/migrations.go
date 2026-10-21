@@ -35,6 +35,8 @@ func Group() *migrate.Group {
 		statements("20261025001000", "pool_effect_fences", poolEffectFencesUp, poolEffectFencesDown),
 		statements("20261025000300", "pool_recovery", poolRecoveryUp, poolRecoveryDown),
 		statements("20261025000100", "server_pools", serverPoolsUp, serverPoolsDown),
+		statements("20261024000500", "native_inventory", nativeInventoryUp, nativeInventoryDown),
+		statements("20261024000400", "native_sources", nativeSourcesUp, nativeSourcesDown),
 		statements("20261024000300", "binding_physical_identity", bindingPhysicalIdentityUp, bindingPhysicalIdentityDown),
 		statements("20261024000200", "cloud_infrastructure_review_guards", cloudInfrastructureReviewUp, cloudInfrastructureReviewDown),
 		statements("20261024000100", "cloud_infrastructure", cloudInfrastructureUp, cloudInfrastructureDown),

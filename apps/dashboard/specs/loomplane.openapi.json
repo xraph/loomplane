@@ -5760,6 +5760,224 @@
           }
         }
       }
+    },
+    "/api/v1/clouds/{cloudId}/placements/preview-recovery": {
+      "post": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "operationId": "cloudPlacements.previewRecovery",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recovery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationRecovery"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/placements/recover": {
+      "post": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "operationId": "cloudPlacements.recover",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recovery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationRecovery"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/servers/{serverId}/usage": {
+      "get": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudServers.usage",
+        "operationId": "cloudServers.usage",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "serverId",
+            "in": "path",
+            "description": "Path parameter: serverId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerUsage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-sources/{id}": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoverySources.inventory",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider snapshot observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeInventory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-sources/{id}/refresh": {
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoverySources.refresh",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Refreshed provider snapshot observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeInventory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/native-recovery-sources": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoverySources.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Captured native database histories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRecoverySources"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -11135,6 +11353,9 @@
           },
           "server_revision": {
             "type": "integer"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ServerUsage"
           }
         }
       },
@@ -11905,6 +12126,346 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "NativeInventory": {
+        "type": "object",
+        "required": [
+          "source",
+          "points"
+        ],
+        "properties": {
+          "next_before": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativePoint"
+            }
+          },
+          "source": {
+            "$ref": "#/components/schemas/NativeSource"
+          }
+        }
+      },
+      "NativePoint": {
+        "type": "object",
+        "required": [
+          "id",
+          "source_id",
+          "provider_id",
+          "name",
+          "kind",
+          "status",
+          "engine",
+          "version",
+          "created_at",
+          "encrypted",
+          "present",
+          "last_seen_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "encrypted": {
+            "type": "boolean"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "kms_key": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "NativeRecoverySources": {
+        "properties": {
+          "next_before": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativeSource"
+            }
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "type": "object",
+        "x-forge-envelope": "sources"
+      },
+      "NativeSource": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "name",
+          "provider",
+          "connection_id",
+          "region",
+          "physical_id",
+          "captured_at",
+          "state",
+          "complete"
+        ],
+        "properties": {
+          "captured_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "physical_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "RecoveryInputBody": {
+        "type": "object",
+        "required": [
+          "plan_id",
+          "service"
+        ],
+        "properties": {
+          "plan_id": {
+            "type": "string"
+          },
+          "review": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "ReservationRecovery": {
+        "type": "object",
+        "required": [
+          "plan_id",
+          "service",
+          "server_id",
+          "phase",
+          "started",
+          "active",
+          "revision",
+          "review",
+          "storage_retained"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "review": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "started": {
+            "type": "boolean"
+          },
+          "storage_retained": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RetainedPoolStorage": {
+        "type": "object",
+        "required": [
+          "plan_id",
+          "service",
+          "project_id",
+          "environment_id"
+        ],
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "ServerUsage": {
+        "type": "object",
+        "required": [
+          "retained_storage",
+          "server_id",
+          "draining",
+          "reserved_cpu_millis",
+          "reserved_memory_bytes",
+          "workloads"
+        ],
+        "properties": {
+          "draining": {
+            "type": "boolean"
+          },
+          "reserved_cpu_millis": {
+            "type": "integer"
+          },
+          "reserved_memory_bytes": {
+            "type": "integer"
+          },
+          "retained_storage": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetainedPoolStorage"
+            }
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "workloads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServerWorkload"
+            }
+          }
+        }
+      },
+      "ServerWorkload": {
+        "type": "object",
+        "required": [
+          "execution_revision",
+          "project_id",
+          "environment_id",
+          "service",
+          "plan_id",
+          "pool_id",
+          "phase",
+          "active",
+          "cpu_millis",
+          "memory_bytes"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "execution_revision": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
           }
         }
       }
