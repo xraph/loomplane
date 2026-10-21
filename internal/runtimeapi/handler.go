@@ -7,11 +7,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/runtimecatalog"
 	"github.com/xraph/loomplane/internal/workloadidentity"
 	domain "github.com/xraph/loomplane/pkg/federation"
@@ -23,6 +23,9 @@ type EnrollmentAuthority interface {
 	CheckPending(context.Context, string, domain.AgentIdentity) error
 	Consume(context.Context, string, domain.AgentIdentity) error
 }
+type Acknowledgments interface {
+	AcknowledgeSnapshot(context.Context, domain.AgentIdentity, domain.Acknowledgment) error
+}
 type Catalog interface {
 	Observe(context.Context, domain.AgentIdentity, domain.ObservationBatch) error
 	Watch(context.Context, domain.AgentIdentity, runtimecatalog.WakeSource, func(context.Context, *domain.Snapshot) error) error
@@ -33,6 +36,7 @@ type Handler struct {
 	registry    workloadidentity.Registry
 	enrollments EnrollmentAuthority
 	catalog     Catalog
+	receipts    Acknowledgments
 	wake        runtimecatalog.WakeSource
 	mux         *http.ServeMux
 	slots       chan struct{}
@@ -40,17 +44,18 @@ type Handler struct {
 	watches     map[string]bool
 }
 
-func NewHandler(org string, trust workloadidentity.TrustSource, registry workloadidentity.Registry, enrollments EnrollmentAuthority, catalog Catalog, wake runtimecatalog.WakeSource) (*Handler, error) {
-	if trust == nil || registry == nil || enrollments == nil || catalog == nil || wake == nil {
+func NewHandler(org string, trust workloadidentity.TrustSource, registry workloadidentity.Registry, enrollments EnrollmentAuthority, catalog Catalog, wake runtimecatalog.WakeSource, receipts Acknowledgments) (*Handler, error) {
+	if trust == nil || registry == nil || enrollments == nil || catalog == nil || wake == nil || receipts == nil {
 		return nil, workloadidentity.ErrIdentity
 	}
 	if _, err := workloadidentity.AgentURI(trust.Domain(), domain.AgentIdentity{Scope: domain.Scope{OrgID: org, ProjectID: "check", EnvironmentID: "check"}, DestinationID: "check", AgentID: "check", Epoch: 1}); err != nil {
 		return nil, err
 	}
-	h := &Handler{org: org, trust: trust, registry: registry, enrollments: enrollments, catalog: catalog, wake: wake, mux: http.NewServeMux(), slots: make(chan struct{}, maxRequests), watches: map[string]bool{}}
+	h := &Handler{org: org, trust: trust, registry: registry, enrollments: enrollments, catalog: catalog, wake: wake, receipts: receipts, mux: http.NewServeMux(), slots: make(chan struct{}, maxRequests), watches: map[string]bool{}}
 	h.mux.HandleFunc("POST "+domain.RuntimeEnrollmentPath+"{id}", h.enroll)
 	h.mux.HandleFunc("POST "+domain.RuntimeObservationPath, h.observe)
 	h.mux.HandleFunc("GET "+domain.RuntimeWatchPath, h.watch)
+	h.mux.HandleFunc("POST "+domain.RuntimeAcknowledgmentPath, h.acknowledge)
 	return h, nil
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -115,17 +120,9 @@ func (h *Handler) observe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, deadlineErr)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, domain.MaxObservationBytes)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	var batch domain.ObservationBatch
-	if err = decoder.Decode(&batch); err != nil {
+	if err = decodeRuntimeBody(w, r, domain.MaxObservationBytes, &batch); err != nil {
 		writeDecodeError(w, err)
-		return
-	}
-	var trailing any
-	if err = decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		http.Error(w, "one observation batch required", http.StatusBadRequest)
 		return
 	}
 	if a != batch.Agent {
@@ -211,10 +208,10 @@ func (h *Handler) watch(w http.ResponseWriter, r *http.Request) {
 func writeDecodeError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		http.Error(w, "observation batch too large", http.StatusRequestEntityTooLarge)
+		http.Error(w, "runtime request too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	http.Error(w, "invalid observation batch", http.StatusBadRequest)
+	http.Error(w, "invalid runtime request", http.StatusBadRequest)
 }
 func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
@@ -225,7 +222,7 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusForbidden
 	case errors.Is(err, runtimecatalog.ErrInvalid):
 		status = http.StatusBadRequest
-	case errors.Is(err, runtimecatalog.ErrStale), errors.Is(err, runtimecatalog.ErrCursorExpired):
+	case errors.Is(err, runtimecatalog.ErrStale), errors.Is(err, runtimecatalog.ErrCursorExpired), errors.Is(err, access.ErrPolicyConflict), errors.Is(err, access.ErrPolicyNotFound):
 		status = http.StatusConflict
 	case errors.Is(err, runtimecatalog.ErrLimit):
 		status = http.StatusTooManyRequests

@@ -22,6 +22,7 @@ import (
 type RuntimeTransport interface {
 	Enroll(context.Context, string) error
 	Publish(context.Context, domain.ObservationBatch) error
+	Acknowledge(context.Context, domain.Acknowledgment) error
 	Watch(context.Context, func(context.Context, domain.Snapshot) error) error
 }
 
@@ -30,7 +31,8 @@ type RuntimeTransport interface {
 type ObserveFunc func(context.Context, func(context.Context) (uint64, error), func(context.Context, domain.ObservationBatch) error) error
 
 // Agent couples a single fresh enrollment to observation and snapshot reception.
-// Receive must verify policy signatures and apply atomically before returning.
+// Receive must verify policy signatures and apply atomically before returning
+// the exact installed acknowledgment. Transport receipt follows application.
 // Neither the coordinator nor its transport grants routing authority.
 type Agent struct {
 	State        *Store
@@ -38,7 +40,7 @@ type Agent struct {
 	Identity     domain.AgentIdentity
 	EnrollmentID string
 	Observe      ObserveFunc
-	Receive      func(context.Context, domain.Snapshot) error
+	Receive      func(context.Context, domain.Snapshot) (domain.Acknowledgment, error)
 	running      atomic.Bool
 	retryMin     time.Duration
 }
@@ -110,12 +112,17 @@ func (a *Agent) watch(ctx context.Context) error {
 		var applyErr error
 		received := false
 		err := a.Transport.Watch(ctx, func(delivery context.Context, snapshot domain.Snapshot) error {
-			applyErr = a.Receive(delivery, snapshot)
+			var ack domain.Acknowledgment
+			ack, applyErr = a.Receive(delivery, snapshot)
 			if applyErr != nil {
 				return fmt.Errorf("apply agent snapshot: %w", applyErr)
 			}
+			if ack.Agent != a.Identity || ack.Sequence != snapshot.Sequence || ack.Revision != snapshot.Revision || ack.AppliedAt.IsZero() {
+				applyErr = ErrClosed
+				return applyErr
+			}
 			received = true
-			return nil
+			return a.Transport.Acknowledge(delivery, ack)
 		})
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -132,7 +139,7 @@ func (a *Agent) watch(ctx context.Context) error {
 			return err
 		}
 		var network net.Error
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, ErrUnavailable) && !errors.Is(err, context.DeadlineExceeded) && !errors.As(err, &network) {
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, ErrUnavailable) && !errors.Is(err, ErrAcknowledgmentStale) && !errors.Is(err, context.DeadlineExceeded) && !errors.As(err, &network) {
 			return err
 		}
 		if received {

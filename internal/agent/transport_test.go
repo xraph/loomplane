@@ -166,3 +166,44 @@ func TestAgentRejectsControlIdentityAfterHandshake(t *testing.T) {
 		t.Fatalf("control expiry ignored: count=%d error=%v", count, err)
 	}
 }
+
+func TestAgentAcknowledgmentTransport(t *testing.T) {
+	client, source, identity := transportFixture(t)
+	ack := domain.Acknowledgment{Agent: identity, Sequence: 3, Revision: "signed", AppliedAt: time.Now().UTC()}
+	calls := 0
+	code := http.StatusNoContent
+	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Method != http.MethodPost || request.URL.Path != domain.RuntimeAcknowledgmentPath || request.Header.Get("Authorization") != "" {
+			t.Fatal("incorrect acknowledgment request")
+		}
+		deadline, ok := request.Context().Deadline()
+		if !ok || deadline.After(source.svid.Certificates[0].NotAfter) {
+			t.Fatal("unbounded acknowledgment")
+		}
+		var body domain.Acknowledgment
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body != ack {
+			t.Fatal("receipt changed in transport")
+		}
+		return response(code, ""), nil
+	})
+	if err := client.Acknowledge(t.Context(), ack); err != nil {
+		t.Fatal(err)
+	}
+	foreign := ack
+	foreign.Agent.Epoch++
+	if err := client.Acknowledge(t.Context(), foreign); err == nil || calls != 1 {
+		t.Fatal("foreign acknowledgment sent")
+	}
+	code = http.StatusConflict
+	if err := client.Acknowledge(t.Context(), ack); !errors.Is(err, ErrAcknowledgmentStale) {
+		t.Fatalf("stale acknowledgment stopped enrollment: %v", err)
+	}
+	code = http.StatusForbidden
+	if err := client.Acknowledge(t.Context(), ack); !errors.Is(err, ErrClosed) {
+		t.Fatalf("revoked acknowledgment retried: %v", err)
+	}
+}

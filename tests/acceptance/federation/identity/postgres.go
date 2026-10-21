@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/agent"
 	"github.com/xraph/loomplane/internal/ops"
 	"github.com/xraph/loomplane/internal/runtimeapi"
@@ -74,10 +77,38 @@ func qualifyPersisted(ctx context.Context, issuer *workloadidentity.SPIREIssuer,
 	}
 	defer func() { err = errors.Join(err, source.Close()) }()
 	registry := runtimecatalog.NewPgStore(db)
-	catalog := runtimecatalog.New(registry, func(context.Context, domain.AgentIdentity) (runtimecatalog.Visibility, error) {
-		return runtimecatalog.Visibility{Revision: "fixture-policy", ExpiresAt: time.Now().Add(time.Minute), Exports: map[string]domain.Scope{"export": scope}}, nil
-	}, nil)
-	handler, err := runtimeapi.NewHandler(scope.OrgID, control, registry, enrollments, catalog, noWake{})
+	policies := access.NewPolicyStore(db)
+	allow := func(context.Context) error { return nil }
+	export, err := policies.PutExport(ctx, domain.ServiceExport{Metadata: domain.Metadata{Scope: scope, ID: "export"}, ServiceID: "fixture-api", DestinationIDs: []string{binding.Destination.ID}, Port: 8080, Protocol: domain.HTTP, IdentityProfile: domain.WorkloadIdentity}, 0, "fixture", allow)
+	if err != nil {
+		return err
+	}
+	proposed, err := policies.ProposeGrant(ctx, domain.AccessGrant{Metadata: domain.Metadata{Scope: scope, ID: "fixture-grant"}, Source: domain.WorkloadSelector{Scope: scope, DestinationID: binding.Destination.ID, ServiceID: "fixture-client"}, ExportID: export.ID, ExportRevision: export.Revision, Port: export.Port, Protocol: export.Protocol}, 0, "fixture", allow)
+	if err != nil {
+		return err
+	}
+	approved, err := policies.ApproveGrant(ctx, scope.OrgID, proposed.ID, proposed.Generation, proposed.Revision, "fixture", allow)
+	if err != nil {
+		return err
+	}
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	signer, err := access.NewSnapshotSigner(scope, private, now.Add(-time.Minute), now.Add(10*time.Minute))
+	if err != nil {
+		return err
+	}
+	signingTrust, err := access.NewSnapshotTrust(scope, 1, []access.SnapshotKey{signer.Key()})
+	if err != nil {
+		return err
+	}
+	catalog, err := access.NewDistributor(policies, registry, func(context.Context, domain.Scope) (*access.SnapshotSigner, error) { return signer, nil })
+	if err != nil {
+		return err
+	}
+	handler, err := runtimeapi.NewHandler(scope.OrgID, control, registry, enrollments, catalog, noWake{}, policies)
 	if err != nil {
 		return err
 	}
@@ -127,15 +158,38 @@ func qualifyPersisted(ctx context.Context, issuer *workloadidentity.SPIREIssuer,
 	if stepErr := client.Publish(ctx, batch); stepErr != nil {
 		return stepErr
 	}
-	received := errors.New("received persisted endpoint")
-	watchErr := client.Watch(ctx, func(_ context.Context, snapshot domain.Snapshot) error {
-		if len(snapshot.Endpoints) != 1 || snapshot.Endpoints[0].Address != "10.20.0.2" {
-			return errors.New("persisted endpoint missing from live snapshot")
-		}
-		return received
-	})
-	if !errors.Is(watchErr, received) {
-		return fmt.Errorf("persisted snapshot: %w", watchErr)
+	receiver, err := agent.NewSnapshotReceiver(state, first.Binding.Agent, signingTrust)
+	if err != nil {
+		return err
+	}
+	installed, err := receivePersistedPolicy(ctx, client, receiver, 1)
+	if err != nil {
+		return err
+	}
+	receipt, err := policies.Delivery(ctx, first.Binding.Agent)
+	if err != nil {
+		return err
+	}
+	if receipt.AcknowledgedSequence != installed.Sequence || receipt.AcknowledgedPolicyGeneration != receipt.PolicyGeneration {
+		return errors.New("live acknowledgment was not persisted")
+	}
+	session, err := receiver.Open(ctx, access.Request{Source: proposed.Source, Target: domain.WorkloadSelector{Scope: scope, DestinationID: binding.Destination.ID, ServiceID: export.ServiceID}, ExportID: export.ID, Port: export.Port, Protocol: export.Protocol, IdentityProfile: export.IdentityProfile, HTTPMethod: "GET", HTTPPath: "/fixture"})
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	if _, revokeErr := policies.RevokeGrant(ctx, scope.OrgID, approved.ID, approved.Generation, "fixture", allow); revokeErr != nil {
+		return revokeErr
+	}
+	if _, receiveErr := receivePersistedPolicy(ctx, client, receiver, 0); receiveErr != nil {
+		return receiveErr
+	}
+	if session.Context().Err() == nil {
+		return errors.New("live signed revocation retained the local session")
+	}
+	receipt, err = policies.Delivery(ctx, first.Binding.Agent)
+	if err != nil {
+		return err
 	}
 	restored, err := agent.OpenStore(statePath)
 	if err != nil {
@@ -198,9 +252,39 @@ func qualifyPersisted(ctx context.Context, issuer *workloadidentity.SPIREIssuer,
 	if references != 0 {
 		return errors.New("confirmed SPIRE deletion retained trust cleanup reference")
 	}
+	// The old enrollment retains trust references until all issued leases end.
+	if waitErr := until(ctx, func() bool { return !receipt.LeaseUntil.After(time.Now()) }); waitErr != nil {
+		return waitErr
+	}
 	if stepErr := enrollments.Revoke(ctx, scope.OrgID, first.ID, issuer); stepErr != nil {
 		return stepErr
 	}
-	fmt.Println("PASS persisted enrollment and endpoint discovery over live SPIRE mTLS; replay, restore, replaced epoch and revoked authority denied")
+	fmt.Println("PASS persisted enrollment, signed policy, acknowledgment and session revocation over live SPIRE mTLS; replay, restore and replaced epoch denied")
 	return nil
+}
+
+func receivePersistedPolicy(ctx context.Context, client *agent.Transport, receiver *agent.SnapshotReceiver, want int) (domain.Acknowledgment, error) {
+	received := errors.New("received and acknowledged signed policy")
+	var ack domain.Acknowledgment
+	err := client.Watch(ctx, func(delivery context.Context, snapshot domain.Snapshot) error {
+		if len(snapshot.Endpoints) != want || len(snapshot.Policy.Grants) != want {
+			return errors.New("unexpected live policy contents")
+		}
+		if want > 0 && snapshot.Endpoints[0].Address != "10.20.0.2" {
+			return errors.New("persisted endpoint missing from live snapshot")
+		}
+		var applyErr error
+		ack, applyErr = receiver.Apply(delivery, snapshot)
+		if applyErr != nil {
+			return applyErr
+		}
+		if ackErr := client.Acknowledge(delivery, ack); ackErr != nil {
+			return ackErr
+		}
+		return received
+	})
+	if !errors.Is(err, received) {
+		return domain.Acknowledgment{}, fmt.Errorf("persisted signed snapshot: %w", err)
+	}
+	return ack, nil
 }

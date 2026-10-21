@@ -55,7 +55,7 @@ func TestRuntimeRechecksReusedTLSConnection(t *testing.T) {
 	registry := &networkRegistry{agent: a}
 	registry.active.Store(true)
 	f := &runtimeFixture{agent: a, active: true}
-	h, err := NewHandler("org", agentTrust, registry, f, f, inertWake{})
+	h, err := NewHandler("org", agentTrust, registry, f, f, inertWake{}, &receiptFixture{})
 	if err != nil {
 		t.Fatal(err)
 	}

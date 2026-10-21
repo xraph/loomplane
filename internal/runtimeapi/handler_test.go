@@ -123,7 +123,7 @@ func TestRuntimeEnrollmentAndRequestAuthority(t *testing.T) {
 	a := runtimeAgent(t)
 	trust, cert := runtimeCertificate(t, a)
 	f := &runtimeFixture{agent: a}
-	handler, err := NewHandler("org", trust, f, f, f, inertWake{})
+	handler, err := NewHandler("org", trust, f, f, f, inertWake{}, &receiptFixture{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestRuntimeRejectsOversizedAndUnboundedBody(t *testing.T) {
 	a := runtimeAgent(t)
 	trust, cert := runtimeCertificate(t, a)
 	f := &runtimeFixture{agent: a, active: true}
-	h, err := NewHandler("org", trust, f, f, f, inertWake{})
+	h, err := NewHandler("org", trust, f, f, f, inertWake{}, &receiptFixture{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestRuntimeStreamCannotOutliveCredential(t *testing.T) {
 	a := runtimeAgent(t)
 	trust, cert := runtimeCertificate(t, a, 3*time.Second)
 	f := &runtimeFixture{agent: a, active: true, afterSend: func() { time.Sleep(time.Until(cert.NotAfter) + 10*time.Millisecond) }}
-	h, err := NewHandler("org", trust, f, f, f, inertWake{})
+	h, err := NewHandler("org", trust, f, f, f, inertWake{}, &receiptFixture{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestRuntimeMutationDeadlineUsesCredentialExpiry(t *testing.T) {
 	a := runtimeAgent(t)
 	trust, cert := runtimeCertificate(t, a, 3*time.Second)
 	f := &runtimeFixture{agent: a, active: true}
-	h, err := NewHandler("org", trust, f, f, f, inertWake{})
+	h, err := NewHandler("org", trust, f, f, f, inertWake{}, &receiptFixture{})
 	if err != nil {
 		t.Fatal(err)
 	}

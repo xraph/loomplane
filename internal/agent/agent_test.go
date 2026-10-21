@@ -13,14 +13,23 @@ import (
 )
 
 type sessionClient struct {
-	enrollError error
-	enrolls     atomic.Int32
-	watches     atomic.Int32
-	watch       func(context.Context, func(context.Context, domain.Snapshot) error) error
+	enrollError     error
+	enrolls         atomic.Int32
+	watches         atomic.Int32
+	acknowledge     func(context.Context, domain.Acknowledgment) error
+	acknowledgments atomic.Int32
+	watch           func(context.Context, func(context.Context, domain.Snapshot) error) error
 }
 
 func (c *sessionClient) Enroll(context.Context, string) error                   { c.enrolls.Add(1); return c.enrollError }
 func (c *sessionClient) Publish(context.Context, domain.ObservationBatch) error { return nil }
+func (c *sessionClient) Acknowledge(ctx context.Context, ack domain.Acknowledgment) error {
+	c.acknowledgments.Add(1)
+	if c.acknowledge != nil {
+		return c.acknowledge(ctx, ack)
+	}
+	return nil
+}
 func (c *sessionClient) Watch(ctx context.Context, receive func(context.Context, domain.Snapshot) error) error {
 	c.watches.Add(1)
 	if c.watch != nil {
@@ -53,7 +62,9 @@ func TestAgentRequiresFreshEnrollmentBeforeObservation(t *testing.T) {
 			}
 			stop := errors.New("observer stopped")
 			observations := 0
-			a := &Agent{State: store, Transport: client, Identity: identity, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: func(context.Context, domain.Snapshot) error { return nil }, Observe: func(ctx context.Context, next func(context.Context) (uint64, error), publish func(context.Context, domain.ObservationBatch) error) error {
+			a := &Agent{State: store, Transport: client, Identity: identity, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: func(context.Context, domain.Snapshot) (domain.Acknowledgment, error) {
+				return domain.Acknowledgment{}, nil
+			}, Observe: func(ctx context.Context, next func(context.Context) (uint64, error), publish func(context.Context, domain.ObservationBatch) error) error {
 				observations++
 				sequence, err := next(ctx)
 				if err != nil || sequence != 1 {
@@ -93,7 +104,9 @@ func TestAgentReconnectDoesNotReplayEnrollment(t *testing.T) {
 		cancel()
 		return context.Canceled
 	}
-	a := &Agent{State: store, Transport: client, Identity: identity, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", retryMin: time.Millisecond, Receive: func(context.Context, domain.Snapshot) error { return nil }, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
+	a := &Agent{State: store, Transport: client, Identity: identity, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", retryMin: time.Millisecond, Receive: func(context.Context, domain.Snapshot) (domain.Acknowledgment, error) {
+		return domain.Acknowledgment{}, nil
+	}, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
@@ -113,7 +126,9 @@ func TestAgentApplicationFailureStopsObservation(t *testing.T) {
 		return receive(ctx, domain.Snapshot{})
 	}}
 	observerStopped := make(chan struct{})
-	a := &Agent{State: state, Transport: client, Identity: identity, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: func(context.Context, domain.Snapshot) error { return stop }, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
+	a := &Agent{State: state, Transport: client, Identity: identity, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: func(context.Context, domain.Snapshot) (domain.Acknowledgment, error) {
+		return domain.Acknowledgment{}, stop
+	}, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
 		<-ctx.Done()
 		close(observerStopped)
 		return ctx.Err()

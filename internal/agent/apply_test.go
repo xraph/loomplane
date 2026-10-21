@@ -273,7 +273,7 @@ func TestAgentExitClosesVerifiedPolicySessions(t *testing.T) {
 		return ctx.Err()
 	}}
 	var session *access.Session
-	agent := &Agent{State: h.store, Identity: h.identity, Transport: client, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: h.receiver.Receive, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
+	agent := &Agent{State: h.store, Identity: h.identity, Transport: client, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: h.receiver.Apply, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
 		select {
 		case session = <-opened:
 			return stop
@@ -369,7 +369,7 @@ func TestAgentRejectedPolicyKeepsUnexpiredStateAcrossReconnect(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	}
-	agent := &Agent{State: h.store, Identity: h.identity, Transport: client, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: h.receiver.Receive, retryMin: time.Millisecond, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
+	agent := &Agent{State: h.store, Identity: h.identity, Transport: client, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: h.receiver.Apply, retryMin: time.Millisecond, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
@@ -392,7 +392,9 @@ func TestAgentEnrollmentFailureOverridesRetryablePolicyError(t *testing.T) {
 	client := &sessionClient{watch: func(ctx context.Context, receive func(context.Context, domain.Snapshot) error) error {
 		return receive(ctx, domain.Snapshot{})
 	}}
-	agent := &Agent{State: h.store, Identity: h.identity, Transport: client, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: func(context.Context, domain.Snapshot) error { return failure }, retryMin: time.Millisecond, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
+	agent := &Agent{State: h.store, Identity: h.identity, Transport: client, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", Receive: func(context.Context, domain.Snapshot) (domain.Acknowledgment, error) {
+		return domain.Acknowledgment{}, failure
+	}, retryMin: time.Millisecond, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}}

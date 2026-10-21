@@ -233,6 +233,9 @@ func TestFederationDelivery(t *testing.T) {
 		var session *access.Session
 		watchErr := distributor.Watch(ctx, agent, bus, func(delivery context.Context, snapshot *domain.Snapshot) error {
 			deliveries++
+			if snapshot.ExpiresAt.Sub(snapshot.IssuedAt) > runtimecatalog.EndpointLease {
+				t.Fatal("signed snapshot exceeds runtime transport lease")
+			}
 			verified, verifyErr := trust.Verify(*snapshot, agent, time.Now())
 			if verifyErr != nil {
 				return verifyErr

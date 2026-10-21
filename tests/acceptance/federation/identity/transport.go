@@ -108,7 +108,7 @@ func qualifyRuntime(ctx context.Context, conn grpc.ClientConnInterface, source *
 	}
 	defer func() { err = errors.Join(err, control.Close()) }()
 	authority := &runtimeAuthority{identity: binding.Agent}
-	handler, err := runtimeapi.NewHandler(binding.Agent.OrgID, control, authority, authority, authority, noWake{})
+	handler, err := runtimeapi.NewHandler(binding.Agent.OrgID, control, authority, authority, authority, noWake{}, authority)
 	if err != nil {
 		return err
 	}
@@ -193,4 +193,9 @@ func startRuntime(ctx context.Context, handler *runtimeapi.Handler, control *wor
 		return errors.Join(shutdownErr, serveErr)
 	}
 	return "https://" + listener.Addr().String(), closeServer, nil
+}
+
+// This identity fixture does not issue signed policy and cannot acknowledge it.
+func (r *runtimeAuthority) AcknowledgeSnapshot(context.Context, domain.AgentIdentity, domain.Acknowledgment) error {
+	return runtimecatalog.ErrUnauthorized
 }

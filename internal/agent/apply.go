@@ -29,12 +29,7 @@ func NewSnapshotReceiver(state *Store, identity domain.AgentIdentity, trust *acc
 	return &SnapshotReceiver{state: state, identity: identity, trust: trust}, nil
 }
 
-// Receive implements Agent.Receive. Apply exposes the acknowledgment for the
-// runtime transport once the control plane accepts policy acknowledgments.
-func (r *SnapshotReceiver) Receive(ctx context.Context, snapshot domain.Snapshot) error {
-	_, err := r.Apply(ctx, snapshot)
-	return err
-}
+// Apply implements Agent.Receive after signature and durable epoch checks.
 func (r *SnapshotReceiver) Apply(ctx context.Context, snapshot domain.Snapshot) (domain.Acknowledgment, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Acknowledgment{}, err

@@ -276,3 +276,30 @@ func (t *Transport) verifyControl(state *tls.ConnectionState) error {
 	}
 	return nil
 }
+
+// ErrAcknowledgmentStale asks the agent to reconnect for a newer snapshot. It
+// does not revoke enrollment or extend the policy already installed locally.
+var ErrAcknowledgmentStale = errors.New("snapshot acknowledgment is no longer current")
+
+func (t *Transport) Acknowledge(ctx context.Context, ack domain.Acknowledgment) error {
+	if ack.Agent != t.agent || ack.Sequence == 0 || ack.Revision == "" || ack.AppliedAt.IsZero() {
+		return runtimecatalog.ErrInvalid
+	}
+	payload, err := json.Marshal(ack)
+	if err != nil {
+		return err
+	}
+	if len(payload) > domain.MaxAcknowledgmentBytes {
+		return runtimecatalog.ErrLimit
+	}
+	response, cancel, err := t.request(ctx, http.MethodPost, domain.RuntimeAcknowledgmentPath, payload, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusConflict {
+		return ErrAcknowledgmentStale
+	}
+	return checkStatus(response.StatusCode, http.StatusNoContent)
+}

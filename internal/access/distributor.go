@@ -82,6 +82,9 @@ func (d *Distributor) Watch(ctx context.Context, agent domain.AgentIdentity, bus
 		snapshot.Revision = ""
 		snapshot.IssuedAt = input.EvaluatedAt
 		snapshot.Policy = policy
+		if deadline := input.EvaluatedAt.Add(runtimecatalog.EndpointLease); deadline.Before(snapshot.ExpiresAt) {
+			snapshot.ExpiresAt = deadline
+		}
 		if policy.ExpiresAt.Before(snapshot.ExpiresAt) {
 			snapshot.ExpiresAt = policy.ExpiresAt
 		}
