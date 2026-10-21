@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,7 +38,23 @@ func TestAcceptanceCloudAccountSwitch(t *testing.T) {
 	cfg.Analysis.WorkDir = t.TempDir()
 	cfg.Storage.URL = "file://" + t.TempDir()
 	r := start(t, cfg)
-	t.Cleanup(r.stop)
+	var dispose func() error
+	t.Cleanup(func() {
+		err := cleanupCloudAcceptance(func() error {
+			r.srv.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
+			defer cancel()
+			return r.app.Stop(ctx)
+		}, func() error {
+			if dispose != nil {
+				return dispose()
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("stop and dispose acceptance resources: %v", err)
+		}
+	})
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
 	var project struct{ ID string }
@@ -62,8 +79,9 @@ func TestAcceptanceCloudAccountSwitch(t *testing.T) {
 		}
 	}
 	t.Logf("disposable project %s, Vercel name %s in verified distinct scopes", project.ID, name)
-	t.Cleanup(func() {
+	dispose = func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		var cleanupErrors []error
 		defer cancel()
 		for _, tok := range tokens {
 			p, err := provider.GetProject(ctx, tok, name)
@@ -71,22 +89,27 @@ func TestAcceptanceCloudAccountSwitch(t *testing.T) {
 				continue
 			}
 			if err != nil {
-				t.Errorf("find disposable project: %v", err)
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("find disposable project: %w", err))
 				continue
 			}
 			if p.Name != name {
-				t.Error("cleanup refused unexpected project name")
+				cleanupErrors = append(cleanupErrors, errors.New("cleanup refused unexpected project name"))
 				continue
 			}
 			if err = provider.DeleteProject(ctx, tok, p.ID); err != nil {
-				t.Errorf("remove disposable project: %v", err)
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("remove disposable project: %w", err))
 				continue
 			}
 			if _, err = provider.GetProject(ctx, tok, p.ID); !vercel.IsNotFound(err) {
-				t.Errorf("disposable project remains: %v", err)
+				if err != nil {
+					cleanupErrors = append(cleanupErrors, fmt.Errorf("verify disposable project removal: %w", err))
+				} else {
+					cleanupErrors = append(cleanupErrors, errors.New("disposable project remains"))
+				}
 			}
 		}
-	})
+		return errors.Join(cleanupErrors...)
+	}
 	analyze(t, cfg, c, project.ID)
 	var cloud cloudprofiles.Profile
 	c.must(http.StatusCreated, http.MethodPost, base+"/clouds", cloudprofiles.CreateInput{Name: "Acceptance"}, &cloud)

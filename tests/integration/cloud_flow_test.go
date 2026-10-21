@@ -155,14 +155,10 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 		}
 		return applyCloudAPI(t, c, base, &preview, key)
 	}
+	cleanupRelease := filepath.Join(t.TempDir(), "allow-cloud-cleanup")
 	vc.mu.Lock()
-	vc.deleteFailures = 1
-	cleanupRelease := ""
-	if os.Getenv("LOOMPLANE_CLOUD_FLOW_HOLD") != "" {
-		cleanupRelease = filepath.Join(t.TempDir(), "allow-cloud-cleanup")
-		vc.deleteFailures = -1
-		vc.deleteRelease = cleanupRelease
-	}
+	vc.deleteFailures = -1
+	vc.deleteRelease = cleanupRelease
 	vc.mu.Unlock()
 	switched := switchTo("vercel", replacement, 1, "account-switch")
 	got := waitCloudAPI(t, c, base, switched.ID)
@@ -200,12 +196,6 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	c.must(http.StatusConflict, http.MethodDelete, "/api/v1/connections/"+old, nil, nil)
 	c.must(http.StatusConflict, http.MethodDelete, targets+"/"+frontend.ID, nil, nil)
 	c.must(http.StatusConflict, http.MethodDelete, base+"/clouds/"+cloud.ID, nil, nil)
-	if os.Getenv("LOOMPLANE_CLOUD_FLOW_HOLD") != "" {
-		holdCloudFlow(t, c.base, project, cloud.ID, frontend.ID, env, switched.ID, cleanupRelease)
-		vc.mu.Lock()
-		vc.deleteFailures = 0
-		vc.mu.Unlock()
-	}
 	// Retry through loomctl, against the persisted failed sync.
 	var cliKey keyBody
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/api-keys", map[string]string{"name": "flow-cli", "access": "write"}, &cliKey)
@@ -220,14 +210,42 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 		return ""
 	}})
 	c.must(http.StatusOK, http.MethodGet, base+"/cloud-syncs/"+switched.ID, nil, &got)
-	if got.Status != cloudprofiles.SyncSucceeded {
-		if err := command.Run([]string{"cloud-syncs", "retry", project, switched.ID, "--wait", "--timeout", "1m", "--json"}); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(output.String(), "succeeded") {
-			t.Fatalf("retry output: %s", output.String())
-		}
+	if got.Status != cloudprofiles.SyncCleanup || got.Error == "" {
+		t.Fatalf("cleanup failure escaped before CLI retry: %+v", got)
 	}
+	attemptBeforeCLI := got.Attempt
+	if err := command.Run([]string{"cloud-syncs", "retry", project, switched.ID, "--wait", "--timeout", "1m", "--json"}); err == nil {
+		t.Fatal("CLI retry ignored the held cleanup failure")
+	}
+	var failedRetry cloudprofiles.Sync
+	if err := json.Unmarshal(output.Bytes(), &failedRetry); err != nil {
+		t.Fatal(err)
+	}
+	if failedRetry.ID != switched.ID || failedRetry.Status != cloudprofiles.SyncCleanup || failedRetry.Error == "" || failedRetry.Attempt <= attemptBeforeCLI {
+		t.Fatalf("CLI did not execute failed retry: %+v", failedRetry)
+	}
+	t.Logf("CLI retry persisted cleanup failure at attempt %d", failedRetry.Attempt)
+	output.Reset()
+	// Ordinary runs release only after an actual failed CLI retry. Held runs
+	// leave release and the successful retry to the browser, then follow it.
+	recoveryCommand := "retry"
+	if os.Getenv("LOOMPLANE_CLOUD_FLOW_HOLD") != "" {
+		holdCloudFlow(t, c.base, project, cloud.ID, frontend.ID, env, switched.ID, cleanupRelease)
+		recoveryCommand = "wait"
+	} else if err := os.WriteFile(cleanupRelease, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Run([]string{"cloud-syncs", recoveryCommand, project, switched.ID, "--wait", "--timeout", "1m", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var successfulRetry cloudprofiles.Sync
+	if err := json.Unmarshal(output.Bytes(), &successfulRetry); err != nil {
+		t.Fatal(err)
+	}
+	if successfulRetry.ID != switched.ID || successfulRetry.Status != cloudprofiles.SyncSucceeded || successfulRetry.Attempt <= failedRetry.Attempt {
+		t.Fatalf("cleanup recovery did not finish: %+v", successfulRetry)
+	}
+	t.Logf("Cleanup recovery completed at attempt %d through CLI %s", successfulRetry.Attempt, recoveryCommand)
 	vc.mu.Lock()
 	removed := append([]string{}, vc.removed...)
 	vc.mu.Unlock()
