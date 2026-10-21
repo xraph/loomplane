@@ -29,6 +29,7 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.9.0
 	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/xraph/authsome v1.7.3-0.20261013045248-b3fd5f9edebc
+	github.com/xraph/bastion v1.2.3-0.20261013131827-23c004a37e64
 	github.com/xraph/chronicle v1.9.0
 	github.com/xraph/confy v1.1.0
 	github.com/xraph/ctrlplane v1.8.0

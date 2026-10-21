@@ -348,3 +348,34 @@ All persisted evidence comes from one read-only database snapshot, with its star
 time in `observed_at`. This is the last confirmed policy state. It does not prove
 current network reachability or grant permission to call a service. Management
 API, CLI and dashboard controls remain pending.
+
+## Private HTTP integration
+
+The internal `mesh` package provides an HTTP authorization guard and a fixed
+Bastion route to a literal loopback address. It is not installed by agent launch.
+You must complete workload enrollment, route assignment and backend isolation
+before wiring it into a destination.
+
+`HTTPGuard` takes one export, target service, port and HTTP authority. Connect its
+policy interface to `agent.SnapshotReceiver` so each request checks the durable
+enrollment epoch. The handler behind the guard must route only to that target
+and honor request cancellation. `NewLoopbackHTTP` provides the local HTTP adapter;
+it has no discovery, route updates, retry policy, caching or traffic mirroring.
+The guard rejects a loopback route whose port differs from its export port. The application
+must listen only on loopback in the gateway's network namespace. A loopback proxy
+address alone does not prove that the application has no other listener.
+
+`ServerTLS` binds the server to its application SPIFFE URI and follows Workload
+API certificate rotation. Clients need service identities in the same trusted
+organization. Agent and control-plane identities cannot authenticate as services.
+The guard re-verifies private trust on each request, then checks the exact signed
+grant. It rejects ambiguous paths, wrong HTTP authorities, CONNECT, TRACE,
+protocol upgrades and gRPC requests. Forwarded and known identity headers from
+the caller are removed before proxying. Bastion returns backend redirects without
+following them.
+
+Active requests inherit policy cancellation and stop before the caller's
+certificate expires. New requests remain denied after policy expiry or revocation.
+This HTTP adapter does not qualify gRPC, TCP, remote upstream TLS, dynamic route
+replacement, DNS or two-cluster reachability. Those require separate runtime and
+installation work; no configuration flag currently enables this path.
