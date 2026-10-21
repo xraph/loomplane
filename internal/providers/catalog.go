@@ -32,6 +32,12 @@ var (
 	// App Platform's regions. Managed Databases go in each one's
 	// datacenter.
 	digitalOceanRegions = []string{"nyc", "sfo", "tor", "atl", "ams", "fra", "lon", "blr", "sgp", "syd"}
+	// Regions with Container Apps and ACR Tasks.
+	azureRegions = []string{
+		"eastus", "eastus2", "centralus", "westus2", "westus3", "canadacentral", "brazilsouth",
+		"northeurope", "westeurope", "uksouth", "francecentral", "germanywestcentral", "swedencentral",
+		"japaneast", "koreacentral", "southeastasia", "centralindia", "australiaeast",
+	}
 )
 
 // Catalog returns the built-in targets, in the order a person choosing one
@@ -116,6 +122,21 @@ func Catalog() []provider.Provider {
 				{Kind: "redis", Creates: "Managed Valkey cluster"},
 			},
 			Regions: digitalOceanRegions, Scaling: true,
+			Available: true,
+		},
+		{
+			Name: "azure-container-apps", Title: "Azure Container Apps", Cloud: "azure",
+			BuildLogs: "unavailable", LogNote: "ACR Tasks' build logs are under Services, Tasks, Runs in the container registry Loomplane makes; progress remains available.",
+			Description: "Builds a service's Dockerfile with ACR Tasks and runs it on Azure Container Apps, which scales it with traffic, down to zero if you let it.",
+			Model:       provider.Build,
+			Runs: []provider.Runs{
+				{Workload: provider.HTTPService, Execution: provider.Container, Creates: "Container app"},
+				{Workload: provider.WebApp, Execution: provider.Container, Creates: "Container app"},
+			},
+			Regions: azureRegions, Scaling: true,
+			// Built and run by a Loomplane adapter (internal/deployments,
+			// internal/clouds/azure), each build pinned to the approved
+			// commit's source.
 			Available: true,
 		},
 		{

@@ -20,6 +20,7 @@ const (
 	AWS          = "aws"
 	Render       = "render"
 	DigitalOcean = "digitalocean"
+	Azure        = "azure"
 	Server       = "server"
 	Kubernetes   = "kubernetes"
 	Registry     = "registry"

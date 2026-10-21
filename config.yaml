@@ -110,6 +110,7 @@ clouds:
   aws_endpoint: "${LOOMPLANE_AWS_ENDPOINT:-}"
   render_endpoint: "${LOOMPLANE_RENDER_ENDPOINT:-}"
   digitalocean_endpoint: "${LOOMPLANE_DIGITALOCEAN_ENDPOINT:-}"
+  azure_endpoint: "${LOOMPLANE_AZURE_ENDPOINT:-}"
 
 providers:
   # Deployment targets that run as their own services, built with

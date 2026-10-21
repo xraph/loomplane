@@ -19,6 +19,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/clouds/aws"
+	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/render"
@@ -98,6 +99,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.AWS:          connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
 		connections.Render:       connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
 		connections.DigitalOcean: connections.DigitalOceanChecker{Client: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)},
+		connections.Azure:        connections.AzureChecker{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
 		connections.Server:       connections.ServerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
 		connections.Registry:     connections.RegistryChecker{},

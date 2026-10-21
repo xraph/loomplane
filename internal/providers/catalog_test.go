@@ -61,7 +61,8 @@ func TestRegistry_capabilities(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "server", "kubernetes"}},
+		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
 		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "server", "kubernetes"}},
 		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "server", "kubernetes"}},
 		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "server", "kubernetes"}},
@@ -94,6 +95,8 @@ func TestProvider_engine(t *testing.T) {
 		{"vercel", provider.WebApp, provider.Loomplane},
 		{"render", provider.Worker, provider.Loomplane},
 		{"render", provider.StaticSite, provider.Loomplane},
+		// Loomplane builds and runs Container Apps itself, without Ctrl Plane.
+		{"azure-container-apps", provider.HTTPService, provider.Loomplane},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider+"/"+string(tt.workload), func(t *testing.T) {

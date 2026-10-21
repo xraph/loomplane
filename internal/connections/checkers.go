@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
+	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
@@ -182,6 +183,64 @@ func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, setti
 	return c, nil
 }
 
+// AzureChecker checks Azure service principals. The credential is the
+// principal's client secret; the settings say whose it is and where it
+// deploys: tenant_id, client_id and subscription_id, and resource_group,
+// which defaults to loomplane.
+type AzureChecker struct{ Client *azure.Client }
+
+// Parse implements Checker.
+func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
+	cred, err := azure.ParseCredential(credential, settings)
+	if err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return Check{Details: map[string]string{
+		"tenant_id": cred.TenantID, "client_id": cred.ClientID,
+		"subscription_id": cred.SubscriptionID, "resource_group": cred.ResourceGroup,
+	}}, nil
+}
+
+// Check implements Checker: it signs in as the principal, reads its
+// subscription, and asks Azure which of the actions a deployment needs
+// its role assignments allow.
+func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
+	c, err := a.Parse(credential, settings)
+	if err != nil {
+		return Check{}, err
+	}
+	cred, err := azure.ParseCredential(credential, settings)
+	if err != nil {
+		return Check{}, err
+	}
+	s, err := a.Client.Session(ctx, cred)
+	if err != nil {
+		return Check{}, err
+	}
+	sub, err := s.Subscription(ctx)
+	if err != nil {
+		return Check{}, err
+	}
+	if sub.TenantID != "" && azureGUID(cred.TenantID) && !strings.EqualFold(sub.TenantID, cred.TenantID) {
+		return Check{}, fmt.Errorf("%w: subscription %s is in tenant %s, not %s", azure.ErrRejected, cred.SubscriptionID, sub.TenantID, cred.TenantID)
+	}
+	if sub.TenantID != "" {
+		// A tenant named by its domain is recorded by its ID, which
+		// doesn't change.
+		c.Details["tenant_id"] = strings.ToLower(sub.TenantID)
+	}
+	c.Account = sub.DisplayName
+	if c.Account == "" {
+		c.Account = cred.SubscriptionID
+	}
+	if c.Missing, err = s.Missing(ctx); err != nil {
+		return Check{}, err
+	}
+	return c, nil
+}
+
+func azureGUID(s string) bool { return len(s) == 36 && strings.Count(s, "-") == 4 }
+
 // rejected reports whether a check failed because the cloud refused the
 // credential, as opposed to the cloud being unreachable.
 func rejected(err error) bool {
@@ -192,7 +251,7 @@ func rejected(err error) bool {
 	return errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
 		errors.Is(err, digitalocean.ErrRejected) || errors.As(err, &de) || errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
 		errors.Is(err, server.ErrRejected) || errors.Is(err, kubernetes.ErrRejected) || errors.Is(err, registry.ErrRejected) ||
-		errors.Is(err, aws.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
+		errors.Is(err, aws.ErrRejected) || errors.Is(err, azure.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
 		errors.As(err, &ge) || errors.As(err, &ve)
 }
 

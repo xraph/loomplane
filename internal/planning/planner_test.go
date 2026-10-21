@@ -240,6 +240,7 @@ func TestCompute_problems(t *testing.T) {
 		{"private across clouds", "version: 1\nservices:\n  web: {source: apps/web, provider: vercel, needs: [api]}\n  api: {source: services/api, provider: ecs-fargate, public: false}", "private-across-clouds:web"},
 		{"private with no network", "version: 1\ndefaults: {provider: vercel}\nservices:\n  web: {source: apps/web, needs: [docs]}\n  docs: {source: apps/docs, public: false}", "private-unreachable:web"},
 		{"render without a dockerfile", "version: 1\nservices:\n  ingest: {source: crates/ingest/src/main.rs, provider: render}", "render-needs-dockerfile:ingest"},
+		{"azure without a dockerfile", "version: 1\nservices:\n  ingest: {source: crates/ingest/src/main.rs, provider: azure-container-apps}", "azure-needs-dockerfile:ingest"},
 		{"tool kind", "version: 1\nservices:\n  api: {source: services/api, provider: render, kind: worker}\n  w: {source: services/worker/cmd/worker, provider: cloud-run, kind: http-service}", ""},
 	}
 	for _, tt := range tests {

@@ -73,7 +73,7 @@ type ConnectionOption struct {
 var connectionRegions = map[string]bool{"aws": true}
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "azure": "Microsoft Azure", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {
@@ -593,6 +593,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 		cfg.CloudPlacement = &placement
 	}
 	p.checkRender(name, base, cfg)
+	p.checkAzure(name, base, cfg)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
@@ -1648,7 +1649,20 @@ const (
 	ecsFargate   = "ecs-fargate"
 	cloudRun     = "cloud-run"
 	renderTarget = "render"
+	azureApps    = "azure-container-apps"
 )
+
+// checkAzure reports what Container Apps can't build: Loomplane builds
+// for it with ACR Tasks, from a Dockerfile.
+func (p *planner) checkAzure(name, base string, cfg *ServiceConfig) {
+	if cfg.Provider != azureApps || cfg.Image != "" {
+		return
+	}
+	p.problem(Finding{
+		Code: "azure-needs-dockerfile", Subject: ServiceSubject, Name: name, Path: base + ".provider",
+		Message: fmt.Sprintf("Loomplane builds for Azure Container Apps from a Dockerfile, and %s has none. Add one, or run %s somewhere else.", name, name),
+	})
+}
 
 // renderNative are the ecosystems Render builds without a Dockerfile.
 var renderNative = map[discovery.Ecosystem]bool{discovery.Go: true, discovery.Node: true, discovery.Python: true}
