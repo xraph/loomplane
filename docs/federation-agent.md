@@ -12,9 +12,11 @@ ports. It uses the local SPIRE Workload API, authenticates the control plane,
 consumes one enrollment, observes registered services and applies signed policy
 before acknowledging it.
 
-The executable and trusted Kubernetes installation records are available.
-Automated installation, launch-file delivery, verified service-target assignment,
-Kubernetes deployment and gateway enforcement are still being built.
+The executable, trusted Kubernetes installation records and Kubernetes launch
+builder are available. The builder creates pod definitions and delivers immutable
+configuration to an exact scheduled pod. Automated installation and restart
+coordination, verified service-target assignment and gateway enforcement are still
+being built. The launch builder is not yet wired to a management route or worker.
 An acknowledgment currently proves installation in the agent's local policy
 state, not that a remote service is reachable through a gateway.
 
@@ -72,6 +74,70 @@ runtime observer's service account.
 A consumer-only installation has no exports and an empty target list. It
 publishes empty observation heartbeats and receives policy without opening a
 Kubernetes client or acquiring its credential.
+
+## Kubernetes launch resources
+
+[The agent manifest](../deployments/federation/agent.yaml) shows an exporting
+installation. Replace its example namespace, attempt UUID and image digest before
+use. It does not include a launch ConfigMap: the trusted controller must verify the
+scheduled pod and issue an enrollment before delivering that file. Applying this
+manifest alone leaves the pod waiting for configuration and does not grant service
+access.
+
+The `internal/agentinstall` builder produces the same resources for the controller.
+Use a new attempt UUID for every process. Create its ServiceAccount first, then its
+optional observer Role and RoleBinding, then its Pod. Keep the resource UIDs so
+recovery can delete only the objects that attempt owns. Do not adopt or overwrite
+resources already using those names.
+
+The pod runs as UID/GID 10001 with a read-only root filesystem, no Linux
+capabilities, no privilege escalation and the runtime's default seccomp profile.
+It opens no listener. The cluster must already provide the `csi.spiffe.io` driver
+and a SPIRE socket named `agent.sock`; the pod mounts that socket through CSI.
+SPIRE's node and workload attestors still need separate installation and
+qualification.
+
+Exporters receive a projected, rotating Kubernetes API token and namespace-local
+EndpointSlice `list`/`watch` permission. Consumers receive neither. Both disable
+automatic token mounts. The state volume contains a private child directory that
+the agent creates with mode 0700; its parent volume is writable by the pod group.
+
+After the pod reaches scheduled Pending, the controller records its verified
+installation, issues enrollment and loads the ready record from storage. Delivery
+requires the already verified destination connection and a guard that rechecks
+management permission, installation generation and enrollment state before the
+write. Scope, epoch and export bounds come from that record. Public signing keys
+and the listener address come from control-plane configuration; Service targets
+must come from verified assignments.
+
+Delivery checks the namespace UID, pod UID, service account, image, command,
+mounts and security settings. Injected sidecars and changed launch resources fail
+validation. The builder creates one immutable ConfigMap owned by that pod UID,
+then mounts `agent.json` using `subPath`. This supplies a regular, read-only file
+without loosening the agent's symlink checks. Data is public; no management token
+or private signing key belongs in the ConfigMap.
+
+A delivery timeout may mean Kubernetes accepted the write. Inspect that exact
+attempt and retire its enrollment before replacing it. Do not retry enrollment
+or change the launch file in place. `restartPolicy: Never` prevents a container
+restart from silently reusing its consumed handle. Durable attempt recovery and
+automatic replacement are still pending.
+
+Regenerate the example after changing the shared builder:
+
+```sh
+LOOMPLANE_UPDATE_AGENT_MANIFEST=1 go test ./internal/agentinstall -run TestKubernetesExampleManifest -count=1
+```
+
+For the optional Kubernetes API test, supply a self-contained kubeconfig for a
+disposable cluster. The test creates its own namespace and deletes it by UID.
+It checks real scheduling, resource defaulting, immutable delivery and RBAC. It
+does not install CSI or SPIRE, start the agent or qualify workload identity.
+
+```sh
+LOOMPLANE_AGENT_INSTALL_TEST_KUBECONFIG=/absolute/path/to/test-kubeconfig \
+  go test -race -tags=integration ./internal/agentinstall -run TestKubernetesLaunchAPI -count=1
+```
 
 ## Shutdown and restart
 
