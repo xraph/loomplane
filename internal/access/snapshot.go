@@ -24,9 +24,9 @@ const maxSnapshotKeys = 32
 // SnapshotKey is public verification material delivered by trusted configuration.
 // A key ID is its SHA256 fingerprint; snapshots cannot supply new trust keys.
 type SnapshotKey struct {
-	PublicKey ed25519.PublicKey
-	NotBefore time.Time
-	NotAfter  time.Time
+	PublicKey ed25519.PublicKey `json:"public_key"`
+	NotBefore time.Time         `json:"not_before"`
+	NotAfter  time.Time         `json:"not_after"`
 }
 
 func (k SnapshotKey) ID() string {

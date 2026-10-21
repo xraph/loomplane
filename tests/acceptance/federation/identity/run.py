@@ -53,6 +53,12 @@ def run(with_postgres: bool = False) -> None:
                 env={**os.environ, "GOOS": "linux", "GOARCH": architecture, "CGO_ENABLED": "0"},
                 check=True,
             )
+            subprocess.run(
+                ["go", "build", "-o", str(context / "loomplane-agent"), "./cmd/loomplane-agent"],
+                cwd=ROOT,
+                env={**os.environ, "GOOS": "linux", "GOARCH": architecture, "CGO_ENABLED": "0"},
+                check=True,
+            )
             shutil.copyfile(FIXTURE / "Dockerfile", context / "Dockerfile")
             subprocess.run(
                 ["docker", "build", "--quiet", "--platform", f"linux/{architecture}", "-t", tag, str(context)],

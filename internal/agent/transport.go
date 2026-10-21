@@ -40,8 +40,8 @@ type Transport struct {
 }
 
 func NewTransport(endpoint, controlURI string, source CredentialSource, agent domain.AgentIdentity) (*Transport, error) {
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || source == nil {
+	u, err := parseControlEndpoint(endpoint)
+	if err != nil || source == nil {
 		return nil, ErrClosed
 	}
 	expected, err := workloadidentity.ControlURI(agent)
@@ -62,6 +62,13 @@ func NewTransport(endpoint, controlURI string, source CredentialSource, agent do
 		return nil, err
 	}
 	return client, nil
+}
+func parseControlEndpoint(endpoint string) (*url.URL, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+		return nil, ErrClosed
+	}
+	return u, nil
 }
 func (t *Transport) Close() { t.http.CloseIdleConnections() }
 func (t *Transport) credentialDeadline(limit time.Duration) (time.Time, error) {

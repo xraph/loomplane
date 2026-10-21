@@ -4,7 +4,8 @@ You can run the agent control endpoint beside Loomplane's management API. It
 serves enrollment, observations, signed policy snapshots and acknowledgments on
 its own TLS listener. Both federation switches default to `false`.
 
-This is an infrastructure foundation. The agent installer, trusted installation
+This is an infrastructure foundation. The [agent executable](federation-agent.md)
+is available. The agent installer, trusted installation
 records, cleanup scheduling, gateway traffic enforcement and product routes are
 still being built. Enabling the listener does not qualify a cloud provider or
 make a service reachable across clouds.

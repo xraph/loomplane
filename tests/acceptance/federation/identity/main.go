@@ -43,7 +43,7 @@ func main() {
 	}
 }
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	if err := os.MkdirAll("/tmp", 0o700); err != nil {
 		return err

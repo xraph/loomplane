@@ -30,10 +30,10 @@ type EndpointSliceClient interface {
 }
 
 type KubernetesTarget struct {
-	ExportID    string
-	ServiceName string
-	ServiceUID  types.UID
-	PortName    string
+	ExportID    string    `json:"export_id"`
+	ServiceName string    `json:"service_name"`
+	ServiceUID  types.UID `json:"service_uid"`
+	PortName    string    `json:"port_name"`
 }
 
 // KubernetesObserver publishes complete registered-export sets. NextSequence
@@ -50,24 +50,30 @@ type KubernetesObserver struct {
 }
 
 func (o *KubernetesObserver) validate() error {
-	if o.Client == nil || o.Publish == nil || o.NextSequence == nil || len(validation.IsDNS1123Label(o.Namespace)) != 0 || len(o.Targets) == 0 || len(o.Targets) > MaxBatch {
+	if (len(o.Targets) > 0 && o.Client == nil) || o.Publish == nil || o.NextSequence == nil || o.RefreshInterval < 0 || o.RefreshInterval >= EndpointLease/2 {
 		return ErrInvalid
 	}
-	if err := ValidateRegistration(o.Registration); err != nil {
+	return ValidateKubernetesTargets(o.Registration, o.Namespace, o.Targets)
+}
+
+// ValidateKubernetesTargets checks installation intent before any API access.
+// Empty targets are valid only for registrations with no exported services.
+func ValidateKubernetesTargets(registration Registration, namespace string, targets []KubernetesTarget) error {
+	if len(validation.IsDNS1123Label(namespace)) != 0 || len(targets) > MaxBatch {
+		return ErrInvalid
+	}
+	if err := ValidateRegistration(registration); err != nil {
 		return err
 	}
-	if len(o.Targets) != len(o.Registration.Exports) {
+	if len(targets) != len(registration.Exports) {
 		return ErrInvalid
 	}
 	seen := map[string]bool{}
-	for _, target := range o.Targets {
-		if _, ok := o.Registration.Exports[target.ExportID]; !ok || seen[target.ExportID] || len(validation.IsDNS1035Label(target.ServiceName)) != 0 || target.ServiceUID == "" {
+	for _, target := range targets {
+		if _, ok := registration.Exports[target.ExportID]; !ok || seen[target.ExportID] || len(validation.IsDNS1035Label(target.ServiceName)) != 0 || !domain.ValidIdentitySegment(string(target.ServiceUID)) || (target.PortName != "" && len(validation.IsValidPortName(target.PortName)) != 0) {
 			return ErrInvalid
 		}
 		seen[target.ExportID] = true
-	}
-	if o.RefreshInterval < 0 || o.RefreshInterval >= EndpointLease/2 {
-		return ErrInvalid
 	}
 	return nil
 }
@@ -126,6 +132,13 @@ func (o *KubernetesObserver) cycle(ctx context.Context) error {
 	// events arrive. Bound list + watch together so a hung API cannot renew data.
 	ctx, cancel := context.WithTimeout(ctx, interval)
 	defer cancel()
+	if len(o.Targets) == 0 {
+		if err := o.publish(ctx, nil); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return nil
+	}
 	objects := map[types.UID]*discoveryv1.EndpointSlice{}
 	options := metav1.ListOptions{LabelSelector: o.selector(), Limit: 100}
 	resourceVersion := ""

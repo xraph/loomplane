@@ -134,3 +134,27 @@ func TestKubernetesClosedWatchDoesNotSpin(t *testing.T) {
 		t.Fatalf("closed watch retried without backoff: %d", len(client.options))
 	}
 }
+
+func TestKubernetesConsumerOnlyNeverListsNamespace(t *testing.T) {
+	c, _, agent, _ := catalogFixture(t)
+	reg := c.store.(*MemoryStore).states[agent.AgentID].Registration
+	reg.Exports = nil
+	client := &sliceClient{}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	count := 0
+	observer := KubernetesObserver{Client: client, Namespace: "ns", Registration: reg, NextSequence: func(context.Context) (uint64, error) { return 1, nil }, Publish: func(_ context.Context, batch domain.ObservationBatch) error {
+		count++
+		if batch.Agent != agent || !batch.Full || len(batch.Endpoints) != 0 {
+			t.Fatal("invalid consumer heartbeat")
+		}
+		cancel()
+		return nil
+	}}
+	if err := observer.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if count != 1 || len(client.options) != 0 || len(client.watchOptions) != 0 {
+		t.Fatal("consumer-only observer queried cluster")
+	}
+}

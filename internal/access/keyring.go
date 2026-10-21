@@ -1,16 +1,12 @@
 package access
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"io"
-	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/xraph/loomplane/internal/secureconfig"
 	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
@@ -41,35 +37,8 @@ type signingKeyRecord struct {
 // LoadSigningKeyring accepts only a bounded, private regular file. Errors never
 // include its contents, including malformed key material or JSON field names.
 func LoadSigningKeyring(path, org string) (*SigningKeyring, error) {
-	if !domain.ValidIdentitySegment(org) || !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, ErrSigningKeys
-	}
-	before, err := os.Lstat(path)
-	if err != nil || !privateKeyFile(before) {
-		return nil, ErrSigningKeys
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, ErrSigningKeys
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !privateKeyFile(opened) || !os.SameFile(before, opened) {
-		return nil, ErrSigningKeys
-	}
-	body, err := io.ReadAll(io.LimitReader(file, maxSigningKeyFile+1))
-	if err != nil || len(body) > maxSigningKeyFile {
-		return nil, ErrSigningKeys
-	}
-	defer clear(body)
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
 	var config signingKeyFile
-	if err = decoder.Decode(&config); err != nil {
-		return nil, ErrSigningKeys
-	}
-	var trailing any
-	if err = decoder.Decode(&trailing); !errors.Is(err, io.EOF) || decoder.InputOffset() > maxSigningKeyFile || config.Version != 1 || len(config.Keys) == 0 || len(config.Keys) > maxSigningScopes {
+	if !domain.ValidIdentitySegment(org) || secureconfig.ReadJSON(path, maxSigningKeyFile, true, &config) != nil || config.Version != 1 || len(config.Keys) == 0 || len(config.Keys) > maxSigningScopes {
 		return nil, ErrSigningKeys
 	}
 	ring := &SigningKeyring{signers: make(map[domain.Scope]*SnapshotSigner, len(config.Keys))}
@@ -91,9 +60,6 @@ func LoadSigningKeyring(path, org string) (*SigningKeyring, error) {
 		ring.signers[scope] = signer
 	}
 	return ring, nil
-}
-func privateKeyFile(info os.FileInfo) bool {
-	return info != nil && info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0 && info.Size() > 0 && info.Size() <= maxSigningKeyFile
 }
 
 // Signer refuses unconfigured scopes and keys that expired after startup.

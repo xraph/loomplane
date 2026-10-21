@@ -277,6 +277,9 @@ func qualifyPersisted(ctx context.Context, issuer *workloadidentity.SPIREIssuer,
 	if stepErr := enrollments.Revoke(ctx, scope.OrgID, first.ID, issuer); stepErr != nil {
 		return stepErr
 	}
+	if stepErr := qualifyAgentExecutable(ctx, enrollments, issuer, binding, endpoint, socket, signer, policies); stepErr != nil {
+		return stepErr
+	}
 	fmt.Println("PASS persisted enrollment, signed policy, acknowledgment and session revocation over live SPIRE mTLS; replay, restore and replaced epoch denied")
 	return nil
 }

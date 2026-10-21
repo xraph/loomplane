@@ -1,4 +1,4 @@
-.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli \
+.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent \
 	image test test-go test-dashboard test-integration acceptance acceptance-infrastructure lint lint-go lint-dashboard \
 	gen-client check-client setup clean
 
@@ -38,11 +38,14 @@ dev-api: ## Run only the API with hot reload
 dev-dashboard: ## Run only the dashboard's dev server, proxying the API
 	LOOMPLANE_API_URL=http://localhost:$(API_PORT) pnpm --dir $(DASHBOARD_DIR) dev
 
-build: build-dashboard build-api build-cli ## Build the dashboard, the binary that serves it, and loomctl
+build: build-dashboard build-api build-cli build-agent ## Build the dashboard, API, worker, agent and loomctl
 
 build-api: ## Build bin/loomplane and bin/loomplane-worker
 	go build $(LDFLAGS) -o bin/loomplane ./cmd/loomplane
 	go build $(LDFLAGS) -o bin/loomplane-worker ./cmd/loomplane-worker
+
+build-agent: ## Build the destination observer and signed-policy receiver
+	go build $(LDFLAGS) -o bin/loomplane-agent ./cmd/loomplane-agent
 
 build-cli: ## Build bin/loomctl, the command-line client
 	go build $(LDFLAGS) -o bin/loomctl ./cmd/loomctl
