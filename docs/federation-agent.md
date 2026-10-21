@@ -180,11 +180,23 @@ preparation. Retired history remains until the destination is deleted, with the
 lifecycle events retained in project history. Schema downgrade refuses to discard
 retirement history.
 
-These store operations are internal. The preparation cleanup controller still
-needs to revoke scoped enrollment, delete the recorded pod and service account,
-and confirm their absence before completing retirement. Launch retirement can
-already remove its pod and configuration. Automatic enrollment coordination,
-replacement and the management API, CLI and dashboard are also pending.
+Use the internal preparation retirement service with the destination and attempt
+IDs. It revokes enrollment for the saved account before contacting Kubernetes,
+then runs any recorded launch retirement and removes the owned pod and service
+account. Revocation failures retain the record for retry. Unrelated accounts and
+enrollment are preserved.
+
+Cleanup recovers an uncertain resource UID only when the object matches the saved
+preparation, and persists that UID before deletion. Missing uncertain creates stay
+unresolved. Deletes carry UID and resource-version conditions; a replacement with
+a different UID is preserved. An unrecorded launch configuration blocks pod
+cleanup. The service account remains while any observed pod still uses it, or
+when the bounded namespace inspection cannot establish that it is unused.
+
+The service completes retirement only after provider cleanup and retained trust
+checks succeed. You can retry by the same attempt ID after a lost response or
+service restart. Automatic enrollment coordination, replacement, background
+retries and the management API, CLI and dashboard are still pending.
 
 ## Guarded launch delivery
 

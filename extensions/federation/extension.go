@@ -130,7 +130,14 @@ func (e *Extension) Register(app forge.App) error {
 		if provideErr := forge.ProvideValue(c, retirement); provideErr != nil {
 			return provideErr
 		}
-		if provideErr := forge.ProvideValue(c, domain.NewPreparationService(launch, domain.NewPgStore(pg))); provideErr != nil {
+		preparation := domain.NewPreparationService(launch, domain.NewPgStore(pg))
+		if provideErr := forge.ProvideValue(c, preparation); provideErr != nil {
+			return provideErr
+		}
+		preparationRetirement := domain.NewPreparationRetirementService(preparation, retirement, func(ctx context.Context, org, destination, id string) error {
+			return enrollmentStore.RevokePreparation(ctx, org, destination, id, e.cleanup)
+		})
+		if provideErr := forge.ProvideValue(c, preparationRetirement); provideErr != nil {
 			return provideErr
 		}
 	}

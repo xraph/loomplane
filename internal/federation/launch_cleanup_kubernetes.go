@@ -44,31 +44,8 @@ func cleanupLaunchResources(ctx context.Context, client kubernetes.Interface, d 
 	if _, err = ownedLaunchConfig(ctx, client, a); err != nil {
 		return err
 	}
-	pods := client.CoreV1().Pods(a.Namespace)
-	pod, err := pods.Get(ctx, a.ConfigMapName, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
-	if err == nil && string(pod.UID) == a.PodUID {
-		if pod.ResourceVersion == "" {
-			return ErrUnverified
-		}
-		if checkErr := guard(ctx); checkErr != nil {
-			return checkErr
-		}
-		if pod.DeletionTimestamp == nil {
-			err = pods.Delete(ctx, pod.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: ptr.To(types.UID(a.PodUID)), ResourceVersion: ptr.To(pod.ResourceVersion)}, PropagationPolicy: ptr.To(metav1.DeletePropagationForeground)})
-			if err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
-		}
-		remaining, readErr := pods.Get(ctx, a.ConfigMapName, metav1.GetOptions{})
-		if readErr != nil && !apierrors.IsNotFound(readErr) {
-			return readErr
-		}
-		if readErr == nil && string(remaining.UID) == a.PodUID {
-			return ErrInUse
-		}
+	if deleteErr := deleteOwnedPod(ctx, client, a.Namespace, a.ConfigMapName, a.PodUID, guard); deleteErr != nil {
+		return deleteErr
 	}
 	// A different pod UID is a replacement. Preserve it and remove only the
 	// configuration whose owner and digest were saved for this attempt.
@@ -111,4 +88,34 @@ func ownedLaunchConfig(ctx context.Context, client kubernetes.Interface, a *Laun
 		return nil, ErrIdentityChanged
 	}
 	return cm, nil
+}
+
+func deleteOwnedPod(ctx context.Context, client kubernetes.Interface, namespace, name, uid string, guard func(context.Context) error) error {
+	pods := client.CoreV1().Pods(namespace)
+	pod, err := pods.Get(ctx, name, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	if err == nil && string(pod.UID) == uid {
+		if pod.ResourceVersion == "" {
+			return ErrUnverified
+		}
+		if checkErr := guard(ctx); checkErr != nil {
+			return checkErr
+		}
+		if pod.DeletionTimestamp == nil {
+			err = pods.Delete(ctx, pod.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: ptr.To(types.UID(uid)), ResourceVersion: ptr.To(pod.ResourceVersion)}, PropagationPolicy: ptr.To(metav1.DeletePropagationForeground)})
+			if err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+		}
+		remaining, readErr := pods.Get(ctx, name, metav1.GetOptions{})
+		if readErr != nil && !apierrors.IsNotFound(readErr) {
+			return readErr
+		}
+		if readErr == nil && string(remaining.UID) == uid {
+			return ErrInUse
+		}
+	}
+	return guard(ctx)
 }
