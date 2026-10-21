@@ -84,7 +84,7 @@ const routeRuntimeJoin = ` LEFT JOIN LATERAL (SELECT d.id,d.release_id,d.state F
 const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id ELSE '' END`
 const routeRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>'main' ELSE i.labels->>'` + owned.LabelReceiptServicePrefix + `main' END`
 
-const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routeRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routeRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
  JOIN loomplane_cloud_targets t ON t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id'
@@ -98,12 +98,12 @@ const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.ex
 func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	var out RouteBinding
 	var config []byte
-	err := row.Scan(&out.BindingID, &config, &out.ServerID, &out.TargetID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.ReleaseID, &out.ContainerID, &out.Address)
+	err := row.Scan(&out.BindingID, &config, &out.ServerID, &out.TargetID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.RuntimeID, &out.ReleaseID, &out.ContainerID, &out.Address)
 	if err != nil {
 		return out, storeError(err)
 	}
 	out.ConfigDigest = digest(json.RawMessage(config))
-	if out.InstanceID == "" || out.ReleaseID == "" || out.ContainerID == "" || !validRouteAddress(out.Address) {
+	if out.RuntimeID == "" || out.InstanceID == "" || out.ReleaseID == "" || out.ContainerID == "" || !validRouteAddress(out.Address) {
 		return out, fmt.Errorf("%w: no successful exact runtime receipt; redeploy this service successfully before configuring its route", ErrConflict)
 	}
 	return out, nil
@@ -114,10 +114,11 @@ func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, 
 }
 
 type routeCheckpoint struct {
-	Source   *IngressTransition      `json:"source,omitempty"`
-	Desired  *server.IngressConfig   `json:"desired,omitempty"`
-	Previous *server.IngressSnapshot `json:"previous,omitempty"`
-	Applied  *server.IngressSnapshot `json:"applied,omitempty"`
+	Cancelled *IngressTransition      `json:"cancelled,omitempty"`
+	Source    *IngressTransition      `json:"source,omitempty"`
+	Desired   *server.IngressConfig   `json:"desired,omitempty"`
+	Previous  *server.IngressSnapshot `json:"previous,omitempty"`
+	Applied   *server.IngressSnapshot `json:"applied,omitempty"`
 }
 
 func routeBytes(op *RouteOperation) (body, principal, checkpoint []byte, err error) {
@@ -126,7 +127,7 @@ func routeBytes(op *RouteOperation) (body, principal, checkpoint []byte, err err
 		principal, err = json.Marshal(op.Principal)
 	}
 	if err == nil {
-		checkpoint, err = json.Marshal(routeCheckpoint{Source: op.SourceTransition, Desired: op.DesiredConfig, Previous: op.PreviousConfig, Applied: op.AppliedConfig})
+		checkpoint, err = json.Marshal(routeCheckpoint{Cancelled: op.CancelledIngress, Source: op.SourceTransition, Desired: op.DesiredConfig, Previous: op.PreviousConfig, Applied: op.AppliedConfig})
 	}
 	return
 }
@@ -147,7 +148,7 @@ func scanRouteOperation(row pgx.Row) (*RouteOperation, error) {
 	if err := json.Unmarshal(checkpoint, &cp); err != nil {
 		return nil, err
 	}
-	op.DesiredConfig, op.PreviousConfig, op.AppliedConfig, op.SourceTransition = cp.Desired, cp.Previous, cp.Applied, cp.Source
+	op.DesiredConfig, op.PreviousConfig, op.AppliedConfig, op.SourceTransition, op.CancelledIngress = cp.Desired, cp.Previous, cp.Applied, cp.Source, cp.Cancelled
 	return &op, nil
 }
 
@@ -256,7 +257,15 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 					return ErrConflict
 				}
 				if op.Kind == "remove" {
-					op.Receipt = active.Receipt
+					if active.Receipt != nil {
+						op.Receipt = active.Receipt
+					} else if active.PreviousReceipt != nil {
+						op.Receipt = active.PreviousReceipt
+					}
+					op.CancelledIngress = active.CancelledIngress
+					if active.DesiredConfig != nil {
+						op.CancelledIngress = &IngressTransition{Desired: *active.DesiredConfig, Previous: active.PreviousConfig, Applied: active.AppliedConfig}
+					}
 				}
 				active.Status = "cancelled"
 				active.Revision++
@@ -415,12 +424,22 @@ func (s *PgStore) SaveServerIngress(ctx context.Context, org, serverID string, s
 // A retained source is an accepted former binding, checked against its exact
 // controller instance and accepted runtime without treating it as current placement.
 func (s *PgStore) ValidateRetainedRoute(ctx context.Context, r Route) error {
+	return s.validateRetainedRoute(ctx, r, false)
+}
+
+// ValidateRouteCleanup checks runtime identity without restoring a Cloud grant.
+// It grants no authority to publish or move the route.
+func (s *PgStore) ValidateRouteCleanup(ctx context.Context, r Route) error {
+	return s.validateRetainedRoute(ctx, r, true)
+}
+func (s *PgStore) validateRetainedRoute(ctx context.Context, r Route, cleanup bool) error {
 	var id string
 	return storeError(s.db.QueryRow(ctx, `SELECT i.id FROM cp_instances i`+routeRuntimeJoin+`
  JOIN loomplane_cloud_servers s ON s.org_id=i.tenant_id AND s.id=$3 AND s.cloud_id=$4 AND s.runtime_connection_id=$5 AND s.status='ready'
- JOIN loomplane_cloud_connections c ON c.org_id=s.org_id AND c.id=s.runtime_connection_id AND c.generation=$6 AND c.status='ready'
- JOIN loomplane_cloud_project_grants g ON g.org_id=s.org_id AND g.cloud_id=s.cloud_id AND g.project_id=$7 AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR $8=ANY(g.target_ids))
- WHERE i.tenant_id=$1 AND i.id=$2 AND `+routeRuntimeRevision+`=$9 AND `+routeRuntimeContainer+`=$10`, r.OrgID, r.Binding.InstanceID, r.Binding.ServerID, r.Input.CloudID, r.Binding.ConnectionID, r.Binding.ConnectionGeneration, r.ProjectID, r.Binding.TargetID, r.Binding.ReleaseID, r.Binding.ContainerID).Scan(&id))
+ JOIN loomplane_cloud_connections c ON c.org_id=s.org_id AND c.id=s.runtime_connection_id AND ($11 OR c.generation=$6) AND c.status='ready'
+ WHERE i.tenant_id=$1 AND i.id=$2 AND `+routeRuntimeRevision+`=$9 AND `+routeRuntimeContainer+`=$10
+ AND ($11 OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=s.org_id AND g.cloud_id=s.cloud_id AND g.project_id=$7 AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR $8=ANY(g.target_ids))))
+ AND $12<>'' AND c.details->>'docker_id'=$12`, r.OrgID, r.Binding.InstanceID, r.Binding.ServerID, r.Input.CloudID, r.Binding.ConnectionID, r.Binding.ConnectionGeneration, r.ProjectID, r.Binding.TargetID, r.Binding.ReleaseID, r.Binding.ContainerID, cleanup, r.Binding.RuntimeID).Scan(&id))
 }
 
 func (s *PgStore) PendingRoutes(ctx context.Context) ([]*RouteOperation, error) {

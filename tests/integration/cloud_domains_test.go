@@ -275,6 +275,28 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Failure before DNS must retain the source receipt through rollback.
+	cutover.Status = "failed"
+	if err = store.SaveRouteOperation(ctx, cutover); err != nil {
+		t.Fatal(err)
+	}
+	preDNSRollback, preDNSErr := svc.RollbackRoute(ctx, p, "proj", cutover.ID)
+	if preDNSErr != nil {
+		t.Fatal(preDNSErr)
+	}
+	if preDNSRollback.PreviousReceipt == nil || preDNSRollback.PreviousReceipt.ID != "source-receipt" || preDNSRollback.DesiredRecord.ID != "source-receipt" || preDNSRollback.DesiredRecord.TTL != 300 {
+		t.Fatal("pre-DNS rollback lost source receipt")
+	}
+	// Explicit completed fixture, as with proxy snapshots in this database test.
+	preDNSRollback.Status = "succeeded"
+	if err = store.SaveRouteOperation(ctx, preDNSRollback); err != nil {
+		t.Fatal(err)
+	}
+	cutover, err = svc.CutoverRoute(ctx, p, "proj", prepared.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err = store.BeginIngress(ctx, cutover); err != nil {
 		t.Fatal(err)
 	}
@@ -289,6 +311,31 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	}
 	if used, err = store.ServerInUse(ctx, host); err != nil || !used {
 		t.Fatal("cutover discarded retained source", err)
+	}
+
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ValidateRouteCleanup(ctx, cutover.Route); err != nil {
+		t.Fatal("revoked cutover denied exact cleanup", err)
+	}
+	if _, err = svc.RollbackRoute(ctx, p, "proj", cutover.ID); err == nil {
+		t.Fatal("revoked cutover authorized rollback")
+	}
+	revokeRelease, revokeErr := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 60)
+	if revokeErr != nil {
+		t.Fatal("revoked cutover denied release", revokeErr)
+	}
+	if revokeRelease.Source.Binding.ServerID != "host" || revokeRelease.Route.Binding.ServerID != "host2" {
+		t.Fatal("release targeted active destination")
+	}
+	// Cancel this unexecuted fixture so the rollback branch can also be covered.
+	revokeRelease.Status = "cancelled"
+	if err = store.SaveRouteOperation(ctx, revokeRelease); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=false,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
 	}
 	rolled, err := svc.RollbackRoute(ctx, p, "proj", cutover.ID)
 	if err != nil {
@@ -312,6 +359,33 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if err = store.SaveRouteOperation(ctx, rolled); err != nil {
 		t.Fatal(err)
 	}
+
+	// Revocation and credential rotation do not grant fresh route work, but exact
+	// retained cleanup is still authorized for the active runtime.
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_connections SET generation=generation+1 WHERE id='runtime'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ValidateRetainedRoute(ctx, rolled.Route); err == nil {
+		t.Fatal("revocation authorized new rollback")
+	}
+	if err = store.ValidateRouteCleanup(ctx, rolled.Route); err != nil {
+		t.Fatal("retained cleanup denied after revoke/rotate", err)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_connections SET details=jsonb_set(details,'{docker_id}','"replacement"') WHERE id='runtime'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ValidateRouteCleanup(ctx, rolled.Route); err == nil {
+		t.Fatal("cleanup accepted replaced runtime")
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_connections SET details=jsonb_set(details,'{docker_id}','"daemon"') WHERE id='runtime'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RollbackRoute(ctx, p, "proj", cutover.ID); err == nil {
+		t.Fatal("revoked grant authorized rollback")
+	}
 	released, err := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 60)
 	if err != nil {
 		t.Fatal(err)
@@ -332,10 +406,56 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if _, err = svc.CutoverRoute(ctx, p, "proj", prepared.ID); err == nil {
 		t.Fatal("released handoff reused stale source authority")
 	}
+
+	var activeHolds, inactiveHolds int
+	if err = sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_connection_uses WHERE kind='domain_route' AND owner_id=$1`, rolled.Route.ID).Scan(&activeHolds); err != nil {
+		t.Fatal(err)
+	}
+	if err = sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_connection_uses WHERE kind='route_handoff' AND owner_id=$1`, prepared.ID).Scan(&inactiveHolds); err != nil {
+		t.Fatal(err)
+	}
+	if activeHolds != 1 || inactiveHolds != 0 {
+		t.Fatalf("cleanup changed active hold: %d %d", activeHolds, inactiveHolds)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=false,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
+	}
 	input.Hostname = "other.example.com"
 	changed, err := svc.PreviewRoute(ctx, p, "proj", input)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	recoveryInput := input
+	recoveryInput.Hostname = "recovery.example.com"
+	recoveryPreview, recoveryErr := svc.PreviewRoute(ctx, p, "proj", recoveryInput)
+	if recoveryErr != nil {
+		t.Fatal(recoveryErr)
+	}
+	recoveryOp, recoveryErr := svc.ApplyRoute(ctx, p, "proj", recoveryPreview.ID, cloudinfra.ApplyInput{Review: recoveryPreview.Review})
+	if recoveryErr != nil {
+		t.Fatal(recoveryErr)
+	}
+	recoveryOp.Status = "failed"
+	recoveryOp.DesiredConfig = &server.IngressConfig{OrgID: "org", ServerID: "host2", Version: "lost-save"}
+	recoveryOp.PreviousConfig = &server.IngressSnapshot{ContainerID: "proxy", ETag: "before"}
+	if err = store.SaveRouteOperation(ctx, recoveryOp); err != nil {
+		t.Fatal(err)
+	}
+	removal, removeErr := svc.RemoveRoute(ctx, p, "proj", recoveryOp.Route.ID, recoveryOp.Route.Revision)
+	if removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	reloaded, reloadErr := store.RouteOperation(ctx, "org", removal.ID)
+	if reloadErr != nil {
+		t.Fatal(reloadErr)
+	}
+	if reloaded.CancelledIngress == nil || reloaded.CancelledIngress.Desired.Version != "lost-save" || reloaded.CancelledIngress.Previous.ETag != "before" {
+		t.Fatal("cancel lost ingress intent")
+	}
+	cancelled, cancelErr := store.RouteOperation(ctx, "org", recoveryOp.ID)
+	if cancelErr != nil || cancelled.Status != "cancelled" {
+		t.Fatal("old operation not cancelled", cancelErr)
 	}
 	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
 		t.Fatal(err)

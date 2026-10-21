@@ -123,11 +123,23 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		if err := s.domainScope(ctx, op.Principal, route.ProjectID, true); err != nil {
 			return err
 		}
-		if op.Kind == "rollback" || op.Kind == "release" {
+		switch op.Kind {
+		case "release":
+			current, err := st.Route(ctx, route.OrgID, route.ProjectID, route.ID)
+			if err != nil {
+				return err
+			}
+			if current.Revision != route.Revision || !reflect.DeepEqual(current.Binding, route.Binding) {
+				return ErrConflict
+			}
+			if checkErr := st.ValidateRouteCleanup(ctx, *route); checkErr != nil {
+				return checkErr
+			}
+		case "rollback":
 			if err := st.ValidateRetainedRoute(ctx, *route); err != nil {
 				return err
 			}
-		} else {
+		default:
 			current, err := st.ResolveRouteBinding(ctx, route.OrgID, route.ProjectID, route.Input)
 			if err != nil {
 				return err
@@ -141,7 +153,7 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 	if err != nil {
 		return err
 	}
-	if op.Kind != "remove" {
+	if op.Kind != "remove" && op.Kind != "release" {
 		if !slices.Contains(zone.ProjectIDs, route.ProjectID) {
 			return ErrNotFound
 		}
@@ -154,7 +166,11 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			return checkErr
 		}
 	}
-	c, err := s.routeClient(ctx, *route)
+	client := s.routeClient
+	if op.Kind == "remove" || op.Kind == "release" {
+		client = s.routeCleanupClient
+	}
+	c, err := client(ctx, *route)
 	if err != nil {
 		return err
 	}
@@ -163,8 +179,20 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 	if checkErr := c.ArmEffectFence(ctx, server.EffectFence{Operation: route.OrgID + "/ingress/" + route.Binding.ServerID, Generation: op.Generation}); checkErr != nil {
 		return checkErr
 	}
-	if op.Kind == "release" && op.DesiredConfig == nil {
+	if op.Kind == "release" {
 		if checkErr := s.recoverHandoffConfig(ctx, st, c, op, state); checkErr != nil {
+			return checkErr
+		}
+		// Cleanup only reads the active config. It cannot republish a route or
+		// connect another backend after deployment authority was revoked.
+		if state.Current == nil {
+			return ErrConflict
+		}
+		route.Verification = s.verifyRouteDestination(ctx, c, *route, state, false)
+		return s.releaseVerifiedSource(ctx, st, op, state)
+	}
+	if op.Kind == "remove" {
+		if checkErr := s.recoverCancelledIngress(ctx, st, c, op, state); checkErr != nil {
 			return checkErr
 		}
 	}
@@ -190,12 +218,6 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			return nil
 		}
 		return ErrPending
-	}
-	if op.Kind == "release" {
-		if s.now().Before(op.NotBefore) || !route.Verification.DNS || !route.Verification.TLS || !route.Verification.Backend {
-			return ErrPending
-		}
-		return s.releaseSourceIngress(ctx, st, op, state)
 	}
 	route.Status = "waiting"
 	if route.Verification.DNS && route.Verification.TLS && route.Verification.Backend {
@@ -295,6 +317,10 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 
 func (s *Service) verifyRouteDestination(ctx context.Context, c *server.Client, route Route, state *IngressState, preparation bool) RouteVerification {
 	out := RouteVerification{CheckedAt: s.now().UTC()}
+	if !routeConfigMatches(route, state.Config, preparation) {
+		out.BackendError = "The recorded proxy upstream does not match the accepted runtime."
+		return out
+	}
 	addresses, err := s.domainResolver().LookupIPAddr(ctx, route.Input.Hostname)
 	out.DNS = err == nil && len(addresses) > 0
 	for _, address := range addresses {
@@ -330,4 +356,59 @@ func (s *Service) verifyRouteDestination(ctx context.Context, c *server.Client, 
 		out.BackendError = "The accepted runtime instance and release did not serve a successful request through the recorded proxy configuration."
 	}
 	return out
+}
+
+// recoverCancelledIngress adopts only the cancelled operation's recorded remote
+// effect. A newer persisted config wins; unknown remote edits remain conflicts.
+func (s *Service) recoverCancelledIngress(ctx context.Context, st DomainStore, c *server.Client, op *RouteOperation, state *IngressState) error {
+	intent := op.CancelledIngress
+	if intent == nil || op.DesiredConfig != nil {
+		return nil
+	}
+	actual, err := server.ReadIngress(ctx, c, op.Route.OrgID, op.Route.Binding.ServerID)
+	if err != nil {
+		return err
+	}
+	if state.Current != nil && server.SameIngressConfig(state.Current.Config, actual.Config) {
+		return nil
+	}
+	desired, err := intent.Desired.JSON()
+	if err != nil {
+		return err
+	}
+	if !server.SameIngressConfig(desired, actual.Config) {
+		initial := server.IngressConfig{OrgID: op.Route.OrgID, ServerID: op.Route.Binding.ServerID, Version: "initial"}
+		raw, encodeErr := initial.JSON()
+		if encodeErr == nil && state.Current == nil && server.SameIngressConfig(raw, actual.Config) {
+			return nil
+		}
+		return ErrConflict
+	}
+	if state.Current != nil && (intent.Previous == nil || !server.SameIngressConfig(state.Current.Config, intent.Previous.Config)) {
+		return ErrConflict
+	}
+	state.Config, state.Previous, state.Current = intent.Desired, intent.Previous, actual
+	return st.SaveIngress(ctx, op, state)
+}
+
+func routeConfigMatches(route Route, config server.IngressConfig, preparation bool) bool {
+	for _, r := range config.Routes {
+		if r.ID == route.ID && r.Hostname == route.Input.Hostname {
+			backend := r.Backend
+			if preparation && r.PreparedBackend != nil {
+				backend = *r.PreparedBackend
+			}
+			backend.Address = ""
+			return reflect.DeepEqual(backend, routeBackend(route))
+		}
+	}
+	return false
+}
+
+func (s *Service) releaseVerifiedSource(ctx context.Context, st DomainStore, op *RouteOperation, state *IngressState) error {
+	v := op.Route.Verification
+	if s.now().Before(op.NotBefore) || !v.DNS || !v.TLS || !v.Backend {
+		return ErrPending
+	}
+	return s.releaseSourceIngress(ctx, st, op, state)
 }

@@ -1,0 +1,338 @@
+//go:build integration
+
+package cloudinfra
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"fmt"
+
+	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/connections"
+
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+)
+
+func recoveryDocker(t *testing.T, args ...string) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "docker", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("Docker %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func recoveryFixture(t *testing.T) (*server.Client, string, []byte) {
+	t.Helper()
+	if os.Getenv("LOOMPLANE_TEST_INGRESS") != "1" {
+		t.Skip("set LOOMPLANE_TEST_INGRESS=1 for disposable real Docker/SSH ingress")
+	}
+	name := fmt.Sprintf("loomplane-ingress-test-%d", time.Now().UnixNano())
+	recoveryDocker(t, "run", "-d", "--privileged", "--name", name, "--label", "loomplane.test=domain-ingress", "-e", "DOCKER_TLS_CERTDIR=", "-p", "127.0.0.1::22", "docker:29-dind", "dockerd", "--host=unix:///var/run/docker.sock")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "docker", "rm", "-fv", name).CombinedOutput(); err != nil {
+			t.Errorf("remove owned ingress fixture: %v %s", err, out)
+		}
+	})
+	for range 60 {
+		if exec.CommandContext(t.Context(), "docker", "exec", name, "docker", "info").Run() == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	recoveryDocker(t, "exec", name, "sh", "-c", "apk add --no-cache openssh-server python3 && ssh-keygen -A && passwd -d root && mkdir -p /root/.ssh && chmod 700 /root/.ssh")
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), "docker", "exec", "-i", name, "sh", "-c", "cat > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && /usr/sbin/sshd -o PermitRootLogin=yes -o PasswordAuthentication=no -o AllowTcpForwarding=yes")
+	cmd.Stdin = bytes.NewReader(ssh.MarshalAuthorizedKey(signer.PublicKey()))
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		t.Fatalf("start SSH: %v %s", runErr, out)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := strings.TrimPrefix(recoveryDocker(t, "port", name, "22/tcp"), "127.0.0.1:")
+	cfg, err := server.ParseConfig(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), map[string]string{"host": "127.0.0.1", "port": port, "user": "root", "host_key": recoveryDocker(t, "exec", name, "cat", "/etc/ssh/ssh_host_ed25519_key.pub")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Details["docker_id"] = recoveryDocker(t, "exec", name, "docker", "info", "--format", "{{.ID}}")
+	c, err := server.Dial(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.RequireFence = true
+	t.Cleanup(func() { _ = c.Close() })
+	return c, name, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+}
+
+type recoveryIngressStore struct {
+	DomainStore
+	state     IngressState
+	durable   RouteOperation
+	failSave  bool
+	completed bool
+}
+
+func (s *recoveryIngressStore) SaveRouteOperation(_ context.Context, op *RouteOperation) error {
+	s.durable = *op
+	return nil
+}
+func (s *recoveryIngressStore) SaveIngress(_ context.Context, _ *RouteOperation, state *IngressState) error {
+	if s.failSave {
+		s.failSave = false
+		return errors.New("lost SaveIngress after remote effect")
+	}
+	s.state = *state
+	return nil
+}
+func (s *recoveryIngressStore) CompleteHandoff(context.Context, *RouteOperation) error {
+	s.completed = true
+	return nil
+}
+
+func TestIngressCancelledSaveRecoveryAndRotatedCleanup(t *testing.T) {
+	c, host, key := recoveryFixture(t)
+	ctx := server.WithEffectFence(t.Context(), server.EffectFence{Operation: "org/ingress/server", Generation: 1})
+	_, err := server.EnsureIngress(ctx, c, "org", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends := map[string]server.IngressBackend{}
+	for _, name := range []string{"a", "b"} {
+		container := recoveryDocker(t, "exec", host, "docker", "run", "-d", "--name", "app-"+name, "--label", "loomplane.org=org", "--label", "loomplane.project="+name, "--label", "loomplane.environment=env", "--label", "loomplane.instance=instance-"+name, "--label", "loomplane.revision=release", "--label", "loomplane.service=web", server.IngressImage, "sh", "-c", "mkdir -p /tmp/www && echo "+name+" > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+		backend, connectErr := server.ConnectIngressBackend(ctx, c, "org", "server", server.IngressBackend{OrgID: "org", ProjectID: name, EnvironmentID: "env", Service: "web", InstanceID: "instance-" + name, ReleaseID: "release", ContainerID: container, Port: 8080})
+		if connectErr != nil {
+			t.Fatal(connectErr)
+		}
+		backends[name] = backend
+	}
+	routeA := server.IngressRoute{ID: "route-a", Hostname: "a.ingress.test", Backend: backends["a"]}
+	routeB := server.IngressRoute{ID: "route-b", Hostname: "b.ingress.test", Backend: backends["b"]}
+	route := Route{ID: "route-a", OrgID: "org", ProjectID: "a", Input: RouteInput{Hostname: routeA.Hostname, EnvironmentID: "env", Service: "web", Port: 8080}, Binding: RouteBinding{ServerID: "server", ConnectionID: "runtime", ConnectionGeneration: 1, RuntimeID: c.Config.Details["docker_id"], InstanceID: routeA.Backend.InstanceID, ReleaseID: "release", ContainerID: routeA.Backend.ContainerID}}
+	for _, scenario := range []string{"initial", "existing", "newer-known", "unknown"} {
+		t.Run(scenario, func(t *testing.T) {
+			prior, readErr := server.ReadIngress(ctx, c, "org", "server")
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			base := server.IngressConfig{OrgID: "org", ServerID: "server", Version: "initial"}
+			if scenario != "initial" {
+				base.Version = "base-" + scenario
+				base.InternalCA = true
+				base.Routes = []server.IngressRoute{routeB}
+			}
+			prior, readErr = server.ApplyIngress(ctx, c, prior, base)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			persisted := IngressState{Generation: 1, Config: base, Current: prior}
+			if scenario == "initial" {
+				persisted.Current = nil
+			}
+			desired := base
+			desired.InternalCA = true
+			desired.Version = "apply-" + scenario
+			desired.Routes = append([]server.IngressRoute{routeA}, base.Routes...)
+			apply := &RouteOperation{ID: "apply-" + scenario, Kind: "apply", Route: route, DesiredConfig: &desired, PreviousConfig: prior}
+			st := &recoveryIngressStore{state: persisted, failSave: true}
+			svc := NewService(Deps{})
+			working := persisted
+			if applyErr := svc.reconcileRouteConfig(ctx, st, c, apply, &working); applyErr == nil {
+				t.Fatal("lost SaveIngress not injected")
+			}
+			removal := &RouteOperation{ID: "remove-" + scenario, Kind: "remove", Route: route, CancelledIngress: &IngressTransition{Desired: *apply.DesiredConfig, Previous: apply.PreviousConfig}}
+			restarted := st.state
+			if scenario == "newer-known" || scenario == "unknown" {
+				latest, latestErr := server.ReadIngress(ctx, c, "org", "server")
+				if latestErr != nil {
+					t.Fatal(latestErr)
+				}
+				newer := desired
+				newer.Version = "other-operation"
+				extra := routeB
+				extra.ID = "route-c"
+				extra.Hostname = "c.ingress.test"
+				newer.Routes = append(append([]server.IngressRoute{}, desired.Routes...), extra)
+				latest, latestErr = server.ApplyIngress(ctx, c, latest, newer)
+				if latestErr != nil {
+					t.Fatal(latestErr)
+				}
+				if scenario == "newer-known" {
+					restarted.Current = latest
+					restarted.Config = newer
+				}
+				recoveryErr := svc.recoverCancelledIngress(ctx, st, c, removal, &restarted)
+				if scenario == "unknown" {
+					after, afterErr := server.ReadIngress(ctx, c, "org", "server")
+					if recoveryErr == nil || afterErr != nil || after.ETag != latest.ETag {
+						t.Fatal("unknown remote config overwritten", recoveryErr, afterErr)
+					}
+					return
+				}
+				if recoveryErr != nil {
+					t.Fatal(recoveryErr)
+				}
+			} else if recoveryErr := svc.recoverCancelledIngress(ctx, st, c, removal, &restarted); recoveryErr != nil {
+				t.Fatal(recoveryErr)
+			}
+
+			st.state = restarted // the newer known config is already the database state
+			st.failSave = true
+			if removeErr := svc.reconcileRouteConfig(ctx, st, c, removal, &restarted); removeErr == nil {
+				t.Fatal("lost removal SaveIngress not injected")
+			}
+			restarted = st.state
+			retry := st.durable
+			if recoveryErr := svc.recoverCancelledIngress(ctx, st, c, &retry, &restarted); recoveryErr != nil {
+				t.Fatal("removal retry reused obsolete cancelled intent", recoveryErr)
+			}
+			if removeErr := svc.reconcileRouteConfig(ctx, st, c, &retry, &restarted); removeErr != nil {
+				t.Fatal(removeErr)
+			}
+
+			want := 0
+			if scenario != "initial" {
+				want = 1
+			}
+			if scenario == "newer-known" {
+				want = 2
+			}
+			if len(restarted.Config.Routes) != want {
+				t.Fatal("unrelated routes lost")
+			}
+			for _, r := range restarted.Config.Routes {
+				if r.ID == route.ID {
+					t.Fatal("cancelled route remained")
+				}
+			}
+		})
+	}
+	// New SSH credentials with a newer generation may clean the exact accepted
+	// daemon, but cannot authorize fresh publication.
+
+	_, rotatedKey, rotationErr := ed25519.GenerateKey(rand.Reader)
+	if rotationErr != nil {
+		t.Fatal(rotationErr)
+	}
+	rotatedSigner, rotationErr := ssh.NewSignerFromKey(rotatedKey)
+	if rotationErr != nil {
+		t.Fatal(rotationErr)
+	}
+	rotate := exec.CommandContext(t.Context(), "docker", "exec", "-i", host, "sh", "-c", "cat > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys")
+	rotate.Stdin = bytes.NewReader(ssh.MarshalAuthorizedKey(rotatedSigner.PublicKey()))
+	if output, rotateErr := rotate.CombinedOutput(); rotateErr != nil {
+		t.Fatalf("rotate fixture SSH credential: %v %s", rotateErr, output)
+	}
+	der, rotationErr := x509.MarshalPKCS8PrivateKey(rotatedKey)
+	if rotationErr != nil {
+		t.Fatal(rotationErr)
+	}
+
+	oldConfig, oldErr := server.ParseConfig(key, c.Config.Details)
+	if oldErr != nil {
+		t.Fatal(oldErr)
+	}
+	if oldClient, dialErr := server.Dial(t.Context(), oldConfig); dialErr == nil {
+		_ = oldClient.Close()
+		t.Fatal("retired SSH key still authenticates")
+	}
+	key = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	conn := &connections.Connection{OrgID: "org", Cloud: "server", Generation: 2, Details: c.Config.Details}
+	svc := NewService(Deps{Connections: rotatedRouteCredential{conn: conn, raw: key}})
+	if _, freshErr := svc.routeClient(ctx, route); freshErr == nil {
+		t.Fatal("rotated generation authorized new work")
+	}
+	cleanup, cleanupErr := svc.routeCleanupClient(ctx, route)
+	if cleanupErr != nil {
+		t.Fatal(cleanupErr)
+	}
+	defer cleanup.Close()
+	fence := server.EffectFence{Operation: "org/ingress/server", Generation: 2}
+	if cleanupErr = cleanup.ArmEffectFence(ctx, fence); cleanupErr != nil {
+		t.Fatal(cleanupErr)
+	}
+	ctx = server.WithEffectFence(ctx, fence)
+	// Retired A connectivity is the only resource removed. Active B and C remain.
+	current, currentErr := server.ReadIngress(ctx, c, "org", "server")
+	if currentErr != nil {
+		t.Fatal(currentErr)
+	}
+	active := server.IngressConfig{OrgID: "org", ServerID: "server", Version: "active", InternalCA: true, Routes: []server.IngressRoute{routeB}}
+	extra := routeB
+	extra.ID = "route-c"
+	extra.Hostname = "c.ingress.test"
+	active.Routes = append(active.Routes, extra)
+
+	if staleErr := server.DisconnectIngressBackend(ctx, c, active, backends["a"]); staleErr == nil {
+		t.Fatal("stale config authorized bridge removal")
+	}
+	recoveryDocker(t, "exec", host, "docker", "network", "inspect", server.IngressNetwork(backends["a"]))
+	current, currentErr = server.ApplyIngress(ctx, c, current, active)
+	if currentErr != nil {
+		t.Fatal(currentErr)
+	}
+	activeRoute := route
+	activeRoute.ID = "route-b"
+	activeRoute.ProjectID = "b"
+	activeRoute.Input.Hostname = routeB.Hostname
+	activeRoute.Binding.InstanceID = routeB.Backend.InstanceID
+	activeRoute.Binding.ContainerID = routeB.Backend.ContainerID
+	st := &recoveryIngressStore{}
+	release := &RouteOperation{Kind: "release", Route: activeRoute, Source: &route, Generation: 2}
+	if !routeConfigMatches(activeRoute, active, false) || routeConfigMatches(route, active, false) {
+		t.Fatal("active backend identity mismatch")
+	}
+	if probeErr := server.ProbeIngressBackend(ctx, c, active, current, activeRoute.ID); probeErr != nil {
+		t.Fatal(probeErr)
+	}
+	if releaseErr := svc.releaseSourceIngress(ctx, st, release, &IngressState{Config: active, Current: current}); releaseErr != nil {
+		t.Fatal(releaseErr)
+	}
+	after, afterErr := server.ReadIngress(ctx, c, "org", "server")
+	if afterErr != nil || after.ETag != current.ETag || !st.completed {
+		t.Fatal("release republished active config", afterErr)
+	}
+	if probeErr := server.ProbeIngressBackend(ctx, c, active, after, "route-c"); probeErr != nil {
+		t.Fatal("unrelated backend lost", probeErr)
+	}
+	if exec.CommandContext(t.Context(), "docker", "exec", host, "docker", "network", "inspect", server.IngressNetwork(backends["a"])).Run() == nil {
+		t.Fatal("retired bridge retained")
+	}
+	// Even matching replaced metadata cannot defeat the actual daemon fence.
+	wrong := route
+	wrong.Binding.RuntimeID = "wrong-physical-daemon"
+	conn.Details = map[string]string{}
+	for k, v := range c.Config.Details {
+		conn.Details[k] = v
+	}
+	conn.Details["docker_id"] = wrong.Binding.RuntimeID
+	rejected, rejectErr := svc.routeCleanupClient(ctx, wrong)
+	if rejectErr != nil {
+		t.Fatal(rejectErr)
+	}
+	defer rejected.Close()
+	if rejected.ArmEffectFence(ctx, server.EffectFence{Operation: "org/ingress/server", Generation: 3}) == nil {
+		t.Fatal("cleanup mutated different actual daemon")
+	}
+}

@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/security"
 
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -39,6 +43,9 @@ type routeDNSAdapter struct {
 	deleted   string
 }
 
+func (a *routeDNSAdapter) GetZone(_ context.Context, c provider.InfrastructureCredential, _ string) (provider.DNSZone, error) {
+	return provider.DNSZone{ID: "zone", Name: "example.com", AccountID: c.AccountID, Verified: true}, nil
+}
 func (a *routeDNSAdapter) ListRecords(context.Context, provider.InfrastructureCredential, provider.DNSZone) ([]provider.DNSRecord, error) {
 	return a.records, nil
 }
@@ -146,5 +153,145 @@ func TestRouteDNSOwnershipAndDurableRecovery(t *testing.T) {
 				t.Fatal("ID-only unknown update was replayed", err)
 			}
 		})
+	}
+}
+
+type rotatedRouteCredential struct {
+	conn *connections.Connection
+	raw  []byte
+}
+
+func (c rotatedRouteCredential) Credential(context.Context, string, string) (*connections.Connection, []byte, error) {
+	return c.conn, c.raw, nil
+}
+
+type identityRouteDNS struct {
+	*routeDNSAdapter
+	account, zoneID string
+}
+
+func (a *identityRouteDNS) GetZone(context.Context, provider.InfrastructureCredential, string) (provider.DNSZone, error) {
+	return provider.DNSZone{ID: a.zoneID, Name: "example.com", AccountID: a.account}, nil
+}
+
+func TestRouteDNSCleanupAfterCredentialRotation(t *testing.T) {
+	for _, variant := range []string{"same-account", "different-metadata-account", "different-provider-account", "different-zone"} {
+		t.Run(variant, func(t *testing.T) {
+			receipt := provider.DNSRecord{ID: "owned", ZoneID: "zone", Name: "app", Type: "A", Value: "192.0.2.1", TTL: 300}
+			adapter := &identityRouteDNS{routeDNSAdapter: &routeDNSAdapter{records: []provider.DNSRecord{receipt}}, account: "account", zoneID: "zone"}
+			conn := &connections.Connection{OrgID: "org", Cloud: "digitalocean", Generation: 2, Details: map[string]string{"account_uuid": "account"}}
+			switch variant {
+			case "different-metadata-account":
+				conn.Details["account_uuid"] = "other"
+			case "different-provider-account":
+				adapter.account = "other"
+			case "different-zone":
+				adapter.zoneID = "other"
+			}
+			registry := NewAdapters()
+			if err := registry.RegisterDNS("digitalocean", adapter); err != nil {
+				t.Fatal(err)
+			}
+			svc := NewService(Deps{Adapters: registry, Connections: rotatedRouteCredential{conn: conn, raw: []byte("new-token")}})
+			zone := &Zone{OrgID: "org", Name: "example.com", Mode: "managed", ConnectionID: "dns", ConnectionGeneration: 1, Provider: "digitalocean", AccountID: "account", ProviderZone: provider.DNSZone{ID: "zone", Name: "example.com", AccountID: "account"}}
+			if _, _, err := svc.zoneCredential(t.Context(), zone); err == nil {
+				t.Fatal("new work accepted rotated generation")
+			}
+			err := svc.applyRouteDNS(t.Context(), &routeDNSStore{}, &RouteOperation{Kind: "remove", Receipt: &receipt}, zone)
+			if variant == "same-account" {
+				if err != nil || adapter.deleted != "owned" {
+					t.Fatal("cleanup refused same account", err)
+				}
+			} else if err == nil || adapter.deleted != "" {
+				t.Fatal("cleanup crossed physical account/zone", err)
+			}
+		})
+	}
+}
+
+func TestRouteRollbackBeforeDNSWritePreservesIDOnlyReceipt(t *testing.T) {
+	receipt := provider.DNSRecord{ID: "source", ZoneID: "zone", Name: "app", Type: "A", Value: "192.0.2.1", TTL: 300}
+	adapter := &routeDNSAdapter{records: []provider.DNSRecord{receipt}}
+	registry := NewAdapters()
+	if err := registry.RegisterDNS("digitalocean", adapter); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(Deps{Adapters: registry, Connections: routeDNSCredentials{"digitalocean"}})
+	zone := &Zone{OrgID: "org", Name: "example.com", Mode: "managed", ConnectionID: "dns", ConnectionGeneration: 1, Provider: "digitalocean", AccountID: "account", ProviderZone: provider.DNSZone{ID: "zone", Name: "example.com"}}
+	op := &RouteOperation{Kind: "rollback", DesiredRecord: receipt, PreviousReceipt: &receipt}
+	if err := svc.applyRouteDNS(t.Context(), &routeDNSStore{}, op, zone); err != nil {
+		t.Fatal(err)
+	}
+	if op.Receipt == nil || op.Receipt.ID != "source" || adapter.writes != 0 || adapter.deleted != "" || len(adapter.records) != 1 {
+		t.Fatal("pre-DNS rollback mutated known source record")
+	}
+}
+
+func TestRouteCleanupCredentialIdentity(t *testing.T) {
+	route := Route{OrgID: "org", Binding: RouteBinding{RuntimeID: "daemon", ConnectionGeneration: 1}}
+	conn := &connections.Connection{OrgID: "org", Cloud: "server", Generation: 2, Details: map[string]string{"docker_id": "daemon"}}
+	if err := routeCredentialIdentity(route, conn, false); err == nil {
+		t.Fatal("new work accepted rotated generation")
+	}
+	if err := routeCredentialIdentity(route, conn, true); err != nil {
+		t.Fatal(err)
+	}
+	conn.Details["docker_id"] = "different"
+	if err := routeCredentialIdentity(route, conn, true); err == nil {
+		t.Fatal("cleanup accepted different daemon")
+	}
+	route.Binding.RuntimeID = ""
+	if err := routeCredentialIdentity(route, conn, true); err == nil {
+		t.Fatal("missing accepted identity was backfilled")
+	}
+}
+
+type pendingCutoverStore struct {
+	DomainStore
+	op RouteOperation
+}
+
+func (s *pendingCutoverStore) RouteOperation(context.Context, string, string) (*RouteOperation, error) {
+	return &s.op, nil
+}
+
+type cleanupTestAuth struct{}
+
+func (cleanupTestAuth) Require(context.Context, security.Principal, security.Permission, string) error {
+	return nil
+}
+func TestRollbackRefusesUnresolvedDNSAttempt(t *testing.T) {
+	st := &pendingCutoverStore{op: RouteOperation{Kind: "cutover", Status: "failed", DNSAttempted: true, Route: Route{ProjectID: "project"}, Source: &Route{}, PreviousReceipt: &provider.DNSRecord{ID: "known-old"}}}
+	svc := NewService(Deps{Domains: st, Authz: cleanupTestAuth{}})
+	if _, err := svc.RollbackRoute(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, "project", "cutover"); !errors.Is(err, ErrConflict) {
+		t.Fatal("unresolved DNS attempt authorized rollback", err)
+	}
+}
+func TestHandoffReleaseNeedsDrainAndIndependentVerification(t *testing.T) {
+	svc := NewService(Deps{})
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	for _, missing := range []string{"drain", "dns", "tls", "backend"} {
+		t.Run(missing, func(t *testing.T) {
+			op := &RouteOperation{Kind: "release", NotBefore: now.Add(-time.Second), Route: Route{Verification: RouteVerification{DNS: true, TLS: true, Backend: true}}}
+			switch missing {
+			case "drain":
+				op.NotBefore = now.Add(time.Second)
+			case "dns":
+				op.Route.Verification.DNS = false
+			case "tls":
+				op.Route.Verification.TLS = false
+			case "backend":
+				op.Route.Verification.Backend = false
+			}
+			if err := svc.releaseVerifiedSource(t.Context(), nil, op, nil); !errors.Is(err, ErrPending) {
+				t.Fatal("cleanup passed incomplete verification", err)
+			}
+		})
+	}
+	backend := server.IngressBackend{OrgID: "org", ProjectID: "project", ContainerID: "retired"}
+	cfg := server.IngressConfig{Routes: []server.IngressRoute{{Backend: server.IngressBackend{ContainerID: "current"}, PreparedBackend: &backend}}}
+	if !ingressReferences(cfg, backend) {
+		t.Fatal("prepared backend treated as quiescent")
 	}
 }

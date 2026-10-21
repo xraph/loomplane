@@ -9,11 +9,15 @@ import (
 )
 
 func (s *Service) zoneCredential(ctx context.Context, zone *Zone) (provider.DNSAdapter, provider.InfrastructureCredential, error) {
+	return s.zoneCredentialFor(ctx, zone, false)
+}
+
+func (s *Service) zoneCredentialFor(ctx context.Context, zone *Zone, cleanup bool) (provider.DNSAdapter, provider.InfrastructureCredential, error) {
 	conn, raw, err := s.Connections.Credential(ctx, zone.OrgID, zone.ConnectionID)
 	if err != nil {
 		return nil, provider.InfrastructureCredential{}, err
 	}
-	if conn.OrgID != zone.OrgID || conn.Generation != zone.ConnectionGeneration || conn.Cloud != zone.Provider {
+	if conn.OrgID != zone.OrgID || (!cleanup && conn.Generation != zone.ConnectionGeneration) || conn.Cloud != zone.Provider {
 		return nil, provider.InfrastructureCredential{}, ErrConflict
 	}
 	credential, err := Credential(conn, raw)
@@ -24,6 +28,15 @@ func (s *Service) zoneCredential(ctx context.Context, zone *Zone) (provider.DNSA
 		return nil, credential, provider.ErrInfrastructureIdentity
 	}
 	adapter, err := s.Adapters.DNS(zone.Provider)
+	if err == nil && cleanup {
+		current, checkErr := adapter.GetZone(ctx, credential, zone.ProviderZone.ID)
+		if checkErr != nil {
+			return nil, credential, checkErr
+		}
+		if current.ID != zone.ProviderZone.ID || current.Name != zone.Name || current.AccountID != zone.AccountID {
+			return nil, credential, provider.ErrInfrastructureIdentity
+		}
+	}
 	return adapter, credential, err
 }
 
@@ -71,7 +84,7 @@ func (s *Service) applyRouteDNS(ctx context.Context, st DomainStore, op *RouteOp
 	if zone.Mode == "external" {
 		return nil
 	}
-	adapter, cred, err := s.zoneCredential(ctx, zone)
+	adapter, cred, err := s.zoneCredentialFor(ctx, zone, op.Kind == "remove")
 	if err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -21,6 +22,7 @@ type RouteInput struct {
 }
 
 type RouteBinding struct {
+	RuntimeID            string `json:"runtime_id"`
 	BindingID            string `json:"binding_id"`
 	ConfigDigest         string `json:"config_digest"`
 	ServerID             string `json:"server_id"`
@@ -52,6 +54,7 @@ type RouteOperation struct {
 	Source           *Route                  `json:"source,omitempty"`
 	HandoffID        string                  `json:"handoff_id,omitempty"`
 	NotBefore        time.Time               `json:"not_before"`
+	CancelledIngress *IngressTransition      `json:"-"`
 	SourceTransition *IngressTransition      `json:"-"`
 	ID               string                  `json:"id" forge:"id"`
 	Route            Route                   `json:"route"`
@@ -105,6 +108,7 @@ type DomainStore interface {
 	BeginServerIngress(context.Context, string, string) (*IngressState, error)
 	SaveServerIngress(context.Context, string, string, *IngressState) error
 	ValidateRetainedRoute(context.Context, Route) error
+	ValidateRouteCleanup(context.Context, Route) error
 	CompleteHandoff(context.Context, *RouteOperation) error
 	SaveIngress(context.Context, *RouteOperation, *IngressState) error
 	PendingRoutes(context.Context) ([]*RouteOperation, error)
@@ -293,18 +297,33 @@ func (s *Service) GetRouteOperation(ctx context.Context, p security.Principal, p
 }
 
 func (s *Service) routeClient(ctx context.Context, route Route) (*server.Client, error) {
+	return s.routeCredentialClient(ctx, route, false)
+}
+func (s *Service) routeCleanupClient(ctx context.Context, route Route) (*server.Client, error) {
+	return s.routeCredentialClient(ctx, route, true)
+}
+func routeCredentialIdentity(route Route, conn *connections.Connection, cleanup bool) error {
+	if conn.OrgID != route.OrgID || conn.Cloud != "server" || (!cleanup && conn.Generation != route.Binding.ConnectionGeneration) {
+		return ErrConflict
+	}
+	if route.Binding.RuntimeID == "" || conn.Details["docker_id"] != route.Binding.RuntimeID {
+		return provider.ErrInfrastructureIdentity
+	}
+	return nil
+}
+func (s *Service) routeCredentialClient(ctx context.Context, route Route, cleanup bool) (*server.Client, error) {
 	conn, raw, err := s.Connections.Credential(ctx, route.OrgID, route.Binding.ConnectionID)
 	if err != nil {
 		return nil, err
 	}
-	if conn.OrgID != route.OrgID || conn.Generation != route.Binding.ConnectionGeneration {
-		return nil, ErrConflict
+	if identityErr := routeCredentialIdentity(route, conn, cleanup); identityErr != nil {
+		return nil, identityErr
 	}
 	cfg, err := server.ParseConfig(raw, conn.Details)
 	if err != nil {
 		return nil, err
 	}
-	cfg.Details["docker_id"] = conn.Details["docker_id"]
+	cfg.Details["docker_id"] = route.Binding.RuntimeID
 	c, err := server.Dial(ctx, cfg)
 	if err != nil {
 		return nil, err

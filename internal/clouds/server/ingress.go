@@ -365,8 +365,17 @@ func DisconnectIngressBackend(ctx context.Context, c *Client, v IngressConfig, b
 	if err := ingressFence(ctx, c); err != nil {
 		return err
 	}
+	actual, err := ReadIngress(ctx, c, v.OrgID, v.ServerID)
+	if err != nil {
+		return err
+	}
+	raw, err := v.JSON()
+	if err != nil || !SameIngressConfig(raw, actual.Config) {
+		return ErrOwned
+	}
+
 	for _, route := range v.Routes {
-		if IngressNetwork(route.Backend) == IngressNetwork(b) {
+		if IngressNetwork(route.Backend) == IngressNetwork(b) || (route.PreparedBackend != nil && IngressNetwork(*route.PreparedBackend) == IngressNetwork(b)) {
 			return nil
 		}
 	}

@@ -154,14 +154,22 @@ func (s *Service) RollbackRoute(ctx context.Context, p security.Principal, proje
 	if err != nil {
 		return nil, err
 	}
-	if cutover.Receipt != nil {
-		record.ID, record.Owner = cutover.Receipt.ID, cutover.Receipt.Owner
+	receipt := cutover.Receipt
+	if !cutover.DNSAttempted && receipt == nil {
+		receipt = cutover.PreviousReceipt
+	}
+	if receipt != nil {
+		record.ID, record.Owner = receipt.ID, receipt.Owner
+		// A failed pre-DNS cutover leaves the source record unchanged, including TTL.
+		if !cutover.DNSAttempted && receipt.Value == source.Binding.Address {
+			record = *receipt
+		}
 	}
 	opID, err := randomID("routeop")
 	if err != nil {
 		return nil, err
 	}
-	op := &RouteOperation{ID: opID, Kind: "rollback", Status: "pending", Attempt: 1, Revision: 1, Route: source, Source: &cutover.Route, HandoffID: cutover.HandoffID, DesiredRecord: record, PreviousReceipt: cutover.Receipt, Principal: p}
+	op := &RouteOperation{ID: opID, Kind: "rollback", Status: "pending", Attempt: 1, Revision: 1, Route: source, Source: &cutover.Route, HandoffID: cutover.HandoffID, DesiredRecord: record, PreviousReceipt: receipt, Principal: p}
 	err = s.Store.WithOperationLock(ctx, "ingress/"+p.OrgID+"/"+cutover.Route.Binding.ServerID, func() error { return st.AcceptRoute(ctx, op) })
 	if err != nil {
 		return nil, err
@@ -296,7 +304,10 @@ func (s *Service) releaseSourceIngress(ctx context.Context, st DomainStore, op *
 		return ErrInvalid
 	}
 	if source.Binding.ServerID == op.Route.Binding.ServerID {
-		c, err := s.routeClient(ctx, op.Route)
+		if ingressReferences(current.Config, routeBackend(*source)) {
+			return ErrConflict
+		}
+		c, err := s.routeCleanupClient(ctx, op.Route)
 		if err != nil {
 			return err
 		}
@@ -311,7 +322,7 @@ func (s *Service) releaseSourceIngress(ctx context.Context, st DomainStore, op *
 	if err != nil {
 		return err
 	}
-	c, err := s.routeClient(ctx, *source)
+	c, err := s.routeCleanupClient(ctx, *source)
 	if err != nil {
 		return err
 	}
@@ -392,6 +403,9 @@ func (s *Service) releaseSourceIngress(ctx context.Context, st DomainStore, op *
 			return checkErr
 		}
 	}
+	if ingressReferences(state.Config, routeBackend(*source)) {
+		return ErrConflict
+	}
 	if checkErr := server.DisconnectIngressBackend(ctx, c, state.Config, routeBackend(*source)); checkErr != nil {
 		return checkErr
 	}
@@ -428,4 +442,13 @@ func (s *Service) recoverHandoffConfig(ctx context.Context, st DomainStore, c *s
 	}
 	state.Previous, state.Current, state.Config = previous, actual, *desired
 	return st.SaveIngress(ctx, op, state)
+}
+
+func ingressReferences(config server.IngressConfig, backend server.IngressBackend) bool {
+	for _, r := range config.Routes {
+		if server.IngressNetwork(r.Backend) == server.IngressNetwork(backend) || (r.PreparedBackend != nil && server.IngressNetwork(*r.PreparedBackend) == server.IngressNetwork(backend)) {
+			return true
+		}
+	}
+	return false
 }
