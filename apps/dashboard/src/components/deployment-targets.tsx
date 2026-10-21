@@ -151,6 +151,9 @@ export function DeploymentTargets({
                 manifest={manifest}
                 row={row}
                 environment={environment}
+                environmentId={
+                  environments.find((e) => e.name === environment)?.id
+                }
                 catalog={providers.data!.providers}
                 onPendingChange={onPendingChange}
               />
@@ -188,6 +191,7 @@ function TargetRow({
   manifest,
   row,
   environment,
+  environmentId,
   catalog,
   onPendingChange,
 }: {
@@ -195,10 +199,11 @@ function TargetRow({
   manifest: Manifest
   row: PlacementRow
   environment: string
+  environmentId?: string
   catalog: Provider[]
   onPendingChange?: (pending: boolean) => void
 }) {
-  const { can } = useOrganization()
+  const { can, session } = useOrganization()
   const save = useMutation(useManifestsEdit)
   const connections = useQuery(useConnectionsList)
   const invalidate = useInvalidate()
@@ -250,6 +255,59 @@ function TargetRow({
       onPendingChange?.(false)
     }
   }
+  if (value.cloudTarget)
+    return (
+      <section
+        aria-label={`${row.name} configuration`}
+        className="flex flex-wrap items-center justify-between gap-2 border-b pb-3 last:border-0"
+      >
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{row.name}</p>
+          <p className="text-xs text-muted-foreground">
+            Cloud target: {value.cloudTarget} · {environment}
+          </p>
+        </div>
+        <Link
+          to="/clouds"
+          onClick={() => {
+            window.localStorage.setItem(
+              `loomplane.clouds.project.${session.orgId}`,
+              projectId
+            )
+            if (environmentId)
+              window.localStorage.setItem(
+                `loomplane.clouds.environment.${session.orgId}.${projectId}`,
+                environmentId
+              )
+          }}
+          className="text-xs underline underline-offset-4"
+        >
+          Manage Cloud target
+        </Link>
+        <Switch
+          size="sm"
+          aria-label={`Enable ${row.name} in ${environment}`}
+          checked={value.enabled}
+          disabled={disabled}
+          onCheckedChange={(enabled) => change({ enabled })}
+        />
+        {dirty && can("project:update") && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={disabled}
+            onClick={() => void submit()}
+          >
+            Save
+          </Button>
+        )}
+        {error && (
+          <p role="alert" className="basis-full text-xs text-destructive">
+            {error}
+          </p>
+        )}
+      </section>
+    )
   return (
     <section
       aria-label={`${row.name} configuration`}

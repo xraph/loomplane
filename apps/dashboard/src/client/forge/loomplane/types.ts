@@ -107,6 +107,22 @@ export interface AppliedInputs {
   variables?: string;
 }
 
+export interface ApplyCloudInputBody {
+  idempotencyKey: string;
+  previewId: string;
+  revision: string;
+}
+
+export interface Assignment {
+  cloudId: string;
+  cloudRevision: number;
+  environmentId: string;
+  orgId: string;
+  projectId: string;
+  revision: number;
+  targets: Target[];
+}
+
 export interface Backup {
   attempt: number;
   bytes: number;
@@ -190,6 +206,26 @@ export interface Change {
   to: string;
 }
 
+export interface ChangeInput {
+  cloudId: string;
+  connectionId?: string;
+  environmentId?: string;
+  provider?: string;
+  region?: string;
+  revision: number;
+  targetId?: string;
+}
+
+export interface ChangeInputBody {
+  cloudId: string;
+  connectionId?: string;
+  environmentId?: string;
+  provider?: string;
+  region?: string;
+  revision: number;
+  targetId?: string;
+}
+
 export interface ChooseConnectionInputBody {
   connectionId: string;
 }
@@ -211,10 +247,6 @@ export interface CloudForm {
   title: string;
 }
 
-export interface CloudList {
-  clouds: CloudForm[];
-}
-
 export interface CloudPlacement {
   accountIdentity: string;
   assignmentRevision: number;
@@ -226,6 +258,32 @@ export interface CloudPlacement {
   targetId: string;
   targetName: string;
   targetRevision: number;
+}
+
+export interface CloudSyncEvent {
+  attempt: number;
+  cloudId: string;
+  environments: EnvironmentChange[];
+  id: string;
+  orgId: string;
+  projectId: string;
+  reverts?: string;
+  status: string;
+  targetId: string;
+  updatedAt: string;
+}
+
+export interface CloudSyncList {
+  next?: string;
+  syncs: (Sync | null)[];
+}
+
+export interface CloudTargetList {
+  targets: (Target | null)[];
+}
+
+export interface CloudprofilesCreateInputBody {
+  name: string;
 }
 
 export interface Collection {
@@ -245,6 +303,11 @@ export interface Commands {
   build?: string;
   dev?: string;
   start?: string;
+}
+
+export interface CompleteCloudRoutingInputBody {
+  environmentId: string;
+  evidence: string;
 }
 
 export interface ConnectGitHubInputBody {
@@ -285,16 +348,20 @@ export interface ConnectionList {
   connections: Connection[];
 }
 
-export interface CreateEnvironmentInputBody {
-  kind?: string;
-  name: string;
+export interface ConnectionsCloudList {
+  clouds: CloudForm[];
 }
 
-export interface CreateInputBody {
+export interface ConnectionsCreateInputBody {
   cloud: string;
   credential: string;
   name: string;
   settings?: Record<string, any>;
+}
+
+export interface CreateEnvironmentInputBody {
+  kind?: string;
+  name: string;
 }
 
 export interface CreateInvitationInputBody {
@@ -321,6 +388,14 @@ export interface CreateProjectInputBody {
 }[];
   repositoryUrl?: string;
   slug?: string;
+}
+
+export interface CreateTargetInputBody {
+  connectionId: string;
+  displayName: string;
+  name: string;
+  provider: string;
+  region: string;
 }
 
 export interface CreateVariableInputBody {
@@ -470,6 +545,37 @@ export interface Environment {
   orgId: string;
   projectId: string;
   updatedAt: string;
+}
+
+export interface EnvironmentChange {
+  deploymentId?: string;
+  environment: string;
+  environmentId: string;
+  error?: string;
+  externalRouting: boolean;
+  planId?: string;
+  routingEvidence?: string;
+  services: string[];
+  status: string;
+  summary: PlanSummary;
+}
+
+export interface EnvironmentCloud {
+  assignment: Assignment | null;
+  revision: number;
+}
+
+export interface EnvironmentCloudEvent {
+  cloudId: string | null;
+  environmentId: string;
+  orgId: string;
+  projectId: string;
+  revision: number;
+}
+
+export interface EnvironmentCloudInputBody {
+  cloudId: string;
+  revision: number;
 }
 
 export interface EnvironmentConnections {
@@ -721,6 +827,19 @@ export interface PlanSource {
   sourceId: string;
 }
 
+export interface PlanSummary {
+  adopt: number;
+  create: number;
+  delete: number;
+  keep: number;
+  replace: number;
+  update: number;
+}
+
+export interface PlanningCloudList {
+  clouds: (Profile | null)[];
+}
+
 export interface PlanningSummary {
   create: number;
   delete: number;
@@ -761,6 +880,32 @@ export interface PreferenceInputBody {
 export interface Preferences {
   deploymentEmail: boolean;
   mailEnabled: boolean;
+}
+
+export interface Preview {
+  after?: Target;
+  afterAssignment?: Assignment;
+  before?: Target;
+  beforeAssignment?: Assignment;
+  blockers: string[];
+  createdAt: string;
+  environments: EnvironmentChange[];
+  id: string;
+  input: ChangeInput;
+  orgId: string;
+  projectId: string;
+  reverts?: string;
+  revision: string;
+}
+
+export interface Profile {
+  createdAt: string;
+  id: string;
+  name: string;
+  orgId: string;
+  projectId: string;
+  revision: number;
+  updatedAt: string;
 }
 
 export interface Project {
@@ -1170,6 +1315,45 @@ export interface StoredVolume {
   storageClass?: string;
 }
 
+export interface Sync {
+  after?: Target;
+  attempt: number;
+  before?: Target;
+  cloudId: string;
+  createdAt: string;
+  createdBy: string;
+  environments: EnvironmentChange[];
+  error?: string;
+  id: string;
+  orgId: string;
+  previewId: string;
+  projectId: string;
+  reverts?: string;
+  status: string;
+  targetId?: string;
+  updatedAt: string;
+}
+
+export interface Target {
+  cloudId: string;
+  connectionId: string;
+  createdAt: string;
+  displayName: string;
+  id: string;
+  name: string;
+  orgId: string;
+  projectId: string;
+  provider: string;
+  region: string;
+  revision: number;
+  updatedAt: string;
+}
+
+export interface UpdateInputBody {
+  name: string;
+  revision: number;
+}
+
 export interface UpdateProjectInputBody {
   color?: string;
   description?: string;
@@ -1180,6 +1364,11 @@ export interface UpdateProjectInputBody {
 export interface UpdateSourceInputBody {
   ref?: string;
   root?: string;
+}
+
+export interface UpdateTargetInputBody {
+  displayName: string;
+  revision: number;
 }
 
 export interface UpdateVariableInputBody {

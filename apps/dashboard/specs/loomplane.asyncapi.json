@@ -68,6 +68,51 @@
           "title": "build.log event",
           "summary": "SSE event: build.log"
         },
+        "cloud.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Profile"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud.deleted",
+          "title": "cloud.deleted event",
+          "summary": "SSE event: cloud.deleted"
+        },
+        "cloud.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Profile"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud.updated",
+          "title": "cloud.updated event",
+          "summary": "SSE event: cloud.updated"
+        },
+        "cloud_sync.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/CloudSyncEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud_sync.updated",
+          "title": "cloud_sync.updated event",
+          "summary": "SSE event: cloud_sync.updated"
+        },
+        "cloud_target.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud_target.deleted",
+          "title": "cloud_target.deleted event",
+          "summary": "SSE event: cloud_target.deleted"
+        },
+        "cloud_target.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud_target.updated",
+          "title": "cloud_target.updated event",
+          "summary": "SSE event: cloud_target.updated"
+        },
         "connection.deleted": {
           "payload": {
             "$ref": "#/components/schemas/Connection"
@@ -121,6 +166,15 @@
           "name": "environment.updated",
           "title": "environment.updated event",
           "summary": "SSE event: environment.updated"
+        },
+        "environment_cloud.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/EnvironmentCloudEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "environment_cloud.updated",
+          "title": "environment_cloud.updated event",
+          "summary": "SSE event: environment_cloud.updated"
         },
         "forge.gap": {
           "payload": {
@@ -402,6 +456,62 @@
           "type": "github.com/xraph/loomplane/internal/deployments.Deployment"
         },
         {
+          "entityType": "Profile",
+          "intent": "upsert",
+          "invalidates": [
+            "Profile[]"
+          ],
+          "message": "cloud.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.Profile"
+        },
+        {
+          "entityType": "Profile",
+          "intent": "evict",
+          "invalidates": [
+            "Profile[]"
+          ],
+          "message": "cloud.deleted",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.Profile"
+        },
+        {
+          "entityType": "Target",
+          "intent": "upsert",
+          "invalidates": [
+            "Target[]"
+          ],
+          "message": "cloud_target.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.Target"
+        },
+        {
+          "entityType": "Target",
+          "intent": "evict",
+          "invalidates": [
+            "Target[]"
+          ],
+          "message": "cloud_target.deleted",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.Target"
+        },
+        {
+          "entityType": "EnvironmentCloudEvent",
+          "intent": "patch",
+          "invalidates": [
+            "EnvironmentCloud"
+          ],
+          "message": "environment_cloud.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.EnvironmentCloudEvent"
+        },
+        {
+          "entityType": "CloudSyncEvent",
+          "intent": "patch",
+          "invalidates": [
+            "Sync",
+            "Sync[]",
+            "EnvironmentCloud"
+          ],
+          "message": "cloud_sync.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
+        },
+        {
           "entityType": "Log",
           "intent": "upsert",
           "invalidates": [
@@ -620,6 +730,62 @@
           "type": "github.com/xraph/loomplane/internal/deployments.Deployment"
         },
         {
+          "entityType": "Profile",
+          "intent": "upsert",
+          "invalidates": [
+            "Profile[]"
+          ],
+          "message": "cloud.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.Profile"
+        },
+        {
+          "entityType": "Profile",
+          "intent": "evict",
+          "invalidates": [
+            "Profile[]"
+          ],
+          "message": "cloud.deleted",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.Profile"
+        },
+        {
+          "entityType": "Target",
+          "intent": "upsert",
+          "invalidates": [
+            "Target[]"
+          ],
+          "message": "cloud_target.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.Target"
+        },
+        {
+          "entityType": "Target",
+          "intent": "evict",
+          "invalidates": [
+            "Target[]"
+          ],
+          "message": "cloud_target.deleted",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.Target"
+        },
+        {
+          "entityType": "EnvironmentCloudEvent",
+          "intent": "patch",
+          "invalidates": [
+            "EnvironmentCloud"
+          ],
+          "message": "environment_cloud.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.EnvironmentCloudEvent"
+        },
+        {
+          "entityType": "CloudSyncEvent",
+          "intent": "patch",
+          "invalidates": [
+            "Sync",
+            "Sync[]",
+            "EnvironmentCloud"
+          ],
+          "message": "cloud_sync.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
+        },
+        {
           "entityType": "Log",
           "intent": "upsert",
           "invalidates": [
@@ -673,6 +839,21 @@
           "$ref": "#/channels/api-v1-realtime-events/messages/build.log"
         },
         {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud_sync.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud_target.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud_target.updated"
+        },
+        {
           "$ref": "#/channels/api-v1-realtime-events/messages/connection.deleted"
         },
         {
@@ -689,6 +870,9 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/environment.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/environment_cloud.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/forge.gap"
@@ -1018,6 +1202,52 @@
           }
         }
       },
+      "EnvironmentChange": {
+        "type": "object",
+        "required": [
+          "environment_id",
+          "environment",
+          "services",
+          "summary",
+          "status",
+          "external_routing"
+        ],
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "external_routing": {
+            "type": "boolean"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "routing_evidence": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/PlanSummary"
+          }
+        }
+      },
       "Evidence": {
         "type": "object",
         "required": [
@@ -1215,6 +1445,37 @@
           },
           "source_id": {
             "type": "string"
+          }
+        }
+      },
+      "PlanSummary": {
+        "type": "object",
+        "required": [
+          "create",
+          "update",
+          "replace",
+          "delete",
+          "keep",
+          "adopt"
+        ],
+        "properties": {
+          "adopt": {
+            "type": "integer"
+          },
+          "create": {
+            "type": "integer"
+          },
+          "delete": {
+            "type": "integer"
+          },
+          "keep": {
+            "type": "integer"
+          },
+          "replace": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
           }
         }
       },
@@ -1867,6 +2128,152 @@
           }
         }
       },
+      "Profile": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "name",
+          "revision",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CloudSyncEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "cloud_id",
+          "target_id",
+          "status",
+          "attempt",
+          "environments",
+          "updated_at"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "environments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentChange"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reverts": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Target": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "cloud_id",
+          "name",
+          "display_name",
+          "provider",
+          "connection_id",
+          "region",
+          "revision",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "Connection": {
         "type": "object",
         "required": [
@@ -2041,6 +2448,34 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "EnvironmentCloudEvent": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "project_id",
+          "environment_id",
+          "cloud_id",
+          "revision"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -2911,6 +3346,278 @@
         "title": "build.log event",
         "summary": "SSE event: build.log"
       },
+      "api-v1-realtime-eventscloud.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "name",
+            "revision",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud.deleted",
+        "title": "cloud.deleted event",
+        "summary": "SSE event: cloud.deleted"
+      },
+      "api-v1-realtime-eventscloud.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "name",
+            "revision",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud.updated",
+        "title": "cloud.updated event",
+        "summary": "SSE event: cloud.updated"
+      },
+      "api-v1-realtime-eventscloud_sync.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "cloud_id",
+            "target_id",
+            "status",
+            "attempt",
+            "environments",
+            "updated_at"
+          ],
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "cloud_id": {
+              "type": "string"
+            },
+            "environments": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/EnvironmentChange"
+              }
+            },
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reverts": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "target_id": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud_sync.updated",
+        "title": "cloud_sync.updated event",
+        "summary": "SSE event: cloud_sync.updated"
+      },
+      "api-v1-realtime-eventscloud_target.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "cloud_id",
+            "name",
+            "display_name",
+            "provider",
+            "connection_id",
+            "region",
+            "revision",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string"
+            },
+            "connection_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "display_name": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud_target.deleted",
+        "title": "cloud_target.deleted event",
+        "summary": "SSE event: cloud_target.deleted"
+      },
+      "api-v1-realtime-eventscloud_target.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "cloud_id",
+            "name",
+            "display_name",
+            "provider",
+            "connection_id",
+            "region",
+            "revision",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string"
+            },
+            "connection_id": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "display_name": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud_target.updated",
+        "title": "cloud_target.updated event",
+        "summary": "SSE event: cloud_target.updated"
+      },
       "api-v1-realtime-eventsconnection.deleted": {
         "payload": {
           "type": "object",
@@ -3300,6 +4007,40 @@
         "name": "environment.updated",
         "title": "environment.updated event",
         "summary": "SSE event: environment.updated"
+      },
+      "api-v1-realtime-eventsenvironment_cloud.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "org_id",
+            "project_id",
+            "environment_id",
+            "cloud_id",
+            "revision"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string",
+              "nullable": true
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "environment_cloud.updated",
+        "title": "environment_cloud.updated event",
+        "summary": "SSE event: environment_cloud.updated"
       },
       "api-v1-realtime-eventsforge.gap": {
         "payload": {

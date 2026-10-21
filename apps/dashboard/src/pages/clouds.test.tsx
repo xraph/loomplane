@@ -1,0 +1,449 @@
+import { ClientProvider } from "@forge-go/client-react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, expect, it, vi } from "vitest"
+import { forgeClient } from "@/client/runtime"
+import { Clouds } from "./clouds"
+import { ChangeReview } from "@/components/cloud-targets/change-review"
+import { SyncHistory } from "@/components/cloud-targets/sync-history"
+
+let denied = false
+vi.mock("@/lib/organization", () => ({
+  useOrganization: () => ({ session: { orgId: "org" }, can: () => !denied }),
+}))
+vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
+vi.mock("@/lib/router", () => ({
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
+    <a href={to}>{children}</a>
+  ),
+}))
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  forgeClient.clear()
+  window.localStorage.clear()
+  denied = false
+})
+const profile = {
+  id: "cloud",
+  name: "Production",
+  revision: 1,
+  project_id: "p",
+  org_id: "org",
+}
+const target = {
+  id: "target",
+  name: "frontend",
+  display_name: "Frontend",
+  cloud_id: "cloud",
+  provider: "vercel",
+  connection_id: "a",
+  region: "",
+  revision: 1,
+}
+const env = {
+  environment_id: "prod",
+  environment: "production",
+  services: ["web"],
+  status: "failed",
+  error: "Readiness failed",
+  summary: { create: 0, update: 0, replace: 1, delete: 0, adopt: 0, keep: 0 },
+  external_routing: false,
+}
+const preview = {
+  id: "preview",
+  revision: "digest",
+  input: { cloud_id: "cloud", revision: 1 },
+  before: { ...target, connection_id: "a" },
+  after: { ...target, connection_id: "b" },
+  environments: [env],
+  blockers: [],
+}
+function fixture(options: { failure?: string; noClouds?: boolean } = {}) {
+  const writes: { url: string; body: Record<string, unknown> }[] = []
+  const reads: string[] = []
+  let profiles = options.noClouds ? [] : [profile]
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const path = new URL(url, "http://localhost").pathname
+      const method = init?.method ?? "GET"
+      reads.push(url)
+      if (method !== "GET") {
+        const payload = JSON.parse(String(init?.body ?? "{}"))
+        writes.push({ url, body: payload })
+        if (path.endsWith("/clouds")) {
+          profiles = [{ ...profile, name: payload.name }]
+          return Response.json(profiles[0], { status: 201 })
+        }
+        if (path.endsWith("/preview")) return Response.json(preview)
+        if (path.endsWith("/apply") && options.failure)
+          return Response.json({ message: options.failure }, { status: 409 })
+        return Response.json({ id: "sync", status: "pending" })
+      }
+      if (options.failure === "list" && path.endsWith("/clouds"))
+        return Response.json({ message: "Cloud read failed" }, { status: 503 })
+      let body: unknown = {}
+      if (path.endsWith("/projects"))
+        body = {
+          projects: [
+            { id: "p", name: "App" },
+            { id: "other", name: "Other project" },
+          ],
+        }
+      if (path.endsWith("/environments"))
+        body = {
+          environments: [
+            { id: "prod", name: "production" },
+            { id: "stage", name: "staging" },
+          ],
+        }
+      if (path.endsWith("/clouds")) body = { clouds: profiles }
+      if (path.endsWith("/cloud")) body = { assignment: null, revision: 0 }
+      if (path.endsWith("/targets")) body = { targets: [target] }
+      if (path.endsWith("/targets/target")) body = target
+      if (path.endsWith("/connections"))
+        body = {
+          connections: [
+            {
+              id: "a",
+              name: "Account A",
+              cloud: "vercel",
+              account: "Team A",
+              status: "ready",
+            },
+          ],
+        }
+      if (path.endsWith("/cloud-syncs")) body = { syncs: [] }
+      return Response.json(body)
+    }
+  )
+  return { writes, reads }
+}
+const show = (children: React.ReactNode) =>
+  render(<ClientProvider client={forgeClient}>{children}</ClientProvider>)
+it("keeps denied access distinct and does not fetch Cloud data", async () => {
+  denied = true
+  const { reads } = fixture()
+  show(<Clouds />)
+  expect(screen.getByText("Cloud access is restricted")).toBeInTheDocument()
+  expect(reads.some((r) => r.endsWith("/clouds"))).toBe(false)
+})
+it("distinguishes filtered targets, clears the filter and discards old project/environment scope", async () => {
+  const user = userEvent.setup()
+  const { reads } = fixture()
+  show(<Clouds />)
+  await screen.findByText("Frontend")
+  await user.type(
+    screen.getByRole("textbox", { name: "Filter targets" }),
+    "missing"
+  )
+  expect(screen.getByText("No matching targets")).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "Clear filter" }))
+  expect(screen.getByText("Frontend")).toBeInTheDocument()
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "Environment" }),
+    "stage"
+  )
+  await waitFor(() =>
+    expect(reads.some((r) => r.includes("/environments/stage/cloud"))).toBe(
+      true
+    )
+  )
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "Project" }),
+    "other"
+  )
+  await waitFor(() =>
+    expect(reads.some((r) => r.includes("/projects/other/clouds"))).toBe(true)
+  )
+  expect(screen.getByRole("textbox", { name: "Filter targets" })).toHaveValue(
+    ""
+  )
+})
+it("creates a Cloud and refreshes the generated list", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture({ noClouds: true })
+  show(<Clouds />)
+  await screen.findByText("Create your first Cloud")
+  await user.click(screen.getAllByRole("button", { name: "New Cloud" })[0])
+  await user.type(
+    screen.getByRole("textbox", { name: "Cloud name" }),
+    "Customer Cloud"
+  )
+  await user.click(screen.getByRole("button", { name: "Save Cloud" }))
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Cloud" })).toHaveDisplayValue(
+      "Customer Cloud"
+    )
+  )
+  expect(writes[0].body).toEqual({ name: "Customer Cloud" })
+})
+it("shows read errors without presenting an empty Cloud result", async () => {
+  fixture({ failure: "list" })
+  show(<Clouds />)
+  await screen.findByText("Cloud read failed.")
+  expect(screen.queryByText("Create your first Cloud")).not.toBeInTheDocument()
+})
+it("blocks a stale preview until refreshed", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture({ failure: "Cloud configuration changed" })
+  show(
+    <ChangeReview
+      projectId="p"
+      title="Switch frontend"
+      change={{ cloudId: "cloud", targetId: "target", revision: 1 }}
+      onClose={() => undefined}
+      onApplied={() => undefined}
+    />
+  )
+  await user.click(
+    await screen.findByRole("button", { name: "Switch and sync" })
+  )
+  await screen.findByText(
+    "This review is out of date. Refresh it before applying."
+  )
+  expect(
+    screen.queryByRole("button", { name: "Switch and sync" })
+  ).not.toBeInTheDocument()
+  expect(writes.find((w) => w.url.endsWith("/apply"))?.body).toMatchObject({
+    preview_id: "preview",
+    revision: "digest",
+  })
+  await user.click(screen.getByRole("button", { name: "Refresh preview" }))
+  expect(
+    await screen.findByRole("button", { name: "Switch and sync" })
+  ).toBeEnabled()
+})
+it("reports each environment's partial result and sends retry through the persisted sync", async () => {
+  const user = userEvent.setup()
+  const writes: string[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (init?.method === "POST") {
+        writes.push(url)
+        return Response.json({ id: "sync", status: "pending" })
+      }
+      return Response.json({
+        syncs: [
+          {
+            id: "sync",
+            status: "failed",
+            attempt: 1,
+            environments: [
+              env,
+              {
+                ...env,
+                environment_id: "stage",
+                environment: "staging",
+                status: "succeeded",
+                error: "",
+              },
+            ],
+          },
+        ],
+      })
+    }
+  )
+  show(
+    <SyncHistory
+      projectId="p"
+      environmentId="prod"
+      refresh={0}
+      onChanged={async () => undefined}
+    />
+  )
+  await screen.findByText("Readiness failed")
+  expect(screen.getByText("staging")).toBeInTheDocument()
+  expect(
+    within(screen.getByRole("article")).getByText("In sync")
+  ).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "Retry sync" }))
+  await waitFor(() =>
+    expect(writes).toEqual(["/api/v1/projects/p/cloud-syncs/sync/retry"])
+  )
+})
+
+it("keeps immutable review placements distinct when both snapshots share a target ID", async () => {
+  fixture()
+  show(
+    <ChangeReview
+      projectId="p"
+      title="Switch frontend"
+      change={{ cloudId: "cloud", targetId: "target", revision: 1 }}
+      onClose={() => undefined}
+      onApplied={() => undefined}
+    />
+  )
+  await screen.findByText("Current: vercel / Account A")
+  expect(screen.getByText("Desired: vercel / b")).toBeInTheDocument()
+})
+
+it("reuses the same acceptance key after a lost response", async () => {
+  const user = userEvent.setup()
+  const accepted: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith("/connections"))
+        return Response.json({ connections: [] })
+      if (url.endsWith("/preview")) return Response.json(preview)
+      const payload = JSON.parse(String(init?.body))
+      accepted.push(payload)
+      return accepted.length === 1
+        ? Response.json({ message: "Response was lost" }, { status: 503 })
+        : Response.json({ id: "sync", status: "pending" })
+    }
+  )
+  const applied = vi.fn()
+  show(
+    <ChangeReview
+      projectId="p"
+      title="Switch frontend"
+      change={{ cloudId: "cloud", targetId: "target", revision: 1 }}
+      onClose={() => undefined}
+      onApplied={applied}
+    />
+  )
+  await user.click(
+    await screen.findByRole("button", { name: "Switch and sync" })
+  )
+  await screen.findByText(/Response was lost/)
+  await user.click(screen.getByRole("button", { name: "Switch and sync" }))
+  await waitFor(() => expect(applied).toHaveBeenCalledOnce())
+  expect(accepted).toHaveLength(2)
+  expect(accepted[0]).toEqual(accepted[1])
+  expect(accepted[0].idempotency_key).toBeTruthy()
+})
+
+it("saves an adopted service through the optimistic generated manifest API", async () => {
+  const user = userEvent.setup()
+  const writes: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        writes.push(JSON.parse(String(init.body)))
+        return Response.json({ id: "next", revision: 4, manifest: {} })
+      }
+      return Response.json({
+        id: "saved",
+        revision: 3,
+        manifest: {
+          version: 1,
+          defaults: { provider: "vercel", region: "iad1" },
+          services: { web: { source: "apps/web" }, api: { source: "cmd/api" } },
+          resources: { db: { kind: "postgres" } },
+        },
+      })
+    }
+  )
+  const { ServiceAdoption } =
+    await import("@/components/cloud-targets/service-adoption")
+  const environments = [
+    { id: "prod", name: "production" },
+    { id: "stage", name: "staging" },
+  ] as import("@/client/forge/loomplane/types").Environment[]
+  const targets = [
+    { id: "target", name: "frontend", displayName: "Frontend" },
+  ] as import("@/client/forge/loomplane/types").Target[]
+  show(
+    <ServiceAdoption
+      projectId="p"
+      environment={environments[0]}
+      environments={environments}
+      targets={targets}
+      onSaved={async () => undefined}
+    />
+  )
+  await user.selectOptions(
+    await screen.findByRole("combobox", { name: "Cloud target for web" }),
+    "frontend"
+  )
+  await user.click(
+    screen.getAllByRole("button", { name: "Review service edit" })[0]
+  )
+  expect(screen.getByLabelText("Manifest adoption preview")).toHaveTextContent(
+    '"cloud_target": "frontend"'
+  )
+  await user.click(screen.getByRole("button", { name: "Save service target" }))
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0]).toMatchObject({
+    base_revision: 3,
+    manifest: {
+      services: {
+        web: {
+          environments: {
+            production: { cloud_target: "frontend" },
+            staging: { provider: "vercel", region: "iad1" },
+          },
+        },
+        api: { provider: "vercel" },
+      },
+      resources: { db: { provider: "vercel" } },
+    },
+  })
+})
+
+it("requires routing evidence and sends it for the selected environment", async () => {
+  const user = userEvent.setup()
+  const writes: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/connections"))
+        return Response.json({ connections: [] })
+      if (init?.method === "POST") {
+        writes.push(JSON.parse(String(init.body)))
+        return Response.json({ id: "sync", status: "pending" })
+      }
+      return Response.json({
+        syncs: [
+          {
+            id: "sync",
+            status: "routing_pending",
+            attempt: 1,
+            environments: [
+              {
+                ...env,
+                status: "succeeded",
+                error: "",
+                external_routing: true,
+              },
+            ],
+          },
+        ],
+      })
+    }
+  )
+  show(
+    <SyncHistory
+      projectId="p"
+      environmentId="prod"
+      refresh={0}
+      onChanged={async () => undefined}
+    />
+  )
+  const confirm = await screen.findByRole("button", { name: "Confirm routing" })
+  expect(confirm).toBeDisabled()
+  await user.type(
+    screen.getByRole("textbox", { name: "Routing evidence for production" }),
+    "DNS checked"
+  )
+  await user.click(confirm)
+  await waitFor(() =>
+    expect(writes).toEqual([
+      { environment_id: "prod", evidence: "DNS checked" },
+    ])
+  )
+})

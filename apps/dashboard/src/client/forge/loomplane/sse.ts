@@ -235,6 +235,51 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('cloud.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.Profile = decode(JSON.parse(event.data), "Profile");
+            this.emit('cloud.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('cloud.updated', (event: MessageEvent) => {
+          try {
+            const data: types.Profile = decode(JSON.parse(event.data), "Profile");
+            this.emit('cloud.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('cloud_sync.updated', (event: MessageEvent) => {
+          try {
+            const data: types.CloudSyncEvent = decode(JSON.parse(event.data), "CloudSyncEvent");
+            this.emit('cloud_sync.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('cloud_target.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.Target = decode(JSON.parse(event.data), "Target");
+            this.emit('cloud_target.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('cloud_target.updated', (event: MessageEvent) => {
+          try {
+            const data: types.Target = decode(JSON.parse(event.data), "Target");
+            this.emit('cloud_target.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('connection.deleted', (event: MessageEvent) => {
           try {
             const data: types.Connection = decode(JSON.parse(event.data), "Connection");
@@ -284,6 +329,15 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           try {
             const data: types.Environment = decode(JSON.parse(event.data), "Environment");
             this.emit('environment.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('environment_cloud.updated', (event: MessageEvent) => {
+          try {
+            const data: types.EnvironmentCloudEvent = decode(JSON.parse(event.data), "EnvironmentCloudEvent");
+            this.emit('environment_cloud.updated', data);
           } catch (error) {
             this.emit('error', error);
           }
@@ -506,6 +560,86 @@ export class RealtimeEventsSSEClient extends EventEmitter {
   }
 
   /**
+   * Register a handler for cloud.deleted events.
+   * @param handler - Function to call when cloud.deleted event is received
+   */
+  onCloudDeleted(handler: (data: types.Profile) => void): void {
+    this.on('cloud.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for cloud.deleted events.
+   * @param handler - The handler to remove
+   */
+  offCloudDeleted(handler: (data: types.Profile) => void): void {
+    this.off('cloud.deleted', handler);
+  }
+
+  /**
+   * Register a handler for cloud.updated events.
+   * @param handler - Function to call when cloud.updated event is received
+   */
+  onCloudUpdated(handler: (data: types.Profile) => void): void {
+    this.on('cloud.updated', handler);
+  }
+
+  /**
+   * Remove a handler for cloud.updated events.
+   * @param handler - The handler to remove
+   */
+  offCloudUpdated(handler: (data: types.Profile) => void): void {
+    this.off('cloud.updated', handler);
+  }
+
+  /**
+   * Register a handler for cloud_sync.updated events.
+   * @param handler - Function to call when cloud_sync.updated event is received
+   */
+  onCloudSyncUpdated(handler: (data: types.CloudSyncEvent) => void): void {
+    this.on('cloud_sync.updated', handler);
+  }
+
+  /**
+   * Remove a handler for cloud_sync.updated events.
+   * @param handler - The handler to remove
+   */
+  offCloudSyncUpdated(handler: (data: types.CloudSyncEvent) => void): void {
+    this.off('cloud_sync.updated', handler);
+  }
+
+  /**
+   * Register a handler for cloud_target.deleted events.
+   * @param handler - Function to call when cloud_target.deleted event is received
+   */
+  onCloudTargetDeleted(handler: (data: types.Target) => void): void {
+    this.on('cloud_target.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for cloud_target.deleted events.
+   * @param handler - The handler to remove
+   */
+  offCloudTargetDeleted(handler: (data: types.Target) => void): void {
+    this.off('cloud_target.deleted', handler);
+  }
+
+  /**
+   * Register a handler for cloud_target.updated events.
+   * @param handler - Function to call when cloud_target.updated event is received
+   */
+  onCloudTargetUpdated(handler: (data: types.Target) => void): void {
+    this.on('cloud_target.updated', handler);
+  }
+
+  /**
+   * Remove a handler for cloud_target.updated events.
+   * @param handler - The handler to remove
+   */
+  offCloudTargetUpdated(handler: (data: types.Target) => void): void {
+    this.off('cloud_target.updated', handler);
+  }
+
+  /**
    * Register a handler for connection.deleted events.
    * @param handler - Function to call when connection.deleted event is received
    */
@@ -599,6 +733,22 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offEnvironmentUpdated(handler: (data: types.Environment) => void): void {
     this.off('environment.updated', handler);
+  }
+
+  /**
+   * Register a handler for environment_cloud.updated events.
+   * @param handler - Function to call when environment_cloud.updated event is received
+   */
+  onEnvironmentCloudUpdated(handler: (data: types.EnvironmentCloudEvent) => void): void {
+    this.on('environment_cloud.updated', handler);
+  }
+
+  /**
+   * Remove a handler for environment_cloud.updated events.
+   * @param handler - The handler to remove
+   */
+  offEnvironmentCloudUpdated(handler: (data: types.EnvironmentCloudEvent) => void): void {
+    this.off('environment_cloud.updated', handler);
   }
 
   /**

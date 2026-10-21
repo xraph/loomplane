@@ -382,16 +382,33 @@ function RemoveDialog({
  * ConnectDialog connects a cloud, starting on cloud, or with replacing set,
  * swaps an existing connection's credential for a new one.
  */
-export function ConnectDialog({
+export function ConnectDialog(props: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  cloud?: string
+  replacing?: Connection
+  onConnected?: (connection: Connection) => void
+}) {
+  return props.open ? (
+    <ConnectForm
+      key={`${props.cloud}:${props.replacing?.id ?? "new"}`}
+      {...props}
+    />
+  ) : null
+}
+
+function ConnectForm({
   open,
   onOpenChange,
   cloud: initial = "gcp",
   replacing,
+  onConnected,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   cloud?: string
   replacing?: Connection
+  onConnected?: (connection: Connection) => void
 }) {
   const create = useMutation(useConnectionsCreate)
   const replace = useMutation(useConnectionsReplace)
@@ -484,6 +501,7 @@ export function ConnectDialog({
           ? `${c.name} is connected and ready`
           : `${c.name} is connected, but missing permissions`
       )
+      onConnected?.(c)
       close(false)
     } catch (err) {
       setError(messageOf(err, "The cloud wasn't connected."))

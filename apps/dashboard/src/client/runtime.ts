@@ -148,5 +148,12 @@ const auth: AuthProvider = {
 /** The dashboard's one normalized cache over both services. */
 export const forgeClient = configureClient({
   transport: new RestTransport({ client: restClient, auth }),
-  entities: { ...authsomeEntities, ...loomplaneEntities },
+  entities: {
+    ...authsomeEntities,
+    ...loomplaneEntities,
+    // A review and its sync retain immutable before/after snapshots. These
+    // share the live target ID but must never upsert or reference its cache row.
+    Preview: { idField: "id" },
+    Sync: { idField: "id" },
+  },
 })

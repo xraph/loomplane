@@ -1,6 +1,6 @@
 import type { OperationMeta } from '../ops';
 import { codec_Connection } from '../codecs/Connection';
-import { codec_CreateInputBody } from '../codecs/CreateInputBody';
+import { codec_ConnectionsCreateInputBody } from '../codecs/ConnectionsCreateInputBody';
 
 export const op_connections_create = {
   method: 'POST',
@@ -9,6 +9,6 @@ export const op_connections_create = {
   rootType: 'Connection',
   provides: ['Connection:{id}'],
   invalidates: ['Connection[]'],
-  bodyCodec: codec_CreateInputBody,
+  bodyCodec: codec_ConnectionsCreateInputBody,
   responseCodec: codec_Connection,
 } as const satisfies OperationMeta;

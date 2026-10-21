@@ -8,6 +8,8 @@ import type {
 } from "@/client/forge/loomplane/types"
 
 export type PlacementFields = {
+  cloudTarget?: string
+  cloud_target?: string
   provider?: string
   region?: string
   enabled?: boolean
@@ -140,6 +142,15 @@ export function placementSettings(
   const healthPath =
     o?.healthPath ?? o?.health_path ?? s.healthPath ?? s.health_path
   return {
+    ...(o?.cloudTarget || o?.cloud_target || s.cloudTarget || s.cloud_target
+      ? {
+          cloudTarget:
+            o?.cloudTarget ||
+            o?.cloud_target ||
+            s.cloudTarget ||
+            s.cloud_target,
+        }
+      : {}),
     provider,
     region,
     enabled: o?.enabled ?? s.enabled ?? true,
@@ -165,6 +176,7 @@ export function placementSummary(
 ) {
   const counts = { services: 0, resources: 0, gateways: 0 }
   const clouds = new Set<string>()
+  const cloudTargets = new Set<string>()
   for (const section of ["services", "resources", "gateways"] as const) {
     for (const [name, entry] of Object.entries(m[section] ?? {})) {
       const settings = placementSettings(
@@ -174,6 +186,7 @@ export function placementSummary(
       )
       if (!settings.enabled) continue
       counts[section]++
+      if (settings.cloudTarget) cloudTargets.add(settings.cloudTarget)
       const cloud = catalog.find((p) => p.name === settings.provider)?.cloud
       if (cloud) clouds.add(cloud)
     }
@@ -182,5 +195,9 @@ export function placementSummary(
     if (link.environments?.[environment]?.enabled !== false)
       for (const cloud of link.between ?? []) clouds.add(String(cloud))
   }
-  return { ...counts, clouds: [...clouds].sort() }
+  return {
+    ...counts,
+    cloudTargets: [...cloudTargets].sort(),
+    clouds: [...clouds].sort(),
+  }
 }
