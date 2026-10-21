@@ -42,7 +42,11 @@ func Dial(ctx context.Context, cfg *Config) (*Client, error) {
 		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	sshConfig := &ssh.ClientConfig{User: cfg.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(cfg.Signer)}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	algorithms := []string{cfg.HostKey.Type()}
+	if cfg.HostKey.Type() == ssh.KeyAlgoRSA {
+		algorithms = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	}
+	sshConfig := &ssh.ClientConfig{HostKeyAlgorithms: algorithms, User: cfg.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(cfg.Signer)}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		if !bytes.Equal(key.Marshal(), cfg.HostKey.Marshal()) {
 			return ErrRejected
 		}

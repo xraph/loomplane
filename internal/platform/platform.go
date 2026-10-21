@@ -28,6 +28,7 @@ import (
 	groveext "github.com/xraph/grove/extension"
 
 	"github.com/xraph/loomplane/database/migrations"
+	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
@@ -139,6 +140,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
 		connectionsext.New(cfg, plugs),
+		cloudinfraext.New(cfg, deployments),
 		federationext.New(cfg),
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),

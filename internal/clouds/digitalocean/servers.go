@@ -114,7 +114,11 @@ type infrastructureLinks struct {
 	Pages struct {
 		Next string `json:"next"`
 	} `json:"pages"`
-	Actions []dropletAction `json:"actions"`
+	Actions []struct {
+		ID   int64  `json:"id"`
+		Href string `json:"href"`
+		Rel  string `json:"rel"`
+	} `json:"actions"`
 }
 type dropletAction struct {
 	ID         int64  `json:"id"`
@@ -227,7 +231,8 @@ func (c *Client) CreateServer(ctx context.Context, credential provider.Infrastru
 	}
 	if result.Server.ID != "" {
 		result.Reconciled = true
-		return result, nil
+		result.Actions, err = c.creationActions(ctx, credential, result.Server.ID)
+		return result, err
 	}
 	if spec.ReconcileOnly {
 		return result, provider.ErrInfrastructureAmbiguous
@@ -263,7 +268,7 @@ func (c *Client) CreateServer(ctx context.Context, credential provider.Infrastru
 		if a.ID < 1 {
 			return result, provider.ErrInfrastructureAmbiguous
 		}
-		result.Actions = append(result.Actions, a.action(result.Server.ID))
+		result.Actions = append(result.Actions, provider.InfrastructureAction{ID: strconv.FormatInt(a.ID, 10), ResourceID: result.Server.ID, Kind: a.Rel, Status: "in-progress"})
 	}
 	return result, nil
 }
@@ -349,4 +354,39 @@ func InfrastructureCapabilities() []provider.InfrastructureCapability {
 		provider.DNSRecordDeletion, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSZoneCreation, provider.DNSZoneDiscovery,
 		provider.ServerDeletion, provider.ServerDiscovery, provider.ServerProvisioning, provider.ServerResize,
 	}
+}
+
+// creationActions recovers exact action identities after a lost create receipt.
+func (c *Client) creationActions(ctx context.Context, credential provider.InfrastructureCredential, id string) ([]provider.InfrastructureAction, error) {
+	actions := []provider.InfrastructureAction{}
+	seen := map[int64]bool{}
+	for page := 1; page <= infrastructureMaxPages; page++ {
+		var out struct {
+			Actions []dropletAction     `json:"actions"`
+			Links   infrastructureLinks `json:"links"`
+		}
+		q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(pageSize)}}
+		if err := c.do(ctx, credential.Token, http.MethodGet, "/v2/droplets/"+id+"/actions", q, nil, &out); err != nil {
+			return nil, infrastructureError(err, "droplet:read")
+		}
+		for _, action := range out.Actions {
+			if action.ID < 1 || seen[action.ID] {
+				return nil, provider.ErrInfrastructurePagination
+			}
+			seen[action.ID] = true
+			if action.ResourceID != 0 && strconv.FormatInt(action.ResourceID, 10) != id {
+				return nil, provider.ErrInfrastructureIdentity
+			}
+			if action.Type == "create" {
+				actions = append(actions, action.action(id))
+			}
+		}
+		if out.Links.Pages.Next == "" {
+			if len(actions) != 1 {
+				return nil, provider.ErrInfrastructureAmbiguous
+			}
+			return actions, nil
+		}
+	}
+	return nil, provider.ErrInfrastructurePagination
 }

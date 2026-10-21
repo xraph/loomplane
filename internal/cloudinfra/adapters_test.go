@@ -164,7 +164,7 @@ func digitalOceanConformanceFixture(t *testing.T) (provider.ServerAdapter, provi
 			response = map[string]any{"droplets": list}
 		case "POST /v2/droplets":
 			server = map[string]any{"id": 42, "name": in["name"], "size_slug": in["size"], "region": map[string]any{"slug": in["region"]}, "tags": in["tags"], "status": "new"}
-			response = map[string]any{"droplet": server, "links": map[string]any{"actions": []any{action}}}
+			response = map[string]any{"droplet": server, "links": map[string]any{"actions": []any{map[string]any{"id": 7, "href": "https://api.digitalocean.com/v2/actions/7", "rel": "create"}}}}
 		case "GET /v2/droplets/42":
 			if server == nil {
 				w.WriteHeader(404)
@@ -177,6 +177,8 @@ func digitalOceanConformanceFixture(t *testing.T) (provider.ServerAdapter, provi
 			action["type"] = actionType
 			server["size_slug"] = in["size"]
 			response = map[string]any{"action": action}
+		case "GET /v2/droplets/42/actions":
+			response = map[string]any{"actions": []any{map[string]any{"id": 7, "resource_id": 42, "status": "completed", "type": "create"}}}
 		case "GET /v2/droplets/42/actions/7":
 			action["status"] = "completed"
 			response = map[string]any{"action": action}

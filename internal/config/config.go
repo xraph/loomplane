@@ -234,10 +234,12 @@ type StorageConfig struct {
 	URL string
 }
 
-// CloudsConfig points Loomplane's cloud clients somewhere other than the
-// clouds' own APIs, for tests. Leave both empty in every real
-// deployment.
+// CloudsConfig configures enrollment callbacks and provider API test overrides.
+// Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
+	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
+	// Empty uses PublicURL; local addresses cannot provision remote servers.
+	EnrollmentURL string
 	// GoogleEndpoint replaces every Google Cloud API host.
 	GoogleEndpoint string
 	// VercelEndpoint replaces Vercel's API.
@@ -332,6 +334,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Environment, "environment")
 	r.str(&c.HTTPAddr, "http_addr")
 	r.str(&c.PublicURL, "public_url")
+	r.str(&c.Clouds.EnrollmentURL, "clouds.enrollment_url")
 	r.str(&c.SecretKey, "secret_key")
 
 	r.str(&c.Database.URL, "database.url")

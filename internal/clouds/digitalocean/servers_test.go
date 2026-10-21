@@ -55,6 +55,9 @@ func TestInfrastructureServerCreateReconcilesLostResponse(t *testing.T) {
 		}
 		reply(w, 200, map[string]any{"droplets": list})
 	})
+	f.on("GET /v2/droplets/42/actions", func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+		reply(w, 200, map[string]any{"actions": []any{map[string]any{"id": 7, "resource_id": 42, "status": "completed", "type": "create"}}})
+	})
 	f.on("POST /v2/droplets", func(w http.ResponseWriter, _ *http.Request, body map[string]any) {
 		created = body
 		creates++
