@@ -527,3 +527,150 @@ func TestServerPoolsRetiredHistoryAllowsConnectionReuse(t *testing.T) {
 	}
 	f.accept(t, "legacy-reuse")
 }
+
+func (*poolExecutor) PreparePoolEffects(context.Context, *deployments.Job) error { return nil }
+
+func directPoolPlan(t *testing.T, f *poolFixture, id, connection string) {
+	t.Helper()
+	f.plan(t, id, f.request("env", "api"), &cloudinfra.Placement{ConnectionID: "runtime-1"})
+	if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_plans SET result=jsonb_set(jsonb_set(jsonb_set(result,'{actions,0,service,cloud_placement}','null'),'{actions,0,connection_id}',to_jsonb($2::text)),'{actions,0,service,target}',to_jsonb($2::text)) WHERE id=$1`, id, connection); err != nil {
+		t.Fatal(err)
+	}
+}
+func poolTestRunner(f *poolFixture, executor deployments.Executor) *deployments.Runner {
+	return deployments.NewRunner(deployments.RunnerDeps{Store: deployments.NewPgStore(f.db), Plans: f.plans, CloudProfiles: f.clouds, Credentials: &syncAccounts{store: connections.NewPgStore(f.db)}, Variables: poolVars{}, Providers: providers.Registry(), Executors: map[string]deployments.Executor{"server": executor}})
+}
+func TestServerPoolsVerifiedAliasAdmission(t *testing.T) {
+	f := newPoolFixture(t)
+	now := time.Now()
+	if err := connections.NewPgStore(f.db).CreateConnection(t.Context(), &connections.Connection{ID: "alias", OrgID: "org", Cloud: "server", Name: "alias", Account: "runtime-1", Details: map[string]string{"docker_id": "runtime-1", "architecture": "amd64"}, Status: "ready", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	aliases, err := f.plans.PooledConnections(t.Context(), "org")
+	if err != nil || !aliases["alias"] {
+		t.Fatal("unadopted alias missing from pool admission", aliases, err)
+	}
+	directPoolPlan(t, f, "alias-plan", "alias")
+	if _, err = f.plans.Decide(t.Context(), "org", "alias-plan", "approved", "usr", "", now); err == nil {
+		t.Fatal("alias approval bypassed capacity")
+	}
+	// Historical approval, before pool enrollment, still cannot execute on a
+	// currently pooled daemon through its unadopted connection alias.
+	if _, err = f.sql.Exec(t.Context(), `DELETE FROM loomplane_server_pool_members`); err != nil {
+		t.Fatal(err)
+	}
+	f.accept(t, "alias-plan")
+	executor := &poolExecutor{}
+	runner := poolTestRunner(f, executor)
+	dep, _, err := runner.Start(t.Context(), "org", "alias-plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_server_pool_members(org_id,pool_id,server_id,cpu_millis,memory_bytes) VALUES('org','pool','server-1',2000,2147483648)`); err != nil {
+		t.Fatal(err)
+	}
+	if err = runner.Run(t.Context(), "org", dep, "service:api", nil, func([]byte) error { return nil }); err == nil || executor.calls != 0 {
+		t.Fatal("alias runtime bypassed pool", err)
+	}
+}
+
+func waitPoolSQL(t *testing.T, f *poolFixture, query string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var ok bool
+		if err := f.db.QueryRow(t.Context(), query).Scan(&ok); err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("database barrier was not reached")
+}
+func TestServerPoolsEnrollmentSerializesApproval(t *testing.T) {
+	f := newPoolFixture(t)
+	if _, err := f.sql.Exec(t.Context(), `DELETE FROM loomplane_server_pool_members`); err != nil {
+		t.Fatal(err)
+	}
+	directPoolPlan(t, f, "direct", "runtime-1")
+	barrier, err := f.sql.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = barrier.Rollback(context.Background()) }()
+	if _, err = barrier.Exec(t.Context(), `SELECT id FROM loomplane_cloud_servers WHERE id='server-1' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	enrolled := make(chan error, 1)
+	next := *f.pool
+	next.Revision++
+	go func() { enrolled <- f.store.SavePool(t.Context(), &next, 1) }()
+	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM loomplane_cloud_servers%')`)
+	approved := make(chan error, 1)
+	go func() {
+		_, e := f.plans.Decide(t.Context(), "org", "direct", "approved", "usr", "", time.Now())
+		approved <- e
+	}()
+	select {
+	case e := <-approved:
+		t.Fatal("approval passed uncommitted enrollment", e)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err = barrier.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-enrolled; err != nil {
+		t.Fatal(err)
+	}
+	if err = <-approved; err == nil {
+		t.Fatal("direct approval escaped committed enrollment")
+	}
+}
+
+type blockingDirectPoolExecutor struct {
+	poolExecutor
+	entered, release chan struct{}
+}
+
+func (e *blockingDirectPoolExecutor) Apply(ctx context.Context, j *deployments.Job) (*deployments.Outcome, error) {
+	close(e.entered)
+	<-e.release
+	return e.poolExecutor.Apply(ctx, j)
+}
+func TestServerPoolsEnrollmentSerializesDirectExecution(t *testing.T) {
+	f := newPoolFixture(t)
+	if _, err := f.sql.Exec(t.Context(), `DELETE FROM loomplane_server_pool_members`); err != nil {
+		t.Fatal(err)
+	}
+	directPoolPlan(t, f, "direct", "runtime-1")
+	f.accept(t, "direct")
+	executor := &blockingDirectPoolExecutor{entered: make(chan struct{}), release: make(chan struct{})}
+	runner := poolTestRunner(f, executor)
+	dep, _, err := runner.Start(t.Context(), "org", "direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := make(chan error, 1)
+	go func() {
+		ran <- runner.Run(t.Context(), "org", dep, "service:api", nil, func([]byte) error { return nil })
+	}()
+	select {
+	case <-executor.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary unclaimed host did not execute")
+	}
+	enrolled := make(chan error, 1)
+	next := *f.pool
+	next.Revision++
+	go func() { enrolled <- f.store.SavePool(t.Context(), &next, 1) }()
+	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT c.id FROM loomplane_cloud_connections%')`)
+	close(executor.release)
+	if err = <-ran; err != nil {
+		t.Fatal(err)
+	}
+	if err = <-enrolled; err == nil {
+		t.Fatal("enrollment ignored direct effects and binding")
+	}
+}

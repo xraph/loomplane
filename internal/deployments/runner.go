@@ -17,6 +17,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gateway"
@@ -427,11 +428,19 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			action = a
 		}
 	}
+	admission, err := r.directServerAdmission(ctx, plan, action)
+	if err != nil {
+		return err
+	}
+	if admission != nil {
+		defer func() { _ = admission.Rollback() }() //nolint:errcheck // releasing a read-only admission lock
+	}
 	poolLock, err := r.beginPoolExecution(ctx, plan, action)
 	if err != nil {
 		return err
 	}
 	if poolLock != nil {
+		ctx = poolEffectContext(poolLock.Context(ctx))
 		defer func() { runErr = errors.Join(runErr, poolLock.Finish(context.WithoutCancel(ctx))) }()
 	}
 	if err := r.authorizeSync(ctx, plan); err != nil {
@@ -471,7 +480,7 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		step.Status, step.Message = status, message
 		_ = r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step) //nolint:errcheck // progress is best effort; the step's end is recorded
 	}
-	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress); err != nil {
+	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress, poolLock); err != nil {
 		finished := r.now().UTC()
 		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))
 		step.Status, step.Message, step.FinishedAt = StepFailed, err.Error(), &finished
@@ -500,6 +509,7 @@ func doneMessage(s *Step) string {
 
 func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action, step *Step,
 	resume []byte, heartbeat func([]byte) error, progress func(string, string),
+	poolLock *cloudinfra.PoolExecutionLock,
 ) error {
 	if plan.CloudSyncID != "" {
 		ctx = planning.WithCloudSyncMutation(ctx, plan.CloudSyncID)
@@ -714,6 +724,14 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 		return authErr
 	}
+	if poolLock != nil {
+		if fenceErr := preparePoolEffects(ctx, exec, job); fenceErr != nil {
+			return fenceErr
+		}
+		if fenceErr := poolLock.Attempt(ctx); fenceErr != nil {
+			return fenceErr
+		}
+	}
 	out, err := exec.Apply(ctx, job)
 	if elsewhere := (*ElsewhereError)(nil); errors.As(err, &elsewhere) {
 		return r.deployedElsewhere(ctx, current, elsewhere)
@@ -867,7 +885,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		}
 	} else {
 		job.Progress(StepDeploying, "Removing "+a.Name)
-		if err := exec.Remove(ctx, job, bound); err != nil {
+		removalCtx, fenceErr := preparePoolRemoval(ctx, exec, job, bound)
+		if fenceErr != nil {
+			return fenceErr
+		}
+		if err := exec.Remove(removalCtx, job, bound); err != nil {
 			return err
 		}
 	}
@@ -1012,7 +1034,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if authErr := r.authorizeCloudRemoval(ctx, job); authErr != nil {
 		return false, authErr
 	}
-	if err := exec.Remove(ctx, &gone, old); err != nil {
+	removalCtx, fenceErr := preparePoolRemoval(ctx, exec, &gone, old)
+	if fenceErr != nil {
+		return false, fenceErr
+	}
+	if err := exec.Remove(removalCtx, &gone, old); err != nil {
 		if deleting {
 			return false, untracked(fmt.Errorf("remove the old %s on %s: %w", a.Name, placement(old.Provider, old.Region), err))
 		}

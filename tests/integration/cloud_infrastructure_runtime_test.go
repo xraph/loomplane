@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -193,6 +194,10 @@ func cloudInfrastructureRuntimeFixture(t *testing.T, constrained bool) {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	if constrained {
+		cfg.Details["docker_id"] = v.Health.DockerID
+		verifyRuntimeEffectFence(t, name, cfg)
+	}
 	// Bind a real conflicting listener inside this host, then refuse takeover.
 	infraDocker(t, "exec", "-d", name, "sh", "-c", "nc -lk -p 80 >/dev/null")
 	for attempt := 0; attempt < 20; attempt++ {
@@ -213,4 +218,111 @@ func cloudInfrastructureRuntimeFixture(t *testing.T, constrained bool) {
 		t.Fatalf("unknown host key: %v", err)
 	}
 	t.Logf("Verified isolated host %s: Docker identity, %d CPUs, %d bytes, enrollment replay refusal and listener conflict", name, v.Health.CPUs, v.Health.MemoryBytes)
+}
+
+func verifyRuntimeEffectFence(t *testing.T, host string, cfg *server.Config) {
+	t.Helper()
+	infraDocker(t, "exec", host, "sh", "-c", "tar -C / -cf /tmp/fence-rootfs.tar bin lib && docker import /tmp/fence-rootfs.tar fence-fixture >/dev/null && docker run -d --name fence-sleeper fence-fixture /bin/busybox sleep 300")
+	old, err := server.Dial(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	first := server.EffectFence{Operation: "fixture/plan/api", Generation: 1}
+	if err = old.ArmEffectFence(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() {
+		response, e := old.Request(server.WithEffectFence(t.Context(), first), http.MethodPost, "/containers/fence-sleeper/wait?condition=not-running", nil)
+		if e == nil {
+			_, e = io.Copy(io.Discard, response.Body)
+			_ = response.Body.Close()
+		}
+		finished <- e
+	}()
+	for attempt := 0; attempt < 100; attempt++ {
+		state := infraDocker(t, "exec", host, "sh", "-c", "cat /var/tmp/loomplane-fence-*/state")
+		if strings.Contains(state, `"dirty": true`) {
+			break
+		}
+		if attempt == 99 {
+			t.Fatal("mutation never entered host journal")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err = old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := server.Dial(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	advanced := make(chan error, 1)
+	second := server.EffectFence{Operation: first.Operation, Generation: 2}
+	go func() { advanced <- next.ArmEffectFence(t.Context(), second) }()
+	select {
+	case err = <-advanced:
+		t.Fatalf("takeover passed live mutation after caller loss: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	infraDocker(t, "exec", host, "docker", "stop", "-t", "0", "fence-sleeper")
+	select {
+	case err = <-advanced:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("completed mutation did not permit takeover")
+	}
+	response, err := next.Request(server.WithEffectFence(t.Context(), first), http.MethodPost, "/networks/create", strings.NewReader(`{"Name":"stale-fence-network"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatal("delayed old generation mutated runtime", response.StatusCode)
+	}
+	if err = next.ArmEffectFence(t.Context(), server.EffectFence{Operation: "fixture/other/api", Generation: 1}); err != nil {
+		t.Fatal("unrelated operation was fenced", err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("disconnected caller did not return")
+	}
+	// An uncatchably terminated helper leaves an unknown Docker outcome. Even
+	// after the container stops, another operation cannot clear the dirty journal.
+	infraDocker(t, "exec", host, "docker", "start", "fence-sleeper")
+	unknown := make(chan error, 1)
+	go func() {
+		response, requestErr := next.Request(server.WithEffectFence(t.Context(), second), http.MethodPost, "/containers/fence-sleeper/wait?condition=not-running", nil)
+		if requestErr == nil {
+			_, requestErr = io.Copy(io.Discard, response.Body)
+			_ = response.Body.Close()
+		}
+		unknown <- requestErr
+	}()
+	for attempt := 0; attempt < 100; attempt++ {
+		state := infraDocker(t, "exec", host, "sh", "-c", "cat /var/tmp/loomplane-fence-*/state")
+		if strings.Contains(state, `"dirty": true`) {
+			break
+		}
+		if attempt == 99 {
+			t.Fatal("unknown mutation never entered host journal")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	infraDocker(t, "exec", host, "killall", "-9", "python3")
+	infraDocker(t, "exec", host, "docker", "stop", "-t", "0", "fence-sleeper")
+	if err = next.ArmEffectFence(t.Context(), server.EffectFence{Operation: "fixture/other/api", Generation: 2}); err == nil {
+		t.Fatal("unknown helper outcome allowed takeover")
+	}
+	select {
+	case <-unknown:
+	case <-time.After(time.Second):
+		t.Fatal("terminated helper caller did not return")
+	}
+	t.Log("Runtime takeover waited for Docker after SSH caller loss; stale requests and dirty-journal takeover refused")
 }

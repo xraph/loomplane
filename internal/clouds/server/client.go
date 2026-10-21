@@ -18,10 +18,11 @@ import (
 
 // Client forwards HTTP over the selected server's Docker Unix socket.
 type Client struct {
-	Config    *Config
-	HTTP      *http.Client
-	ssh       *ssh.Client
-	transport *http.Transport
+	RequireFence bool
+	Config       *Config
+	HTTP         *http.Client
+	ssh          *ssh.Client
+	transport    *http.Transport
 }
 
 // Dial authenticates without reading SSH config, agents or ambient keys.
@@ -92,6 +93,11 @@ func (c *Client) Request(ctx context.Context, method, resource string, body io.R
 }
 
 func (c *Client) RequestHeaders(ctx context.Context, method, resource string, body io.Reader, headers http.Header) (*http.Response, error) {
+	if c.RequireFence && method != http.MethodGet && method != http.MethodHead {
+		if _, ok := EffectFenceFrom(ctx); !ok {
+			return nil, fmt.Errorf("pooled runtime mutation has no effect fence")
+		}
+	}
 	if !strings.HasPrefix(resource, "/") || strings.HasPrefix(resource, "//") {
 		return nil, ErrInvalid
 	}
@@ -104,6 +110,9 @@ func (c *Client) RequestHeaders(ctx context.Context, method, resource string, bo
 	}
 	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if fence, ok := EffectFenceFrom(ctx); ok && method != http.MethodGet && method != http.MethodHead {
+		return c.fencedRequest(ctx, "request", fence, method, resource, body, req.Header)
 	}
 	return c.HTTP.Do(req)
 }

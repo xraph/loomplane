@@ -26,7 +26,7 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 			if err != nil {
 				return err
 			}
-			if hosts[a.ConnectionID] {
+			if hosts[a.ConnectionID] || conn != nil && hosts[conn.ID] {
 				return fmt.Errorf("shared host requires a reviewed pool reservation")
 			}
 		}

@@ -104,6 +104,7 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 			}
 			return nil, errors.New("the SSH server or Docker identity changed; check the connection and plan again")
 		}
+		client.RequireFence = labels["loomplane.pool"] != ""
 		client.Config.Details = details
 		return client, nil
 	}
@@ -406,6 +407,10 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	sp, _ = spec(job, image, nil)
 	labels = map[string]string{owned.LabelOrg: job.Deployment.OrgID, owned.LabelProject: job.Deployment.ProjectID, owned.LabelEnvironment: job.Deployment.EnvironmentID, owned.LabelAction: job.Action.ID, owned.LabelService: job.Action.Name, owned.LabelConnection: job.Connection.ID, owned.LabelRuntime: state.RuntimeRef, owned.LabelPublic: strconv.FormatBool(cfg.Public), owned.LabelHealth: cfg.HealthPath, owned.LabelArchitecture: state.Image.Architecture, owned.LabelRevision: job.Deployment.ID + "/" + job.Action.ID}
 	labels[owned.LabelPlan] = job.Deployment.PlanID
+	if cfg.CloudPlacement != nil && cfg.CloudPlacement.PoolID != "" {
+		labels["loomplane.pool"] = cfg.CloudPlacement.PoolID
+	}
+
 	if cfg.Workload == provider.Worker {
 		labels[owned.LabelHealth] = ""
 	}

@@ -7,17 +7,18 @@ import (
 )
 
 type ServerWorkload struct {
-	ProjectID     string `json:"project_id"`
-	EnvironmentID string `json:"environment_id"`
-	Service       string `json:"service"`
-	PlanID        string `json:"plan_id"`
-	DeploymentID  string `json:"deployment_id,omitempty"`
-	PoolID        string `json:"pool_id"`
-	BindingID     string `json:"binding_id,omitempty"`
-	Phase         string `json:"phase"`
-	Active        bool   `json:"active"`
-	CPUMillis     int64  `json:"cpu_millis"`
-	MemoryBytes   int64  `json:"memory_bytes"`
+	ExecutionRevision int64  `json:"execution_revision"`
+	ProjectID         string `json:"project_id"`
+	EnvironmentID     string `json:"environment_id"`
+	Service           string `json:"service"`
+	PlanID            string `json:"plan_id"`
+	DeploymentID      string `json:"deployment_id,omitempty"`
+	PoolID            string `json:"pool_id"`
+	BindingID         string `json:"binding_id,omitempty"`
+	Phase             string `json:"phase"`
+	Active            bool   `json:"active"`
+	CPUMillis         int64  `json:"cpu_millis"`
+	MemoryBytes       int64  `json:"memory_bytes"`
 }
 
 // RetainedPoolStorage reports cleanup that deliberately preserved storage.
@@ -53,7 +54,7 @@ func (s *PgStore) serverUsage(ctx context.Context, org, cloud, id string) (*Serv
 		return nil, err
 	}
 	out := &ServerUsage{ServerID: id, Draining: server.Draining, Workloads: []ServerWorkload{}, RetainedStorage: []RetainedPoolStorage{}}
-	rows, err := s.db.Query(ctx, `SELECT r.project_id,r.environment_id,r.service,r.plan_id,coalesce(d.id,''),r.pool_id,r.binding_id,CASE WHEN r.binding_id<>'' THEN CASE WHEN b.config->'cloud_placement'->>'server_id'=r.server_id THEN 'serving' ELSE 'replaced' END WHEN x.phase<>'reserved' THEN x.phase WHEN x.active THEN 'running' WHEN x.started THEN 'pending_recovery' ELSE 'reserved' END,coalesce(x.active,false),r.cpu_millis,r.memory_bytes FROM loomplane_capacity_reservations r LEFT JOIN loomplane_pool_execution x ON x.org_id=r.org_id AND x.plan_id=r.plan_id AND x.service=r.service LEFT JOIN loomplane_deployments d ON d.org_id=r.org_id AND d.plan_id=r.plan_id LEFT JOIN loomplane_bindings b ON b.id=r.binding_id WHERE r.org_id=$1 AND r.server_id=$2 ORDER BY r.project_id,r.environment_id,r.service,r.plan_id`, org, id)
+	rows, err := s.db.Query(ctx, `SELECT r.project_id,r.environment_id,r.service,r.plan_id,coalesce(d.id,''),r.pool_id,r.binding_id,CASE WHEN r.binding_id<>'' THEN CASE WHEN b.config->'cloud_placement'->>'server_id'=r.server_id THEN 'serving' ELSE 'replaced' END WHEN x.phase<>'reserved' THEN x.phase WHEN x.active THEN 'running' WHEN x.started THEN 'pending_recovery' ELSE 'reserved' END,coalesce(x.active,false),coalesce(x.revision,0),r.cpu_millis,r.memory_bytes FROM loomplane_capacity_reservations r LEFT JOIN loomplane_pool_execution x ON x.org_id=r.org_id AND x.plan_id=r.plan_id AND x.service=r.service LEFT JOIN loomplane_deployments d ON d.org_id=r.org_id AND d.plan_id=r.plan_id LEFT JOIN loomplane_bindings b ON b.id=r.binding_id WHERE r.org_id=$1 AND r.server_id=$2 ORDER BY r.project_id,r.environment_id,r.service,r.plan_id`, org, id)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +62,7 @@ func (s *PgStore) serverUsage(ctx context.Context, org, cloud, id string) (*Serv
 	totals := map[string][2]int64{}
 	for rows.Next() {
 		var v ServerWorkload
-		if scanErr := rows.Scan(&v.ProjectID, &v.EnvironmentID, &v.Service, &v.PlanID, &v.DeploymentID, &v.PoolID, &v.BindingID, &v.Phase, &v.Active, &v.CPUMillis, &v.MemoryBytes); scanErr != nil {
+		if scanErr := rows.Scan(&v.ProjectID, &v.EnvironmentID, &v.Service, &v.PlanID, &v.DeploymentID, &v.PoolID, &v.BindingID, &v.Phase, &v.Active, &v.ExecutionRevision, &v.CPUMillis, &v.MemoryBytes); scanErr != nil {
 			return nil, scanErr
 		}
 		out.Workloads = append(out.Workloads, v)

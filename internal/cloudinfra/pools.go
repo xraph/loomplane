@@ -128,6 +128,15 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('pool-config/'||$1,0))`, p.OrgID); err != nil {
 		return err
 	}
+
+	// Lock every verified alias before the shared daemon admission lock. Approval
+	// takes connection locks in the same order, then these same identity locks.
+	if _, err = tx.Exec(ctx, `SELECT c.id FROM loomplane_cloud_connections c WHERE c.cloud='server' AND c.details->>'docker_id' IN (SELECT body->'health'->>'docker_id' FROM loomplane_cloud_servers WHERE org_id=$1 AND (id=ANY($2::text[]) OR id IN (SELECT server_id FROM loomplane_server_pool_members WHERE pool_id=$3))) ORDER BY c.id FOR UPDATE`, p.OrgID, memberIDs(p.Members), p.ID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('host-admission/'||identity,0)) FROM (SELECT DISTINCT body->'health'->>'docker_id' identity FROM loomplane_cloud_servers WHERE org_id=$1 AND (id=ANY($2::text[]) OR id IN (SELECT server_id FROM loomplane_server_pool_members WHERE pool_id=$3)) ORDER BY identity) identities`, p.OrgID, memberIDs(p.Members), p.ID); err != nil {
+		return err
+	}
 	rows, err := tx.Query(ctx, `SELECT id FROM loomplane_cloud_servers WHERE org_id=$1 AND (id=ANY($2::text[]) OR id IN (SELECT server_id FROM loomplane_server_pool_members WHERE pool_id=$3)) ORDER BY id FOR UPDATE`, p.OrgID, memberIDs(p.Members), p.ID)
 	if err != nil {
 		return err
@@ -156,7 +165,7 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 			return checkErr
 		}
 		var unmanaged bool
-		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_bindings WHERE org_id=$1 AND connection_id=$2 AND coalesce(config->'cloud_placement'->>'pool_id','')='') OR EXISTS(SELECT 1 FROM loomplane_plans p CROSS JOIN LATERAL jsonb_array_elements(coalesce(p.result->'actions','[]')) a WHERE p.org_id=$1 AND p.status='approved' AND a->>'connection_id'=$2 AND coalesce(a->'service'->'cloud_placement'->>'pool_id','')='' AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.plan_id=p.id AND d.status='succeeded'))`, p.OrgID, v.RuntimeConnectionID).Scan(&unmanaged); checkErr != nil {
+		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_bindings WHERE (config->'target_settings'->>'docker_id'=$1 OR connection_id IN(SELECT id FROM loomplane_cloud_connections WHERE details->>'docker_id'=$1)) AND coalesce(config->'cloud_placement'->>'pool_id','')='') OR EXISTS(SELECT 1 FROM loomplane_plans p CROSS JOIN LATERAL jsonb_array_elements(coalesce(p.result->'actions','[]')) a WHERE p.status='approved' AND (a->'service'->'target_settings'->>'docker_id'=$1 OR a->>'connection_id' IN(SELECT id FROM loomplane_cloud_connections WHERE details->>'docker_id'=$1)) AND coalesce(a->'service'->'cloud_placement'->>'pool_id','')='' AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.plan_id=p.id AND d.status='succeeded'))`, v.Health.DockerID).Scan(&unmanaged); checkErr != nil {
 			return checkErr
 		}
 		if unmanaged {

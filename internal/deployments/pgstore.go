@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 )
@@ -147,6 +148,9 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	if guardErr := cloudinfra.GuardPoolWrite(ctx, tx); guardErr != nil {
+		return guardErr
+	}
 	var raw []byte
 	err = tx.QueryRow(ctx, `SELECT steps FROM loomplane_deployments WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {

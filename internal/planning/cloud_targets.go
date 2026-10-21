@@ -355,7 +355,7 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 }
 
 func (s *PgStore) PooledConnections(ctx context.Context, org string) (map[string]bool, error) {
-	rows, err := s.db.Query(ctx, `SELECT DISTINCT s.runtime_connection_id FROM loomplane_cloud_servers s JOIN loomplane_server_pool_members m ON m.server_id=s.id WHERE s.org_id=$1 AND s.status NOT IN ('deleted','disconnected')`, org)
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT c.id FROM loomplane_cloud_connections c JOIN loomplane_cloud_servers s ON (s.runtime_connection_id=c.id OR (coalesce(c.details->>'docker_id','')<>'' AND c.details->>'docker_id'=s.body->'health'->>'docker_id')) JOIN loomplane_server_pool_members m ON m.server_id=s.id WHERE c.org_id=$1 AND c.cloud='server' AND s.status NOT IN ('deleted','disconnected')`, org)
 	if err != nil {
 		return nil, err
 	}

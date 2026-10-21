@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/page"
 )
 
@@ -364,19 +365,21 @@ func (s *PgStore) RecordDrift(ctx context.Context, orgID, id, drift, message str
 // in an environment, replacing what was recorded before.
 func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 	id := syncMutation(ctx)
-	if id == "" {
-		return putBinding(ctx, s.db, b)
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
+	if guardErr := cloudinfra.GuardPoolWrite(ctx, tx); guardErr != nil {
+		return guardErr
+	}
 	if err := putBinding(ctx, tx, b); err != nil {
 		return err
 	}
-	if err := s.checkpointCloudBinding(ctx, tx, id, b.OrgID, b.ID); err != nil {
-		return err
+	if id != "" {
+		if err := s.checkpointCloudBinding(ctx, tx, id, b.OrgID, b.ID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -410,15 +413,24 @@ func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {
 
 // SetReplaced implements Store.
 func (s *PgStore) SetReplaced(ctx context.Context, orgID, id string, replaced []Binding) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // no-op after commit
+	if guardErr := cloudinfra.GuardPoolWrite(ctx, tx); guardErr != nil {
+		return guardErr
+	}
+
 	raw, err := encodeReplaced(replaced)
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE loomplane_bindings SET replaced = $3 WHERE org_id = $1 AND id = $2`,
+	if _, err := tx.Exec(ctx, `UPDATE loomplane_bindings SET replaced = $3 WHERE org_id = $1 AND id = $2`,
 		orgID, id, raw); err != nil {
 		return fmt.Errorf("record what binding %s replaced: %w", id, err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // encodeReplaced is what a binding replaced as it's stored: a list,
@@ -436,10 +448,19 @@ func encodeReplaced(replaced []Binding) ([]byte, error) {
 
 // DeleteBinding implements Store.
 func (s *PgStore) DeleteBinding(ctx context.Context, orgID, id string) error {
-	if _, err := s.db.Exec(ctx, `DELETE FROM loomplane_bindings WHERE org_id = $1 AND id = $2`, orgID, id); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // no-op after commit
+	if guardErr := cloudinfra.GuardPoolWrite(ctx, tx); guardErr != nil {
+		return guardErr
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM loomplane_bindings WHERE org_id = $1 AND id = $2`, orgID, id); err != nil {
 		return fmt.Errorf("delete binding: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // EnvironmentConnections implements Store.

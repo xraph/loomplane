@@ -79,15 +79,13 @@ func (s *Service) RecoverReservation(ctx context.Context, p security.Principal, 
 	if in.Review == "" || v.Review != in.Review {
 		return nil, ErrConflict
 	}
-	if v.Active {
-		return nil, fmt.Errorf("%w: resume the recorded deployment to reconcile its interrupted worker before abandonment", ErrConflict)
-	}
+
 	if v.Started && s.PoolCleanup == nil {
 		return nil, fmt.Errorf("%w: runtime cleanup unavailable", ErrConflict)
 	}
 	// Conditional update also fences an attempt entering after this review.
-	var revision int64
-	err = st.db.QueryRow(ctx, `UPDATE loomplane_pool_execution SET phase='cleanup',revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND revision=$4 AND NOT active RETURNING revision`, p.OrgID, in.PlanID, in.Service, v.Revision).Scan(&revision)
+	var revision, generation int64
+	err = st.db.QueryRow(ctx, `UPDATE loomplane_pool_execution SET phase='cleanup',active=false,generation=generation+1,revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND revision=$4 RETURNING revision,generation`, p.OrgID, in.PlanID, in.Service, v.Revision).Scan(&revision, &generation)
 	if err != nil {
 		return nil, ErrConflict
 	}
@@ -95,13 +93,13 @@ func (s *Service) RecoverReservation(ctx context.Context, p security.Principal, 
 		var checkpoint []byte
 		err = st.db.QueryRow(ctx, `SELECT checkpoint FROM loomplane_pool_execution WHERE org_id=$1 AND plan_id=$2 AND service=$3`, p.OrgID, in.PlanID, in.Service).Scan(&checkpoint)
 		if err == nil {
-			err = s.PoolCleanup.CleanupPoolReservation(ctx, p.OrgID, in.PlanID, in.Service, checkpoint, func(raw []byte) error {
-				_, e := st.db.Exec(ctx, `UPDATE loomplane_pool_execution SET checkpoint=$4 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND phase='cleanup'`, p.OrgID, in.PlanID, in.Service, raw)
+			err = s.PoolCleanup.CleanupPoolReservation(WithExecutionScope(ctx, ExecutionScope{p.OrgID, in.PlanID, in.Service, generation}), p.OrgID, in.PlanID, in.Service, checkpoint, func(raw []byte) error {
+				e := st.db.QueryRow(ctx, `UPDATE loomplane_pool_execution SET checkpoint=$4 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND phase='cleanup' AND generation=$5 RETURNING generation`, p.OrgID, in.PlanID, in.Service, raw, generation).Scan(new(int64))
 				return e
 			})
 		}
 		if err != nil {
-			_, saveErr := st.db.Exec(context.WithoutCancel(ctx), `UPDATE loomplane_pool_execution SET phase='blocked',revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3`, p.OrgID, in.PlanID, in.Service)
+			_, saveErr := st.db.Exec(context.WithoutCancel(ctx), `UPDATE loomplane_pool_execution SET phase='blocked',revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND generation=$4`, p.OrgID, in.PlanID, in.Service, generation)
 			if saveErr != nil {
 				return nil, saveErr
 			}
@@ -110,7 +108,12 @@ func (s *Service) RecoverReservation(ctx context.Context, p security.Principal, 
 			return v, fmt.Errorf("%w: exact owned compute cleanup could not be verified; restore the recorded connection or reconcile its checkpoint", ErrConflict)
 		}
 	}
-	// The lock remains held. No runtime effect or pending worker may now enter.
+	// The same transaction validates ownership before releasing capacity. A lost
+	// locking session or superseded cleanup can never publish a release.
+	var current int64
+	if err = lock.tx.QueryRow(ctx, `SELECT generation FROM loomplane_pool_execution WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND generation=$4 AND phase='cleanup' FOR UPDATE`, p.OrgID, in.PlanID, in.Service, generation).Scan(&current); err != nil {
+		return nil, ErrConflict
+	}
 	if _, err = lock.tx.Exec(ctx, `DELETE FROM loomplane_capacity_reservations WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND binding_id=''`, p.OrgID, in.PlanID, in.Service); err != nil {
 		return nil, err
 	}

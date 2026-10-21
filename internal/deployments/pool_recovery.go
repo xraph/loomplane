@@ -20,6 +20,7 @@ type poolWorkloadCleaner interface {
 // CleanupPoolReservation uses the reservation's retained cleanup authority. It
 // deliberately does not authorize a new deployment or resolve a current target.
 func (r *Runner) CleanupPoolReservation(ctx context.Context, org, planID, service string, checkpoint []byte, save func([]byte) error) error {
+	ctx = poolEffectContext(ctx)
 	plan, err := r.plans.GetPlan(ctx, org, planID)
 	if err != nil {
 		return err
@@ -62,6 +63,9 @@ func (r *Runner) CleanupPoolReservation(ctx context.Context, org, planID, servic
 		return errors.New("provider cannot verify exact pending compute cleanup")
 	}
 	job := &Job{Deployment: d, Plan: plan, Action: action, Connection: conn, Credential: credential, Replaces: step.Replaced, Resume: readReplaceCheckpoint(step.Checkpoint).Apply, Progress: func(string, string) {}}
+	if fenceErr := preparePoolEffects(ctx, r.executors[action.Provider], job); fenceErr != nil {
+		return fenceErr
+	}
 	return cleaner.CleanupPoolWorkload(ctx, job, checkpoint, save)
 }
 
