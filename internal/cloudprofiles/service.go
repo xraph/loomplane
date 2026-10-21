@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,7 +17,11 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-const maxName = 64
+const (
+	maxName = 64
+	maxTags = 16
+	maxTag  = 32
+)
 
 var slugPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
@@ -63,9 +68,17 @@ func NewService(d Deps) *Service {
 	return &Service{store: d.Store, projects: d.Projects, connections: d.Connections, providers: d.Providers, authz: d.Authz, audit: d.Audit, now: time.Now}
 }
 
-// CreateInput names a new Cloud.
+// CreateInput names a new Cloud. DefaultPlacement is optional.
 type CreateInput struct {
-	Name string `json:"name"`
+	Name             string            `json:"name"`
+	DefaultPlacement *DefaultPlacement `json:"default_placement,omitempty"`
+}
+
+// SetDefaultPlacementInput replaces a Cloud's default at an expected revision.
+// A null placement clears it.
+type SetDefaultPlacementInput struct {
+	DefaultPlacement *DefaultPlacement `json:"default_placement" nullable:"true" required:"true"`
+	Revision         int64             `json:"revision"`
 }
 
 // UpdateInput renames a Cloud at an expected revision.
@@ -83,12 +96,16 @@ type CreateTargetInput struct {
 	Provider     string `json:"provider"`
 	ConnectionID string `json:"connection_id"`
 	Region       string `json:"region"`
+	// Tags are lowercase slugs, such as frontend, eu or gpu.
+	Tags []string `json:"tags,omitempty"`
 }
 
-// UpdateTargetInput edits display metadata at an expected revision.
+// UpdateTargetInput edits display metadata at an expected revision. Omitted
+// tags stay as they are; an empty list removes them all.
 type UpdateTargetInput struct {
-	DisplayName string `json:"display_name"`
-	Revision    int64  `json:"revision"`
+	DisplayName string    `json:"display_name"`
+	Tags        *[]string `json:"tags,omitempty"`
+	Revision    int64     `json:"revision"`
 }
 
 func (s *Service) scope(ctx context.Context, p security.Principal, projectID string, permission security.Permission) error {
@@ -119,6 +136,49 @@ func name(value string) (string, error) {
 	}
 	return value, nil
 }
+
+// normalizeTags returns sorted, distinct tags or explains the first bad one.
+func normalizeTags(in []string) ([]string, error) {
+	out := make([]string, 0, len(in))
+	for _, tag := range in {
+		tag = strings.TrimSpace(tag)
+		if len(tag) > maxTag || !slugPattern.MatchString(tag) {
+			return nil, fmt.Errorf("%w: tag %q must be a lowercase slug of at most %d characters", ErrInvalid, tag, maxTag)
+		}
+		out = append(out, tag)
+	}
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if len(out) > maxTags {
+		return nil, fmt.Errorf("%w: a target can carry at most %d tags", ErrInvalid, maxTags)
+	}
+	return out, nil
+}
+
+// defaultPlacement checks a Cloud default like a managed target's placement.
+func (s *Service) defaultPlacement(ctx context.Context, orgID string, in *DefaultPlacement) (*DefaultPlacement, error) {
+	if in == nil {
+		return nil, nil
+	}
+	out := &DefaultPlacement{Provider: strings.TrimSpace(in.Provider), ConnectionID: strings.TrimSpace(in.ConnectionID), Region: strings.TrimSpace(in.Region)}
+	if out.Provider == "" || out.ConnectionID == "" {
+		return nil, fmt.Errorf("%w: a default placement needs one provider and one connection", ErrInvalid)
+	}
+	if err := s.placement(ctx, orgID, CreateTargetInput{Runtime: "managed", Provider: out.Provider, ConnectionID: out.ConnectionID, Region: out.Region}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// placementAttributes is an untyped nil for an absent default, so audit
+// readers see null rather than an empty object.
+func placementAttributes(p *DefaultPlacement) any {
+	if p == nil {
+		return nil
+	}
+	return map[string]any{"provider": p.Provider, "connection_id": p.ConnectionID, "region": p.Region}
+}
+
 func (s *Service) record(ctx context.Context, p security.Principal, projectID, action string, attributes map[string]any) {
 	if s.audit != nil {
 		s.audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", ProjectID: projectID, Principal: p, Attributes: attributes})
@@ -142,16 +202,20 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err != nil {
 		return nil, err
 	}
+	fallback, err := s.defaultPlacement(ctx, p.OrgID, in.DefaultPlacement)
+	if err != nil {
+		return nil, err
+	}
 	id, err := typeid.Generate("cloud")
 	if err != nil {
 		return nil, fmt.Errorf("generate cloud id: %w", err)
 	}
 	now := s.now().UTC()
-	c := &Profile{ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, Name: value, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	c := &Profile{ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, Name: value, DefaultPlacement: fallback, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := s.store.CreateProfile(ctx, c); err != nil {
 		return nil, err
 	}
-	s.record(ctx, p, projectID, "cloud.create", map[string]any{"cloud_id": c.ID, "revision": c.Revision})
+	s.record(ctx, p, projectID, "cloud.create", map[string]any{"cloud_id": c.ID, "revision": c.Revision, "default_placement": placementAttributes(fallback)})
 	return c, nil
 }
 
@@ -186,6 +250,36 @@ func (s *Service) Update(ctx context.Context, p security.Principal, projectID, i
 		return nil, err
 	}
 	s.record(ctx, p, projectID, "cloud.update", map[string]any{"cloud_id": c.ID, "revision": c.Revision})
+	return c, nil
+}
+
+// SetDefaultPlacement sets, replaces or clears the Cloud's single default
+// provider and account. Replacing or clearing one is refused while any
+// environment uses the Cloud, because it would move serving services without
+// a reviewed sync.
+func (s *Service) SetDefaultPlacement(ctx context.Context, p security.Principal, projectID, id string, in SetDefaultPlacementInput) (*Profile, error) {
+	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
+		return nil, err
+	}
+	c, err := s.store.GetProfile(ctx, p.OrgID, projectID, id)
+	if err != nil {
+		return nil, err
+	}
+	if in.Revision != c.Revision {
+		return nil, ErrConflict
+	}
+	fallback, err := s.defaultPlacement(ctx, p.OrgID, in.DefaultPlacement)
+	if err != nil {
+		return nil, err
+	}
+	before := c.DefaultPlacement
+	c.DefaultPlacement = fallback
+	c.Revision++
+	c.UpdatedAt = s.now().UTC()
+	if err := s.store.UpdateProfile(ctx, c, in.Revision); err != nil {
+		return nil, err
+	}
+	s.record(ctx, p, projectID, "cloud.default_placement", map[string]any{"cloud_id": c.ID, "revision": c.Revision, "before": placementAttributes(before), "after": placementAttributes(fallback)})
 	return c, nil
 }
 
@@ -253,16 +347,20 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	if placementErr := s.placement(ctx, p.OrgID, in); placementErr != nil {
 		return nil, placementErr
 	}
+	tags, err := normalizeTags(in.Tags)
+	if err != nil {
+		return nil, err
+	}
 	id, err := typeid.Generate("target")
 	if err != nil {
 		return nil, fmt.Errorf("generate target id: %w", err)
 	}
 	now := s.now().UTC()
-	target := &Target{Runtime: in.Runtime, PoolID: in.PoolID, ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, CloudID: cloudID, Name: in.Name, DisplayName: display, Provider: in.Provider, ConnectionID: in.ConnectionID, Region: in.Region, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	target := &Target{Runtime: in.Runtime, PoolID: in.PoolID, ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, CloudID: cloudID, Name: in.Name, DisplayName: display, Provider: in.Provider, ConnectionID: in.ConnectionID, Region: in.Region, Tags: tags, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := s.store.CreateTarget(ctx, target); err != nil {
 		return nil, err
 	}
-	s.record(ctx, p, projectID, "cloud_target.create", map[string]any{"cloud_id": cloudID, "target_id": target.ID, "revision": target.Revision})
+	s.record(ctx, p, projectID, "cloud_target.create", map[string]any{"cloud_id": cloudID, "target_id": target.ID, "revision": target.Revision, "tags": tags})
 	return target, nil
 }
 func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetInput) error {
@@ -291,7 +389,9 @@ func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetIn
 	return fmt.Errorf("%w: choose a ready connection for %s", ErrInvalid, capability.Cloud)
 }
 
-// UpdateTarget changes the display name only. Placement changes require review.
+// UpdateTarget changes the display name and tags. DefaultPlacement changes require
+// review. A tag change reaches services on their next reviewed plan, and
+// advances the revision so plans approved against the old tags go stale.
 func (s *Service) UpdateTarget(ctx context.Context, p security.Principal, projectID, cloudID, id string, in UpdateTargetInput) (*Target, error) {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
@@ -307,13 +407,23 @@ func (s *Service) UpdateTarget(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
+	attributes := map[string]any{"cloud_id": cloudID, "target_id": id}
+	if in.Tags != nil {
+		tags, tagErr := normalizeTags(*in.Tags)
+		if tagErr != nil {
+			return nil, tagErr
+		}
+		attributes["tags_before"], attributes["tags"] = target.Tags, tags
+		target.Tags = tags
+	}
 	target.DisplayName = display
 	target.Revision++
 	target.UpdatedAt = s.now().UTC()
 	if err := s.store.UpdateTarget(ctx, target, in.Revision); err != nil {
 		return nil, err
 	}
-	s.record(ctx, p, projectID, "cloud_target.update", map[string]any{"cloud_id": cloudID, "target_id": id, "revision": target.Revision})
+	attributes["revision"] = target.Revision
+	s.record(ctx, p, projectID, "cloud_target.update", attributes)
 	return target, nil
 }
 

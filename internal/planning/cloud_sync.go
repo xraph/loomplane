@@ -121,7 +121,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if e != nil {
 			return nil, e
 		}
-		desired = &cloudprofiles.Assignment{OrgID: p.OrgID, ProjectID: project, EnvironmentID: in.EnvironmentID, CloudID: profile.ID, CloudRevision: profile.Revision, Revision: in.Revision + 1}
+		desired = &cloudprofiles.Assignment{OrgID: p.OrgID, ProjectID: project, EnvironmentID: in.EnvironmentID, CloudID: profile.ID, CloudRevision: profile.Revision, Revision: in.Revision + 1, DefaultPlacement: profile.DefaultPlacement}
 		for _, t := range targets {
 			desired.Targets = append(desired.Targets, *t)
 		}
@@ -211,6 +211,10 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 					if len(g.TargetIDs) > 0 && !slices.Contains(g.TargetIDs, target.ID) {
 						return nil, cloudprofiles.ErrConflict
 					}
+				}
+				// Like Resolve: only a grant covering the whole Cloud reaches its default.
+				if len(g.TargetIDs) > 0 {
+					after.DefaultPlacement = nil
 				}
 
 				after.GrantRevision = g.Revision

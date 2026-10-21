@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudProjectGrantList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativeRecoverySources, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, Server, ServerList, ServerOptions, ServerUsage, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudProjectGrantList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativeRecoverySources, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, Server, ServerList, ServerOptions, ServerUsage, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -32,6 +32,7 @@ export const useOrganizationCloudSyncsCompleteRouting = mutation<Sync, Sync>(ops
 export const useOrganizationCloudsGet = query<Profile>(ops['organizationClouds.get']);
 export const useOrganizationCloudsUpdate = mutation<Profile, Profile>(ops['organizationClouds.update']);
 export const useOrganizationCloudsDelete = mutation(ops['organizationClouds.delete']);
+export const useOrganizationCloudsSetDefaultPlacement = mutation<Profile, Profile>(ops['organizationClouds.setDefaultPlacement']);
 export const useInfrastructureOperationsList = query<OperationList>(ops['infrastructureOperations.list']);
 export const useInfrastructureOperationsGet = query<Operation>(ops['infrastructureOperations.get']);
 export const useInfrastructureOperationsApply = mutation<Operation, Operation>(ops['infrastructureOperations.apply']);
@@ -70,6 +71,11 @@ export const useConnectionStorageList = query<StorageVolumeList>(ops['connection
 export const useDeploymentsGet = query<Deployment>(ops['deployments.get']);
 export const useDeploymentsLogs = query<LogPage>(ops['deployments.logs']);
 export const useDeploymentsRetry = mutation<Deployment, Deployment>(ops['deployments.retry']);
+export const useDnsZonesList = query<ZoneList>(ops['dnsZones.list']);
+export const useDnsZonesCreate = mutation<Zone, Zone>(ops['dnsZones.create']);
+export const useDnsZonesRemove = mutation(ops['dnsZones.remove']);
+export const useDnsZonesUpdate = mutation<Zone, Zone>(ops['dnsZones.update']);
+export const useDnsZonesVerify = mutation<Zone, Zone>(ops['dnsZones.verify']);
 export const useGithubStatus = query<GitHubStatus>(ops['github.status']);
 export const useGithubConnect = mutation<GitHubInstallation, GitHubInstallation>(ops['github.connect']);
 export const useGithubDisconnect = mutation(ops['github.disconnect']);
@@ -119,6 +125,7 @@ export const useCloudsCreate = mutation<Profile, Profile>(ops['clouds.create']);
 export const useCloudsGet = query<Profile>(ops['clouds.get']);
 export const useCloudsUpdate = mutation<Profile, Profile>(ops['clouds.update']);
 export const useCloudsDelete = mutation(ops['clouds.delete']);
+export const useCloudsSetDefaultPlacement = mutation<Profile, Profile>(ops['clouds.setDefaultPlacement']);
 export const useCloudTargetsList = query<CloudTargetList>(ops['cloudTargets.list']);
 export const useCloudTargetsCreate = mutation<Target, Target>(ops['cloudTargets.create']);
 export const useCloudTargetsGet = query<Target>(ops['cloudTargets.get']);
@@ -153,6 +160,19 @@ export const useSourcesDelete = mutation(ops['sources.delete']);
 export const useProjectVariablesList = query<VariableList>(ops['projectVariables.list']);
 export const useProjectVariablesCreate = mutation<Variable, Variable>(ops['projectVariables.create']);
 export const useVariablesResolve = query<Resolution>(ops['variables.resolve']);
+export const useDnsZonesProject = query<ProjectZoneList>(ops['dnsZones.project']);
+export const useDomainRoutesList = query<DomainRouteList>(ops['domainRoutes.list']);
+export const useDomainRoutesPreview = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.preview']);
+export const useDomainRoutesHistory = query<DomainOperationList>(ops['domainRoutes.history']);
+export const useDomainRoutesPrepareHandoff = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.prepareHandoff']);
+export const useDomainRoutesRemove = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.remove']);
+export const useDomainRoutesVerify = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.verify']);
+export const useDomainRoutesOperation = query<RouteOperation>(ops['domainRoutes.operation']);
+export const useDomainRoutesApply = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.apply']);
+export const useDomainRoutesCutover = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.cutover']);
+export const useDomainRoutesReleaseHandoff = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.releaseHandoff']);
+export const useDomainRoutesRetry = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.retry']);
+export const useDomainRoutesRollback = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.rollback']);
 export const useProvidersList = query<ProviderList>(ops['providers.list']);
 export const usePublicConfigGet = query<PublicConfig>(ops['publicConfig.get']);
 export const useRealtimeEvents = query(ops['realtime.events']);

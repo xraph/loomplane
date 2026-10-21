@@ -48,12 +48,22 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			blocked(b.Name, "This deployed service needs a named Cloud target; remove or adopt its reference before unassigning the Cloud.")
 			continue
 		}
-		ti := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.Name == pin.TargetName })
-		if ti < 0 {
-			blocked(b.Name, "The proposed Cloud is missing target "+pin.TargetName+".")
-			continue
+		var t cloudprofiles.Target
+		if pin.Default {
+			d := assignment.DefaultPlacement
+			if d == nil {
+				blocked(b.Name, "The proposed Cloud has no default placement this project may use.")
+				continue
+			}
+			t = cloudprofiles.Target{Runtime: "managed", Provider: d.Provider, ConnectionID: d.ConnectionID, Region: d.Region}
+		} else {
+			ti := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.Name == pin.TargetName })
+			if ti < 0 {
+				blocked(b.Name, "The proposed Cloud is missing target "+pin.TargetName+".")
+				continue
+			}
+			t = assignment.Targets[ti]
 		}
-		t := assignment.Targets[ti]
 		if t.PoolID != "" {
 			placement, found := pools[b.Name]
 			if !found || placement.PoolID != t.PoolID {
@@ -100,7 +110,7 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			blocked(b.Name, "The destination cannot preserve the applied scale and size settings.")
 		}
 		cfg.Provider, cfg.Region, cfg.Execution = prov.Name, region, runs.Execution
-		cfg.CloudPlacement = &CloudPlacement{GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: pin.RegionSource}
+		cfg.CloudPlacement = &CloudPlacement{Default: pin.Default, GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: pin.RegionSource}
 		if placement, found := pools[b.Name]; found && t.PoolID != "" {
 			cfg.CloudPlacement = &placement
 		}

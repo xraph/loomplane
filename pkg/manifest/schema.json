@@ -21,6 +21,17 @@
         },
         "region": {
           "$ref": "#/$defs/region"
+        },
+        "cloud_tags": {
+          "description": "Select a Cloud target by tags for every service with no placement of its own. Can't be set with provider.",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+          }
         }
       }
     },
@@ -191,6 +202,17 @@
           "type": "string",
           "maxLength": 48,
           "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        },
+        "cloud_tags": {
+          "description": "Select the one target in this environment's assigned Cloud that carries every tag. Can't be set with cloud_target.",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+          }
         },
         "provider": {
           "$ref": "#/$defs/provider"

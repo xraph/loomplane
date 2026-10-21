@@ -1013,6 +1013,12 @@
           "resource": {
             "$ref": "#/components/schemas/ResourceConfig"
           },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudinfraRoute"
+            }
+          },
           "service": {
             "$ref": "#/components/schemas/ServiceConfig"
           },
@@ -1123,6 +1129,9 @@
           "account_identity": {
             "type": "string"
           },
+          "allocation": {
+            "type": "string"
+          },
           "assignment_revision": {
             "type": "integer"
           },
@@ -1140,6 +1149,9 @@
           },
           "cpu_millis": {
             "type": "integer"
+          },
+          "default": {
+            "type": "boolean"
           },
           "grant_revision": {
             "type": "integer"
@@ -1179,9 +1191,121 @@
           }
         }
       },
+      "CloudinfraRoute": {
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/RouteBinding"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "input": {
+            "$ref": "#/components/schemas/RouteInput"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/DNSRecord"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/RouteVerification"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "input",
+          "binding",
+          "status",
+          "operation_id",
+          "verification",
+          "revision",
+          "updated_at"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.Route"
+      },
+      "DNSRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "zone_id",
+          "name",
+          "type",
+          "value",
+          "ttl"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "zone_id": {
+            "type": "string"
+          }
+        }
+      },
+      "DefaultPlacement": {
+        "type": "object",
+        "required": [
+          "provider",
+          "connection_id",
+          "region"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      },
       "Defaults": {
         "type": "object",
         "properties": {
+          "cloud_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "provider": {
             "type": "string"
           },
@@ -1353,6 +1477,29 @@
             "type": "string"
           }
         }
+      },
+      "GatewayRoute": {
+        "properties": {
+          "env": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "strip_prefix": {
+            "type": "boolean"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "to",
+          "env"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/gateway.Route"
       },
       "GraphSummary": {
         "properties": {
@@ -1703,24 +1850,122 @@
           }
         }
       },
-      "Route": {
+      "RouteBinding": {
         "type": "object",
         "required": [
-          "path",
-          "to",
-          "env"
+          "runtime_id",
+          "binding_id",
+          "config_digest",
+          "server_id",
+          "target_id",
+          "connection_id",
+          "connection_generation",
+          "instance_id",
+          "release_id",
+          "container_id",
+          "address"
         ],
         "properties": {
-          "env": {
+          "address": {
             "type": "string"
           },
-          "path": {
+          "binding_id": {
             "type": "string"
           },
-          "strip_prefix": {
+          "config_digest": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "container_id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "runtime_id": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RouteInput": {
+        "type": "object",
+        "required": [
+          "zone_id",
+          "cloud_id",
+          "environment_id",
+          "service",
+          "hostname",
+          "port"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "zone_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RouteVerification": {
+        "type": "object",
+        "required": [
+          "dns",
+          "tls",
+          "backend",
+          "checked_at",
+          "cert_expires"
+        ],
+        "properties": {
+          "backend": {
             "type": "boolean"
           },
-          "to": {
+          "backend_error": {
+            "type": "string"
+          },
+          "cert_expires": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dns": {
+            "type": "boolean"
+          },
+          "dns_error": {
+            "type": "string"
+          },
+          "tls": {
+            "type": "boolean"
+          },
+          "tls_error": {
             "type": "string"
           }
         }
@@ -1794,7 +2039,7 @@
           "gateway": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Route"
+              "$ref": "#/components/schemas/GatewayRoute"
             }
           },
           "health_path": {
@@ -2265,6 +2510,7 @@
           "org_id",
           "project_id",
           "name",
+          "default_placement",
           "revision",
           "created_at",
           "updated_at"
@@ -2273,6 +2519,20 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "default_placement": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DefaultPlacement"
+              },
+              {
+                "type": "object",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "id": {
             "type": "string",
@@ -2359,6 +2619,7 @@
           "provider",
           "connection_id",
           "region",
+          "tags",
           "revision",
           "created_at",
           "updated_at"
@@ -2404,6 +2665,12 @@
           },
           "runtime": {
             "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "updated_at": {
             "type": "string",
@@ -3504,6 +3771,7 @@
             "org_id",
             "project_id",
             "name",
+            "default_placement",
             "revision",
             "created_at",
             "updated_at"
@@ -3512,6 +3780,20 @@
             "created_at": {
               "type": "string",
               "format": "date-time"
+            },
+            "default_placement": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/DefaultPlacement"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
             },
             "id": {
               "type": "string",
@@ -3548,6 +3830,7 @@
             "org_id",
             "project_id",
             "name",
+            "default_placement",
             "revision",
             "created_at",
             "updated_at"
@@ -3556,6 +3839,20 @@
             "created_at": {
               "type": "string",
               "format": "date-time"
+            },
+            "default_placement": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/DefaultPlacement"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
             },
             "id": {
               "type": "string",
@@ -3654,6 +3951,7 @@
             "provider",
             "connection_id",
             "region",
+            "tags",
             "revision",
             "created_at",
             "updated_at"
@@ -3699,6 +3997,12 @@
             },
             "runtime": {
               "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "updated_at": {
               "type": "string",
@@ -3725,6 +4029,7 @@
             "provider",
             "connection_id",
             "region",
+            "tags",
             "revision",
             "created_at",
             "updated_at"
@@ -3770,6 +4075,12 @@
             },
             "runtime": {
               "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "updated_at": {
               "type": "string",

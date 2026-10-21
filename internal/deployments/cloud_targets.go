@@ -39,7 +39,7 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	if r.cloudProfiles == nil {
 		return stale("cannot be revalidated because the Cloud resolver is unavailable")
 	}
-	if pin.AccountIdentity == "" || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || pin.TargetRevision < 1 {
+	if pin.AccountIdentity == "" || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || !pin.Default && pin.TargetRevision < 1 {
 		return stale("has no verified identity or revision")
 	}
 	if pin.Provider != a.Provider || a.Service.Provider != a.Provider || pin.ConnectionID != a.ConnectionID || pin.Region != a.Region || a.Service.Region != a.Region {
@@ -64,13 +64,21 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	if assignment == nil || assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.EnvironmentID != plan.EnvironmentID || assignment.CloudID != pin.CloudID || assignment.CloudRevision != pin.CloudRevision || assignment.Revision != pin.AssignmentRevision || !retained && (pin.GrantRevision > 0 && assignment.GrantRevision != pin.GrantRevision || pin.GrantRevision == 0 && assignment.GrantRevision > 1) {
 		return stale("assignment changed since review or is outside this scope")
 	}
-	i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.ID == pin.TargetID })
-	if i < 0 {
-		return stale("is missing from the assigned Cloud")
-	}
-	target := assignment.Targets[i]
-	if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || (pin.PoolID == "" && target.ConnectionID != pin.ConnectionID) || target.PoolID != pin.PoolID {
-		return stale("changed since review or is outside this scope")
+	if pin.Default {
+		// The Cloud revision already pins its default; check it is still reachable.
+		d := assignment.DefaultPlacement
+		if d == nil || pin.TargetID != "" || pin.PoolID != "" || d.Provider != pin.Provider || d.ConnectionID != pin.ConnectionID {
+			return stale("default placement changed since review or is outside this grant")
+		}
+	} else {
+		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.ID == pin.TargetID })
+		if i < 0 {
+			return stale("is missing from the assigned Cloud")
+		}
+		target := assignment.Targets[i]
+		if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || (pin.PoolID == "" && target.ConnectionID != pin.ConnectionID) || target.PoolID != pin.PoolID {
+			return stale("changed since review or is outside this scope")
+		}
 	}
 	if pin.PoolID != "" {
 		validator, ok := r.plans.(interface {

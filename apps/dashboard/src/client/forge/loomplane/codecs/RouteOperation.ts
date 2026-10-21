@@ -1,0 +1,5 @@
+import type { Codec } from '../codec-runtime';
+import { codec_CloudinfraRoute } from './CloudinfraRoute';
+import { codec_DNSRecord } from './DNSRecord';
+
+export const codec_RouteOperation: Codec = {"kind": "object", "fields": {"attempt": {"ts": "attempt"}, "created_at": {"ts": "createdAt"}, "desired_record": {"ts": "desiredRecord", "codec": () => codec_DNSRecord}, "dns_attempted": {"ts": "dnsAttempted"}, "expires_at": {"ts": "expiresAt"}, "generation": {"ts": "generation"}, "handoff_id": {"ts": "handoffId"}, "id": {"ts": "id"}, "kind": {"ts": "kind"}, "message": {"ts": "message"}, "not_before": {"ts": "notBefore"}, "previous_receipt": {"ts": "previousReceipt", "codec": () => codec_DNSRecord}, "receipt": {"ts": "receipt", "codec": () => codec_DNSRecord}, "review": {"ts": "review"}, "revision": {"ts": "revision"}, "route": {"ts": "route", "codec": () => codec_CloudinfraRoute}, "source": {"ts": "source", "codec": () => codec_CloudinfraRoute}, "status": {"ts": "status"}}, "required": ["attempt", "created_at", "desired_record", "dns_attempted", "expires_at", "generation", "id", "kind", "message", "not_before", "review", "revision", "route", "status"]};
