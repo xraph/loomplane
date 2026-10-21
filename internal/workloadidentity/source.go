@@ -5,8 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"net/url"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,8 +26,7 @@ type Source struct {
 }
 
 func OpenSource(ctx context.Context, address, expectedURI string) (*Source, error) {
-	socket, err := url.Parse(address)
-	if err != nil || socket.Scheme != "unix" || socket.Host != "" || socket.User != nil || socket.RawQuery != "" || socket.Fragment != "" || !filepath.IsAbs(socket.Path) || filepath.Clean(socket.Path) != socket.Path || socket.RawPath != "" {
+	if !domain.ValidWorkloadAPIAddress(address) {
 		return nil, ErrIdentity
 	}
 	expected, err := spiffeid.FromString(expectedURI)

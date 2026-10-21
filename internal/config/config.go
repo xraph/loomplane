@@ -72,9 +72,10 @@ type Config struct {
 	Providers     ProvidersConfig
 }
 
-// FederationConfig enables destination management. It does not activate runtime traffic.
+// FederationConfig keeps management and the agent listener independently configured.
 type FederationConfig struct {
 	Enabled bool
+	Runtime FederationRuntimeConfig
 }
 
 // ProvidersConfig adds deployment targets Loomplane doesn't ship with.
@@ -382,6 +383,12 @@ func FromSource(src Getter) (Config, error) {
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
+	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
+	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
+	r.str(&c.Federation.Runtime.OrganizationID, "federation.runtime.organization_id")
+	r.str(&c.Federation.Runtime.TrustDomain, "federation.runtime.trust_domain")
+	r.str(&c.Federation.Runtime.WorkloadAPI, "federation.runtime.workload_api")
+	r.str(&c.Federation.Runtime.SigningKeysFile, "federation.runtime.signing_keys_file")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -395,7 +402,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment))
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate())
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:
