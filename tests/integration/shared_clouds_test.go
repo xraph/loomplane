@@ -4,16 +4,19 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/migrate"
 
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/ops"
+	"github.com/xraph/loomplane/internal/page"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
@@ -325,5 +328,179 @@ func TestSharedCloudProjectCannotManageSharedInfrastructure(t *testing.T) {
 	}
 	if _, err := service.PreviewCloudChange(t.Context(), actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", EnvironmentID: "env", Revision: 0}); err != nil {
 		t.Fatalf("project release authority rejected: %v", err)
+	}
+}
+
+func TestSharedCloudRevokedPreviewKeepsTargetsPrivate(t *testing.T) {
+	st, conn, db := cloudSyncDatabase(t)
+	ctx := t.Context()
+	hidden, err := st.GetTarget(ctx, "org", "proj", "cloud", "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden.ID, hidden.Name, hidden.Region = "never-granted-target", "private-target", "private-region"
+	if err = st.CreateTarget(ctx, hidden); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.SetProjectGrant(ctx, "org", "cloud", "proj", []string{"target"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`); err != nil {
+		t.Fatal(err)
+	}
+	service := planning.NewService(planning.Deps{Store: planning.NewPgStore(db), Projects: projects.NewPgStore(db), CloudProfiles: st, Connections: &syncAccounts{store: connections.NewPgStore(db)}, Providers: providers.Registry(), Authz: sharedProjectAuthorizer{}})
+	actor := security.Principal{OrgID: "org", UserID: "developer"}
+	authorizedPreview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", Revision: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorizedPreview.BeforeAssignment == nil || len(authorizedPreview.BeforeAssignment.Targets) != 1 || authorizedPreview.BeforeAssignment.Targets[0].ID != "target" {
+		t.Fatalf("allowed preview target missing: %+v", authorizedPreview.BeforeAssignment)
+	}
+	if _, err = st.SetProjectGrant(ctx, "org", "cloud", "proj", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", Revision: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(preview *cloudprofiles.Preview) {
+		t.Helper()
+		if preview.BeforeAssignment == nil || preview.BeforeAssignment.CloudID != "cloud" {
+			t.Fatalf("retained assignment reference missing: %+v", preview.BeforeAssignment)
+		}
+		if len(preview.BeforeAssignment.Targets) != 0 {
+			t.Errorf("revoked preview exposed target configurations: %+v", preview.BeforeAssignment.Targets)
+		}
+	}
+	check(preview)
+	stored, err := service.CloudPreview(ctx, actor, "proj", preview.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(stored)
+	stored, err = service.CloudPreview(ctx, actor, "proj", authorizedPreview.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(stored)
+	retained, err := st.RetainedAssignment(ctx, "org", "proj", "env")
+	if err != nil || len(retained.Targets) != 2 {
+		t.Fatalf("private retained comparison state lost: %+v %v", retained, err)
+	}
+}
+
+func insertSharedCloudHistory(t *testing.T, conn *pgx.Conn, org, id, project string, participants []cloudprofiles.EnvironmentSnapshot, at time.Time) {
+	t.Helper()
+	sync := cloudprofiles.Sync{ID: id, OrgID: org, ProjectID: project, PreviewID: id + "-preview", TargetID: "target", CloudID: "cloud", Status: cloudprofiles.SyncSucceeded, CreatedAt: at, UpdatedAt: at, Error: "another project's error"}
+	for _, participant := range participants {
+		sync.Environments = append(sync.Environments, cloudprofiles.EnvironmentChange{ProjectID: participant.ProjectID, EnvironmentID: participant.EnvironmentID, Services: []string{participant.EnvironmentID + "-service"}})
+	}
+	body, err := json.Marshal(sync)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := json.Marshal(cloudprofiles.Snapshot{Environments: participants})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(t.Context(), `INSERT INTO loomplane_cloud_previews(id,org_id,project_id,revision,body,snapshot,created_at) VALUES($1,$2,$3,'digest','{}',$4,$5)`, sync.PreviewID, org, project, snapshot, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(t.Context(), `INSERT INTO loomplane_cloud_syncs(id,org_id,project_id,preview_id,idempotency_key,status,body,snapshot,created_at,updated_at) VALUES($1,$2,$3,$4,$1,'succeeded',$5,$6,$7,$7)`, id, org, project, sync.PreviewID, body, snapshot, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type sharedHistoryAuthorizer struct{ project string }
+
+func (a sharedHistoryAuthorizer) Require(_ context.Context, _ security.Principal, permission security.Permission, resource string) error {
+	if permission == security.OrganizationCloudManage || resource != a.project {
+		return security.ErrForbidden
+	}
+	return nil
+}
+
+func TestSharedCloudParticipantHistoryAndPagination(t *testing.T) {
+	st, conn, db := cloudSyncDatabase(t)
+	ctx := t.Context()
+	if _, err := conn.Exec(ctx, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('second','org','Second','second','ready','usr',now(),now()),('third','org','Third','third','ready','usr',now(),now())`); err != nil {
+		t.Fatal(err)
+	}
+	shared := []cloudprofiles.EnvironmentSnapshot{{ProjectID: "proj", EnvironmentID: "env"}, {ProjectID: "second", EnvironmentID: "second-env"}}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	insertSharedCloudHistory(t, conn, "org", "old-legacy", "second", []cloudprofiles.EnvironmentSnapshot{{EnvironmentID: "second-env"}}, now.Add(-4*time.Second))
+	insertSharedCloudHistory(t, conn, "org", "compat-shared", "proj", shared, now.Add(-3*time.Second))
+	insertSharedCloudHistory(t, conn, "org", "hidden-middle", "third", []cloudprofiles.EnvironmentSnapshot{{ProjectID: "third", EnvironmentID: "private-env"}}, now.Add(-2*time.Second))
+	insertSharedCloudHistory(t, conn, "org", "organization-shared", "", shared, now.Add(-time.Second))
+	insertSharedCloudHistory(t, conn, "org", "hidden-newest", "third", nil, now)
+	service := planning.NewService(planning.Deps{Projects: projects.NewPgStore(db), CloudProfiles: st, Authz: sharedHistoryAuthorizer{project: "second"}})
+	actor := security.Principal{OrgID: "org", UserID: "developer"}
+	for _, id := range []string{"organization-shared", "compat-shared", "old-legacy"} {
+		sync, err := service.CloudSync(ctx, actor, "second", id)
+		if err != nil {
+			t.Errorf("participant lookup %s: %v", id, err)
+			continue
+		}
+		if len(sync.Environments) != 1 || sync.Environments[0].EnvironmentID != "second-env" || sync.Error != "" {
+			t.Errorf("participant view: %+v", sync)
+		}
+	}
+	for _, id := range []string{"hidden-middle", "hidden-newest"} {
+		if _, err := service.CloudSync(ctx, actor, "second", id); !errors.Is(err, cloudprofiles.ErrNotFound) {
+			t.Errorf("unrelated operation discovered: %s %v", id, err)
+		}
+	}
+	if _, err := service.CloudSync(ctx, security.Principal{OrgID: "other"}, "second", "organization-shared"); !errors.Is(err, cloudprofiles.ErrNotFound) {
+		t.Errorf("cross-org operation discovered: %v", err)
+	}
+	if _, _, err := service.CloudSyncPage(ctx, actor, "third", page.Cursor{}, 1); !errors.Is(err, security.ErrForbidden) {
+		t.Errorf("unauthorized project history: %v", err)
+	}
+	var cursor page.Cursor
+	for i, id := range []string{"organization-shared", "compat-shared", "old-legacy"} {
+		rows, next, err := service.CloudSyncPage(ctx, actor, "second", cursor, 1)
+		if err != nil || len(rows) != 1 || rows[0].ID != id {
+			t.Errorf("eligible page %d: %+v %v", i, rows, err)
+			break
+		}
+		if len(rows[0].Environments) != 1 || rows[0].Environments[0].EnvironmentID != "second-env" {
+			t.Errorf("page leaked participants: %+v", rows[0])
+		}
+		if (i == 2) != next.IsZero() {
+			t.Errorf("page count exposed ineligible operations: next=%+v", next)
+		}
+		cursor = next
+	}
+	rows, err := service.CloudSyncs(ctx, actor, "second")
+	if err != nil || len(rows) != 3 {
+		t.Errorf("participant history: %+v %v", rows, err)
+	}
+	if _, _, err := st.GetSync(ctx, "org", "second", "organization-shared"); !errors.Is(err, cloudprofiles.ErrNotFound) {
+		t.Errorf("read view broadened internal mutation lookup: %v", err)
+	}
+}
+
+func TestSharedCloudOrganizationSyncListAPI(t *testing.T) {
+	cfg, r, c, org, project := cloudAPISetup(t)
+	defer r.stop()
+	conn, err := pgx.Connect(t.Context(), cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	insertSharedCloudHistory(t, conn, org, "existing-project-operation", project, nil, time.Now().UTC().Truncate(time.Microsecond))
+	var list struct {
+		Syncs []cloudprofiles.Sync `json:"syncs"`
+		Next  string               `json:"next"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/clouds/syncs", nil, &list)
+	if len(list.Syncs) != 1 || list.Syncs[0].ID != "existing-project-operation" || list.Next != "" {
+		t.Fatalf("organization history: %+v", list)
+	}
+	var sync cloudprofiles.Sync
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/clouds/syncs/existing-project-operation", nil, &sync)
+	if sync.ID != "existing-project-operation" {
+		t.Fatalf("organization read: %+v", sync)
 	}
 }

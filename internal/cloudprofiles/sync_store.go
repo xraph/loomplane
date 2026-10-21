@@ -25,6 +25,7 @@ type SyncStore interface {
 	GetPreview(context.Context, string, string, string) (*Preview, *Snapshot, error)
 	Accept(context.Context, *Preview, *Snapshot, *Sync, string) (*Sync, error)
 	GetSync(context.Context, string, string, string) (*Sync, *Snapshot, error)
+	GetSyncView(context.Context, string, string, string) (*Sync, error)
 	ListSyncs(context.Context, string, string) ([]*Sync, error)
 	PendingSyncs(context.Context) ([]*Sync, error)
 	SaveSync(context.Context, *Sync, *Snapshot) error
@@ -357,9 +358,21 @@ func (s *PgStore) GetSync(ctx context.Context, org, project, id string) (*Sync, 
 	return readSync(s.db.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND id=$3`, org, project, id))
 }
 
-// ListSyncs lists a project's durable operation history.
+// syncViewScope includes original operations and immutable recorded participants.
+// An empty project is reserved for an authorized organization view.
+const syncViewScope = `($2='' OR s.project_id=$2 OR EXISTS (
+ SELECT 1 FROM jsonb_array_elements(coalesce(nullif(s.snapshot->'environments','null'::jsonb),'[]'::jsonb)) participant
+ WHERE coalesce(nullif(participant->>'project_id',''),s.project_id)=$2))`
+
+// GetSyncView reads history without broadening GetSync's execution scope.
+func (s *PgStore) GetSyncView(ctx context.Context, org, project, id string) (*Sync, error) {
+	sync, _, err := readSync(s.db.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` AND id=$3`, org, project, id))
+	return sync, err
+}
+
+// ListSyncs lists eligible operation history for an organization or project.
 func (s *PgStore) ListSyncs(ctx context.Context, org, project string) ([]*Sync, error) {
-	return s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 ORDER BY created_at DESC LIMIT 100`, org, project)
+	return s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` ORDER BY created_at DESC,id DESC LIMIT 100`, org, project)
 }
 
 // PendingSyncs is the durable outbox read on startup and periodically.
@@ -498,7 +511,7 @@ func (s *PgStore) ListSyncPage(ctx context.Context, org, project string, before 
 	if limit < 1 || limit > page.Max {
 		return nil, page.Cursor{}, page.ErrBadLimit
 	}
-	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND ($3='' OR (created_at,id)<($4,$3)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1)
+	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` AND ($3='' OR (created_at,id)<($4,$3)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1)
 	if err != nil {
 		return nil, page.Cursor{}, err
 	}

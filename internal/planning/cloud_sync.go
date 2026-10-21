@@ -297,6 +297,9 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	}
 	slices.Sort(snapshot.Connections)
 	snapshot.Connections = slices.Compact(snapshot.Connections)
+	if filterErr := s.filterCloudPreviewAssignments(ctx, p, preview); filterErr != nil {
+		return nil, filterErr
+	}
 	preview.Revision, err = Digest(struct {
 		Preview  *cloudprofiles.Preview
 		Snapshot *cloudprofiles.Snapshot
@@ -454,7 +457,7 @@ func (s *Service) CloudSync(ctx context.Context, p security.Principal, project, 
 	if err != nil {
 		return nil, err
 	}
-	sync, _, err := st.GetSync(ctx, p.OrgID, project, id)
+	sync, err := st.GetSyncView(ctx, p.OrgID, project, id)
 	if err == nil {
 		s.filterCloudParticipants(ctx, p, sync, project)
 	}
@@ -578,8 +581,10 @@ func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, proje
 	if err := s.authorizeCloudRead(ctx, p, project); err != nil {
 		return nil, page.Cursor{}, err
 	}
-	if _, err := s.projects.GetProject(ctx, p.OrgID, project); err != nil {
-		return nil, page.Cursor{}, err
+	if project != "" {
+		if _, err := s.projects.GetProject(ctx, p.OrgID, project); err != nil {
+			return nil, page.Cursor{}, err
+		}
 	}
 	st, ok := s.cloudProfiles.(interface {
 		ListSyncPage(context.Context, string, string, page.Cursor, int) ([]*cloudprofiles.Sync, page.Cursor, error)
@@ -613,7 +618,41 @@ func (s *Service) CloudPreview(ctx context.Context, p security.Principal, projec
 	if err == nil && preview.Input.TargetID != "" {
 		err = s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}
+	if err == nil {
+		err = s.filterCloudPreviewAssignments(ctx, p, preview)
+	}
 	return preview, err
+}
+
+// Assignment references survive revocation for removal and compensation. Target
+// configuration is visible only through the current grant; retained full state
+// stays in the private comparison snapshot and cleanup resolver.
+func (s *Service) filterCloudPreviewAssignments(ctx context.Context, p security.Principal, preview *cloudprofiles.Preview) error {
+	if s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID) == nil {
+		return nil
+	}
+	for _, field := range []**cloudprofiles.Assignment{&preview.BeforeAssignment, &preview.AfterAssignment} {
+		if *field == nil {
+			continue
+		}
+		assignment := **field
+		assignment.Targets = []cloudprofiles.Target{}
+		if grants, ok := s.cloudProfiles.(cloudprofiles.GrantStore); ok {
+			grant, err := grants.GetProjectGrant(ctx, p.OrgID, assignment.CloudID, preview.ProjectID)
+			if err != nil && !errors.Is(err, cloudprofiles.ErrNotFound) {
+				return err
+			}
+			if err == nil && !grant.Revoked {
+				for _, target := range (*field).Targets {
+					if len(grant.TargetIDs) == 0 || slices.Contains(grant.TargetIDs, target.ID) {
+						assignment.Targets = append(assignment.Targets, target)
+					}
+				}
+			}
+		}
+		*field = &assignment
+	}
+	return nil
 }
 
 func (s *Service) authorizeCloudRead(ctx context.Context, p security.Principal, project string) error {
