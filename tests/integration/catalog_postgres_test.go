@@ -48,7 +48,11 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 	cfg.Orchestration.PollInterval = 100 * time.Millisecond
 	cfg.Storage.URL = "file://" + t.TempDir()
 	running := start(t, cfg)
-	defer func() { running.stop() }()
+	defer func() {
+		if running != nil {
+			running.stop()
+		}
+	}()
 	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
 	var connection struct{ ID, Status string }
@@ -272,6 +276,7 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 		c.base = running.srv.URL
 		return running.app.(forge.App)
 	})
+	catalogRetirementCrash(t, c, &running, db, cfg, project.ID, backup.ID, socket)
 
 	outsider := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
 	var auth struct {
