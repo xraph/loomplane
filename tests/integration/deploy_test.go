@@ -242,8 +242,9 @@ func (f *fakeCloud) cloudSQL(r *http.Request, p string, body []byte, reply func(
 		var in map[string]any
 		_ = json.Unmarshal(body, &in)
 		name := in["name"].(string)
+		region, _ := in["region"].(string)
 		f.sql[name] = map[string]any{
-			"name": name, "connectionName": "acme-prod:us-central1:" + name,
+			"name": name, "connectionName": "acme-prod:" + region + ":" + name,
 			"databaseVersion": in["databaseVersion"], "state": "RUNNABLE",
 		}
 		reply(map[string]any{"name": "op-sql", "status": "PENDING"})

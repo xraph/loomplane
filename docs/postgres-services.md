@@ -8,7 +8,7 @@ The PostgreSQL profiles run one private instance with a digest-pinned image, ret
 
 ## Managed cloud services
 
-You can already provision managed resources through project manifests and their normal plan review. The service catalog's standalone database and recovery controls currently cover the Docker and Kubernetes profiles described here.
+You can provision managed resources through project manifests and their normal plan review. You can also prepare standalone RDS or Cloud SQL PostgreSQL plans with `loomctl`, as shown below. The dashboard deployment form and recovery controls currently cover the Docker and Kubernetes profiles described here.
 
 | Connected provider | Existing resource adapters                                       |
 | ------------------ | ---------------------------------------------------------------- |
@@ -71,6 +71,17 @@ loomctl services create "Cluster database" --provider kubernetes --target conn_y
 ```
 
 The Kubernetes catalog currently accepts PostgreSQL only. Review and approve the returned plan with the same `approve` command.
+
+For managed PostgreSQL 17, choose a checked AWS or Google Cloud account connection:
+
+```sh
+loomctl services create "Orders RDS" --provider rds --target conn_your_aws_account --json
+loomctl services create "Orders Cloud SQL" --provider cloud-sql --target conn_your_google_project --region europe-west1 --json
+```
+
+Here, `--target` chooses the environment's cloud account connection. Managed manifests use the provider's storage and contain no container target, image or mount. Selecting the account requires cloud account management access. If selection fails after project creation, the error includes that project's ID; no deployment plan is started.
+
+`--region` is optional for managed services. Cloud SQL uses its default region when you omit it. RDS uses the selected AWS connection's region and blocks a plan that requests a different one. Review the returned plan, connection and provider charges before approving it with `loomctl approve PLAN_ID --yes`. Plan creation does not provision the database. The managed CLI profiles currently accept PostgreSQL only, and the Docker/Kubernetes backup commands do not apply to them.
 
 Select MySQL or MariaDB when you create the service project:
 

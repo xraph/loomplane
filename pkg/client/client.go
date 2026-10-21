@@ -364,20 +364,22 @@ type Action struct {
 // Plan is what deploying a manifest to an environment would do, waiting
 // for someone to approve or reject it.
 type Plan struct {
-	ID           string       `json:"id"`
-	ProjectID    string       `json:"project_id"`
-	Environment  string       `json:"environment"`
-	Status       string       `json:"status"`
-	Revision     string       `json:"revision"`
-	Sources      []PlanSource `json:"sources"`
-	Executable   bool         `json:"executable"`
-	Error        string       `json:"error,omitempty"`
-	Actions      []Action     `json:"actions"`
-	Problems     []Finding    `json:"problems"`
-	Warnings     []Finding    `json:"warnings"`
-	DecidedBy    string       `json:"decided_by,omitempty"`
-	DecisionNote string       `json:"decision_note,omitempty"`
-	CreatedAt    time.Time    `json:"created_at"`
+	ID           string            `json:"id"`
+	ProjectID    string            `json:"project_id"`
+	Catalog      bool              `json:"catalog"`
+	Connections  map[string]string `json:"connections"`
+	Environment  string            `json:"environment"`
+	Status       string            `json:"status"`
+	Revision     string            `json:"revision"`
+	Sources      []PlanSource      `json:"sources"`
+	Executable   bool              `json:"executable"`
+	Error        string            `json:"error,omitempty"`
+	Actions      []Action          `json:"actions"`
+	Problems     []Finding         `json:"problems"`
+	Warnings     []Finding         `json:"warnings"`
+	DecidedBy    string            `json:"decided_by,omitempty"`
+	DecisionNote string            `json:"decision_note,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
 }
 
 // PlanSource is one repository a plan was made from, at the commit it
