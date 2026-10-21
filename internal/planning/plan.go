@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -76,6 +77,8 @@ const (
 
 // Action is one step of a plan.
 type Action struct {
+	Routes []cloudinfra.Route `json:"routes,omitempty"`
+
 	// AdoptCloudPlacement persists reviewed metadata without a provider call.
 	AdoptCloudPlacement bool           `json:"adopt_cloud_placement,omitempty"`
 	CloudAdoption       *CloudAdoption `json:"cloud_adoption,omitempty"`

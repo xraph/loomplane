@@ -12,7 +12,8 @@ import (
 
 // PlacementRequest is scoped to one service and its reviewed target.
 type PlacementRequest struct {
-	Allocation string
+	Allocation   string
+	TargetChange bool
 
 	PlanID                                                              string
 	Planned                                                             []PlannedPlacement
@@ -50,7 +51,7 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 		return nil, fmt.Errorf("%w: pool services need one bounded replica", ErrInvalid)
 	}
 	var allowed bool
-	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_targets t JOIN loomplane_cloud_project_grants g ON g.org_id=t.org_id AND g.cloud_id=t.cloud_id AND g.project_id=$2 AND NOT g.revoked WHERE t.org_id=$1 AND t.cloud_id=$3 AND t.id=$4 AND t.revision=$5 AND t.pool_id=$6 AND EXISTS(SELECT 1 FROM loomplane_environments e WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$7) AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids)))`, in.OrgID, in.ProjectID, in.CloudID, in.TargetID, in.TargetRevision, in.PoolID, in.EnvironmentID).Scan(&allowed); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_targets t JOIN loomplane_cloud_project_grants g ON g.org_id=t.org_id AND g.cloud_id=t.cloud_id AND g.project_id=$2 AND NOT g.revoked WHERE t.org_id=$1 AND t.cloud_id=$3 AND t.id=$4 AND t.revision=$5 AND ($8 OR t.pool_id=$6) AND EXISTS(SELECT 1 FROM loomplane_environments e WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$7) AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids)))`, in.OrgID, in.ProjectID, in.CloudID, in.TargetID, in.TargetRevision, in.PoolID, in.EnvironmentID, in.TargetChange).Scan(&allowed); err != nil {
 		return nil, err
 	}
 	if !allowed {

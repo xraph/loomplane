@@ -61,6 +61,13 @@ func TestSharedCloudRoutingOverlapCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCapacity(1000)
+	var sourceCount, candidateCount int
+	if err = f.sql.QueryRow(ctx, `SELECT count(*) FILTER(WHERE plan_id='route-source'),count(*) FILTER(WHERE plan_id='route-candidate') FROM loomplane_capacity_reservations`).Scan(&sourceCount, &candidateCount); err != nil || sourceCount != 0 || candidateCount != 1 {
+		t.Fatalf("exact cleanup: source=%d candidate=%d error=%v", sourceCount, candidateCount, err)
+	}
+	if err = f.store.ValidatePlacement(ctx, "org", "proj", "env", "route-candidate", "api", *candidate); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = f.store.PreviewPlacement(ctx, other); err != nil {
 		t.Fatal(err)
 	}

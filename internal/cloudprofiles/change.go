@@ -14,6 +14,9 @@ var ErrBusy = errors.New("environment has unfinished deployment or Cloud sync wo
 // ChangeInput selects either a target placement or an environment assignment.
 // Revision is the target revision, or the assignment generation (zero initially).
 type ChangeInput struct {
+	Runtime string `json:"runtime,omitempty"`
+	PoolID  string `json:"pool_id,omitempty"`
+
 	Revision      int64  `json:"revision"`
 	CloudID       string `json:"cloud_id"`
 	TargetID      string `json:"target_id,omitempty"`
@@ -112,8 +115,20 @@ type Snapshot struct {
 	Connections          []string              `json:"connections"`
 }
 
+// AcceptedPlan is the exact plan materialized by reviewed sync acceptance.
+type AcceptedPlan struct {
+	ID               string          `json:"id"`
+	Revision         string          `json:"revision"`
+	ManifestID       string          `json:"manifest_id"`
+	ManifestRevision int             `json:"manifest_revision"`
+	Result           json.RawMessage `json:"result"`
+}
+
 // EnvironmentSnapshot compares the complete serving set during acceptance.
 type EnvironmentSnapshot struct {
+	Routes       json.RawMessage `json:"routes,omitempty"`
+	AcceptedPlan *AcceptedPlan   `json:"accepted_plan,omitempty"`
+
 	ProjectID          string          `json:"project_id,omitempty"`
 	EnvironmentID      string          `json:"environment_id"`
 	AssignmentRevision int64           `json:"assignment_revision"`

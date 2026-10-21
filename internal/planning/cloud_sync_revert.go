@@ -48,10 +48,10 @@ func (s *Service) PreviewCloudRevert(ctx context.Context, p security.Principal, 
 		if e != nil {
 			return nil, e
 		}
-		if sync.After == nil || current.Provider != sync.After.Provider || current.ConnectionID != sync.After.ConnectionID || current.Region != sync.After.Region || current.Revision != sync.After.Revision {
+		if sync.After == nil || current.Provider != sync.After.Provider || current.ConnectionID != sync.After.ConnectionID || current.Region != sync.After.Region || current.Runtime != sync.After.Runtime || current.PoolID != sync.After.PoolID || current.Revision != sync.After.Revision {
 			return nil, cloudprofiles.ErrConflict
 		}
-		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, TargetID: sync.TargetID, Revision: current.Revision, Provider: sync.Before.Provider, ConnectionID: sync.Before.ConnectionID, Region: sync.Before.Region}
+		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, TargetID: sync.TargetID, Revision: current.Revision, Provider: sync.Before.Provider, ConnectionID: sync.Before.ConnectionID, Region: sync.Before.Region, Runtime: sync.Before.Runtime, PoolID: sync.Before.PoolID}
 	} else {
 		env := previous.Input.EnvironmentID
 		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env)

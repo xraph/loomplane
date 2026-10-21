@@ -93,8 +93,10 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if before.Revision != in.Revision {
 			return nil, cloudprofiles.ErrConflict
 		}
-		after := *before
-		after.Provider, after.ConnectionID, after.Region = in.Provider, in.ConnectionID, in.Region
+		after, targetErr := changedSyncTarget(*before, in)
+		if targetErr != nil {
+			return nil, targetErr
+		}
 		after.Revision++
 		after.UpdatedAt = preview.CreatedAt
 		preview.Before, preview.After = before, &after
@@ -105,7 +107,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		snapshot.ProfileRevisions[profile.ID] = profile.Revision
 		snapshot.TargetRevisions[before.ID] = before.Revision
 
-		if err = s.validateSyncTarget(after, options); err != nil {
+		if err = s.validateSyncTarget(ctx, after, options); err != nil {
 			preview.Blockers = append(preview.Blockers, err.Error())
 		}
 		snapshot.Connections = append(snapshot.Connections, before.ConnectionID, after.ConnectionID)
@@ -235,8 +237,19 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if bindings, e = decodeCloudBindings(raw); e != nil {
 			return nil, e
 		}
-		result := AppliedCloudPlan(bindings, after, in.TargetID, options, s.providers, assignment)
-		plan := &Plan{OrgID: p.OrgID, ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, CreatedBy: p.UserID, CreatedAt: preview.CreatedAt, Status: StatusApproved, DecidedBy: p.UserID}
+		plan := &Plan{ID: preview.ID + "/" + env.ID, OrgID: p.OrgID, ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, CreatedBy: p.UserID, CreatedAt: preview.CreatedAt, Status: StatusApproved, DecidedBy: p.UserID}
+		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, bindings, after, preview.Before, options)
+		if poolErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+poolErr.Error())
+		}
+		routes, routeErr := s.releaseRoutes(ctx, plan)
+		if routeErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
+		}
+		result := appliedCloudPlan(bindings, after, in.TargetID, options, s.providers, poolPlacements, routes)
+		if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings, preview.Before); routeErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
+		}
 		plan.setResult(result)
 		for _, finding := range result.Problems {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+finding.Name+": "+finding.Message)
@@ -251,7 +264,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 				continue
 			}
 			change.Services = append(change.Services, a.Name)
-			if a.Op == Replace && a.Service.Public {
+			if a.Op == Replace && a.Service.Public && len(a.Routes) == 0 {
 				change.ExternalRouting = true
 			}
 			if plan.ManifestID == "" {
@@ -277,11 +290,22 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		}
 		refs := snapshotConnections(bindings, plan)
 		snapshot.Connections = append(snapshot.Connections, refs...)
+		plan.Revision, e = Digest(plan.Actions)
+		if e != nil {
+			return nil, e
+		}
 		encoded, e := json.Marshal(plan)
 		if e != nil {
 			return nil, e
 		}
-		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
+		routeSnapshot, e := json.Marshal(routes)
+		if e != nil {
+			return nil, e
+		}
+		if string(routeSnapshot) == "null" {
+			routeSnapshot = []byte("[]")
+		}
+		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
 		preview.Environments = append(preview.Environments, change)
 	}
 	if !found {
@@ -313,7 +337,19 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	return preview, nil
 }
 
-func (s *Service) validateSyncTarget(t cloudprofiles.Target, options []ConnectionOption) error {
+func (s *Service) validateSyncTarget(ctx context.Context, t cloudprofiles.Target, options []ConnectionOption) error {
+	if t.Runtime == "server" {
+		if t.Provider != "server" || t.PoolID == "" || t.ConnectionID != "" {
+			return cloudprofiles.ErrInvalid
+		}
+		reader, ok := s.store.(interface {
+			ValidateSyncPool(context.Context, string, string, string) error
+		})
+		if !ok {
+			return errors.New("pool inventory is unavailable")
+		}
+		return reader.ValidateSyncPool(ctx, t.OrgID, t.CloudID, t.PoolID)
+	}
 	prov, err := s.providers.Get(t.Provider)
 	if err != nil {
 		return err
@@ -397,6 +433,9 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 	now := s.now().UTC()
 	sync := &cloudprofiles.Sync{ID: id.String(), OrgID: p.OrgID, ProjectID: project, CloudID: preview.Input.CloudID, TargetID: preview.Input.TargetID, PreviewID: previewID, Status: cloudprofiles.SyncPending, CreatedBy: p.UserID, Actor: p, Before: preview.Before, After: preview.After, Environments: slices.Clone(preview.Environments), Attempt: 1, CreatedAt: now, UpdatedAt: now, Reverts: preview.Reverts}
 	snapshot.Actor = p
+	if planErr := prepareAcceptedPlans(sync, snapshot); planErr != nil {
+		return nil, planErr
+	}
 	sync, err = st.Accept(ctx, preview, snapshot, sync, key)
 	if err != nil {
 		return nil, err

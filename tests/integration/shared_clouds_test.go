@@ -186,7 +186,8 @@ func TestSharedCloudMigrationPreservesInitialGrant(t *testing.T) {
 	dsn := freshDatabase(t)
 	legacy := migrate.NewGroup(migrations.GroupName)
 	for _, migration := range migrations.Group().Migrations() {
-		if migration.Name != "shared_clouds" {
+		// Rehearse the schema before shared Clouds and its dependent migrations.
+		if migration.Version < "20261020000900" {
 			legacy.MustRegister(migration)
 		}
 	}

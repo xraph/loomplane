@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/pkg/manifest"
@@ -18,8 +19,11 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 	return appliedCloudPlan(bindings, assignment, targetID, options, registry, nil)
 }
 
-func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement) *Result {
+func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, routes ...[]cloudinfra.Route) *Result {
 	p := &planner{in: Input{Providers: registry, Connections: options, CloudPlacements: map[string]CloudPlacement{}, Chosen: map[string]string{}}, services: map[string]*Action{}, resources: map[string]*Action{}, bindings: map[string]*Binding{}, clouds: map[string]bool{}, unready: map[string]string{}, held: map[string]string{}, removing: map[string]bool{}}
+	if len(routes) > 0 {
+		p.in.Routes = routes[0]
+	}
 	blocked := func(name, message string) {
 		p.problem(Finding{Code: "cloud-sync-blocked", Subject: ServiceSubject, Name: name, Message: message})
 	}
@@ -121,9 +125,10 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			a.Reason = "Adopt the reviewed Cloud placement."
 		}
 	}
+	p.routedReplacements()
 	// Follow the applied dependency graph transitively, including generated gateways.
 	for changed := true; changed; {
-		changed = false
+		changed = p.routedReplacements()
 		for _, a := range p.actions {
 			for i, link := range a.Service.Env {
 				if link.Subject == ResourceSubject {
