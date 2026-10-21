@@ -168,6 +168,8 @@ type DNSZoneSpec struct {
 
 // DNSRecord is the complete ownership receipt callers must persist. Owner is a
 // provider comment where supported; DigitalOcean ownership uses the recorded ID.
+// ID is the provider's current record version identity. A provider may rotate it
+// on update, so persist the returned receipt before further mutation or cleanup.
 // An empty Name means the zone apex, and names are relative to the zone.
 type DNSRecord struct {
 	ID     string `json:"id"`
@@ -180,8 +182,11 @@ type DNSRecord struct {
 }
 
 // DNSUpsertRequest creates only if Expected is nil and the name is unclaimed.
-// Updates require the exact prior receipt and cannot change ID, name or type.
-// ReconcileOnly forbids a new create after an earlier attempt became uncertain.
+// Updates supply the prior ID, name and type unchanged; the returned provider ID
+// may rotate. Expected must be the exact persisted prior receipt.
+// ReconcileOnly forbids a new create. For Vercel updates it performs read-only
+// reconciliation using the persisted owner and complete intended state, including
+// a provider-rotated ID, and returns ambiguity while that state is unresolved.
 type DNSUpsertRequest struct {
 	Zone          DNSZone    `json:"zone"`
 	Record        DNSRecord  `json:"record"`

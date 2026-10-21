@@ -294,6 +294,9 @@ func (c *Client) UpsertRecord(ctx context.Context, credential provider.Infrastru
 	if err != nil {
 		return provider.DNSRecord{}, err
 	}
+	if req.ReconcileOnly && req.Expected != nil {
+		return reconcileDNSUpdate(req, records)
+	}
 	prior, done, err := provider.PlanDNSUpsert(req, records, true)
 	if err != nil || done {
 		return prior, err
@@ -328,10 +331,51 @@ func (c *Client) UpsertRecord(ctx context.Context, credential provider.Infrastru
 		return provider.DNSRecord{}, errors.Join(provider.ErrInfrastructureAmbiguous, infrastructureError(err, "DNS write"))
 	}
 	actual := out.record(req.Zone.ID)
-	if out.Domain != req.Zone.Name || actual != req.Record {
+	desired := req.Record
+	desired.ID = actual.ID
+	if actual.ID == "" || out.Domain != req.Zone.Name || actual != desired {
 		return actual, provider.ErrInfrastructureAmbiguous
 	}
 	return actual, nil
+}
+
+// reconcileDNSUpdate recognizes a provider-rotated ID only from the exact
+// persisted owner and intended state. It never infers ownership from value alone
+// and never submits another mutation while its outcome remains unresolved.
+func reconcileDNSUpdate(req provider.DNSUpsertRequest, records []provider.DNSRecord) (provider.DNSRecord, error) {
+	if _, _, err := provider.PlanDNSUpsert(req, []provider.DNSRecord{*req.Expected}, true); err != nil {
+		return provider.DNSRecord{}, err
+	}
+	var recovered provider.DNSRecord
+	priorPresent := false
+	for _, current := range records {
+		if current.ID == req.Expected.ID && current.Name != req.Record.Name {
+			return provider.DNSRecord{}, provider.ErrInfrastructureDrift
+		}
+		if current.Name != req.Record.Name || (current.Type != req.Record.Type && current.Type != "CNAME" && req.Record.Type != "CNAME") {
+			continue
+		}
+		desired := req.Record
+		desired.ID = current.ID
+		switch current {
+		case desired:
+			if recovered.ID != "" {
+				return provider.DNSRecord{}, provider.ErrInfrastructureDrift
+			}
+			recovered = current
+		case *req.Expected:
+			priorPresent = true
+		default:
+			return provider.DNSRecord{}, provider.ErrInfrastructureDrift
+		}
+	}
+	if recovered.ID != "" {
+		if priorPresent {
+			return provider.DNSRecord{}, provider.ErrInfrastructureDrift
+		}
+		return recovered, nil
+	}
+	return provider.DNSRecord{}, provider.ErrInfrastructureAmbiguous
 }
 
 // DeleteRecord confirms exact ownership in the requested zone before calling

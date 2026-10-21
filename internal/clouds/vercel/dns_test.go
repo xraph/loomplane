@@ -14,12 +14,13 @@ import (
 )
 
 type dnsFixture struct {
-	records  []infrastructureRecord
-	writes   int
-	status   int
-	next     *int64
-	zoneTeam string
-	lastBody map[string]any
+	rotateIDs bool
+	records   []infrastructureRecord
+	writes    int
+	status    int
+	next      *int64
+	zoneTeam  string
+	lastBody  map[string]any
 }
 
 func newDNSFixture(t *testing.T) (*dnsFixture, *Client, provider.InfrastructureCredential, provider.DNSZone) {
@@ -62,12 +63,15 @@ func newDNSFixture(t *testing.T) (*dnsFixture, *Client, provider.InfrastructureC
 			data, _ := json.Marshal(f.lastBody)
 			_ = json.Unmarshal(data, &record)
 			record.ID = "rec_a"
+			if f.rotateIDs {
+				record.ID = "rec_b"
+			}
 			record.Domain = "example.test"
 			record.RecordType = record.Type
 			record.Type = "record"
 			f.records = []infrastructureRecord{record}
 			_ = json.NewEncoder(w).Encode(record)
-		case "DELETE /v2/domains/example.test/records/rec_a":
+		case "DELETE /v2/domains/example.test/records/rec_a", "DELETE /v2/domains/example.test/records/rec_b":
 			f.writes++
 			f.records = nil
 			w.WriteHeader(http.StatusOK)
@@ -236,5 +240,68 @@ func TestDNSZoneDiscoveryAndCreationPreserveRegistrarAndNameservers(t *testing.T
 	zones, err := c.ListZones(t.Context(), credential)
 	if err != nil || len(zones) != 1 || pages != 2 {
 		t.Fatalf("zones: %+v %v", zones, err)
+	}
+}
+
+func TestDNSUpdateAcceptsProviderRecordIDRotation(t *testing.T) {
+	f, c, credential, zone := newDNSFixture(t)
+	f.rotateIDs = true
+	prior := provider.DNSRecord{ID: "rec_a", ZoneID: zone.ID, Name: "test-api", Type: "TXT", Value: "test-v1", TTL: 60, Owner: "loomplane:route-1"}
+	f.records = []infrastructureRecord{{ID: prior.ID, Name: prior.Name, Type: prior.Type, Value: prior.Value, TTL: prior.TTL, Comment: prior.Owner}}
+	desired := prior
+	desired.Value = "test-v2"
+	updated, err := c.UpsertRecord(t.Context(), credential, provider.DNSUpsertRequest{Zone: zone, Record: desired, Expected: &prior})
+	want := desired
+	want.ID = "rec_b"
+	if err != nil || updated != want || f.writes != 1 {
+		t.Fatalf("provider ID rotation must return the current owned receipt: %+v %v", updated, err)
+	}
+	if err = c.DeleteRecord(t.Context(), credential, provider.DNSDeleteRequest{Zone: zone, Expected: updated}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDNSReconcileUpdateUsesExactOwnedDesiredReceipt(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*dnsFixture)
+		want   error
+	}{
+		{name: "rotated id"},
+		{name: "stable id", change: func(f *dnsFixture) { f.records[0].ID = "rec_a" }},
+		{name: "foreign owner", change: func(f *dnsFixture) { f.records[0].Comment = "loomplane:another-route" }, want: provider.ErrInfrastructureDrift},
+		{name: "unexpected value", change: func(f *dnsFixture) { f.records[0].Value = "unrelated" }, want: provider.ErrInfrastructureDrift},
+		{name: "unexpected ttl", change: func(f *dnsFixture) { f.records[0].TTL = 120 }, want: provider.ErrInfrastructureDrift},
+		{name: "duplicate owned candidates", change: func(f *dnsFixture) { other := f.records[0]; other.ID = "rec_c"; f.records = append(f.records, other) }, want: provider.ErrInfrastructureDrift},
+		{name: "foreign cname", change: func(f *dnsFixture) {
+			f.records = append(f.records, infrastructureRecord{ID: "foreign", Name: "test-api", Type: "CNAME", Value: "foreign.test", TTL: 60})
+		}, want: provider.ErrInfrastructureDrift},
+		{name: "missing attempted update", change: func(f *dnsFixture) { f.records = nil }, want: provider.ErrInfrastructureAmbiguous},
+		{name: "prior state still present", change: func(f *dnsFixture) { f.records[0].ID = "rec_a"; f.records[0].Value = "test-v1" }, want: provider.ErrInfrastructureAmbiguous},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c, credential, zone := newDNSFixture(t)
+			prior := provider.DNSRecord{ID: "rec_a", ZoneID: zone.ID, Name: "test-api", Type: "TXT", Value: "test-v1", TTL: 60, Owner: "loomplane:route-1"}
+			desired := prior
+			desired.Value = "test-v2"
+			f.records = []infrastructureRecord{{ID: "rec_b", Name: desired.Name, Type: desired.Type, Value: desired.Value, TTL: desired.TTL, Comment: desired.Owner}}
+			if tc.change != nil {
+				tc.change(f)
+			}
+			got, err := c.UpsertRecord(t.Context(), credential, provider.DNSUpsertRequest{Zone: zone, Record: desired, Expected: &prior, ReconcileOnly: true})
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("reconcile: %+v %v", got, err)
+				}
+			} else {
+				want := f.records[0].record(zone.ID)
+				if err != nil || got != want {
+					t.Fatalf("owned desired receipt: %+v %v", got, err)
+				}
+			}
+			if f.writes != 0 {
+				t.Fatal("reconciliation mutated provider state")
+			}
+		})
 	}
 }
