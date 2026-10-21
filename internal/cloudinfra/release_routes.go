@@ -187,7 +187,8 @@ func (s *Service) ValidateRuntimeRemoval(ctx context.Context, org, project, inst
 	return nil
 }
 
-// ReviewedRouteDrain never infers an external record's previous TTL from DNS observations.
+// ReviewedRouteDrain bounds reviewed input without inferring an external record's TTL.
+// ReleaseRouteHandoff independently extends the deadline using trusted provider receipts.
 func ReviewedRouteDrain(source Route, minimum int) (int, error) {
 	bound := source.Input.ExternalTTLSeconds
 	if bound != 0 && (bound < 60 || bound > 86400) {
@@ -197,11 +198,8 @@ func ReviewedRouteDrain(source Route, minimum int) (int, error) {
 		return 0, fmt.Errorf("%w: review the external DNS TTL using the route TTL update, then plan again before replacing its runtime", ErrConflict)
 	}
 	drain := max(60, minimum, bound)
-	if source.Receipt != nil {
-		drain = max(drain, source.Receipt.TTL)
-	}
 	if drain > 86400 {
-		return 0, fmt.Errorf("%w: DNS TTL exceeds the supported 86400 second drain bound", ErrInvalid)
+		return 0, fmt.Errorf("%w: reviewed drain exceeds the supported 86400 second bound", ErrInvalid)
 	}
 	return drain, nil
 }

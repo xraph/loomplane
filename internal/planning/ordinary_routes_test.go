@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/pkg/manifest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 func TestOrdinaryComputeRetainsRoutedRuntimeBeforeConsumerPropagation(t *testing.T) {
@@ -36,6 +37,14 @@ func TestOrdinaryComputeRetainsRoutedRuntimeBeforeConsumerPropagation(t *testing
 	in.Routes[0].Input.ExternalTTLSeconds = 0
 	if missing := Compute(in); missing.Executable {
 		t.Fatal("missing external TTL permitted replacement planning")
+	}
+	in.Routes[0].Receipt = &provider.DNSRecord{TTL: 90000}
+	if managed := Compute(in); !managed.Executable {
+		t.Fatal("trusted provider TTL prevented replacement planning", managed.Problems)
+	}
+	in.Routes[0].Input.ExternalTTLSeconds = 86401
+	if oversized := Compute(in); oversized.Executable {
+		t.Fatal("trusted provider receipt bypassed the external TTL input limit")
 	}
 	consumer := &Action{ID: "service:consumer", Name: "consumer", Op: Keep, Provider: "server", Service: &ServiceConfig{Env: []EnvLink{{From: "api", Subject: ServiceSubject}}}}
 	p := planner{services: map[string]*Action{"api": &changed, "consumer": consumer}, bindings: map[string]*Binding{bound.ID: bound}}

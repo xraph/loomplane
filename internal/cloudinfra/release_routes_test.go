@@ -104,7 +104,32 @@ func TestReleaseCoordinatorUsesReviewedExternalTTL(t *testing.T) {
 		})
 	}
 	source := Route{Input: RouteInput{ExternalTTLSeconds: 3600}, Receipt: &provider.DNSRecord{TTL: 7200}}
-	if delay, err := ReviewedRouteDrain(source, 60); err != nil || delay != 7200 {
-		t.Fatal("receipt TTL reduced", delay, err)
+	if delay, err := ReviewedRouteDrain(source, 60); err != nil || delay != 3600 {
+		t.Fatal("provider receipt changed the reviewed input", delay, err)
+	}
+}
+
+func TestReleaseCoordinatorHonorsLongManagedReceiptTTL(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		previous, current int
+	}{{"previous receipt", 90000, 60}, {"current receipt", 60, 90000}} {
+		t.Run(tt.name, func(t *testing.T) {
+			source := Route{ID: "route", OrgID: "org", ProjectID: "project", Status: "ready", Input: RouteInput{EnvironmentID: "env", Service: "web"}, Binding: RouteBinding{InstanceID: "old"}, Receipt: &provider.DNSRecord{TTL: tt.previous}}
+			destination := source
+			destination.Binding.InstanceID = "new"
+			destination.UpdatedAt = time.Now()
+			destination.Revision = 2
+			destination.Receipt = &provider.DNSRecord{TTL: tt.current}
+			st := &ttlReleaseStore{source: source, destination: destination}
+			svc := NewService(Deps{Store: st, Domains: st, Authz: cleanupTestAuth{}})
+			err := svc.ReconcileReleaseRoutes(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, ReleaseRouteRequest{Key: "plan/action", ProjectID: "project", EnvironmentID: "env", Service: "web", InstanceID: "new", Routes: []Route{source}, DrainSeconds: 60})
+			if !errors.Is(err, ErrPending) || st.accepted == nil {
+				t.Fatal("managed receipt prevented release acceptance", err)
+			}
+			if delay := st.accepted.NotBefore.Sub(destination.UpdatedAt); delay != 90000*time.Second {
+				t.Fatal("trusted receipt TTL was reduced", delay)
+			}
+		})
 	}
 }
