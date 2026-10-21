@@ -1,13 +1,20 @@
 import type { Connection, Recipe } from "@/client/forge/loomplane/types"
 import type { DatabaseKind } from "@/lib/catalog-recipes"
+import type { ManagedDatabaseProvider } from "@/lib/managed-catalog"
 
-export type DatabaseProvider = "server" | "kubernetes"
+export type DatabaseProvider = "server" | "kubernetes" | ManagedDatabaseProvider
 
 export function databaseTargetProvider(
   connection: Connection,
   kind: DatabaseKind
 ): DatabaseProvider | undefined {
   const details = connection.details
+  if (connection.status !== "ready") return
+  if (kind === "postgres" && connection.accountIdentity) {
+    if (connection.cloud === "aws" && connection.account && details.region)
+      return "rds"
+    if (connection.cloud === "gcp" && details.project_id) return "cloud-sql"
+  }
   if (
     connection.status !== "ready" ||
     !["amd64", "arm64"].includes(details.architecture)

@@ -6132,6 +6132,9 @@
           "account": {
             "type": "string"
           },
+          "account_identity": {
+            "type": "string"
+          },
           "checked_at": {
             "type": "string"
           },

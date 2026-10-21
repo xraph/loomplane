@@ -4,6 +4,7 @@ import { toast } from "sonner"
 
 import {
   useConnectionsList,
+  useProvidersList,
   useProjectsList,
   useEnvironmentsList,
   useBindingsList,
@@ -77,6 +78,11 @@ import { RecoveryPointRow } from "@/components/recovery-point-row"
 import { useRecoveryPolling } from "@/lib/recovery-polling"
 import { BackupSchedule } from "@/components/backup-schedule"
 import { useDeploymentWrites } from "@/lib/deployment-writes"
+import {
+  isManagedDatabaseProvider,
+  managedDatabaseProfile,
+} from "@/lib/managed-catalog"
+import { ManagedDatabaseSettings } from "@/components/managed-database-settings"
 
 export function ServiceCatalog() {
   const { can } = useOrganization()
@@ -156,27 +162,47 @@ function DatabaseDeployment({
 }) {
   const { can } = useOrganization()
   const connections = useQuery(useConnectionsList)
+  const providers = useQuery(useProvidersList)
+  const offers =
+    providers.status === "success" ? (providers.data?.providers ?? []) : []
   const [kind, setKind] = useState<DatabaseKind>("postgres")
   const targets =
-    connections.data?.connections.filter((connection) =>
-      databaseTargetProvider(connection, kind)
-    ) ?? []
+    connections.data?.connections.filter((connection) => {
+      const provider = databaseTargetProvider(connection, kind)
+      return (
+        !!provider &&
+        (!isManagedDatabaseProvider(provider) ||
+          !!managedDatabaseProfile(offers, provider))
+      )
+    }) ?? []
   const recipe = databaseRecipes[kind]
   const [name, setName] = useState<string>("PostgreSQL")
   const [target, setTarget] = useState("")
+  const [regionChoice, setRegionChoice] = useState({ target: "", value: "" })
   const [daily, setDaily] = useState(true)
   const [pending, setPending] = useState(false)
   const [progress, setProgress] = useState("")
   const [error, setError] = useState("")
   const [created, setCreated] = useState("")
+  const defaultTarget = targets[0]?.id ?? ""
+  if (
+    !target &&
+    defaultTarget &&
+    connections.status === "success" &&
+    providers.status !== "pending"
+  )
+    setTarget(defaultTarget)
+  const locked = pending || !!created
   const allowed = [
     "project:create",
     "project:update",
     "deployment:create",
     "deployment:approve",
   ].every(can)
-  const selected = targets.some((connection) => connection.id === target)
-    ? target
+  const selected = target
+    ? targets.some((connection) => connection.id === target)
+      ? target
+      : ""
     : (targets[0]?.id ?? "")
   const selectedTarget = targets.find(
     (connection) => connection.id === selected
@@ -184,11 +210,24 @@ function DatabaseDeployment({
   const targetProvider = selectedTarget
     ? databaseTargetProvider(selectedTarget, kind)
     : undefined
+  const managed = isManagedDatabaseProvider(targetProvider)
+  const profile = targetProvider
+    ? managedDatabaseProfile(offers, targetProvider)
+    : undefined
+  const selectedProvider = offers.find((offer) => offer.name === targetProvider)
+  const regions = managed
+    ? targetProvider === "rds"
+      ? [selectedTarget!.details.region]
+      : (selectedProvider?.regions ?? [])
+    : []
+  const region =
+    regionChoice.target === selected && regions.includes(regionChoice.value)
+      ? regionChoice.value
+      : (regions[0] ?? "")
   async function deploy() {
-    if (pending || !targetProvider) return
+    if (locked || !targetProvider) return
     setPending(true)
     setError("")
-    setCreated("")
     try {
       await deployDatabase(
         {
@@ -197,7 +236,15 @@ function DatabaseDeployment({
           target: selected,
           provider: targetProvider,
           targetSettings: selectedTarget?.details,
-          daily: daily && can("service_backup:manage"),
+          daily: !managed && daily && can("service_backup:manage"),
+          managed:
+            managed && profile
+              ? {
+                  profile,
+                  accountIdentity: selectedTarget!.accountIdentity!,
+                  region,
+                }
+              : undefined,
         },
         setProgress,
         (id) => {
@@ -223,11 +270,12 @@ function DatabaseDeployment({
           </Label>
           <Select
             value={kind}
-            disabled={pending}
+            disabled={locked}
             onValueChange={(value) => {
               if (!isDatabaseKind(value)) return
               if (name === recipe.title) setName(databaseRecipes[value].title)
               setKind(value)
+              setTarget("")
             }}
           >
             <SelectTrigger id="database-engine" className="w-full">
@@ -246,25 +294,40 @@ function DatabaseDeployment({
         </div>
 
         <Badge variant="secondary">
-          Single instance ·{" "}
-          {targetProvider === "kubernetes" ? "Kubernetes" : "Docker"}
+          {managed
+            ? `Managed · ${selectedProvider?.title}`
+            : targetProvider
+              ? `Single instance · ${targetProvider === "kubernetes" ? "Kubernetes" : "Docker"}`
+              : "Choose a target"}
         </Badge>
       </div>
-      <p className="mb-4 text-sm text-muted-foreground">
-        {targetProvider === "kubernetes"
-          ? `Private endpoint, restricted application role and a 10 GiB retained PVC on ${selectedTarget?.details.storage_class}. Restore copies require an enforcing NetworkPolicy CNI. Keep backups outside this cluster.`
-          : recipe.description}{" "}
-        Point-in-time recovery is not available in this profile.
-      </p>
+      {managed && profile ? (
+        <ManagedDatabaseSettings profile={profile} />
+      ) : targetProvider ? (
+        <p className="mb-4 text-sm text-muted-foreground">
+          {targetProvider === "kubernetes"
+            ? `Private endpoint, restricted application role and a 10 GiB retained PVC on ${selectedTarget?.details.storage_class}. Restore copies require an enforcing NetworkPolicy CNI. Keep backups outside this cluster.`
+            : recipe.description}{" "}
+          Point-in-time recovery is not available in this profile.
+        </p>
+      ) : null}
+      {providers.status === "error" && connections.status !== "error" && (
+        <QueryError
+          error={providers.error}
+          fallback="Could not load cloud profiles"
+          retry={providers.refetch}
+        />
+      )}
       {connections.status === "error" ? (
         <QueryError
           error={connections.error}
           fallback="Could not load targets"
           retry={connections.refetch}
         />
-      ) : connections.status === "pending" ? (
+      ) : connections.status === "pending" || providers.status === "pending" ? (
         <p role="status">Loading checked targets…</p>
-      ) : !targets.length ? (
+      ) : providers.status === "error" &&
+        !targets.length ? null : !targets.length ? (
         <CatalogEmpty
           title={
             kind === "postgres"
@@ -273,7 +336,7 @@ function DatabaseDeployment({
           }
           description={
             kind === "postgres"
-              ? "Check a Docker server or a Kubernetes namespace with a retained storage class, architecture and recovery permissions."
+              ? "Check an AWS or Google Cloud account, a Docker server, or a Kubernetes namespace with retained storage and recovery permissions."
               : "Add and check an SSH server connection before deploying a database."
           }
         >
@@ -300,7 +363,7 @@ function DatabaseDeployment({
               value={name}
               maxLength={100}
               required
-              disabled={pending || !allowed}
+              disabled={locked || !allowed}
               onChange={(e) => setName(e.target.value)}
             />
           </div>
@@ -308,7 +371,7 @@ function DatabaseDeployment({
             <Label htmlFor="database-target">Deployment target</Label>
             <Select
               value={selected}
-              disabled={pending || !allowed}
+              disabled={locked || !allowed}
               onValueChange={(value) => setTarget(value ?? "")}
             >
               <SelectTrigger id="database-target" className="w-full">
@@ -326,23 +389,61 @@ function DatabaseDeployment({
               </SelectContent>
             </Select>
           </div>
-          {can("service_backup:manage") && (
+          {managed && (
+            <div className="grid min-w-0 basis-full gap-1.5 sm:min-w-40 sm:flex-1 sm:basis-0">
+              <Label htmlFor="database-region">Region</Label>
+              {targetProvider === "rds" ? (
+                <Input id="database-region" readOnly value={region} />
+              ) : (
+                <Select
+                  value={region}
+                  onValueChange={(value) =>
+                    setRegionChoice({ target: selected, value: value ?? "" })
+                  }
+                  disabled={locked || !allowed}
+                >
+                  <SelectTrigger id="database-region" className="w-full">
+                    <SelectValue>{region || "Choose a region"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {regions.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {value}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          )}
+          {!managed && can("service_backup:manage") && (
             <label className="flex h-9 items-center gap-2 text-sm">
               <Checkbox
                 checked={daily}
                 onCheckedChange={(value) => setDaily(!!value)}
-                disabled={pending}
+                disabled={locked}
               />
               Daily backups
             </label>
           )}
           <Button
             type="submit"
-            disabled={pending || !allowed || !name.trim() || !selected}
+            disabled={
+              locked ||
+              !allowed ||
+              !name.trim() ||
+              !selected ||
+              (managed && !region)
+            }
           >
             {pending ? "Deploying…" : `Deploy ${recipe.title}`}
           </Button>
         </form>
+      )}
+      {managed && selectedTarget && (
+        <p className="mt-2 text-xs break-words text-muted-foreground">
+          Cloud account: {selectedTarget.account}
+        </p>
       )}
       {!allowed && (
         <p className="mt-2 text-sm text-muted-foreground">
@@ -361,13 +462,28 @@ function DatabaseDeployment({
         </Alert>
       )}
       {created && (
-        <Link
-          to="/projects/$id"
-          params={{ id: created }}
-          className="mt-2 inline-block text-sm underline"
-        >
-          Open service project
-        </Link>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <Link
+            to="/projects/$id"
+            params={{ id: created }}
+            className="inline-block text-sm underline"
+          >
+            Open service project
+          </Link>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => {
+              setCreated("")
+              setError("")
+              setProgress("")
+              setName("")
+            }}
+          >
+            New service
+          </Button>
+        </div>
       )}
     </section>
   )
@@ -392,13 +508,24 @@ function ServiceRecovery({ project }: { project: string }) {
   const { busy, onPendingChange } = useDeploymentWrites(project)
   const requests = useRef<Record<string, string>>({})
   const [resource, setResource] = useState("")
+  const environmentID = environments.data?.environments.find(
+    (e) => e.name === environment
+  )?.id
   const { resources, selected, live, points, copies } = recoverySelection(
     bindings.data?.bindings ?? [],
     backups.data?.backups ?? [],
     restores.data?.restores ?? [],
-    environments.data?.environments.find((e) => e.name === environment)?.id,
+    environmentID,
     resource
   )
+  const managedRecovery =
+    !selected &&
+    bindings.data?.bindings.some(
+      (binding) =>
+        binding.subject === "resource" &&
+        ["rds", "cloud-sql"].includes(binding.provider) &&
+        binding.environmentId === environmentID
+    )
   const policy = policies.data?.policies.find(
     (p) => p.environment === environment && p.resource === selected
   )
@@ -539,7 +666,20 @@ function ServiceRecovery({ project }: { project: string }) {
           />
         )}
       </div>
-      {!selected ? (
+      {managedRecovery ? (
+        <CatalogEmpty
+          title="Managed database recovery"
+          description="Manage backups and restores in your cloud account. Loomplane's managed recovery controls are not available yet."
+        >
+          <Button
+            variant="outline"
+            nativeButton={false}
+            render={<Link to="/projects/$id" params={{ id: project }} />}
+          >
+            Open project
+          </Button>
+        </CatalogEmpty>
+      ) : !selected ? (
         <CatalogEmpty
           title="No catalog database in this environment"
           description="Deploy a database above, or choose the environment where it runs."
@@ -616,89 +756,95 @@ function ServiceRecovery({ project }: { project: string }) {
           )}
         </>
       )}
-      <div className="min-w-0">
-        <h3 className="mb-2 text-sm font-semibold">Isolated recovery copies</h3>
-        <p className="mb-3 text-sm text-muted-foreground">
-          Copies use a private network, never replace a live database, and are
-          scheduled for removal after 24 hours. Database checks do not test your
-          application.
-        </p>
-        {!copies.length ? (
-          <CatalogEmpty
-            title="No recovery copies"
-            description="Use Test restore on a completed backup to verify it in a temporary database."
-          />
-        ) : (
-          <div className="min-w-0 overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Copy</TableHead>
-                  <TableHead className="hidden sm:table-cell">Status</TableHead>
-                  <TableHead className="hidden sm:table-cell">
-                    Cleanup deadline
-                  </TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {copies.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="whitespace-normal">
-                      <div>{formatDate(r.createdAt)}</div>
-                      <div className="mt-1 grid gap-1 text-xs sm:hidden">
-                        <Badge variant="secondary">{r.status}</Badge>
-                        <span>
-                          {r.status === "deleted"
-                            ? "Removed"
-                            : `Cleanup: ${formatDate(r.expiresAt)}`}
-                        </span>
-                        {r.error && (
-                          <span className="text-destructive">{r.error}</span>
-                        )}
-                      </div>
-                      {r.verifiedAt && (
-                        <div className="text-xs text-muted-foreground">
-                          Restore verified in {(r.durationMs / 1000).toFixed(1)}
-                          s
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      <Badge variant="secondary">{r.status}</Badge>
-                      {r.error && (
-                        <p className="max-w-xs text-xs text-destructive">
-                          {r.error}
-                        </p>
-                      )}
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      {r.status === "deleted"
-                        ? "Removed"
-                        : formatDate(r.expiresAt)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {["succeeded", "failed", "cleanup_failed"].includes(
-                        r.status
-                      ) &&
-                        can("service_restore:manage") && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() => setDeleting(r)}
-                          >
-                            Remove copy
-                          </Button>
-                        )}
-                    </TableCell>
+      {!managedRecovery && (
+        <div className="min-w-0">
+          <h3 className="mb-2 text-sm font-semibold">
+            Isolated recovery copies
+          </h3>
+          <p className="mb-3 text-sm text-muted-foreground">
+            Copies use a private network, never replace a live database, and are
+            scheduled for removal after 24 hours. Database checks do not test
+            your application.
+          </p>
+          {!copies.length ? (
+            <CatalogEmpty
+              title="No recovery copies"
+              description="Use Test restore on a completed backup to verify it in a temporary database."
+            />
+          ) : (
+            <div className="min-w-0 overflow-x-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Copy</TableHead>
+                    <TableHead className="hidden sm:table-cell">
+                      Status
+                    </TableHead>
+                    <TableHead className="hidden sm:table-cell">
+                      Cleanup deadline
+                    </TableHead>
+                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </div>
+                </TableHeader>
+                <TableBody>
+                  {copies.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell className="whitespace-normal">
+                        <div>{formatDate(r.createdAt)}</div>
+                        <div className="mt-1 grid gap-1 text-xs sm:hidden">
+                          <Badge variant="secondary">{r.status}</Badge>
+                          <span>
+                            {r.status === "deleted"
+                              ? "Removed"
+                              : `Cleanup: ${formatDate(r.expiresAt)}`}
+                          </span>
+                          {r.error && (
+                            <span className="text-destructive">{r.error}</span>
+                          )}
+                        </div>
+                        {r.verifiedAt && (
+                          <div className="text-xs text-muted-foreground">
+                            Restore verified in{" "}
+                            {(r.durationMs / 1000).toFixed(1)}s
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        <Badge variant="secondary">{r.status}</Badge>
+                        {r.error && (
+                          <p className="max-w-xs text-xs text-destructive">
+                            {r.error}
+                          </p>
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        {r.status === "deleted"
+                          ? "Removed"
+                          : formatDate(r.expiresAt)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {["succeeded", "failed", "cleanup_failed"].includes(
+                          r.status
+                        ) &&
+                          can("service_restore:manage") && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() => setDeleting(r)}
+                            >
+                              Remove copy
+                            </Button>
+                          )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      )}
       <AlertDialog
         open={!!deleting}
         onOpenChange={(open) => {

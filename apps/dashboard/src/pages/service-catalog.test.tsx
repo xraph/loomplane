@@ -1,9 +1,15 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { ServiceCatalog } from "@/pages/service-catalog"
+import * as catalog from "@/lib/catalog"
+import { useProvidersList } from "@/client/forge/loomplane/hooks"
+import {
+  managedDatabaseFixture,
+  managedWire,
+} from "@/test-fixtures/managed-database"
 
 const permissions = vi.hoisted(() => ({ allowed: true }))
 vi.mock("@/lib/organization", () => ({
@@ -28,6 +34,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   permissions.allowed = true
+  vi.restoreAllMocks()
 })
 function mount() {
   return render(
@@ -42,6 +49,142 @@ function response(body: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
   })
 }
+
+for (const target of ["rds", "cloud-sql"] as const) {
+  it(`shows ${target} account, requested storage and provider backups without a Docker schedule`, async () => {
+    const fixture = managedDatabaseFixture(target)
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const path = String(input)
+      return response(
+        managedWire(
+          path.endsWith("/projects")
+            ? { projects: [] }
+            : path.endsWith("/providers")
+              ? { providers: [fixture.provider] }
+              : { connections: [fixture.connection] }
+        )
+      )
+    })
+    mount()
+    expect(
+      await screen.findByRole("button", { name: "Deploy PostgreSQL" })
+    ).toBeEnabled()
+    expect(
+      screen.getByRole("combobox", { name: "Deployment target" })
+    ).toHaveTextContent("Selected account")
+    expect(screen.getByText(fixture.profile.computeClass)).toBeInTheDocument()
+    expect(
+      screen.getByText(new RegExp(`${fixture.profile.storageGb} GiB`))
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(target === "rds" ? "7 days" : "7 copies")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("checkbox", { name: "Daily backups" })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(/Review provider charges/)).toBeInTheDocument()
+    if (target === "rds") {
+      expect(screen.getByRole("textbox", { name: "Region" })).toHaveValue(
+        "us-east-1"
+      )
+      expect(screen.getByRole("textbox", { name: "Region" })).toHaveAttribute(
+        "readonly"
+      )
+    } else {
+      await userEvent.click(screen.getByRole("combobox", { name: "Region" }))
+      await userEvent.click(
+        await screen.findByRole("option", { name: "europe-west1" })
+      )
+      expect(
+        screen.getByRole("combobox", { name: "Region" })
+      ).toHaveTextContent("europe-west1")
+    }
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Database engine" })
+    )
+    await userEvent.click(
+      await screen.findByRole("option", { name: "MySQL 8.4" })
+    )
+    expect(screen.getByText("Connect a Docker server")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Deploy MySQL" })
+    ).not.toBeInTheDocument()
+  })
+}
+
+it("keeps a failed provider read distinct from having no eligible cloud accounts", async () => {
+  const fixture = managedDatabaseFixture("rds")
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = String(input)
+    return path.endsWith("/providers")
+      ? response({ error: "Cloud profiles denied" }, 403)
+      : response(
+          managedWire(
+            path.endsWith("/projects")
+              ? { projects: [] }
+              : { connections: [fixture.connection] }
+          )
+        )
+  })
+  mount()
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Cloud profiles denied"
+  )
+  expect(
+    screen.queryByText("Connect a database target")
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("button", { name: "Deploy PostgreSQL" })
+  ).not.toBeInTheDocument()
+})
+
+it("identifies managed recovery as pending instead of offering container backups", async () => {
+  const fixture = managedDatabaseFixture("rds")
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.endsWith("/providers"))
+      return response(managedWire({ providers: [fixture.provider] }))
+    if (path.endsWith("/projects"))
+      return response({ projects: [{ id: "p", name: "Managed orders" }] })
+    if (path.endsWith("/environments"))
+      return response({ environments: [{ id: "prod", name: "production" }] })
+    if (path.includes("/bindings"))
+      return response({
+        bindings: [
+          {
+            id: "binding",
+            name: "database",
+            subject: "resource",
+            provider: "rds",
+            environment_id: "prod",
+            config: {
+              kind: "postgres",
+              managed: { profile: { id: "postgresql-17-rds" } },
+            },
+          },
+        ],
+      })
+    return response({
+      connections: [],
+      backups: [],
+      restores: [],
+      policies: [],
+    })
+  })
+  mount()
+  expect(
+    await screen.findByText("Managed database recovery")
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByText("No catalog database in this environment")
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("button", { name: "Back up now" })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("heading", { name: "Isolated recovery copies" })
+  ).not.toBeInTheDocument()
+})
 it("keeps empty projects distinct from a failed read and offers retry", async () => {
   let failed = true
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
@@ -235,4 +378,104 @@ it("offers a checked Kubernetes PostgreSQL target and removes it for other engin
     screen.queryByRole("button", { name: "Deploy MySQL" })
   ).not.toBeInTheDocument()
   expect(screen.getByText("Connect a Docker server")).toBeInTheDocument()
+})
+
+it("preserves a failed service project without offering another implicit creation", async () => {
+  const fixture = managedDatabaseFixture("rds")
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = String(input)
+    return response(
+      managedWire(
+        path.endsWith("/providers")
+          ? { providers: [fixture.provider] }
+          : {
+              projects: [],
+              connections: [fixture.connection],
+              environments: [],
+              bindings: [],
+              backups: [],
+              restores: [],
+              policies: [],
+            }
+      )
+    )
+  })
+  const deploy = vi
+    .spyOn(catalog, "deployDatabase")
+    .mockImplementation(async (_input, _progress, created) => {
+      created("partially-created")
+      throw new Error("Cloud creation refused")
+    })
+  mount()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Deploy PostgreSQL" })
+  )
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Cloud creation refused"
+  )
+  expect(
+    screen.getByRole("button", { name: "Deploy PostgreSQL" })
+  ).toBeDisabled()
+  expect(
+    screen.getByRole("link", { name: "Open service project" })
+  ).toHaveAttribute("href", "/projects/$id")
+  expect(deploy).toHaveBeenCalledTimes(1)
+  await userEvent.click(screen.getByRole("button", { name: "New service" }))
+  expect(screen.getByLabelText("Project name")).toHaveValue("")
+  await userEvent.type(screen.getByLabelText("Project name"), "Another service")
+  expect(
+    screen.getByRole("button", { name: "Deploy PostgreSQL" })
+  ).toBeEnabled()
+})
+
+it("does not silently replace the default cloud account with a server after profile refresh fails", async () => {
+  const fixture = managedDatabaseFixture("rds")
+  let denied = false
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.endsWith("/providers"))
+      return denied
+        ? response({ error: "Profiles unavailable" }, 403)
+        : response(managedWire({ providers: [fixture.provider] }))
+    return response(
+      managedWire(
+        path.endsWith("/projects")
+          ? { projects: [] }
+          : {
+              connections: [
+                fixture.connection,
+                {
+                  ...fixture.connection,
+                  id: "docker",
+                  name: "Other server",
+                  cloud: "server",
+                  details: { architecture: "arm64" },
+                },
+              ],
+            }
+      )
+    )
+  })
+  mount()
+  expect(
+    await screen.findByRole("button", { name: "Deploy PostgreSQL" })
+  ).toBeEnabled()
+  expect(
+    screen.getByRole("combobox", { name: "Deployment target" })
+  ).toHaveTextContent("Selected account")
+  denied = true
+  await act(async () => {
+    await useProvidersList()
+      .refetch()
+      .catch(() => undefined)
+  })
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Profiles unavailable"
+  )
+  expect(
+    screen.getByRole("combobox", { name: "Deployment target" })
+  ).not.toHaveTextContent("Other server")
+  expect(
+    screen.getByRole("button", { name: "Deploy PostgreSQL" })
+  ).toBeDisabled()
 })

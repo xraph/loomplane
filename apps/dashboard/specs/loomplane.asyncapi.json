@@ -2400,6 +2400,9 @@
           "account": {
             "type": "string"
           },
+          "account_identity": {
+            "type": "string"
+          },
           "checked_at": {
             "type": "string"
           },
@@ -3745,6 +3748,9 @@
             "account": {
               "type": "string"
             },
+            "account_identity": {
+              "type": "string"
+            },
             "checked_at": {
               "type": "string"
             },
@@ -3814,6 +3820,9 @@
           ],
           "properties": {
             "account": {
+              "type": "string"
+            },
+            "account_identity": {
               "type": "string"
             },
             "checked_at": {

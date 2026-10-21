@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/internal/planning"
 	lpclient "github.com/xraph/loomplane/pkg/client"
@@ -91,7 +92,7 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 			defer func() { running.stop() }()
 			c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
 			signedIn(t, c)
-			var selected struct{ ID string }
+			var selected connections.Connection
 			for _, name := range []string{"Other account", "Selected account"} {
 				c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections", map[string]any{"cloud": cloud, "name": name, "credential": credential, "settings": settings}, &selected)
 			}
@@ -117,6 +118,11 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 			}
 			if action.Resource.Managed == nil || action.Resource.Managed.Profile != *profile || action.Resource.Managed.ConnectionID != selected.ID || action.Resource.Managed.AccountIdentity == "" {
 				t.Fatal("managed plan has no immutable reviewed profile and account identity")
+			}
+			var checked connections.Connection
+			c.must(http.StatusOK, http.MethodGet, "/api/v1/connections/"+selected.ID, nil, &checked)
+			if selected.AccountIdentity == "" || checked.AccountIdentity != selected.AccountIdentity || checked.AccountIdentity != action.Resource.Managed.AccountIdentity {
+				t.Fatal("the public connection identity does not match the reviewed managed plan")
 			}
 			readChoice := managedCatalogConnectionReader(c, plan.ProjectID, cloud)
 			if readChoice() != selected.ID {
@@ -155,7 +161,6 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 			if !reflect.DeepEqual(reviewedAgain.Actions[0].Resource.Managed, saved.Managed) {
 				t.Fatal("reviewed profile changed after control-plane restart")
 			}
-			holdCatalogBrowser(t, running.srv.URL, plan.ProjectID, selected.ID)
 			if provider == "rds" {
 				var misplaced lpclient.Plan
 				if err := json.Unmarshal([]byte(lc.must("services", "create", "Wrong region", "--provider", provider, "--target", selected.ID, "--region", "us-west-2", "--json")), &misplaced); err != nil {
@@ -169,6 +174,7 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 					t.Fatal("an RDS region mismatch was executable or mutated the provider")
 				}
 			}
+			holdCatalogBrowser(t, running.srv.URL, plan.ProjectID, selected.ID)
 		})
 	}
 }

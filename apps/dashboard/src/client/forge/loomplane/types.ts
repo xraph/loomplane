@@ -341,6 +341,7 @@ export interface ConnectedRepositoryList {
 
 export interface Connection {
   account: string;
+  accountIdentity?: string;
   checkedAt?: string;
   cloud: string;
   createdAt: string;

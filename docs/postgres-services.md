@@ -8,7 +8,11 @@ The PostgreSQL profiles run one private instance with a digest-pinned image, ret
 
 ## Managed cloud services
 
-You can provision managed resources through project manifests and their normal plan review. You can also prepare standalone RDS or Cloud SQL PostgreSQL plans with `loomctl`, as shown below. The dashboard deployment form and recovery controls currently cover the Docker and Kubernetes profiles described here.
+In **Services**, you can also deploy PostgreSQL 17 through a checked AWS RDS or Google Cloud SQL account. Choose the account and region, then review the requested compute, disk, access and backup settings. RDS uses the region checked on its connection. Cloud SQL offers the provider's listed regions. Loomplane approves only one creation whose account identity, region and complete profile match that review.
+
+The form keeps a link to your project if creation fails or takes longer than its wait limit. Once a project exists, use that project to inspect the result. **New service** starts a separate creation and requires a new name. Managed operations can take up to 45 minutes before the form stops waiting; this limit does not cancel a cloud operation.
+
+Managed creation has been checked through the actual API and dashboard against controlled provider endpoints, at desktop and narrow widths. Live cloud creation and recovery remain unqualified. You can also use project manifests or prepare standalone plans with `loomctl`, as shown below. The recovery controls in this guide apply to the Docker and Kubernetes profiles. Managed services keep their provider-native backups separate from Trove exports.
 
 | Connected provider | Existing resource adapters                                       |
 | ------------------ | ---------------------------------------------------------------- |

@@ -55,6 +55,9 @@ type Connection struct {
 	// Account is what the credential acts as: a Google Cloud project, or
 	// a Vercel team or username.
 	Account string `json:"account"`
+	// AccountIdentity is derived from checked scope, never accepted from input
+	// or persisted separately. Clients use it to compare reviewed plans.
+	AccountIdentity string `json:"account_identity,omitempty"`
 	// Details are facts about the credential that are safe to show, such
 	// as a service account's email. Never the credential.
 	Details map[string]string `json:"details"`
@@ -70,6 +73,7 @@ type Connection struct {
 }
 
 func (c *Connection) normalize() {
+	c.AccountIdentity = AccountIdentity(c.Cloud, c.Account, c.Details)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	if c.CheckedAt != nil {
 		t := c.CheckedAt.UTC()
