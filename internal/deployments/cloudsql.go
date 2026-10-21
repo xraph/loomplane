@@ -167,8 +167,8 @@ func databaseURL(kind, password, db, connection string) string {
 	return "postgresql://" + creds + "@/" + db + "?host=" + url.QueryEscape(socket)
 }
 
-// Remove implements Executor: it deletes the instance, with its data, and
-// the credentials Loomplane kept for it.
+// Remove implements Executor: it requests a final backup before instance
+// removal and forgets credentials only after the operation succeeds.
 func (c *CloudSQL) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 	key, err := gcp.ParseKey(job.Credential)
 	if err != nil {

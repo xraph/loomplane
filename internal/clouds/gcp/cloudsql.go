@@ -143,11 +143,13 @@ func (s *Session) SetUser(ctx context.Context, instance, name, password string) 
 	return s.waitSQL(ctx, op, "Setting the database user")
 }
 
-// DeleteSQLInstance deletes an instance and its data, and waits until
-// it's gone. One that's already gone is not an error.
+// DeleteSQLInstance removes the instance with a final backup retained for
+// 30 days. Backup refusal blocks removal; there is no unprotected fallback.
+// One that's already gone is not an error.
 func (s *Session) DeleteSQLInstance(ctx context.Context, name string) error {
 	var op sqlOperation
-	err := s.do(ctx, http.MethodDelete, s.sqlPath("/instances/"+url.PathEscape(name)), nil, &op)
+	query := url.Values{"enableFinalBackup": {"true"}, "finalBackupTtlDays": {"30"}}
+	err := s.do(ctx, http.MethodDelete, s.sqlPath("/instances/"+url.PathEscape(name))+"?"+query.Encode(), nil, &op)
 	if IsNotFound(err) {
 		return nil
 	}

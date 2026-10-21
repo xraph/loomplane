@@ -6,6 +6,21 @@ You can also choose **MySQL 8.4** or **MariaDB 11.8** in the database engine sel
 
 The PostgreSQL profiles run one private instance with a digest-pinned image, retained storage and a separate application role. That role cannot create databases or roles and is not a superuser. Database credentials stay in Vault. Applications deployed in the same environment on the same target receive the resource URL through the existing resource binding workflow.
 
+## Managed cloud services
+
+You can already provision managed resources through project manifests and their normal plan review. The service catalog's standalone database and recovery controls currently cover the Docker and Kubernetes profiles described here.
+
+| Connected provider | Existing resource adapters                                       |
+| ------------------ | ---------------------------------------------------------------- |
+| AWS                | RDS PostgreSQL/MySQL, ElastiCache Redis OSS and S3               |
+| Google Cloud       | Cloud SQL PostgreSQL/MySQL, Memorystore Redis and Cloud Storage  |
+| DigitalOcean       | Managed PostgreSQL/MySQL/Valkey through the App Platform adapter |
+| Render             | Postgres and Key Value                                           |
+
+Provider availability does not establish backup or restore support. RDS removal requests a final snapshot and retains automated backups. Cloud SQL removal requests a final backup with a 30-day lifetime and waits for the operation to finish. If Google refuses the request or reports an operation failure, Loomplane keeps the resource credentials and reports the failure. There is no retry without the final backup. Retained cloud backups can incur storage charges.
+
+Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane's managed backup inventory, isolated restore controls and live cloud recovery qualification remain pending.
+
 ## Persistence and backup storage
 
 A container replacement retains its named volume. Removing the container also retains the volume. Docker local storage shares host capacity: this profile does not reserve a disk quota or survive host loss on its own. You can inspect retained data under **Infrastructure**, **Persistent storage**, or with `loomctl storage CONNECTION_ID`. See the [inventory guide](storage-inventory.md). Deliberate destruction remains a separate operation; the inventory is read-only.
@@ -195,7 +210,7 @@ Backup creation accepts `environment`, `resource` and `request_id`. Restore crea
 
 PostgreSQL 17.11 has passed the Docker catalog and recovery drill, with local Trove and a separate native adapter drill against an isolated MinIO endpoint. The Kubernetes catalog, CLI, API and browser drill passed on arm64 Kubernetes 1.36.4, Cilium 1.20.3 and a retained local-path class. That drill covered pod replacement, backup persistence after a control-plane restart, isolated SQL recovery, scheduled backups and deletion of the exact temporary PV.
 
-AWS S3 acceptance, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, Kubernetes and other-engine retention, automatic-policy dashboard controls, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
+AWS S3 acceptance, managed cloud recovery, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, Kubernetes and other-engine retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
 
 ## MySQL and MariaDB recovery
 
