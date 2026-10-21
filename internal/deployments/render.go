@@ -153,7 +153,17 @@ func renderAddress(kind string, svc *render.Service, port int) string {
 func repositoryFor(job *Job) (string, error) {
 	alias := ""
 	if job.Action.Service != nil {
-		alias = job.Action.Service.Repo
+		cfg := job.Action.Service
+		alias = cfg.Repo
+		// Migration plans preserve sources per service, since two services of
+		// one repository can be serving different commits after a partial release.
+		if pin := cfg.AppliedInputs; pin != nil && pin.ArtifactKey != "" {
+			src := pin.Source
+			if src == nil || src.Alias != alias || src.CommitSHA != cfg.CommitSHA || src.CommitSHA != job.CommitSHA || src.Repository == "" {
+				return "", errors.New("applied repository does not match the service revision")
+			}
+			return src.Repository, nil
+		}
 	}
 	var found string
 	for _, s := range job.Deployment.Sources {

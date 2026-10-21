@@ -198,7 +198,7 @@ func TestAcceptance_aRealDeploymentAnswersAndIsTakenDown(t *testing.T) {
 		}
 		deadline := time.Now().Add(5 * time.Minute)
 		for {
-			res, gerr := http.Get(s.URL) //nolint:gosec,noctx // a test reaching what it deployed
+			res, gerr := http.Get(s.URL) //nolint:noctx // a test reaching what it deployed
 			if gerr == nil {
 				_ = res.Body.Close()
 				if res.StatusCode < 500 {

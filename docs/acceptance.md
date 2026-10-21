@@ -38,6 +38,27 @@ The October 18, 2026 run verified the full setup page, saved placements, plan re
 
 The October 14, 2026 browser run completed this sequence with the Astro sample and retained 93 real Vercel build lines across reload. The interactive counter worked, removal succeeded and the old URL returned `DEPLOYMENT_NOT_FOUND`. This verifies Vercel's static-site path and build-log reader. GCP and AWS log adapters have API fixture coverage; their live cloud acceptance remains account-specific.
 
+### Switch a Cloud between Vercel accounts
+
+You can run the persisted Cloud flow against two Vercel accounts or teams:
+
+```bash
+export LOOMPLANE_ACCEPTANCE_CLOUD_REPO=your-org/disposable-web-app
+export LOOMPLANE_ACCEPTANCE_CLOUD_SOURCE=apps/web
+export LOOMPLANE_ACCEPTANCE_CLOUD_VERCEL_A_TOKEN=...
+export LOOMPLANE_ACCEPTANCE_CLOUD_VERCEL_B_TOKEN=...
+# Set CLOUD_VERCEL_A_TEAM and CLOUD_VERCEL_B_TEAM with the same prefix for team scopes.
+LOOMPLANE_TEST_DATABASE_URL='postgres://loomplane:loomplane@localhost:55532/loomplane?sslmode=disable' \
+  go test -tags='integration acceptance' -count=1 -timeout=120m -v \
+  -run '^TestAcceptanceCloudAccountSwitch$' ./tests/integration
+```
+
+Use a public repository with one web app or static site and no backing resources. Set the source to its analyzed source identifier or directory, using `.` for an app at the repository root. Both tokens must resolve to different verified account or team identities. Missing configuration skips the test, so a skipped run does not qualify either account.
+
+The run creates an isolated database and project, deploys on A, migrates the applied commit to B, checks the destination account and ready deployment URL, then makes another release on B. It confirms that A's project was removed. External routing is acknowledged only after the destination URL answers successfully; custom domains still need their own verification.
+
+Cleanup checks that the generated project name was absent from both accounts before any deployment, then removes only that name in those two scopes, including a project created before a failed binding write. Cleanup errors fail the run. This test always removes its disposable projects and does not use `LOOMPLANE_ACCEPTANCE_KEEP`.
+
 ### Run the acceptance harness
 
 You'll need the compose Postgres (`make up`), a public GitHub repository Loomplane can analyze, and a `loomplane.yaml` for it. Then set the accounts you want to test and run it:

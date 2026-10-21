@@ -517,7 +517,7 @@ function ConnectForm({
             <DialogTitle>
               {replacing
                 ? `Replace ${replacing.name}'s credential`
-                : "Connect a cloud"}
+                : "Connect an account"}
             </DialogTitle>
             <DialogDescription>
               {replacing

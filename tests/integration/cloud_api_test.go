@@ -27,16 +27,19 @@ import (
 // cloudAPIVercel keeps immutable account identities and resources partitioned by
 // token. Both accounts use the actual adapter against HTTP provider fixtures.
 type cloudAPIVercel struct {
-	srv      *httptest.Server
-	accounts map[string]*fakeVercelDeploys
-	mu       sync.Mutex
-	removed  []string
+	srv            *httptest.Server
+	accounts       map[string]*fakeVercelDeploys
+	mu             sync.Mutex
+	removed        []string
+	deleteFailures int
+	deleteRelease  string
+	deployFailure  bool
 }
 
 func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 	t.Helper()
 	f := &cloudAPIVercel{accounts: map[string]*fakeVercelDeploys{}}
-	for _, token := range []string{"old-token-0123456789", "new-token-0123456789"} {
+	for _, token := range []string{"old-token-0123456789", "new-token-0123456789", "docs-token-0123456789"} {
 		f.accounts[token] = newFakeVercelDeploys(t, token)
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +54,32 @@ func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 			if strings.HasPrefix(token, "new-") {
 				identity, label = "user-replacement", "Replacement Vercel"
 			}
+			if strings.HasPrefix(token, "docs-") {
+				identity, label = "user-docs", "Docs Vercel"
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"user": map[string]any{"id": identity, "username": label}})
+			return
+		}
+		f.mu.Lock()
+		failDeploy := f.deployFailure
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v9/projects/") && f.deleteFailures != 0 {
+			if f.deleteFailures < 0 && f.deleteRelease != "" {
+				if _, err := os.Stat(f.deleteRelease); err == nil {
+					f.deleteFailures = 0
+				}
+			}
+			if f.deleteFailures != 0 {
+				if f.deleteFailures > 0 {
+					f.deleteFailures--
+				}
+				f.mu.Unlock()
+				http.Error(w, "fixture cleanup temporarily unavailable", http.StatusBadRequest)
+				return
+			}
+		}
+		f.mu.Unlock()
+		if failDeploy && r.Method == http.MethodGet && r.URL.Path == "/v13/deployments/dpl_1" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "dpl_1", "readyState": "ERROR", "errorMessage": "fixture build failed"})
 			return
 		}
 		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v9/projects/") {

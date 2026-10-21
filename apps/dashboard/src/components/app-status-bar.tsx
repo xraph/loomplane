@@ -74,10 +74,10 @@ export function AppStatusBar() {
               tone={clouds === 0 ? "idle" : unready > 0 ? "warn" : "ok"}
             />
             {clouds === 0
-              ? "No clouds connected"
+              ? "No accounts connected"
               : clouds === 1
-                ? "1 cloud"
-                : `${clouds} clouds`}
+                ? "1 account"
+                : `${clouds} accounts`}
           </Link>
         </StatusItem>
       )}
