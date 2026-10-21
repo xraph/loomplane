@@ -30,7 +30,33 @@ type EnrollmentService struct {
 func NewEnrollmentService(destinations *Service, store EnrollmentBackend, resolve AttestationResolver, issuer workloadidentity.EnrollmentIssuer) *EnrollmentService {
 	return &EnrollmentService{destinations: destinations, store: store, resolve: resolve, issuer: issuer}
 }
+
+type PreparedEnrollmentBackend interface {
+	ReservePrepared(context.Context, workloadidentity.Binding, map[string]runtimecatalog.ExportBounds, string, string, func(context.Context) error) (*workloadidentity.EnrollmentRecord, error)
+}
+type enrollmentReservation func(context.Context, workloadidentity.Binding, map[string]runtimecatalog.ExportBounds, func(context.Context) error) (*workloadidentity.EnrollmentRecord, error)
+
 func (s *EnrollmentService) Enroll(ctx context.Context, p security.Principal, request domain.EnrollmentRequest) (*domain.Enrollment, error) {
+	return s.enroll(ctx, p, request, func(ctx context.Context, b workloadidentity.Binding, exports map[string]runtimecatalog.ExportBounds, _ func(context.Context) error) (*workloadidentity.EnrollmentRecord, error) {
+		return s.store.Reserve(ctx, b, exports)
+	})
+}
+
+// EnrollPreparation reserves through a durable receipt and reuses the same
+// attestation, qualification and permission checks as explicit enrollment.
+func (s *EnrollmentService) EnrollPreparation(ctx context.Context, p security.Principal, destinationID, preparationID string) (*domain.Enrollment, error) {
+	if s == nil || !domain.ValidIdentitySegment(preparationID) {
+		return nil, ErrInvalid
+	}
+	store, ok := s.store.(PreparedEnrollmentBackend)
+	if !ok {
+		return nil, ErrDisabled
+	}
+	return s.enroll(ctx, p, domain.EnrollmentRequest{DestinationID: destinationID}, func(ctx context.Context, b workloadidentity.Binding, exports map[string]runtimecatalog.ExportBounds, guard func(context.Context) error) (*workloadidentity.EnrollmentRecord, error) {
+		return store.ReservePrepared(ctx, b, exports, preparationID, p.UserID, guard)
+	})
+}
+func (s *EnrollmentService) enroll(ctx context.Context, p security.Principal, request domain.EnrollmentRequest, reserve enrollmentReservation) (*domain.Enrollment, error) {
 	if s == nil {
 		return nil, ErrDisabled
 	}
@@ -74,7 +100,7 @@ func (s *EnrollmentService) Enroll(ctx context.Context, p security.Principal, re
 	if checkErr := guard(ctx); checkErr != nil {
 		return nil, checkErr
 	}
-	r, err := s.store.Reserve(ctx, b, exports)
+	r, err := reserve(ctx, b, exports, guard)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +108,9 @@ func (s *EnrollmentService) Enroll(ctx context.Context, p security.Principal, re
 	if err := s.store.Issue(ctx, p.OrgID, r.ID, guardedEnrollmentIssuer{EnrollmentIssuer: s.issuer, guard: guard}); err != nil {
 		s.record(ctx, p, "federation.enrollment.issue_failed", r)
 		return nil, err
+	}
+	if checkErr := guard(ctx); checkErr != nil {
+		return nil, checkErr
 	}
 	s.record(ctx, p, "federation.enrollment.issue", r)
 	return &domain.Enrollment{Metadata: domain.Metadata{Scope: d.Scope, ID: r.ID, Generation: 1}, DestinationID: d.ID, ExpiresAt: r.ExpiresAt, Agent: r.Binding.Agent, Identity: d.Identity, AttestationMethod: r.Binding.Method}, nil

@@ -55,6 +55,15 @@ func (s *EnrollmentStore) Reserve(ctx context.Context, b Binding, exports map[st
 	if stepErr := s.checkDestination(ctx, tx, b); stepErr != nil {
 		return nil, stepErr
 	}
+	record, err = s.reserveTx(ctx, tx, b, exports)
+	if err != nil {
+		return nil, err
+	}
+	return record, tx.Commit()
+}
+
+// reserveTx runs after the caller has locked and checked the destination.
+func (s *EnrollmentStore) reserveTx(ctx context.Context, tx driver.Tx, b Binding, exports map[string]runtimecatalog.ExportBounds) (record *EnrollmentRecord, err error) {
 	var epoch uint64
 	if stepErr := tx.QueryRow(ctx, `INSERT INTO loomplane_federation_enrollment_epochs(org_id,destination_id,epoch) VALUES($1,$2,1) ON CONFLICT(org_id,destination_id) DO UPDATE SET epoch=loomplane_federation_enrollment_epochs.epoch+1 WHERE loomplane_federation_enrollment_epochs.epoch<$3 RETURNING epoch`, b.Destination.OrgID, b.Destination.ID, int64(math.MaxInt64)).Scan(&epoch); stepErr != nil {
 		return nil, stepErr
@@ -88,7 +97,7 @@ func (s *EnrollmentStore) Reserve(ctx context.Context, b Binding, exports map[st
 	if _, err := tx.Exec(ctx, `INSERT INTO loomplane_federation_enrollments(id,org_id,project_id,environment_id,destination_id,destination_generation,identity_revision,epoch,agent_id,entry_id,phase,body,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13)`, record.ID, b.Agent.OrgID, b.Agent.ProjectID, b.Agent.EnvironmentID, b.Agent.DestinationID, b.Destination.Generation, b.Destination.Identity.Revision(), epoch, b.Agent.AgentID, b.EntryID, raw, now, record.ExpiresAt); err != nil {
 		return nil, err
 	}
-	return record, tx.Commit()
+	return record, nil
 }
 
 func (s *EnrollmentStore) checkDestination(ctx context.Context, tx driver.Tx, b Binding) error {
@@ -114,10 +123,13 @@ func (s *EnrollmentStore) checkDestination(ctx context.Context, tx driver.Tx, b 
 }
 func loadEnrollment(ctx context.Context, tx driver.Tx, org, id string) (*EnrollmentRecord, string, error) {
 	query := `SELECT body,phase,created_at,expires_at FROM loomplane_federation_enrollments WHERE org_id=$1 AND id=$2 FOR UPDATE`
+	return scanEnrollment(tx.QueryRow(ctx, query, org, id), org, id)
+}
+func scanEnrollment(row interface{ Scan(...any) error }, org, id string) (*EnrollmentRecord, string, error) {
 	var raw []byte
 	var phase string
 	var created, expires time.Time
-	if err := tx.QueryRow(ctx, query, org, id).Scan(&raw, &phase, &created, &expires); err != nil {
+	if err := row.Scan(&raw, &phase, &created, &expires); err != nil {
 		return nil, "", enrollmentError(err)
 	}
 	var r EnrollmentRecord
@@ -154,6 +166,9 @@ func (s *EnrollmentStore) Issue(ctx context.Context, org, id string, issuer Enro
 		return ErrIdentity
 	}
 	if stepErr := s.checkDestination(ctx, tx, r.Binding); stepErr != nil {
+		return stepErr
+	}
+	if stepErr := s.checkEpoch(ctx, tx, r); stepErr != nil {
 		return stepErr
 	}
 	if phase == "ready" {

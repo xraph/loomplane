@@ -35,6 +35,9 @@ func (s *EnrollmentStore) checkReady(ctx context.Context, tx driver.Tx, r *Enrol
 	if err := s.checkDestination(ctx, tx, r.Binding); err != nil {
 		return err
 	}
+	return s.checkEpoch(ctx, tx, r)
+}
+func (s *EnrollmentStore) checkEpoch(ctx context.Context, tx driver.Tx, r *EnrollmentRecord) error {
 	var epoch uint64
 	if err := tx.QueryRow(ctx, `SELECT epoch FROM loomplane_federation_enrollment_epochs WHERE org_id=$1 AND destination_id=$2 FOR SHARE`, r.Binding.Agent.OrgID, r.Binding.Agent.DestinationID).Scan(&epoch); err != nil {
 		return enrollmentError(err)

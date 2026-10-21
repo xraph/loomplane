@@ -35,6 +35,7 @@ type Preparation struct {
 	IdentityRevision      string    `json:"identity_revision"`
 	State                 string    `json:"state"`
 	CleanupFrom           string    `json:"cleanup_from"`
+	EnrollmentID          string    `json:"enrollment_id"`
 	Generation            int64     `json:"generation"`
 	AccountUID            string    `json:"account_uid"`
 	PodUID                string    `json:"pod_uid"`
@@ -54,12 +55,12 @@ func validPreparationIntent(in PreparationIntent) bool {
 	return err == nil && domain.ValidIdentitySegment(in.NamespaceUID)
 }
 
-const preparationColumns = `org_id,project_id,environment_id,destination_id,destination_generation,identity_revision,intent,state,cleanup_from,generation,account_uid,pod_uid,recorded_by,created_at,updated_at`
+const preparationColumns = `org_id,project_id,environment_id,destination_id,destination_generation,identity_revision,intent,state,cleanup_from,enrollment_id,generation,account_uid,pod_uid,recorded_by,created_at,updated_at`
 
 func scanPreparation(row rowScanner) (*Preparation, error) {
 	var r Preparation
 	var raw []byte
-	if err := row.Scan(&r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.DestinationID, &r.DestinationGeneration, &r.IdentityRevision, &raw, &r.State, &r.CleanupFrom, &r.Generation, &r.AccountUID, &r.PodUID, &r.RecordedBy, &r.CreatedAt, &r.UpdatedAt); err != nil {
+	if err := row.Scan(&r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.DestinationID, &r.DestinationGeneration, &r.IdentityRevision, &raw, &r.State, &r.CleanupFrom, &r.EnrollmentID, &r.Generation, &r.AccountUID, &r.PodUID, &r.RecordedBy, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		return nil, storeError(err)
 	}
 	if err := json.Unmarshal(raw, &r.PreparationIntent); err != nil {

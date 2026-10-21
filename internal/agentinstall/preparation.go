@@ -40,3 +40,9 @@ func (p *KubernetesPlan) MatchesPreparedPod(pod *corev1.Pod, namespaceUID string
 func matchesNamespaceOwner(owners []metav1.OwnerReference, namespace, uid string) bool {
 	return len(owners) == 1 && owners[0].APIVersion == "v1" && owners[0].Kind == "Namespace" && owners[0].Name == namespace && string(owners[0].UID) == uid && !ptr.Deref(owners[0].Controller, false) && !ptr.Deref(owners[0].BlockOwnerDeletion, false)
 }
+
+// MatchesWaitingPod shares delivery's scheduled, never-started pod checks with
+// the installation coordinator before it reserves workload trust.
+func (p *KubernetesPlan) MatchesWaitingPod(pod *corev1.Pod, uid, namespaceUID string) bool {
+	return p != nil && p.matches(pod, uid, namespaceUID)
+}

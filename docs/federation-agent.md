@@ -14,10 +14,11 @@ before acknowledging it.
 
 The executable, trusted Kubernetes installation records and Kubernetes launch
 builder are available. The builder creates pod definitions and delivers immutable
-configuration to an exact scheduled pod. Automatic consumer resource preparation is available. Enrollment and restart
-coordination, verified service-target assignment and gateway enforcement are still
-being built. The opt-in launch service is registered in the application, but its
-management route and automatic worker are still pending.
+configuration to an exact scheduled pod. Internal services prepare consumer resources,
+verify the installation, reserve one enrollment and deliver configuration with
+recovery across lost responses. Restart coordination, verified service-target
+assignment and gateway enforcement are still being built. Management routes and
+automatic workers are still pending.
 An acknowledgment currently proves installation in the agent's local policy
 state, not that a remote service is reachable through a gateway.
 
@@ -195,8 +196,39 @@ when the bounded namespace inspection cannot establish that it is unused.
 
 The service completes retirement only after provider cleanup and retained trust
 checks succeed. You can retry by the same attempt ID after a lost response or
-service restart. Automatic enrollment coordination, replacement, background
-retries and the management API, CLI and dashboard are still pending.
+service restart. Automatic replacement, background retries and the management API,
+CLI and dashboard are still pending.
+
+## Launching a prepared consumer
+
+The internal preparation launch service accepts destination and preparation IDs
+plus the operator's SPIRE cluster, namespace and service-account profile. You must
+configure that profile against the same physical cluster in SPIRE. Pod identity,
+resource names, image and launch trust come from saved records.
+
+The coordinator resumes unfinished preparation and requires a scheduled pod that
+has never started. It verifies live Kubernetes and SPIRE parent evidence before
+recording the installation. It checks the saved account UID, shared pod security
+settings and absence of an unrecorded launch configuration before reserving trust.
+A running, restarted or changed pod must be retired and replaced. An unrelated
+installation is never overwritten.
+
+Enrollment reservation and its preparation receipt commit together. Concurrent
+calls recover the same handle and epoch. The receipt remains after enrollment
+cleanup; an expired, revoked, missing or superseded handle cannot be replaced on
+the same preparation. Recovery still requires fresh attestation and current
+permission. Issuance checks the latest epoch before calling SPIRE and uses the
+same deterministic registration ID on retry.
+
+A saved installation is reused after a lost reply. If a launch record exists, the
+coordinator recovers that exact write before attempting enrollment, including when
+the agent has already consumed the handle. An uncertain missing ConfigMap stays
+unresolved without another create. Retire the preparation before creating a new
+attempt when its identity or enrollment can no longer be used.
+
+Success reports configuration delivery. It does not establish that the agent has
+joined, acknowledged policy, or made a private service reachable. Those runtime
+checks and the automatic replacement worker remain separate.
 
 ## Guarded launch delivery
 
@@ -249,8 +281,8 @@ retirement service to revoke authority and remove the attempt's pod and configur
 before preparing a replacement.
 
 The application currently wires consumer installations only. Exporting agents
-still need verified service-target assignments. Automatic resource preparation,
-replacement, management API, CLI and dashboard controls are pending.
+still need verified service-target assignments. Automatic replacement and management
+API, CLI and dashboard controls are pending.
 
 ## Retiring a launch attempt
 

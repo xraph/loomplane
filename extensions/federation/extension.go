@@ -134,6 +134,13 @@ func (e *Extension) Register(app forge.App) error {
 		if provideErr := forge.ProvideValue(c, preparation); provideErr != nil {
 			return provideErr
 		}
+		enrollment, injectErr := forge.InjectType[*domain.EnrollmentService](c)
+		if injectErr != nil {
+			return injectErr
+		}
+		if provideErr := forge.ProvideValue(c, domain.NewPreparationLaunchService(preparation, enrollment)); provideErr != nil {
+			return provideErr
+		}
 		preparationRetirement := domain.NewPreparationRetirementService(preparation, retirement, func(ctx context.Context, org, destination, id string) error {
 			return enrollmentStore.RevokePreparation(ctx, org, destination, id, e.cleanup)
 		})
