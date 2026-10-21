@@ -123,3 +123,29 @@ func TestDeleteBackupRejectsMalformedReferenceBeforeStorage(t *testing.T) {
 		}
 	}
 }
+
+func TestCanDeleteChecksCapabilityWithoutDeleting(t *testing.T) {
+	for _, versioned := range []bool{false, true} {
+		base := &deletionDriver{}
+		var drv driver.Driver = base
+		var captured *versionDeletionDriver
+		if versioned {
+			captured = &versionDeletionDriver{deletionDriver: base}
+			drv = captured
+		}
+		files, err := trove.Open(drv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := configuredStore(t, files, "backups", "s3://us-east-1/backups")
+		ref := pinnedRef(t, store, Object{Key: "org/point", Size: 3, SHA256: strings.Repeat("a", 64), VersionID: "v1"})
+		err = store.CanDelete(ref)
+		if (err == nil) != versioned || base.deleted || captured != nil && captured.version != "" {
+			t.Fatalf("preflight mutated storage or misreported capability: versioned=%v err=%v", versioned, err)
+		}
+		ref.DestinationID = strings.Repeat("b", 64)
+		if err = store.CanDelete(ref); err == nil {
+			t.Fatal("preflight accepted another destination")
+		}
+	}
+}

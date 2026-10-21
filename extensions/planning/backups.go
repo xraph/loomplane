@@ -21,6 +21,8 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
+const retirementJob = "loomplane.service.backup.retirement"
+
 const restoreJob = "loomplane.service.restore"
 
 const backupJob = "loomplane.service.backup"
@@ -41,17 +43,27 @@ func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects
 	if err != nil {
 		return err
 	}
-	e.backups = &recovery.Service{Policies: recovery.NewPgStore(pg), Restores: recovery.NewPgStore(pg), RestoreBackend: target, EnqueueRestore: func(ctx context.Context, org, id string) error {
-		_, err := engine.Enqueue(ctx, e.engineOf(), restoreJob, backupPayload{OrgID: org, ID: id}, job.WithQueue(orchestration.Queue), job.WithMaxRetries(0), job.WithTimeout(45*time.Minute))
-		return err
-	}, Audit: audit, Store: recovery.NewPgStore(pg), Projects: prj, Bindings: plans, Authz: authz, Backend: target, Files: files, Enqueue: func(ctx context.Context, org, id string) error {
-		_, err := engine.Enqueue(ctx, e.engineOf(), backupJob, backupPayload{OrgID: org, ID: id}, job.WithQueue(orchestration.Queue), job.WithMaxRetries(2), job.WithTimeout(45*time.Minute))
-		return err
-	}}
+	records := recovery.NewPgStore(pg)
+	e.backups = &recovery.Service{
+		Policies: records, Restores: records, Retirements: records, Store: records,
+		RestoreBackend: target, Backend: target, Projects: prj, Bindings: plans, Authz: authz, Audit: audit, Files: files,
+		Enqueue: e.enqueueRecovery(backupJob, 2), EnqueueRestore: e.enqueueRecovery(restoreJob, 0), EnqueueRetirement: e.enqueueRecovery(retirementJob, 0),
+	}
+
+	engine.Register(e.engineOf(), job.NewDefinition(retirementJob, func(ctx context.Context, in backupPayload) error {
+		return e.backups.RunRetirement(ctx, in.OrgID, in.ID)
+	}))
 	engine.Register(e.engineOf(), job.NewDefinition(restoreJob, func(ctx context.Context, in backupPayload) error { return e.backups.RunRestore(ctx, in.OrgID, in.ID) }))
 	engine.Register(e.engineOf(), job.NewDefinition(backupJob, func(ctx context.Context, in backupPayload) error { return e.backups.Run(ctx, in.OrgID, in.ID) }))
 	engine.Register(e.engineOf(), job.NewDefinition(reconcileBackupsJob, func(ctx context.Context, _ orchestration.DriftPayload) error { return e.backups.Reconcile(ctx) }))
 	return nil
+}
+
+func (e *Extension) enqueueRecovery(name string, retries int) func(context.Context, string, string) error {
+	return func(ctx context.Context, org, id string) error {
+		_, err := engine.Enqueue(ctx, e.engineOf(), name, backupPayload{OrgID: org, ID: id}, job.WithQueue(orchestration.Queue), job.WithMaxRetries(retries), job.WithTimeout(45*time.Minute))
+		return err
+	}
 }
 
 func (e *Extension) scheduleBackupReconciliation(ctx context.Context) error {

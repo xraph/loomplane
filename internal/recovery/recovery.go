@@ -79,18 +79,20 @@ type Backend interface {
 	BackupDatabase(context.Context, security.Principal, *planning.Binding, *backupfiles.Store, string) (backupfiles.Object, error)
 }
 type Service struct {
-	Policies       PolicyStore
-	Restores       RestoreStore
-	RestoreBackend RestoreBackend
-	EnqueueRestore func(context.Context, string, string) error
-	Store          Store
-	Authz          Authorizer
-	Projects       Projects
-	Bindings       Bindings
-	Backend        Backend
-	Files          *backupfiles.Store
-	Enqueue        func(context.Context, string, string) error
-	Audit          projects.Auditor
+	Retirements       RetirementStore
+	EnqueueRetirement func(context.Context, string, string) error
+	Policies          PolicyStore
+	Restores          RestoreStore
+	RestoreBackend    RestoreBackend
+	EnqueueRestore    func(context.Context, string, string) error
+	Store             Store
+	Authz             Authorizer
+	Projects          Projects
+	Bindings          Bindings
+	Backend           Backend
+	Files             *backupfiles.Store
+	Enqueue           func(context.Context, string, string) error
+	Audit             projects.Auditor
 }
 
 func (s *Service) Create(ctx context.Context, p security.Principal, project string, in BackupCreateInput) (*Backup, error) {
@@ -234,22 +236,24 @@ func (s *Service) Run(ctx context.Context, org, id string) error {
 // Reconcile repairs the gap between committing a request and enqueueing it,
 // and retries claims whose worker disappeared. Native jobs have a shorter timeout.
 func (s *Service) Reconcile(ctx context.Context) error {
+	var failures []error
 	pending, err := s.Store.Pending(ctx)
 	if err != nil {
-		return err
+		failures = append(failures, err)
 	}
 	for _, record := range pending {
-		if checkErr := s.Enqueue(ctx, record.OrgID, record.ID); checkErr != nil {
-			return checkErr
+		if err = s.Enqueue(ctx, record.OrgID, record.ID); err != nil {
+			failures = append(failures, err)
 		}
 	}
 	if s.Policies != nil {
-		if err := s.reconcilePolicies(ctx); err != nil {
-			return err
-		}
+		failures = append(failures, s.reconcilePolicies(ctx))
 	}
 	if s.Restores != nil {
-		return s.reconcileRestores(ctx)
+		failures = append(failures, s.reconcileRestores(ctx))
 	}
-	return nil
+	if s.Retirements != nil {
+		failures = append(failures, s.reconcileRetirements(ctx))
+	}
+	return errors.Join(failures...)
 }

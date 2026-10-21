@@ -100,6 +100,9 @@ func (a *Authorizer) Allowed(ctx context.Context, p Principal, perm Permission) 
 		return false, nil
 	}
 	res, err := a.check(ctx, p, perm, "")
+	if errors.Is(err, ErrForbidden) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -109,6 +112,20 @@ func (a *Authorizer) Allowed(ctx context.Context, p Principal, perm Permission) 
 func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, resourceID string) (*warden.CheckResult, error) {
 	if p.UserID == "" || p.OrgID == "" {
 		return nil, ErrUnauthenticated
+	}
+	// Retirement destroys recovery bytes. A cached Warden assignment alone
+	// cannot authorize it when a membership hook has failed or is delayed.
+	if perm == BackupRetire {
+		if a.members == nil {
+			return nil, ErrForbidden
+		}
+		memberRole, found, err := a.members(ctx, p.OrgID, p.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("look up retirement membership: %w", err)
+		}
+		if !found || memberRole != MemberOwner {
+			return nil, ErrForbidden
+		}
 	}
 	// Once per organization per process, so an upgrade that grows a role
 	// reaches organizations whose members already have one. Assign is the

@@ -58,6 +58,7 @@ type Auditor interface {
 type AuditEvent struct {
 	Action     string
 	Severity   string // info, warning or critical
+	Outcome    string // defaults to success when omitted
 	ProjectID  string
 	Principal  security.Principal
 	Attributes map[string]any

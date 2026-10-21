@@ -35,7 +35,11 @@ func (a Auditor) Record(ctx context.Context, e projects.AuditEvent) {
 	default:
 		b = a.chronicle.Info(ctx, e.Action, "project", e.ProjectID)
 	}
-	b = b.Category("projects").AppID(a.appID).TenantID(e.Principal.OrgID).UserID(e.Principal.UserID).Outcome("success")
+	outcome := e.Outcome
+	if outcome == "" {
+		outcome = "success"
+	}
+	b = b.Category("projects").AppID(a.appID).TenantID(e.Principal.OrgID).UserID(e.Principal.UserID).Outcome(outcome)
 	for k, v := range e.Attributes {
 		b = b.Meta(k, v)
 	}

@@ -100,7 +100,7 @@ func Catalog() []RoleDef {
 		BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
 		RepositoryConnect, OrganizationVariableManage, DestinationManage, NetworkManage, ExportManage, GrantApprove, GrantRevoke, TrustManage,
 	)
-	owner := append(clone(admin), OrganizationAdminister)
+	owner := append(clone(admin), OrganizationAdminister, BackupRetire)
 	return []RoleDef{
 		{Slug: RoleOwner, Name: "Owner", Description: "Everything, including the organization itself", Permissions: owner},
 		{Slug: RoleAdmin, Name: "Admin", Description: "Approves deployments, manages members, cloud accounts and secrets", Permissions: admin},
