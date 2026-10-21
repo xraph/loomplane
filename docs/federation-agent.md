@@ -29,19 +29,19 @@ It must be a regular file at an absolute path, with no group/world write
 permissions. The final path component cannot be a symlink. Unknown fields,
 trailing JSON values and files larger than 1 MiB are rejected.
 
-| Field | Value supplied by the installer |
-| --- | --- |
-| `version` | `1` |
-| `control_endpoint` | HTTPS origin of the separate agent listener, including its port |
-| `workload_api` | Canonical local socket address, such as `unix:///run/spire/agent.sock` |
-| `state_path` | Absolute path to the agent's SQLite file in a private directory |
-| `enrollment_id` | One-use UUID returned by the enrollment controller |
-| `enrollment_expires_at` | The controller's enrollment expiry, within its five-minute window |
-| `registration` | Exact agent identity, destination generation and export bounds from the enrollment record |
-| `namespace` | Kubernetes namespace selected for this installation |
-| `targets` | Registered export IDs with their exact Service names, UIDs and port names |
-| `trust_generation` | Nonzero generation of the trusted public signing-key configuration |
-| `signing_keys` | Public Ed25519 keys with `public_key`, `not_before` and `not_after` |
+| Field                   | Value supplied by the installer                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `version`               | `1`                                                                                       |
+| `control_endpoint`      | HTTPS origin of the separate agent listener, including its port                           |
+| `workload_api`          | Canonical local socket address, such as `unix:///run/spire/agent.sock`                    |
+| `state_path`            | Absolute path to the agent's SQLite file in a private directory                           |
+| `enrollment_id`         | One-use UUID returned by the enrollment controller                                        |
+| `enrollment_expires_at` | The controller's enrollment expiry, within its five-minute window                         |
+| `registration`          | Exact agent identity, destination generation and export bounds from the enrollment record |
+| `namespace`             | Kubernetes namespace selected for this installation                                       |
+| `targets`               | Registered export IDs with their exact Service names, UIDs and port names                 |
+| `trust_generation`      | Nonzero generation of the trusted public signing-key configuration                        |
+| `signing_keys`          | Public Ed25519 keys with `public_key`, `not_before` and `not_after`                       |
 
 `registration.agent` contains `org_id`, `project_id`, `environment_id`,
 `destination_id`, `agent_id`, `epoch` and the matching SPIFFE `uri`.
@@ -235,12 +235,12 @@ checks and the automatic replacement worker remain separate.
 Enable the internal launch service only after configuring identity administration
 and the agent listener:
 
-| Environment variable | Required value |
-| --- | --- |
-| `LOOMPLANE_FEDERATION_LAUNCH_ENABLED` | `true` (default: `false`) |
+| Environment variable                           | Required value                                     |
+| ---------------------------------------------- | -------------------------------------------------- |
+| `LOOMPLANE_FEDERATION_LAUNCH_ENABLED`          | `true` (default: `false`)                          |
 | `LOOMPLANE_FEDERATION_LAUNCH_CONTROL_ENDPOINT` | Public HTTPS origin of the separate agent listener |
-| `LOOMPLANE_FEDERATION_LAUNCH_AGENT_IMAGE` | Agent image pinned by SHA-256 digest |
-| `LOOMPLANE_FEDERATION_LAUNCH_TRUST_GENERATION` | Positive generation for the public signing trust |
+| `LOOMPLANE_FEDERATION_LAUNCH_AGENT_IMAGE`      | Agent image pinned by SHA-256 digest               |
+| `LOOMPLANE_FEDERATION_LAUNCH_TRUST_GENERATION` | Positive generation for the public signing trust   |
 
 The launch service uses destination, enrollment and attempt IDs. You cannot pass
 identity selectors, credentials, service targets or signing keys through its
@@ -385,9 +385,9 @@ installation work; no configuration flag currently enables this path.
 `RegisterWorkload` issues a service identity from a server-verified
 `WorkloadBinding`. You must resolve its service from an owned deployment and
 retain durable revocation intent before calling it. There is no management
-endpoint for caller-supplied selectors. The deployment verifier and application
-registration journal are still pending, so agent launch does not issue service
-identities yet.
+endpoint for caller-supplied selectors. The Kubernetes deployment verifier is available internally. Durable controller
+pins and the application registration journal are still pending, so agent launch
+does not issue service identities yet.
 
 The workload selector must match the destination's organization, project,
 environment and ID. An application binding cannot carry agent authority. Both
@@ -412,3 +412,42 @@ The lifecycle-owned SPIRE client registers and revokes both agents and services.
 It denies control-plane, privileged and foreign-organization deletion. Application
 registration uses the existing administrative connection; it does not add a
 worker, background renewal or deployment action.
+
+## Verifying a Kubernetes application
+
+`FederationWorkloadDeployment` projects a stored Kubernetes service binding into
+its scope, Ctrl Plane instance, connection and digest-pinned image. It preserves
+the manifest service name separately from the deployed `main` container. Resource
+bindings, drifted workloads and mutable image tags are rejected.
+
+Pass that projection and a trusted `KubernetesWorkloadProfile` to
+`VerifyKubernetesWorkload`. The profile must retain the Deployment UID, generation
+and runtime revision from deployment or installation evidence. Reading a matching
+name or label is not enough to establish those pins. Production capture and
+persistence of this controller record still need to be wired.
+
+The verifier uses the current explicit connection and shared namespace, pod,
+node and SPIRE PSAT checks. It follows the pod's controlling ReplicaSet to the
+pinned Deployment, checks ownership labels and selectors, and compares the
+service account, image and runtime revision across the pod and both templates.
+The application container must be running with an `ImageID` digest tied to the
+deployed image. A missing or unverified runtime digest is rejected even when
+the reported image name matches the deployment. Repository aliases may differ when the content digest is identical. An
+OCI index requires the original index bytes as a bounded proof: their SHA-256
+hashes must connect the deployed reference to a manifest for the node's operating system and architecture. Index bytes must be retained unchanged;
+normalizing their JSON invalidates the proof. A runtime import wrapper is also
+accepted when every index in its hash-verified chain has exactly one child
+leading to the deployed digest. Additional candidate images are rejected.
+The verifier performs no registry
+fetch and rejects an unresolved image. Production artifact retrieval still needs
+to provide this evidence. Repeated object reads reject resource-version changes during verification.
+These reads are not an atomic Kubernetes snapshot. Issuance must recheck the
+retained evidence and reconcile later deployment changes.
+
+Kubernetes application registrations add a digest-pinned `container-image`
+selector to the pod UID and container name. A neighboring container or a changed
+image cannot satisfy that registration just by using the same service account.
+The local kind fixture exercises the real Deployment/ReplicaSet chain, CSI
+Workload API, PSAT parent and image selector, including a wrong-image registration
+and explicit revocation. It does not qualify production controller persistence,
+StatefulSets, Miget or two-cluster application traffic.

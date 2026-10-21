@@ -10,6 +10,11 @@ var pinnedAgentImage = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-
 
 // ValidAgentImage requires an immutable SHA-256 image reference, never a URL.
 func ValidAgentImage(image string) bool {
+	return ValidPinnedImage(image)
+}
+
+// ValidPinnedImage shares the immutable image boundary for agents and applications.
+func ValidPinnedImage(image string) bool {
 	return pinnedAgentImage.MatchString(image) && !strings.Contains(image, "//")
 }
 

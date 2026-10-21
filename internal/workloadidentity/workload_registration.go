@@ -15,9 +15,10 @@ import (
 // Never construct this value directly from a management request. Binding.Agent
 // must be empty; application registrations do not grant observer authority.
 type WorkloadBinding struct {
-	Binding    Binding
-	Workload   domain.WorkloadSelector
-	PruneAfter time.Time
+	Binding        Binding
+	Workload       domain.WorkloadSelector
+	PruneAfter     time.Time
+	ContainerImage string
 }
 
 // RegisterWorkload requests short-lived certificates and sets SPIRE housekeeping
@@ -45,6 +46,14 @@ func (i *SPIREIssuer) workloadEntry(b WorkloadBinding) (*spiretypes.Entry, error
 	entry, err := i.attestedEntry(binding, uri)
 	if err != nil {
 		return nil, err
+	}
+	if binding.Method == "kubernetes" {
+		if !domain.ValidPinnedImage(b.ContainerImage) {
+			return nil, ErrIdentity
+		}
+		entry.Selectors = append(entry.Selectors, &spiretypes.Selector{Type: "k8s", Value: "container-image:" + b.ContainerImage})
+	} else if b.ContainerImage != "" {
+		return nil, ErrIdentity
 	}
 	entry.ExpiresAt = b.PruneAfter.Unix()
 	return entry, nil

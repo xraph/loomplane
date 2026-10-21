@@ -35,6 +35,18 @@ class FixtureTests(unittest.TestCase):
         ]
         self.assertEqual(service_ports, [8081, 9443])
 
+    def test_application_controller_permissions_stay_in_apps(self):
+        docs = manifests("fixture@sha256:" + "a" * 64, "certificate")
+        roles = [d for d in docs if d["kind"] == "Role" and d["metadata"]["name"] == "fixture"]
+        apps = next(d for d in roles if d["metadata"]["namespace"] == "apps")
+        controllers = [r for r in apps["rules"] if r["apiGroups"] == ["apps"]]
+        self.assertEqual(controllers, [
+            {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "create", "delete"]},
+            {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]},
+        ])
+        spire = next(d for d in roles if d["metadata"]["namespace"] == "spire")
+        self.assertFalse(any(r["apiGroups"] == ["apps"] for r in spire["rules"]))
+
     def test_kubelet_tls_is_verified(self):
         docs = manifests("fixture@sha256:" + "a" * 64, "pinned-kubelet-ca")
         cm = next(

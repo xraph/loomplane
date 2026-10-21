@@ -19,7 +19,7 @@ func workloadBindingFixture(t *testing.T) WorkloadBinding {
 	t.Helper()
 	b := bindingFixture(t)
 	b.Agent = domain.AgentIdentity{}
-	return WorkloadBinding{Binding: b, Workload: domain.WorkloadSelector{Scope: b.Destination.Scope, DestinationID: b.Destination.ID, ServiceID: "api"}, PruneAfter: time.Now().Add(2 * time.Minute).Truncate(time.Second)}
+	return WorkloadBinding{Binding: b, ContainerImage: "registry.example/api@sha256:" + strings.Repeat("a", 64), Workload: domain.WorkloadSelector{Scope: b.Destination.Scope, DestinationID: b.Destination.ID, ServiceID: "api"}, PruneAfter: time.Now().Add(2 * time.Minute).Truncate(time.Second)}
 }
 
 func TestWorkloadRegistrationPinsIdentityAttestationAndPruning(t *testing.T) {
@@ -31,7 +31,7 @@ func TestWorkloadRegistrationPinsIdentityAttestationAndPruning(t *testing.T) {
 		t.Fatal(err)
 	}
 	uri, err := WorkloadURI("loomplane.test", b.Workload)
-	if err != nil || "spiffe://"+entry.SpiffeId.TrustDomain+entry.SpiffeId.Path != uri || entry.ExpiresAt != b.PruneAfter.Unix() || entry.X509SvidTtl != 60 || entry.JwtSvidTtl != 60 || len(entry.Selectors) != 4 || entry.Admin || entry.Downstream {
+	if err != nil || "spiffe://"+entry.SpiffeId.TrustDomain+entry.SpiffeId.Path != uri || entry.ExpiresAt != b.PruneAfter.Unix() || entry.X509SvidTtl != 60 || entry.JwtSvidTtl != 60 || len(entry.Selectors) != 5 || entry.Selectors[4].Type != "k8s" || entry.Selectors[4].Value != "container-image:"+b.ContainerImage || entry.Admin || entry.Downstream {
 		t.Fatalf("wrong workload registration: %v, %v", entry, err)
 	}
 	for name, change := range map[string]func(*WorkloadBinding){
@@ -40,6 +40,8 @@ func TestWorkloadRegistrationPinsIdentityAttestationAndPruning(t *testing.T) {
 		"foreign project":                func(b *WorkloadBinding) { b.Workload.ProjectID = "foreign" },
 		"foreign environment":            func(b *WorkloadBinding) { b.Workload.EnvironmentID = "foreign" },
 		"foreign destination":            func(b *WorkloadBinding) { b.Workload.DestinationID = "foreign" },
+		"missing image":                  func(b *WorkloadBinding) { b.ContainerImage = "" },
+		"mutable image":                  func(b *WorkloadBinding) { b.ContainerImage = "api:latest" },
 		"missing service":                func(b *WorkloadBinding) { b.Workload.ServiceID = "" },
 		"path injection":                 func(b *WorkloadBinding) { b.Workload.ServiceID = "api/agent" },
 		"missing expiry":                 func(b *WorkloadBinding) { b.PruneAfter = time.Time{} },
@@ -72,6 +74,7 @@ func TestWorkloadRegistrationPinsIdentityAttestationAndPruning(t *testing.T) {
 	if issued, issueErr := issuer.RegisterWorkload(t.Context(), shortPruning); issueErr != nil || issued.X509SvidTtl != 300 {
 		t.Fatalf("certificate TTL incorrectly tied to housekeeping: %v", issueErr)
 	}
+	b.ContainerImage = ""
 	uid := uint32(1000)
 	b.Binding.Method, b.Binding.Destination.Identity.Provider = "unix", "server"
 	b.Binding.UnixUID, b.Binding.Executable, b.Binding.SHA256 = &uid, "/opt/app", strings.Repeat("a", 64)

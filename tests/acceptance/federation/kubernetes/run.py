@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify prepared agents on an owned kind cluster with SPIRE PSAT and CSI."""
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -59,7 +60,7 @@ def daemon(name, spec):
     )
 
 
-def manifests(image, kubelet_ca):
+def manifests(image, kubelet_ca, image_indexes="[]"):
     server_config = """server {
  bind_address = "0.0.0.0"
  bind_port = "8081"
@@ -148,7 +149,10 @@ plugins {
                         "resources": resources,
                         "verbs": ["get", "list", "create", "delete", "patch"],
                     }
-                ],
+                ] + ([
+                    {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "create", "delete"]},
+                    {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]},
+                ] if ns == "apps" else []),
             )
         )
         docs.append(
@@ -383,6 +387,7 @@ plugins {
                         password_env,
                         {"name": "LOOMPLANE_KUBERNETES_QUALIFICATION", "value": "1"},
                         {"name": "AGENT_IMAGE", "value": image},
+                        {"name": "APPLICATION_IMAGE_INDEXES", "value": image_indexes},
                         {
                             "name": "POD_NAME",
                             "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}},
@@ -532,7 +537,20 @@ def run():
             ca = output(
                 ["docker", "exec", node, "cat", "/var/lib/kubelet/pki/kubelet.crt"]
             )
-            docs = manifests(image, ca)
+            runtime_image = json.loads(output(["docker", "exec", node, "crictl", "inspecti", imported[0]]))["status"]
+            digests = {imported[2]}
+            digests.update(ref.rsplit("@", 1)[1] for ref in runtime_image["repoDigests"])
+            if len(digests) > 4:
+                raise RuntimeError("Too many runtime image proofs")
+            image_indexes = []
+            for digest in sorted(digests):
+                raw = subprocess.check_output(
+                    ["docker", "exec", node, "ctr", "-n", "k8s.io", "content", "get", digest], timeout=30
+                )
+                if not raw or len(raw) > 256 * 1024:
+                    raise RuntimeError("Invalid runtime image proof size")
+                image_indexes.append(base64.b64encode(raw).decode("ascii"))
+            docs = manifests(image, ca, json.dumps(image_indexes))
             docs.insert(
                 2,
                 object_(
