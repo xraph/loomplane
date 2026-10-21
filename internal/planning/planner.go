@@ -567,8 +567,8 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 		})
 		return nil
 	}
-	if set.CloudTarget != "" {
-		p.problem(Finding{Code: "cloud-target-unresolved", Subject: ServiceSubject, Name: name, Path: base + ".cloud_target", Message: "Resolve this service's named Cloud target before planning."})
+	if set.CloudTarget != "" || len(set.CloudTags) > 0 {
+		p.problem(Finding{Code: "cloud-target-unresolved", Subject: ServiceSubject, Name: name, Path: cloudPath(name, set), Message: "Resolve this service's Cloud target before planning."})
 		return nil
 	}
 	workload := provider.Workload(kind)

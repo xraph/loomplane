@@ -48,6 +48,8 @@ export const entities = {
   'Project': { idField: 'id' },
   'ProjectList': { fields: { 'projects': 'Project' } },
   'ProjectView': { idField: 'projectId', fields: { 'sources': 'SourceState' } },
+  'ProjectZone': { idField: 'id' },
+  'ProjectZoneList': { fields: { 'zones': 'ProjectZone' } },
   'Resolution': { fields: { 'variables': 'ResolvedVariable' } },
   'ResolvedVariable': { fields: { 'overrides': 'Variable', 'variable': 'Variable' } },
   'Restore': { idField: 'id' },
@@ -58,6 +60,7 @@ export const entities = {
   'RetirementPage': { fields: { 'retirements': 'Retirement' } },
   'Revision': { idField: 'id' },
   'RevisionList': { fields: { 'revisions': 'Revision' } },
+  'RouteOperation': { idField: 'id' },
   'Server': { idField: 'id' },
   'Source': { idField: 'id' },
   'SourceList': { fields: { 'sources': 'Source' } },
@@ -71,4 +74,5 @@ export const entities = {
   'WebhookEndpoint': { idField: 'id' },
   'WebhookEndpointList': { fields: { 'items': 'WebhookEndpoint' } },
   'WebhookEndpointSecret': { fields: { 'endpoint': 'WebhookEndpoint' } },
+  'Zone': { idField: 'id' },
 } as const satisfies Record<string, EntityMeta>;

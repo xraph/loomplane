@@ -17,17 +17,20 @@ import (
 // Placement changes where an existing service, resource or gateway runs.
 // A nil field leaves its value alone; an empty string restores inheritance.
 type Placement struct {
-	Section     string    `json:"section"`
-	Name        string    `json:"name"`
-	Environment string    `json:"environment,omitempty"`
-	Provider    *string   `json:"provider,omitempty"`
-	Region      *string   `json:"region,omitempty"`
-	CloudTarget *string   `json:"cloud_target,omitempty"`
-	Target      *string   `json:"target,omitempty"`
-	HealthPath  *string   `json:"health_path,omitempty"`
-	Endpoint    *Endpoint `json:"endpoint,omitempty"`
-	Build       *Build    `json:"build,omitempty"`
-	Enabled     *bool     `json:"enabled,omitempty"`
+	Section     string  `json:"section"`
+	Name        string  `json:"name"`
+	Environment string  `json:"environment,omitempty"`
+	Provider    *string `json:"provider,omitempty"`
+	Region      *string `json:"region,omitempty"`
+	CloudTarget *string `json:"cloud_target,omitempty"`
+	// CloudTags replaces the tag list; an empty list restores inheritance.
+	// Clear cloud_target in the same edit when switching to tags.
+	CloudTags  *[]string `json:"cloud_tags,omitempty"`
+	Target     *string   `json:"target,omitempty"`
+	HealthPath *string   `json:"health_path,omitempty"`
+	Endpoint   *Endpoint `json:"endpoint,omitempty"`
+	Build      *Build    `json:"build,omitempty"`
+	Enabled    *bool     `json:"enabled,omitempty"`
 }
 
 // WithPlacement edits only placement fields, preserving source, needs and
@@ -37,11 +40,11 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		return nil, err
 	}
 	if !slices.Contains([]string{"services", "resources", "gateways"}, p.Section) ||
-		(p.CloudTarget == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil) {
+		(p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil) {
 		return nil, fmt.Errorf("%w: name a service, resource or gateway and its placement changes", ErrInvalid)
 	}
-	if p.Section != "services" && (p.CloudTarget != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil) {
-		return nil, fmt.Errorf("%w: cloud_target, target, endpoint, health_path and build edits need a service", ErrInvalid)
+	if p.Section != "services" && (p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil) {
+		return nil, fmt.Errorf("%w: cloud_target, cloud_tags, target, endpoint, health_path and build edits need a service", ErrInvalid)
 	}
 	if p.Environment == "" && p.Section != "services" && p.Enabled != nil {
 		return nil, fmt.Errorf("%w: enabled on %s needs an environment", ErrInvalid, p.Section)
@@ -98,6 +101,14 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		if field.value != nil {
 			setPlacementField(target, field.key, scalar(*field.value), *field.value == "")
 		}
+	}
+	if p.CloudTags != nil {
+		value := &yaml.Node{}
+		if err := value.Encode(*p.CloudTags); err != nil {
+			return nil, err
+		}
+		value.Style = yaml.FlowStyle
+		setPlacementField(target, "cloud_tags", value, len(*p.CloudTags) == 0)
 	}
 	if p.Endpoint != nil {
 		value := &yaml.Node{}

@@ -784,6 +784,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * clouds.setDefaultPlacement
+     */
+    setDefaultPlacement: async (id: string, cloudId: string, body: types.SetDefaultPlacementInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/clouds/${encodeURIComponent(String(cloudId))}/default-placement`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetDefaultPlacementInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Profile"],
+      };
+
+      return this.request<types.Profile>(config);
+    },
+
+    /**
      * clouds.update
      */
     update: async (id: string, cloudId: string, body: types.UpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
@@ -1063,6 +1081,316 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Deployment>(config);
+    },
+
+  };
+
+  public readonly dnsZones = {
+    /**
+     * dnsZones.create
+     */
+    create: async (body: types.ZoneInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {
+      let __path = `/api/v1/dns-zones`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ZoneInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Zone"],
+      };
+
+      return this.request<types.Zone>(config);
+    },
+
+    /**
+     * dnsZones.list
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ZoneList> => {
+      let __path = `/api/v1/dns-zones`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ZoneList"],
+      };
+
+      return this.request<types.ZoneList>(config);
+    },
+
+    /**
+     * dnsZones.project
+     */
+    project: async (projectId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProjectZoneList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/dns-zones`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProjectZoneList"],
+      };
+
+      return this.request<types.ProjectZoneList>(config);
+    },
+
+    /**
+     * dnsZones.remove
+     */
+    remove: async (zoneId: string, body: types.RemoveRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RemoveRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * dnsZones.update
+     */
+    update: async (zoneId: string, body: types.ZoneUpdateBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}/update`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ZoneUpdateBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Zone"],
+      };
+
+      return this.request<types.Zone>(config);
+    },
+
+    /**
+     * dnsZones.verify
+     */
+    verify: async (zoneId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}/verify`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Zone"],
+      };
+
+      return this.request<types.Zone>(config);
+    },
+
+  };
+
+  public readonly domainRoutes = {
+    /**
+     * domainRoutes.apply
+     */
+    apply: async (projectId: string, operationId: string, body: types.ApplyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/route-operations/${encodeURIComponent(String(operationId))}/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApplyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.cutover
+     */
+    cutover: async (projectId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/route-operations/${encodeURIComponent(String(operationId))}/cutover`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.history
+     */
+    history: async (projectId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainOperationList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/operations`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainOperationList"],
+      };
+
+      return this.request<types.DomainOperationList>(config);
+    },
+
+    /**
+     * domainRoutes.list
+     */
+    list: async (projectId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainRouteList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainRouteList"],
+      };
+
+      return this.request<types.DomainRouteList>(config);
+    },
+
+    /**
+     * domainRoutes.operation
+     */
+    operation: async (projectId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/route-operations/${encodeURIComponent(String(operationId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.prepareHandoff
+     */
+    prepareHandoff: async (projectId: string, routeId: string, body: types.HandoffInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/prepare-handoff`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["HandoffInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.preview
+     */
+    preview: async (projectId: string, body: types.RouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.releaseHandoff
+     */
+    releaseHandoff: async (projectId: string, operationId: string, body: types.HandoffReleaseInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/route-operations/${encodeURIComponent(String(operationId))}/release-handoff`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["HandoffReleaseInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.remove
+     */
+    remove: async (projectId: string, routeId: string, body: types.RemoveRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RemoveRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.retry
+     */
+    retry: async (projectId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/route-operations/${encodeURIComponent(String(operationId))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.rollback
+     */
+    rollback: async (projectId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/route-operations/${encodeURIComponent(String(operationId))}/rollback`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.verify
+     */
+    verify: async (projectId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/verify`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteOperation"],
+      };
+
+      return this.request<types.RouteOperation>(config);
     },
 
   };
@@ -2123,6 +2451,24 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ProjectGrant>(config);
+    },
+
+    /**
+     * organizationClouds.setDefaultPlacement
+     */
+    setDefaultPlacement: async (cloudId: string, body: types.SetDefaultPlacementInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/default-placement`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetDefaultPlacementInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Profile"],
+      };
+
+      return this.request<types.Profile>(config);
     },
 
     /**

@@ -21,13 +21,18 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 var _ Resolver = (*PgStore)(nil)
 
-const profileColumns = `id,org_id,project_id,name,revision,created_at,updated_at`
-const targetColumns = `id,org_id,project_id,cloud_id,name,display_name,provider,connection_id,region,revision,created_at,updated_at,runtime,pool_id`
+const profileColumns = `id,org_id,project_id,name,revision,created_at,updated_at,default_provider,default_connection_id,default_region`
+const targetColumns = `id,org_id,project_id,cloud_id,name,display_name,provider,connection_id,region,revision,created_at,updated_at,runtime,pool_id,tags`
 
 func scanProfile(row pgx.Row) (*Profile, error) {
 	var p Profile
-	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.Name, &p.Revision, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	var provider, connection *string
+	var region string
+	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.Name, &p.Revision, &p.CreatedAt, &p.UpdatedAt, &provider, &connection, &region); err != nil {
 		return nil, storeError(err)
+	}
+	if provider != nil && connection != nil {
+		p.DefaultPlacement = &DefaultPlacement{Provider: *provider, ConnectionID: *connection, Region: region}
 	}
 	p.CreatedAt, p.UpdatedAt = p.CreatedAt.UTC(), p.UpdatedAt.UTC()
 	return &p, nil
@@ -36,8 +41,11 @@ func scanTarget(row pgx.Row) (*Target, error) {
 	var t Target
 	var connection *string
 	var pool *string
-	if err := row.Scan(&t.ID, &t.OrgID, &t.ProjectID, &t.CloudID, &t.Name, &t.DisplayName, &t.Provider, &connection, &t.Region, &t.Revision, &t.CreatedAt, &t.UpdatedAt, &t.Runtime, &pool); err != nil {
+	if err := row.Scan(&t.ID, &t.OrgID, &t.ProjectID, &t.CloudID, &t.Name, &t.DisplayName, &t.Provider, &connection, &t.Region, &t.Revision, &t.CreatedAt, &t.UpdatedAt, &t.Runtime, &pool, &t.Tags); err != nil {
 		return nil, storeError(err)
+	}
+	if t.Tags == nil {
+		t.Tags = []string{}
 	}
 	if connection != nil {
 		t.ConnectionID = *connection
@@ -88,7 +96,8 @@ func (s *PgStore) CreateProfile(ctx context.Context, p *Profile) error {
 		return err
 	}
 	defer rollbackSync(tx)
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_profiles (`+profileColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7)`, p.ID, p.OrgID, p.ProjectID, p.Name, p.Revision, p.CreatedAt, p.UpdatedAt)
+	provider, connection, region := defaultColumns(p.DefaultPlacement)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_profiles (`+profileColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, p.ID, p.OrgID, p.ProjectID, p.Name, p.Revision, p.CreatedAt, p.UpdatedAt, provider, connection, region)
 	if err != nil {
 		return storeError(err)
 	}
@@ -137,7 +146,20 @@ func (s *PgStore) UpdateProfile(ctx context.Context, p *Profile, previousRevisio
 		return err
 	}
 	defer rollbackSync(tx)
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name=$4,revision=$5,updated_at=$6 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND id=$3 AND revision=$7`, p.OrgID, p.ProjectID, p.ID, p.Name, p.Revision, p.UpdatedAt, previousRevision)
+	provider, connection, region := defaultColumns(p.DefaultPlacement)
+	// The organization lock is held, so no assignment can begin while this
+	// runs. Setting a first default is safe: services it places had none.
+	var redirects bool
+	err = tx.QueryRow(ctx, `SELECT default_provider IS NOT NULL AND (default_provider IS DISTINCT FROM $3 OR default_connection_id IS DISTINCT FROM $4 OR default_region<>$5)
+ AND EXISTS(SELECT 1 FROM loomplane_cloud_assignments a WHERE a.org_id=c.org_id AND a.cloud_id=c.id)
+ FROM loomplane_cloud_profiles c WHERE org_id=$1 AND id=$2`, p.OrgID, p.ID, provider, connection, region).Scan(&redirects)
+	if err != nil {
+		return storeError(err)
+	}
+	if redirects {
+		return fmt.Errorf("%w: unassign this Cloud from every environment before changing or clearing its default placement", ErrInUse)
+	}
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name=$4,revision=$5,updated_at=$6,default_provider=$8,default_connection_id=$9,default_region=$10 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND id=$3 AND revision=$7`, p.OrgID, p.ProjectID, p.ID, p.Name, p.Revision, p.UpdatedAt, previousRevision, provider, connection, region)
 	if err != nil {
 		return storeError(err)
 	}
@@ -175,7 +197,7 @@ func (s *PgStore) CreateTarget(ctx context.Context, t *Target) error {
 	if _, err := s.GetProfile(ctx, t.OrgID, t.ProjectID, t.CloudID); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_cloud_targets (`+targetColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,nullif($8,''),$9,$10,$11,$12,$13,nullif($14,''))`, t.ID, t.OrgID, t.ProjectID, t.CloudID, t.Name, t.DisplayName, t.Provider, t.ConnectionID, t.Region, t.Revision, t.CreatedAt, t.UpdatedAt, targetRuntime(t), t.PoolID)
+	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_cloud_targets (`+targetColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,nullif($8,''),$9,$10,$11,$12,$13,nullif($14,''),$15)`, t.ID, t.OrgID, t.ProjectID, t.CloudID, t.Name, t.DisplayName, t.Provider, t.ConnectionID, t.Region, t.Revision, t.CreatedAt, t.UpdatedAt, targetRuntime(t), t.PoolID, targetTags(t))
 	return storeError(err)
 }
 
@@ -205,7 +227,7 @@ func (s *PgStore) ListTargets(ctx context.Context, orgID, projectID, cloudID str
 	return out, nil
 }
 
-// UpdateTarget changes display metadata only; all placement fields must match.
+// UpdateTarget changes display metadata and tags; all placement fields must match.
 func (s *PgStore) UpdateTarget(ctx context.Context, t *Target, previousRevision int64) error {
 	if previousRevision < 1 || t.Revision != previousRevision+1 {
 		return ErrConflict
@@ -215,7 +237,7 @@ func (s *PgStore) UpdateTarget(ctx context.Context, t *Target, previousRevision 
 		return err
 	}
 	defer rollbackSync(tx)
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name=$5,revision=$6,updated_at=$7 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND cloud_id=$3 AND id=$4 AND revision=$8 AND name=$9 AND provider=$10 AND coalesce(connection_id,'')=$11 AND region=$12 AND runtime=$13 AND coalesce(pool_id,'')=$14`, t.OrgID, t.ProjectID, t.CloudID, t.ID, t.DisplayName, t.Revision, t.UpdatedAt, previousRevision, t.Name, t.Provider, t.ConnectionID, t.Region, targetRuntime(t), t.PoolID)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name=$5,revision=$6,updated_at=$7,tags=$15 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND cloud_id=$3 AND id=$4 AND revision=$8 AND name=$9 AND provider=$10 AND coalesce(connection_id,'')=$11 AND region=$12 AND runtime=$13 AND coalesce(pool_id,'')=$14`, t.OrgID, t.ProjectID, t.CloudID, t.ID, t.DisplayName, t.Revision, t.UpdatedAt, previousRevision, t.Name, t.Provider, t.ConnectionID, t.Region, targetRuntime(t), t.PoolID, targetTags(t))
 	if err != nil {
 		return storeError(err)
 	}
@@ -266,7 +288,10 @@ func (s *PgStore) environmentCloud(ctx context.Context, orgID, projectID, enviro
 	var cloudID *string
 	var revision, cloudRevision, grantRevision *int64
 	var targets []byte
-	err := s.db.QueryRow(ctx, `SELECT a.cloud_id,a.revision,c.revision,g.revision,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
+	var defaultProvider, defaultConnection *string
+	var defaultRegion *string
+	var wholeCloud *bool
+	err := s.db.QueryRow(ctx, `SELECT a.cloud_id,a.revision,c.revision,g.revision,c.default_provider,c.default_connection_id,c.default_region,cardinality(g.target_ids)=0,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
  FROM loomplane_environments e
  JOIN loomplane_projects p ON p.org_id=e.org_id AND p.id=e.project_id
  LEFT JOIN loomplane_cloud_assignments a ON a.org_id=e.org_id AND a.project_id=e.project_id AND a.environment_id=e.id
@@ -274,7 +299,7 @@ func (s *PgStore) environmentCloud(ctx context.Context, orgID, projectID, enviro
  LEFT JOIN loomplane_cloud_project_grants g ON g.org_id=a.org_id AND g.cloud_id=a.cloud_id AND g.project_id=a.project_id AND NOT g.revoked
  LEFT JOIN loomplane_cloud_targets t ON t.org_id=a.org_id AND t.cloud_id=a.cloud_id AND ($4 OR (g.revision IS NOT NULL AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids))))
  WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$3
- GROUP BY e.id,a.cloud_id,a.revision,c.revision,g.revision`, orgID, projectID, environmentID, retained).Scan(&cloudID, &revision, &cloudRevision, &grantRevision, &targets)
+ GROUP BY e.id,a.cloud_id,a.revision,c.revision,g.revision,c.default_provider,c.default_connection_id,c.default_region,g.target_ids`, orgID, projectID, environmentID, retained).Scan(&cloudID, &revision, &cloudRevision, &grantRevision, &defaultProvider, &defaultConnection, &defaultRegion, &wholeCloud, &targets)
 	if err != nil {
 		return nil, 0, storeError(err)
 	}
@@ -294,6 +319,19 @@ func (s *PgStore) environmentCloud(ctx context.Context, orgID, projectID, enviro
 	a := &Assignment{GrantRevision: *grantRevision, OrgID: orgID, ProjectID: projectID, EnvironmentID: environmentID, CloudID: *cloudID, Revision: *revision, CloudRevision: *cloudRevision}
 	if err = json.Unmarshal(targets, &a.Targets); err != nil {
 		return nil, 0, fmt.Errorf("decode assigned targets: %w", err)
+	}
+	for i := range a.Targets {
+		if a.Targets[i].Tags == nil {
+			a.Targets[i].Tags = []string{}
+		}
+	}
+	// Cleanup keeps the default it placed with; fresh placement needs a grant
+	// covering the whole Cloud, not just chosen targets.
+	if defaultProvider != nil && defaultConnection != nil && (retained || wholeCloud != nil && *wholeCloud) {
+		a.DefaultPlacement = &DefaultPlacement{Provider: *defaultProvider, ConnectionID: *defaultConnection}
+		if defaultRegion != nil {
+			a.DefaultPlacement.Region = *defaultRegion
+		}
 	}
 	return a, *revision, nil
 }
@@ -319,6 +357,21 @@ func (s *PgStore) metadataTransaction(ctx context.Context, org, _ string) (drive
 		return nil, fmt.Errorf("%w: finish or revert the project Cloud sync before renaming a Cloud or target", ErrBusy)
 	}
 	return tx, nil
+}
+
+func targetTags(t *Target) []string {
+	if t.Tags == nil {
+		return []string{}
+	}
+	return t.Tags
+}
+
+// defaultColumns maps an absent default to NULL provider and connection.
+func defaultColumns(p *DefaultPlacement) (provider, connection *string, region string) {
+	if p == nil {
+		return nil, nil, ""
+	}
+	return &p.Provider, &p.ConnectionID, p.Region
 }
 
 func targetRuntime(t *Target) string {

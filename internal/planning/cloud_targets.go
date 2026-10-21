@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 
@@ -28,20 +29,102 @@ type CloudPlacement struct {
 	CloudID              string `json:"cloud_id"`
 	CloudRevision        int64  `json:"cloud_revision"`
 	AssignmentRevision   int64  `json:"assignment_revision"`
-	TargetID             string `json:"target_id"`
-	TargetRevision       int64  `json:"target_revision"`
-	TargetName           string `json:"target_name"`
-	Provider             string `json:"provider"`
-	ConnectionID         string `json:"connection_id"`
-	AccountIdentity      string `json:"account_identity"`
-	Region               string `json:"region,omitempty"`
+	// Default marks a service placed by the Cloud's default rather than a
+	// target. It has no target ID, name or revision; the Cloud revision pins it.
+	Default         bool   `json:"default,omitempty"`
+	TargetID        string `json:"target_id"`
+	TargetRevision  int64  `json:"target_revision"`
+	TargetName      string `json:"target_name"`
+	Provider        string `json:"provider"`
+	ConnectionID    string `json:"connection_id"`
+	AccountIdentity string `json:"account_identity"`
+	Region          string `json:"region,omitempty"`
 	// RegionSource records the effective manifest override before defaults resolve.
 	RegionSource string `json:"region_source,omitempty"`
+}
+
+// CloudPlacementError is a placement finding found before planning. Service
+// planning reports it under its own code and manifest path.
+type CloudPlacementError struct {
+	Code    string
+	Path    string
+	Message string
+}
+
+func (e *CloudPlacementError) Error() string { return e.Path + ": " + e.Message }
+
+// SelectCloudTarget returns the target a service's settings name or tag, or
+// nil when they select none. Tags match the targets the project's grant
+// allows; a service gets a target only when exactly one carries every tag.
+func SelectCloudTarget(set manifest.Settings, assignment *cloudprofiles.Assignment, path string) (*cloudprofiles.Target, error) {
+	if assignment == nil || set.CloudTarget == "" && len(set.CloudTags) == 0 {
+		return nil, nil
+	}
+	if set.CloudTarget != "" {
+		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.Name == set.CloudTarget })
+		if i < 0 {
+			return nil, fmt.Errorf("%s: target %q is missing from the assigned Cloud; choose an existing target", path, set.CloudTarget)
+		}
+		return &assignment.Targets[i], nil
+	}
+	var matches []int
+	for i, t := range assignment.Targets {
+		if carriesTags(t.Tags, set.CloudTags) {
+			matches = append(matches, i)
+		}
+	}
+	tags := strings.Join(set.CloudTags, ", ")
+	switch len(matches) {
+	case 1:
+		return &assignment.Targets[matches[0]], nil
+	case 0:
+		return nil, &CloudPlacementError{Code: "cloud-tag-unmatched", Path: path, Message: fmt.Sprintf("no target this project may use in the assigned Cloud carries %s. Tag a target, or ask an organization admin to grant this project one that does.", tags)}
+	}
+	names := make([]string, 0, len(matches))
+	for _, i := range matches {
+		names = append(names, assignment.Targets[i].Name)
+	}
+	return nil, &CloudPlacementError{Code: "cloud-tag-ambiguous", Path: path, Message: fmt.Sprintf("%s matches %d targets (%s). Add a tag only one of them carries, or name the target with cloud_target.", tags, len(names), strings.Join(names, ", "))}
+}
+
+func carriesTags(have, want []string) bool {
+	for _, tag := range want {
+		if !slices.Contains(have, tag) {
+			return false
+		}
+	}
+	return true
+}
+
+// usesCloudDefault reports whether a service with no placement of its own
+// goes to the assigned Cloud's default provider and account. Targets never
+// change this: adding one only places services that name or tag it.
+func usesCloudDefault(set manifest.Settings, assignment *cloudprofiles.Assignment) bool {
+	return assignment != nil && assignment.DefaultPlacement != nil && set.CloudTarget == "" && len(set.CloudTags) == 0 && set.Provider == "" && set.Target == ""
+}
+
+func cloudPath(name string, set manifest.Settings) string {
+	switch {
+	case set.CloudTarget != "":
+		return "services." + name + ".cloud_target"
+	case len(set.CloudTags) > 0:
+		return "services." + name + ".cloud_tags"
+	}
+	return "services." + name + ".provider"
 }
 
 // ResolveCloudTargets returns an independent manifest with effective placement.
 // The caller checks the assignment's organization, project and environment.
 func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools ...map[string]*cloudinfra.Placement) (*manifest.Manifest, map[string]CloudPlacement, error) {
+	var resolved map[string]*cloudinfra.Placement
+	if len(pools) > 0 {
+		resolved = pools[0]
+	}
+	return resolveCloudPlacements(m, environment, assignment, options, resolved, nil)
+}
+
+// resolveCloudPlacements leaves held services exactly as their manifest says.
+func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, held map[string]bool) (*manifest.Manifest, map[string]CloudPlacement, error) {
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return nil, nil, err
@@ -52,13 +135,20 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 	}
 	placements := map[string]CloudPlacement{}
 	for _, name := range m.ServiceNames() {
-		s := out.Services[name]
-		set := s.For(environment, m.Defaults)
-		if set.CloudTarget == "" || !manifest.On(set.Enabled) {
+		if held[name] {
 			continue
 		}
-		path := "services." + name + ".cloud_target"
-		if set.Provider != "" || set.Target != "" {
+		s := out.Services[name]
+		set := s.For(environment, m.Defaults)
+		if !manifest.On(set.Enabled) {
+			continue
+		}
+		fallback := usesCloudDefault(set, assignment)
+		if set.CloudTarget == "" && len(set.CloudTags) == 0 && !fallback {
+			continue
+		}
+		path := cloudPath(name, set)
+		if !fallback && (set.Provider != "" || set.Target != "") {
 			return nil, nil, fmt.Errorf("%s conflicts with effective provider or target placement; remove direct placement, including defaults, to use a Cloud target", path)
 		}
 		if assignment == nil {
@@ -70,13 +160,19 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 		if assignment.OrgID == "" || assignment.ProjectID == "" || assignment.EnvironmentID == "" || assignment.CloudID == "" {
 			return nil, nil, fmt.Errorf("%s has an invalid assignment scope", path)
 		}
-		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.Name == set.CloudTarget })
-		if i < 0 {
-			return nil, nil, fmt.Errorf("%s: target %q is missing from the assigned Cloud; choose an existing target", path, set.CloudTarget)
-		}
-		target := assignment.Targets[i]
-		if target.Revision < 1 {
-			return nil, nil, fmt.Errorf("%s has no reviewed target revision", path)
+		var target cloudprofiles.Target
+		if fallback {
+			d := assignment.DefaultPlacement
+			target = cloudprofiles.Target{OrgID: assignment.OrgID, CloudID: assignment.CloudID, Provider: d.Provider, ConnectionID: d.ConnectionID, Region: d.Region}
+		} else {
+			selected, selectErr := SelectCloudTarget(set, assignment, path)
+			if selectErr != nil {
+				return nil, nil, selectErr
+			}
+			target = *selected
+			if target.Revision < 1 {
+				return nil, nil, fmt.Errorf("%s has no reviewed target revision", path)
+			}
 		}
 		if target.OrgID != assignment.OrgID || target.CloudID != assignment.CloudID {
 			return nil, nil, fmt.Errorf("%s: target is outside the assignment scope", path)
@@ -84,10 +180,10 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 		connectionID := target.ConnectionID
 		var pool *cloudinfra.Placement
 		if target.PoolID != "" {
-			if len(pools) == 0 || pools[0][name] == nil {
+			if pools[name] == nil {
 				return nil, nil, fmt.Errorf("%s needs resolved pool capacity", path)
 			}
-			pool = pools[0][name]
+			pool = pools[name]
 			if pool.PoolID != target.PoolID {
 				return nil, nil, fmt.Errorf("%s resolved another pool", path)
 			}
@@ -113,7 +209,7 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 		if OwnedCloud(c.Cloud) {
 			set.Target = c.ID
 		}
-		placements[name] = CloudPlacement{GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: target.Provider, ConnectionID: connectionID, AccountIdentity: identity, Region: set.Region, RegionSource: regionSource}
+		placements[name] = CloudPlacement{Default: fallback, GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: target.Provider, ConnectionID: connectionID, AccountIdentity: identity, Region: set.Region, RegionSource: regionSource}
 		if pool != nil {
 			p := placements[name]
 			p.PoolID = pool.PoolID
@@ -126,10 +222,12 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 			p.MemoryBytes = pool.MemoryBytes
 			placements[name] = p
 		}
-		set.CloudTarget = ""
+		set.CloudTarget, set.CloudTags = "", nil
 		s.Settings, s.Environments = set, nil
 		out.Services[name] = s
 	}
+	// Every service the default tags applied to is resolved above.
+	out.Defaults.CloudTags = nil
 	return &out, placements, nil
 }
 
@@ -194,15 +292,25 @@ func MatchesCloudAdoption(b *Binding, reviewed *CloudAdoption) bool {
 	return reviewed != nil && current != nil && *reviewed == *current
 }
 
+// cloudNeeds says why a plan reads the environment's Cloud. Explicit services
+// name or tag a target; fallback services have no placement and may use the
+// Cloud's default. Held services keep their manifest placement untouched.
+type cloudNeeds struct {
+	Explicit bool
+	Fallback bool
+	Held     map[string]bool
+}
+
 // cloudResolutionManifest excludes held services from desired placement lookup.
-func cloudResolutionManifest(m *manifest.Manifest, in Input) (*manifest.Manifest, bool, error) {
+func cloudResolutionManifest(m *manifest.Manifest, in Input) (*manifest.Manifest, cloudNeeds, error) {
+	needs := cloudNeeds{Held: map[string]bool{}}
 	raw, err := json.Marshal(m)
 	if err != nil {
-		return nil, false, err
+		return nil, needs, err
 	}
 	var out manifest.Manifest
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, false, err
+		return nil, needs, err
 	}
 	p := &planner{in: in}
 	byName := map[string]*Binding{}
@@ -211,7 +319,6 @@ func cloudResolutionManifest(m *manifest.Manifest, in Input) (*manifest.Manifest
 			byName[b.Name] = b
 		}
 	}
-	needed := false
 	for _, name := range out.ServiceNames() {
 		s := out.Services[name]
 		_, held := p.heldBinding(byName[name])
@@ -220,18 +327,23 @@ func cloudResolutionManifest(m *manifest.Manifest, in Input) (*manifest.Manifest
 			repo = in.Graph.Sources[0].Alias
 		}
 		if held || in.Held[repo] {
-			s.CloudTarget = ""
+			s.CloudTarget, s.CloudTags = "", nil
 			for env, override := range s.Environments {
-				override.CloudTarget = ""
+				override.CloudTarget, override.CloudTags = "", nil
 				s.Environments[env] = override
 			}
 			out.Services[name] = s
+			needs.Held[name] = true
 			continue
 		}
 		set := s.For(in.Environment, out.Defaults)
-		needed = needed || set.CloudTarget != "" && manifest.On(set.Enabled)
+		if !manifest.On(set.Enabled) {
+			continue
+		}
+		needs.Explicit = needs.Explicit || set.CloudTarget != "" || len(set.CloudTags) > 0
+		needs.Fallback = needs.Fallback || set.CloudTarget == "" && len(set.CloudTags) == 0 && set.Provider == "" && set.Target == ""
 	}
-	return &out, needed, nil
+	return &out, needs, nil
 }
 
 func (p *planner) sameDeploymentAccount(a, b *Action) bool {
@@ -276,7 +388,7 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in cloudinfra.PlacementR
 func (s *PgStore) ValidatePlacement(ctx context.Context, org, project, env, plan, service string, p cloudinfra.Placement) error {
 	return cloudinfra.NewPgStore(s.db).ValidatePlacement(ctx, org, project, env, plan, service, p)
 }
-func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Manifest, a *cloudprofiles.Assignment, bindings []*Binding, options []ConnectionOption) (map[string]*cloudinfra.Placement, error) {
+func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Manifest, a *cloudprofiles.Assignment, bindings []*Binding, options []ConnectionOption, held map[string]bool) (map[string]*cloudinfra.Placement, error) {
 	out := map[string]*cloudinfra.Placement{}
 	if a == nil {
 		return out, nil
@@ -286,14 +398,15 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 	for _, name := range m.ServiceNames() {
 		svc := m.Services[name]
 		set := svc.For(plan.Environment, m.Defaults)
-		if set.CloudTarget == "" || !manifest.On(set.Enabled) {
+		if held[name] || !manifest.On(set.Enabled) {
 			continue
 		}
-		i := slices.IndexFunc(a.Targets, func(t cloudprofiles.Target) bool { return t.Name == set.CloudTarget })
-		if i < 0 || a.Targets[i].PoolID == "" {
+		// Resolution reports a missing or ambiguous target; capacity skips it.
+		selected, selectErr := SelectCloudTarget(set, a, name)
+		if selectErr != nil || selected == nil || selected.PoolID == "" {
 			continue
 		}
-		t := a.Targets[i]
+		t := *selected
 		if !ok {
 			return nil, fmt.Errorf("pool capacity resolver is unavailable")
 		}
