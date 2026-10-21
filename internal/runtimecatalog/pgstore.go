@@ -307,3 +307,10 @@ func DeactivateTx(ctx context.Context, tx driver.Tx, org, destination, agent str
 	}
 	return appendChange(ctx, tx, &state)
 }
+
+// CheckAgentTx holds the observer and destination while a controller records a
+// delivery. It shares the catalog's exact registration and quarantine checks.
+func CheckAgentTx(ctx context.Context, tx driver.Tx, agent domain.AgentIdentity) error {
+	_, err := loadAgent(ctx, tx, agent, true)
+	return err
+}

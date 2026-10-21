@@ -36,6 +36,20 @@ func (s *PolicyStore) Input(ctx context.Context, scope domain.Scope) (input doma
 	if stepErr := expirePolicyGrants(ctx, tx, scope.OrgID, input.EvaluatedAt); stepErr != nil {
 		return input, stepErr
 	}
+	input, err = policyInputTx(ctx, tx, scope, input.EvaluatedAt)
+	if err != nil {
+		return domain.PolicyInput{}, err
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return domain.PolicyInput{}, commitErr
+	}
+	return input, nil
+}
+
+// policyInputTx reads the same durable rules for compilation and final signing.
+// Its caller holds the organization policy lock and has materialized expiry.
+func policyInputTx(ctx context.Context, tx driver.Tx, scope domain.Scope, evaluatedAt time.Time) (input domain.PolicyInput, err error) {
+	input.EvaluatedAt = evaluatedAt
 	input.Scope = scope
 	if stepErr := tx.QueryRow(ctx, `SELECT COALESCE((SELECT generation FROM loomplane_federation_policy_versions WHERE org_id=$1),1)`, scope.OrgID).Scan(&input.Generation); stepErr != nil {
 		return input, stepErr
@@ -66,11 +80,9 @@ func (s *PolicyStore) Input(ctx context.Context, scope domain.Scope) (input doma
 	for _, grant := range grants {
 		input.Grants = append(input.Grants, grant.AccessGrant)
 	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return domain.PolicyInput{}, commitErr
-	}
 	return input, nil
 }
+
 func policyRecords[T any](ctx context.Context, tx driver.Tx, query string, scope domain.Scope) ([]T, error) {
 	rows, err := tx.Query(ctx, query, scope.OrgID, scope.ProjectID, scope.EnvironmentID, domain.MaxSnapshotRecords+1)
 	if err != nil {
