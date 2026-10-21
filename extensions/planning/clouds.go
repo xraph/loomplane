@@ -298,8 +298,15 @@ func (e *Extension) completeCloudRouting(c forge.Context) error {
 }
 
 func (e *Extension) startCloudRecovery(ctx context.Context, every time.Duration) error {
-	if err := e.deployments.RecoverCloudSyncs(ctx); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
+	}
+	recoveryErr := e.deployments.RecoverCloudSyncs(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if recoveryErr != nil {
+		e.Logger().Warn("Cloud recovery will retry", forge.F("error", recoveryErr.Error()))
 	}
 	work, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	e.cloudRecoveryCancel = cancel
@@ -313,6 +320,9 @@ func (e *Extension) startCloudRecovery(ctx context.Context, every time.Duration)
 			case <-work.Done():
 				return
 			case <-ticker.C:
+				if work.Err() != nil {
+					return
+				}
 				if err := e.deployments.RecoverCloudSyncs(work); err != nil && work.Err() == nil {
 					e.Logger().Warn("Cloud recovery will retry", forge.F("error", err.Error()))
 				}
