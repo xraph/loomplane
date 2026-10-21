@@ -97,6 +97,9 @@ func (e *Extension) Start(context.Context) error {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
+			if err := e.svc.RecoverRoutes(ctx); err != nil && ctx.Err() == nil {
+				e.Logger().Warn("Recover domain route operations", forge.F("error", err.Error()))
+			}
 			if err := e.svc.RecoverInfrastructure(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Recover infrastructure operations", forge.F("error", err.Error()))
 			}

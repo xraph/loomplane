@@ -14,6 +14,14 @@ import (
 // ExecOutput streams stdout without mixing diagnostics into a database dump.
 // Callers supply fixed native-tool argument lists, never shell commands.
 func ExecOutput(ctx context.Context, c *Client, container string, args []string, dst io.Writer) error {
+	return execOutput(ctx, c, container, args, dst, false)
+}
+
+func execIngressOutput(ctx context.Context, c *Client, container string, args []string, dst io.Writer) error {
+	return execOutput(ctx, c, container, args, dst, true)
+}
+
+func execOutput(ctx context.Context, c *Client, container string, args []string, dst io.Writer, ingress bool) error {
 	var created struct {
 		ID string `json:"Id"`
 	}
@@ -23,7 +31,17 @@ func ExecOutput(ctx context.Context, c *Client, container string, args []string,
 	if created.ID == "" {
 		return errors.New("docker returned no exec identity")
 	}
-	response, err := c.Request(ctx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":false}`))
+	var response *http.Response
+	var err error
+	if ingress {
+		f, ok := EffectFenceFrom(ctx)
+		if !ok {
+			return errors.New("ingress exec requires an effect fence")
+		}
+		response, err = c.fencedRequest(ctx, "ingress-exec", f, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":false}`), http.Header{"Content-Type": []string{"application/json"}})
+	} else {
+		response, err = c.Request(ctx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":false}`))
+	}
 	if err != nil {
 		return err
 	}

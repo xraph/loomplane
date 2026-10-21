@@ -203,6 +203,10 @@ type DNSDeleteRequest struct {
 // DNSAdapter manages DNS independently of compute. Expected-prior checks are
 // drift guards, not atomic compare-and-swap, because these APIs provide no CAS.
 // Callers must serialize changes by zone/name and reconcile ambiguous outcomes.
+// DNSRecordOwnership is an optional capability for adapters that persist an
+// owner token on provider records. Other adapters require recorded IDs.
+type DNSRecordOwnership interface{ SupportsDNSRecordOwnership() bool }
+
 type DNSAdapter interface {
 	ListZones(context.Context, InfrastructureCredential) ([]DNSZone, error)
 	GetZone(context.Context, InfrastructureCredential, string) (DNSZone, error)

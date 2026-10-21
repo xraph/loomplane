@@ -122,6 +122,8 @@ type Runtime interface {
 }
 
 type Deps struct {
+	Domains              DomainStore
+	Resolver             DomainResolver
 	PoolCleanup          PoolCleanup
 	Store                Store
 	Clouds               Clouds

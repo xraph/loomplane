@@ -418,3 +418,5 @@ func (c *Client) DeleteRecord(ctx context.Context, credential provider.Infrastru
 func InfrastructureCapabilities() []provider.InfrastructureCapability {
 	return []provider.InfrastructureCapability{provider.DNSRecordDeletion, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSZoneCreation, provider.DNSZoneDiscovery}
 }
+
+func (*Client) SupportsDNSRecordOwnership() bool { return true }

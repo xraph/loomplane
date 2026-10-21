@@ -102,7 +102,7 @@ func (c *Client) fencedRequest(ctx context.Context, mode string, f EffectFence, 
 	return response, nil
 }
 
-const effectFenceScript = `import os,sys,json,hashlib,fcntl,socket,http.client,signal,tempfile,stat
+const effectFenceScript = `import os,sys,json,hashlib,fcntl,socket,http.client,signal,tempfile,stat,re,time,struct
 # Once the complete request has arrived, caller loss must not interrupt the
 # daemon request. An uncatchable termination leaves the durable dirty marker.
 for sig in (signal.SIGHUP,signal.SIGTERM,signal.SIGINT): signal.signal(sig,signal.SIG_IGN)
@@ -155,10 +155,27 @@ def main():
   state['epochs'][op]=generation;save()
   emit(b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');return
  assert generation==old and old>0
+ ingress=q['Mode']=='ingress-exec'
+ if ingress:
+  assert q['Method']=='POST' and re.fullmatch(r'/exec/[a-f0-9]{64}/start',q['Path'])
+  assert json.loads(payload.read())=={'Detach':False,'Tty':False};payload.seek(0)
+  inspect=q['Path'][:-5]+'json'
+  c.request('GET',inspect);r=c.getresponse();execution=json.loads(r.read());assert r.status==200
+  container=execution['ContainerID'];assert re.fullmatch(r'[a-f0-9]{64}',container)
+  assert not execution['Running']
+  process=execution['ProcessConfig'];args=process['arguments']
+  assert not process['tty'] and not process['privileged'] and process['entrypoint']=='sh' and args[0]=='-c'
+  admin=r"""` + ingressAdminScript + `"""
+  probe=r"""` + ingressProbeScript + `"""
+  assert (len(args)==6 and args[1]==admin and args[2]=='ingress' and args[3] in ('read','apply')) or (len(args)==4 and args[1]==probe and args[2]=='probe' and re.fullmatch(r'[a-z0-9.-]+',args[3]))
+  c.request('GET','/containers/'+container+'/json');r=c.getresponse();owned=json.loads(r.read());assert r.status==200
+  assert owned['Id']==container and owned['State']['Running'] and owned['Config']['Image']=='` + IngressImage + `'
+  assert owned['Config']['Labels'].get('loomplane.org') and owned['Config']['Labels'].get('loomplane.ingress')
+  assert q['Fence']['operation']==owned['Config']['Labels']['loomplane.org']+'/ingress/'+owned['Config']['Labels']['loomplane.ingress']
  headers={k:','.join(v) for k,v in (q['Headers'] or {}).items()};headers['Content-Length']=str(size)
  state['dirty']=True;save()
  c.request(q['Method'],q['Path'],body=payload,headers=headers);r=c.getresponse()
- assert r.chunked or r.length is not None
+ assert r.chunked or r.length is not None or (ingress and r.status==200)
  responding=True
  emit(('HTTP/1.1 '+str(r.status)+' '+r.reason+'\r\n').encode())
  for k,v in r.getheaders():
@@ -166,7 +183,26 @@ def main():
  emit(b'Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n')
  def output(chunk):
   emit(('%x\r\n'%len(chunk)).encode()+chunk+b'\r\n')
- if r.chunked:
+ if ingress and r.status==200:
+  # Docker's synchronous non-TTY exec uses a close-delimited multiplex stream.
+  # Complete frames plus exact process completion establish quiescence.
+  while True:
+   header=r.read(8)
+   if not header: break
+   assert len(header)==8 and header[0] in (1,2) and header[1:4]==b'\x00\x00\x00'
+   remaining=struct.unpack('>I',header[4:])[0];assert remaining<=16*1024*1024
+   output(header)
+   while remaining:
+    chunk=r.read(min(65536,remaining));assert chunk
+    remaining-=len(chunk);output(chunk)
+  c.close();c=UnixHTTP('docker')
+  for attempt in range(120):
+   c.request('GET',inspect);finished=c.getresponse();receipt=json.loads(finished.read());assert finished.status==200
+   assert receipt['ContainerID']==container and isinstance(receipt['ExitCode'],int)
+   if not receipt['Running']: break
+   time.sleep(0.25)
+  assert not receipt['Running']
+ elif r.chunked:
   # Consume strict chunk framing, including the terminating trailer line.
   # HTTPResponse's trailer reader otherwise accepts a premature EOF.
   while True:

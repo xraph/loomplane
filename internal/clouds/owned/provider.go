@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/xraph/ctrlplane"
@@ -14,35 +15,41 @@ import (
 )
 
 const (
-	LabelOrg           = "loomplane.org"
-	LabelPlan          = "loomplane.plan"
-	LabelProject       = "loomplane.project"
-	LabelEnvironment   = "loomplane.environment"
-	LabelAction        = "loomplane.action"
-	LabelService       = "loomplane.service"
-	LabelOperation     = "loomplane.operation"
-	LabelConnection    = "loomplane.connection"
-	LabelSettings      = "loomplane.target.settings"
-	LabelRuntime       = "loomplane.runtime.ref"
-	LabelImage         = "loomplane.image.ref"
-	LabelPublic        = "loomplane.public"
-	LabelHostPort      = "loomplane.host.port"
-	LabelHealth        = "loomplane.health.path"
-	LabelHostname      = "loomplane.hostname"
-	LabelIngressClass  = "loomplane.ingress.class"
-	LabelTLSSecret     = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
-	LabelReplicas      = "loomplane.replicas"
-	LabelScaleMin      = "loomplane.scale.min"
-	LabelScaleMax      = "loomplane.scale.max"
-	LabelArchitecture  = "loomplane.architecture"
-	LabelRevision      = "loomplane.revision"
-	LabelInstance      = "loomplane.instance"
-	LabelManageIngress = "loomplane.manage.ingress"
-	LabelManageHPA     = "loomplane.manage.hpa"
+	LabelOrg                  = "loomplane.org"
+	LabelPlan                 = "loomplane.plan"
+	LabelProject              = "loomplane.project"
+	LabelEnvironment          = "loomplane.environment"
+	LabelAction               = "loomplane.action"
+	LabelService              = "loomplane.service"
+	LabelOperation            = "loomplane.operation"
+	LabelConnection           = "loomplane.connection"
+	LabelSettings             = "loomplane.target.settings"
+	LabelRuntime              = "loomplane.runtime.ref"
+	LabelImage                = "loomplane.image.ref"
+	LabelPublic               = "loomplane.public"
+	LabelHostPort             = "loomplane.host.port"
+	LabelHealth               = "loomplane.health.path"
+	LabelHostname             = "loomplane.hostname"
+	LabelIngressClass         = "loomplane.ingress.class"
+	LabelTLSSecret            = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
+	LabelReplicas             = "loomplane.replicas"
+	LabelScaleMin             = "loomplane.scale.min"
+	LabelScaleMax             = "loomplane.scale.max"
+	LabelArchitecture         = "loomplane.architecture"
+	LabelRevision             = "loomplane.revision"
+	LabelReceiptRelease       = "loomplane.runtime.receipt.release"
+	LabelReceiptServicePrefix = "loomplane.runtime.receipt.service."
+	LabelInstance             = "loomplane.instance"
+	LabelManageIngress        = "loomplane.manage.ingress"
+	LabelManageHPA            = "loomplane.manage.hpa"
 )
 
 type Instances interface {
 	Get(context.Context, id.ID) (*instance.Instance, error)
+}
+
+type instanceUpdater interface {
+	Update(context.Context, id.ID, instance.UpdateRequest) (*instance.Instance, error)
 }
 
 type RuntimeValues struct {
@@ -96,6 +103,10 @@ func (p *Provider) Provision(ctx context.Context, r cpprovider.ProvisionRequest)
 	return p.Backend.Apply(ctx, r.InstanceID, r.Services[0], maps.Clone(r.Labels))
 }
 func (p *Provider) Deploy(ctx context.Context, r cpprovider.DeployRequest) (*cpprovider.DeployResult, error) {
+	updater, ok := p.Instances.(instanceUpdater)
+	if !ok {
+		return nil, fmt.Errorf("owned deployment requires persistent runtime receipts")
+	}
 	inst, err := p.Instances.Get(ctx, r.InstanceID)
 	if err != nil {
 		return nil, err
@@ -113,18 +124,38 @@ func (p *Provider) Deploy(ctx context.Context, r cpprovider.DeployRequest) (*cpp
 		}
 	}
 	labels := maps.Clone(inst.Labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
 	labels[LabelRevision] = r.ReleaseID.String()
 	result, err := p.Backend.Apply(ctx, r.InstanceID, spec, labels)
 	if err != nil {
 		return nil, err
 	}
+	if result == nil || result.ServiceRefs[spec.Name] == "" {
+		return nil, fmt.Errorf("owned deployment returned no exact service reference")
+	}
 	deadline := time.Now().Add(p.ReadinessPolicy().Timeout)
 	for {
-		status, statusErr := p.Backend.Status(ctx, r.InstanceID, inst.Labels)
+		status, statusErr := p.Backend.Status(ctx, r.InstanceID, labels)
 		if statusErr != nil {
 			return nil, statusErr
 		}
 		if status.Ready {
+			// Controller Deploy does not refresh ServiceRefs. Record the ready
+			// runtime separately; consumers also require its deployment to succeed.
+			for key := range labels {
+				if strings.HasPrefix(key, LabelReceiptServicePrefix) {
+					delete(labels, key)
+				}
+			}
+			labels[LabelReceiptRelease] = r.ReleaseID.String()
+			for name, ref := range result.ServiceRefs {
+				labels[LabelReceiptServicePrefix+name] = ref
+			}
+			if _, err = updater.Update(ctx, r.InstanceID, instance.UpdateRequest{Labels: labels}); err != nil {
+				return nil, fmt.Errorf("persist owned runtime receipt: %w", err)
+			}
 			return &cpprovider.DeployResult{ProviderRef: result.ProviderRef, Status: "succeeded", Endpoints: result.Endpoints}, nil
 		}
 		if status.State == cpprovider.StateFailed || time.Now().After(deadline) {
