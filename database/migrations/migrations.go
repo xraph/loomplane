@@ -70,6 +70,7 @@ func Group() *migrate.Group {
 		statements("20261020000600", "backup_retirement", backupRetirementUp, backupRetirementDown),
 		statements("20261020000700", "backup_retirement_history", backupRetirementHistoryUp, backupRetirementHistoryDown),
 		statements("20261020000800", "backup_retirement_listing", backupRetirementListingUp, backupRetirementListingDown),
+		statements("20261021000200", "retention_policies", retentionPoliciesUp, retentionPoliciesDown),
 		statements("20261018000400", "create_cloud_profiles", cloudProfilesUp, cloudProfilesDown),
 		statements("20261018000401", "cloud_sync", cloudSyncUp, cloudSyncDown),
 		statements("20261020000400", "cloud_sync_recovery_guards", cloudSyncRecoveryGuardsUp, cloudSyncRecoveryGuardsDown),

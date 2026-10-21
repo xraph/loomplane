@@ -19,20 +19,22 @@ type RetirementRequest struct {
 }
 
 type ServiceRetirement struct {
-	ID           string            `json:"id"`
-	OrgID        string            `json:"org_id"`
-	ProjectID    string            `json:"project_id"`
-	BackupID     string            `json:"backup_id"`
-	WitnessID    string            `json:"witness_id"`
-	Status       string            `json:"status"`
-	ExecutionBy  string            `json:"execution_by"`
-	AttemptLimit int               `json:"attempt_limit"`
-	Attempt      int               `json:"attempt"`
-	Error        string            `json:"error,omitempty"`
-	Policy       RetentionSettings `json:"policy"`
-	CreatedBy    string            `json:"created_by"`
-	CreatedAt    time.Time         `json:"created_at"`
-	CompletedAt  *time.Time        `json:"completed_at,omitempty"`
+	RetentionPolicyID string            `json:"retention_policy_id,omitempty"`
+	RetentionRevision int64             `json:"retention_revision,omitempty"`
+	ID                string            `json:"id"`
+	OrgID             string            `json:"org_id"`
+	ProjectID         string            `json:"project_id"`
+	BackupID          string            `json:"backup_id"`
+	WitnessID         string            `json:"witness_id"`
+	Status            string            `json:"status"`
+	ExecutionBy       string            `json:"execution_by"`
+	AttemptLimit      int               `json:"attempt_limit"`
+	Attempt           int               `json:"attempt"`
+	Error             string            `json:"error,omitempty"`
+	Policy            RetentionSettings `json:"policy"`
+	CreatedBy         string            `json:"created_by"`
+	CreatedAt         time.Time         `json:"created_at"`
+	CompletedAt       *time.Time        `json:"completed_at,omitempty"`
 }
 
 type RetirementPageInput struct {

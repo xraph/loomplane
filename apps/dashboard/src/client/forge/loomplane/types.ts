@@ -1121,6 +1121,8 @@ export interface Retirement {
   orgId: string;
   policy: RetentionInput;
   projectId: string;
+  retentionPolicyId?: string;
+  retentionRevision?: number;
   status: string;
   witnessId: string;
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/xraph/grove/driver"
 )
 
-const retirementColumns = `id,org_id,project_id,backup_id,source_key,witness_id,request_id,policy,object,witness_object,status,attempt,token,error,created_by,created_at,completed_at,execution_by,attempt_limit`
+const retirementColumns = `id,org_id,project_id,backup_id,source_key,witness_id,request_id,policy,object,witness_object,status,attempt,token,error,created_by,created_at,completed_at,execution_by,attempt_limit,COALESCE(retention_policy_id,''),COALESCE(retention_revision,0)`
 
 func (s *PgStore) GetRetirement(ctx context.Context, org, id string) (*Retirement, error) {
 	return scanRetirement(s.db.QueryRow(ctx, `SELECT `+retirementColumns+` FROM loomplane_backup_retirements WHERE org_id=$1 AND id=$2`, org, id))
@@ -48,7 +48,7 @@ func (s *PgStore) PendingRetirements(ctx context.Context) ([]Retirement, error) 
 func scanRetirement(row pgx.Row) (*Retirement, error) {
 	var r Retirement
 	var policy, object, witness []byte
-	if err := row.Scan(&r.ID, &r.OrgID, &r.ProjectID, &r.BackupID, &r.SourceKey, &r.WitnessID, &r.RequestID, &policy, &object, &witness, &r.Status, &r.Attempt, &r.Token, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.CompletedAt, &r.ExecutionBy, &r.AttemptLimit); err != nil {
+	if err := row.Scan(&r.ID, &r.OrgID, &r.ProjectID, &r.BackupID, &r.SourceKey, &r.WitnessID, &r.RequestID, &policy, &object, &witness, &r.Status, &r.Attempt, &r.Token, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.CompletedAt, &r.ExecutionBy, &r.AttemptLimit, &r.RetentionPolicyID, &r.RetentionRevision); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -79,7 +79,7 @@ func retirementSourceKey(b *Backup) (string, error) {
 }
 
 func (s *PgStore) BeginRetirement(ctx context.Context, in *Retirement, guard RetirementGuard) (result *Retirement, err error) {
-	if in == nil || in.ID == "" || in.OrgID == "" || in.ProjectID == "" || in.CreatedBy == "" || !requestKey.MatchString(in.RequestID) || guard == nil {
+	if in == nil || (in.RetentionPolicyID == "") != (in.RetentionRevision == 0) || in.RetentionRevision < 0 || in.ID == "" || in.OrgID == "" || in.ProjectID == "" || in.CreatedBy == "" || !requestKey.MatchString(in.RequestID) || guard == nil {
 		return nil, ErrInvalid
 	}
 	if checkErr := in.Policy.Validate(); checkErr != nil {
@@ -105,15 +105,15 @@ func (s *PgStore) BeginRetirement(ctx context.Context, in *Retirement, guard Ret
 			err = errors.Join(err, tx.Rollback())
 		}
 	}()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "loomplane-backup-retirement:"+sourceKey); err != nil {
-		return nil, err
+	if checkErr := lockRetirementSource(ctx, tx, sourceKey); checkErr != nil {
+		return nil, checkErr
 	}
 	if checkErr := guard(ctx); checkErr != nil {
 		return nil, checkErr
 	}
 	existing, lookupErr := scanRetirement(tx.QueryRow(ctx, `SELECT `+retirementColumns+` FROM loomplane_backup_retirements WHERE org_id=$1 AND project_id=$2 AND request_id=$3`, in.OrgID, in.ProjectID, in.RequestID))
 	if lookupErr == nil {
-		if existing.BackupID != in.BackupID || existing.Policy != in.Policy {
+		if existing.BackupID != in.BackupID || existing.Policy != in.Policy || existing.RetentionPolicyID != in.RetentionPolicyID || existing.RetentionRevision != in.RetentionRevision {
 			return nil, ErrConflict
 		}
 		if checkErr := guard(ctx); checkErr != nil {
@@ -123,6 +123,9 @@ func (s *PgStore) BeginRetirement(ctx context.Context, in *Retirement, guard Ret
 	}
 	if !errors.Is(lookupErr, ErrNotFound) {
 		return nil, lookupErr
+	}
+	if checkErr := checkRetentionGrant(ctx, tx, in, sourceKey); checkErr != nil {
+		return nil, checkErr
 	}
 	var active bool
 	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_backup_retirements WHERE org_id=$1 AND source_key=$2 AND status<>'succeeded')`, in.OrgID, sourceKey).Scan(&active); checkErr != nil {
@@ -172,8 +175,8 @@ func (s *PgStore) BeginRetirement(ctx context.Context, in *Retirement, guard Ret
 	if err != nil {
 		return nil, err
 	}
-	result, err = scanRetirement(tx.QueryRow(ctx, `INSERT INTO loomplane_backup_retirements(id,org_id,project_id,backup_id,source_key,witness_id,request_id,policy,object,witness_object,status,created_by,execution_by)
-	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'queued',$11,$11) ON CONFLICT(org_id,project_id,request_id) DO NOTHING RETURNING `+retirementColumns, in.ID, in.OrgID, in.ProjectID, in.BackupID, sourceKey, witness.ID, in.RequestID, policy, object, witnessObject, in.CreatedBy))
+	result, err = scanRetirement(tx.QueryRow(ctx, `INSERT INTO loomplane_backup_retirements(id,org_id,project_id,backup_id,source_key,witness_id,request_id,policy,object,witness_object,status,created_by,execution_by,retention_policy_id,retention_revision)
+	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'queued',$11,$11,NULLIF($12,''),NULLIF($13,0)) ON CONFLICT(org_id,project_id,request_id) DO NOTHING RETURNING `+retirementColumns, in.ID, in.OrgID, in.ProjectID, in.BackupID, sourceKey, witness.ID, in.RequestID, policy, object, witnessObject, in.CreatedBy, in.RetentionPolicyID, in.RetentionRevision))
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrConflict
 	}
@@ -257,4 +260,9 @@ func (s *PgStore) FinishRetirement(ctx context.Context, r *Retirement, cause err
 		return ErrConflict
 	}
 	return nil
+}
+
+func lockRetirementSource(ctx context.Context, tx driver.Tx, key string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "loomplane-backup-retirement:"+key)
+	return err
 }

@@ -7851,6 +7851,12 @@
           "project_id": {
             "type": "string"
           },
+          "retention_policy_id": {
+            "type": "string"
+          },
+          "retention_revision": {
+            "type": "integer"
+          },
           "status": {
             "type": "string"
           },

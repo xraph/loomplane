@@ -74,8 +74,8 @@ func (s *PgStore) RetryRetirement(ctx context.Context, org, id, actor, requestID
 			err = errors.Join(err, tx.Rollback())
 		}
 	}()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "loomplane-backup-retirement:"+current.SourceKey); err != nil {
-		return nil, err
+	if checkErr := lockRetirementSource(ctx, tx, current.SourceKey); checkErr != nil {
+		return nil, checkErr
 	}
 	if checkErr := guard(ctx); checkErr != nil {
 		return nil, checkErr
