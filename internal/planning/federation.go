@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/graph"
 	domain "github.com/xraph/loomplane/pkg/federation"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -18,12 +19,16 @@ const (
 
 // FederationInput pins desired intent and persisted destination observations.
 type FederationInput struct {
-	Scope        domain.Scope
-	Environment  string
-	Manifest     *manifest.Manifest
-	Destinations map[string]*domain.Destination
-	Held         map[string]bool
-	Now          time.Time
+	Graph           *graph.Graph
+	Bindings        []*Binding
+	Providers       *provider.Registry
+	CloudPlacements map[string]CloudPlacement
+	Scope           domain.Scope
+	Environment     string
+	Manifest        *manifest.Manifest
+	Destinations    map[string]*domain.Destination
+	Held            map[string]bool
+	Now             time.Time
 }
 
 // FederationRevision excludes observation timing and credential material while
@@ -34,22 +39,32 @@ func FederationRevision(in FederationInput) string {
 		CapabilityRevision string
 		ConnectionID       string
 		Quarantined        bool
+		Generation         int64
 	}
 	pins := map[string]pin{}
 	for id, d := range in.Destinations {
 		if d != nil {
-			pins[id] = pin{d.Identity, d.Capabilities.Revision, d.ConnectionID, d.Quarantined}
+			pins[id] = pin{d.Identity, d.Capabilities.Revision, d.ConnectionID, d.Quarantined, d.Generation}
 		}
 	}
 	value := struct {
-		Scope        domain.Scope
-		Environment  string
-		Intent       *manifest.Federation
-		Destinations map[string]pin
-		Held         map[string]bool
+		Scope           domain.Scope
+		Environment     string
+		Manifest        *manifest.Manifest
+		Bindings        map[string]*CloudAdoption
+		CloudPlacements map[string]CloudPlacement
+		Destinations    map[string]pin
+		Held            map[string]bool
 	}{Scope: in.Scope, Environment: in.Environment, Destinations: pins, Held: in.Held}
 	if in.Manifest != nil {
-		value.Intent = in.Manifest.Federation
+		value.Manifest = in.Manifest
+	}
+	value.CloudPlacements = in.CloudPlacements
+	value.Bindings = map[string]*CloudAdoption{}
+	for _, binding := range in.Bindings {
+		if binding != nil {
+			value.Bindings[binding.ID] = ReviewCloudAdoption(binding)
+		}
 	}
 	digest, err := Digest(value)
 	if err != nil {
@@ -83,7 +98,7 @@ func PlanFederation(in FederationInput) ([]Action, []Finding) {
 	for _, name := range federationKeys(intent.Destinations) {
 		ref := intent.Destinations[name]
 		d := in.Destinations[ref.For(in.Environment)]
-		if d == nil || d.Scope != in.Scope || in.Scope.OrgID == "" || in.Scope.ProjectID == "" || in.Scope.EnvironmentID == "" {
+		if d == nil || d.ID != ref.For(in.Environment) || d.Scope != in.Scope || in.Scope.OrgID == "" || in.Scope.ProjectID == "" || in.Scope.EnvironmentID == "" {
 			findings = append(findings, Finding{Code: "federation-destination-not-found", Path: "federation.destinations." + name, Message: "The destination is unavailable in this environment."})
 			continue
 		}
@@ -105,22 +120,31 @@ func PlanFederation(in FederationInput) ([]Action, []Finding) {
 			findings = append(findings, Finding{Code: "federation-network-unqualified", Path: "federation.network_links." + name, Message: "Network ownership, route scope, cost and disruption require qualification."})
 		}
 	}
+	placementActions, placementFindings := reviewFederationPlacements(in, destinations, changes)
+	actions = append(actions, placementActions...)
+	findings = append(findings, placementFindings...)
 	for _, name := range federationKeys(intent.ServiceExports) {
 		e := intent.ServiceExports[name]
 		connection := ""
 		if d := destinations[e.Destination]; d != nil {
 			connection = d.ConnectionID
 		}
-		add(PolicySubject, "export:"+name, connection, []string{"policy:destination:" + e.Destination})
+		deps := federationPlacementDependencies(intent, e.Service, e.Destination, "policy:destination:"+e.Destination)
+		add(PolicySubject, "export:"+name, connection, deps)
 	}
 	for _, name := range federationKeys(intent.AccessGrants) {
 		g := intent.AccessGrants[name]
 		// Calls may be cyclic. Grant installation depends on exports, never on another call.
-		add(PolicySubject, "grant:"+name, "", []string{"policy:export:" + g.Export, "policy:destination:" + g.SourceDestination})
+		deps := federationPlacementDependencies(intent, g.SourceService, g.SourceDestination, "policy:export:"+g.Export, "policy:destination:"+g.SourceDestination)
+		add(PolicySubject, "grant:"+name, "", deps)
 		findings = append(findings, Finding{Code: "federation-grant-unapproved", Path: "federation.access_grants." + name, Message: "A manifest grant is a proposal. Separate approval and gateway acknowledgment are required."})
 	}
 	// Pin even an empty version 2 intent so it never falls into legacy execution.
-	add(PolicySubject, "activation", "", nil)
+	dependencies := make([]string, 0, len(actions))
+	for _, action := range actions {
+		dependencies = append(dependencies, action.ID)
+	}
+	add(PolicySubject, "activation", "", dependencies)
 	return actions, findings
 }
 
@@ -141,6 +165,10 @@ func federationResult(in Input) *Result {
 		f.Environment = in.Environment
 		f.Held = in.Held
 	}
+	f.Providers = in.Providers
+	f.Graph = in.Graph
+	f.Bindings = in.Bindings
+	f.CloudPlacements = in.CloudPlacements
 	actions, findings := PlanFederation(f)
 	return &Result{Actions: actions, Problems: findings, Warnings: []Finding{}, Executable: false, Connections: map[string]string{}, Summary: Summary{Keep: len(actions)}}
 }

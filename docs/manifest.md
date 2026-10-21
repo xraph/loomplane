@@ -206,7 +206,7 @@ Use `pkg/manifest/schema.json` (`https://loomplane.dev/schemas/loomplane.json`) 
 version: 2
 services:
   api: { source: cmd/api, provider: kubernetes }
-  worker: { source: cmd/worker, provider: kubernetes }
+  worker: { source: cmd/worker, provider: kubernetes, public: false, port: 8080 }
 federation:
   destinations:
     east: { id: dest_01m4va49zwe9pvk24sm9h8v0ta }
@@ -239,7 +239,11 @@ federation:
 
 Destination IDs must resolve in the selected organization, project and environment. Overrides select a separately registered destination for that environment. Cross-environment and cross-organization grants are rejected by this initial format. Connections supply credentials through Vault; manifests contain no tokens, kubeconfigs or certificate keys.
 
-Exports require explicit private exposure. Remove public endpoints and gateway routes before exporting a service. HTTP selectors are exact paths and methods; gRPC selectors use `/package.Service/Method`; opaque TCP accepts neither. UDP is unavailable. Every export and source grant needs a matching placement. Runtime call relationships belong in access proposals, so two services can propose calling each other without creating a deployment dependency cycle. Existing `needs` still controls configuration and startup ordering and grants no access.
+Exports require explicit private exposure. Set `public: false` and an explicit service `port` matching the export in the selected environment. Remove public endpoints and gateway routes before exporting a service. HTTP selectors are exact paths and methods; gRPC selectors use `/package.Service/Method`; opaque TCP accepts neither. UDP is unavailable. Every export and source grant needs a matching placement. Runtime call relationships belong in access proposals, so two services can propose calling each other without creating a deployment dependency cycle. Existing `needs` still controls configuration and startup ordering and grants no access.
+
+The preview compares each placement with the service's effective environment settings. Its provider must belong to the destination's cloud, and a direct target or resolved Cloud target must use the destination's checked connection. A disabled service or a repository held out of the plan blocks its placement. This also checks the deployed repository when the manifest moves a service to another source. If the repository cannot be identified while any repository is held, include the source before reviewing federation changes.
+
+You can review each placement's service, source, destination identity and generation. Exports depend on their placements, grants depend on the source placement and export, and activation waits for all prerequisites. The review revision includes the manifest, destination generations, deployed binding revisions and resolved Cloud revisions. These actions describe prerequisites only; they do not deploy workloads or authorize traffic.
 
 The five federation maps each allow at most 100 entries. A grant allows 16 HTTP methods, 32 paths of at most 1024 bytes, or 32 gRPC methods of at most 256 bytes. The existing 256 KiB manifest limit also applies. An expiry must be RFC3339; execution must reject an expired grant even if its manifest still parses.
 
