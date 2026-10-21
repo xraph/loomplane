@@ -162,7 +162,20 @@ func (s *LaunchService) Deliver(ctx context.Context, p security.Principal, in La
 	if err != nil {
 		return nil, err
 	}
-	cm, err := s.deliver(ctx, plan, *d, *r, settings, guard)
+	deliveryGuard := func(ctx context.Context) error {
+		if checkErr := guard(ctx); checkErr != nil {
+			return checkErr
+		}
+		saved, checkErr := s.attempts.GetLaunch(ctx, p.OrgID, attempt.ID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if saved.State != LaunchPending || saved.Generation != attempt.Generation || saved.LaunchIntent != attempt.LaunchIntent {
+			return ErrConflict
+		}
+		return nil
+	}
+	cm, err := s.deliver(ctx, plan, *d, *r, settings, deliveryGuard)
 	if err != nil {
 		return nil, err
 	}

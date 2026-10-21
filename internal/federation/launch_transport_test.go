@@ -38,7 +38,7 @@ func (a *launchAtomicAuth) Require(context.Context, security.Principal, security
 }
 
 func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
-	for _, mode := range []string{"deliver", "revoke during read", "wrong CA", "recover", "recover wrong pod", "recover wrong namespace", "recover content", "recover revoked"} {
+	for _, mode := range []string{"deliver", "revoke during read", "wrong CA", "recover", "recover wrong pod", "recover wrong namespace", "recover content", "recover revoked", "retire", "retire replacement race"} {
 		t.Run(mode, func(t *testing.T) {
 			svc, ready, store, principal, input, _ := launchServiceFixture(t)
 			auth := &launchAtomicAuth{}
@@ -49,10 +49,12 @@ func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
 			}
 			pod := plan.Pod()
 			pod.UID = types.UID(store.record.Profile.PodUID)
+			pod.ResourceVersion = "1"
 			pod.Spec.NodeName = "node"
 			pod.Status.Phase = corev1.PodPending
 			pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}}
-			var reads, writes atomic.Int32
+			var reads, writes, deletes atomic.Int32
+			podDeleted := false
 			var created *corev1.ConfigMap
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer fixture-token" {
@@ -71,6 +73,10 @@ func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
 					}
 				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/workloads/pods/"+pod.Name:
 					reads.Add(1)
+					if podDeleted {
+						http.NotFound(w, r)
+						return
+					}
 					if mode == "revoke during read" {
 						auth.denied.Store(true)
 					}
@@ -110,12 +116,45 @@ func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
 						t.Error("unbound configuration write")
 					}
 					cm.UID = "config-uid"
+					cm.ResourceVersion = "1"
 					response = &cm
 					created = cm.DeepCopy()
 					if strings.HasPrefix(mode, "recover") {
 						http.Error(w, "write outcome unknown", http.StatusInternalServerError)
 						return
 					}
+				case r.Method == http.MethodDelete:
+					deletes.Add(1)
+					var options metav1.DeleteOptions
+					if decodeErr := json.NewDecoder(r.Body).Decode(&options); decodeErr != nil {
+						t.Error(decodeErr)
+						http.Error(w, "invalid", 400)
+						return
+					}
+					expected := pod.UID
+					if strings.Contains(r.URL.Path, "/configmaps/") {
+						expected = "config-uid"
+					}
+					if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID != expected || options.Preconditions.ResourceVersion == nil || *options.Preconditions.ResourceVersion != "1" {
+						t.Error("provider delete omitted ownership preconditions")
+						http.Error(w, "invalid", 400)
+						return
+					}
+					if strings.Contains(r.URL.Path, "/pods/") {
+						if mode == "retire replacement race" {
+							pod.UID = "replacement"
+							http.Error(w, "UID changed", http.StatusConflict)
+							return
+						}
+						podDeleted = true
+					} else if strings.Contains(r.URL.Path, "/configmaps/") {
+						created = nil
+					} else {
+						t.Error("cleanup deleted unrelated resource")
+						http.NotFound(w, r)
+						return
+					}
+					response = &metav1.Status{TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}, Status: "Success"}
 				default:
 					http.NotFound(w, r)
 					return
@@ -171,12 +210,27 @@ func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
 				if writes.Load() != 1 {
 					t.Fatal("recovery wrote to Kubernetes")
 				}
-			} else if mode == "deliver" {
+			} else if mode == "deliver" || strings.HasPrefix(mode, "retire") {
 				if err != nil || result.ConfigMapUID != "config-uid" || writes.Load() != 1 || reads.Load() != 2 {
 					t.Fatal("production writer failed", err, reads.Load(), writes.Load())
 				}
 			} else if err == nil || writes.Load() != 0 {
 				t.Fatal("unsafe provider write", err, writes.Load())
+			}
+			if strings.HasPrefix(mode, "retire") {
+				revokes := 0
+				retirement := NewLaunchRetirementService(svc, func(context.Context, string, string) error { revokes++; return nil })
+				retired, retireErr := retirement.Retire(t.Context(), principal, input.DestinationID, input.AttemptID)
+				if mode == "retire" {
+					if retireErr != nil || retired.State != LaunchRetired || deletes.Load() != 2 {
+						t.Fatal("production cleanup failed", retireErr, deletes.Load())
+					}
+				} else if retireErr == nil || deletes.Load() != 1 {
+					t.Fatal("replacement race was not retained", retireErr, deletes.Load())
+				}
+				if revokes != 1 || writes.Load() != 1 {
+					t.Fatal("cleanup did not revoke first or repeated create")
+				}
 			}
 			if mode == "wrong CA" && reads.Load() != 0 {
 				t.Fatal("wrong physical cluster reached provider")

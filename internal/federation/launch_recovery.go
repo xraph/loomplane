@@ -38,6 +38,9 @@ func (s *LaunchService) Recover(ctx context.Context, p security.Principal, desti
 	if attempt.State == LaunchDelivered {
 		return launchResult(attempt), nil
 	}
+	if attempt.State != LaunchPending {
+		return nil, ErrConflict
+	}
 	cm, err := s.inspect(ctx, *d, attempt)
 	if err != nil {
 		return nil, err
@@ -65,8 +68,7 @@ func (s *LaunchService) authorizeAttempt(ctx context.Context, p security.Princip
 	return d, nil
 }
 func (s *LaunchService) confirmDelivery(ctx context.Context, p security.Principal, a *LaunchAttempt, cm *corev1.ConfigMap) (*LaunchDelivery, error) {
-	digest, err := agentinstall.ConfigMapDigest(cm)
-	if err != nil || cm.UID == "" || digest != a.Digest || cm.Name != a.ConfigMapName || cm.Namespace != a.Namespace {
+	if !matchesLaunchConfig(a, cm) {
 		return nil, ErrIdentityChanged
 	}
 	guard := func(ctx context.Context) error { _, checkErr := s.authorizeAttempt(ctx, p, a); return checkErr }
@@ -74,9 +76,7 @@ func (s *LaunchService) confirmDelivery(ctx context.Context, p security.Principa
 	if err != nil {
 		return nil, err
 	}
-	if audit := s.installations.destinations.audit; audit != nil {
-		audit.Record(ctx, projects.AuditEvent{Action: "federation.launch.deliver", Severity: "info", ProjectID: a.ProjectID, Principal: p, Attributes: map[string]any{"destination_id": a.DestinationID, "enrollment_id": a.EnrollmentID, "attempt_id": a.ID, "pod_uid": a.PodUID, "config_map_uid": confirmed.ConfigMapUID}})
-	}
+	s.recordLaunch(ctx, p, "federation.launch.deliver", confirmed)
 	return launchResult(confirmed), nil
 }
 func launchResult(a *LaunchAttempt) *LaunchDelivery {
@@ -105,4 +105,15 @@ func (s *LaunchService) inspectKubernetes(ctx context.Context, d domain.Destinat
 		return nil, ErrIdentityChanged
 	}
 	return client.Kube.CoreV1().ConfigMaps(a.Namespace).Get(ctx, a.ConfigMapName, metav1.GetOptions{})
+}
+
+func matchesLaunchConfig(a *LaunchAttempt, cm *corev1.ConfigMap) bool {
+	digest, err := agentinstall.ConfigMapDigest(cm)
+	return err == nil && a != nil && cm.UID != "" && digest == a.Digest && cm.Name == a.ConfigMapName && cm.Namespace == a.Namespace && (a.ConfigMapUID == "" || a.ConfigMapUID == string(cm.UID))
+}
+
+func (s *LaunchService) recordLaunch(ctx context.Context, p security.Principal, action string, a *LaunchAttempt) {
+	if audit := s.installations.destinations.audit; audit != nil {
+		audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", ProjectID: a.ProjectID, Principal: p, Attributes: map[string]any{"destination_id": a.DestinationID, "enrollment_id": a.EnrollmentID, "attempt_id": a.ID, "pod_uid": a.PodUID, "config_map_uid": a.ConfigMapUID, "state": a.State}})
+	}
 }

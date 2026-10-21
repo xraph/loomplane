@@ -17,6 +17,8 @@ import (
 const (
 	LaunchPending   = "pending"
 	LaunchDelivered = "delivered"
+	LaunchRetiring  = "retiring"
+	LaunchRetired   = "retired"
 )
 
 // LaunchIntent records the exact public configuration before the provider write.
@@ -130,8 +132,15 @@ func (s *PgStore) ReserveLaunch(ctx context.Context, d domain.Destination, in La
 
 // ConfirmLaunch records observed evidence, never issues authority. Existing
 // installation and enrollment records retain their own lifecycle references.
-func (s *PgStore) ConfirmLaunch(ctx context.Context, org, id string, expected int64, uid, actor string, guard func(context.Context) error) (out *LaunchAttempt, err error) {
-	if expected != 1 || !domain.ValidIdentitySegment(uid) || !domain.ValidIdentitySegment(actor) || guard == nil {
+func (s *PgStore) ConfirmLaunch(ctx context.Context, org, id string, expected int64, uid, actor string, guard func(context.Context) error) (*LaunchAttempt, error) {
+	if expected != 1 || !domain.ValidIdentitySegment(uid) {
+		return nil, ErrInvalid
+	}
+	return s.transitionLaunch(ctx, org, id, expected, uid, actor, LaunchDelivered, guard)
+}
+
+func (s *PgStore) transitionLaunch(ctx context.Context, org, id string, expected int64, uid, actor, target string, guard func(context.Context) error) (out *LaunchAttempt, err error) {
+	if expected < 1 || expected > 3 || !domain.ValidIdentitySegment(actor) || guard == nil {
 		return nil, ErrInvalid
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -145,21 +154,32 @@ func (s *PgStore) ConfirmLaunch(ctx context.Context, org, id string, expected in
 	if err != nil {
 		return nil, err
 	}
-	if out.ID != id || out.State != LaunchPending || out.Generation != expected {
+	if out.ID != id || out.Generation != expected || !launchTransitionAllowed(out.State, target) {
 		return nil, ErrConflict
 	}
 	if checkErr := guard(ctx); checkErr != nil {
 		return nil, checkErr
 	}
-	out.State = LaunchDelivered
+	if target == LaunchRetired {
+		var retained bool
+		if queryErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_federation_enrollments WHERE org_id=$1 AND id=$2)`, org, out.EnrollmentID).Scan(&retained); queryErr != nil {
+			return nil, queryErr
+		}
+		if retained {
+			return nil, ErrInUse
+		}
+	}
+	out.State = target
 	out.Generation++
-	out.ConfigMapUID = uid
+	if target == LaunchDelivered {
+		out.ConfigMapUID = uid
+	}
 	out.RecordedBy = actor
 	out.UpdatedAt = time.Now().UTC()
-	if _, writeErr := tx.Exec(ctx, `UPDATE loomplane_federation_launch_attempts SET state='delivered',generation=$3,config_map_uid=$4,recorded_by=$5,updated_at=$6 WHERE org_id=$1 AND id=$2`, org, id, out.Generation, uid, actor, out.UpdatedAt); writeErr != nil {
+	if _, writeErr := tx.Exec(ctx, `UPDATE loomplane_federation_launch_attempts SET state=$7,generation=$3,config_map_uid=$4,recorded_by=$5,updated_at=$6 WHERE org_id=$1 AND id=$2`, org, id, out.Generation, out.ConfigMapUID, actor, out.UpdatedAt, target); writeErr != nil {
 		return nil, storeError(writeErr)
 	}
-	if eventErr := appendLaunchEvent(ctx, tx, out, "federation.launch.delivered"); eventErr != nil {
+	if eventErr := appendLaunchEvent(ctx, tx, out, "federation.launch."+target); eventErr != nil {
 		return nil, eventErr
 	}
 	if checkErr := guard(ctx); checkErr != nil {
@@ -174,4 +194,29 @@ func appendLaunchEvent(ctx context.Context, tx driver.Tx, r *LaunchAttempt, name
 	}
 	_, err = tx.Exec(ctx, `SELECT loomplane_append_event($1,$2,$3,$4,$5)`, r.OrgID, r.ProjectID, name, r.ID, raw)
 	return err
+}
+
+type LaunchRetirementStore interface {
+	LaunchAttemptStore
+	BeginLaunchRetirement(context.Context, string, string, int64, string, func(context.Context) error) (*LaunchAttempt, error)
+	CompleteLaunchRetirement(context.Context, string, string, int64, string, func(context.Context) error) (*LaunchAttempt, error)
+}
+
+func launchTransitionAllowed(from, to string) bool {
+	switch to {
+	case LaunchDelivered:
+		return from == LaunchPending
+	case LaunchRetiring:
+		return from == LaunchPending || from == LaunchDelivered
+	case LaunchRetired:
+		return from == LaunchRetiring
+	default:
+		return false
+	}
+}
+func (s *PgStore) BeginLaunchRetirement(ctx context.Context, org, id string, expected int64, actor string, guard func(context.Context) error) (*LaunchAttempt, error) {
+	return s.transitionLaunch(ctx, org, id, expected, "", actor, LaunchRetiring, guard)
+}
+func (s *PgStore) CompleteLaunchRetirement(ctx context.Context, org, id string, expected int64, actor string, guard func(context.Context) error) (*LaunchAttempt, error) {
+	return s.transitionLaunch(ctx, org, id, expected, "", actor, LaunchRetired, guard)
 }

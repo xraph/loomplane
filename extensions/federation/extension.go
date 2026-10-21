@@ -123,6 +123,13 @@ func (e *Extension) Register(app forge.App) error {
 		if provideErr := forge.ProvideValue(c, launch); provideErr != nil {
 			return provideErr
 		}
+		enrollmentStore := workloadidentity.NewEnrollmentStore(pg, e.cfg.Federation.Identity.TrustDomain)
+		retirement := domain.NewLaunchRetirementService(launch, func(ctx context.Context, org, id string) error {
+			return enrollmentStore.Revoke(ctx, org, id, e.cleanup)
+		})
+		if provideErr := forge.ProvideValue(c, retirement); provideErr != nil {
+			return provideErr
+		}
 	}
 	return nil
 }

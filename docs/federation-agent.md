@@ -186,12 +186,39 @@ not renew the agent's authority. Both reservation and confirmation append projec
 events in the same transaction as the saved record.
 
 Missing resources, changed identities and mismatched content leave the attempt
-pending. Repeating delivery does not send another create request. Cleanup and
-replacement of these unresolved attempts still need the installation coordinator.
+pending. Repeating delivery does not send another create request. Use the internal
+retirement service to revoke authority and remove the attempt's pod and configuration
+before preparing a replacement.
 
 The application currently wires consumer installations only. Exporting agents
 still need verified service-target assignments. Automatic resource preparation,
 replacement, management API, CLI and dashboard controls are pending.
+
+## Retiring a launch attempt
+
+Call the internal retirement service with the destination and attempt IDs. It saves
+`retiring` before revoking enrollment, and blocks new delivery while cleanup is
+pending. Revocation deactivates the observer first. SPIRE deletion and any retained
+policy leases must finish before cleanup can release its destination reference.
+
+Cleanup checks the current cluster and namespace identity, then targets the saved
+pod UID and exact configuration digest. Delete requests include UID and resource
+version preconditions. A replacement pod with the same name survives. Changed
+configuration, revoked permission, a finalizer or a lost delete response leaves the
+attempt in `retiring`; retrying inspects the resources again without issuing an
+enrollment or creating resources. Retirement records project events and Chronicle
+audit entries.
+
+The service marks the attempt `retired` only after the original pod and configuration
+are observed absent and the enrollment is no longer retained. Its history keeps the
+original IDs. A newer installation generation on the same physical destination does
+not prevent cleanup of the old pod UID.
+
+Service accounts, RBAC and the trusted installation record remain separate. This
+cleanup path has no recorded creation UIDs for those Kubernetes objects, so it
+preserves them. Automatic resource preparation and replacement, background retries,
+and management API, CLI and dashboard controls are still pending. Replacement must
+use a new pod identity and fresh enrollment.
 
 ## Shutdown and restart
 
