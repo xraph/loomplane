@@ -458,10 +458,13 @@ func (s *Service) CloudSync(ctx context.Context, p security.Principal, project, 
 		return nil, err
 	}
 	sync, err := st.GetSyncView(ctx, p.OrgID, project, id)
-	if err == nil {
-		s.filterCloudParticipants(ctx, p, sync, project)
+	if err != nil {
+		return nil, err
 	}
-	return sync, err
+	if filterErr := s.filterCloudSync(ctx, p, sync, project); filterErr != nil {
+		return nil, filterErr
+	}
+	return sync, nil
 }
 
 // CloudSyncs reads project operation history.
@@ -475,7 +478,9 @@ func (s *Service) CloudSyncs(ctx context.Context, p security.Principal, project 
 	}
 	syncs, err := st.ListSyncs(ctx, p.OrgID, project)
 	for _, sync := range syncs {
-		s.filterCloudParticipants(ctx, p, sync, project)
+		if filterErr := s.filterCloudSync(ctx, p, sync, project); filterErr != nil {
+			return nil, filterErr
+		}
 	}
 	return syncs, err
 }
@@ -594,7 +599,9 @@ func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, proje
 	}
 	syncs, next, err := st.ListSyncPage(ctx, p.OrgID, project, before, limit)
 	for _, sync := range syncs {
-		s.filterCloudParticipants(ctx, p, sync, project)
+		if filterErr := s.filterCloudSync(ctx, p, sync, project); filterErr != nil {
+			return nil, page.Cursor{}, filterErr
+		}
 	}
 	return syncs, next, err
 }
@@ -661,9 +668,9 @@ func (s *Service) authorizeCloudRead(ctx context.Context, p security.Principal, 
 	}
 	return s.authz.Require(ctx, p, security.DeploymentRead, project)
 }
-func (s *Service) filterCloudParticipants(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, project string) {
+func (s *Service) filterCloudSync(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, project string) error {
 	if project == "" || s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID) == nil {
-		return
+		return nil
 	}
 	sync.Environments = slices.DeleteFunc(sync.Environments, func(e cloudprofiles.EnvironmentChange) bool {
 		return cloudprofiles.ParticipantProject(e.ProjectID, sync.ProjectID) != project
@@ -672,4 +679,33 @@ func (s *Service) filterCloudParticipants(ctx context.Context, p security.Princi
 	if sync.TargetID != "" {
 		sync.Error = ""
 	}
+	if sync.TargetID == "" && sync.Before == nil && sync.After == nil {
+		return nil
+	}
+	var grant *cloudprofiles.ProjectGrant
+	if grants, ok := s.cloudProfiles.(cloudprofiles.GrantStore); ok {
+		var err error
+		grant, err = grants.GetProjectGrant(ctx, p.OrgID, sync.CloudID, project)
+		if err != nil && !errors.Is(err, cloudprofiles.ErrNotFound) {
+			return err
+		}
+		if err != nil {
+			grant = nil
+		}
+	}
+	allowed := func(id string) bool {
+		return grant != nil && !grant.Revoked && id != "" && (len(grant.TargetIDs) == 0 || slices.Contains(grant.TargetIDs, id))
+	}
+	if !allowed(sync.TargetID) {
+		sync.TargetID = ""
+		sync.Before, sync.After = nil, nil
+	} else {
+		if sync.Before != nil && !allowed(sync.Before.ID) {
+			sync.Before = nil
+		}
+		if sync.After != nil && !allowed(sync.After.ID) {
+			sync.After = nil
+		}
+	}
+	return nil
 }

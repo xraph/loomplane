@@ -393,6 +393,8 @@ func TestSharedCloudRevokedPreviewKeepsTargetsPrivate(t *testing.T) {
 func insertSharedCloudHistory(t *testing.T, conn *pgx.Conn, org, id, project string, participants []cloudprofiles.EnvironmentSnapshot, at time.Time) {
 	t.Helper()
 	sync := cloudprofiles.Sync{ID: id, OrgID: org, ProjectID: project, PreviewID: id + "-preview", TargetID: "target", CloudID: "cloud", Status: cloudprofiles.SyncSucceeded, CreatedAt: at, UpdatedAt: at, Error: "another project's error"}
+	sync.Before = &cloudprofiles.Target{ID: "target", CloudID: "cloud", Provider: "vercel", ConnectionID: "old", Region: "original-region"}
+	sync.After = &cloudprofiles.Target{ID: "target", CloudID: "cloud", Provider: "vercel", ConnectionID: "new", Region: "replacement-region"}
 	for _, participant := range participants {
 		sync.Environments = append(sync.Environments, cloudprofiles.EnvironmentChange{ProjectID: participant.ProjectID, EnvironmentID: participant.EnvironmentID, Services: []string{participant.EnvironmentID + "-service"}})
 	}
@@ -502,5 +504,79 @@ func TestSharedCloudOrganizationSyncListAPI(t *testing.T) {
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/clouds/syncs/existing-project-operation", nil, &sync)
 	if sync.ID != "existing-project-operation" {
 		t.Fatalf("organization read: %+v", sync)
+	}
+}
+
+func TestSharedCloudHistoryTargetGrantProjection(t *testing.T) {
+	st, conn, db := cloudSyncDatabase(t)
+	ctx := t.Context()
+	hidden, err := st.GetTarget(ctx, "org", "proj", "cloud", "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden.ID, hidden.Name = "private-target", "private-target"
+	if err = st.CreateTarget(ctx, hidden); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.SetProjectGrant(ctx, "org", "cloud", "proj", []string{"target"}, false); err != nil {
+		t.Fatal(err)
+	}
+	insertSharedCloudHistory(t, conn, "org", "private-target-change", "", []cloudprofiles.EnvironmentSnapshot{{ProjectID: "proj", EnvironmentID: "env"}}, time.Now().UTC().Truncate(time.Microsecond))
+	if _, err = conn.Exec(ctx, `UPDATE loomplane_cloud_syncs SET body=jsonb_set(jsonb_set(jsonb_set(body,'{target_id}','"private-target"'),'{before,id}','"private-target"'),'{after,id}','"private-target"'),snapshot=jsonb_set(snapshot,'{target_revisions}','{"private-target":1}') WHERE id='private-target-change'`); err != nil {
+		t.Fatal(err)
+	}
+	var originalBody, originalSnapshot string
+	if err = conn.QueryRow(ctx, `SELECT body::text,snapshot::text FROM loomplane_cloud_syncs WHERE id='private-target-change'`).Scan(&originalBody, &originalSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	actor := security.Principal{OrgID: "org", UserID: "developer"}
+	service := planning.NewService(planning.Deps{Projects: projects.NewPgStore(db), CloudProfiles: st, Authz: sharedHistoryAuthorizer{project: "proj"}})
+	checkViews := func(visible bool) {
+		t.Helper()
+		single, getErr := service.CloudSync(ctx, actor, "proj", "private-target-change")
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		list, listErr := service.CloudSyncs(ctx, actor, "proj")
+		if listErr != nil || len(list) != 1 {
+			t.Fatalf("history list: %+v %v", list, listErr)
+		}
+		paged, next, pageErr := service.CloudSyncPage(ctx, actor, "proj", page.Cursor{}, 1)
+		if pageErr != nil || len(paged) != 1 || !next.IsZero() {
+			t.Fatalf("history page: %+v %+v %v", paged, next, pageErr)
+		}
+		for path, sync := range map[string]*cloudprofiles.Sync{"get": single, "list": list[0], "page": paged[0]} {
+			if visible {
+				if sync.TargetID != "private-target" || sync.Before == nil || sync.After == nil || sync.Before.ConnectionID != "old" || sync.After.ConnectionID != "new" {
+					t.Errorf("%s lost granted target details: %+v", path, sync)
+				}
+			} else if sync.TargetID != "" || sync.Before != nil || sync.After != nil {
+				t.Errorf("%s exposed unauthorized target details: %+v", path, sync)
+			}
+			if len(sync.Environments) != 1 || sync.Environments[0].EnvironmentID != "env" {
+				t.Errorf("%s lost participant history: %+v", path, sync)
+			}
+		}
+	}
+	checkViews(false)
+	if _, err = st.SetProjectGrant(ctx, "org", "cloud", "proj", []string{"private-target"}, false); err != nil {
+		t.Fatal(err)
+	}
+	checkViews(true)
+	if _, err = st.SetProjectGrant(ctx, "org", "cloud", "proj", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	checkViews(false)
+	manager := planning.NewService(planning.Deps{CloudProfiles: st, Authz: &syncAuth{}})
+	full, err := manager.CloudSync(ctx, actor, "", "private-target-change")
+	if err != nil || full.Before == nil || full.After == nil || full.TargetID != "private-target" {
+		t.Fatalf("manager view lost target details: %+v %v", full, err)
+	}
+	var body, snapshot string
+	if err = conn.QueryRow(ctx, `SELECT body::text,snapshot::text FROM loomplane_cloud_syncs WHERE id='private-target-change'`).Scan(&body, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if body != originalBody || snapshot != originalSnapshot {
+		t.Fatal("public history projection changed private operation state")
 	}
 }
