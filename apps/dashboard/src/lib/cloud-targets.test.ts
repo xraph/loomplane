@@ -59,3 +59,33 @@ it("adopts one environment while retaining effective defaults, unrelated entries
   expect(original.defaults?.provider).toBe("vercel")
   expect(original.services!.web.cloud_target).toBeUndefined()
 })
+
+it("preserves placement in saved overrides before an environment is registered", () => {
+  const manifest: Manifest = {
+    version: 1,
+    defaults: { provider: "vercel", region: "iad1" },
+    services: {
+      web: { source: "web", environments: { future: { port: 9000 } } },
+    },
+  }
+  const result = adoptServiceTarget(
+    manifest,
+    [{ name: "production" }] as Environment[],
+    "production",
+    "web",
+    "frontend"
+  )
+  expect(
+    placementSettings(
+      result,
+      {
+        section: "services",
+        name: "web",
+        kind: "",
+        entry: result.services!.web,
+      },
+      "future"
+    )
+  ).toMatchObject({ provider: "vercel", region: "iad1" })
+  expect(result.services!.web.environments.future.port).toBe(9000)
+})

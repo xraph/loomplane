@@ -436,6 +436,9 @@ it("requires routing evidence and sends it for the selected environment", async 
   )
   const confirm = await screen.findByRole("button", { name: "Confirm routing" })
   expect(confirm).toBeDisabled()
+  expect(
+    screen.getByText("Deployment ready, routing pending")
+  ).toBeInTheDocument()
   await user.type(
     screen.getByRole("textbox", { name: "Routing evidence for production" }),
     "DNS checked"

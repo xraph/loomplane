@@ -224,7 +224,13 @@ function SyncRow({
         >
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{env.environment}</span>
-            <span>{syncLabel(env.status)}</span>
+            <span>
+              {env.status === "succeeded" &&
+              env.externalRouting &&
+              !env.routingEvidence
+                ? "Deployment ready, routing pending"
+                : syncLabel(env.status)}
+            </span>
             {env.deploymentId && (
               <a
                 className="underline underline-offset-4"

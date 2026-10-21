@@ -52,14 +52,18 @@ export function adoptServiceTarget(
   const entry = next.services![service]
   const previous = manifest.services![service]
   entry.environments = { ...entry.environments }
-  for (const env of environments) {
+  const names = new Set([
+    ...environments.map((env) => env.name),
+    ...Object.keys(previous.environments ?? {}),
+  ])
+  for (const name of names) {
     const settings = placementSettings(
       manifest,
       { section: "services", name: service, kind: "", entry: previous },
-      env.name
+      name
     )
-    const override = { ...entry.environments[env.name] }
-    if (env.name === environment) {
+    const override = { ...entry.environments[name] }
+    if (name === environment) {
       delete override.provider
       delete override.target
       override.cloud_target = target
@@ -69,7 +73,7 @@ export function adoptServiceTarget(
       if (settings.region) override.region = settings.region
       if (settings.cloudTarget) override.cloud_target = settings.cloudTarget
     }
-    entry.environments[env.name] = override
+    entry.environments[name] = override
   }
   delete entry.provider
   delete entry.target
