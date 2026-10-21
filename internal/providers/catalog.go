@@ -9,6 +9,8 @@ package providers
 import (
 	"slices"
 
+	"github.com/xraph/loomplane/internal/clouds/digitalocean"
+	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -34,7 +36,7 @@ var (
 // Catalog returns the built-in targets, in the order a person choosing one
 // should see them.
 func Catalog() []provider.Provider {
-	return []provider.Provider{
+	all := []provider.Provider{
 		{
 			Name: "vercel", Title: "Vercel", Cloud: "vercel",
 			BuildLogs:   "streamed",
@@ -213,6 +215,15 @@ func Catalog() []provider.Provider {
 			Available:  true,
 		},
 	}
+	for i := range all {
+		switch all[i].Cloud {
+		case "digitalocean":
+			all[i].Infrastructure = digitalocean.InfrastructureCapabilities()
+		case "vercel":
+			all[i].Infrastructure = vercel.InfrastructureCapabilities()
+		}
+	}
+	return all
 }
 
 func containerWorkloads(creates string) []provider.Runs {

@@ -105,6 +105,9 @@ type Provider struct {
 	Model       Model        `json:"model"`
 	Runs        []Runs       `json:"runs,omitempty"`
 	Provisions  []Provisions `json:"provisions,omitempty"`
+	// Infrastructure lists separately implemented account capabilities. It does
+	// not change this target's deployment model or runtime.
+	Infrastructure []InfrastructureCapability `json:"infrastructure,omitempty"`
 	// Regions are the regions Loomplane offers, the default first. Empty
 	// means the target places things itself.
 	Regions []string `json:"regions,omitempty"`
@@ -233,6 +236,7 @@ func (r *Registry) Register(p Provider) error {
 	p.Runs = slices.Clone(p.Runs)
 	p.Provisions = slices.Clone(p.Provisions)
 	p.Regions = slices.Clone(p.Regions)
+	p.Infrastructure = slices.Clone(p.Infrastructure)
 	r.list = append(r.list, &p)
 	r.byName[p.Name] = &p
 	return nil
