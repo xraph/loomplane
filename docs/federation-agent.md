@@ -121,8 +121,8 @@ or private signing key belongs in the ConfigMap.
 A delivery timeout may mean Kubernetes accepted the write. Inspect that exact
 attempt and retire its enrollment before replacing it. Do not retry enrollment
 or change the launch file in place. `restartPolicy: Never` prevents a container
-restart from silently reusing its consumed handle. Durable attempt recovery and
-automatic replacement are still pending.
+restart from silently reusing its consumed handle. The launch service can recover
+matching configuration writes; automatic replacement is still pending.
 
 Regenerate the example after changing the shared builder:
 
@@ -170,11 +170,28 @@ expiry, destination and latest-epoch checks. Delivery rechecks those records and
 human authority after provider reads. A newer enrollment fences an older pending
 handle immediately. A consumed handle cannot deliver another launch file.
 
+Before the Kubernetes write, the service saves the attempt, enrollment,
+destination generation, pod UID and immutable configuration digest in PostgreSQL.
+Only one unresolved delivery is allowed per destination, and an enrollment cannot
+be assigned to another delivery attempt. The pending record prevents destination
+deletion while the outcome remains unknown.
+
+If the write response is lost, use the internal service's `Recover` operation with
+the destination and attempt IDs. It checks your destination and trust-management
+permissions, the current installation, cluster identity, namespace UID, pod UID
+and configuration digest. Recovery only reads Kubernetes. A matching result saves
+the ConfigMap UID and releases the pending delivery reference, even if the agent
+has already consumed its enrollment. Confirmation is delivery history; it does
+not renew the agent's authority. Both reservation and confirmation append project
+events in the same transaction as the saved record.
+
+Missing resources, changed identities and mismatched content leave the attempt
+pending. Repeating delivery does not send another create request. Cleanup and
+replacement of these unresolved attempts still need the installation coordinator.
+
 The application currently wires consumer installations only. Exporting agents
-still need verified service-target assignments. Launch delivery performs one
-ConfigMap create and returns its UID; it does not prepare resources, retry a lost
-response or recover an interrupted attempt. Those operations need the durable
-installation coordinator. Management API, CLI and dashboard controls are pending.
+still need verified service-target assignments. Automatic resource preparation,
+replacement, management API, CLI and dashboard controls are pending.
 
 ## Shutdown and restart
 

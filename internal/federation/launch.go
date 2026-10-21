@@ -10,7 +10,6 @@ import (
 	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/agentinstall"
 	"github.com/xraph/loomplane/internal/config"
-	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/runtimecatalog"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/workloadidentity"
@@ -45,17 +44,20 @@ type LaunchService struct {
 	keys          LaunchSigningKey
 	cfg           config.FederationLaunchConfig
 	org           string
+	attempts      LaunchAttemptStore
+	inspect       func(context.Context, domain.Destination, *LaunchAttempt) (*corev1.ConfigMap, error)
 	deliver       func(context.Context, *agentinstall.KubernetesPlan, domain.Destination, workloadidentity.EnrollmentRecord, agentinstall.LaunchSettings, func(context.Context) error) (*corev1.ConfigMap, error)
 }
 
-func NewLaunchService(installations *InstallationService, enrollments ReadyEnrollmentStore, credentials InstallationCredentials, keys LaunchSigningKey, cfg config.FederationLaunchConfig, org string) *LaunchService {
-	s := &LaunchService{installations: installations, enrollments: enrollments, credentials: credentials, keys: keys, cfg: cfg, org: org}
+func NewLaunchService(installations *InstallationService, enrollments ReadyEnrollmentStore, credentials InstallationCredentials, keys LaunchSigningKey, cfg config.FederationLaunchConfig, org string, attempts LaunchAttemptStore) *LaunchService {
+	s := &LaunchService{installations: installations, enrollments: enrollments, credentials: credentials, keys: keys, cfg: cfg, org: org, attempts: attempts}
 	s.deliver = s.deliverKubernetes
+	s.inspect = s.inspectKubernetes
 	return s
 }
 
 func (s *LaunchService) load(ctx context.Context, p security.Principal, in LaunchDeliveryInput) (*domain.Destination, *KubernetesInstallation, *workloadidentity.EnrollmentRecord, error) {
-	if s == nil || !s.cfg.Enabled || s.cfg.Validate() != nil || s.installations == nil || s.installations.destinations == nil || s.enrollments == nil || s.keys == nil || s.deliver == nil {
+	if s == nil || !s.cfg.Enabled || s.cfg.Validate() != nil || s.installations == nil || s.installations.destinations == nil || s.enrollments == nil || s.keys == nil || s.deliver == nil || s.attempts == nil {
 		return nil, nil, nil, ErrDisabled
 	}
 	if p.OrgID != s.org {
@@ -92,8 +94,8 @@ func (s *LaunchService) load(ctx context.Context, p security.Principal, in Launc
 }
 
 // Deliver publishes once to an existing verified pod. It neither reissues an
-// enrollment nor retries uncertain Kubernetes writes. Recovery must inspect and
-// retire that attempt before preparing a replacement.
+// enrollment nor retries uncertain Kubernetes writes. Recover confirms only
+// observed configuration matching the durable intent.
 func (s *LaunchService) Deliver(ctx context.Context, p security.Principal, in LaunchDeliveryInput) (*LaunchDelivery, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -148,18 +150,23 @@ func (s *LaunchService) Deliver(ctx context.Context, p security.Principal, in La
 		return nil, ErrInvalid
 	}
 	settings := agentinstall.LaunchSettings{ControlEndpoint: s.cfg.ControlEndpoint, TrustGeneration: uint64(generation), SigningKeys: []access.SnapshotKey{key}}
+	desired, err := plan.DesiredConfigMap(*r, settings)
+	if err != nil {
+		return nil, err
+	}
+	digest, err := agentinstall.ConfigMapDigest(desired)
+	if err != nil {
+		return nil, err
+	}
+	attempt, err := s.attempts.ReserveLaunch(ctx, *d, LaunchIntent{ID: in.AttemptID, EnrollmentID: r.ID, Namespace: pod.Namespace, PodUID: installation.Profile.PodUID, ConfigMapName: pod.Name, Digest: digest}, p.UserID, guard)
+	if err != nil {
+		return nil, err
+	}
 	cm, err := s.deliver(ctx, plan, *d, *r, settings, guard)
 	if err != nil {
 		return nil, err
 	}
-	if cm == nil || cm.UID == "" || cm.Name != pod.Name || cm.Namespace != pod.Namespace {
-		return nil, ErrIdentityChanged
-	}
-	result := &LaunchDelivery{DestinationID: d.ID, EnrollmentID: r.ID, PodUID: installation.Profile.PodUID, Namespace: cm.Namespace, ConfigMapName: cm.Name, ConfigMapUID: string(cm.UID)}
-	if audit := s.installations.destinations.audit; audit != nil {
-		audit.Record(ctx, projects.AuditEvent{Action: "federation.launch.deliver", Severity: "info", ProjectID: d.ProjectID, Principal: p, Attributes: map[string]any{"destination_id": d.ID, "enrollment_id": r.ID, "pod_uid": result.PodUID, "config_map_uid": result.ConfigMapUID}})
-	}
-	return result, nil
+	return s.confirmDelivery(ctx, p, attempt, cm)
 }
 func (s *LaunchService) deliverKubernetes(ctx context.Context, plan *agentinstall.KubernetesPlan, d domain.Destination, r workloadidentity.EnrollmentRecord, settings agentinstall.LaunchSettings, guard func(context.Context) error) (*corev1.ConfigMap, error) {
 	if err := guard(ctx); err != nil {

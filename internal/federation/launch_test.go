@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/agentinstall"
@@ -72,9 +71,9 @@ func launchServiceFixture(t *testing.T) (*LaunchService, *readyFixture, *install
 	keys := func(context.Context, domain.Scope) (access.SnapshotKey, error) {
 		return access.SnapshotKey{PublicKey: public, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour)}, nil
 	}
-	svc := NewLaunchService(installations, ready, nil, keys, cfg, principal.OrgID)
+	svc := NewLaunchService(installations, ready, nil, keys, cfg, principal.OrgID, &launchMemory{})
 	writes := new(int)
-	svc.deliver = func(ctx context.Context, _ *agentinstall.KubernetesPlan, _ domain.Destination, r workloadidentity.EnrollmentRecord, s agentinstall.LaunchSettings, guard func(context.Context) error) (*corev1.ConfigMap, error) {
+	svc.deliver = func(ctx context.Context, plan *agentinstall.KubernetesPlan, _ domain.Destination, r workloadidentity.EnrollmentRecord, s agentinstall.LaunchSettings, guard func(context.Context) error) (*corev1.ConfigMap, error) {
 		if err := guard(ctx); err != nil {
 			return nil, err
 		}
@@ -82,7 +81,12 @@ func launchServiceFixture(t *testing.T) (*LaunchService, *readyFixture, *install
 			t.Fatal("delivery lost server-owned launch inputs")
 		}
 		*writes++
-		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace, UID: "config-uid"}}, nil
+		cm, configErr := plan.DesiredConfigMap(r, s)
+		if configErr != nil {
+			return nil, configErr
+		}
+		cm.UID = "config-uid"
+		return cm, nil
 	}
 	return svc, ready, store, principal, LaunchDeliveryInput{DestinationID: d.ID, EnrollmentID: ready.record.ID, AttemptID: attempt}, writes
 }

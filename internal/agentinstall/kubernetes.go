@@ -5,7 +5,6 @@ package agentinstall
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
@@ -116,7 +114,7 @@ type LaunchSettings struct {
 // The caller must load a ready enrollment from durable storage. guard must check
 // current management authorization, installation generation and enrollment state.
 // An error after the Create request has an uncertain outcome: inspect the exact
-// attempt, revoke its enrollment and replace it instead of retrying enrollment.
+// attempt against its saved intent. Never retry enrollment to resolve a timeout.
 func (p *KubernetesPlan) Deliver(ctx context.Context, client kubernetes.Interface, record workloadidentity.EnrollmentRecord, settings LaunchSettings, guard func(context.Context) error) (*corev1.ConfigMap, error) {
 	if p == nil || client == nil || guard == nil {
 		return nil, ErrLaunch
@@ -129,7 +127,7 @@ func (p *KubernetesPlan) Deliver(ctx context.Context, client kubernetes.Interfac
 	if err := guard(ctx); err != nil {
 		return nil, err
 	}
-	cfg, err := p.launch(record, settings, time.Now())
+	cm, err := p.DesiredConfigMap(record, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -147,18 +145,11 @@ func (p *KubernetesPlan) Deliver(ctx context.Context, client kubernetes.Interfac
 	if !p.matches(pod, record.Binding.PodUID) {
 		return nil, ErrLaunch
 	}
-	body, err := json.Marshal(cfg)
-	if err != nil || len(body) > 1<<20 {
-		return nil, ErrLaunch
-	}
-	defer clear(body)
-	cm := &corev1.ConfigMap{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, ObjectMeta: p.metadata(), Immutable: ptr.To(true), Data: map[string]string{ConfigKey: string(body)}}
-	cm.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "Pod", Name: p.name, UID: types.UID(record.Binding.PodUID)}}
 	// Remote reads may outlive authorization or the five-minute bootstrap window.
 	if err := guard(ctx); err != nil {
 		return nil, err
 	}
-	if err := cfg.Validate(time.Now()); err != nil {
+	if _, err := p.launch(record, settings, time.Now()); err != nil {
 		return nil, ErrLaunch
 	}
 	return client.CoreV1().ConfigMaps(p.namespace).Create(ctx, cm, metav1.CreateOptions{})

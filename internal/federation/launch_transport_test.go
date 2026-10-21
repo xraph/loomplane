@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -37,7 +38,7 @@ func (a *launchAtomicAuth) Require(context.Context, security.Principal, security
 }
 
 func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
-	for _, mode := range []string{"deliver", "revoke during read", "wrong CA"} {
+	for _, mode := range []string{"deliver", "revoke during read", "wrong CA", "recover", "recover wrong pod", "recover wrong namespace", "recover content", "recover revoked"} {
 		t.Run(mode, func(t *testing.T) {
 			svc, ready, store, principal, input, _ := launchServiceFixture(t)
 			auth := &launchAtomicAuth{}
@@ -52,6 +53,7 @@ func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
 			pod.Status.Phase = corev1.PodPending
 			pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}}
 			var reads, writes atomic.Int32
+			var created *corev1.ConfigMap
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer fixture-token" {
 					t.Error("destination credential missing")
@@ -64,12 +66,34 @@ func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
 				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/workloads":
 					reads.Add(1)
 					response = &corev1.Namespace{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: "workloads", UID: types.UID(ready.record.Binding.NamespaceUID)}}
+					if mode == "recover wrong namespace" && writes.Load() > 0 {
+						response.(*corev1.Namespace).UID = "foreign-namespace"
+					}
 				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/workloads/pods/"+pod.Name:
 					reads.Add(1)
 					if mode == "revoke during read" {
 						auth.denied.Store(true)
 					}
-					response = pod
+					response = pod.DeepCopy()
+					if writes.Load() > 0 {
+						response.(*corev1.Pod).Status.Phase = corev1.PodRunning
+						if mode == "recover wrong pod" {
+							response.(*corev1.Pod).UID = "foreign-pod"
+						}
+					}
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/workloads/configmaps/"+pod.Name:
+					reads.Add(1)
+					if created == nil {
+						http.NotFound(w, r)
+						return
+					}
+					response = created.DeepCopy()
+					if mode == "recover content" {
+						response.(*corev1.ConfigMap).Data[agentinstall.ConfigKey] = "{}"
+					}
+					if mode == "recover revoked" {
+						auth.denied.Store(true)
+					}
 				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/workloads/configmaps":
 					writes.Add(1)
 					var cm corev1.ConfigMap
@@ -87,6 +111,11 @@ func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
 					}
 					cm.UID = "config-uid"
 					response = &cm
+					created = cm.DeepCopy()
+					if strings.HasPrefix(mode, "recover") {
+						http.Error(w, "write outcome unknown", http.StatusInternalServerError)
+						return
+					}
 				default:
 					http.NotFound(w, r)
 					return
@@ -126,7 +155,23 @@ func TestLaunchServiceUsesVerifiedCredentialAndGuardsRealWrite(t *testing.T) {
 			})
 			svc.deliver = svc.deliverKubernetes
 			result, err := svc.Deliver(t.Context(), principal, input)
-			if mode == "deliver" {
+			if strings.HasPrefix(mode, "recover") {
+				if err == nil || writes.Load() != 1 {
+					t.Fatal("fixture did not leave uncertain write", err, writes.Load())
+				}
+				ready.fail = true
+				result, err = svc.Recover(t.Context(), principal, input.DestinationID, input.AttemptID)
+				if mode == "recover" {
+					if err != nil || result.ConfigMapUID != "config-uid" || reads.Load() != 5 {
+						t.Fatal("production recovery failed", err, reads.Load())
+					}
+				} else if err == nil {
+					t.Fatal("unverified provider evidence confirmed")
+				}
+				if writes.Load() != 1 {
+					t.Fatal("recovery wrote to Kubernetes")
+				}
+			} else if mode == "deliver" {
 				if err != nil || result.ConfigMapUID != "config-uid" || writes.Load() != 1 || reads.Load() != 2 {
 					t.Fatal("production writer failed", err, reads.Load(), writes.Load())
 				}
