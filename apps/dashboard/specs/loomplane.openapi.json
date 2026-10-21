@@ -8067,6 +8067,9 @@
             "items": {
               "$ref": "#/components/schemas/RetentionPoint"
             }
+          },
+          "verified_backup_id": {
+            "type": "string"
           }
         }
       },

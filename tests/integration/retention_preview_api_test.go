@@ -66,7 +66,7 @@ func TestRetentionPreviewAPIIsReadOnlyAndScoped(t *testing.T) {
 	path := "/api/v1/service-backups/point1/retention-preview?older_than_days=7&keep_last=1"
 	var preview recovery.RetentionPreview
 	c.must(http.StatusOK, http.MethodGet, path, nil, &preview)
-	if !preview.Complete || preview.EligibleCount != 1 || preview.EligibleBytes != 3 {
+	if !preview.Complete || preview.EligibleCount != 1 || preview.EligibleBytes != 3 || preview.VerifiedBackupID != "point3" {
 		t.Fatalf("read-only retention preview: %+v", preview)
 	}
 	for _, point := range preview.Points {
@@ -90,7 +90,7 @@ func TestRetentionPreviewAPIIsReadOnlyAndScoped(t *testing.T) {
 	if err = app.Run([]string{"backups", "retention", "point1", "--older-than-days", "7", "--keep-last", "1", "--json"}); err != nil {
 		t.Fatal(err)
 	}
-	if err = json.Unmarshal(output.Bytes(), &preview); err != nil || preview.EligibleCount != 1 {
+	if err = json.Unmarshal(output.Bytes(), &preview); err != nil || preview.EligibleCount != 1 || preview.VerifiedBackupID != "point3" {
 		t.Fatalf("CLI read-only preview: %+v %v", preview, err)
 	}
 	var other struct{ ID string }

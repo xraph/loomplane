@@ -67,6 +67,30 @@ func TestRetentionPreviewProtectsNewestTestedAndActivePoints(t *testing.T) {
 	}
 }
 
+func TestRetentionPreviewReportsWitnessInsideKeptCount(t *testing.T) {
+	points := []RetentionEntry{
+		{Backup: retentionBackup(t, "tested", 1, true)},
+		{Backup: retentionBackup(t, "older", 40, false)},
+	}
+	preview, err := previewRetention(retentionNow, RetentionInput{OlderThanDays: 7, KeepLast: 7}, &points[1].Backup, points)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(preview)
+	if err != nil || !strings.Contains(string(raw), `"verified_backup_id":"tested"`) || preview.Points[0].Reason != "newest" {
+		t.Fatalf("preview lost witness masked by count protection: %s %v", raw, err)
+	}
+	points[0].Backup.RestoredAt = nil
+	preview, err = previewRetention(retentionNow, RetentionInput{OlderThanDays: 7, KeepLast: 7}, &points[1].Backup, points)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(preview)
+	if err != nil || strings.Contains(string(raw), `"verified_backup_id"`) {
+		t.Fatalf("preview invented witness without restore evidence: %s %v", raw, err)
+	}
+}
+
 func TestRetentionPreviewRequiresRestoreEvidenceAndCompleteInventory(t *testing.T) {
 	for _, count := range []int{3, 1001} {
 		points := make([]RetentionEntry, count)

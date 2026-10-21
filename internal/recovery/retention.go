@@ -33,11 +33,12 @@ type RetentionPoint struct {
 }
 
 type RetentionPreview struct {
-	AsOf          time.Time        `json:"as_of"`
-	Complete      bool             `json:"complete"`
-	EligibleCount int              `json:"eligible_count"`
-	EligibleBytes int64            `json:"eligible_bytes"`
-	Points        []RetentionPoint `json:"points"`
+	AsOf             time.Time        `json:"as_of"`
+	Complete         bool             `json:"complete"`
+	VerifiedBackupID string           `json:"verified_backup_id,omitempty"`
+	EligibleCount    int              `json:"eligible_count"`
+	EligibleBytes    int64            `json:"eligible_bytes"`
+	Points           []RetentionPoint `json:"points"`
 }
 
 // RetentionEntry includes copy references from the same database snapshot as
@@ -186,6 +187,7 @@ func previewRetention(now time.Time, input RetentionInput, anchor *Backup, inven
 	if witness := verifiedRetentionPoint(now, points); witness != nil {
 		verified = witness.ID
 	}
+	preview.VerifiedBackupID = verified
 	pendingRetirement := slices.ContainsFunc(points, func(point RetentionEntry) bool { return point.Backup.Status == "retiring" })
 	cutoff, kept := now.Add(-time.Duration(input.OlderThanDays)*24*time.Hour), 0
 	for _, point := range points {

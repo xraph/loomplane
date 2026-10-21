@@ -1150,6 +1150,7 @@ export interface RetentionPreview {
   eligibleBytes: number;
   eligibleCount: number;
   points: RetentionPoint[];
+  verifiedBackupId?: string;
 }
 
 export interface Retirement {

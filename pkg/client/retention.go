@@ -19,11 +19,12 @@ type RetentionPoint struct {
 }
 
 type RetentionPreview struct {
-	AsOf          time.Time        `json:"as_of"`
-	Complete      bool             `json:"complete"`
-	EligibleCount int              `json:"eligible_count"`
-	EligibleBytes int64            `json:"eligible_bytes"`
-	Points        []RetentionPoint `json:"points"`
+	AsOf             time.Time        `json:"as_of"`
+	Complete         bool             `json:"complete"`
+	VerifiedBackupID string           `json:"verified_backup_id,omitempty"`
+	EligibleCount    int              `json:"eligible_count"`
+	EligibleBytes    int64            `json:"eligible_bytes"`
+	Points           []RetentionPoint `json:"points"`
 }
 
 func (c *Client) BackupRetentionPreview(ctx context.Context, id string, days, keep int) (*RetentionPreview, error) {
