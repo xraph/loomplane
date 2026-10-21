@@ -12,6 +12,8 @@ import (
 
 // PlacementRequest is scoped to one service and its reviewed target.
 type PlacementRequest struct {
+	Allocation string
+
 	PlanID                                                              string
 	Planned                                                             []PlannedPlacement
 	OrgID, ProjectID, EnvironmentID, CloudID, TargetID, PoolID, Service string
@@ -31,6 +33,8 @@ type PlannedPlacement struct {
 
 // Placement pins the exact runtime and capacity reviewed for a service.
 type Placement struct {
+	Allocation string `json:"allocation,omitempty"`
+
 	PoolID               string `json:"pool_id"`
 	PoolRevision         int64  `json:"pool_revision"`
 	ServerID             string `json:"server_id"`
@@ -114,12 +118,12 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 		}
 		var cpu, mem int64
 		planned := append([]PlannedPlacement{}, in.Planned...)
-		planned = append(planned, PlannedPlacement{Service: in.Service, Placement: Placement{ServerID: v.ID, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes}})
+		planned = append(planned, PlannedPlacement{Service: in.Service, Placement: Placement{Allocation: in.Allocation, ServerID: v.ID, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes}})
 		raw, marshalErr := json.Marshal(planned)
 		if marshalErr != nil {
 			return nil, marshalErr
 		}
-		err = s.db.QueryRow(ctx, `SELECT coalesce(sum(cpu),0),coalesce(sum(memory),0) FROM (SELECT max(cpu_millis) cpu,max(memory_bytes) memory FROM (SELECT environment_id,service,cpu_millis,memory_bytes FROM loomplane_capacity_reservations WHERE org_id=$1 AND server_id=$2 UNION ALL SELECT $3,p->>'service',(p->>'cpu_millis')::bigint,(p->>'memory_bytes')::bigint FROM jsonb_array_elements($4::jsonb) p WHERE p->>'server_id'=$2) demands GROUP BY environment_id,service) r`, in.OrgID, v.ID, in.EnvironmentID, raw).Scan(&cpu, &mem)
+		err = s.db.QueryRow(ctx, `SELECT cpu,memory FROM loomplane_server_capacity($1,$2,$3::jsonb)`, v.ID, in.EnvironmentID, raw).Scan(&cpu, &mem)
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +134,7 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 		if err = s.db.QueryRow(ctx, `SELECT generation FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND status='ready'`, in.OrgID, v.RuntimeConnectionID).Scan(&generation); err != nil {
 			continue
 		}
-		return &Placement{PoolID: p.ID, PoolRevision: p.Revision, ServerID: v.ID, ServerRevision: v.Revision, ConnectionID: v.RuntimeConnectionID, ConnectionGeneration: generation, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes}, nil
+		return &Placement{Allocation: in.Allocation, PoolID: p.ID, PoolRevision: p.Revision, ServerID: v.ID, ServerRevision: v.Revision, ConnectionID: v.RuntimeConnectionID, ConnectionGeneration: generation, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes}, nil
 	}
 	return nil, fmt.Errorf("%w: no compatible capacity for the reviewed workload; current placements stay pinned", ErrConflict)
 }
@@ -138,7 +142,7 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 // ValidatePlacement checks the persisted reservation before runtime execution.
 func (s *PgStore) ValidatePlacement(ctx context.Context, org, project, env, plan, service string, p Placement) error {
 	var raw []byte
-	err := s.db.QueryRow(ctx, `SELECT r.body FROM loomplane_capacity_reservations r JOIN loomplane_cloud_servers s ON s.org_id=r.org_id AND s.id=r.server_id WHERE r.org_id=$1 AND r.project_id=$2 AND r.environment_id=$3 AND r.plan_id=$4 AND r.service=$5 AND r.server_id=$6 AND s.status='ready' AND s.runtime_connection_id=r.connection_id AND (s.body->'health'->>'checked_at')::timestamptz>=now()-interval '15 minutes' AND (SELECT coalesce(sum(cpu),0) FROM (SELECT max(cpu_millis) cpu FROM loomplane_capacity_reservations x WHERE x.server_id=s.id GROUP BY environment_id,service) used)<=(s.body->'health'->>'effective_cpu_millis')::bigint AND (SELECT coalesce(sum(memory),0) FROM (SELECT max(memory_bytes) memory FROM loomplane_capacity_reservations x WHERE x.server_id=s.id GROUP BY environment_id,service) used)<=(s.body->'health'->>'effective_memory_bytes')::bigint AND (s.body->'health'->>'effective_cpu_millis')::bigint>=r.cpu_millis AND (s.body->'health'->>'effective_memory_bytes')::bigint>=r.memory_bytes`, org, project, env, plan, service, p.ServerID).Scan(&raw)
+	err := s.db.QueryRow(ctx, `SELECT r.body FROM loomplane_capacity_reservations r JOIN loomplane_cloud_servers s ON s.org_id=r.org_id AND s.id=r.server_id WHERE r.org_id=$1 AND r.project_id=$2 AND r.environment_id=$3 AND r.plan_id=$4 AND r.service=$5 AND r.server_id=$6 AND s.status='ready' AND s.runtime_connection_id=r.connection_id AND (s.body->'health'->>'checked_at')::timestamptz>=now()-interval '15 minutes' AND (SELECT cpu FROM loomplane_server_capacity(s.id))<=(s.body->'health'->>'effective_cpu_millis')::bigint AND (SELECT memory FROM loomplane_server_capacity(s.id))<=(s.body->'health'->>'effective_memory_bytes')::bigint AND (s.body->'health'->>'effective_cpu_millis')::bigint>=r.cpu_millis AND (s.body->'health'->>'effective_memory_bytes')::bigint>=r.memory_bytes`, org, project, env, plan, service, p.ServerID).Scan(&raw)
 	if err != nil {
 		return storeError(err)
 	}

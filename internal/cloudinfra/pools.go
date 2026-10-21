@@ -179,7 +179,7 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 			return fmt.Errorf("%w: a server must use the same budget in every pool", ErrInvalid)
 		}
 		var cpu, mem int64
-		if checkErr := tx.QueryRow(ctx, `SELECT coalesce(sum(cpu),0),coalesce(sum(memory),0) FROM (SELECT max(cpu_millis) cpu,max(memory_bytes) memory FROM loomplane_capacity_reservations WHERE org_id=$1 AND server_id=$2 GROUP BY environment_id,service) r`, p.OrgID, m.ServerID).Scan(&cpu, &mem); checkErr != nil {
+		if checkErr := tx.QueryRow(ctx, `SELECT cpu,memory FROM loomplane_server_capacity($1)`, m.ServerID).Scan(&cpu, &mem); checkErr != nil {
 			return checkErr
 		}
 		if cpu > m.CPUMillis || mem > m.MemoryBytes {

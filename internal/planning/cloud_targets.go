@@ -15,6 +15,8 @@ import (
 
 // CloudPlacement pins the reviewed Cloud configuration and verified account.
 type CloudPlacement struct {
+	Allocation string `json:"allocation,omitempty"`
+
 	PoolID               string `json:"pool_id,omitempty"`
 	PoolRevision         int64  `json:"pool_revision,omitempty"`
 	ServerID             string `json:"server_id,omitempty"`
@@ -119,6 +121,7 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 			p.ServerID = pool.ServerID
 			p.ServerRevision = pool.ServerRevision
 			p.ConnectionGeneration = pool.ConnectionGeneration
+			p.Allocation = pool.Allocation
 			p.CPUMillis = pool.CPUMillis
 			p.MemoryBytes = pool.MemoryBytes
 			placements[name] = p
@@ -260,7 +263,7 @@ func (p *planner) sameDeploymentAccount(a, b *Action) bool {
 
 // PoolPlacement returns the capacity fields used by admission and runtime checks.
 func (p *CloudPlacement) PoolPlacement() cloudinfra.Placement {
-	return cloudinfra.Placement{PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionID: p.ConnectionID, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes}
+	return cloudinfra.Placement{Allocation: p.Allocation, PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionID: p.ConnectionID, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes}
 }
 
 type poolResolver interface {
@@ -314,6 +317,7 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 			}
 			if old.CloudPlacement != nil {
 				req.StickyServerID = old.CloudPlacement.ServerID
+				req.Allocation = old.CloudPlacement.Allocation
 			}
 			req.LocalData = old.Catalog != nil
 			req.Architecture = old.TargetSettings["architecture"]

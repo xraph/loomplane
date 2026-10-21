@@ -1,5 +1,14 @@
 package migrations
 
+// serverCapacitySQL counts each retained allocation separately. Legacy in-place
+// deployments share one allocation and keep their maximum demand.
+const serverCapacitySQL = `CREATE OR REPLACE FUNCTION loomplane_server_capacity(host_id TEXT, extra_environment TEXT DEFAULT '', extra JSONB DEFAULT '[]') RETURNS TABLE(cpu BIGINT,memory BIGINT) LANGUAGE SQL STABLE AS $$
+ SELECT coalesce(sum(c),0)::bigint,coalesce(sum(m),0)::bigint FROM (
+ SELECT max(cpu_millis) c,max(memory_bytes) m FROM (
+ SELECT environment_id,service,coalesce(body->>'allocation','') allocation,cpu_millis,memory_bytes FROM loomplane_capacity_reservations WHERE server_id=host_id
+ UNION ALL SELECT extra_environment,p->>'service',coalesce(p->>'allocation',''),(p->>'cpu_millis')::bigint,(p->>'memory_bytes')::bigint FROM jsonb_array_elements(extra) p WHERE p->>'server_id'=host_id
+ ) demands GROUP BY environment_id,service,allocation) allocated $$`
+
 var serverPoolsUp = []string{
 	`CREATE TABLE IF NOT EXISTS loomplane_placement_moves(org_id TEXT NOT NULL,project_id TEXT NOT NULL,environment_id TEXT NOT NULL,service TEXT NOT NULL,cloud_id TEXT NOT NULL,pool_id TEXT NOT NULL,source_server_id TEXT NOT NULL,destination_server_id TEXT NOT NULL,review TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL,source_config JSONB NOT NULL,PRIMARY KEY(org_id,environment_id,service))`,
 	`CREATE TABLE IF NOT EXISTS loomplane_server_pools(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,cloud_id TEXT NOT NULL,revision BIGINT NOT NULL CHECK(revision>0),body JSONB NOT NULL,UNIQUE(org_id,cloud_id,id),FOREIGN KEY(org_id,cloud_id) REFERENCES loomplane_cloud_profiles(org_id,id) ON DELETE RESTRICT)`,
@@ -10,11 +19,12 @@ var serverPoolsUp = []string{
 	`DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='loomplane_target_pool_scope') THEN ALTER TABLE loomplane_cloud_targets ADD CONSTRAINT loomplane_target_pool_scope FOREIGN KEY(org_id,cloud_id,pool_id) REFERENCES loomplane_server_pools(org_id,cloud_id,id); END IF; END $$`,
 	`DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='loomplane_target_runtime') THEN ALTER TABLE loomplane_cloud_targets ADD CONSTRAINT loomplane_target_runtime CHECK((runtime='managed' AND pool_id IS NULL AND connection_id IS NOT NULL) OR (runtime='server' AND pool_id IS NOT NULL AND connection_id IS NULL AND provider='server')); END IF; END $$`,
 	`CREATE TABLE IF NOT EXISTS loomplane_capacity_reservations(org_id TEXT NOT NULL,project_id TEXT NOT NULL,environment_id TEXT NOT NULL,service TEXT NOT NULL,plan_id TEXT NOT NULL REFERENCES loomplane_plans(id) ON DELETE RESTRICT,pool_id TEXT NOT NULL REFERENCES loomplane_server_pools(id),server_id TEXT NOT NULL REFERENCES loomplane_cloud_servers(id),connection_id TEXT NOT NULL,cpu_millis BIGINT NOT NULL CHECK(cpu_millis>0),memory_bytes BIGINT NOT NULL CHECK(memory_bytes>0),binding_id TEXT NOT NULL DEFAULT '',body JSONB NOT NULL,PRIMARY KEY(plan_id,service,server_id))`,
+	serverCapacitySQL,
 	`CREATE INDEX IF NOT EXISTS loomplane_capacity_server ON loomplane_capacity_reservations(org_id,server_id)`,
 	// A daemon is a single capacity domain, even if two SSH connections reach it.
 	`CREATE UNIQUE INDEX IF NOT EXISTS loomplane_server_docker_identity ON loomplane_cloud_servers((body->'health'->>'docker_id')) WHERE status NOT IN ('deleted','disconnected') AND coalesce(body->'health'->>'docker_id','')<>''`,
 	`CREATE OR REPLACE FUNCTION loomplane_reserve_pool_plan() RETURNS TRIGGER LANGUAGE plpgsql AS $$
- DECLARE a JSONB; pin JSONB; host loomplane_cloud_servers%ROWTYPE; member loomplane_server_pool_members%ROWTYPE; pool loomplane_server_pools%ROWTYPE; cpu BIGINT; mem BIGINT; used_cpu BIGINT; used_mem BIGINT; old_cpu BIGINT; old_mem BIGINT;
+ DECLARE a JSONB; pin JSONB; host loomplane_cloud_servers%ROWTYPE; member loomplane_server_pool_members%ROWTYPE; pool loomplane_server_pools%ROWTYPE; cpu BIGINT; mem BIGINT; used_cpu BIGINT; used_mem BIGINT;
  BEGIN
  IF NEW.status<>'approved' OR (TG_OP='UPDATE' AND OLD.status='approved') THEN RETURN NEW; END IF;
  -- Order host and connection locks consistently across every accepted plan.
@@ -44,20 +54,18 @@ var serverPoolsUp = []string{
  IF NOT EXISTS(SELECT 1 FROM loomplane_cloud_targets t JOIN loomplane_cloud_project_grants g ON g.org_id=t.org_id AND g.cloud_id=t.cloud_id AND g.project_id=NEW.project_id AND NOT g.revoked JOIN loomplane_cloud_assignments ca ON ca.org_id=t.org_id AND ca.project_id=NEW.project_id AND ca.environment_id=NEW.environment_id AND ca.cloud_id=t.cloud_id JOIN loomplane_cloud_profiles c ON c.org_id=t.org_id AND c.id=t.cloud_id WHERE t.org_id=NEW.org_id AND t.id=pin->>'target_id' AND t.pool_id=pool.id AND t.revision=(pin->>'target_revision')::bigint AND ca.revision=(pin->>'assignment_revision')::bigint AND c.revision=(pin->>'cloud_revision')::bigint AND g.revision=(pin->>'grant_revision')::bigint AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids))) THEN RAISE EXCEPTION 'pool target authority changed' USING ERRCODE='23514'; END IF;
  cpu:=coalesce((a->'service'->'size'->>'cpu')::numeric*1000,1000);mem:=coalesce((a->'service'->'size'->>'memory')::bigint*1048576,536870912);
  IF cpu<=0 OR mem<=0 OR cpu<>(pin->>'cpu_millis')::bigint OR mem<>(pin->>'memory_bytes')::bigint THEN RAISE EXCEPTION 'capacity differs from runtime limits' USING ERRCODE='23514'; END IF;
- SELECT coalesce(sum(c),0),coalesce(sum(m),0) INTO used_cpu,used_mem FROM (SELECT max(cpu_millis) c,max(memory_bytes) m FROM loomplane_capacity_reservations WHERE server_id=host.id AND NOT(environment_id=NEW.environment_id AND service=a->>'name') GROUP BY environment_id,service) r;
- SELECT coalesce(max(cpu_millis),0),coalesce(max(memory_bytes),0) INTO old_cpu,old_mem FROM loomplane_capacity_reservations WHERE server_id=host.id AND environment_id=NEW.environment_id AND service=a->>'name';
- IF used_cpu+greatest(old_cpu,cpu)>member.cpu_millis OR used_mem+greatest(old_mem,mem)>member.memory_bytes THEN RAISE EXCEPTION 'insufficient reserved host capacity' USING ERRCODE='23514'; END IF;
+ SELECT c.cpu,c.memory INTO used_cpu,used_mem FROM loomplane_server_capacity(host.id,NEW.environment_id,jsonb_build_array(jsonb_build_object('service',a->>'name','server_id',host.id,'allocation',coalesce(pin->>'allocation',''),'cpu_millis',cpu,'memory_bytes',mem))) c;
+ IF used_cpu>member.cpu_millis OR used_mem>member.memory_bytes THEN RAISE EXCEPTION 'insufficient reserved host capacity' USING ERRCODE='23514'; END IF;
  INSERT INTO loomplane_capacity_reservations(org_id,project_id,environment_id,service,plan_id,pool_id,server_id,connection_id,cpu_millis,memory_bytes,body) VALUES(NEW.org_id,NEW.project_id,NEW.environment_id,a->>'name',NEW.id,pool.id,host.id,host.runtime_connection_id,cpu,mem,pin) ON CONFLICT DO NOTHING;
  END LOOP;
  RETURN NEW; END $$`,
 	`CREATE OR REPLACE TRIGGER loomplane_pool_plan_reserve AFTER INSERT OR UPDATE ON loomplane_plans FOR EACH ROW EXECUTE FUNCTION loomplane_reserve_pool_plan()`,
 	`CREATE OR REPLACE FUNCTION loomplane_pool_binding_capacity() RETURNS TRIGGER LANGUAGE plpgsql AS $$
- DECLARE hosts TEXT[]; pin JSONB;
+ DECLARE pin JSONB;
  BEGIN
  IF TG_OP='DELETE' THEN DELETE FROM loomplane_capacity_reservations WHERE org_id=OLD.org_id AND binding_id=OLD.id; RETURN OLD; END IF;
  pin:=NEW.config->'cloud_placement';
- SELECT array_agg(id) INTO hosts FROM (SELECT pin->>'server_id' id UNION SELECT x->'config'->'cloud_placement'->>'server_id' FROM jsonb_array_elements(NEW.replaced) x) h WHERE id IS NOT NULL;
- DELETE FROM loomplane_capacity_reservations WHERE org_id=NEW.org_id AND binding_id=NEW.id AND (NOT(server_id=ANY(coalesce(hosts,ARRAY[]::text[]))) OR (server_id=pin->>'server_id' AND plan_id<>NEW.plan_id));
+ DELETE FROM loomplane_capacity_reservations r WHERE r.org_id=NEW.org_id AND r.binding_id=NEW.id AND NOT coalesce(r.server_id=pin->>'server_id' AND r.plan_id=NEW.plan_id,false) AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(NEW.replaced) x WHERE x->>'plan_id'=r.plan_id AND x->'config'->'cloud_placement'->>'server_id'=r.server_id);
  UPDATE loomplane_capacity_reservations SET binding_id=NEW.id WHERE org_id=NEW.org_id AND project_id=NEW.project_id AND environment_id=NEW.environment_id AND service=NEW.name AND (plan_id=NEW.plan_id OR body=pin) AND server_id=pin->>'server_id';
  RETURN NEW; END $$`,
 	`CREATE OR REPLACE TRIGGER loomplane_pool_binding_capacity AFTER INSERT OR UPDATE OR DELETE ON loomplane_bindings FOR EACH ROW EXECUTE FUNCTION loomplane_pool_binding_capacity()`,
@@ -74,6 +82,7 @@ var serverPoolsDown = []string{
 	`DROP FUNCTION IF EXISTS loomplane_reserve_pool_plan()`,
 	`DROP FUNCTION IF EXISTS loomplane_pool_binding_capacity()`,
 	`DROP FUNCTION IF EXISTS loomplane_pool_server_retirement()`,
+	`DROP FUNCTION IF EXISTS loomplane_server_capacity(TEXT,TEXT,JSONB)`,
 	`DROP TABLE IF EXISTS loomplane_capacity_reservations`,
 	`DROP INDEX IF EXISTS loomplane_server_docker_identity`,
 	`ALTER TABLE loomplane_cloud_targets DROP CONSTRAINT IF EXISTS loomplane_target_pool_scope`,
