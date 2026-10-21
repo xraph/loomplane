@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+
+	"github.com/xraph/loomplane/internal/manageddb"
 )
 
 // SQLInstance is the part of a Cloud SQL instance Loomplane reads.
@@ -22,6 +25,16 @@ type SQLInstanceSpec struct {
 	DatabaseVersion string
 	Region          string
 	Tier            string
+	// Storage is an explicit reviewed request. Nil preserves legacy defaults.
+	Storage *SQLStorageSettings
+}
+
+// SQLStorageSettings are the native disk and recovery settings requested at creation.
+type SQLStorageSettings struct {
+	SizeGB          int32
+	Type            string
+	RetainedBackups int32
+	RecoveryDays    int32
 }
 
 func (s *Session) sqlPath(path string) string {
@@ -82,14 +95,23 @@ func (s *Session) EnsureSQLInstance(ctx context.Context, spec SQLInstanceSpec, r
 	in, err := s.GetSQLInstance(ctx, spec.Name)
 	if IsNotFound(err) {
 		var op sqlOperation
+		settings := map[string]any{
+			"tier": spec.Tier, "edition": "ENTERPRISE",
+			"ipConfiguration":     map[string]any{"ipv4Enabled": true},
+			"backupConfiguration": map[string]any{"enabled": true},
+			"userLabels":          map[string]string{"managed-by": "loomplane"},
+		}
+		if disk := spec.Storage; disk != nil {
+			settings["dataDiskSizeGb"], settings["dataDiskType"] = strconv.FormatInt(int64(disk.SizeGB), 10), disk.Type
+			settings["storageAutoResize"], settings["availabilityType"] = false, "ZONAL"
+			settings["backupConfiguration"] = map[string]any{
+				"enabled": true, "pointInTimeRecoveryEnabled": true, "transactionLogRetentionDays": disk.RecoveryDays,
+				"backupRetentionSettings": map[string]any{"retentionUnit": "COUNT", "retainedBackups": disk.RetainedBackups},
+			}
+		}
 		err = s.do(ctx, http.MethodPost, s.sqlPath("/instances"), map[string]any{
 			"name": spec.Name, "databaseVersion": spec.DatabaseVersion, "region": spec.Region,
-			"settings": map[string]any{
-				"tier": spec.Tier, "edition": "ENTERPRISE",
-				"ipConfiguration":     map[string]any{"ipv4Enabled": true},
-				"backupConfiguration": map[string]any{"enabled": true},
-				"userLabels":          map[string]string{"managed-by": "loomplane"},
-			},
+			"settings": settings,
 		}, &op)
 		if err != nil {
 			return nil, err
@@ -148,7 +170,7 @@ func (s *Session) SetUser(ctx context.Context, instance, name, password string) 
 // One that's already gone is not an error.
 func (s *Session) DeleteSQLInstance(ctx context.Context, name string) error {
 	var op sqlOperation
-	query := url.Values{"enableFinalBackup": {"true"}, "finalBackupTtlDays": {"30"}}
+	query := url.Values{"enableFinalBackup": {"true"}, "finalBackupTtlDays": {strconv.Itoa(manageddb.CloudSQLFinalBackupDays)}}
 	err := s.do(ctx, http.MethodDelete, s.sqlPath("/instances/"+url.PathEscape(name))+"?"+query.Encode(), nil, &op)
 	if IsNotFound(err) {
 		return nil

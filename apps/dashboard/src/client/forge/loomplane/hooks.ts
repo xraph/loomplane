@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudProjectGrantList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -18,6 +18,28 @@ export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
 export const useApiKeysList = query<APIKeyList>(ops['apiKeys.list']);
 export const useApiKeysCreate = mutation(ops['apiKeys.create']);
 export const useApiKeysRevoke = mutation(ops['apiKeys.revoke']);
+export const useOrganizationCloudsList = query<PlanningCloudList>(ops['organizationClouds.list']);
+export const useOrganizationCloudsCreate = mutation<Profile, Profile>(ops['organizationClouds.create']);
+export const useOrganizationCloudChangesApply = mutation<Sync, Sync>(ops['organizationCloudChanges.apply']);
+export const useOrganizationCloudChangesPreview = mutation<Preview, Preview>(ops['organizationCloudChanges.preview']);
+export const useOrganizationCloudChangesGetPreview = query<Preview>(ops['organizationCloudChanges.getPreview']);
+export const useOrganizationCloudSyncsList = query<CloudSyncList>(ops['organizationCloudSyncs.list']);
+export const useOrganizationCloudSyncsApplyRevert = mutation<Sync, Sync>(ops['organizationCloudSyncs.applyRevert']);
+export const useOrganizationCloudSyncsGet = query<Sync>(ops['organizationCloudSyncs.get']);
+export const useOrganizationCloudSyncsRetry = mutation<Sync, Sync>(ops['organizationCloudSyncs.retry']);
+export const useOrganizationCloudSyncsPreviewRevert = mutation<Preview, Preview>(ops['organizationCloudSyncs.previewRevert']);
+export const useOrganizationCloudSyncsCompleteRouting = mutation<Sync, Sync>(ops['organizationCloudSyncs.completeRouting']);
+export const useOrganizationCloudsGet = query<Profile>(ops['organizationClouds.get']);
+export const useOrganizationCloudsUpdate = mutation<Profile, Profile>(ops['organizationClouds.update']);
+export const useOrganizationCloudsDelete = mutation(ops['organizationClouds.delete']);
+export const useOrganizationCloudsListGrants = query<CloudProjectGrantList>(ops['organizationClouds.listGrants']);
+export const useOrganizationCloudsGrantProject = mutation(ops['organizationClouds.grantProject']);
+export const useOrganizationCloudsRevokeProject = mutation(ops['organizationClouds.revokeProject']);
+export const useOrganizationCloudTargetsList = query<CloudTargetList>(ops['organizationCloudTargets.list']);
+export const useOrganizationCloudTargetsCreate = mutation<Target, Target>(ops['organizationCloudTargets.create']);
+export const useOrganizationCloudTargetsGet = query<Target>(ops['organizationCloudTargets.get']);
+export const useOrganizationCloudTargetsUpdate = mutation<Target, Target>(ops['organizationCloudTargets.update']);
+export const useOrganizationCloudTargetsDelete = mutation(ops['organizationCloudTargets.delete']);
 export const useConnectionCloudsList = query<ConnectionsCloudList>(ops['connectionClouds.list']);
 export const useConnectionsList = query<ConnectionList>(ops['connections.list']);
 export const useConnectionsCreate = mutation<Connection, Connection>(ops['connections.create']);

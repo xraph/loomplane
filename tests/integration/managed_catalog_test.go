@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/internal/planning"
 	lpclient "github.com/xraph/loomplane/pkg/client"
 )
@@ -50,7 +52,7 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 						t.Fatal("managed service created extra compute or database resources")
 					}
 					for _, request := range state.dbs {
-						if request.Get("Engine") != "postgres" || request.Get("EngineVersion") != "17" || request.Get("PubliclyAccessible") != "false" || request.Get("StorageEncrypted") != "true" || request.Get("BackupRetentionPeriod") != "7" {
+						if request.Get("Engine") != "postgres" || request.Get("EngineVersion") != "17" || request.Get("PubliclyAccessible") != "false" || request.Get("StorageEncrypted") != "true" || request.Get("BackupRetentionPeriod") != "7" || request.Get("AllocatedStorage") != "20" || request.Get("StorageType") != "gp3" || request.Get("DBInstanceClass") != "db.t4g.micro" || request.Get("MultiAZ") != "false" {
 							t.Fatal("managed PostgreSQL lost its engine, private storage or backup settings")
 						}
 					}
@@ -75,6 +77,12 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 					for name, instance := range state.sql {
 						if instance["databaseVersion"] != "POSTGRES_17" || len(state.databases[name]) != 1 || state.databases[name][0] != "database" || state.passwords[name] == "" {
 							t.Fatal("managed PostgreSQL has no database, selected engine or application credential")
+						}
+						settings := instance["settings"].(map[string]any)
+						backup := settings["backupConfiguration"].(map[string]any)
+						retention, ok := backup["backupRetentionSettings"].(map[string]any)
+						if !ok || settings["dataDiskSizeGb"] != "10" || settings["dataDiskType"] != "PD_SSD" || settings["availabilityType"] != "ZONAL" || settings["storageAutoResize"] != false || settings["tier"] != "db-custom-1-3840" || backup["pointInTimeRecoveryEnabled"] != true || backup["transactionLogRetentionDays"] != float64(7) || retention["retainedBackups"] != float64(7) || retention["retentionUnit"] != "COUNT" {
+							t.Fatal("reviewed storage and recovery requests did not reach Cloud SQL")
 						}
 					}
 				}
@@ -101,7 +109,14 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 			}
 			action := plan.Actions[0]
 			if !response.Catalog || response.Connections[cloud] != selected.ID || plan.Connections[cloud] != selected.ID || action.Provider != provider || action.Region != region || action.Op != planning.Create || action.Resource == nil || action.Resource.Kind != "postgres" || action.Resource.Version != "17" || action.Resource.Target != "" || action.Resource.Catalog != nil {
-				t.Fatal("managed plan lost its selected placement or inherited container assumptions")
+				t.Fatalf("managed plan lost its selected placement or inherited container assumptions: catalog=%v selected=%s response=%v connections=%v action=%+v resource=%+v", response.Catalog, selected.ID, response.Connections, plan.Connections, action, action.Resource)
+			}
+			profile, err := manageddb.Postgres(provider, "17")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action.Resource.Managed == nil || action.Resource.Managed.Profile != *profile || action.Resource.Managed.ConnectionID != selected.ID || action.Resource.Managed.AccountIdentity == "" {
+				t.Fatal("managed plan has no immutable reviewed profile and account identity")
 			}
 			readChoice := managedCatalogConnectionReader(c, plan.ProjectID, cloud)
 			if readChoice() != selected.ID {
@@ -113,6 +128,10 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 			c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+plan.ProjectID+"/bindings?environment=production", nil, &bindings)
 			if len(bindings.Bindings) != 1 || bindings.Bindings[0].Provider != provider || bindings.Bindings[0].ConnectionID != selected.ID || bindings.Bindings[0].ExternalID == "" {
 				t.Fatal("managed database has no scoped persisted binding")
+			}
+			var saved planning.ResourceConfig
+			if err := json.Unmarshal(bindings.Bindings[0].Config, &saved); err != nil || !reflect.DeepEqual(saved.Managed, action.Resource.Managed) {
+				t.Fatal("deployed binding lost its reviewed request profile")
 			}
 			if provider == "cloud-sql" && !strings.Contains(bindings.Bindings[0].ExternalID, ":"+region+":") {
 				t.Fatal("Cloud SQL's returned physical location does not match the selected region")
@@ -131,6 +150,12 @@ func TestManagedCatalogCLIProvisionsStandalonePostgres(t *testing.T) {
 			if !again.Executable || len(again.Actions) != 1 || again.Actions[0].Op != "keep" || resources() != 1 {
 				t.Fatal("managed service reconciliation proposed another database")
 			}
+			var reviewedAgain planning.Plan
+			c.must(http.StatusOK, http.MethodGet, "/api/v1/plans/"+again.ID, nil, &reviewedAgain)
+			if !reflect.DeepEqual(reviewedAgain.Actions[0].Resource.Managed, saved.Managed) {
+				t.Fatal("reviewed profile changed after control-plane restart")
+			}
+			holdCatalogBrowser(t, running.srv.URL, plan.ProjectID, selected.ID)
 			if provider == "rds" {
 				var misplaced lpclient.Plan
 				if err := json.Unmarshal([]byte(lc.must("services", "create", "Wrong region", "--provider", provider, "--target", selected.ID, "--region", "us-west-2", "--json")), &misplaced); err != nil {

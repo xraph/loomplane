@@ -11,6 +11,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
+	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -129,7 +130,7 @@ func Catalog() []provider.Provider {
 			Description: "Managed Postgres and MySQL on Google Cloud.",
 			Model:       provider.Managed,
 			Provisions: []provider.Provisions{
-				{Kind: "postgres", Creates: "Cloud SQL for PostgreSQL instance", Versions: []string{"17", "16", "15"}},
+				{Kind: "postgres", Creates: "Cloud SQL for PostgreSQL instance", Versions: []string{"17", "16", "15"}, ManagedProfiles: manageddb.Profiles("cloud-sql")},
 				{Kind: "mysql", Creates: "Cloud SQL for MySQL instance", Versions: []string{"8.4", "8.0"}},
 			},
 			Regions: gcpRegions,
@@ -162,7 +163,7 @@ func Catalog() []provider.Provider {
 			Description: "Managed Postgres and MySQL on AWS.",
 			Model:       provider.Managed,
 			Provisions: []provider.Provisions{
-				{Kind: "postgres", Creates: "RDS for PostgreSQL instance", Versions: []string{"17", "16", "15"}},
+				{Kind: "postgres", Creates: "RDS for PostgreSQL instance", Versions: []string{"17", "16", "15"}, ManagedProfiles: manageddb.Profiles("rds")},
 				{Kind: "mysql", Creates: "RDS for MySQL instance", Versions: []string{"8.4", "8.0"}},
 			},
 			Regions: awsRegions,

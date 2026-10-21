@@ -1135,6 +1135,9 @@
           "connection_id": {
             "type": "string"
           },
+          "grant_revision": {
+            "type": "integer"
+          },
           "provider": {
             "type": "string"
           },
@@ -1232,6 +1235,9 @@
             "type": "boolean"
           },
           "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
             "type": "string"
           },
           "routing_evidence": {
@@ -1371,6 +1377,100 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "ManagedDatabaseConfig": {
+        "type": "object",
+        "required": [
+          "profile",
+          "connection_id",
+          "account_identity"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ManagedDatabaseProfile"
+          }
+        }
+      },
+      "ManagedDatabaseProfile": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "provider",
+          "kind",
+          "version",
+          "compute_class",
+          "storage_gb",
+          "storage_type",
+          "storage_encrypted",
+          "availability",
+          "access",
+          "backup_retention_value",
+          "backup_retention_unit",
+          "point_in_time_recovery_days",
+          "final_backup",
+          "final_backup_retention_days",
+          "retain_automated_backups"
+        ],
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "availability": {
+            "type": "string"
+          },
+          "backup_retention_unit": {
+            "type": "string"
+          },
+          "backup_retention_value": {
+            "type": "integer"
+          },
+          "compute_class": {
+            "type": "string"
+          },
+          "final_backup": {
+            "type": "string"
+          },
+          "final_backup_retention_days": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "point_in_time_recovery_days": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "retain_automated_backups": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "storage_encrypted": {
+            "type": "boolean"
+          },
+          "storage_gb": {
+            "type": "integer"
+          },
+          "storage_type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
           }
         }
       },
@@ -1560,6 +1660,9 @@
           },
           "kind": {
             "type": "string"
+          },
+          "managed": {
+            "$ref": "#/components/schemas/ManagedDatabaseConfig"
           },
           "provider": {
             "type": "string"

@@ -14,14 +14,6 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 )
 
-const (
-	// rdsClass is the instance an RDS database runs on: two burstable
-	// vCPUs and 1 GB on Graviton, the smallest class.
-	rdsClass = "db.t4g.micro"
-	// rdsStorageGB is the instance's gp3 disk, RDS's smallest.
-	rdsStorageGB = 20
-)
-
 // rdsEngines maps a resource kind to its RDS engine and port.
 var rdsEngines = map[string]struct {
 	engine string
@@ -66,6 +58,10 @@ func (r *RDS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: rds provisions databases, not %s", ErrNoExecutor, job.Action.Subject)
 	}
+	request, err := managedDatabaseRequest(job, "rds")
+	if err != nil {
+		return nil, err
+	}
 	eng, ok := rdsEngines[cfg.Kind]
 	if !ok || cfg.Version == "" {
 		return nil, fmt.Errorf("rds doesn't offer %s %s", cfg.Kind, cfg.Version)
@@ -106,8 +102,8 @@ func (r *RDS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	job.Progress(StepDeploying, "Creating the database instance; this takes several minutes")
 	db := databaseName(job.Action.Name)
 	in, created, err := s.EnsureDBInstance(ctx, aws.DBInstanceSpec{
-		ID: SQLInstanceName(job), Engine: eng.engine, EngineVersion: cfg.Version, Class: rdsClass,
-		StorageGB: rdsStorageGB, Database: db, User: sqlUser, Password: password,
+		ID: SQLInstanceName(job), Engine: eng.engine, EngineVersion: cfg.Version, Class: request.ComputeClass,
+		StorageGB: request.StorageGB, Database: db, User: sqlUser, Password: password,
 		SubnetGroup: subnets, Group: group,
 	})
 	if err != nil {
@@ -140,6 +136,9 @@ func rdsURL(kind, password, host string, port int32, db string) string {
 // Remove retains a final snapshot and automated backups before forgetting
 // the instance credentials. Snapshot failure keeps the binding retryable.
 func (r *RDS) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
+	if _, err := managedDatabaseBindingReview(b, job.Connection, "rds"); err != nil {
+		return err
+	}
 	s, err := r.session(job.Connection, job.Credential)
 	if err != nil {
 		return err
@@ -152,6 +151,9 @@ func (r *RDS) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 
 // Observe implements Executor.
 func (r *RDS) Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+	if _, err := managedDatabaseBindingReview(b, conn, "rds"); err != nil {
+		return nil, err
+	}
 	s, err := r.session(conn, credential)
 	if err != nil {
 		return nil, err

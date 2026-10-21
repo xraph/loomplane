@@ -215,13 +215,14 @@ type EnvLink struct {
 
 // ResourceConfig is everything a resource is provisioned from.
 type ResourceConfig struct {
-	Target         string            `json:"target,omitempty"`
-	TargetSettings map[string]string `json:"target_settings,omitempty"`
-	Catalog        *recipes.Recipe   `json:"catalog,omitempty"`
-	Provider       string            `json:"provider"`
-	Region         string            `json:"region,omitempty"`
-	Kind           string            `json:"kind"`
-	Version        string            `json:"version,omitempty"`
+	Target         string                 `json:"target,omitempty"`
+	TargetSettings map[string]string      `json:"target_settings,omitempty"`
+	Catalog        *recipes.Recipe        `json:"catalog,omitempty"`
+	Managed        *ManagedDatabaseConfig `json:"managed,omitempty"`
+	Provider       string                 `json:"provider"`
+	Region         string                 `json:"region,omitempty"`
+	Kind           string                 `json:"kind"`
+	Version        string                 `json:"version,omitempty"`
 }
 
 // Change is one setting an update changes.

@@ -21,6 +21,8 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
+	// Catalog requests a standalone service without repository sources.
+	Catalog         bool
 	CloudPlacements map[string]CloudPlacement
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput

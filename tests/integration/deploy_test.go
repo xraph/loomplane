@@ -246,6 +246,7 @@ func (f *fakeCloud) cloudSQL(r *http.Request, p string, body []byte, reply func(
 		f.sql[name] = map[string]any{
 			"name": name, "connectionName": "acme-prod:" + region + ":" + name,
 			"databaseVersion": in["databaseVersion"], "state": "RUNNABLE",
+			"settings": in["settings"],
 		}
 		reply(map[string]any{"name": "op-sql", "status": "PENDING"})
 	case strings.HasSuffix(rest, "/databases") && r.Method == http.MethodPost:

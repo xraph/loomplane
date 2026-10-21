@@ -117,6 +117,7 @@ export interface Assignment {
   cloudId: string;
   cloudRevision: number;
   environmentId: string;
+  grantRevision: number;
   orgId: string;
   projectId: string;
   revision: number;
@@ -253,12 +254,21 @@ export interface CloudPlacement {
   cloudId: string;
   cloudRevision: number;
   connectionId: string;
+  grantRevision?: number;
   provider: string;
   region?: string;
   regionSource?: string;
   targetId: string;
   targetName: string;
   targetRevision: number;
+}
+
+export interface CloudProjectGrantInputBody {
+  targetIds: string[];
+}
+
+export interface CloudProjectGrantList {
+  grants: (ProjectGrant | null)[];
 }
 
 export interface CloudSyncEvent {
@@ -555,6 +565,7 @@ export interface EnvironmentChange {
   error?: string;
   externalRouting: boolean;
   planId?: string;
+  projectId?: string;
   routingEvidence?: string;
   services: string[];
   status: string;
@@ -682,6 +693,32 @@ export interface LogPage {
   gap: boolean;
   logs: Log[];
   next: string;
+}
+
+export interface ManagedDatabaseConfig {
+  accountIdentity: string;
+  connectionId: string;
+  profile: ManagedDatabaseProfile;
+}
+
+export interface ManagedDatabaseProfile {
+  access: string;
+  availability: string;
+  backupRetentionUnit: string;
+  backupRetentionValue: number;
+  computeClass: string;
+  finalBackup: string;
+  finalBackupRetentionDays: number;
+  id: string;
+  kind: string;
+  pointInTimeRecoveryDays: number;
+  provider: string;
+  retainAutomatedBackups: boolean;
+  revision: string;
+  storageEncrypted: boolean;
+  storageGb: number;
+  storageType: string;
+  version: string;
 }
 
 export interface Manifest {
@@ -924,6 +961,15 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface ProjectGrant {
+  cloudId: string;
+  orgId: string;
+  projectId: string;
+  revision: number;
+  revoked: boolean;
+  targetIds: string[];
+}
+
 export interface ProjectList {
   projects: Project[];
 }
@@ -939,6 +985,7 @@ export interface Provider {
   buildLogs?: string;
   cloud: string;
   description: string;
+  infrastructure?: string[];
   logNote?: string;
   model: string;
   name: string;
@@ -964,6 +1011,7 @@ export interface ProviderStatus {
 export interface Provisions {
   creates: string;
   kind: string;
+  managedProfiles?: ManagedDatabaseProfile[];
   versions?: string[];
 }
 
@@ -1055,6 +1103,7 @@ export interface Resource {
 export interface ResourceConfig {
   catalog?: Recipe;
   kind: string;
+  managed?: ManagedDatabaseConfig;
   provider: string;
   region?: string;
   target?: string;

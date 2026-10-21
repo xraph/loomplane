@@ -83,6 +83,22 @@ Here, `--target` chooses the environment's cloud account connection. Managed man
 
 `--region` is optional for managed services. Cloud SQL uses its default region when you omit it. RDS uses the selected AWS connection's region and blocks a plan that requests a different one. Review the returned plan, connection and provider charges before approving it with `loomctl approve PLAN_ID --yes`. Plan creation does not provision the database. The managed CLI profiles currently accept PostgreSQL only, and the Docker/Kubernetes backup commands do not apply to them.
 
+Each new standalone RDS or Cloud SQL PostgreSQL 17 plan saves a versioned managed profile, the selected connection and its checked account identity. You can review the complete resource request in `--json` output before approval. Deployment checks that identity again. Moving an existing profiled database to another account or region, or changing its profile or engine version, requires a tested restore into a fresh service.
+
+| Requested setting | AWS RDS                                       | Google Cloud SQL                                              |
+| ----------------- | --------------------------------------------- | ------------------------------------------------------------- |
+| Compute           | `db.t4g.micro`                                | `db-custom-1-3840`, Enterprise                                |
+| Disk              | 20 GiB, encrypted gp3                         | 10 GiB, provider-encrypted SSD, automatic growth disabled     |
+| Availability      | Single zone                                   | Single zone                                                   |
+| Access            | Private VPC, environment ECS tasks            | Cloud SQL connector, IPv4 enabled without authorized networks |
+| Automated backups | 7 days                                        | 7 retained backups                                            |
+| Recovery logs     | 7 days through RDS backup retention           | 7 days, point-in-time recovery enabled                        |
+| Removal           | Final snapshot and retained automated backups | Final backup requested for 30 days                            |
+
+These are creation requests. They do not establish the actual retained recovery window or a successful restore, and they do not include a Loomplane point-in-time restore control. A Cloud SQL backup count is not a duration. RDS final snapshots have no Loomplane expiry; your account controls their lifetime. Provider availability and quotas can reject a requested class or region.
+
+Existing databases without a managed profile keep their original settings when you replan. Loomplane does not label them with a new profile or silently reconfigure their storage and backups.
+
 Select MySQL or MariaDB when you create the service project:
 
 ```sh

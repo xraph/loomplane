@@ -1,11 +1,31 @@
 package providers
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
+	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/pkg/provider"
 )
+
+func TestManagedProfilesShareTheDeploymentContract(t *testing.T) {
+	for _, target := range []string{"rds", "cloud-sql"} {
+		p, err := Registry().Get(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, offer := range p.Provisions {
+			if offer.Kind == "postgres" {
+				if !reflect.DeepEqual(offer.ManagedProfiles, manageddb.Profiles(target)) {
+					t.Fatalf("%s publishes a different profile than deployment", target)
+				}
+			} else if len(offer.ManagedProfiles) != 0 {
+				t.Fatal("unreviewed managed engine published a profile")
+			}
+		}
+	}
+}
 
 func TestBuildLogCapabilitiesAreOperationScoped(t *testing.T) {
 	want := map[string]string{"vercel": "streamed", "cloud-run": "polled", "ecs-fargate": "polled", "render": "unavailable"}

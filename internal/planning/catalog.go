@@ -14,6 +14,7 @@ func (p *planner) configureCatalog(name, base string, resource manifest.Resource
 		if resource.Target != "" {
 			p.problem(Finding{Code: "resource-target-unsupported", Subject: ResourceSubject, Name: name, Path: base + ".target", Message: "This resource provider does not accept a target connection."})
 		}
+		p.configureManagedCatalog(name, base, cfg, action)
 		return
 	}
 	connection := p.targetConnection(name, base+".target", "target", cfg.Provider, resource.Target)

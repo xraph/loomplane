@@ -349,16 +349,18 @@ type Change struct {
 
 // Action is one thing a plan would do.
 type Action struct {
-	ID       string   `json:"id"`
-	Op       string   `json:"op"`
-	Subject  string   `json:"subject"`
-	Name     string   `json:"name"`
-	Provider string   `json:"provider"`
-	Region   string   `json:"region,omitempty"`
-	Creates  string   `json:"creates,omitempty"`
-	Reason   string   `json:"reason,omitempty"`
-	Step     int      `json:"step"`
-	Changes  []Change `json:"changes,omitempty"`
+	// Resource preserves the complete provider request for JSON plan review.
+	Resource json.RawMessage `json:"resource,omitempty"`
+	ID       string          `json:"id"`
+	Op       string          `json:"op"`
+	Subject  string          `json:"subject"`
+	Name     string          `json:"name"`
+	Provider string          `json:"provider"`
+	Region   string          `json:"region,omitempty"`
+	Creates  string          `json:"creates,omitempty"`
+	Reason   string          `json:"reason,omitempty"`
+	Step     int             `json:"step"`
+	Changes  []Change        `json:"changes,omitempty"`
 }
 
 // Plan is what deploying a manifest to an environment would do, waiting

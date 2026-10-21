@@ -91,6 +91,8 @@ type Provisions struct {
 	// Versions are the engine versions it offers, newest first. Empty
 	// means the target doesn't let you choose.
 	Versions []string `json:"versions,omitempty"`
+	// ManagedProfiles are reviewed requests for standalone managed databases.
+	ManagedProfiles []ManagedDatabaseProfile `json:"managed_profiles,omitempty"`
 }
 
 // Provider describes one deployment target.

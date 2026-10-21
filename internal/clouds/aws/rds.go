@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 
 	"github.com/xraph/loomplane/internal/clouds/progress"
+	"github.com/xraph/loomplane/internal/manageddb"
 )
 
 // AllowPortFromGroup opens one TCP port on a group to another group.
@@ -94,13 +95,17 @@ func (s *Session) GetDBInstance(ctx context.Context, id string) (*DBInstance, er
 // created reports whether this call made it.
 func (s *Session) EnsureDBInstance(ctx context.Context, spec DBInstanceSpec) (db *DBInstance, created bool, err error) {
 	if _, err = s.GetDBInstance(ctx, spec.ID); IsNotFound(err) {
+		defaults, defaultsErr := manageddb.Defaults("rds")
+		if defaultsErr != nil {
+			return nil, false, defaultsErr
+		}
 		_, err = rds.NewFromConfig(s.cfg).CreateDBInstance(ctx, &rds.CreateDBInstanceInput{
 			DBInstanceIdentifier: sdk.String(spec.ID), DBInstanceClass: sdk.String(spec.Class),
 			Engine: sdk.String(spec.Engine), EngineVersion: sdk.String(spec.EngineVersion),
-			AllocatedStorage: sdk.Int32(spec.StorageGB), StorageType: sdk.String("gp3"), StorageEncrypted: sdk.Bool(true),
+			AllocatedStorage: sdk.Int32(spec.StorageGB), StorageType: sdk.String(defaults.StorageType), StorageEncrypted: sdk.Bool(defaults.StorageEncrypted), MultiAZ: sdk.Bool(false),
 			DBName: sdk.String(spec.Database), MasterUsername: sdk.String(spec.User), MasterUserPassword: sdk.String(spec.Password),
 			DBSubnetGroupName: sdk.String(spec.SubnetGroup), VpcSecurityGroupIds: []string{spec.Group},
-			PubliclyAccessible: sdk.Bool(false), BackupRetentionPeriod: sdk.Int32(7), CopyTagsToSnapshot: sdk.Bool(true),
+			PubliclyAccessible: sdk.Bool(false), BackupRetentionPeriod: sdk.Int32(defaults.BackupRetentionValue), CopyTagsToSnapshot: sdk.Bool(true),
 		})
 		if err != nil && !IsExists(err) {
 			return nil, false, fmt.Errorf("create db instance %s: %w", spec.ID, err)

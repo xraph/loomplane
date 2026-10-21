@@ -564,6 +564,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result = &Result{Problems: []Finding{{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
 		result = Compute(Input{
+			Catalog:    plan.Catalog,
 			Federation: federation, CloudPlacements: placements,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,

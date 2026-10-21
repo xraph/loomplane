@@ -16,9 +16,6 @@ import (
 )
 
 const (
-	// sqlTier is the machine a Cloud SQL instance runs on: one vCPU and
-	// 3.75 GB, the smallest dedicated Enterprise tier.
-	sqlTier = "db-custom-1-3840"
 	// sqlUser is the user Loomplane creates for the application.
 	sqlUser = "app"
 	// passwordField is where a database's password is kept, in Vault.
@@ -84,6 +81,10 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: cloud sql provisions databases, not %s", ErrNoExecutor, job.Action.Subject)
 	}
+	request, err := managedDatabaseRequest(job, "cloud-sql")
+	if err != nil {
+		return nil, err
+	}
 	version, ok := sqlVersions[cfg.Kind+"/"+cfg.Version]
 	if !ok {
 		return nil, fmt.Errorf("cloud sql doesn't offer %s %s", cfg.Kind, cfg.Version)
@@ -91,6 +92,9 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	key, err := gcp.ParseKey(job.Credential)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.Managed != nil && key.ProjectID != job.Connection.Details["project_id"] {
+		return nil, fmt.Errorf("managed database review changed: the credential belongs to a different project")
 	}
 	s, err := c.Google.Session(ctx, key)
 	if err != nil {
@@ -110,9 +114,11 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	})
 
 	job.Progress(StepDeploying, "Creating the database instance; this takes several minutes")
-	in, err := s.EnsureSQLInstance(ctx, gcp.SQLInstanceSpec{
-		Name: cloudSQLInstance(job), DatabaseVersion: version, Region: cfg.Region, Tier: sqlTier,
-	}, state.Operation, func(op string) {
+	spec := gcp.SQLInstanceSpec{Name: cloudSQLInstance(job), DatabaseVersion: version, Region: cfg.Region, Tier: request.ComputeClass}
+	if cfg.Managed != nil {
+		spec.Storage = &gcp.SQLStorageSettings{SizeGB: request.StorageGB, Type: request.StorageType, RetainedBackups: request.BackupRetentionValue, RecoveryDays: request.PointInTimeRecoveryDays}
+	}
+	in, err := s.EnsureSQLInstance(ctx, spec, state.Operation, func(op string) {
 		state.Operation = op
 		save()
 	})
@@ -170,9 +176,16 @@ func databaseURL(kind, password, db, connection string) string {
 // Remove implements Executor: it requests a final backup before instance
 // removal and forgets credentials only after the operation succeeds.
 func (c *CloudSQL) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
+	cfg, err := managedDatabaseBindingReview(b, job.Connection, "cloud-sql")
+	if err != nil {
+		return err
+	}
 	key, err := gcp.ParseKey(job.Credential)
 	if err != nil {
 		return err
+	}
+	if cfg.Managed != nil && key.ProjectID != job.Connection.Details["project_id"] {
+		return fmt.Errorf("managed database review changed: the credential belongs to a different project")
 	}
 	s, err := c.Google.Session(ctx, key)
 	if err != nil {
@@ -189,10 +202,17 @@ func (c *CloudSQL) Remove(ctx context.Context, job *Job, b *planning.Binding) er
 }
 
 // Observe implements Executor.
-func (c *CloudSQL) Observe(ctx context.Context, _ *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+func (c *CloudSQL) Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+	cfg, err := managedDatabaseBindingReview(b, conn, "cloud-sql")
+	if err != nil {
+		return nil, err
+	}
 	key, err := gcp.ParseKey(credential)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.Managed != nil && key.ProjectID != conn.Details["project_id"] {
+		return nil, fmt.Errorf("managed database review changed: the credential belongs to a different project")
 	}
 	s, err := c.Google.Session(ctx, key)
 	if err != nil {

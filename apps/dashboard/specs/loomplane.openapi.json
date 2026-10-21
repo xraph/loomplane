@@ -181,6 +181,776 @@
         }
       }
     },
+    "/api/v1/clouds": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.list",
+        "operationId": "organizationClouds.list",
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningCloudList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.create",
+        "operationId": "organizationClouds.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudprofilesCreateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/changes/apply": {
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudChanges.apply",
+        "operationId": "organizationCloudChanges.apply",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyCloudInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sync"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/changes/preview": {
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudChanges.preview",
+        "operationId": "organizationCloudChanges.preview",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/changes/{previewId}": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudChanges.getPreview",
+        "operationId": "organizationCloudChanges.getPreview",
+        "parameters": [
+          {
+            "name": "previewId",
+            "in": "path",
+            "description": "Path parameter: previewId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/syncs": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudSyncs.list",
+        "operationId": "organizationCloudSyncs.list",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudSyncList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/syncs/revert/apply": {
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudSyncs.applyRevert",
+        "operationId": "organizationCloudSyncs.applyRevert",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyCloudInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sync"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/syncs/{syncId}": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudSyncs.get",
+        "operationId": "organizationCloudSyncs.get",
+        "parameters": [
+          {
+            "name": "syncId",
+            "in": "path",
+            "description": "Path parameter: syncId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sync"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/syncs/{syncId}/retry": {
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudSyncs.retry",
+        "operationId": "organizationCloudSyncs.retry",
+        "parameters": [
+          {
+            "name": "syncId",
+            "in": "path",
+            "description": "Path parameter: syncId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sync"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/syncs/{syncId}/revert/preview": {
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudSyncs.previewRevert",
+        "operationId": "organizationCloudSyncs.previewRevert",
+        "parameters": [
+          {
+            "name": "syncId",
+            "in": "path",
+            "description": "Path parameter: syncId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/syncs/{syncId}/routing": {
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudSyncs.completeRouting",
+        "operationId": "organizationCloudSyncs.completeRouting",
+        "parameters": [
+          {
+            "name": "syncId",
+            "in": "path",
+            "description": "Path parameter: syncId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteCloudRoutingInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sync"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.get",
+        "operationId": "organizationClouds.get",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.update",
+        "operationId": "organizationClouds.update",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.delete",
+        "operationId": "organizationClouds.delete",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/projects": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.listGrants",
+        "operationId": "organizationClouds.listGrants",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudProjectGrantList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/projects/{projectId}": {
+      "put": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.grantProject",
+        "operationId": "organizationClouds.grantProject",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudProjectGrantInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectGrant"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.revokeProject",
+        "operationId": "organizationClouds.revokeProject",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectGrant"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/targets": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudTargets.list",
+        "operationId": "organizationCloudTargets.list",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudTargetList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudTargets.create",
+        "operationId": "organizationCloudTargets.create",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTargetInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Target"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/targets/{targetId}": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudTargets.get",
+        "operationId": "organizationCloudTargets.get",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "description": "Path parameter: targetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Target"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudTargets.update",
+        "operationId": "organizationCloudTargets.update",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "description": "Path parameter: targetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTargetInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Target"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationCloudTargets.delete",
+        "operationId": "organizationCloudTargets.delete",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "description": "Path parameter: targetId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
     "/api/v1/connection-clouds": {
       "get": {
         "tags": [
@@ -4643,6 +5413,7 @@
       "Assignment": {
         "type": "object",
         "required": [
+          "grant_revision",
           "cloud_revision",
           "org_id",
           "project_id",
@@ -4660,6 +5431,9 @@
           },
           "environment_id": {
             "type": "string"
+          },
+          "grant_revision": {
+            "type": "integer"
           },
           "org_id": {
             "type": "string"
@@ -5119,6 +5893,9 @@
           "connection_id": {
             "type": "string"
           },
+          "grant_revision": {
+            "type": "integer"
+          },
           "provider": {
             "type": "string"
           },
@@ -5138,6 +5915,46 @@
             "type": "integer"
           }
         }
+      },
+      "CloudProjectGrantInputBody": {
+        "type": "object",
+        "required": [
+          "target_ids"
+        ],
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CloudProjectGrantList": {
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ProjectGrant"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "grants"
+        ],
+        "type": "object",
+        "x-forge-envelope": "grants"
       },
       "CloudSyncList": {
         "properties": {
@@ -6063,6 +6880,9 @@
           "plan_id": {
             "type": "string"
           },
+          "project_id": {
+            "type": "string"
+          },
           "routing_evidence": {
             "type": "string"
           },
@@ -6500,6 +7320,100 @@
             }
           },
           "next": {
+            "type": "string"
+          }
+        }
+      },
+      "ManagedDatabaseConfig": {
+        "type": "object",
+        "required": [
+          "profile",
+          "connection_id",
+          "account_identity"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ManagedDatabaseProfile"
+          }
+        }
+      },
+      "ManagedDatabaseProfile": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "provider",
+          "kind",
+          "version",
+          "compute_class",
+          "storage_gb",
+          "storage_type",
+          "storage_encrypted",
+          "availability",
+          "access",
+          "backup_retention_value",
+          "backup_retention_unit",
+          "point_in_time_recovery_days",
+          "final_backup",
+          "final_backup_retention_days",
+          "retain_automated_backups"
+        ],
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "availability": {
+            "type": "string"
+          },
+          "backup_retention_unit": {
+            "type": "string"
+          },
+          "backup_retention_value": {
+            "type": "integer"
+          },
+          "compute_class": {
+            "type": "string"
+          },
+          "final_backup": {
+            "type": "string"
+          },
+          "final_backup_retention_days": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "point_in_time_recovery_days": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "retain_automated_backups": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "storage_encrypted": {
+            "type": "boolean"
+          },
+          "storage_gb": {
+            "type": "integer"
+          },
+          "storage_type": {
+            "type": "string"
+          },
+          "version": {
             "type": "string"
           }
         }
@@ -7392,6 +8306,40 @@
           }
         }
       },
+      "ProjectGrant": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "project_id",
+          "target_ids",
+          "revision",
+          "revoked"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ProjectList": {
         "properties": {
           "projects": {
@@ -7452,6 +8400,12 @@
           },
           "description": {
             "type": "string"
+          },
+          "infrastructure": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "log_note": {
             "type": "string"
@@ -7543,6 +8497,12 @@
           },
           "kind": {
             "type": "string"
+          },
+          "managed_profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedDatabaseProfile"
+            }
           },
           "versions": {
             "type": "array",
@@ -7734,6 +8694,9 @@
           },
           "kind": {
             "type": "string"
+          },
+          "managed": {
+            "$ref": "#/components/schemas/ManagedDatabaseConfig"
           },
           "provider": {
             "type": "string"
