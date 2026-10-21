@@ -23,6 +23,10 @@ Managed creation has been checked through the actual API and dashboard against c
 
 Provider availability does not establish backup or restore support. RDS removal requests a final snapshot and retains automated backups. Cloud SQL removal requests a final backup with a 30-day lifetime and waits for the operation to finish. If Google refuses the request or reports an operation failure, Loomplane keeps the resource credentials and reports the failure. There is no retry without the final backup. Retained cloud backups can incur storage charges.
 
+Cloud SQL deployments save the account, region, resource settings and each native operation before moving to the next setup step. A retry follows the captured operation for instance creation, database creation, user setup or protected removal. Checkpoint failures stop further work. If a request may have reached Google but its operation ID was not saved, Loomplane blocks replay and asks you to reconcile the original operation. Older operation-only checkpoints also need reconciliation. Automatic discovery for these uncertain requests is still pending.
+
+A resumed user operation requires its original password in Vault; it cannot publish a newly generated password that Google never received. A new service also refuses an already existing instance with no saved operation or binding. Identity is currently pinned to the native connection name, not an immutable instance incarnation. Provider-native backup inventory and recovery controls remain pending. The [Cloud SQL operation reference](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/operations) describes the native operation identities used by this flow.
+
 Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane's managed backup inventory, isolated restore controls and live cloud recovery qualification remain pending.
 
 ## Persistence and backup storage

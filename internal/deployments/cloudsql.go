@@ -3,7 +3,6 @@ package deployments
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -38,9 +37,8 @@ type CloudSQL struct {
 
 var _ Executor = (*CloudSQL)(nil)
 
-type cloudSQLState struct {
-	Operation string `json:"operation,omitempty"`
-}
+// RetainCheckpointOnRetry keeps captured operations across explicit retries.
+func (*CloudSQL) RetainCheckpointOnRetry() bool { return true }
 
 // SQLInstanceName is the Cloud SQL instance a resource is in an
 // environment: lower case letters, digits and hyphens.
@@ -96,49 +94,83 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if cfg.Managed != nil && key.ProjectID != job.Connection.Details["project_id"] {
 		return nil, fmt.Errorf("managed database review changed: the credential belongs to a different project")
 	}
+	instance := cloudSQLInstance(job)
+	if job.Binding != nil {
+		bound, _, bindErr := boundSQLInstance(job.Binding.ExternalID, key.ProjectID, cfg.Region)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		if bound != instance {
+			return nil, errors.New("cloud sql binding no longer matches the saved deployment")
+		}
+	}
+	state, err := readCloudSQLState(job, cfg, key.ProjectID, cfg.Region, instance, "apply")
+	if err != nil {
+		return nil, err
+	}
 	s, err := c.Google.Session(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	var state cloudSQLState
-	if len(job.Resume) > 0 {
-		_ = json.Unmarshal(job.Resume, &state) //nolint:errcheck // an unreadable checkpoint starts over
-	}
-	save := func() {
-		data, _ := json.Marshal(state) //nolint:errcheck // a plain struct always encodes
-		_ = job.Checkpoint(data)       //nolint:errcheck // the next heartbeat retries it
-	}
-	ctx = progress.With(ctx, func(m string) {
-		job.Progress(StepDeploying, m)
-		save()
-	})
-
+	ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
 	job.Progress(StepDeploying, "Creating the database instance; this takes several minutes")
-	spec := gcp.SQLInstanceSpec{Name: cloudSQLInstance(job), DatabaseVersion: version, Region: cfg.Region, Tier: request.ComputeClass}
+	spec := gcp.SQLInstanceSpec{Name: instance, DatabaseVersion: version, Region: cfg.Region, Tier: request.ComputeClass, Existing: job.Binding != nil}
 	if cfg.Managed != nil {
 		spec.Storage = &gcp.SQLStorageSettings{SizeGB: request.StorageGB, Type: request.StorageType, RetainedBackups: request.BackupRetentionValue, RecoveryDays: request.PointInTimeRecoveryDays}
 	}
-	in, err := s.EnsureSQLInstance(ctx, spec, state.Operation, func(op string) {
-		state.Operation = op
-		save()
-	})
-	if err != nil {
-		return nil, err
+	var in *gcp.SQLInstance
+	if state.Stage == "instance" {
+		in, err = s.EnsureSQLInstance(ctx, spec, state.track())
+		if err != nil {
+			return nil, err
+		}
+		if saveErr := state.advance("database"); saveErr != nil {
+			return nil, saveErr
+		}
+	} else {
+		in, err = s.GetSQLInstance(ctx, instance)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if in.Name != instance || in.ConnectionName != key.ProjectID+":"+cfg.Region+":"+instance || in.DatabaseVersion != version || in.State != "RUNNABLE" {
+		return nil, errors.New("cloud sql instance no longer matches the saved deployment")
 	}
 	db := databaseName(job.Action.Name)
-	if derr := s.EnsureDatabase(ctx, in.Name, db); derr != nil {
-		return nil, fmt.Errorf("create the database: %w", derr)
+	if state.Stage == "database" {
+		if err = s.EnsureDatabase(ctx, instance, db, state.track()); err != nil {
+			return nil, fmt.Errorf("create the database: %w", err)
+		}
+		if saveErr := state.advance("user"); saveErr != nil {
+			return nil, saveErr
+		}
 	}
-	password, _, err := keptPassword(ctx, job, rand.Text()+rand.Text())
+	var password string
+	if state.Stage == "user" && state.Operation == "" {
+		password, _, err = keptPassword(ctx, job, rand.Text()+rand.Text())
+	} else {
+		var kept []byte
+		kept, err = job.Recall(ctx, passwordField)
+		if errors.Is(err, ErrNoCredential) || (err == nil && len(kept) == 0) {
+			return nil, errors.New("the saved cloud sql user operation has no kept password")
+		}
+		password = string(kept)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if err := s.SetUser(ctx, in.Name, sqlUser, password); err != nil {
-		return nil, fmt.Errorf("set the database user: %w", err)
+	if state.Stage == "user" {
+		if err = s.SetUser(ctx, instance, sqlUser, password, state.track()); err != nil {
+			return nil, fmt.Errorf("set the database user: %w", err)
+		}
+		if saveErr := state.advance("ready"); saveErr != nil {
+			return nil, saveErr
+		}
 	}
 	if err := job.Keep(ctx, ResourceURL, []byte(databaseURL(cfg.Kind, password, db, in.ConnectionName))); err != nil {
 		return nil, err
 	}
+
 	return &Outcome{ExternalID: in.ConnectionName, Revision: in.DatabaseVersion}, nil
 }
 
@@ -187,17 +219,28 @@ func (c *CloudSQL) Remove(ctx context.Context, job *Job, b *planning.Binding) er
 	if cfg.Managed != nil && key.ProjectID != job.Connection.Details["project_id"] {
 		return fmt.Errorf("managed database review changed: the credential belongs to a different project")
 	}
-	s, err := c.Google.Session(ctx, key)
+	instance, region, err := boundSQLInstance(b.ExternalID, key.ProjectID, b.Region)
 	if err != nil {
 		return err
 	}
-	_, instance, _ := strings.Cut(strings.TrimPrefix(b.ExternalID, key.ProjectID+":"), ":")
-	if instance == "" {
-		return fmt.Errorf("the binding names no instance: %q", b.ExternalID)
-	}
-	if err := s.DeleteSQLInstance(ctx, instance); err != nil {
+	state, err := readCloudSQLState(job, cfg, key.ProjectID, region, instance, "remove")
+	if err != nil {
 		return err
 	}
+	if state.Stage != "removed" {
+		s, sessionErr := c.Google.Session(ctx, key)
+		if sessionErr != nil {
+			return sessionErr
+		}
+		ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
+		if err := s.DeleteSQLInstance(ctx, instance, state.track()); err != nil {
+			return err
+		}
+		if err := state.advance("removed"); err != nil {
+			return err
+		}
+	}
+
 	return job.Forget(ctx)
 }
 
@@ -218,7 +261,10 @@ func (c *CloudSQL) Observe(ctx context.Context, conn *connections.Connection, cr
 	if err != nil {
 		return nil, err
 	}
-	_, instance, _ := strings.Cut(strings.TrimPrefix(b.ExternalID, key.ProjectID+":"), ":")
+	instance, _, err := boundSQLInstance(b.ExternalID, key.ProjectID, b.Region)
+	if err != nil {
+		return nil, err
+	}
 	in, err := s.GetSQLInstance(ctx, instance)
 	if gcp.IsNotFound(err) {
 		return &Observation{}, nil

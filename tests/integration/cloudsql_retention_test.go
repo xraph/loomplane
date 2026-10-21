@@ -42,12 +42,11 @@ func TestCloudSQLRemovalKeepsCredentialsUntilProtectedCompletion(t *testing.T) {
 				}
 			})
 			forgotten := false
-			job := &deployments.Job{
-				Credential: []byte(serviceAccountKey(t, google.srv.URL+"/token")),
-				Forget: func(context.Context) error {
-					forgotten = true
-					return nil
-				},
+			job := checkpointSQLJob(t, google)
+			job.Checkpoint = func([]byte) error { return nil }
+			job.Forget = func(context.Context) error {
+				forgotten = true
+				return nil
 			}
 			executor := &deployments.CloudSQL{Google: gcp.New(google.srv.URL)}
 			err := executor.Remove(t.Context(), job, &planning.Binding{ExternalID: "acme-prod:us-central1:database"})

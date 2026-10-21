@@ -37,7 +37,7 @@ func TestCloudSQLReviewedStorageRequest(t *testing.T) {
 			if reviewed {
 				spec.Storage = &SQLStorageSettings{SizeGB: 10, Type: "PD_SSD", RetainedBackups: 7, RecoveryDays: 7}
 			}
-			if _, err := s.EnsureSQLInstance(t.Context(), spec, "", func(string) {}); err != nil {
+			if _, err := s.EnsureSQLInstance(t.Context(), spec, SQLMutation{Before: func() error { return nil }, Started: func(string) error { return nil }}); err != nil {
 				t.Fatal(err)
 			}
 			settings := request["settings"].(map[string]any)
@@ -104,7 +104,7 @@ func TestCloudSQLRemovalRequiresFinalBackup(t *testing.T) {
 			}))
 			defer srv.Close()
 			s := &Session{c: New(srv.URL), key: &Key{ProjectID: "project-test"}, http: srv.Client()}
-			err := s.DeleteSQLInstance(t.Context(), "database")
+			err := s.DeleteSQLInstance(t.Context(), "database", SQLMutation{Before: func() error { return nil }, Started: func(string) error { return nil }})
 			switch state {
 			case "refused", "backup-failed":
 				if err == nil || !strings.Contains(err.Error(), "final backup") {

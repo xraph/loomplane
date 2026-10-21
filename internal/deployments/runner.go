@@ -40,6 +40,13 @@ type Executor interface {
 	Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error)
 }
 
+// retryCheckpointExecutor opts into keeping native operation state when an
+// explicit deployment retry starts a new workflow. Its checkpoints must be
+// scoped to the original deployment and safe to resume after failure.
+type retryCheckpointExecutor interface {
+	RetainCheckpointOnRetry() bool
+}
+
 // Observation is what's live for a binding.
 type Observation struct {
 	// Exists is false when it's been deleted.
@@ -387,6 +394,11 @@ func commitFor(d *Deployment, a planning.Action) string {
 	return d.CommitSHA
 }
 
+func (r *Runner) retainsCheckpoint(providerName string) bool {
+	executor, ok := r.executors[providerName].(retryCheckpointExecutor)
+	return ok && executor.RetainCheckpointOnRetry()
+}
+
 // Run carries out one action of a deployment. resume is the last
 // checkpoint an earlier attempt saved, or nil; heartbeat saves one and
 // tells Dispatch the activity is alive.
@@ -417,7 +429,22 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err := r.authorizeSync(ctx, plan); err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" {
+	retainCheckpoint := plan.CloudSyncID != "" || r.retainsCheckpoint(action.Provider) || (step.Replaced != nil && r.retainsCheckpoint(step.Replaced.Provider))
+	// The first move has not populated Step.Replaced yet. Its original provider
+	// can still require durable cleanup even when the destination does not.
+	if !retainCheckpoint && (action.Op == planning.Replace || action.Op == planning.Create) {
+		bindings, readErr := r.plans.ListBindings(ctx, orgID, d.EnvironmentID)
+		if readErr != nil {
+			return readErr
+		}
+		for _, binding := range bindings {
+			if string(binding.Subject)+":"+binding.Name == actionID && r.retainsCheckpoint(binding.Provider) {
+				retainCheckpoint = true
+				break
+			}
+		}
+	}
+	if retainCheckpoint {
 		if len(step.Checkpoint) > 0 {
 			resume = step.Checkpoint
 		}
