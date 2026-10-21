@@ -30,7 +30,7 @@ The pin describes the configured namespace, not a physical disk or cloud account
 
 ## Back up and test recovery
 
-In **Service recovery**, select your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. All recovery points are retained; automatic retention is not implemented.
+In **Service recovery**, select your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. Recovery points stay until an owner requests deletion. Automatic retention is not implemented.
 
 The lists show recovery points and copies for the selected database and environment. If you remove the source service, its backup history and restore controls remain available. Backup creation and scheduling need a live source.
 
@@ -118,7 +118,11 @@ This command only reads metadata. It does not delete files, save a policy or cha
 
 ## Retire an old backup
 
-Preview the selection, then ask an organization owner to retire an eligible point:
+In **Service recovery**, open **Review retention**. Select the history you want, set **Older than (days)** and **Keep newest**, then select **Update preview**. The table explains why each point stays or qualifies. Storage that cannot safely delete the captured file has no deletion action. An incomplete history also blocks deletion.
+
+An organization owner can select **Delete backup** on an eligible point and confirm the file removal. **Deletion details** shows the current attempt, the protected recovery point and committed history. If deletion fails, check the retained point and storage permissions before selecting **Retry deletion**. Readers can inspect the same history but cannot request deletion or retry. A failed deletion keeps new restores blocked until it finishes.
+
+You can also preview the selection from loomctl, then ask an organization owner to retire an eligible point:
 
 ```sh
 loomctl backups retention BACKUP_ID --older-than-days 30 --keep-last 7 --json
@@ -140,7 +144,7 @@ loomctl retirements retry RETIREMENT_ID --request-id retirement-retry-1 --yes --
 
 Reuse the key after a lost response. A new retry key authorizes up to three attempts from the lifetime count, with the current owner recorded separately from the original requester. History retains each committed transition and the previous failure.
 
-The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. Automatic deletion policies and dashboard retirement controls are still pending.
+The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. The dashboard retry and deletion flow has also been checked against native PostgreSQL backups with local Trove storage at desktop and phone widths. Automatic deletion policies remain pending. Kubernetes retirement and other engine/storage combinations need their own live qualification.
 
 ## API and permissions
 
@@ -158,7 +162,7 @@ The Docker PostgreSQL drill qualified retirement with local Trove storage, inclu
 | List/read copies        | `GET /api/v1/projects/:id/service-restores`, `GET /api/v1/service-restores/:id`                     | `service_backup:read`                           |
 | Remove a copy           | `DELETE /api/v1/service-restores/:id`                                                               | `service_restore:manage`                        |
 
-Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Policy updates accept `environment`, `resource`, `every_hours` and `enabled`. Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
+Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Project retirement lists also accept `backup_id` to resolve one recovery point without scanning other histories. Policy updates accept `environment`, `resource`, `every_hours` and `enabled`. Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
 
 ## Qualification boundary
 

@@ -283,5 +283,7 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 	outsider.must(http.StatusNotFound, http.MethodPost, "/api/v1/service-backups/"+backup.ID+"/restore", restoreRequest, nil)
 	t.Logf("backup %s survived application restart with %d verified bytes", backup.ID, backup.Bytes)
 	t.Logf("API plan %s deployed standalone PostgreSQL through checked SSH target; application writes and restricted role verified", plan.ID)
+	verifyBrowserRetirements := prepareRetirementBrowser(t, c, running, db, project.ID, backup.ID)
 	holdCatalogBrowser(t, running.srv.URL, project.ID, connection.ID)
+	verifyBrowserRetirements()
 }

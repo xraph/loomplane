@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react"
-import { DatabaseIcon, RotateCcwIcon } from "lucide-react"
+import { useCallback, useRef, useState } from "react"
+import { DatabaseIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -72,6 +72,9 @@ import {
 import { Link } from "@/lib/router"
 import { formatDate } from "@/lib/format"
 import { recoverySelection } from "@/lib/service-recovery"
+import { BackupRetentionReview } from "@/components/backup-retirement/review"
+import { RecoveryPointRow } from "@/components/recovery-point-row"
+import { useRecoveryPolling } from "@/lib/recovery-polling"
 import { BackupSchedule } from "@/components/backup-schedule"
 import { useDeploymentWrites } from "@/lib/deployment-writes"
 
@@ -406,28 +409,17 @@ function ServiceRecovery({ project }: { project: string }) {
   const { refetch: refreshRestores } = restores
   const { refetch: refreshBindings } = bindings
   const { refetch: refreshPolicies } = policies
-  // Recovery jobs currently have no realtime event contract. Poll even when the
-  // general live connection is healthy; its presence is not evidence of updates.
-  useEffect(() => {
-    const timer = window.setInterval(
-      () => {
-        void Promise.allSettled([
-          refreshBackups(),
-          refreshRestores(),
-          refreshBindings(),
-          refreshPolicies(),
-        ])
-      },
-      active ? 2000 : 15000
-    )
-    return () => window.clearInterval(timer)
-  }, [
-    active,
-    refreshBackups,
-    refreshRestores,
-    refreshBindings,
-    refreshPolicies,
-  ])
+  const pollRecovery = useCallback(
+    () =>
+      Promise.allSettled([
+        refreshBackups(),
+        refreshRestores(),
+        refreshBindings(),
+        refreshPolicies(),
+      ]),
+    [refreshBackups, refreshRestores, refreshBindings, refreshPolicies]
+  )
+  useRecoveryPolling(active, pollRecovery)
   async function action(
     key: string,
     run: (requestId: string) => Promise<unknown>
@@ -538,6 +530,14 @@ function ServiceRecovery({ project }: { project: string }) {
             />
           </>
         )}
+        {selected && points.length > 0 && (
+          <BackupRetentionReview
+            key={`${environment}:${selected}`}
+            project={project}
+            points={points}
+            onChanged={refreshBackups}
+          />
+        )}
       </div>
       {!selected ? (
         <CatalogEmpty
@@ -556,7 +556,7 @@ function ServiceRecovery({ project }: { project: string }) {
             {policy?.enabled
               ? `Backups every ${policy.everyHours} hours. Next: ${formatDate(policy.nextAt)}.`
               : "Backups run when requested."}{" "}
-            All recovery points are retained.{" "}
+            Recovery points stay until an owner requests deletion.{" "}
             {policy?.lastError && (
               <span className="text-destructive">{policy.lastError}</span>
             )}
@@ -589,82 +589,26 @@ function ServiceRecovery({ project }: { project: string }) {
                 </TableHeader>
                 <TableBody>
                   {points.map((b) => (
-                    <TableRow key={b.id}>
-                      <TableCell className="whitespace-normal">
-                        <div>{formatDate(b.createdAt)}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {b.bytes.toLocaleString()} bytes
-                        </div>
-                        <div className="mt-1 grid gap-1 text-xs sm:hidden">
-                          <Badge variant="secondary">{b.status}</Badge>
-                          <span>
-                            {b.restoredAt
-                              ? `Restore verified ${formatDate(b.restoredAt)}`
-                              : "Restore not tested"}
-                          </span>
-                          {b.error && (
-                            <span className="text-destructive">{b.error}</span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        <Badge variant="secondary">{b.status}</Badge>
-                        {b.error && (
-                          <p className="max-w-xs text-xs text-destructive">
-                            {b.error}
-                          </p>
-                        )}
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        {b.restoredAt ? (
-                          <span>
-                            Restore verified {formatDate(b.restoredAt)}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">
-                            Not tested
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {b.status === "succeeded" &&
-                          can("service_restore:manage") && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={busy}
-                              onClick={() =>
-                                void action(`restore:${b.id}`, (requestId) =>
-                                  createRestore.mutateAsync({
-                                    path: { id: b.id },
-                                    body: { requestId },
-                                  })
-                                )
-                              }
-                            >
-                              <RotateCcwIcon />
-                              Test restore
-                            </Button>
-                          )}
-                        {b.status === "failed" &&
-                          can("service_backup:manage") && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={busy}
-                              onClick={() =>
-                                void action(`retry:${b.id}`, () =>
-                                  retryBackup.mutateAsync({
-                                    path: { id: b.id },
-                                  })
-                                )
-                              }
-                            >
-                              Retry backup
-                            </Button>
-                          )}
-                      </TableCell>
-                    </TableRow>
+                    <RecoveryPointRow
+                      key={b.id}
+                      project={project}
+                      backup={b}
+                      busy={busy}
+                      onChanged={refreshBackups}
+                      onRestore={(id) =>
+                        void action(`restore:${id}`, (requestId) =>
+                          createRestore.mutateAsync({
+                            path: { id },
+                            body: { requestId },
+                          })
+                        )
+                      }
+                      onRetry={(id) =>
+                        void action(`retry:${id}`, () =>
+                          retryBackup.mutateAsync({ path: { id } })
+                        )
+                      }
+                    />
                   ))}
                 </TableBody>
               </Table>
