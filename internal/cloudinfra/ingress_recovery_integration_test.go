@@ -7,10 +7,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
@@ -334,5 +338,176 @@ func TestIngressCancelledSaveRecoveryAndRotatedCleanup(t *testing.T) {
 	defer rejected.Close()
 	if rejected.ArmEffectFence(ctx, server.EffectFence{Operation: "org/ingress/server", Generation: 3}) == nil {
 		t.Fatal("cleanup mutated different actual daemon")
+	}
+}
+
+func TestIngressAbandonedSameServerPreparation(t *testing.T) {
+	c, host, key := recoveryFixture(t)
+	ctx := server.WithEffectFence(t.Context(), server.EffectFence{Operation: "org/ingress/server", Generation: 1})
+	initial, err := server.EnsureIngress(ctx, c, "org", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends := map[string]server.IngressBackend{}
+	for _, name := range []string{"source", "candidate", "unrelated"} {
+		project := "project"
+		if name == "unrelated" {
+			project = "other"
+		}
+		container := recoveryDocker(t, "exec", host, "docker", "run", "-d", "--name", name, "--label", "loomplane.org=org", "--label", "loomplane.project="+project, "--label", "loomplane.environment=env", "--label", "loomplane.instance="+name, "--label", "loomplane.revision=release", "--label", "loomplane.service=web", server.IngressImage, "sh", "-c", "mkdir -p /tmp/www && echo "+name+" > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+		b, connectErr := server.ConnectIngressBackend(ctx, c, "org", "server", server.IngressBackend{OrgID: "org", ProjectID: project, EnvironmentID: "env", Service: "web", InstanceID: name, ReleaseID: "release", ContainerID: container, Port: 8080})
+		if connectErr != nil {
+			t.Fatal(connectErr)
+		}
+		backends[name] = b
+	}
+	source := Route{ID: "route", OrgID: "org", ProjectID: "project", Input: RouteInput{Hostname: "active.ingress.test", EnvironmentID: "env", Service: "web", Port: 8080}, Binding: RouteBinding{ServerID: "server", ConnectionID: "runtime", ConnectionGeneration: 1, RuntimeID: c.Config.Details["docker_id"], InstanceID: "source", ReleaseID: "release", ContainerID: backends["source"].ContainerID}}
+	candidate := source
+	candidate.Binding.InstanceID = "candidate"
+	candidate.Binding.ContainerID = backends["candidate"].ContainerID
+	base := server.IngressConfig{OrgID: "org", ServerID: "server", Version: "base", InternalCA: true, Routes: []server.IngressRoute{{ID: "route", Hostname: source.Input.Hostname, Backend: backends["source"]}, {ID: "other-route", Hostname: "other.ingress.test", Backend: backends["unrelated"]}}}
+	_, err = server.ApplyIngress(ctx, c, initial, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Read the actual public HTTPS endpoint through the pinned SSH host, trusting
+	// only this fixture's Caddy CA. This does not use the private candidate probe.
+	roots := x509.NewCertPool()
+	root := recoveryDocker(t, "exec", host, "docker", "exec", server.IngressName("org", "server"), "cat", "/data/caddy/pki/authorities/local/root.crt")
+	if !roots.AppendCertsFromPEM([]byte(root)) {
+		t.Fatal("fixture root missing")
+	}
+	tunnel, tunnelErr := ssh.Dial("tcp", c.Config.Address, &ssh.ClientConfig{User: c.Config.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(c.Config.Signer)}, HostKeyCallback: ssh.FixedHostKey(c.Config.HostKey), HostKeyAlgorithms: []string{c.Config.HostKey.Type()}, Timeout: 10 * time.Second})
+	if tunnelErr != nil {
+		t.Fatal(tunnelErr)
+	}
+	defer tunnel.Close()
+	transport := &http.Transport{DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
+		return tunnel.DialContext(dialCtx, "tcp", "127.0.0.1:443")
+	}, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
+	defer transport.CloseIdleConnections()
+	public := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	assertPublic := func(t *testing.T) {
+		t.Helper()
+		var last error
+		for range 30 {
+			req, requestErr := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+source.Input.Hostname+"/", nil)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			resp, getErr := public.Do(req)
+			if getErr == nil {
+				body, readErr := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if readErr == nil && strings.TrimSpace(string(body)) == "source" {
+					return
+				}
+				t.Fatalf("public backend changed: %s %v", body, readErr)
+			}
+			last = getErr
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatal(last)
+	}
+	assertPublic(t)
+	for _, status := range []string{"failed", "succeeded", "unknown-config"} {
+		t.Run(status, func(t *testing.T) {
+			recoveryDocker(t, "exec", host, "docker", "exec", "candidate", "sh", "-c", "echo candidate > /tmp/www/index.html")
+			candidateBackend := backends["candidate"]
+			candidateBackend.Address = ""
+			b, connectErr := server.ConnectIngressBackend(ctx, c, "org", "server", candidateBackend)
+			if connectErr != nil {
+				t.Fatal(connectErr)
+			}
+			prepared := base
+			prepared.Version = "prepare-" + status
+			prepared.Routes = append([]server.IngressRoute{}, base.Routes...)
+			prepared.Routes[0].PreparedBackend = &b
+			before, readErr := server.ReadIngress(ctx, c, "org", "server")
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			applied, applyErr := server.ApplyIngress(ctx, c, before, prepared)
+			if applyErr != nil {
+				t.Fatal(applyErr)
+			}
+			if status == "failed" {
+				recoveryDocker(t, "exec", host, "docker", "exec", "candidate", "rm", "/tmp/www/index.html")
+				if probeErr := server.ProbeIngressPreparation(ctx, c, prepared, applied, "route"); probeErr == nil {
+					t.Fatal("failed candidate passed preparation")
+				}
+			} else if probeErr := server.ProbeIngressPreparation(ctx, c, prepared, applied, "route"); probeErr != nil {
+				t.Fatal(probeErr)
+			}
+			if probeErr := server.ProbeIngressBackend(ctx, c, prepared, applied, "route"); probeErr == nil {
+				t.Fatal("normal probe accepted prepared candidate")
+			}
+			assertPublic(t)
+			state := IngressState{Generation: 1, Config: prepared, Current: applied}
+			st := &recoveryIngressStore{state: state, failSave: true}
+			svc := NewService(Deps{Connections: rotatedRouteCredential{conn: &connections.Connection{OrgID: "org", Cloud: "server", Generation: 1, Details: c.Config.Details}, raw: key}})
+			op := &RouteOperation{ID: "release-" + status, Kind: "release", Route: source, Source: &candidate, Generation: 1, NotBefore: time.Now().Add(time.Minute)}
+			if status == "unknown-config" {
+				foreign := prepared
+				foreign.Version = "unknown"
+				foreign.Routes = append([]server.IngressRoute{}, prepared.Routes...)
+				foreign.Routes[1].Hostname = "changed.ingress.test"
+				actual, foreignErr := server.ApplyIngress(ctx, c, applied, foreign)
+				if foreignErr != nil {
+					t.Fatal(foreignErr)
+				}
+				if clearErr := svc.clearInactivePreparation(ctx, st, c, op, &state); clearErr == nil {
+					t.Fatal("unknown config accepted")
+				}
+				after, afterErr := server.ReadIngress(ctx, c, "org", "server")
+				if afterErr != nil || after.ETag != actual.ETag {
+					t.Fatal("unknown config overwritten", afterErr)
+				}
+				assertPublic(t)
+				return
+			}
+
+			wrongSource := candidate
+			wrongSource.Binding.ContainerID = "unaccepted-container"
+			wrongOp := *op
+			wrongOp.Source = &wrongSource
+			if clearErr := svc.clearInactivePreparation(ctx, st, c, &wrongOp, &state); !errors.Is(clearErr, ErrConflict) {
+				t.Fatal("cleanup accepted wrong inactive instance", clearErr)
+			}
+			if clearErr := svc.clearInactivePreparation(ctx, st, c, op, &state); clearErr == nil {
+				t.Fatal("lost cleanup receipt not injected")
+			}
+			assertPublic(t)
+			restarted := st.state
+			retry := st.durable
+			if clearErr := svc.clearInactivePreparation(ctx, st, c, &retry, &restarted); clearErr != nil {
+				t.Fatal("cleanup receipt recovery failed", clearErr)
+			}
+			if len(restarted.Config.Routes) != 2 || restarted.Config.Routes[0].PreparedBackend != nil || restarted.Config.Routes[0].Backend != base.Routes[0].Backend || restarted.Config.Routes[1] != base.Routes[1] {
+				t.Fatal("cleanup changed public or unrelated route")
+			}
+			if probeErr := server.ProbeIngressBackend(ctx, c, restarted.Config, restarted.Current, "route"); probeErr != nil {
+				t.Fatal(probeErr)
+			}
+			retry.Route.Verification = RouteVerification{DNS: true, TLS: true, Backend: true}
+			if gateErr := svc.releaseVerifiedSource(ctx, st, &retry, &restarted); !errors.Is(gateErr, ErrPending) || st.completed {
+				t.Fatal("release skipped drain", gateErr)
+			}
+			recoveryDocker(t, "exec", host, "docker", "network", "inspect", server.IngressNetwork(b))
+			retry.NotBefore = time.Now().Add(-time.Minute)
+			if releaseErr := svc.releaseVerifiedSource(ctx, st, &retry, &restarted); releaseErr != nil {
+				t.Fatal(releaseErr)
+			}
+			if !st.completed {
+				t.Fatal("handoff hold not released")
+			}
+			if exec.CommandContext(t.Context(), "docker", "exec", host, "docker", "network", "inspect", server.IngressNetwork(b)).Run() == nil {
+				t.Fatal("candidate bridge retained")
+			}
+			if probeErr := server.ProbeIngressBackend(ctx, c, restarted.Config, restarted.Current, "other-route"); probeErr != nil {
+				t.Fatal("unrelated route lost", probeErr)
+			}
+			assertPublic(t)
+		})
 	}
 }

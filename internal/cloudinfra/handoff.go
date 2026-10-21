@@ -452,3 +452,62 @@ func ingressReferences(config server.IngressConfig, backend server.IngressBacken
 	}
 	return false
 }
+
+// clearInactivePreparation removes only the accepted candidate probe reference.
+// It preserves the public upstream and unrelated routes even without a grant.
+func (s *Service) clearInactivePreparation(ctx context.Context, st DomainStore, c *server.Client, op *RouteOperation, state *IngressState) error {
+	if op.Source == nil || op.Source.Binding.ServerID != op.Route.Binding.ServerID {
+		return nil
+	}
+	if state.Current == nil {
+		return ErrConflict
+	}
+	actual, err := server.ReadIngress(ctx, c, op.Route.OrgID, op.Route.Binding.ServerID)
+	if err != nil {
+		return err
+	}
+	if !server.SameIngressConfig(state.Current.Config, actual.Config) {
+		// A completed cleanup can lose its database receipt. Only its exact saved
+		// intention and expected predecessor establish recovery authority.
+		if op.DesiredConfig == nil || op.PreviousConfig == nil || !server.SameIngressConfig(state.Current.Config, op.PreviousConfig.Config) {
+			return ErrConflict
+		}
+		raw, encodeErr := op.DesiredConfig.JSON()
+		if encodeErr != nil || !server.SameIngressConfig(raw, actual.Config) {
+			return ErrConflict
+		}
+		state.Config, state.Previous, state.Current = *op.DesiredConfig, op.PreviousConfig, actual
+		return st.SaveIngress(ctx, op, state)
+	}
+	if !routeConfigMatches(op.Route, state.Config, false) {
+		return ErrConflict
+	}
+	index := slices.IndexFunc(state.Config.Routes, func(r server.IngressRoute) bool { return r.ID == op.Route.ID })
+	candidate := state.Config.Routes[index].PreparedBackend
+	if candidate == nil {
+		return nil
+	}
+	accepted := *candidate
+	accepted.Address = ""
+	if !reflect.DeepEqual(accepted, routeBackend(*op.Source)) {
+		return ErrConflict
+	}
+	desired := state.Config
+	desired.Routes = slices.Clone(state.Config.Routes)
+	desired.Routes[index].PreparedBackend = nil
+	desired.Version = op.ID + "-abandoned"
+	op.DesiredConfig, op.PreviousConfig = &desired, actual
+	if checkpointErr := st.SaveRouteOperation(ctx, op); checkpointErr != nil {
+		return checkpointErr
+	}
+	applied, err := server.ApplyIngress(ctx, c, actual, desired)
+	if err != nil {
+		return err
+	}
+	state.Config, state.Previous, state.Current = desired, actual, applied
+	if saveErr := st.SaveIngress(ctx, op, state); saveErr != nil {
+		return saveErr
+	}
+	op.AppliedConfig = applied
+	return st.SaveRouteOperation(ctx, op)
+}

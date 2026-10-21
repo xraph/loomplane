@@ -420,6 +420,99 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=false,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
 		t.Fatal(err)
 	}
+
+	// A same-server candidate can be abandoned after either failed or successful
+	// preparation, without restoring its Cloud grant or changing the source.
+	if _, err = sql.Exec(ctx, `INSERT INTO cp_instances VALUES('same-server-candidate','org',NULL,'{"main":"candidate-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, prepareStatus := range []string{"failed", "succeeded"} {
+		t.Run("abandon_same_server_"+prepareStatus, func(t *testing.T) {
+			sourceInput := input
+			sourceInput.Hostname = prepareStatus + ".example.com"
+			previewSame, previewErr := svc.PreviewRoute(ctx, p, "proj", sourceInput)
+			if previewErr != nil {
+				t.Fatal(previewErr)
+			}
+			sourceOp, sourceErr := svc.ApplyRoute(ctx, p, "proj", previewSame.ID, cloudinfra.ApplyInput{Review: previewSame.Review})
+			if sourceErr != nil {
+				t.Fatal(sourceErr)
+			}
+			if _, err = store.BeginIngress(ctx, sourceOp); err != nil {
+				t.Fatal(err)
+			}
+			sourceOp.Route.Status = "ready"
+			if err = store.PublishRoute(ctx, sourceOp); err != nil {
+				t.Fatal(err)
+			}
+			sourceOp.Status = "succeeded"
+			if err = store.SaveRouteOperation(ctx, sourceOp); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sql.Exec(ctx, `UPDATE loomplane_bindings SET external_id='same-server-candidate' WHERE id='binding'`); err != nil {
+				t.Fatal(err)
+			}
+			prep, prepErr := svc.PrepareRouteHandoff(ctx, p, "proj", sourceOp.Route.ID, cloudinfra.HandoffInput{Revision: sourceOp.Route.Revision, DestinationCloudID: "cloud"})
+			if prepErr != nil {
+				t.Fatal(prepErr)
+			}
+			if prep.Route.Binding.ServerID != prep.Source.Binding.ServerID {
+				t.Fatal("fixture is not same-server")
+			}
+			prep.Status = prepareStatus
+			prep.DesiredConfig = &server.IngressConfig{OrgID: "org", ServerID: "host2", Version: prep.ID}
+			if err = store.SaveRouteOperation(ctx, prep); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+				t.Fatal(err)
+			}
+			abandoned, abandonErr := svc.ReleaseRouteHandoff(ctx, p, "proj", prep.ID, 60)
+			if abandonErr != nil {
+				t.Fatal(abandonErr)
+			}
+			if abandoned.Route.Binding.InstanceID != "destination" || abandoned.Source.Binding.InstanceID != "same-server-candidate" {
+				t.Fatal("abandonment selected wrong active binding")
+			}
+			if err = store.ValidateRouteCleanup(ctx, abandoned.Route); err != nil {
+				t.Fatal("revoked grant blocked cleanup", err)
+			}
+			// Checkpoint the cleanup-only CAS intent, then read it as a resumed worker.
+			abandoned.DesiredConfig = &server.IngressConfig{OrgID: "org", ServerID: "host2", Version: abandoned.ID + "-abandoned"}
+			abandoned.PreviousConfig = &server.IngressSnapshot{ContainerID: "proxy", ETag: "prepared"}
+			if err = store.SaveRouteOperation(ctx, abandoned); err != nil {
+				t.Fatal(err)
+			}
+			resumed, resumeErr := store.RouteOperation(ctx, "org", abandoned.ID)
+			if resumeErr != nil {
+				t.Fatal(resumeErr)
+			}
+			if resumed.DesiredConfig == nil || resumed.DesiredConfig.Version != abandoned.DesiredConfig.Version || resumed.PreviousConfig.ETag != "prepared" {
+				t.Fatal("cleanup CAS intent was lost")
+			}
+			if err = store.CompleteHandoff(ctx, resumed); err != nil {
+				t.Fatal(err)
+			}
+			resumed.Status = "succeeded"
+			if err = store.SaveRouteOperation(ctx, resumed); err != nil {
+				t.Fatal(err)
+			}
+			stillActive, activeErr := store.Route(ctx, "org", "proj", sourceOp.Route.ID)
+			if activeErr != nil || stillActive.Binding != sourceOp.Route.Binding {
+				t.Fatal("cleanup published a different active binding", activeErr)
+			}
+			var holds int
+			if err = sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_connection_uses WHERE kind='route_handoff' AND owner_id=$1`, prep.ID).Scan(&holds); err != nil || holds != 0 {
+				t.Fatal("abandoned preparation retained holds", err)
+			}
+			if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=false,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sql.Exec(ctx, `UPDATE loomplane_bindings SET external_id='destination' WHERE id='binding'`); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 	input.Hostname = "other.example.com"
 	changed, err := svc.PreviewRoute(ctx, p, "proj", input)
 	if err != nil {

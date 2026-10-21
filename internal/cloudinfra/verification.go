@@ -183,8 +183,11 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		if checkErr := s.recoverHandoffConfig(ctx, st, c, op, state); checkErr != nil {
 			return checkErr
 		}
-		// Cleanup only reads the active config. It cannot republish a route or
-		// connect another backend after deployment authority was revoked.
+		if checkErr := s.clearInactivePreparation(ctx, st, c, op, state); checkErr != nil {
+			return checkErr
+		}
+		// Cleanup may remove an accepted inactive probe reference, but cannot
+		// replace the public backend or connect another backend.
 		if state.Current == nil {
 			return ErrConflict
 		}
