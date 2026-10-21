@@ -167,13 +167,24 @@ attestation, trusted installation recording, fresh enrollment and configuration
 delivery still have to succeed. The preparation service does not grant runtime
 access or create exporter RBAC.
 
-The ownership journal retains its destination reference after creation. Automatic
-cleanup of the recorded service account and release of that journal are still
-pending, so a second preparation for the same destination is refused. Launch
-retirement can remove the pod and configuration, but it leaves the service account
-and preparation record. Automatic enrollment coordination, replacement and the
-management API, CLI and dashboard are also pending. Schema downgrade refuses to
-discard retained preparation ownership or retirement history.
+The ownership journal retains its destination reference after creation. Retirement
+now has durable `retiring` and `retired` states. Starting retirement removes a
+matching trusted installation and fences its enrollment in the same transaction;
+an unrelated installation keeps its authority. Retiring resources cannot be bound
+or enrolled again. The journal preserves the original creation state and resource
+UIDs, including identities recovered after a timed-out create.
+
+Completion requires resolved creation ownership and no matching enrollment,
+installation or unresolved launch. It releases the reference and permits a new
+preparation. Retired history remains until the destination is deleted, with the
+lifecycle events retained in project history. Schema downgrade refuses to discard
+retirement history.
+
+These store operations are internal. The preparation cleanup controller still
+needs to revoke scoped enrollment, delete the recorded pod and service account,
+and confirm their absence before completing retirement. Launch retirement can
+already remove its pod and configuration. Automatic enrollment coordination,
+replacement and the management API, CLI and dashboard are also pending.
 
 ## Guarded launch delivery
 
@@ -251,7 +262,7 @@ not prevent cleanup of the old pod UID.
 
 Service accounts, RBAC and the trusted installation record remain separate. This
 cleanup path has no recorded creation UIDs for those Kubernetes objects, so it
-preserves them. Automatic resource preparation and replacement, background retries,
+preserves them. Automatic replacement, background retries,
 and management API, CLI and dashboard controls are still pending. Replacement must
 use a new pod identity and fresh enrollment.
 

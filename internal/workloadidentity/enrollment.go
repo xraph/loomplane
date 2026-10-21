@@ -101,6 +101,15 @@ func (s *EnrollmentStore) checkDestination(ctx context.Context, tx driver.Tx, b 
 	if generation != b.Destination.Generation || revision != b.Destination.Identity.Revision() {
 		return ErrIdentity
 	}
+	if b.Method == "kubernetes" {
+		var unavailable bool
+		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_federation_preparations WHERE org_id=$1 AND destination_id=$2 AND intent->>'namespace_uid'=$3 AND 'loomplane-agent-'||id=$4 AND (state<>'prepared' OR pod_uid<>$5))`, b.Destination.OrgID, b.Destination.ID, b.NamespaceUID, b.ServiceAccount, b.PodUID).Scan(&unavailable); checkErr != nil {
+			return checkErr
+		}
+		if unavailable {
+			return ErrIdentity
+		}
+	}
 	return nil
 }
 func loadEnrollment(ctx context.Context, tx driver.Tx, org, id string) (*EnrollmentRecord, string, error) {

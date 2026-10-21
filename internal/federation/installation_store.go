@@ -74,6 +74,13 @@ func (s *PgStore) PutInstallation(ctx context.Context, d domain.Destination, p K
 	if current.Scope != d.Scope || current.ConnectionID != d.ConnectionID || current.Identity != d.Identity || current.Quarantined {
 		return nil, ErrIdentityChanged
 	}
+	var unavailable bool
+	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_federation_preparations WHERE org_id=$1 AND destination_id=$2 AND ('loomplane-agent-'||id=$3 OR 'loomplane-agent-'||id=$4) AND (state<>'prepared' OR pod_uid<>$5 OR 'loomplane-agent-'||id<>$3 OR 'loomplane-agent-'||id<>$4))`, d.OrgID, d.ID, p.PodName, p.ServiceAccount, p.PodUID).Scan(&unavailable); checkErr != nil {
+		return nil, checkErr
+	}
+	if unavailable {
+		return nil, ErrConflict
+	}
 	previous, readErr := scanInstallation(tx.QueryRow(ctx, `SELECT `+installationColumns+` FROM loomplane_federation_installations WHERE org_id=$1 AND destination_id=$2`, d.OrgID, d.ID), d.OrgID, d.ID)
 	if readErr != nil && !errors.Is(readErr, ErrNotFound) {
 		return nil, readErr

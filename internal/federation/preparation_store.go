@@ -17,6 +17,8 @@ const (
 	PreparationAccountCreated = "account_created"
 	PreparationPodPending     = "pod_pending"
 	PreparationPrepared       = "prepared"
+	PreparationRetiring       = "retiring"
+	PreparationRetired        = "retired"
 )
 
 type PreparationIntent struct {
@@ -32,6 +34,7 @@ type Preparation struct {
 	DestinationGeneration int64     `json:"destination_generation"`
 	IdentityRevision      string    `json:"identity_revision"`
 	State                 string    `json:"state"`
+	CleanupFrom           string    `json:"cleanup_from"`
 	Generation            int64     `json:"generation"`
 	AccountUID            string    `json:"account_uid"`
 	PodUID                string    `json:"pod_uid"`
@@ -51,12 +54,12 @@ func validPreparationIntent(in PreparationIntent) bool {
 	return err == nil && domain.ValidIdentitySegment(in.NamespaceUID)
 }
 
-const preparationColumns = `org_id,project_id,environment_id,destination_id,destination_generation,identity_revision,intent,state,generation,account_uid,pod_uid,recorded_by,created_at,updated_at`
+const preparationColumns = `org_id,project_id,environment_id,destination_id,destination_generation,identity_revision,intent,state,cleanup_from,generation,account_uid,pod_uid,recorded_by,created_at,updated_at`
 
 func scanPreparation(row rowScanner) (*Preparation, error) {
 	var r Preparation
 	var raw []byte
-	if err := row.Scan(&r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.DestinationID, &r.DestinationGeneration, &r.IdentityRevision, &raw, &r.State, &r.Generation, &r.AccountUID, &r.PodUID, &r.RecordedBy, &r.CreatedAt, &r.UpdatedAt); err != nil {
+	if err := row.Scan(&r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.DestinationID, &r.DestinationGeneration, &r.IdentityRevision, &raw, &r.State, &r.CleanupFrom, &r.Generation, &r.AccountUID, &r.PodUID, &r.RecordedBy, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		return nil, storeError(err)
 	}
 	if err := json.Unmarshal(raw, &r.PreparationIntent); err != nil {
@@ -78,7 +81,7 @@ func (s *PgStore) GetPreparation(ctx context.Context, org, id string) (*Preparat
 	return r, nil
 }
 func (s *PgStore) CurrentPreparation(ctx context.Context, org, destination string) (*Preparation, error) {
-	return scanPreparation(s.db.QueryRow(ctx, `SELECT `+preparationColumns+` FROM loomplane_federation_preparations WHERE org_id=$1 AND destination_id=$2`, org, destination))
+	return scanPreparation(s.db.QueryRow(ctx, `SELECT `+preparationColumns+` FROM loomplane_federation_preparations WHERE org_id=$1 AND destination_id=$2 AND state<>'retired'`, org, destination))
 }
 func (s *PgStore) ReservePreparation(ctx context.Context, d domain.Destination, in PreparationIntent, actor string, guard func(context.Context) error) (out *Preparation, err error) {
 	if !validPreparationIntent(in) || in.NamespaceUID != d.Identity.NamespaceUID || d.Identity.Provider != "kubernetes" || d.Quarantined || !domain.ValidIdentitySegment(actor) || guard == nil {
