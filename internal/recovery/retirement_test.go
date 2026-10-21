@@ -132,7 +132,7 @@ func retirementWorkerFixture(t *testing.T) (*Service, *retirementOperations, *re
 	if err != nil {
 		t.Fatal(err)
 	}
-	operations := &retirementOperations{record: &Retirement{ID: "retirement", OrgID: "org", ProjectID: "project", BackupID: "candidate", WitnessID: "witness", CreatedBy: "owner", SourceKey: key, Object: records.points["candidate"].Object, WitnessObject: records.points["witness"].Object}}
+	operations := &retirementOperations{record: &Retirement{ID: "retirement", OrgID: "org", ProjectID: "project", BackupID: "candidate", WitnessID: "witness", CreatedBy: "owner", ExecutionBy: "owner", SourceKey: key, Object: records.points["candidate"].Object, WitnessObject: records.points["witness"].Object}}
 	service := &Service{Store: records, Retirements: operations, Files: store, Authz: &retirementAuthorization{}, Audit: &retirementAudit{}}
 	return service, operations, records
 }
@@ -251,5 +251,83 @@ func TestRetirementPreflightDoesNotLeaveUnsupportedIntent(t *testing.T) {
 	_, err := s.Retire(t.Context(), security.Principal{OrgID: "org", UserID: "owner"}, "candidate", RetirementInput{RequestID: "retirement-request", Policy: RetentionInput{OlderThanDays: 7, KeepLast: 1}})
 	if err == nil || ops.record != nil {
 		t.Fatalf("unqualified destination left an intent: %+v %v", ops.record, err)
+	}
+}
+
+func TestRetirementWorkerUsesRetryOwnerWithoutRewritingCreator(t *testing.T) {
+	s, ops, _ := retirementWorkerFixture(t)
+	ops.record.ExecutionBy = "replacement-owner"
+	if err := s.RunRetirement(t.Context(), "org", "retirement"); err != nil {
+		t.Fatal(err)
+	}
+	auth := s.Authz.(*retirementAuthorization)
+	if len(auth.principals) != 2 || auth.principals[0].UserID != "replacement-owner" || auth.principals[1].UserID != "replacement-owner" || ops.record.CreatedBy != "owner" {
+		t.Fatalf("worker attributed retry to creator: %+v %+v", auth.principals, ops.record)
+	}
+	audit := s.Audit.(*retirementAudit)
+	if audit.events[0].Principal.UserID != "replacement-owner" {
+		t.Fatalf("retry audit lost actor: %+v", audit.events)
+	}
+}
+
+func (s *retirementOperations) GetRetirement(_ context.Context, org, id string) (*Retirement, error) {
+	if s.record == nil || s.record.OrgID != org || s.record.ID != id {
+		return nil, ErrNotFound
+	}
+	return s.record, nil
+}
+func (s *retirementOperations) RetryRetirement(ctx context.Context, org, id, actor, key string, guard RetirementGuard) (*Retirement, error) {
+	if err := guard(ctx); err != nil {
+		return nil, err
+	}
+	r, err := s.GetRetirement(ctx, org, id)
+	if err != nil {
+		return nil, err
+	}
+	r.Status, r.ExecutionBy, r.RequestID = "queued", actor, key
+	return r, nil
+}
+
+func TestRetirementRetryQueuesAndAuditsTheAuthorizedOwner(t *testing.T) {
+	s, ops, _ := retirementWorkerFixture(t)
+	unavailable := errors.New("dispatch unavailable")
+	s.EnqueueRetirement = func(_ context.Context, org, id string) error {
+		if org != "org" || id != "retirement" {
+			t.Fatal("lost retry scope")
+		}
+		return unavailable
+	}
+	p := security.Principal{OrgID: "org", UserID: "replacement-owner"}
+	r, err := s.RetryRetirement(t.Context(), p, "retirement", RetirementRetryInput{RequestID: "retry-request-key"})
+	if !errors.Is(err, unavailable) || r == nil || r.ExecutionBy != p.UserID || r.CreatedBy != "owner" || ops.record.RequestID != "retry-request-key" {
+		t.Fatalf("retry lost durable intent or actor: %+v %v", r, err)
+	}
+	audit := s.Audit.(*retirementAudit)
+	if len(audit.events) != 1 || audit.events[0].Principal != p || audit.events[0].Action != "service.backup.retirement.retry" {
+		t.Fatalf("retry audit attributed to creator: %+v", audit.events)
+	}
+}
+
+func TestDeniedRetryAndHistoryCannotReachStores(t *testing.T) {
+	s, _, _ := retirementWorkerFixture(t)
+	s.Authz = denied{}
+	p := security.Principal{OrgID: "org", UserID: "admin"}
+	if _, err := s.RetryRetirement(t.Context(), p, "retirement", RetirementRetryInput{RequestID: "retry-request-key"}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("retry denial: %v", err)
+	}
+	if _, err := s.RetirementHistory(t.Context(), p, "retirement", RetirementHistoryInput{}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("history denial: %v", err)
+	}
+}
+
+func TestRetirementHistoryBoundsRejectMalformedOrUnboundedPages(t *testing.T) {
+	for _, in := range []RetirementHistoryInput{{Limit: -1}, {Limit: 101}, {Before: "-1"}, {Before: "0"}, {Before: "01"}, {Before: "+1"}, {Before: "9223372036854775808"}, {Before: "1;SELECT"}} {
+		if _, _, err := in.bounds(); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("accepted history input: %+v %v", in, err)
+		}
+	}
+	limit, before, err := (RetirementHistoryInput{}).bounds()
+	if err != nil || limit != 50 || before != 0 {
+		t.Fatalf("history defaults: %d %d %v", limit, before, err)
 	}
 }

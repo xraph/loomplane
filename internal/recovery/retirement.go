@@ -16,6 +16,8 @@ type Retirement struct {
 	BackupID      string             `json:"backup_id"`
 	WitnessID     string             `json:"witness_id"`
 	Status        string             `json:"status"`
+	ExecutionBy   string             `json:"execution_by"`
+	AttemptLimit  int                `json:"attempt_limit"`
 	Attempt       int                `json:"attempt"`
 	Error         string             `json:"error,omitempty"`
 	Policy        RetentionInput     `json:"policy"`
@@ -31,3 +33,28 @@ type Retirement struct {
 
 // RetirementGuard is supplied by the management service, never a request body.
 type RetirementGuard func(context.Context) error
+
+// RetirementEvent records a committed transition. Imported events describe only
+// state observed during migration; they do not reconstruct earlier attempts.
+type RetirementEvent struct {
+	Cursor        string    `json:"cursor"`
+	Kind          string    `json:"kind"`
+	Status        string    `json:"status"`
+	Attempt       int       `json:"attempt"`
+	AttemptLimit  int       `json:"attempt_limit"`
+	Actor         string    `json:"actor"`
+	PreviousActor string    `json:"previous_actor,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	PreviousError string    `json:"previous_error,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type RetirementHistoryInput struct {
+	Before string `json:"before,omitempty" query:"before"`
+	Limit  int    `json:"limit,omitempty" query:"limit"`
+}
+
+type RetirementHistory struct {
+	Events     []RetirementEvent `json:"events"`
+	NextBefore string            `json:"next_before,omitempty"`
+}

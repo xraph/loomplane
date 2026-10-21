@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/drivers/pgdriver"
+	"github.com/xraph/grove/migrate"
 
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/ops"
@@ -23,9 +24,14 @@ import (
 
 func retirementFixture(t *testing.T) (*pgx.Conn, *recovery.PgStore) {
 	t.Helper()
+	return retirementFixtureSchema(t, migrations.All())
+}
+
+func retirementFixtureSchema(t *testing.T, groups []*migrate.Group) (*pgx.Conn, *recovery.PgStore) {
+	t.Helper()
 	ctx := t.Context()
 	dsn := freshDatabase(t)
-	if err := ops.Migrate(ctx, dsn, migrations.All()); err != nil {
+	if err := ops.Migrate(ctx, dsn, groups); err != nil {
 		t.Fatal(err)
 	}
 	conn, err := pgx.Connect(ctx, dsn)

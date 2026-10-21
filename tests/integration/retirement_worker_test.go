@@ -18,17 +18,24 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-type retirementOwner struct{ revoked bool }
+type retirementOwner struct {
+	revoked bool
+	user    string
+}
 
 func (a *retirementOwner) Require(_ context.Context, p security.Principal, permission security.Permission, project string) error {
-	if a.revoked || p.OrgID != "o" || p.UserID != "u" || project != "p" || permission != security.BackupRetire {
+	user := a.user
+	if user == "" {
+		user = "u"
+	}
+	if a.revoked || p.OrgID != "o" || p.UserID != user || project != "p" || permission != security.BackupRetire {
 		return security.ErrForbidden
 	}
 	return nil
 }
 
 func TestRetirementWorkerPersistsDeletionAndRecoversDispatchGap(t *testing.T) {
-	for _, mode := range []string{"valid", "missing_witness", "revoked_owner"} {
+	for _, mode := range []string{"valid", "missing_witness", "revoked_owner", "retry_owner"} {
 		t.Run(mode, func(t *testing.T) {
 			conn, records := retirementFixture(t)
 			dsn := "file://" + t.TempDir()
@@ -88,7 +95,19 @@ func TestRetirementWorkerPersistsDeletionAndRecoversDispatchGap(t *testing.T) {
 			case "revoked_owner":
 				auth.revoked = true
 			}
-			if err = service.RunRetirement(t.Context(), pending[0].OrgID, pending[0].ID); (err == nil) != (mode == "valid") {
+			if mode == "retry_owner" {
+				auth.revoked = true
+				if err = service.RunRetirement(t.Context(), "o", r.ID); !errors.Is(err, security.ErrForbidden) {
+					t.Fatalf("revoked original owner ran retirement: %v", err)
+				}
+				auth.revoked, auth.user = false, "replacement"
+				retried, retryErr := service.RetryRetirement(t.Context(), security.Principal{OrgID: "o", UserID: "replacement"}, r.ID, recovery.RetirementRetryInput{RequestID: "replacement-retry-key"})
+				if !errors.Is(retryErr, queueFailure) || retried == nil || retried.CreatedBy != "u" || retried.ExecutionBy != "replacement" {
+					t.Fatalf("replacement owner retry: %+v %v", retried, retryErr)
+				}
+			}
+			successful := mode == "valid" || mode == "retry_owner"
+			if err = service.RunRetirement(t.Context(), pending[0].OrgID, pending[0].ID); (err == nil) != successful {
 				t.Fatalf("worker mode=%s: %v", mode, err)
 			}
 			stored, err := records.GetRetirement(t.Context(), "o", r.ID)
@@ -100,7 +119,7 @@ func TestRetirementWorkerPersistsDeletionAndRecoversDispatchGap(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, headErr := files.Head(t.Context(), "backups", objects["b"].Key)
-			if mode == "valid" {
+			if successful {
 				if stored.Status != "succeeded" || candidate.Status != "retired" || stored.CompletedAt == nil || !errors.Is(headErr, driver.ErrNotFound) {
 					t.Fatalf("retirement publication: %+v %+v %v", stored, candidate, headErr)
 				}
