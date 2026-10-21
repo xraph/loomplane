@@ -4,7 +4,9 @@ package federation
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
@@ -22,6 +24,7 @@ import (
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/runtimeapi"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/workloadidentity"
 )
 
 // Name identifies this extension.
@@ -32,6 +35,7 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg     config.Config
 	runtime *runtimeapi.Runtime
+	cleanup *workloadidentity.CleanupRuntime
 }
 
 // New constructs the extension with explicit, default-off management settings.
@@ -44,6 +48,9 @@ func (e *Extension) Dependencies() []string { return []string{identity.Name, rea
 
 // Register provides the scoped service over the shared database and audit trail.
 func (e *Extension) Register(app forge.App) error {
+	if err := e.cfg.Federation.Validate(); err != nil {
+		return err
+	}
 	if err := e.BaseExtension.Register(app); err != nil {
 		return err
 	}
@@ -68,10 +75,17 @@ func (e *Extension) Register(app forge.App) error {
 	if err = forge.ProvideValue(c, domain.NewAccessService(svc, access.NewPolicyStore(pg))); err != nil {
 		return fmt.Errorf("provide federation access service: %w", err)
 	}
-	if e.cfg.Federation.Runtime.Enabled {
-		if validationErr := e.cfg.Federation.Validate(); validationErr != nil {
-			return validationErr
+	if e.cfg.Federation.Identity.Enabled {
+		e.cleanup, err = workloadidentity.NewCleanupRuntime(e.cfg.Federation.Identity, workloadidentity.NewEnrollmentStore(pg, e.cfg.Federation.Identity.TrustDomain), func(result workloadidentity.CleanupResult, sweepErr error) {
+			if sweepErr != nil && !errors.Is(sweepErr, context.Canceled) {
+				e.Logger().Warn("federation enrollment cleanup incomplete", forge.F("org_id", e.cfg.Federation.Identity.OrganizationID), forge.F("attempted", result.Attempted), forge.F("deleted", result.Deleted), forge.F("failed", result.Failed), forge.F("error", sweepErr.Error()))
+			}
+		})
+		if err != nil {
+			return err
 		}
+	}
+	if e.cfg.Federation.Runtime.Enabled {
 		bus, injectErr := forge.InjectType[realtime.WakeSource](c)
 		if injectErr != nil {
 			return fmt.Errorf("federation runtime wake source: %w", injectErr)
@@ -86,8 +100,18 @@ func (e *Extension) Register(app forge.App) error {
 
 // Start opens the agent listener after shared database migrations and bus startup.
 func (e *Extension) Start(ctx context.Context) error {
+	if e.cleanup != nil {
+		if err := e.cleanup.Start(ctx); err != nil {
+			return err
+		}
+	}
 	if e.runtime != nil {
 		if err := e.runtime.Start(ctx); err != nil {
+			if e.cleanup != nil {
+				stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer cancel()
+				return errors.Join(err, e.cleanup.Stop(stop))
+			}
 			return err
 		}
 	}
@@ -97,15 +121,23 @@ func (e *Extension) Start(ctx context.Context) error {
 
 func (e *Extension) Stop(ctx context.Context) error {
 	defer e.MarkStopped()
+	var err error
 	if e.runtime != nil {
-		return e.runtime.Stop(ctx)
+		err = e.runtime.Stop(ctx)
 	}
-	return nil
+	if e.cleanup != nil {
+		err = errors.Join(err, e.cleanup.Stop(ctx))
+	}
+	return err
 }
 
 func (e *Extension) Health(ctx context.Context) error {
-	if e.runtime != nil {
-		return e.runtime.Health(ctx)
+	var err error
+	if e.cleanup != nil {
+		err = e.cleanup.Health(ctx)
 	}
-	return e.BaseExtension.Health(ctx)
+	if e.runtime != nil {
+		err = errors.Join(err, e.runtime.Health(ctx))
+	}
+	return errors.Join(err, e.BaseExtension.Health(ctx))
 }

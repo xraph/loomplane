@@ -169,6 +169,12 @@ func (t *Transport) Watch(ctx context.Context, receive func(context.Context, dom
 	}
 	defer cancel()
 	defer response.Body.Close()
+	// A watch can lose its catalog/policy version while the signed snapshot is
+	// assembled. Reconnect without renewing the installed lease. Observation
+	// and enrollment conflicts still use the terminal replay classification.
+	if response.StatusCode == http.StatusConflict {
+		return ErrUnavailable
+	}
 	if statusErr := checkStatus(response.StatusCode, http.StatusOK); statusErr != nil {
 		return statusErr
 	}

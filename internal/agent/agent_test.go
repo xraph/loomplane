@@ -92,29 +92,33 @@ func TestAgentRequiresFreshEnrollmentBeforeObservation(t *testing.T) {
 	}
 }
 func TestAgentReconnectDoesNotReplayEnrollment(t *testing.T) {
-	_, _, identity := transportFixture(t)
-	store := sessionStore(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	client := &sessionClient{}
-	client.watch = func(context.Context, func(context.Context, domain.Snapshot) error) error {
-		if client.watches.Load() == 1 {
-			return io.EOF
-		}
-		cancel()
-		return context.Canceled
-	}
-	a := &Agent{State: store, Transport: client, Identity: identity, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", retryMin: time.Millisecond, Receive: func(context.Context, domain.Snapshot) (domain.Acknowledgment, error) {
-		return domain.Acknowledgment{}, nil
-	}, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
-		<-ctx.Done()
-		return ctx.Err()
-	}}
-	if err := a.Run(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("shutdown: %v", err)
-	}
-	if client.enrolls.Load() != 1 || client.watches.Load() != 2 {
-		t.Fatalf("reconnect reenrolled: enroll=%d watch=%d", client.enrolls.Load(), client.watches.Load())
+	for _, firstFailure := range []error{io.EOF, ErrUnavailable} {
+		t.Run(firstFailure.Error(), func(t *testing.T) {
+			_, _, identity := transportFixture(t)
+			store := sessionStore(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			client := &sessionClient{}
+			client.watch = func(context.Context, func(context.Context, domain.Snapshot) error) error {
+				if client.watches.Load() == 1 {
+					return firstFailure
+				}
+				cancel()
+				return context.Canceled
+			}
+			a := &Agent{State: store, Transport: client, Identity: identity, EnrollmentID: "01234567-89ab-cdef-0123-456789abcdef", retryMin: time.Millisecond, Receive: func(context.Context, domain.Snapshot) (domain.Acknowledgment, error) {
+				return domain.Acknowledgment{}, nil
+			}, Observe: func(ctx context.Context, _ func(context.Context) (uint64, error), _ func(context.Context, domain.ObservationBatch) error) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}}
+			if err := a.Run(ctx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("shutdown: %v", err)
+			}
+			if client.enrolls.Load() != 1 || client.watches.Load() != 2 {
+				t.Fatalf("reconnect reenrolled: enroll=%d watch=%d", client.enrolls.Load(), client.watches.Load())
+			}
+		})
 	}
 }
 

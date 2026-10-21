@@ -130,6 +130,11 @@ worker:
 # Provision SPIRE identity and scoped signing keys before enabling runtime.
 federation:
   enabled: "${LOOMPLANE_FEDERATION_ENABLED:-false}"
+  identity:
+    enabled: "${LOOMPLANE_FEDERATION_IDENTITY_ENABLED:-false}"
+    organization_id: "${LOOMPLANE_FEDERATION_IDENTITY_ORGANIZATION_ID:-}"
+    trust_domain: "${LOOMPLANE_FEDERATION_IDENTITY_TRUST_DOMAIN:-}"
+    admin_socket: "${LOOMPLANE_FEDERATION_IDENTITY_ADMIN_SOCKET:-}"
   runtime:
     enabled: "${LOOMPLANE_FEDERATION_RUNTIME_ENABLED:-false}"
     listen_address: "${LOOMPLANE_FEDERATION_RUNTIME_LISTEN_ADDRESS:-}"

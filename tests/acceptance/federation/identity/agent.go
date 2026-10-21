@@ -20,7 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/workloadidentity"
 )
 
-func qualifyAgentExecutable(ctx context.Context, enrollments *workloadidentity.EnrollmentStore, issuer *workloadidentity.SPIREIssuer, binding workloadidentity.Binding, endpoint, socket string, signer *access.SnapshotSigner, policies *access.PolicyStore) (err error) {
+func qualifyAgentExecutable(ctx context.Context, enrollments *workloadidentity.EnrollmentStore, issuer workloadidentity.EnrollmentIssuer, binding workloadidentity.Binding, endpoint, socket string, signer *access.SnapshotSigner, policies *access.PolicyStore) (err error) {
 	executable, err := os.ReadFile("/loomplane-agent")
 	if err != nil {
 		return err

@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -23,13 +24,45 @@ type FederationRuntimeConfig struct {
 }
 
 func (c FederationConfig) Validate() error {
-	if !c.Runtime.Enabled {
+	if (c.Runtime.Enabled || c.Identity.Enabled) && !c.Enabled {
+		return errors.New("federation runtime and identity require federation.enabled")
+	}
+	if c.Runtime.Enabled && c.Identity.Enabled && (c.Runtime.OrganizationID != c.Identity.OrganizationID || c.Runtime.TrustDomain != c.Identity.TrustDomain) {
+		return errors.New("federation runtime and identity must use the same organization and trust domain")
+	}
+	return errors.Join(c.Runtime.Validate(), c.Identity.Validate())
+}
+
+// FederationIdentityConfig enables local SPIRE administration and enrollment cleanup.
+type FederationIdentityConfig struct {
+	Enabled        bool
+	OrganizationID string
+	TrustDomain    string
+	AdminSocket    string
+}
+
+func (c FederationIdentityConfig) Validate() error {
+	if !c.Enabled {
 		return nil
 	}
-	if !c.Enabled {
-		return errors.New("federation.runtime requires federation.enabled")
+	if err := validateFederationScope("identity", c.OrganizationID, c.TrustDomain); err != nil {
+		return err
 	}
-	return c.Runtime.Validate()
+	if !domain.ValidUnixSocketAddress(c.AdminSocket) {
+		return errors.New("federation.identity.admin_socket requires a canonical Unix socket address")
+	}
+	return nil
+}
+
+func validateFederationScope(component, org, trustDomain string) error {
+	if !domain.ValidIdentitySegment(org) {
+		return fmt.Errorf("federation.%s.organization_id is invalid", component)
+	}
+	td, err := spiffeid.TrustDomainFromString(trustDomain)
+	if err != nil || td.Name() != trustDomain {
+		return fmt.Errorf("federation.%s.trust_domain is invalid", component)
+	}
+	return nil
 }
 
 func (c FederationRuntimeConfig) Validate() error {
@@ -41,12 +74,8 @@ func (c FederationRuntimeConfig) Validate() error {
 	if err != nil || portErr != nil || net.ParseIP(host) == nil || number < 1 || number > 65535 {
 		return errors.New("federation.runtime.listen_address requires an IP address and port (1-65535)")
 	}
-	if !domain.ValidIdentitySegment(c.OrganizationID) {
-		return errors.New("federation.runtime.organization_id is invalid")
-	}
-	td, err := spiffeid.TrustDomainFromString(c.TrustDomain)
-	if err != nil || td.Name() != c.TrustDomain {
-		return errors.New("federation.runtime.trust_domain is invalid")
+	if err := validateFederationScope("runtime", c.OrganizationID, c.TrustDomain); err != nil {
+		return err
 	}
 	if !domain.ValidWorkloadAPIAddress(c.WorkloadAPI) {
 		return errors.New("federation.runtime.workload_api requires a canonical Unix socket address")

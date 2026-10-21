@@ -2,11 +2,11 @@
 
 You can run the agent control endpoint beside Loomplane's management API. It
 serves enrollment, observations, signed policy snapshots and acknowledgments on
-its own TLS listener. Both federation switches default to `false`.
+its own TLS listener. All federation switches default to `false`.
 
 This is an infrastructure foundation. The [agent executable](federation-agent.md)
 is available. The agent installer, trusted installation
-records, cleanup scheduling, gateway traffic enforcement and product routes are
+records, gateway traffic enforcement and product routes are
 still being built. Enabling the listener does not qualify a cloud provider or
 make a service reachable across clouds.
 
@@ -80,3 +80,49 @@ public verification keys to agents through trusted configuration before issuing
 policy with a new key. Runtime snapshots cannot add their own trust keys. SPIRE
 credential rotation is automatic; policy signing key replacement is currently
 an explicit operation.
+
+## Identity cleanup
+
+You can enable enrollment cleanup independently of the agent listener:
+
+```yaml
+federation:
+  enabled: true
+  identity:
+    enabled: true
+    organization_id: "your-org-id"
+    trust_domain: "loomplane.example"
+    admin_socket: "unix:///run/spire/server.sock"
+```
+
+Use the corresponding `LOOMPLANE_FEDERATION_IDENTITY_*` variables from
+`config.yaml` if you configure Loomplane through the environment. When both
+identity cleanup and the runtime listener are enabled, their organization and
+trust domain must match.
+
+Mount the SPIRE server's local administration socket into Loomplane and restrict
+access to the service account that runs it. This socket grants SPIRE administrative
+authority. Keep it separate from the agent Workload API socket; TCP endpoints and
+proxy-based connections are not supported. The client checks the server's trust
+domain and administrative access at startup and before registration or deletion.
+It accepts agent identities only in the configured organization. Cleanup inspects
+each registration and refuses to delete control identities, foreign organizations,
+administrators or downstream servers. These checks prevent accidental scope
+mixups. They do not isolate Loomplane from another administrator who can modify
+the same SPIRE server.
+
+Cleanup starts after database migrations, runs an immediate sweep, then waits
+30 seconds between sweeps. Each sweep processes at most 20 enrollments and has a
+30-second deadline. Eligibility is rechecked under the enrollment row lock.
+Failed deletions retain their cleanup references for retry; outstanding signed
+policy leases also retain the enrollment until those leases expire.
+
+Startup fails if the configured administration socket is unavailable. Health
+checks cover worker liveness and the administration connection. Cleanup failures
+are logged with the organization and attempted, deleted and failed counts.
+A retained enrollment can still be waiting for a policy lease, so a failed sweep
+does not by itself mark the worker unhealthy. Shutdown cancels the sweep, waits
+for the worker and closes the administration connection.
+
+This setting runs cleanup for existing enrollment records. Trusted installation
+records and the controller that requests new enrollments are still being built.

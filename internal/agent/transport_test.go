@@ -15,6 +15,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 
+	"github.com/xraph/loomplane/internal/runtimecatalog"
 	"github.com/xraph/loomplane/internal/workloadidentity"
 	domain "github.com/xraph/loomplane/pkg/federation"
 )
@@ -205,5 +206,20 @@ func TestAgentAcknowledgmentTransport(t *testing.T) {
 	code = http.StatusForbidden
 	if err := client.Acknowledge(t.Context(), ack); !errors.Is(err, ErrClosed) {
 		t.Fatalf("revoked acknowledgment retried: %v", err)
+	}
+}
+
+func TestAgentWatchConflictIsRetryableButObservationReplayIsTerminal(t *testing.T) {
+	client, _, identity := transportFixture(t)
+	client.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) { return response(http.StatusConflict, ""), nil })
+	receive := func(context.Context, domain.Snapshot) error { t.Fatal("conflicted snapshot delivered"); return nil }
+	if err := client.Watch(t.Context(), receive); !errors.Is(err, ErrUnavailable) || terminal(err) {
+		t.Fatal("snapshot assembly conflict terminated the agent", err)
+	}
+	if err := client.Publish(t.Context(), domain.ObservationBatch{Agent: identity, Sequence: 1}); !errors.Is(err, runtimecatalog.ErrStale) || !terminal(err) {
+		t.Fatal("observation replay became retryable", err)
+	}
+	if err := client.Enroll(t.Context(), "01234567-89ab-cdef-0123-456789abcdef"); !terminal(err) {
+		t.Fatal("enrollment replay became retryable", err)
 	}
 }

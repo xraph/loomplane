@@ -25,7 +25,7 @@ import (
 	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
-func qualifyPersisted(ctx context.Context, issuer *workloadidentity.SPIREIssuer, binding workloadidentity.Binding, socket string, control *workloadidentity.Source) (err error) {
+func qualifyPersisted(ctx context.Context, issuer workloadidentity.EnrollmentIssuer, binding workloadidentity.Binding, socket, adminSocket string, control *workloadidentity.Source) (err error) {
 	dsn := os.Getenv("LOOMPLANE_FIXTURE_DATABASE_URL")
 	if dsn == "" {
 		return nil
@@ -274,9 +274,37 @@ func qualifyPersisted(ctx context.Context, issuer *workloadidentity.SPIREIssuer,
 	if waitErr := until(ctx, func() bool { return !receipt.LeaseUntil.After(time.Now()) }); waitErr != nil {
 		return waitErr
 	}
-	if stepErr := enrollments.Revoke(ctx, scope.OrgID, first.ID, issuer); stepErr != nil {
+	cleanup, stepErr := workloadidentity.NewCleanupRuntime(config.FederationIdentityConfig{Enabled: true, OrganizationID: scope.OrgID, TrustDomain: "loomplane.test", AdminSocket: adminSocket}, enrollments, nil)
+	if stepErr != nil {
 		return stepErr
 	}
+	if stepErr := cleanup.Start(ctx); stepErr != nil {
+		return stepErr
+	}
+	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err = errors.Join(err, cleanup.Stop(stop))
+	}()
+	if stepErr := until(ctx, func() bool {
+		var count int
+		return db.QueryRow(ctx, `SELECT count(*) FROM loomplane_federation_enrollments WHERE org_id=$1 AND id=$2`, scope.OrgID, first.ID).Scan(&count) == nil && count == 0
+	}); stepErr != nil {
+		return stepErr
+	}
+	if stepErr := cleanup.Health(ctx); stepErr != nil {
+		return stepErr
+	}
+	stop, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if stepErr := cleanup.Stop(stop); stepErr != nil {
+		return stepErr
+	}
+	cleanupState := cleanup.Status()
+	if cleanupState.LastSweep.IsZero() || cleanupState.Result.Deleted < 1 || cleanupState.Err != nil {
+		return errors.New("scheduled cleanup did not report confirmed deletion")
+	}
+	fmt.Println("PASS scoped SPIRE administration and scheduled PostgreSQL enrollment cleanup")
 	if stepErr := qualifyAgentExecutable(ctx, enrollments, issuer, binding, endpoint, socket, signer, policies); stepErr != nil {
 		return stepErr
 	}

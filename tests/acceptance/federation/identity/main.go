@@ -167,10 +167,15 @@ plugins {
 	}
 	digest := sha256.Sum256(raw)
 	uid := uint32(0)
-	issuer, runErr := workloadidentity.NewSPIREIssuer(conn, "loomplane.test")
+	issuer, runErr := workloadidentity.OpenAdmin(ctx, "unix://"+serverSocket, "loomplane.test", "fixture")
 	if runErr != nil {
 		return runErr
 	}
+	defer func() {
+		if closeErr := issuer.Close(); closeErr != nil {
+			fmt.Fprintln(os.Stderr, closeErr)
+		}
+	}()
 	binding := workloadidentity.Binding{EntryID: "01234567-89ab-cdef-0123-456789abcdef", Agent: a, Destination: domain.Destination{Scope: a.Scope, ID: a.DestinationID, Generation: 1, Identity: domain.PhysicalIdentity{Provider: "server", Account: "fixture", ResourceID: "isolated-container"}}, ParentURI: "spiffe://loomplane.test/node/fixture", CheckedAt: time.Now(), Method: "unix", UnixUID: &uid, Executable: executable, SHA256: hex.EncodeToString(digest[:]), TTL: 30 * time.Second}
 	if _, err := issuer.Register(ctx, binding); err != nil {
 		return fmt.Errorf("SPIRE registration: %w", err)
@@ -281,7 +286,7 @@ plugins {
 		return err
 	}
 	fmt.Println("PASS expired credential denied while rotated credential remains valid")
-	if err := qualifyRuntime(ctx, conn, source, binding, "unix://"+filepath.Join(dir, "agent", "agent.sock")); err != nil {
+	if err := qualifyRuntime(ctx, conn, issuer, "unix://"+serverSocket, source, binding, "unix://"+filepath.Join(dir, "agent", "agent.sock")); err != nil {
 		return err
 	}
 	fresh, runErr = source.GetX509SVID()

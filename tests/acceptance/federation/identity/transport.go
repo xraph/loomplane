@@ -74,8 +74,8 @@ func (noWake) Watch(string) (wake <-chan struct{}, unsubscribe func()) { return 
 
 // qualifyRuntime joins the real SPIRE sources to both ends of the HTTP protocol.
 // Enrollment state is deliberately in memory here; PostgreSQL acceptance is separate.
-func qualifyRuntime(ctx context.Context, conn grpc.ClientConnInterface, source *workloadidentity.Source, binding workloadidentity.Binding, socket string) (err error) {
-	issuer, err := workloadidentity.NewSPIREIssuer(conn, "loomplane.test")
+func qualifyRuntime(ctx context.Context, conn grpc.ClientConnInterface, issuer workloadidentity.EnrollmentIssuer, adminSocket string, source *workloadidentity.Source, binding workloadidentity.Binding, socket string) (err error) {
+	controlIssuer, err := workloadidentity.NewSPIREIssuer(conn, "loomplane.test")
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ func qualifyRuntime(ctx context.Context, conn grpc.ClientConnInterface, source *
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		err = errors.Join(err, issuer.Revoke(cleanup, controlEntryID))
+		err = errors.Join(err, controlIssuer.Revoke(cleanup, controlEntryID))
 	}()
 	control, err := readySource(ctx, socket, controlURI)
 	if err != nil {
@@ -147,7 +147,7 @@ func qualifyRuntime(ctx context.Context, conn grpc.ClientConnInterface, source *
 		return errors.Join(errors.New("revoked observer was not denied"), deniedErr)
 	}
 	fmt.Println("PASS real SPIRE mTLS agent enrollment, replay denial, observation, snapshot transport and revocation")
-	return qualifyPersisted(ctx, issuer, binding, socket, control)
+	return qualifyPersisted(ctx, issuer, binding, socket, adminSocket, control)
 }
 
 func readySource(ctx context.Context, socket, uri string) (*workloadidentity.Source, error) {

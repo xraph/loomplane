@@ -74,8 +74,9 @@ type Config struct {
 
 // FederationConfig keeps management and the agent listener independently configured.
 type FederationConfig struct {
-	Enabled bool
-	Runtime FederationRuntimeConfig
+	Enabled  bool
+	Runtime  FederationRuntimeConfig
+	Identity FederationIdentityConfig
 }
 
 // ProvidersConfig adds deployment targets Loomplane doesn't ship with.
@@ -389,6 +390,10 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Federation.Runtime.TrustDomain, "federation.runtime.trust_domain")
 	r.str(&c.Federation.Runtime.WorkloadAPI, "federation.runtime.workload_api")
 	r.str(&c.Federation.Runtime.SigningKeysFile, "federation.runtime.signing_keys_file")
+	r.boolean(&c.Federation.Identity.Enabled, "federation.identity.enabled")
+	r.str(&c.Federation.Identity.OrganizationID, "federation.identity.organization_id")
+	r.str(&c.Federation.Identity.TrustDomain, "federation.identity.trust_domain")
+	r.str(&c.Federation.Identity.AdminSocket, "federation.identity.admin_socket")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
