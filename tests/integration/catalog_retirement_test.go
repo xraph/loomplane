@@ -34,8 +34,8 @@ func catalogRetirement(t *testing.T, c *client, running *running, db *pgx.Conn, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var candidateRaw, witnessRaw, sourceRaw []byte
-	if err = db.QueryRow(t.Context(), `SELECT object,source FROM loomplane_service_backups WHERE id=$1`, candidate).Scan(&candidateRaw, &sourceRaw); err != nil {
+	var candidateRaw, witnessRaw []byte
+	if err = db.QueryRow(t.Context(), `SELECT object FROM loomplane_service_backups WHERE id=$1`, candidate).Scan(&candidateRaw); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.QueryRow(t.Context(), `SELECT object FROM loomplane_service_backups WHERE id=$1`, witness).Scan(&witnessRaw); err != nil {
@@ -51,27 +51,7 @@ func catalogRetirement(t *testing.T, c *client, running *running, db *pgx.Conn, 
 	if _, err = db.Exec(t.Context(), `UPDATE loomplane_service_backups SET created_at=now()-interval '40 days 1 minute',completed_at=now()-interval '40 days' WHERE id=$1`, candidate); err != nil {
 		t.Fatal(err)
 	}
-	var key struct {
-		Secret string `json:"secret"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/api/v1/api-keys", map[string]string{"name": "Catalog retirement CLI", "access": "write"}, &key)
-	run := func(args ...string) []byte {
-		t.Helper()
-		var output bytes.Buffer
-		app := ctl.New(ctl.Options{Out: &output, ConfigPath: t.TempDir() + "/loomctl.json", Getenv: func(name string) string {
-			if name == ctl.EnvURL {
-				return c.base
-			}
-			if name == ctl.EnvKey {
-				return key.Secret
-			}
-			return ""
-		}})
-		if checkErr := app.Run(args); checkErr != nil {
-			t.Fatalf("retirement CLI %v: %v output=%s", args, checkErr, output.String())
-		}
-		return output.Bytes()
-	}
+	run := catalogRecoveryCLI(t, c)
 	var retired api.ServiceRetirement
 	if err = json.Unmarshal(run("backups", "retire", candidate, "--yes", "--older-than-days", "7", "--keep-last", "1", "--request-id", "catalog-retirement-request", "--wait", "--timeout", "45s", "--json"), &retired); err != nil {
 		t.Fatal(err)
@@ -98,10 +78,41 @@ func catalogRetirement(t *testing.T, c *client, running *running, db *pgx.Conn, 
 		t.Fatalf("native retirement idempotency: %+v %v", repeated, err)
 	}
 	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/service-backups/"+candidate+"/restore", map[string]string{"request_id": "retired-dump-restore"}, nil)
+	catalogVerifyRetainedRestore(t, c, db, witness, socket, "post-retirement-restore")
+	t.Logf("retirement %s deleted native dump %s; retained dump %s restored original SQL row", retired.ID, candidate, witness)
+}
+
+func catalogRecoveryCLI(t *testing.T, c *client) func(...string) []byte {
+	t.Helper()
+	var key struct {
+		Secret string `json:"secret"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/api-keys", map[string]string{"name": "Catalog recovery CLI", "access": "write"}, &key)
+	return func(args ...string) []byte {
+		t.Helper()
+		var output bytes.Buffer
+		app := ctl.New(ctl.Options{Out: &output, ConfigPath: t.TempDir() + "/loomctl.json", Getenv: func(name string) string {
+			if name == ctl.EnvURL {
+				return c.base
+			}
+			if name == ctl.EnvKey {
+				return key.Secret
+			}
+			return ""
+		}})
+		if checkErr := app.Run(args); checkErr != nil {
+			t.Fatalf("recovery CLI %v: %v output=%s", args, checkErr, output.String())
+		}
+		return output.Bytes()
+	}
+}
+
+func catalogVerifyRetainedRestore(t *testing.T, c *client, db *pgx.Conn, witness, socket, request string) {
+	t.Helper()
 	// Restore the retained dump again after deletion. It must still contain the
 	// original row, even though the source row was deleted earlier in the drill.
 	var restored recovery.Restore
-	c.must(http.StatusAccepted, http.MethodPost, "/api/v1/service-backups/"+witness+"/restore", map[string]string{"request_id": "post-retirement-restore"}, &restored)
+	c.must(http.StatusAccepted, http.MethodPost, "/api/v1/service-backups/"+witness+"/restore", map[string]string{"request_id": request}, &restored)
 	deadline := time.Now().Add(time.Minute)
 	for restored.Status == "queued" || restored.Status == "running" {
 		if time.Now().After(deadline) {
@@ -124,6 +135,10 @@ func catalogRetirement(t *testing.T, c *client, running *running, db *pgx.Conn, 
 	if remaining := fixtureCommand(t, "docker", "--host", "unix://"+socket, "volume", "ls", "-q", "--filter", "label=loomplane.instance="+clone.String()); remaining != "" {
 		t.Fatalf("post-retirement restore volume survived cleanup: %s", remaining)
 	}
+	var sourceRaw []byte
+	if err = db.QueryRow(t.Context(), `SELECT source FROM loomplane_service_backups WHERE id=$1`, witness).Scan(&sourceRaw); err != nil {
+		t.Fatal(err)
+	}
 	var source planning.Binding
 	if err = json.Unmarshal(sourceRaw, &source); err != nil {
 		t.Fatal(err)
@@ -135,7 +150,6 @@ func catalogRetirement(t *testing.T, c *client, running *running, db *pgx.Conn, 
 	if count := fixtureCommand(t, "docker", "--host", "unix://"+socket, "exec", server.ContainerName(sourceID), "psql", "-U", "app", "-d", "database", "-At", "-c", "SELECT count(*) FROM catalog_probe"); count != "0" {
 		t.Fatalf("retirement or retained restore changed source data: %s", count)
 	}
-	t.Logf("retirement %s deleted native dump %s; retained dump %s restored original SQL row", retired.ID, candidate, witness)
 }
 
 // prepareRetirementBrowser seeds two additional native dumps for browser checks.
@@ -151,19 +165,7 @@ func prepareRetirementBrowser(t *testing.T, c *client, running *running, db *pgx
 	}
 	candidates := make([]string, 0, 2)
 	for n := range 2 {
-		var backup recovery.Backup
-		c.must(http.StatusAccepted, http.MethodPost, "/api/v1/projects/"+project+"/service-backups", map[string]string{"environment": "production", "resource": "database", "request_id": fmt.Sprintf("browser-retirement-backup-%d", n)}, &backup)
-		deadline := time.Now().Add(time.Minute)
-		for backup.Status == "queued" || backup.Status == "running" {
-			if time.Now().After(deadline) {
-				t.Fatalf("browser backup did not finish: %+v", backup)
-			}
-			time.Sleep(100 * time.Millisecond)
-			c.must(http.StatusOK, http.MethodGet, "/api/v1/service-backups/"+backup.ID, nil, &backup)
-		}
-		if backup.Status != "succeeded" {
-			t.Fatalf("browser native backup: %+v", backup)
-		}
+		backup := catalogCreateNativeBackup(t, c, project, fmt.Sprintf("browser-retirement-backup-%d", n))
 		if _, err = db.Exec(t.Context(), `UPDATE loomplane_service_backups SET created_at=now()-$2*interval '1 day'-interval '1 minute',completed_at=now()-$2*interval '1 day' WHERE id=$1`, backup.ID, 40+n); err != nil {
 			t.Fatal(err)
 		}

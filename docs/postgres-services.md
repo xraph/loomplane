@@ -144,7 +144,7 @@ loomctl retirements retry RETIREMENT_ID --request-id retirement-retry-1 --yes --
 
 Reuse the key after a lost response. A new retry key authorizes up to three attempts from the lifetime count, with the current owner recorded separately from the original requester. History retains each committed transition and the previous failure.
 
-The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. The dashboard retry and deletion flow has also been checked against native PostgreSQL backups with local Trove storage at desktop and phone widths. The API and CLI can manage automatic policies; native recurring-retention and dashboard policy controls still need qualification. Kubernetes retirement and other engine/storage combinations need their own live qualification.
+The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. The dashboard retry and deletion flow has also been checked against native PostgreSQL backups with local Trove storage at desktop and phone widths. The same local profile also passed automatic retention through API and CLI: two scheduled native dump deletions, pause and a retained SQL restore. Dashboard policy controls still need qualification. Kubernetes retirement and other engine/storage combinations need their own live qualification.
 
 ## Automatic retention policies
 
@@ -161,7 +161,7 @@ Revision zero creates a policy. To change one, pass the revision you just read. 
 
 This authorizes recurring deletion. The minute reconciliation job selects at most one oldest eligible full backup per due evaluation and uses the same retained-byte checks as explicit retirement. Age/count settings, current owner authority and the captured physical source are checked again when work is admitted. A failed deletion holds that source until its bounded attempts complete or an owner checks the failure and authorizes a retry. Ordinary policy failures wait an hour before another evaluation.
 
-Backup schedules and retention have separate switches. Pausing a backup schedule does not pause deletion. Pausing retention stops new selections; already accepted deletions may still finish. The policy records its last deletion ID, safe failure text and authorizing owner, and its history preserves every saved revision. Readers and admins can inspect that history. Only owners can change it.
+Backup schedules and retention have separate switches. Pausing a backup schedule does not pause deletion. Pausing retention stops new selections; already accepted deletions may still finish. The policy records its last deletion ID, safe failure text and authorizing owner, and its history preserves every saved revision. Readers and admins can inspect that history. Only owners can change it. The Docker/local Trove drill also verifies a saved paused policy across control-plane restart and observes a completed scheduler pass after pause. Crash recovery during an active automatic deletion remains separately unqualified.
 
 ## API and permissions
 
@@ -187,7 +187,7 @@ Backup creation accepts `environment`, `resource` and `request_id`. Restore crea
 
 PostgreSQL 17.11 has passed the Docker catalog and recovery drill, with local Trove and a separate native adapter drill against an isolated MinIO endpoint. The Kubernetes catalog, CLI, API and browser drill passed on arm64 Kubernetes 1.36.4, Cilium 1.20.3 and a retained local-path class. That drill covered pod replacement, backup persistence after a control-plane restart, isolated SQL recovery, scheduled backups and deletion of the exact temporary PV.
 
-AWS S3 acceptance, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, native recurring-retention qualification, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
+AWS S3 acceptance, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, Kubernetes and other-engine retention, automatic-policy dashboard controls, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
 
 ## MySQL and MariaDB recovery
 

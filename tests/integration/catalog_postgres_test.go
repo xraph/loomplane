@@ -19,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/ctrlplane/id"
+	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
@@ -265,6 +266,12 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 		t.Fatal("no scheduled native dump available for retirement")
 	}
 	catalogRetirement(t, c, running, db, project.ID, retirementCandidate, backup.ID, socket)
+	catalogAutomaticRetention(t, c, db, project.ID, backup.ID, socket, func() forge.App {
+		running.stop()
+		running = start(t, cfg)
+		c.base = running.srv.URL
+		return running.app.(forge.App)
+	})
 
 	outsider := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
 	var auth struct {
