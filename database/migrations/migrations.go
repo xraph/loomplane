@@ -65,6 +65,7 @@ func Group() *migrate.Group {
 		statements("20261021000100", "federation_installations", federationInstallationsUp, federationInstallationsDown),
 		statements("20261021000300", "federation_launch_attempts", federationLaunchAttemptsUp, federationLaunchAttemptsDown),
 		statements("20261021000400", "federation_launch_retirement", federationLaunchRetirementUp, federationLaunchRetirementDown),
+		statements("20261022000100", "federation_preparations", federationPreparationsUp, federationPreparationsDown),
 		statements("20261018000200", "standalone_catalog_plans", catalogPlansUp, catalogPlansDown),
 		statements("20261018000201", "service_recovery", serviceRecoveryUp, serviceRecoveryDown),
 		statements("20261018000202", "service_restores", serviceRestoresUp, serviceRestoresDown),

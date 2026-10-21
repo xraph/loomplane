@@ -142,7 +142,7 @@ func (p *KubernetesPlan) Deliver(ctx context.Context, client kubernetes.Interfac
 	if err != nil {
 		return nil, err
 	}
-	if !p.matches(pod, record.Binding.PodUID) {
+	if !p.matches(pod, record.Binding.PodUID, record.Binding.NamespaceUID) {
 		return nil, ErrLaunch
 	}
 	// Remote reads may outlive authorization or the five-minute bootstrap window.
@@ -168,8 +168,8 @@ func (p *KubernetesPlan) launch(r workloadidentity.EnrollmentRecord, s LaunchSet
 	return cfg, nil
 }
 
-func (p *KubernetesPlan) matches(pod *corev1.Pod, uid string) bool {
-	if pod == nil || pod.Name != p.name || pod.Namespace != p.namespace || string(pod.UID) != uid || pod.DeletionTimestamp != nil || len(pod.OwnerReferences) != 0 || pod.Status.Phase != corev1.PodPending || pod.Spec.NodeName == "" || len(pod.Spec.InitContainers) != 0 || len(pod.Spec.EphemeralContainers) != 0 {
+func (p *KubernetesPlan) matches(pod *corev1.Pod, uid, namespaceUID string) bool {
+	if pod == nil || pod.Name != p.name || pod.Namespace != p.namespace || string(pod.UID) != uid || pod.DeletionTimestamp != nil || (len(pod.OwnerReferences) != 0 && !matchesNamespaceOwner(pod.OwnerReferences, p.namespace, namespaceUID)) || pod.Status.Phase != corev1.PodPending || pod.Spec.NodeName == "" || len(pod.Spec.InitContainers) != 0 || len(pod.Spec.EphemeralContainers) != 0 {
 		return false
 	}
 	scheduled := false
@@ -186,7 +186,10 @@ func (p *KubernetesPlan) matches(pod *corev1.Pod, uid string) bool {
 			return false
 		}
 	}
+	return p.matchesSpec(pod.Spec)
+}
+
+func (p *KubernetesPlan) matchesSpec(got corev1.PodSpec) bool {
 	want := p.Pod().Spec
-	got := pod.Spec
-	return !got.HostNetwork && !got.HostPID && !got.HostIPC && !ptr.Deref(got.ShareProcessNamespace, false) && got.RestartPolicy == want.RestartPolicy && got.ServiceAccountName == want.ServiceAccountName && got.AutomountServiceAccountToken != nil && !*got.AutomountServiceAccountToken && got.EnableServiceLinks != nil && !*got.EnableServiceLinks && equality.Semantic.DeepEqual(got.SecurityContext, want.SecurityContext) && equality.Semantic.DeepEqual(got.Containers, want.Containers) && equality.Semantic.DeepEqual(got.Volumes, want.Volumes)
+	return len(got.InitContainers) == 0 && len(got.EphemeralContainers) == 0 && !got.HostNetwork && !got.HostPID && !got.HostIPC && !ptr.Deref(got.ShareProcessNamespace, false) && got.RestartPolicy == want.RestartPolicy && got.ServiceAccountName == want.ServiceAccountName && got.AutomountServiceAccountToken != nil && !*got.AutomountServiceAccountToken && got.EnableServiceLinks != nil && !*got.EnableServiceLinks && equality.Semantic.DeepEqual(got.SecurityContext, want.SecurityContext) && equality.Semantic.DeepEqual(got.Containers, want.Containers) && equality.Semantic.DeepEqual(got.Volumes, want.Volumes)
 }

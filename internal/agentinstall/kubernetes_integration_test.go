@@ -58,8 +58,19 @@ func TestKubernetesLaunchAPI(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = client.Kube.CoreV1().ServiceAccounts(namespace).Create(ctx, plan.ServiceAccount(), metav1.CreateOptions{}); err != nil {
+			desiredAccount, desiredPod := plan.ServiceAccount(), plan.Pod()
+			if !publisher {
+				desiredAccount, desiredPod, err = plan.PreparationResources(string(ns.UID))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			account, err := client.Kube.CoreV1().ServiceAccounts(namespace).Create(ctx, desiredAccount, metav1.CreateOptions{})
+			if err != nil {
 				t.Fatal(err)
+			}
+			if !publisher && !plan.MatchesPreparedAccount(account, string(ns.UID)) {
+				t.Fatal("defaulted prepared account lost ownership")
 			}
 			role, binding := plan.ObserverRBAC()
 			if role != nil {
@@ -70,9 +81,12 @@ func TestKubernetesLaunchAPI(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			pod, err := client.Kube.CoreV1().Pods(namespace).Create(ctx, plan.Pod(), metav1.CreateOptions{})
+			pod, err := client.Kube.CoreV1().Pods(namespace).Create(ctx, desiredPod, metav1.CreateOptions{})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if !publisher && !plan.MatchesPreparedPod(pod, string(ns.UID)) {
+				t.Fatal("defaulted prepared pod lost ownership")
 			}
 			for pod.Spec.NodeName == "" {
 				select {

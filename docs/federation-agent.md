@@ -14,7 +14,7 @@ before acknowledging it.
 
 The executable, trusted Kubernetes installation records and Kubernetes launch
 builder are available. The builder creates pod definitions and delivers immutable
-configuration to an exact scheduled pod. Automated installation and restart
+configuration to an exact scheduled pod. Automatic consumer resource preparation is available. Enrollment and restart
 coordination, verified service-target assignment and gateway enforcement are still
 being built. The opt-in launch service is registered in the application, but its
 management route and automatic worker are still pending.
@@ -139,6 +139,41 @@ does not install CSI or SPIRE, start the agent or qualify workload identity.
 LOOMPLANE_AGENT_INSTALL_TEST_KUBECONFIG=/absolute/path/to/test-kubeconfig \
   go test -race -tags=integration ./internal/agentinstall -run TestKubernetesLaunchAPI -count=1
 ```
+
+## Preparing consumer resources
+
+The internal preparation service creates an attempt-specific service account and
+pod through the destination's verified connection. `Start` chooses a new attempt
+ID and the configured image digest, then saves the intended namespace UID and
+resource names before either Kubernetes create. Each resource has a pending
+creation state and a saved UID after confirmation. Concurrent controllers cannot
+claim the same create step.
+
+Use `Current` to recover the attempt ID after a lost management response. `Resume`
+rechecks destination and trust-management permission, provider qualification,
+physical identity, destination generation and image configuration. It only reads
+an already pending create. If the resource is missing or differs from the saved
+intent, the attempt remains unresolved rather than sending another create.
+
+Preparation checks the service account UID before and after pod creation. Both
+resources carry the attempt marker and a Namespace owner reference pinned to its
+UID. Kubernetes permits namespaced dependents to refer to a cluster-scoped owner.
+[Owner reference rules](https://kubernetes.io/docs/reference/kubernetes-api/definitions/owner-reference-v1-meta/).
+The pod uses the same security settings as launch delivery; injected containers,
+changed mounts and unexpected token access fail validation.
+
+`prepared` means both resource UIDs were recorded. Scheduling, live SPIRE
+attestation, trusted installation recording, fresh enrollment and configuration
+delivery still have to succeed. The preparation service does not grant runtime
+access or create exporter RBAC.
+
+The ownership journal retains its destination reference after creation. Automatic
+cleanup of the recorded service account and release of that journal are still
+pending, so a second preparation for the same destination is refused. Launch
+retirement can remove the pod and configuration, but it leaves the service account
+and preparation record. Automatic enrollment coordination, replacement and the
+management API, CLI and dashboard are also pending. Schema downgrade refuses to
+discard retained preparation ownership or retirement history.
 
 ## Guarded launch delivery
 

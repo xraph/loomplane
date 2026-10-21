@@ -1,9 +1,11 @@
 package migrations
 
-var federationLaunchRetirementUp = []string{
-	`ALTER TABLE loomplane_federation_launch_attempts DROP CONSTRAINT loomplane_federation_launch_attempts_state_check, DROP CONSTRAINT loomplane_federation_launch_attempts_check`,
+import "strings"
+
+var federationLaunchRetirementUp = atomicFederationDDL([]string{
+	`ALTER TABLE loomplane_federation_launch_attempts DROP CONSTRAINT IF EXISTS loomplane_federation_launch_attempts_state_check, DROP CONSTRAINT IF EXISTS loomplane_federation_launch_attempts_check`,
 	`ALTER TABLE loomplane_federation_launch_attempts ADD CONSTRAINT loomplane_federation_launch_attempts_state_check CHECK(state IN ('pending','delivered','retiring','retired')), ADD CONSTRAINT loomplane_federation_launch_attempts_check CHECK((state='pending' AND config_map_uid='') OR (state='delivered' AND config_map_uid<>'') OR state IN ('retiring','retired'))`,
-	`DROP INDEX loomplane_federation_launch_one_pending`,
+	`DROP INDEX IF EXISTS loomplane_federation_launch_one_pending`,
 	`CREATE UNIQUE INDEX loomplane_federation_launch_one_pending ON loomplane_federation_launch_attempts(org_id,destination_id) WHERE state IN ('pending','retiring')`,
 	`CREATE OR REPLACE FUNCTION loomplane_federation_launch_reference_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS $$
  BEGIN
@@ -17,12 +19,19 @@ var federationLaunchRetirementUp = []string{
  END IF;
  RETURN NULL;
  END $$`,
-}
+})
 
 // Downgrade refuses retained retirement history instead of deleting evidence.
-var federationLaunchRetirementDown = []string{
-	`ALTER TABLE loomplane_federation_launch_attempts DROP CONSTRAINT loomplane_federation_launch_attempts_state_check, DROP CONSTRAINT loomplane_federation_launch_attempts_check`,
+var federationLaunchRetirementDown = atomicFederationDDL([]string{
+	`IF EXISTS(SELECT 1 FROM loomplane_federation_launch_attempts WHERE state IN ('retiring','retired')) THEN RAISE EXCEPTION 'retirement history is still retained' USING ERRCODE='55000'; END IF`,
+	`ALTER TABLE loomplane_federation_launch_attempts DROP CONSTRAINT IF EXISTS loomplane_federation_launch_attempts_state_check, DROP CONSTRAINT IF EXISTS loomplane_federation_launch_attempts_check`,
 	`ALTER TABLE loomplane_federation_launch_attempts ADD CONSTRAINT loomplane_federation_launch_attempts_state_check CHECK(state IN ('pending','delivered')), ADD CONSTRAINT loomplane_federation_launch_attempts_check CHECK((state='pending' AND config_map_uid='') OR (state='delivered' AND config_map_uid<>''))`,
-	`DROP INDEX loomplane_federation_launch_one_pending`,
+	`DROP INDEX IF EXISTS loomplane_federation_launch_one_pending`,
 	`CREATE UNIQUE INDEX loomplane_federation_launch_one_pending ON loomplane_federation_launch_attempts(org_id,destination_id) WHERE state='pending'`,
+})
+
+// Grove executes each migration statement separately. Keep related constraint
+// and index changes in one PostgreSQL statement so failure cannot remove guards.
+func atomicFederationDDL(statements []string) []string {
+	return []string{"DO $federation_migration$ BEGIN\n" + strings.Join(statements, ";\n") + ";\nEND $federation_migration$"}
 }

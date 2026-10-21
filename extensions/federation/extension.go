@@ -130,6 +130,9 @@ func (e *Extension) Register(app forge.App) error {
 		if provideErr := forge.ProvideValue(c, retirement); provideErr != nil {
 			return provideErr
 		}
+		if provideErr := forge.ProvideValue(c, domain.NewPreparationService(launch, domain.NewPgStore(pg))); provideErr != nil {
+			return provideErr
+		}
 	}
 	return nil
 }
