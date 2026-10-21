@@ -1,7 +1,11 @@
 package planning
 
 import (
+	"encoding/json"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/pkg/manifest"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
@@ -39,6 +43,35 @@ func TestChangedSyncTargetCompatibility(t *testing.T) {
 			}
 			if got.ID != "stable" || got.Runtime != tc.runtime || got.PoolID != tc.pool || got.ConnectionID != tc.connection {
 				t.Fatalf("unexpected target: %+v", got)
+			}
+		})
+	}
+}
+
+func TestRoutedReplacementPhysicalHostIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, oldDaemon, newDaemon, oldServer, newServer string
+		blocked                                          bool
+	}{
+		{name: "distinct direct daemons", oldDaemon: "daemon-a", newDaemon: "daemon-b"},
+		{name: "shared daemon with server aliases", oldDaemon: "daemon-a", newDaemon: "daemon-a", oldServer: "server-a", newServer: "server-b", blocked: true},
+		{name: "same server", oldServer: "server-a", newServer: "server-a", blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := ServiceConfig{Public: true, Endpoint: &manifest.Endpoint{HostPort: 8080}, TargetSettings: map[string]string{"docker_id": tc.oldDaemon}, CloudPlacement: &CloudPlacement{ServerID: tc.oldServer}}
+			raw, err := json.Marshal(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := &Binding{ID: "binding", ExternalID: "instance", Provider: "server", Config: raw}
+			next := old
+			next.TargetSettings = map[string]string{"docker_id": tc.newDaemon}
+			next.CloudPlacement = &CloudPlacement{ServerID: tc.newServer}
+			a := &Action{Name: "api", Provider: "server", Service: &next}
+			route := cloudinfra.Route{Status: "ready", Binding: cloudinfra.RouteBinding{BindingID: b.ID, InstanceID: b.ExternalID}}
+			err = routedReplacementAllowed(a, b, route)
+			if (err != nil) != tc.blocked {
+				t.Fatalf("blocked=%v, error=%v", tc.blocked, err)
 			}
 		})
 	}

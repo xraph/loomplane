@@ -28,7 +28,10 @@ type PlacementRequest struct {
 }
 
 type PlannedPlacement struct {
-	Service string `json:"service"`
+	OrgID         string `json:"org_id,omitempty"`
+	ProjectID     string `json:"project_id,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	Service       string `json:"service"`
 	Placement
 }
 
@@ -119,7 +122,7 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 		}
 		var cpu, mem int64
 		planned := append([]PlannedPlacement{}, in.Planned...)
-		planned = append(planned, PlannedPlacement{Service: in.Service, Placement: Placement{Allocation: in.Allocation, ServerID: v.ID, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes}})
+		planned = append(planned, PlannedPlacement{OrgID: in.OrgID, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID, Service: in.Service, Placement: Placement{Allocation: in.Allocation, ServerID: v.ID, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes}})
 		raw, marshalErr := json.Marshal(planned)
 		if marshalErr != nil {
 			return nil, marshalErr

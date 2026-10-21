@@ -48,13 +48,13 @@ func changedSyncTarget(before cloudprofiles.Target, in cloudprofiles.ChangeInput
 	return after, nil
 }
 
-func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings []*Binding, assignment *cloudprofiles.Assignment, before *cloudprofiles.Target, options []ConnectionOption) (map[string]CloudPlacement, error) {
+func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings []*Binding, assignment *cloudprofiles.Assignment, before *cloudprofiles.Target, options []ConnectionOption, prior []cloudinfra.PlannedPlacement) (map[string]CloudPlacement, error) {
 	result := map[string]CloudPlacement{}
 	if assignment == nil {
 		return result, nil
 	}
 	resolver, ok := s.store.(poolResolver)
-	var planned []cloudinfra.PlannedPlacement
+	planned := slices.Clone(prior)
 	for _, b := range bindings {
 		if b.Subject != ServiceSubject {
 			continue
@@ -99,7 +99,7 @@ func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings [
 		}
 		connection := options[ci]
 		result[b.Name] = CloudPlacement{Allocation: placed.Allocation, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, GrantRevision: assignment.GrantRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: "server", ConnectionID: placed.ConnectionID, AccountIdentity: connections.AccountIdentity(connection.Cloud, connection.Account, connection.Details), RegionSource: old.CloudPlacement.RegionSource, PoolID: placed.PoolID, PoolRevision: placed.PoolRevision, ServerID: placed.ServerID, ServerRevision: placed.ServerRevision, ConnectionGeneration: placed.ConnectionGeneration, CPUMillis: placed.CPUMillis, MemoryBytes: placed.MemoryBytes}
-		planned = append(planned, cloudinfra.PlannedPlacement{Service: b.Name, Placement: *placed})
+		planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: b.Name, Placement: *placed})
 	}
 	return result, nil
 }

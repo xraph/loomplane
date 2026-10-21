@@ -5,9 +5,9 @@ package migrations
 const serverCapacitySQL = `CREATE OR REPLACE FUNCTION loomplane_server_capacity(host_id TEXT, extra_environment TEXT DEFAULT '', extra JSONB DEFAULT '[]') RETURNS TABLE(cpu BIGINT,memory BIGINT) LANGUAGE SQL STABLE AS $$
  SELECT coalesce(sum(c),0)::bigint,coalesce(sum(m),0)::bigint FROM (
  SELECT max(cpu_millis) c,max(memory_bytes) m FROM (
- SELECT environment_id,service,coalesce(body->>'allocation','') allocation,cpu_millis,memory_bytes FROM loomplane_capacity_reservations WHERE server_id=host_id
- UNION ALL SELECT extra_environment,p->>'service',coalesce(p->>'allocation',''),(p->>'cpu_millis')::bigint,(p->>'memory_bytes')::bigint FROM jsonb_array_elements(extra) p WHERE p->>'server_id'=host_id
- ) demands GROUP BY environment_id,service,allocation) allocated $$`
+ SELECT org_id,project_id,environment_id,service,coalesce(body->>'allocation','') allocation,cpu_millis,memory_bytes FROM loomplane_capacity_reservations WHERE server_id=host_id
+ UNION ALL SELECT coalesce(nullif(p->>'org_id',''),e.org_id),coalesce(nullif(p->>'project_id',''),e.project_id),coalesce(nullif(p->>'environment_id',''),extra_environment),p->>'service',coalesce(p->>'allocation',''),(p->>'cpu_millis')::bigint,(p->>'memory_bytes')::bigint FROM jsonb_array_elements(extra) p LEFT JOIN loomplane_environments e ON e.id=coalesce(nullif(p->>'environment_id',''),extra_environment) WHERE p->>'server_id'=host_id
+ ) demands GROUP BY org_id,project_id,environment_id,service,allocation) allocated $$`
 
 var serverPoolsUp = []string{
 	`CREATE TABLE IF NOT EXISTS loomplane_placement_moves(org_id TEXT NOT NULL,project_id TEXT NOT NULL,environment_id TEXT NOT NULL,service TEXT NOT NULL,cloud_id TEXT NOT NULL,pool_id TEXT NOT NULL,source_server_id TEXT NOT NULL,destination_server_id TEXT NOT NULL,review TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL,source_config JSONB NOT NULL,PRIMARY KEY(org_id,environment_id,service))`,

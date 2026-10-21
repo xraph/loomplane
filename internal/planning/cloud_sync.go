@@ -10,6 +10,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/page"
@@ -152,6 +153,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		}
 		environments = slices.DeleteFunc(environments, func(e *projects.Environment) bool { return !allowed[e.ProjectID+"/"+e.ID] })
 	}
+	var planned []cloudinfra.PlannedPlacement
 	found := in.EnvironmentID == ""
 	for _, env := range environments {
 		project := env.ProjectID
@@ -238,7 +240,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			return nil, e
 		}
 		plan := &Plan{ID: preview.ID + "/" + env.ID, OrgID: p.OrgID, ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, CreatedBy: p.UserID, CreatedAt: preview.CreatedAt, Status: StatusApproved, DecidedBy: p.UserID}
-		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, bindings, after, preview.Before, options)
+		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, bindings, after, preview.Before, options, planned)
 		if poolErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+poolErr.Error())
 		}
@@ -247,8 +249,13 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
 		}
 		result := appliedCloudPlan(bindings, after, in.TargetID, options, s.providers, poolPlacements, routes)
-		if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings, preview.Before); routeErr != nil {
+		if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings, routePlacementReview{Prior: planned, Before: preview.Before}); routeErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
+		}
+		for _, action := range result.Actions {
+			if action.Service != nil && action.Service.CloudPlacement != nil && action.Service.CloudPlacement.PoolID != "" && action.Op != Delete && (action.Op != Keep || action.AdoptCloudPlacement) {
+				planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: action.Name, Placement: action.Service.CloudPlacement.PoolPlacement()})
+			}
 		}
 		plan.setResult(result)
 		for _, finding := range result.Problems {

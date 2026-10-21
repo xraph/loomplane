@@ -80,7 +80,7 @@ func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) err
 	}
 	sameHost := old.TargetSettings["docker_id"] != "" && old.TargetSettings["docker_id"] == a.Service.TargetSettings["docker_id"]
 	if old.CloudPlacement != nil && a.Service.CloudPlacement != nil {
-		sameHost = sameHost || old.CloudPlacement.ServerID == a.Service.CloudPlacement.ServerID
+		sameHost = sameHost || (old.CloudPlacement.ServerID != "" && old.CloudPlacement.ServerID == a.Service.CloudPlacement.ServerID)
 	}
 	if sameHost && old.Public && a.Service.Public && old.Endpoint != nil && a.Service.Endpoint != nil && old.Endpoint.HostPort == a.Service.Endpoint.HostPort {
 		return fmt.Errorf("%s cannot retain two instances on host port %d; review a move to another server, a distinct port, or an ingress-only private manifest", a.Name, old.Endpoint.HostPort)
@@ -88,9 +88,18 @@ func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) err
 	return nil
 }
 
-func (s *Service) reserveRoutedPlacements(ctx context.Context, plan *Plan, result *Result, bindings []*Binding, transitions ...*cloudprofiles.Target) error {
+type routePlacementReview struct {
+	Prior  []cloudinfra.PlannedPlacement
+	Before *cloudprofiles.Target
+}
+
+func (s *Service) reserveRoutedPlacements(ctx context.Context, plan *Plan, result *Result, bindings []*Binding, reviews ...routePlacementReview) error {
 	resolver, ok := s.store.(poolResolver)
-	var planned []cloudinfra.PlannedPlacement
+	var review routePlacementReview
+	if len(reviews) > 0 {
+		review = reviews[0]
+	}
+	planned := slices.Clone(review.Prior)
 	for i := range result.Actions {
 		a := &result.Actions[i]
 		if a.Service == nil || a.Op == Keep || a.Op == Delete {
@@ -116,9 +125,9 @@ func (s *Service) reserveRoutedPlacements(ctx context.Context, plan *Plan, resul
 					}
 				}
 			}
-			if len(transitions) > 0 && transitions[0] != nil && transitions[0].ID == pin.TargetID {
+			if review.Before != nil && review.Before.ID == pin.TargetID {
 				req.TargetChange = true
-				req.TargetRevision = transitions[0].Revision
+				req.TargetRevision = review.Before.Revision
 			}
 			allocation, err := resolver.PreviewPlacement(ctx, req)
 			if err != nil {
@@ -126,7 +135,7 @@ func (s *Service) reserveRoutedPlacements(ctx context.Context, plan *Plan, resul
 			}
 			pin.Allocation = allocation.Allocation
 		}
-		planned = append(planned, cloudinfra.PlannedPlacement{Service: a.Name, Placement: pin.PoolPlacement()})
+		planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: a.Name, Placement: pin.PoolPlacement()})
 	}
 	return nil
 }
