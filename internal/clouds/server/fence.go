@@ -108,14 +108,17 @@ const effectFenceScript = `import os,sys,json,hashlib,fcntl,socket,http.client,s
 for sig in (signal.SIGHUP,signal.SIGTERM,signal.SIGINT): signal.signal(sig,signal.SIG_IGN)
 out=sys.stdout.buffer
 alive=True
+responding=False
 def emit(data):
  global alive
  if alive:
   try: out.write(data);out.flush()
   except (BrokenPipeError,OSError): alive=False
 def fail():
+ if responding: return
  emit(b'HTTP/1.1 409 Conflict\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
 def main():
+ global responding
  q=json.loads(sys.stdin.buffer.readline(65536))
  assert q['Fence']['generation']>0 and q['Fence']['operation'] and q['Daemon']
  payload=tempfile.TemporaryFile()
@@ -155,15 +158,42 @@ def main():
  headers={k:','.join(v) for k,v in (q['Headers'] or {}).items()};headers['Content-Length']=str(size)
  state['dirty']=True;save()
  c.request(q['Method'],q['Path'],body=payload,headers=headers);r=c.getresponse()
+ assert r.chunked or r.length is not None
+ responding=True
  emit(('HTTP/1.1 '+str(r.status)+' '+r.reason+'\r\n').encode())
  for k,v in r.getheaders():
   if k.lower() not in ('transfer-encoding','connection','content-length'): emit((k+': '+v+'\r\n').encode())
- emit(b'Connection: close\r\n\r\n')
- while True:
-  chunk=r.read(65536)
-  if not chunk: break
-  emit(chunk)
+ emit(b'Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n')
+ def output(chunk):
+  emit(('%x\r\n'%len(chunk)).encode()+chunk+b'\r\n')
+ if r.chunked:
+  # Consume strict chunk framing, including the terminating trailer line.
+  # HTTPResponse's trailer reader otherwise accepts a premature EOF.
+  while True:
+   line=r.fp.readline(65537)
+   assert len(line)<=65536 and line.endswith(b'\r\n')
+   token=line[:-2].split(b';',1)[0]
+   assert token and all(ch in b'0123456789abcdefABCDEF' for ch in token)
+   remaining=int(token,16)
+   if remaining==0:
+    while True:
+     trailer=r.fp.readline(65537)
+     assert len(trailer)<=65536 and trailer.endswith(b'\r\n')
+     if trailer==b'\r\n': break
+     assert b':' in trailer
+    break
+   while remaining:
+    chunk=r.fp.read(min(65536,remaining));assert chunk
+    remaining-=len(chunk);output(chunk)
+   assert r.fp.read(2)==b'\r\n'
+ else:
+  while r.length:
+   chunk=r.read(min(65536,r.length));assert chunk
+   output(chunk)
+  assert r.length==0
  state['dirty']=False;save()
+ # Only a verified daemon response can complete the caller's response framing.
+ emit(b'0\r\n\r\n')
  c.close()
 try: main()
 except Exception: fail()

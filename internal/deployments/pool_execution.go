@@ -48,6 +48,13 @@ func (e *OwnedTarget) PreparePoolEffects(ctx context.Context, job *Job) error {
 	if !ok {
 		return errors.New("pooled effect generation is missing")
 	}
+	builder := e.Builder
+	if builder == nil {
+		builder = &ImageBuilder{Dial: e.ServerDial}
+	}
+	if err := builder.PrepareEffects(ctx, job); err != nil {
+		return err
+	}
 	if e.Backend != nil {
 		backend, err := e.registeredBackend(e.Register(job.Deployment.OrgID, job.Connection.ID))
 		if err != nil {

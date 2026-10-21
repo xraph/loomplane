@@ -196,6 +196,7 @@ func (e *OwnedTarget) Register(org, connection string) string {
 }
 
 type ownedState struct {
+	EffectStage   string                   `json:"effect_stage,omitempty"`
 	Image         ImageArtifact            `json:"image"`
 	RuntimeRef    string                   `json:"runtime_ref,omitempty"`
 	PriorInstance string                   `json:"prior_instance,omitempty"`
@@ -299,6 +300,12 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	if builder == nil {
 		builder = &ImageBuilder{Dial: e.ServerDial}
 	}
+	if state.EffectStage == "" && len(job.Resume) == 0 {
+		state.EffectStage = "building"
+		if stageErr := save(); stageErr != nil {
+			return nil, stageErr
+		}
+	}
 	image, err := builder.Build(ctx, job, &state.Image, save)
 	if err != nil {
 		return nil, err
@@ -348,6 +355,12 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		}
 		if inst.TenantID != job.Deployment.OrgID || inst.Labels[owned.LabelProject] != job.Deployment.ProjectID || inst.Labels[owned.LabelEnvironment] != job.Deployment.EnvironmentID {
 			return nil, errors.New("the instance belongs to another project or environment")
+		}
+	}
+	if state.EffectStage != "runtime" {
+		state.EffectStage = "runtime"
+		if stageErr := save(); stageErr != nil {
+			return nil, stageErr
 		}
 	}
 	job.Progress(StepDeploying, "Deploying to the selected "+e.Cloud+" target")

@@ -62,7 +62,7 @@ func (r *Runner) CleanupPoolReservation(ctx context.Context, org, planID, servic
 	if !ok {
 		return errors.New("provider cannot verify exact pending compute cleanup")
 	}
-	job := &Job{Deployment: d, Plan: plan, Action: action, Connection: conn, Credential: credential, Replaces: step.Replaced, Resume: readReplaceCheckpoint(step.Checkpoint).Apply, Progress: func(string, string) {}}
+	job := &Job{Deployment: d, Plan: plan, Action: action, Connection: conn, Credential: credential, BuildCredentials: r.credentials, Replaces: step.Replaced, Resume: readReplaceCheckpoint(step.Checkpoint).Apply, Progress: func(string, string) {}}
 	if fenceErr := preparePoolEffects(ctx, r.executors[action.Provider], job); fenceErr != nil {
 		return fenceErr
 	}
@@ -96,6 +96,17 @@ func (e *OwnedTarget) CleanupPoolWorkload(ctx context.Context, job *Job, raw []b
 		}
 		if err := json.Unmarshal(job.Resume, &state); err != nil {
 			return err
+		}
+		if state.EffectStage == "building" {
+			// Preparation drained every accepted participant. This durable stage was
+			// saved before building and never advanced to a Ctrl/runtime mutation.
+			if state.RuntimeRef != "" {
+				if err := validateRuntimeRef(job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef); err != nil {
+					return err
+				}
+				return e.deleteRuntime(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef)
+			}
+			return nil
 		}
 		inst, _, err := currentInstance(ctx, e.Ctrl, job, key)
 		if err != nil {

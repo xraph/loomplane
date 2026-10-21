@@ -195,7 +195,9 @@ func cloudInfrastructureRuntimeFixture(t *testing.T, constrained bool) {
 	}
 	defer client.Close()
 	if constrained {
+		cfg.Details = maps.Clone(settings)
 		cfg.Details["docker_id"] = v.Health.DockerID
+		verifyPoolSourceBuildFence(t, name, cfg, []byte(secret.PrivateKey))
 		verifyRuntimeEffectFence(t, name, cfg)
 	}
 	// Bind a real conflicting listener inside this host, then refuse takeover.
@@ -222,7 +224,7 @@ func cloudInfrastructureRuntimeFixture(t *testing.T, constrained bool) {
 
 func verifyRuntimeEffectFence(t *testing.T, host string, cfg *server.Config) {
 	t.Helper()
-	infraDocker(t, "exec", host, "sh", "-c", "tar -C / -cf /tmp/fence-rootfs.tar bin lib && docker import /tmp/fence-rootfs.tar fence-fixture >/dev/null && docker run -d --name fence-sleeper fence-fixture /bin/busybox sleep 300")
+	infraDocker(t, "exec", host, "sh", "-c", "tar -C / -cf /tmp/fence-rootfs.tar bin lib && docker import /tmp/fence-rootfs.tar fence-fixture >/dev/null && docker run -d --network=none --name fence-sleeper fence-fixture /bin/busybox sleep 300")
 	old, err := server.Dial(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
