@@ -26,11 +26,11 @@ The current transfer path uses 8 MiB chunks, bounded retries and a SHA-256 diges
 
 New recovery points also record a destination identity derived from the configured driver, local directory or S3 region/endpoint, and explicit bucket. Credentials are excluded, so rotating a backup access key does not change that identity. Changing the directory, endpoint or bucket does not migrate existing points: reconnect their original destination to read them. S3 endpoints must be absolute HTTP or HTTPS URLs without query strings or fragments.
 
-The pin describes the configured namespace, not a physical disk or cloud account. Legacy points without a pin remain readable with checksum verification, but cannot be retired through the deletion helper. Automatic retention is still unavailable.
+The pin describes the configured namespace, not a physical disk or cloud account. Legacy points without a pin remain readable with checksum verification, but cannot be retired through the deletion helper. Automatic retention requires an explicit owner policy and safe deletion support from the captured storage driver.
 
 ## Back up and test recovery
 
-In **Service recovery**, select your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. Recovery points stay until an owner requests deletion. Automatic retention is not implemented.
+In **Service recovery**, select your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. Recovery points stay until an owner requests deletion or enables a separate retention policy through the API or CLI.
 
 The lists show recovery points and copies for the selected database and environment. If you remove the source service, its backup history and restore controls remain available. Backup creation and scheduling need a live source.
 
@@ -144,31 +144,50 @@ loomctl retirements retry RETIREMENT_ID --request-id retirement-retry-1 --yes --
 
 Reuse the key after a lost response. A new retry key authorizes up to three attempts from the lifetime count, with the current owner recorded separately from the original requester. History retains each committed transition and the previous failure.
 
-The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. The dashboard retry and deletion flow has also been checked against native PostgreSQL backups with local Trove storage at desktop and phone widths. Automatic deletion policies remain pending. Kubernetes retirement and other engine/storage combinations need their own live qualification.
+The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. The dashboard retry and deletion flow has also been checked against native PostgreSQL backups with local Trove storage at desktop and phone widths. The API and CLI can manage automatic policies; native recurring-retention and dashboard policy controls still need qualification. Kubernetes retirement and other engine/storage combinations need their own live qualification.
+
+## Automatic retention policies
+
+Inspect the policy for any backup in the database's history, then enable it with an owner key:
+
+```sh
+loomctl backups retention-policy BACKUP_ID --json
+loomctl backups retention-set BACKUP_ID --revision 0 --older-than-days 30 --keep-last 7 --yes --json
+loomctl backups retention-history BACKUP_ID --limit 50 --json
+loomctl backups retention-pause BACKUP_ID --yes --json
+```
+
+Revision zero creates a policy. To change one, pass the revision you just read. A conflicting update fails without replacing another owner's settings. If a response is lost, inspect the current policy before retrying. An unset policy returns `configured: false`; a failed inspection returns an error.
+
+This authorizes recurring deletion. The minute reconciliation job selects at most one oldest eligible full backup per due evaluation and uses the same retained-byte checks as explicit retirement. Age/count settings, current owner authority and the captured physical source are checked again when work is admitted. A failed deletion holds that source until its bounded attempts complete or an owner checks the failure and authorizes a retry. Ordinary policy failures wait an hour before another evaluation.
+
+Backup schedules and retention have separate switches. Pausing a backup schedule does not pause deletion. Pausing retention stops new selections; already accepted deletions may still finish. The policy records its last deletion ID, safe failure text and authorizing owner, and its history preserves every saved revision. Readers and admins can inspect that history. Only owners can change it.
 
 ## API and permissions
 
-| Operation               | Route                                                                                               | Permission                                      |
-| ----------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| List/create backups     | `GET/POST /api/v1/projects/:id/service-backups`                                                     | `service_backup:read` / `service_backup:manage` |
-| Read/retry a backup     | `GET /api/v1/service-backups/:id`, `POST .../:id/retry`                                             | Read / manage                                   |
-| Preview retention       | `GET /api/v1/service-backups/:id/retention-preview?older_than_days=30&keep_last=7`                  | `service_backup:read`                           |
-| Request retirement      | `POST /api/v1/service-backups/:id/retire`                                                           | `service_backup:retire` (owner)                 |
-| List/read retirements   | `GET /api/v1/projects/:id/service-backup-retirements`, `GET /api/v1/service-backup-retirements/:id` | `service_backup:read`                           |
-| Read retirement history | `GET /api/v1/service-backup-retirements/:id/history`                                                | `service_backup:read`                           |
-| Retry retirement        | `POST /api/v1/service-backup-retirements/:id/retry`                                                 | `service_backup:retire` (owner)                 |
-| Set/list schedules      | `PUT/GET /api/v1/projects/:id/backup-policies`                                                      | Manage / read                                   |
-| Create a recovery copy  | `POST /api/v1/service-backups/:id/restore`                                                          | `service_restore:manage`                        |
-| List/read copies        | `GET /api/v1/projects/:id/service-restores`, `GET /api/v1/service-restores/:id`                     | `service_backup:read`                           |
-| Remove a copy           | `DELETE /api/v1/service-restores/:id`                                                               | `service_restore:manage`                        |
+| Operation                     | Route                                                                                                          | Permission                                      |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| List/create backups           | `GET/POST /api/v1/projects/:id/service-backups`                                                                | `service_backup:read` / `service_backup:manage` |
+| Read/retry a backup           | `GET /api/v1/service-backups/:id`, `POST .../:id/retry`                                                        | Read / manage                                   |
+| Preview retention             | `GET /api/v1/service-backups/:id/retention-preview?older_than_days=30&keep_last=7`                             | `service_backup:read`                           |
+| Request retirement            | `POST /api/v1/service-backups/:id/retire`                                                                      | `service_backup:retire` (owner)                 |
+| List/read retirements         | `GET /api/v1/projects/:id/service-backup-retirements`, `GET /api/v1/service-backup-retirements/:id`            | `service_backup:read`                           |
+| Read retirement history       | `GET /api/v1/service-backup-retirements/:id/history`                                                           | `service_backup:read`                           |
+| Retry retirement              | `POST /api/v1/service-backup-retirements/:id/retry`                                                            | `service_backup:retire` (owner)                 |
+| Read retention policy/history | `GET /api/v1/service-backups/:id/retention-policy`, `GET /api/v1/service-backups/:id/retention-policy/history` | `service_backup:read`                           |
+| Save/pause retention policy   | `PUT /api/v1/service-backups/:id/retention-policy`                                                             | `service_backup:retire` (owner)                 |
+| Set/list schedules            | `PUT/GET /api/v1/projects/:id/backup-policies`                                                                 | Manage / read                                   |
+| Create a recovery copy        | `POST /api/v1/service-backups/:id/restore`                                                                     | `service_restore:manage`                        |
+| List/read copies              | `GET /api/v1/projects/:id/service-restores`, `GET /api/v1/service-restores/:id`                                | `service_backup:read`                           |
+| Remove a copy                 | `DELETE /api/v1/service-restores/:id`                                                                          | `service_restore:manage`                        |
 
-Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Project retirement lists also accept `backup_id` to resolve one recovery point without scanning other histories. Policy updates accept `environment`, `resource`, `every_hours` and `enabled`. Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
+Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Project retirement lists also accept `backup_id` to resolve one recovery point without scanning other histories. Backup schedule updates accept `environment`, `resource`, `every_hours` and `enabled`. Retention policy updates accept the observed `revision`, `policy` (`older_than_days`, `keep_last`) and `enabled`. Retention history accepts `before` and `limit` (1 to 100). Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
 
 ## Qualification boundary
 
 PostgreSQL 17.11 has passed the Docker catalog and recovery drill, with local Trove and a separate native adapter drill against an isolated MinIO endpoint. The Kubernetes catalog, CLI, API and browser drill passed on arm64 Kubernetes 1.36.4, Cilium 1.20.3 and a retained local-path class. That drill covered pod replacement, backup persistence after a control-plane restart, isolated SQL recovery, scheduled backups and deletion of the exact temporary PV.
 
-AWS S3 acceptance, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, automatic retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
+AWS S3 acceptance, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, native recurring-retention qualification, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
 
 ## MySQL and MariaDB recovery
 

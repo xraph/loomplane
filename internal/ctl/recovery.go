@@ -17,6 +17,10 @@ func (a *App) backupCommand() cli.Command {
 		cli.WithSubcommand(cli.NewCommand("show", "Show backup status and verification evidence", a.showBackup, cli.WithUsage("backups show <backup-id> [--wait]"), cli.WithFlags(recoveryFlags()...))),
 		cli.WithSubcommand(cli.NewCommand("retry", "Retry a failed backup", a.retryBackup, cli.WithUsage("backups retry <backup-id> [--wait]"), cli.WithFlags(recoveryFlags()...))),
 		cli.WithSubcommand(a.retireCommand()),
+		cli.WithSubcommand(a.retentionSetCommand()),
+		cli.WithSubcommand(cli.NewCommand("retention-policy", "Inspect automatic retention for a source history", a.showRetentionPolicy, cli.WithFlag(jsonFlag))),
+		cli.WithSubcommand(cli.NewCommand("retention-pause", "Pause future selection; accepted deletions may finish", a.pauseRetentionPolicy, cli.WithFlags(retentionPolicyWriteFlags()...))),
+		cli.WithSubcommand(cli.NewCommand("retention-history", "Read committed policy revisions", a.retentionPolicyHistory, cli.WithFlags(retirementPageFlags()...))),
 		cli.WithSubcommand(cli.NewCommand("retention", "Preview full-backup retention without deleting data", a.previewBackupRetention, cli.WithUsage("backups retention <backup-id> [--older-than-days 30] [--keep-last 7] [--json]"), cli.WithFlags(append([]cli.Flag{jsonFlag}, retentionSettingFlags()...)...))),
 		cli.WithSubcommand(cli.NewCommand("policies", "List saved backup schedules", a.backupPolicies, cli.WithUsage("backups policies <project> [--json]"), cli.WithFlag(jsonFlag))),
 		cli.WithSubcommand(cli.NewCommand("policy", "Set a full-backup schedule; all points are retained", a.backupPolicy, cli.WithUsage("backups policy <project> --resource database --every-hours 24 [--disable]"), cli.WithFlags(cli.NewStringFlag("resource", "", "Deployed resource name", "database"), cli.NewStringFlag("env", "e", "Environment", "production"), cli.NewStringFlag("every-hours", "", "Cadence, from 1 to 168 hours", "24"), cli.NewBoolFlag("disable", "", "Disable the schedule", false)))))

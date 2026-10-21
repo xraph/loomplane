@@ -26,6 +26,7 @@ type RetentionPolicy struct {
 }
 
 type RetentionPolicyStore interface {
+	RetentionPolicyHistory(context.Context, string, string, string, RetentionPolicyHistoryInput) (*RetentionPolicyHistory, error)
 	PutRetentionPolicy(context.Context, *RetentionPolicy, int64, RetirementGuard) (*RetentionPolicy, error)
 	GetRetentionPolicy(context.Context, string, string) (*RetentionPolicy, error)
 	FindRetentionPolicy(context.Context, string, string) (*RetentionPolicy, error)

@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -118,6 +118,9 @@ export const useServiceRetirementsHistory = query<RetirementHistory>(ops['servic
 export const useServiceRetirementsRetry = mutation<Retirement, Retirement>(ops['serviceRetirements.retry']);
 export const useServiceBackupsGet = query<Backup>(ops['serviceBackups.get']);
 export const useServiceRestoresCreate = mutation<Restore, Restore>(ops['serviceRestores.create']);
+export const useRetentionPoliciesGet = query<RetentionPolicyState>(ops['retentionPolicies.get']);
+export const useRetentionPoliciesSet = mutation<RetentionPolicy, RetentionPolicy>(ops['retentionPolicies.set']);
+export const useRetentionPoliciesHistory = query<RetentionPolicyHistory>(ops['retentionPolicies.history']);
 export const useServiceBackupsPreviewRetention = query<RetentionPreview>(ops['serviceBackups.previewRetention']);
 export const useServiceRetirementsCreate = mutation<Retirement, Retirement>(ops['serviceRetirements.create']);
 export const useServiceBackupsRetry = mutation<Backup, Backup>(ops['serviceBackups.retry']);

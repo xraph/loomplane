@@ -1100,6 +1100,50 @@ export interface RetentionPoint {
   reason: string;
 }
 
+export interface RetentionPolicy {
+  anchorId: string;
+  authorizedBy: string;
+  createdAt: string;
+  createdBy: string;
+  enabled: boolean;
+  id: string;
+  lastError?: string;
+  lastRetirementId?: string;
+  nextAt: string;
+  orgId: string;
+  policy: RetentionInput;
+  projectId: string;
+  revision: number;
+  updatedAt: string;
+}
+
+export interface RetentionPolicyHistory {
+  events: RetentionPolicyRevision[];
+  nextBefore?: string;
+}
+
+export interface RetentionPolicyInputBody {
+  enabled: boolean;
+  policy: {
+  keepLast: number;
+  olderThanDays: number;
+};
+  revision: number;
+}
+
+export interface RetentionPolicyRevision {
+  authorizedBy: string;
+  createdAt: string;
+  enabled: boolean;
+  policy: RetentionInput;
+  revision: number;
+}
+
+export interface RetentionPolicyState {
+  configured: boolean;
+  policy?: RetentionPolicy;
+}
+
 export interface RetentionPreview {
   asOf: string;
   complete: boolean;

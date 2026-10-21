@@ -1731,6 +1731,67 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly retentionPolicies = {
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPolicyState> => {
+      let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retention-policy`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPolicyState"],
+      };
+
+      return this.request<types.RetentionPolicyState>(config);
+    },
+
+    /**
+     */
+    history: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPolicyHistory> => {
+      let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retention-policy/history`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPolicyHistory"],
+      };
+
+      return this.request<types.RetentionPolicyHistory>(config);
+    },
+
+    /**
+     */
+    set: async (id: string, body: types.RetentionPolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPolicy> => {
+      let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retention-policy`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RetentionPolicyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPolicy"],
+      };
+
+      return this.request<types.RetentionPolicy>(config);
+    },
+
+  };
+
   public readonly serviceBackups = {
     /**
      */

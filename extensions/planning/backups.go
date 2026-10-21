@@ -87,6 +87,9 @@ func (e *Extension) backupRoutes(router forge.Router, guard identity.Guard) erro
 	if err := group.POST("/service-backups/:id/retry", e.retryBackup, forge.WithName("serviceBackups.retry"), forge.WithResponseSchema(http.StatusAccepted, "Retried database backup", recovery.Backup{})); err != nil {
 		return err
 	}
+	if err := e.retentionPolicyRoutes(group); err != nil {
+		return err
+	}
 	if err := e.restoreRoutes(group); err != nil {
 		return err
 	}

@@ -3843,6 +3843,125 @@
         }
       }
     },
+    "/api/v1/service-backups/{id}/retention-policy": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "retentionPolicies.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Source-bound automatic retention policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPolicyState"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "retentionPolicies.set",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetentionPolicyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved retention policy revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPolicy"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Service backups"
+        ],
+        "x-forge-invalidates": [
+          "RetentionPolicy[]"
+        ]
+      }
+    },
+    "/api/v1/service-backups/{id}/retention-policy/history": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "retentionPolicies.history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed retention policy revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPolicyHistory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/service-backups/{id}/retention-preview": {
       "get": {
         "tags": [
@@ -7762,6 +7881,161 @@
           },
           "reason": {
             "type": "string"
+          }
+        }
+      },
+      "RetentionPolicy": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "anchor_id",
+          "revision",
+          "policy",
+          "enabled",
+          "created_by",
+          "authorized_by",
+          "created_at",
+          "updated_at",
+          "next_at"
+        ],
+        "properties": {
+          "anchor_id": {
+            "type": "string"
+          },
+          "authorized_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_retirement_id": {
+            "type": "string"
+          },
+          "next_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RetentionInput"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RetentionPolicyHistory": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionPolicyRevision"
+            }
+          },
+          "next_before": {
+            "type": "string"
+          }
+        }
+      },
+      "RetentionPolicyInputBody": {
+        "type": "object",
+        "required": [
+          "revision",
+          "policy",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "policy": {
+            "type": "object",
+            "required": [
+              "older_than_days",
+              "keep_last"
+            ],
+            "properties": {
+              "keep_last": {
+                "type": "integer"
+              },
+              "older_than_days": {
+                "type": "integer"
+              }
+            }
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "RetentionPolicyRevision": {
+        "type": "object",
+        "required": [
+          "revision",
+          "policy",
+          "enabled",
+          "authorized_by",
+          "created_at"
+        ],
+        "properties": {
+          "authorized_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RetentionInput"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "RetentionPolicyState": {
+        "type": "object",
+        "required": [
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RetentionPolicy"
           }
         }
       },

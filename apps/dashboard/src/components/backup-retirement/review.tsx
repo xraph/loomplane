@@ -154,7 +154,7 @@ function RetentionReview({
         <DialogHeader>
           <DialogTitle>Backup retention</DialogTitle>
           <DialogDescription>
-            Review one database history. Automatic deletion is not enabled.
+            Review one database history before selecting a backup to delete.
           </DialogDescription>
         </DialogHeader>
         <form

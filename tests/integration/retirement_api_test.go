@@ -45,7 +45,7 @@ func TestRetirementAPIIsScopedAndVerifiesBytesBeforeRetry(t *testing.T) {
 		} `json:"paths"`
 	}
 	c.must(http.StatusOK, http.MethodGet, "/openapi.json", nil, &contract)
-	for path, queryCount := range map[string]int{"/api/v1/projects/{id}/service-backup-retirements": 3, "/api/v1/service-backup-retirements/{id}/history": 2} {
+	for path, queryCount := range map[string]int{"/api/v1/projects/{id}/service-backup-retirements": 3, "/api/v1/service-backup-retirements/{id}/history": 2, "/api/v1/service-backups/{id}/retention-policy/history": 2} {
 		count := 0
 		for _, parameter := range contract.Paths[path]["get"].Parameters {
 			if parameter.In == "query" {
@@ -236,6 +236,7 @@ func TestRetirementAPIIsScopedAndVerifiesBytesBeforeRetry(t *testing.T) {
 	if _, err = runCLI(readKey.Secret, "retirements", "retry", retirement.ID, "--yes", "--request-id", "reader-retry-key"); !errors.Is(err, api.ErrForbidden) {
 		t.Fatalf("read-only CLI retried deletion: %v", err)
 	}
+	verifyRetentionPolicyControls(t, c, reader, runCLI, writeKey.Secret, readKey.Secret)
 	var invitation struct {
 		AcceptPath string `json:"accept_path"`
 	}
@@ -256,16 +257,19 @@ func TestRetirementAPIIsScopedAndVerifiesBytesBeforeRetry(t *testing.T) {
 	}
 	admin.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": session.OrgID}, nil)
 	admin.must(http.StatusOK, http.MethodGet, listPath, nil, nil)
+	admin.must(http.StatusOK, http.MethodGet, "/api/v1/service-backups/witness/retention-policy", nil, nil)
+	admin.must(http.StatusForbidden, http.MethodPut, "/api/v1/service-backups/witness/retention-policy", recovery.RetentionPolicyInput{Revision: 4, Policy: recovery.RetentionInput{OlderThanDays: 30, KeepLast: 2}}, nil)
 	admin.must(http.StatusForbidden, http.MethodPost, "/api/v1/service-backups/witness/retire", body, nil)
 	admin.must(http.StatusForbidden, http.MethodPost, retryPath, map[string]string{"request_id": "admin-retry-key"}, nil)
 
 	var other struct{ ID string }
 	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Other retirement", "slug": "other-retirement"}, &other)
 	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": other.ID}, nil)
-	for _, path := range []string{getPath, getPath + "/history", listPath} {
+	for _, path := range []string{getPath, getPath + "/history", listPath, "/api/v1/service-backups/witness/retention-policy", "/api/v1/service-backups/witness/retention-policy/history"} {
 		c.must(http.StatusNotFound, http.MethodGet, path, nil, nil)
 	}
 	c.must(http.StatusNotFound, http.MethodPost, retryPath, map[string]string{"request_id": "foreign-retry-key"}, nil)
+	c.must(http.StatusNotFound, http.MethodPut, "/api/v1/service-backups/witness/retention-policy", recovery.RetentionPolicyInput{Revision: 4, Policy: recovery.RetentionInput{OlderThanDays: 30, KeepLast: 2}}, nil)
 	holdCatalogBrowser(t, running.srv.URL, project.ID, "retirement-connection")
 }
 
