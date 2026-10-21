@@ -112,6 +112,9 @@ func TestPlatformFederationLaunchWiring(t *testing.T) {
 	if _, err := forge.InjectType[*federation.PreparationLaunchService](app.Container()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := forge.InjectType[*federation.PreparationStatusService](app.Container()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := forge.InjectType[*federation.PreparationService](app.Container()); err != nil {
 		t.Fatal("preparation service not wired", err)
 	}

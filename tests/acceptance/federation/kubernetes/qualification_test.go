@@ -2,20 +2,16 @@ package kubernetes_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/xraph/grove/drivers/pgdriver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/config"
 	fed "github.com/xraph/loomplane/internal/federation"
 	"github.com/xraph/loomplane/internal/security"
@@ -49,6 +45,7 @@ func TestPreparedKubernetesIdentity(t *testing.T) {
 	preparation := fed.NewPreparationService(launch, store)
 	enrollment := fed.NewEnrollmentService(destinations, enrollments, installation.Resolve, admin)
 	coordinator := fed.NewPreparationLaunchService(preparation, enrollment)
+	status := fed.NewPreparationStatusService(installation, store)
 	prepared, err := preparation.Start(ctx, principal, destination.ID)
 	must(t, err)
 	name := "loomplane-agent-" + prepared.ID
@@ -81,7 +78,14 @@ func TestPreparedKubernetesIdentity(t *testing.T) {
 		t.Fatal("launch changed prepared pod identity")
 	}
 	wait(ctx, t, "agent enrollment and signed policy acknowledgment", func() error {
-		return acknowledged(ctx, db, delivered.EnrollmentID)
+		observed, statusErr := status.Get(ctx, principal, destination.ID, prepared.ID)
+		if statusErr != nil {
+			return statusErr
+		}
+		if observed.State != "policy_current" {
+			return errors.New("agent policy is not current: " + observed.State)
+		}
+		return nil
 	})
 	t.Log("PASS prepared pod launches through CSI, enrolls with PSAT identity and acknowledges signed policy")
 	// Reconstruct the coordinator and recover a delivered attempt after the
@@ -125,6 +129,11 @@ func TestPreparedKubernetesIdentity(t *testing.T) {
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("owned configuration remains: %v", err)
 	}
+	observed, err := status.Get(ctx, principal, destination.ID, prepared.ID)
+	must(t, err)
+	if observed.State != "retired" {
+		t.Fatalf("retirement status: %+v", observed)
+	}
 	t.Log("PASS retirement revokes enrollment and removes exact pod, configuration and account")
 }
 
@@ -161,26 +170,4 @@ func wait(ctx context.Context, t *testing.T, label string, check func() error) {
 		case <-ticker.C:
 		}
 	}
-}
-func acknowledged(ctx context.Context, db *pgdriver.PgDB, id string) error {
-	var phase string
-	var raw []byte
-	if err := db.QueryRow(ctx, `SELECT phase,body FROM loomplane_federation_enrollments WHERE org_id='fixture' AND id=$1`, id).Scan(&phase, &raw); err != nil {
-		return err
-	}
-	if phase != "consumed" {
-		return fmt.Errorf("enrollment phase %s", phase)
-	}
-	var record workloadidentity.EnrollmentRecord
-	if err := json.Unmarshal(raw, &record); err != nil {
-		return err
-	}
-	state, err := access.NewPolicyStore(db).Delivery(ctx, record.Binding.Agent)
-	if err != nil {
-		return err
-	}
-	if state.AcknowledgedSequence == 0 || state.Revision == "" || state.ReceivedAt.IsZero() || !state.ExpiresAt.After(time.Now()) {
-		return errors.New("no current acknowledged policy")
-	}
-	return nil
 }

@@ -324,3 +324,27 @@ response leaves its consumption status uncertain.
 
 See [the control-plane listener configuration](federation-runtime.md) for SPIRE
 identity and policy signing-key setup.
+
+## Reading installation status
+
+With agent launch enabled, `PreparationStatusService.Get` reads one preparation
+by destination and attempt ID. You need destination read permission. The service
+checks permission and current connection identity before and after the read.
+It does not create resources, issue credentials, or renew policy leases.
+
+The result separates preparation and delivery from enrollment and policy receipt.
+`policy_current` means the active agent acknowledged the latest issued sequence
+for the current policy generation. `policy_valid_until` is the signed snapshot's
+expiry minus the clock-skew allowance. You must stop displaying that state when
+the deadline passes, even if another status request has not finished.
+
+An unapplied renewal or changed policy reports `policy_pending`. An expired
+snapshot reports `lease_expired`; a replacement identity reports `superseded`.
+Retirement retains its own state after enrollment and installation records are
+removed. Database failures remain errors, so an unavailable read cannot appear
+as an empty or healthy installation.
+
+All persisted evidence comes from one read-only database snapshot, with its start
+time in `observed_at`. This is the last confirmed policy state. It does not prove
+current network reachability or grant permission to call a service. Management
+API, CLI and dashboard controls remain pending.

@@ -314,3 +314,10 @@ func CheckAgentTx(ctx context.Context, tx driver.Tx, agent domain.AgentIdentity)
 	_, err := loadAgent(ctx, tx, agent, true)
 	return err
 }
+
+// CheckAgentReadTx shares the runtime identity checks without taking row locks.
+// Callers needing consistent related evidence must use a repeatable-read snapshot.
+func CheckAgentReadTx(ctx context.Context, tx driver.Tx, agent domain.AgentIdentity) error {
+	_, err := loadAgent(ctx, tx, agent, false)
+	return err
+}

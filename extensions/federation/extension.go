@@ -141,6 +141,9 @@ func (e *Extension) Register(app forge.App) error {
 		if provideErr := forge.ProvideValue(c, domain.NewPreparationLaunchService(preparation, enrollment)); provideErr != nil {
 			return provideErr
 		}
+		if provideErr := forge.ProvideValue(c, domain.NewPreparationStatusService(installations, domain.NewPgStore(pg))); provideErr != nil {
+			return provideErr
+		}
 		preparationRetirement := domain.NewPreparationRetirementService(preparation, retirement, func(ctx context.Context, org, destination, id string) error {
 			return enrollmentStore.RevokePreparation(ctx, org, destination, id, e.cleanup)
 		})

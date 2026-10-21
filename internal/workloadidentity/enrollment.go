@@ -122,7 +122,19 @@ func (s *EnrollmentStore) checkDestination(ctx context.Context, tx driver.Tx, b 
 	return nil
 }
 func loadEnrollment(ctx context.Context, tx driver.Tx, org, id string) (*EnrollmentRecord, string, error) {
-	query := `SELECT body,phase,created_at,expires_at FROM loomplane_federation_enrollments WHERE org_id=$1 AND id=$2 FOR UPDATE`
+	return readEnrollment(ctx, tx, org, id, true)
+}
+
+// ReadEnrollmentTx reads immutable enrollment evidence in a caller-owned
+// snapshot. It takes no locks and grants no issuance or bootstrap authority.
+func ReadEnrollmentTx(ctx context.Context, tx driver.Tx, org, id string) (*EnrollmentRecord, string, error) {
+	return readEnrollment(ctx, tx, org, id, false)
+}
+func readEnrollment(ctx context.Context, tx driver.Tx, org, id string, lock bool) (*EnrollmentRecord, string, error) {
+	query := `SELECT body,phase,created_at,expires_at FROM loomplane_federation_enrollments WHERE org_id=$1 AND id=$2`
+	if lock {
+		query += ` FOR UPDATE`
+	}
 	return scanEnrollment(tx.QueryRow(ctx, query, org, id), org, id)
 }
 func scanEnrollment(row interface{ Scan(...any) error }, org, id string) (*EnrollmentRecord, string, error) {
