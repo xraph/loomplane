@@ -106,6 +106,10 @@ func TestCloudSQLRemovalRequiresFinalBackup(t *testing.T) {
 			s := &Session{c: New(srv.URL), key: &Key{ProjectID: "project-test"}, http: srv.Client()}
 			err := s.DeleteSQLInstance(t.Context(), "database", SQLMutation{Before: func() error { return nil }, Started: func(string) error { return nil }})
 			switch state {
+			case "missing":
+				if !IsNotFound(err) {
+					t.Fatalf("absent instance must not prove protected removal: %v", err)
+				}
 			case "refused", "backup-failed":
 				if err == nil || !strings.Contains(err.Error(), "final backup") {
 					t.Fatalf("backup failure was ignored: %v", err)

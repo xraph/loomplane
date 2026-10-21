@@ -16,9 +16,15 @@ import (
 // SQLInstance is the part of a Cloud SQL instance Loomplane reads.
 type SQLInstance struct {
 	Name            string `json:"name"`
+	Project         string `json:"project"`
+	Region          string `json:"region"`
+	CreateTime      string `json:"createTime"`
 	ConnectionName  string `json:"connectionName"`
 	DatabaseVersion string `json:"databaseVersion"`
 	State           string `json:"state"`
+	Settings        struct {
+		UserLabels map[string]string `json:"userLabels"`
+	} `json:"settings"`
 }
 
 // SQLInstanceSpec is what Loomplane creates an instance from.
@@ -31,6 +37,10 @@ type SQLInstanceSpec struct {
 	Existing bool
 	// Storage is an explicit reviewed request. Nil preserves legacy defaults.
 	Storage *SQLStorageSettings
+	// Intent identifies this create request before its incarnation is visible.
+	Intent string
+	// Inspect validates and durably captures each observed incarnation.
+	Inspect func(*SQLInstance) error
 }
 
 // SQLStorageSettings are the native disk and recovery settings requested at creation.
@@ -52,6 +62,15 @@ type SQLMutation struct {
 	Resume  string
 	Before  func() error
 	Started func(string) error
+	// Check guards name-addressed writes and operation polling with a fresh read.
+	Check func(context.Context) error
+}
+
+func (m SQLMutation) check(ctx context.Context) error {
+	if m.Check != nil {
+		return m.Check(ctx)
+	}
+	return nil
 }
 
 type sqlOperation struct {
@@ -81,6 +100,9 @@ func (s *Session) validateSQLOperation(op sqlOperation, name, instance string, t
 // mutateSQL resumes the captured operation, or records the intent and operation
 // around a new request. Missing operations never authorize another mutation.
 func (s *Session) mutateSQL(ctx context.Context, instance, message string, track SQLMutation, begin func(*sqlOperation) (bool, error), types ...string) error {
+	if err := track.check(ctx); err != nil {
+		return err
+	}
 	var op sqlOperation
 	if track.Resume != "" {
 		if strings.ContainsAny(track.Resume, "/\\?#") {
@@ -94,6 +116,9 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 			return errors.New("cloud sql mutation requires a durable checkpoint")
 		}
 		if err := track.Before(); err != nil {
+			return err
+		}
+		if err := track.check(ctx); err != nil {
 			return err
 		}
 		done, err := begin(&op)
@@ -113,9 +138,15 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 			return err
 		}
 	}
+	if err := track.check(ctx); err != nil {
+		return err
+	}
 	for op.Status != "DONE" {
 		progress(ctx, message)
 		if err := s.wait(ctx); err != nil {
+			return err
+		}
+		if err := track.check(ctx); err != nil {
 			return err
 		}
 		var next sqlOperation
@@ -126,6 +157,9 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 			return err
 		}
 		op = next
+	}
+	if err := track.check(ctx); err != nil {
+		return err
 	}
 	if op.Error != nil {
 		if len(op.Error.Errors) == 0 {
@@ -162,11 +196,15 @@ func (s *Session) EnsureSQLInstance(ctx context.Context, spec SQLInstanceSpec, t
 		return nil, errors.New("cloud sql instance already exists without a saved operation or binding; review its ownership before adoption")
 	}
 	if IsNotFound(err) && track.Resume == "" {
+		labels := map[string]string{"managed-by": "loomplane"}
+		if spec.Intent != "" {
+			labels[SQLIntentLabel] = spec.Intent
+		}
 		settings := map[string]any{
 			"tier": spec.Tier, "edition": "ENTERPRISE",
 			"ipConfiguration":     map[string]any{"ipv4Enabled": true},
 			"backupConfiguration": map[string]any{"enabled": true},
-			"userLabels":          map[string]string{"managed-by": "loomplane"},
+			"userLabels":          labels,
 		}
 		if disk := spec.Storage; disk != nil {
 			settings["dataDiskSizeGb"], settings["dataDiskType"] = strconv.FormatInt(int64(disk.SizeGB), 10), disk.Type
@@ -190,7 +228,15 @@ func (s *Session) EnsureSQLInstance(ctx context.Context, spec SQLInstanceSpec, t
 	if err != nil {
 		return nil, err
 	}
-	for in.State != "RUNNABLE" {
+	for {
+		if spec.Inspect != nil {
+			if inspectErr := spec.Inspect(in); inspectErr != nil {
+				return nil, inspectErr
+			}
+		}
+		if in.State == "RUNNABLE" {
+			break
+		}
 		progress(ctx, "Waiting for the database instance ("+strings.ToLower(in.State)+")")
 		if werr := s.wait(ctx); werr != nil {
 			return nil, werr
@@ -220,6 +266,9 @@ func (s *Session) SetUser(ctx context.Context, instance, name, password string, 
 		base := "/instances/" + url.PathEscape(instance) + "/users"
 		err := s.do(ctx, http.MethodPost, s.sqlPath(base), body, op)
 		if IsConflict(err) {
+			if checkErr := track.check(ctx); checkErr != nil {
+				return false, checkErr
+			}
 			err = s.do(ctx, http.MethodPut, s.sqlPath(base+"?name="+url.QueryEscape(name)), body, op)
 		}
 		return false, err
@@ -232,9 +281,6 @@ func (s *Session) DeleteSQLInstance(ctx context.Context, name string, track SQLM
 	return s.mutateSQL(ctx, name, "Deleting the database instance", track, func(op *sqlOperation) (bool, error) {
 		query := url.Values{"enableFinalBackup": {"true"}, "finalBackupTtlDays": {strconv.Itoa(manageddb.CloudSQLFinalBackupDays)}}
 		err := s.do(ctx, http.MethodDelete, s.sqlPath("/instances/"+url.PathEscape(name))+"?"+query.Encode(), nil, op)
-		if IsNotFound(err) {
-			return true, nil
-		}
 		return false, err
 	}, "DELETE")
 }

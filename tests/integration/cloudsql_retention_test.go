@@ -20,6 +20,14 @@ func TestCloudSQLRemovalKeepsCredentialsUntilProtectedCompletion(t *testing.T) {
 			google := newFakeGoogle(t)
 			google.deploy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if r.Method == http.MethodGet && r.URL.Path == "/v1/projects/acme-prod/instances/database" {
+					if state == "missing" {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					fmt.Fprint(w, `{"name":"database","project":"acme-prod","region":"us-central1","connectionName":"acme-prod:us-central1:database","createTime":"2026-10-21T00:00:00Z"}`)
+					return
+				}
 				if r.Method != http.MethodDelete || r.URL.Path != "/v1/projects/acme-prod/instances/database" {
 					t.Errorf("unexpected cloud request: %s %s", r.Method, r.URL)
 					w.WriteHeader(http.StatusBadRequest)
@@ -50,9 +58,9 @@ func TestCloudSQLRemovalKeepsCredentialsUntilProtectedCompletion(t *testing.T) {
 			}
 			executor := &deployments.CloudSQL{Google: gcp.New(google.srv.URL)}
 			err := executor.Remove(t.Context(), job, &planning.Binding{ExternalID: "acme-prod:us-central1:database"})
-			failed := state == "refused" || state == "backup-failed"
+			failed := state != "completed"
 			if failed {
-				if err == nil || !strings.Contains(err.Error(), "final backup") || forgotten {
+				if err == nil || (!strings.Contains(err.Error(), "final backup") && (state != "missing" || !strings.Contains(err.Error(), "incarnation is missing"))) || forgotten {
 					t.Fatalf("backup refusal lost credentials or failure: forgotten=%v err=%v", forgotten, err)
 				}
 			} else if err != nil || !forgotten {

@@ -47,6 +47,7 @@ func TestCloudSQLExecutorResumesEverySavedMutation(t *testing.T) {
 			job := checkpointSQLJob(t, google)
 			instance := deployments.SQLInstanceName(job) + "-europe-west1"
 			created := stop == "remove"
+			var settings map[string]any
 			writes := map[string]int{}
 			passwords := []string{}
 			google.deploy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +62,8 @@ func TestCloudSQLExecutorResumesEverySavedMutation(t *testing.T) {
 						w.WriteHeader(http.StatusNotFound)
 						return
 					}
-					fmt.Fprintf(w, `{"name":%q,"connectionName":%q,"state":"RUNNABLE","databaseVersion":"POSTGRES_17"}`, instance, "acme-prod:europe-west1:"+instance)
+					labels, _ := json.Marshal(settings)
+					fmt.Fprintf(w, `{"settings":%s,"project":"acme-prod","region":"europe-west1","createTime":"2026-10-21T00:00:00Z","name":%q,"connectionName":%q,"state":"RUNNABLE","databaseVersion":"POSTGRES_17"}`, labels, instance, "acme-prod:europe-west1:"+instance)
 					return
 				}
 				stage := "instance"
@@ -80,6 +82,13 @@ func TestCloudSQLExecutorResumesEverySavedMutation(t *testing.T) {
 				}
 				writes[stage]++
 				if stage == "instance" {
+					var body struct {
+						Settings map[string]any `json:"settings"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					settings = body.Settings
 					created = true
 				}
 				if stage == "remove" {

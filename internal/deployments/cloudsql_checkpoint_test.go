@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/planning"
 )
 
 func TestCloudSQLCheckpointKeepsExactScope(t *testing.T) {
@@ -90,6 +92,50 @@ func TestBoundSQLInstanceRequiresOriginalProjectAndRegion(t *testing.T) {
 				}
 			} else if err == nil {
 				t.Fatal("foreign binding accepted")
+			}
+		})
+	}
+}
+
+func TestCloudSQLCheckpointRequiresIncarnationAfterCreateAndBlocksV1(t *testing.T) {
+	job := managedDatabaseJob(t, "cloud-sql")
+	job.Action.ID = "resource:database"
+	job.Deployment = &Deployment{ID: "deployment"}
+	var saved []byte
+	job.Checkpoint = func(raw []byte) error { saved = append([]byte(nil), raw...); return nil }
+	state, err := readCloudSQLState(job, job.Action.Resource, "project", "us-east-1", "instance", "apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"legacy", "missing-pin", "intent", "binding-pin"} {
+		t.Run(scenario, func(t *testing.T) {
+			var body map[string]any
+			if err := json.Unmarshal(saved, &body); err != nil {
+				t.Fatal(err)
+			}
+			job.Binding = nil
+			switch scenario {
+			case "legacy":
+				body["cloud_sql_checkpoint"] = 1
+				delete(body, "intent")
+			case "missing-pin":
+				body["stage"] = "database"
+			case "intent":
+				body["intent"] = "foreign"
+			case "binding-pin":
+				job.Binding = &planning.Binding{PhysicalID: "known"}
+				body["resource_id"] = "another"
+			}
+			raw, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job.Resume = raw
+			if _, err := readCloudSQLState(job, job.Action.Resource, "project", "us-east-1", "instance", "apply"); err == nil {
+				t.Fatal("unproven checkpoint accepted")
 			}
 		})
 	}

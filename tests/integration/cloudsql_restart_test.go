@@ -23,10 +23,11 @@ import (
 // This crosses the durable worker, deployment store, explicit Retry API and a
 // complete app restart. Provider HTTP is controlled; it is not a live SQL drill.
 func TestCloudSQLAPIRetryAfterRestartKeepsCapturedOperation(t *testing.T) {
-	for _, stage := range []string{"instance", "database", "user", "remove", "instance-uncertain"} {
+	for _, stage := range []string{"instance", "database", "user", "remove", "instance-uncertain", "instance-reused", "database-reused"} {
 		t.Run(stage, func(t *testing.T) {
 			uncertain := strings.HasSuffix(stage, "-uncertain")
-			wantedStage := strings.TrimSuffix(stage, "-uncertain")
+			reused := strings.HasSuffix(stage, "-reused")
+			wantedStage := strings.TrimSuffix(strings.TrimSuffix(stage, "-uncertain"), "-reused")
 			cfg := config.Defaults()
 			cfg.Database.URL = freshDatabase(t)
 			cfg.Orchestration.PollInterval = 100 * time.Millisecond
@@ -43,7 +44,7 @@ func TestCloudSQLAPIRetryAfterRestartKeepsCapturedOperation(t *testing.T) {
 				if strings.HasPrefix(r.URL.Path, prefix) {
 					op := strings.TrimPrefix(r.URL.Path, prefix)
 					w.Header().Set("Content-Type", "application/json")
-					if blocked && op == stage {
+					if blocked && op == wantedStage {
 						w.WriteHeader(http.StatusServiceUnavailable)
 						fmt.Fprint(w, `{"error":{"message":"operation temporarily unavailable"}}`)
 						return
@@ -150,17 +151,21 @@ func TestCloudSQLAPIRetryAfterRestartKeepsCapturedOperation(t *testing.T) {
 				checkpointRaw = envelope.Apply
 			}
 			var checkpoint struct {
-				Version   int    `json:"cloud_sql_checkpoint"`
-				Stage     string `json:"stage"`
-				Operation string `json:"operation"`
-				Uncertain bool   `json:"uncertain"`
+				Version    int    `json:"cloud_sql_checkpoint"`
+				Stage      string `json:"stage"`
+				Operation  string `json:"operation"`
+				Uncertain  bool   `json:"uncertain"`
+				ResourceID string `json:"resource_id"`
 			}
 			wantedOperation := wantedStage
 			if uncertain {
 				wantedOperation = ""
 			}
-			if err = json.Unmarshal(checkpointRaw, &checkpoint); err != nil || checkpoint.Version != 1 || checkpoint.Stage != wantedStage || checkpoint.Operation != wantedOperation || !checkpoint.Uncertain {
+			if err = json.Unmarshal(checkpointRaw, &checkpoint); err != nil || checkpoint.Version != 2 || checkpoint.Stage != wantedStage || checkpoint.Operation != wantedOperation || !checkpoint.Uncertain {
 				t.Fatalf("saved step lost its captured operation: %s %v", checkpointRaw, err)
+			}
+			if !uncertain && checkpoint.ResourceID == "" {
+				t.Fatal("operation polling started without a durable incarnation pin")
 			}
 			if stage == "remove" {
 				var stillBound struct {
@@ -176,6 +181,13 @@ func TestCloudSQLAPIRetryAfterRestartKeepsCapturedOperation(t *testing.T) {
 			running.stop()
 			mu.Lock()
 			blocked = false
+			if reused {
+				cloud.mu.Lock()
+				for _, in := range cloud.sql {
+					in["createTime"] = "2026-10-21T01:00:00Z"
+				}
+				cloud.mu.Unlock()
+			}
 			mu.Unlock()
 			running = start(t, cfg)
 			c.base = running.srv.URL
@@ -199,8 +211,24 @@ func TestCloudSQLAPIRetryAfterRestartKeepsCapturedOperation(t *testing.T) {
 				}
 				return
 			}
+			if reused {
+				if d.Status != "failed" || !strings.Contains(d.Error, "incarnation") {
+					t.Fatalf("reused name resumed saved operation: %+v", d)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if writes["instance"] != 1 || writes["user"] != 0 || (wantedStage == "instance" && writes["database"] != 0) || (wantedStage == "database" && writes["database"] != 1) {
+					t.Fatalf("reused name received mutations after restart: %v", writes)
+				}
+				return
+			}
 			if d.Status != "succeeded" {
 				t.Fatalf("saved operation did not resume: %+v", d)
+			}
+			var archivedPin, archivedBodyPin string
+			var hasURL bool
+			if err = db.QueryRow(t.Context(), "SELECT physical_id,source->>'physical_id',source ? 'url' FROM loomplane_native_sources WHERE project_id=$1 AND provider='cloud-sql'", created.ProjectID).Scan(&archivedPin, &archivedBodyPin, &hasURL); err != nil || archivedPin != checkpoint.ResourceID || archivedBodyPin != checkpoint.ResourceID || hasURL {
+				t.Fatalf("native source archive lost scoped creation identity: pin=%q body=%q url=%v err=%v", archivedPin, archivedBodyPin, hasURL, err)
 			}
 			if stage == "remove" {
 				var after struct {
@@ -209,6 +237,17 @@ func TestCloudSQLAPIRetryAfterRestartKeepsCapturedOperation(t *testing.T) {
 				c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+created.ProjectID+"/bindings?environment=production", nil, &after)
 				if len(after.Bindings) != 0 {
 					t.Fatal("completed protected removal retained a live binding")
+				}
+			}
+			if stage != "remove" {
+				var bound struct {
+					Bindings []struct {
+						PhysicalID string `json:"physical_id"`
+					} `json:"bindings"`
+				}
+				c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+created.ProjectID+"/bindings?environment=production", nil, &bound)
+				if len(bound.Bindings) != 1 || bound.Bindings[0].PhysicalID != checkpoint.ResourceID {
+					t.Fatal("binding lost checkpointed creation identity")
 				}
 			}
 			mu.Lock()

@@ -245,6 +245,7 @@ func (f *fakeCloud) cloudSQL(r *http.Request, p string, body []byte, reply func(
 		region, _ := in["region"].(string)
 		f.sql[name] = map[string]any{
 			"name": name, "connectionName": "acme-prod:" + region + ":" + name,
+			"project": "acme-prod", "region": region, "createTime": "2026-10-21T00:00:00Z",
 			"databaseVersion": in["databaseVersion"], "state": "RUNNABLE",
 			"settings": in["settings"],
 		}
