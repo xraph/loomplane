@@ -57,6 +57,8 @@ const env = {
   external_routing: false,
 }
 const preview = {
+  project_id: "p",
+  org_id: "org",
   id: "preview",
   revision: "digest",
   input: { cloud_id: "cloud", revision: 1 },
@@ -65,7 +67,13 @@ const preview = {
   environments: [env],
   blockers: [],
 }
-function fixture(options: { failure?: string; noClouds?: boolean } = {}) {
+function fixture(
+  options: {
+    failure?: string
+    noClouds?: boolean
+    noEnvironments?: boolean
+  } = {}
+) {
   const writes: { url: string; body: Record<string, unknown> }[] = []
   const reads: string[] = []
   let profiles = options.noClouds ? [] : [profile]
@@ -79,6 +87,11 @@ function fixture(options: { failure?: string; noClouds?: boolean } = {}) {
       if (method !== "GET") {
         const payload = JSON.parse(String(init?.body ?? "{}"))
         writes.push({ url, body: payload })
+        if (method === "DELETE" && options.failure === "delete")
+          return Response.json(
+            { message: "This cloud or target is assigned to an environment." },
+            { status: 409 }
+          )
         if (path.endsWith("/clouds")) {
           profiles = [{ ...profile, name: payload.name }]
           return Response.json(profiles[0], { status: 201 })
@@ -88,7 +101,11 @@ function fixture(options: { failure?: string; noClouds?: boolean } = {}) {
           return Response.json({ message: options.failure }, { status: 409 })
         return Response.json({ id: "sync", status: "pending" })
       }
-      if (options.failure === "list" && path.endsWith("/clouds"))
+      if (
+        options.failure === "list" &&
+        path.includes("/projects/p/") &&
+        path.endsWith("/clouds")
+      )
         return Response.json({ message: "Cloud read failed" }, { status: 503 })
       let body: unknown = {}
       if (path.endsWith("/projects"))
@@ -98,12 +115,23 @@ function fixture(options: { failure?: string; noClouds?: boolean } = {}) {
             { id: "other", name: "Other project" },
           ],
         }
+      if (
+        options.failure === "environments" &&
+        path.includes("/projects/p/environments")
+      )
+        return Response.json(
+          { message: "Environment read failed" },
+          { status: 503 }
+        )
       if (path.endsWith("/environments"))
         body = {
-          environments: [
-            { id: "prod", name: "production" },
-            { id: "stage", name: "staging" },
-          ],
+          environments:
+            options.noEnvironments && path.includes("/projects/p/")
+              ? []
+              : [
+                  { id: "prod", name: "production" },
+                  { id: "stage", name: "staging" },
+                ],
         }
       if (path.endsWith("/clouds")) body = { clouds: profiles }
       if (path.endsWith("/cloud")) body = { assignment: null, revision: 0 }
@@ -448,5 +476,159 @@ it("requires routing evidence and sends it for the selected environment", async 
     expect(writes).toEqual([
       { environment_id: "prod", evidence: "DNS checked" },
     ])
+  )
+})
+
+it.each(["empty", "environments", "list"])(
+  "keeps project selection available when selected scope is %s",
+  async (state) => {
+    const user = userEvent.setup()
+    const { reads } = fixture({
+      noEnvironments: state === "empty",
+      failure: state === "empty" ? undefined : state,
+    })
+    show(<Clouds />)
+    if (state === "empty") await screen.findByText("No environments yet")
+    else if (state === "environments")
+      await screen.findByText("Environment read failed.")
+    else await screen.findByText("Cloud read failed.")
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Project" }),
+      "other"
+    )
+    await waitFor(() =>
+      expect(
+        reads.some((url) => url.includes("/projects/other/environments"))
+      ).toBe(true)
+    )
+    expect(
+      screen.getByRole("combobox", { name: "Project" })
+    ).toHaveDisplayValue("Other project")
+    await screen.findByText("Frontend")
+  }
+)
+
+it("keeps blocked previews distinct from environments without deployed services", async () => {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+    String(input).endsWith("/clouds")
+      ? Response.json({ clouds: [] })
+      : String(input).endsWith("/connections")
+        ? Response.json({ connections: [] })
+        : Response.json({
+            ...preview,
+            blockers: ["The proposed Cloud is missing target frontend."],
+            environments: [
+              { ...env, services: [], error: "", status: "blocked" },
+            ],
+          })
+  )
+  show(
+    <ChangeReview
+      projectId="p"
+      title="Review assignment"
+      assignment={{ environmentId: "prod", cloudId: "empty", revision: 1 }}
+      onClose={() => undefined}
+      onApplied={() => undefined}
+    />
+  )
+  await screen.findByText("The proposed Cloud is missing target frontend.")
+  expect(screen.getByRole("button", { name: "Switch and sync" })).toBeDisabled()
+  expect(screen.queryByText("No deployed services")).not.toBeInTheDocument()
+  expect(
+    screen.getByText(
+      "Service details are unavailable while this preview is blocked."
+    )
+  ).toBeInTheDocument()
+})
+
+it.each([false, true])(
+  "shows revision-bound Cloud assignment account changes, removal=%s",
+  async (remove) => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith("/connections"))
+        return Response.json({
+          connections: [
+            { id: "a", name: "Old account" },
+            { id: "b", name: "New account" },
+          ],
+        })
+      if (url.endsWith("/clouds"))
+        return Response.json({
+          clouds: [
+            { id: "old", name: "Old Cloud" },
+            { id: "new", name: "New Cloud" },
+          ],
+        })
+      return Response.json({
+        ...preview,
+        before: undefined,
+        after: undefined,
+        input: { cloud_id: remove ? "" : "new", revision: 1 },
+        before_assignment: {
+          cloud_id: "old",
+          cloud_revision: 2,
+          targets: [{ ...target, connection_id: "a" }],
+        },
+        ...(remove
+          ? {}
+          : {
+              after_assignment: {
+                cloud_id: "new",
+                cloud_revision: 3,
+                targets: [
+                  { ...target, connection_id: "b", provider: "cloud-run" },
+                ],
+              },
+            }),
+      })
+    })
+    show(
+      <ChangeReview
+        projectId="p"
+        title="Review assignment"
+        assignment={{
+          environmentId: "prod",
+          cloudId: remove ? "" : "new",
+          revision: 1,
+        }}
+        onClose={() => undefined}
+        onApplied={() => undefined}
+      />
+    )
+    await screen.findByText("Current Cloud: Old Cloud (revision 2)")
+    expect(
+      screen.getByText("Current: vercel / Old account")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        remove
+          ? "Desired Cloud: Direct placement"
+          : "Desired Cloud: New Cloud (revision 3)"
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        remove
+          ? "Desired: Target removed from this environment"
+          : "Desired: cloud-run / New account"
+      )
+    ).toBeInTheDocument()
+  }
+)
+
+it("explains retained preview protection when deleting an unassigned Cloud", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture({ failure: "delete" })
+  show(<Clouds />)
+  await user.click(await screen.findByRole("button", { name: "Manage Cloud" }))
+  await user.click(screen.getByRole("button", { name: "Delete Cloud" }))
+  await user.click(screen.getByRole("button", { name: "Confirm delete Cloud" }))
+  await screen.findByText(
+    "This Cloud is protected while environments, deployments, syncs or recent previews reference it. Preview references expire after 24 hours."
+  )
+  expect(writes[0].url).toBe("/api/v1/projects/p/clouds/cloud")
+  expect(screen.getByRole("textbox", { name: "Cloud name" })).toHaveValue(
+    "Production"
   )
 })

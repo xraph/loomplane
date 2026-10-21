@@ -27,6 +27,7 @@ import {
   ZeroStateHeader,
   ZeroStateTitle,
 } from "@/components/zero-state"
+import { cloudDeletionError } from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
 import { TargetEditor } from "./target-editor"
 import { ChangeReview } from "./change-review"
@@ -72,49 +73,60 @@ export function CloudWorkspace({
   const environment =
     environments.data?.environments.find((e) => e.id === chosen) ??
     environments.data?.environments[0]
-  return environments.status === "error" ? (
-    <QueryError
-      error={environments.error}
-      fallback="Environments couldn't be loaded."
-      retry={environments.refetch}
-    />
-  ) : !environments.data ? (
-    <Skeleton className="h-32" />
-  ) : !environment ? (
-    <EmptyClouds
-      title="No environments yet"
-      description="Add an environment in your project before assigning a Cloud."
-    />
-  ) : (
-    <EnvironmentWorkspace
-      key={environment.id}
-      projectId={projectId}
-      environment={environment}
-      environments={environments.data.environments}
-      scopeControls={
-        <>
+  const content =
+    environments.status === "error" ? (
+      <QueryError
+        error={environments.error}
+        fallback="Environments couldn't be loaded."
+        retry={environments.refetch}
+      />
+    ) : !environments.data ? (
+      <Skeleton className="h-32" />
+    ) : !environment ? (
+      <EmptyClouds
+        title="No environments yet"
+        description="Add an environment in your project before assigning a Cloud."
+      />
+    ) : (
+      <EnvironmentWorkspace
+        key={environment.id}
+        projectId={projectId}
+        environment={environment}
+        environments={environments.data.environments}
+        scopeControls={
+          <>
+            {projectControl}
+            <label className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
+              Environment
+              <select
+                className={selectClass}
+                aria-label="Environment"
+                value={environment.id}
+                onChange={(e) => {
+                  setChosen(e.target.value)
+                  window.localStorage.setItem(preference, e.target.value)
+                }}
+              >
+                {environments.data.environments.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
+        }
+      />
+    )
+  return (
+    <>
+      {(environments.status === "error" || !environment) && (
+        <section className="flex flex-wrap items-end gap-2">
           {projectControl}
-          <label className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
-            Environment
-            <select
-              className={selectClass}
-              aria-label="Environment"
-              value={environment.id}
-              onChange={(e) => {
-                setChosen(e.target.value)
-                window.localStorage.setItem(preference, e.target.value)
-              }}
-            >
-              {environments.data.environments.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </>
-      }
-    />
+        </section>
+      )}
+      {content}
+    </>
   )
 }
 function EnvironmentWorkspace({
@@ -162,6 +174,14 @@ function EnvironmentWorkspace({
   }, [refetchProfiles, refetchAssignment])
   return (
     <>
+      {(profiles.status === "error" ||
+        assignment.status === "error" ||
+        !profiles.data ||
+        !assignment.data) && (
+        <section className="flex flex-wrap items-end gap-2">
+          {scopeControls}
+        </section>
+      )}
       {profiles.status === "error" || assignment.status === "error" ? (
         <QueryError
           error={profiles.error ?? assignment.error}
@@ -355,12 +375,7 @@ function CloudForm({
       })
       onSaved("")
     } catch (err) {
-      setError(
-        messageOf(
-          err,
-          "The Cloud couldn't be deleted. Remove its references first."
-        )
-      )
+      setError(cloudDeletionError(err, "Cloud"))
     }
   }
   return (

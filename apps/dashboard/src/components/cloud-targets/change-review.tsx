@@ -200,12 +200,10 @@ function ReviewContent({
                 {preview.after.region ? ` / ${preview.after.region}` : ""}
               </p>
             )}
-            {assignment && (
-              <p>
-                {assignment.cloudId
-                  ? "Assign the selected Cloud"
-                  : "Remove this environment's Cloud assignment"}
-              </p>
+            {(assignment ||
+              preview.beforeAssignment ||
+              preview.afterAssignment) && (
+              <AssignmentPreview preview={preview} accountName={accountName} />
             )}
             {(preview.blockers ?? []).map((blocker, i) => (
               <p role="alert" key={i} className="text-destructive">
@@ -218,13 +216,18 @@ function ReviewContent({
                   {env.environment}: {env.status}
                 </p>
                 <p className="text-muted-foreground">
-                  {env.services?.join(", ") || "No deployed services"}
+                  {env.services?.join(", ") ||
+                    (preview.blockers?.length || env.error
+                      ? "Service details are unavailable while this preview is blocked."
+                      : "No deployed services")}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  {env.summary.replace} replacements · {env.summary.update}{" "}
-                  updates · {env.summary.adopt} adoptions · {env.summary.keep}{" "}
-                  unchanged
-                </p>
+                {!preview.blockers?.length && !env.error && (
+                  <p className="text-xs text-muted-foreground">
+                    {env.summary.replace} replacements · {env.summary.update}{" "}
+                    updates · {env.summary.adopt} adoptions · {env.summary.keep}{" "}
+                    unchanged
+                  </p>
+                )}
                 {env.externalRouting && (
                   <p className="text-weld-ink text-xs">
                     External routing must be confirmed before cleanup.
@@ -239,8 +242,9 @@ function ReviewContent({
             ))}
             {!preview.environments?.length && (
               <p className="text-muted-foreground">
-                No running services need a deployment. Save this placement for
-                the next release.
+                {preview.blockers?.length
+                  ? "Resolve the blockers above before reviewing deployment work."
+                  : "No running services need a deployment. Save this placement for the next release."}
               </p>
             )}
           </div>
@@ -285,5 +289,68 @@ function ReviewContent({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function AssignmentPreview({
+  preview,
+  accountName,
+}: {
+  preview: Preview
+  accountName: (id: string) => string
+}) {
+  const clouds = useQuery(api.useCloudsList, {
+    path: { id: preview.projectId },
+  })
+  const name = (id: string) =>
+    clouds.data?.clouds?.find((cloud) => cloud?.id === id)?.name ?? id
+  const before = preview.beforeAssignment
+  const after = preview.afterAssignment
+  const targetNames = [
+    ...new Set([
+      ...(before?.targets ?? []).map((t) => t.name),
+      ...(after?.targets ?? []).map((t) => t.name),
+    ]),
+  ]
+  return (
+    <section className="grid gap-2" aria-label="Assignment placement changes">
+      <p className="break-words">
+        Current Cloud:{" "}
+        {before
+          ? `${name(before.cloudId)} (revision ${before.cloudRevision})`
+          : "Direct placement"}
+      </p>
+      <p className="break-words">
+        Desired Cloud:{" "}
+        {after
+          ? `${name(after.cloudId)} (revision ${after.cloudRevision})`
+          : preview.input.cloudId
+            ? name(preview.input.cloudId)
+            : "Direct placement"}
+      </p>
+      {targetNames.map((slug) => {
+        const current = before?.targets.find((target) => target.name === slug)
+        const desired = after?.targets.find((target) => target.name === slug)
+        return (
+          <div key={slug} className="grid gap-1 rounded-lg border p-2 text-xs">
+            <p className="font-medium">{slug}</p>
+            <p className="break-words">
+              Current:{" "}
+              {current
+                ? `${current.provider} / ${accountName(current.connectionId)}${current.region ? ` / ${current.region}` : ""}`
+                : "Not assigned"}
+            </p>
+            <p className="break-words">
+              Desired:{" "}
+              {desired
+                ? `${desired.provider} / ${accountName(desired.connectionId)}${desired.region ? ` / ${desired.region}` : ""}`
+                : !after && preview.input.cloudId
+                  ? "Unavailable until blockers are resolved"
+                  : "Target removed from this environment"}
+            </p>
+          </div>
+        )
+      })}
+    </section>
   )
 }

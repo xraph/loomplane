@@ -89,3 +89,58 @@ it("preserves placement in saved overrides before an environment is registered",
   ).toMatchObject({ provider: "vercel", region: "iad1" })
   expect(result.services!.web.environments.future.port).toBe(9000)
 })
+
+it("retains inherited endpoints when another environment adopts a target", () => {
+  const manifest: Manifest = {
+    version: 1,
+    services: {
+      web: {
+        source: "web",
+        provider: "server",
+        target: "conn",
+        endpoint: {
+          hostname: "staging.example",
+          host_port: 8080,
+          ingress_class: "nginx",
+          tls_secret: "web-tls",
+        },
+      },
+    },
+  }
+  const result = adoptServiceTarget(
+    manifest,
+    [{ name: "production" }, { name: "staging" }] as Environment[],
+    "production",
+    "web",
+    "frontend"
+  )
+  expect(result.services!.web.environments.staging.endpoint).toEqual({
+    hostname: "staging.example",
+    host_port: 8080,
+    ingress_class: "nginx",
+    tls_secret: "web-tls",
+  })
+  expect(
+    placementSettings(
+      result,
+      {
+        section: "services",
+        name: "web",
+        kind: "",
+        entry: result.services!.web,
+      },
+      "staging"
+    ).endpoint
+  ).toEqual(
+    placementSettings(
+      manifest,
+      {
+        section: "services",
+        name: "web",
+        kind: "",
+        entry: manifest.services!.web,
+      },
+      "staging"
+    ).endpoint
+  )
+})

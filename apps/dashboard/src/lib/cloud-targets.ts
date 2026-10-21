@@ -1,3 +1,4 @@
+import { messageOf, statusOf } from "@/client/errors"
 import type {
   Environment,
   Manifest,
@@ -71,6 +72,25 @@ export function adoptServiceTarget(
       if (settings.provider) override.provider = settings.provider
       if (settings.target) override.target = settings.target
       if (settings.region) override.region = settings.region
+      // Changing the base provider/target makes Service.For clear its inherited
+      // endpoint. Pin the old effective endpoint explicitly in each other scope.
+      if (settings.endpoint) {
+        const endpoint = settings.endpoint
+        override.endpoint = {
+          ...(endpoint.hostname !== undefined
+            ? { hostname: endpoint.hostname }
+            : {}),
+          ...(endpoint.hostPort !== undefined
+            ? { host_port: endpoint.hostPort }
+            : {}),
+          ...(endpoint.ingressClass !== undefined
+            ? { ingress_class: endpoint.ingressClass }
+            : {}),
+          ...(endpoint.tlsSecret !== undefined
+            ? { tls_secret: endpoint.tlsSecret }
+            : {}),
+        }
+      }
       if (settings.cloudTarget) override.cloud_target = settings.cloudTarget
     }
     entry.environments[name] = override
@@ -80,4 +100,16 @@ export function adoptServiceTarget(
   delete entry.cloud_target
   delete entry.cloudTarget
   return next
+}
+
+export function cloudDeletionError(
+  error: unknown,
+  kind: "Cloud" | "target"
+): string {
+  return statusOf(error) === 409
+    ? `This ${kind} is protected while environments, deployments, syncs or recent previews reference it. Preview references expire after 24 hours.`
+    : messageOf(
+        error,
+        `The ${kind} couldn't be deleted. Remove its references first.`
+      )
 }

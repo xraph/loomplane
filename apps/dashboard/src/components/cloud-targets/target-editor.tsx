@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { cloudDeletionError } from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
 import { ChangeReview } from "./change-review"
 import { selectClass } from "./workspace"
@@ -98,12 +99,7 @@ export function TargetEditor({
       })
       onSaved()
     } catch (err) {
-      setError(
-        messageOf(
-          err,
-          "The target couldn't be deleted. Remove its references first."
-        )
-      )
+      setError(cloudDeletionError(err, "target"))
     }
   }
   return (
