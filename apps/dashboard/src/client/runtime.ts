@@ -22,6 +22,7 @@ import {
   type RequestConfig,
 } from "./forge/authsome/fetch"
 import { entities as loomplaneEntities } from "./forge/loomplane/entities"
+import { op_retentionPolicies_set } from "./forge/loomplane/ops/retentionPolicies.set"
 import { HTTPClient as LoomplaneHTTPClient } from "./forge/loomplane/fetch"
 
 const REQUEST_TIMEOUT_MS = 30_000
@@ -145,9 +146,24 @@ const auth: AuthProvider = {
   refresh: renewSession,
 }
 
+const transport = new RestTransport({ client: restClient, auth })
+// An uncertain revision-guarded save needs inspection before another send.
+const policyTransport = new RestTransport({
+  client: restClient,
+  auth,
+  retry: { attempts: 1 },
+})
+
 /** The dashboard's one normalized cache over both services. */
 export const forgeClient = configureClient({
-  transport: new RestTransport({ client: restClient, auth }),
+  transport: {
+    execute(request) {
+      const policySave =
+        request.meta.method === op_retentionPolicies_set.method &&
+        request.meta.path === op_retentionPolicies_set.path
+      return (policySave ? policyTransport : transport).execute(request)
+    },
+  },
   entities: {
     ...authsomeEntities,
     ...loomplaneEntities,

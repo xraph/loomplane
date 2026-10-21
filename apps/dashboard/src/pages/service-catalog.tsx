@@ -403,7 +403,7 @@ function ServiceRecovery({ project }: { project: string }) {
     (p) => p.environment === environment && p.resource === selected
   )
   const active =
-    points.some((b) => ["queued", "running"].includes(b.status)) ||
+    points.some((b) => ["queued", "running", "retiring"].includes(b.status)) ||
     copies.some((r) => ["queued", "running", "deleting"].includes(r.status))
   const { refetch: refreshBackups } = backups
   const { refetch: refreshRestores } = restores
@@ -556,7 +556,7 @@ function ServiceRecovery({ project }: { project: string }) {
             {policy?.enabled
               ? `Backups every ${policy.everyHours} hours. Next: ${formatDate(policy.nextAt)}.`
               : "Backups run when requested."}{" "}
-            Recovery points stay until an owner requests deletion.{" "}
+            Manage deletion separately in Review retention.{" "}
             {policy?.lastError && (
               <span className="text-destructive">{policy.lastError}</span>
             )}

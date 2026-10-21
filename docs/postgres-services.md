@@ -30,7 +30,7 @@ The pin describes the configured namespace, not a physical disk or cloud account
 
 ## Back up and test recovery
 
-In **Service recovery**, select your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. Recovery points stay until an owner requests deletion or enables a separate retention policy through the API or CLI.
+In **Service recovery**, select your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from one to 168 and save your schedule. **Enable backups** and **Pause backup schedule** preserve that interval. Recovery points stay until an owner requests deletion or enables a separate retention policy.
 
 The lists show recovery points and copies for the selected database and environment. If you remove the source service, its backup history and restore controls remain available. Backup creation and scheduling need a live source.
 
@@ -144,9 +144,15 @@ loomctl retirements retry RETIREMENT_ID --request-id retirement-retry-1 --yes --
 
 Reuse the key after a lost response. A new retry key authorizes up to three attempts from the lifetime count, with the current owner recorded separately from the original requester. History retains each committed transition and the previous failure.
 
-The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. The dashboard retry and deletion flow has also been checked against native PostgreSQL backups with local Trove storage at desktop and phone widths. The same local profile also passed automatic retention through API and CLI: two scheduled native dump deletions, pause and a retained SQL restore. Dashboard policy controls still need qualification. Kubernetes retirement and other engine/storage combinations need their own live qualification.
+The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. The dashboard retry and deletion flow has also been checked against native PostgreSQL backups with local Trove storage at desktop and phone widths. The same local profile also passed automatic retention through API and CLI: two scheduled native dump deletions, pause and a retained SQL restore. Dashboard enable, rule changes, revision history and pause were checked on that profile at desktop and phone widths, including deletion through the real scheduler. Kubernetes retirement and other engine/storage combinations need their own live qualification.
 
 ## Automatic retention policies
+
+Open **Review retention**, choose the history and update its age/count preview. An owner can select **Enable automatic deletion** and confirm the displayed rule. When deletion is already enabled, **Update automatic policy** saves the reviewed settings after confirmation. You need a complete history, supported captured storage and a restore-tested recovery point before enabling it.
+
+The summary shows the saved rule and revision. **Policy changes** lists each saved revision, its authorizing owner and date, with controls for older changes. **Last deletion** opens the existing deletion details. These reads keep refreshing while the review is open, including when the general live connection is healthy.
+
+Select **Pause automatic deletion** to stop future selections while preserving the rule. You can pause even when storage is unavailable. If the policy changes while you confirm, close the dialog and review it again. If a save fails or its response is uncertain, select **Inspect current policy** before making another change.
 
 Inspect the policy for any backup in the database's history, then enable it with an owner key:
 

@@ -5,6 +5,7 @@ import {
   useServiceRetirementsCreate,
 } from "@/client/forge/loomplane/hooks"
 import type { Backup } from "@/client/forge/loomplane/types"
+import { useRecoveryPolling } from "@/lib/recovery-polling"
 import { useOrganization } from "@/lib/organization"
 import { formatDate } from "@/lib/format"
 import { Button } from "@/components/ui/button"
@@ -44,6 +45,7 @@ import {
 } from "@/components/ui/table"
 import { QueryError } from "@/components/query-error"
 import { RetirementDetails } from "./details"
+import { RetentionPolicyControls } from "./policy"
 import {
   RetirementEmpty,
   retentionDecision,
@@ -108,10 +110,15 @@ function RetentionReview({
   const [confirming, setConfirming] = useState<string | null>(null)
   const create = useMutation(useServiceRetirementsCreate)
   const request = useDeletionRequest(project, onChanged)
-  const preview = useQuery(useServiceBackupsPreviewRetention, {
-    path: { id: anchor },
-    query: { older_than_days: settings.days, keep_last: settings.keep },
-  })
+  const preview = useQuery(
+    useServiceBackupsPreviewRetention,
+    {
+      path: { id: anchor },
+      query: { older_than_days: settings.days, keep_last: settings.keep },
+    },
+    { staleTime: 0 }
+  )
+  useRecoveryPolling(false, preview.refetch)
   const valid =
     Number.isInteger(Number(days)) &&
     Number(days) >= 1 &&
@@ -121,6 +128,19 @@ function RetentionReview({
     Number(keep) <= 1000
   const stale = Number(days) !== settings.days || Number(keep) !== settings.keep
   const owner = can("service_backup:retire")
+  const enableBlocked =
+    !valid || stale
+      ? "Update the preview before enabling automatic deletion with these settings."
+      : preview.status !== "success" || preview.isFetching
+        ? "Load a fresh retention preview before enabling automatic deletion."
+        : !preview.data?.complete
+          ? "The history is incomplete. Automatic deletion cannot be enabled."
+          : !preview.data.points.find((point) => point.backupId === anchor)
+                ?.deletionSupported
+            ? "The captured storage cannot safely delete this history's backup files."
+            : !preview.data.verifiedBackupId
+              ? "Test a restore from this history before enabling automatic deletion."
+              : null
   const currentPage = Math.min(
     page,
     Math.max(0, Math.ceil((preview.data?.points.length ?? 0) / 50) - 1)
@@ -236,6 +256,15 @@ function RetentionReview({
             Update preview
           </Button>
         </form>
+        <RetentionPolicyControls
+          key={anchor}
+          project={project}
+          anchor={anchor}
+          settings={{ olderThanDays: settings.days, keepLast: settings.keep }}
+          enableBlocked={enableBlocked}
+          onChanged={onChanged}
+          onOpenRetirement={onAccepted}
+        />
         {stale && (
           <p role="status" className="text-sm text-muted-foreground">
             Update the preview before deleting with these settings.

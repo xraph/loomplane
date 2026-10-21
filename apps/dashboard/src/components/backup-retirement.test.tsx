@@ -44,6 +44,7 @@ function fixture({
   supported = true,
   complete = true,
   loseResponse = false,
+  omitListedWitness = false,
 } = {}) {
   const writes: { url: string; body: Record<string, unknown> }[] = []
   let accepted = false
@@ -71,6 +72,7 @@ function fixture({
         body = {
           complete,
           as_of: "2026-10-20T12:00:00Z",
+          verified_backup_id: "tested-point",
           eligible_count: 1,
           eligible_bytes: 4096,
           points: [
@@ -93,6 +95,7 @@ function fixture({
             },
           ],
         }
+      if (url.endsWith("/retention-policy")) body = { configured: false }
       if (init?.method === "POST") {
         const payload = JSON.parse(String(init.body))
         writes.push({ url, body: payload })
@@ -137,13 +140,24 @@ function fixture({
     <ClientProvider client={forgeClient}>
       <BackupRetentionReview
         project="project"
-        points={points}
+        points={omitListedWitness ? [points[0]] : points}
         onChanged={async () => undefined}
       />
     </ClientProvider>
   )
   return writes
 }
+
+it("uses full-preview restore evidence outside the capped project list", async () => {
+  fixture({ omitListedWitness: true })
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review retention" })
+  )
+  const enable = await screen.findByRole("button", {
+    name: "Enable automatic deletion",
+  })
+  await waitFor(() => expect(enable).toBeEnabled())
+})
 
 it("reviews the captured storage capability and confirms only one eligible deletion", async () => {
   const writes = fixture()
