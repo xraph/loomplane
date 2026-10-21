@@ -1883,6 +1883,102 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly serviceRetirements = {
+    /**
+     */
+    create: async (id: string, body: types.RetirementInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Retirement> => {
+      let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retire`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RetirementInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Retirement"],
+      };
+
+      return this.request<types.Retirement>(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Retirement> => {
+      let __path = `/api/v1/service-backup-retirements/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Retirement"],
+      };
+
+      return this.request<types.Retirement>(config);
+    },
+
+    /**
+     */
+    history: async (id: string, before?: string, limit?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementHistory> => {
+      let __path = `/api/v1/service-backup-retirements/${encodeURIComponent(String(id))}/history`;
+      const queryParams: Record<string, any> = {};
+      queryParams['before'] = before;
+      queryParams['limit'] = limit;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetirementHistory"],
+      };
+
+      return this.request<types.RetirementHistory>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, before?: string, limit?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementPage> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/service-backup-retirements`;
+      const queryParams: Record<string, any> = {};
+      queryParams['before'] = before;
+      queryParams['limit'] = limit;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetirementPage"],
+      };
+
+      return this.request<types.RetirementPage>(config);
+    },
+
+    /**
+     */
+    retry: async (id: string, body: types.RetirementRetryInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Retirement> => {
+      let __path = `/api/v1/service-backup-retirements/${encodeURIComponent(String(id))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RetirementRetryInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Retirement"],
+      };
+
+      return this.request<types.Retirement>(config);
+    },
+
+  };
+
   public readonly session = {
     /**
      * The signed-in user, their active organization and their permissions in it

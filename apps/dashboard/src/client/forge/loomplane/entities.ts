@@ -46,6 +46,8 @@ export const entities = {
   'ResolvedVariable': { fields: { 'overrides': 'Variable', 'variable': 'Variable' } },
   'Restore': { idField: 'id' },
   'RestoreList': { fields: { 'restores': 'Restore' } },
+  'Retirement': { idField: 'id' },
+  'RetirementPage': { fields: { 'retirements': 'Retirement' } },
   'Revision': { idField: 'id' },
   'RevisionList': { fields: { 'revisions': 'Revision' } },
   'Source': { idField: 'id' },

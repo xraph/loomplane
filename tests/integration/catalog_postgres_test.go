@@ -254,6 +254,18 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 		t.Fatal("schedule remained enabled")
 	}
 
+	var retirementCandidate string
+	for _, point := range scheduled.Backups {
+		if point.ID != backup.ID && point.Status == "succeeded" {
+			retirementCandidate = point.ID
+			break
+		}
+	}
+	if retirementCandidate == "" {
+		t.Fatal("no scheduled native dump available for retirement")
+	}
+	catalogRetirement(t, c, running, db, project.ID, retirementCandidate, backup.ID, socket)
+
 	outsider := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
 	var auth struct {
 		SessionToken string `json:"session_token"`

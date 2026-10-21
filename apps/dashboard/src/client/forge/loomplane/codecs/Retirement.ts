@@ -1,0 +1,4 @@
+import type { Codec } from '../codec-runtime';
+import { codec_RetentionInput } from './RetentionInput';
+
+export const codec_Retirement: Codec = {"kind": "object", "fields": {"attempt": {"ts": "attempt"}, "attempt_limit": {"ts": "attemptLimit"}, "backup_id": {"ts": "backupId"}, "completed_at": {"ts": "completedAt"}, "created_at": {"ts": "createdAt"}, "created_by": {"ts": "createdBy"}, "error": {"ts": "error"}, "execution_by": {"ts": "executionBy"}, "id": {"ts": "id"}, "org_id": {"ts": "orgId"}, "policy": {"ts": "policy", "codec": () => codec_RetentionInput}, "project_id": {"ts": "projectId"}, "status": {"ts": "status"}, "witness_id": {"ts": "witnessId"}}, "required": ["attempt", "attempt_limit", "backup_id", "created_at", "created_by", "execution_by", "id", "org_id", "policy", "project_id", "status", "witness_id"]};

@@ -1085,6 +1085,11 @@ export interface RestoreList {
   restores: Restore[];
 }
 
+export interface RetentionInput {
+  keepLast: number;
+  olderThanDays: number;
+}
+
 export interface RetentionPoint {
   backupId: string;
   bytes: number;
@@ -1098,6 +1103,58 @@ export interface RetentionPreview {
   eligibleBytes: number;
   eligibleCount: number;
   points: RetentionPoint[];
+}
+
+export interface Retirement {
+  attempt: number;
+  attemptLimit: number;
+  backupId: string;
+  completedAt?: string;
+  createdAt: string;
+  createdBy: string;
+  error?: string;
+  executionBy: string;
+  id: string;
+  orgId: string;
+  policy: RetentionInput;
+  projectId: string;
+  status: string;
+  witnessId: string;
+}
+
+export interface RetirementEvent {
+  actor: string;
+  attempt: number;
+  attemptLimit: number;
+  createdAt: string;
+  cursor: string;
+  error?: string;
+  kind: string;
+  previousActor?: string;
+  previousError?: string;
+  status: string;
+}
+
+export interface RetirementHistory {
+  events: RetirementEvent[];
+  nextBefore?: string;
+}
+
+export interface RetirementInputBody {
+  policy: {
+  keepLast: number;
+  olderThanDays: number;
+};
+  requestId: string;
+}
+
+export interface RetirementPage {
+  nextBefore?: string;
+  retirements: Retirement[];
+}
+
+export interface RetirementRetryInputBody {
+  requestId: string;
 }
 
 export interface Revision {

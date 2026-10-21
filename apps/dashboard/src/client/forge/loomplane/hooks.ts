@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPreview, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -97,6 +97,7 @@ export const useManifestsEdit = mutation<Revision, Revision>(ops['manifests.edit
 export const useManifestsHistory = query<RevisionList>(ops['manifests.history']);
 export const usePlansList = query<PlanList>(ops['plans.list']);
 export const usePlansCreate = mutation<Plan, Plan>(ops['plans.create']);
+export const useServiceRetirementsList = query<RetirementPage>(ops['serviceRetirements.list']);
 export const useServiceBackupsList = query<BackupList>(ops['serviceBackups.list']);
 export const useServiceBackupsCreate = mutation<Backup, Backup>(ops['serviceBackups.create']);
 export const useServiceRestoresList = query<RestoreList>(ops['serviceRestores.list']);
@@ -112,9 +113,13 @@ export const usePublicConfigGet = query<PublicConfig>(ops['publicConfig.get']);
 export const useRealtimeEvents = query(ops['realtime.events']);
 export const useRealtimeSnapshot = query<Snapshot>(ops['realtime.snapshot']);
 export const useRealtimeWs = query(ops['realtime.ws']);
+export const useServiceRetirementsGet = query<Retirement>(ops['serviceRetirements.get']);
+export const useServiceRetirementsHistory = query<RetirementHistory>(ops['serviceRetirements.history']);
+export const useServiceRetirementsRetry = mutation<Retirement, Retirement>(ops['serviceRetirements.retry']);
 export const useServiceBackupsGet = query<Backup>(ops['serviceBackups.get']);
 export const useServiceRestoresCreate = mutation<Restore, Restore>(ops['serviceRestores.create']);
 export const useServiceBackupsPreviewRetention = query<RetentionPreview>(ops['serviceBackups.previewRetention']);
+export const useServiceRetirementsCreate = mutation<Retirement, Retirement>(ops['serviceRetirements.create']);
 export const useServiceBackupsRetry = mutation<Backup, Backup>(ops['serviceBackups.retry']);
 export const useServiceRestoresGet = query<Restore>(ops['serviceRestores.get']);
 export const useServiceRestoresDelete = mutation(ops['serviceRestores.delete']);

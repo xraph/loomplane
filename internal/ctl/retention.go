@@ -13,23 +13,15 @@ func (a *App) previewBackupRetention(ctx cli.CommandContext) error {
 	if ctx.Arg(0) == "" {
 		return errors.New("give a backup ID from the database whose history you want to preview")
 	}
-	days, err := strconv.Atoi(ctx.String("older-than-days"))
+	input, err := retentionSettings(ctx)
 	if err != nil {
-		return errors.New("older-than-days must be an integer")
-	}
-	keep, err := strconv.Atoi(ctx.String("keep-last"))
-	if err != nil {
-		return errors.New("keep-last must be an integer")
-	}
-	input := recovery.RetentionInput{OlderThanDays: days, KeepLast: keep}
-	if checkErr := input.Validate(); checkErr != nil {
-		return checkErr
+		return err
 	}
 	c, err := a.client()
 	if err != nil {
 		return err
 	}
-	preview, err := c.BackupRetentionPreview(ctxOf(ctx), ctx.Arg(0), days, keep)
+	preview, err := c.BackupRetentionPreview(ctxOf(ctx), ctx.Arg(0), input.OlderThanDays, input.KeepLast)
 	if err != nil {
 		return err
 	}
@@ -47,4 +39,21 @@ func (a *App) previewBackupRetention(ctx cli.CommandContext) error {
 	}
 	a.table([]string{"BACKUP", "BYTES", "RETENTION DECISION"}, rows)
 	return nil
+}
+
+func retentionSettingFlags() []cli.Flag {
+	return []cli.Flag{cli.NewStringFlag("older-than-days", "", "Only consider backups completed before this age in days", "30"), cli.NewStringFlag("keep-last", "", "Minimum number of newest successful points to retain", "7")}
+}
+
+func retentionSettings(ctx cli.CommandContext) (recovery.RetentionInput, error) {
+	days, err := strconv.Atoi(ctx.String("older-than-days"))
+	if err != nil {
+		return recovery.RetentionInput{}, errors.New("older-than-days must be an integer")
+	}
+	keep, err := strconv.Atoi(ctx.String("keep-last"))
+	if err != nil {
+		return recovery.RetentionInput{}, errors.New("keep-last must be an integer")
+	}
+	input := recovery.RetentionInput{OlderThanDays: days, KeepLast: keep}
+	return input, input.Validate()
 }

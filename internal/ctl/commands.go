@@ -22,6 +22,7 @@ func (a *App) commands() []cli.Command {
 		a.cloudSyncsCommand(),
 		a.backupCommand(),
 		a.restoreCommand(),
+		a.retirementsCommand(),
 		a.servicesCommand(),
 		a.storageCommand(),
 		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,

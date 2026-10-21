@@ -44,12 +44,9 @@ func (s *PgStore) RetirementHistory(ctx context.Context, org, id string, in Reti
 }
 
 func (in RetirementHistoryInput) bounds() (limit int, before int64, err error) {
-	limit = in.Limit
-	if limit == 0 {
-		limit = 50
-	}
-	if limit < 1 || limit > 100 {
-		return 0, 0, ErrInvalid
+	limit, err = retirementPageLimit(in.Limit)
+	if err != nil {
+		return 0, 0, err
 	}
 	if in.Before != "" {
 		before, err = strconv.ParseInt(in.Before, 10, 64)

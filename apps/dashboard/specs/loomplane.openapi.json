@@ -3035,6 +3035,53 @@
         }
       }
     },
+    "/api/v1/projects/{id}/service-backup-retirements": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceRetirements.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backup retirement records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetirementPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/service-backups": {
       "get": {
         "tags": [
@@ -3597,6 +3644,129 @@
         }
       }
     },
+    "/api/v1/service-backup-retirements/{id}": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceRetirements.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backup retirement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Retirement"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/service-backup-retirements/{id}/history": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "serviceRetirements.history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed retirement history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetirementHistory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/service-backup-retirements/{id}/retry": {
+      "post": {
+        "operationId": "serviceRetirements.retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetirementRetryInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Retried backup retirement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Retirement"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Service backups"
+        ],
+        "x-forge-invalidates": [
+          "Backup[]"
+        ]
+      }
+    },
     "/api/v1/service-backups/{id}": {
       "get": {
         "tags": [
@@ -3715,6 +3885,52 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/service-backups/{id}/retire": {
+      "post": {
+        "operationId": "serviceRetirements.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetirementInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued backup retirement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Retirement"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Service backups"
+        ],
+        "x-forge-invalidates": [
+          "Backup[]",
+          "Backup:{id}"
+        ]
       }
     },
     "/api/v1/service-backups/{id}/retry": {
@@ -7496,6 +7712,21 @@
         "type": "object",
         "x-forge-envelope": "restores"
       },
+      "RetentionInput": {
+        "type": "object",
+        "required": [
+          "older_than_days",
+          "keep_last"
+        ],
+        "properties": {
+          "keep_last": {
+            "type": "integer"
+          },
+          "older_than_days": {
+            "type": "integer"
+          }
+        }
+      },
       "RetentionPoint": {
         "type": "object",
         "required": [
@@ -7547,6 +7778,186 @@
             "items": {
               "$ref": "#/components/schemas/RetentionPoint"
             }
+          }
+        }
+      },
+      "Retirement": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "backup_id",
+          "witness_id",
+          "status",
+          "execution_by",
+          "attempt_limit",
+          "attempt",
+          "policy",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "attempt_limit": {
+            "type": "integer"
+          },
+          "backup_id": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "execution_by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RetentionInput"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "witness_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RetirementEvent": {
+        "type": "object",
+        "required": [
+          "cursor",
+          "kind",
+          "status",
+          "attempt",
+          "attempt_limit",
+          "actor",
+          "created_at"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "attempt_limit": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "previous_actor": {
+            "type": "string"
+          },
+          "previous_error": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RetirementHistory": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetirementEvent"
+            }
+          },
+          "next_before": {
+            "type": "string"
+          }
+        }
+      },
+      "RetirementInputBody": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "policy"
+        ],
+        "properties": {
+          "policy": {
+            "type": "object",
+            "required": [
+              "older_than_days",
+              "keep_last"
+            ],
+            "properties": {
+              "keep_last": {
+                "type": "integer"
+              },
+              "older_than_days": {
+                "type": "integer"
+              }
+            }
+          },
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RetirementPage": {
+        "type": "object",
+        "required": [
+          "retirements"
+        ],
+        "properties": {
+          "next_before": {
+            "type": "string"
+          },
+          "retirements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Retirement"
+            }
+          }
+        }
+      },
+      "RetirementRetryInputBody": {
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
           }
         }
       },

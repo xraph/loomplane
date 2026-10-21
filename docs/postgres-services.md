@@ -116,25 +116,55 @@ Use any recovery point from the database history you want to inspect. The previe
 
 This command only reads metadata. It does not delete files, save a policy or change your backup schedule. Incomplete inventories select nothing; the current preview covers up to 1,000 points from one physical database source. The result reports each decision and the bytes that meet the rule. Actual deletion still needs a qualified storage capability, current permission checks and protection against concurrent restores.
 
+## Retire an old backup
+
+Preview the selection, then ask an organization owner to retire an eligible point:
+
+```sh
+loomctl backups retention BACKUP_ID --older-than-days 30 --keep-last 7 --json
+loomctl backups retire BACKUP_ID --older-than-days 30 --keep-last 7 --request-id retirement-1 --yes --wait --json
+loomctl retirements PROJECT_ID --limit 50 --json
+loomctl retirements show RETIREMENT_ID --wait --json
+loomctl retirements history RETIREMENT_ID --limit 50 --json
+```
+
+You need a write-capable owner key to request retirement or authorize a retry. Admins and read-only keys can inspect the records. Pass a response's `next_before` as `--before` to continue that list or history page.
+
+Retirement deletes the selected backup file. The service and its retained data volume stay in place. The server rechecks the age/count rule, protects existing recovery copies and the newest restore-tested point, and verifies that retained point's current bytes through Trove before deleting anything. Concurrent restore admission and retirement are serialized. An accepted candidate becomes unavailable for new restores.
+
+A failed retirement keeps that protection because deletion may have completed after its response was lost. Check the retained point and storage permissions, then authorize another bounded set of attempts:
+
+```sh
+loomctl retirements retry RETIREMENT_ID --request-id retirement-retry-1 --yes --wait --json
+```
+
+Reuse the key after a lost response. A new retry key authorizes up to three attempts from the lifetime count, with the current owner recorded separately from the original requester. History retains each committed transition and the previous failure.
+
+The Docker PostgreSQL drill qualified retirement with local Trove storage, including a native SQL restore of the retained dump after deletion. Remote stores need captured-version deletion support in their Trove driver; the pinned S3 driver does not provide that capability yet. Legacy backups without a destination pin remain recoverable but cannot be retired. Automatic deletion policies and dashboard retirement controls are still pending.
+
 ## API and permissions
 
-| Operation              | Route                                                                              | Permission                                      |
-| ---------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------- |
-| List/create backups    | `GET/POST /api/v1/projects/:id/service-backups`                                    | `service_backup:read` / `service_backup:manage` |
-| Read/retry a backup    | `GET /api/v1/service-backups/:id`, `POST .../:id/retry`                            | Read / manage                                   |
-| Preview retention      | `GET /api/v1/service-backups/:id/retention-preview?older_than_days=30&keep_last=7` | `service_backup:read`                           |
-| Set/list schedules     | `PUT/GET /api/v1/projects/:id/backup-policies`                                     | Manage / read                                   |
-| Create a recovery copy | `POST /api/v1/service-backups/:id/restore`                                         | `service_restore:manage`                        |
-| List/read copies       | `GET /api/v1/projects/:id/service-restores`, `GET /api/v1/service-restores/:id`    | `service_backup:read`                           |
-| Remove a copy          | `DELETE /api/v1/service-restores/:id`                                              | `service_restore:manage`                        |
+| Operation               | Route                                                                                               | Permission                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| List/create backups     | `GET/POST /api/v1/projects/:id/service-backups`                                                     | `service_backup:read` / `service_backup:manage` |
+| Read/retry a backup     | `GET /api/v1/service-backups/:id`, `POST .../:id/retry`                                             | Read / manage                                   |
+| Preview retention       | `GET /api/v1/service-backups/:id/retention-preview?older_than_days=30&keep_last=7`                  | `service_backup:read`                           |
+| Request retirement      | `POST /api/v1/service-backups/:id/retire`                                                           | `service_backup:retire` (owner)                 |
+| List/read retirements   | `GET /api/v1/projects/:id/service-backup-retirements`, `GET /api/v1/service-backup-retirements/:id` | `service_backup:read`                           |
+| Read retirement history | `GET /api/v1/service-backup-retirements/:id/history`                                                | `service_backup:read`                           |
+| Retry retirement        | `POST /api/v1/service-backup-retirements/:id/retry`                                                 | `service_backup:retire` (owner)                 |
+| Set/list schedules      | `PUT/GET /api/v1/projects/:id/backup-policies`                                                      | Manage / read                                   |
+| Create a recovery copy  | `POST /api/v1/service-backups/:id/restore`                                                          | `service_restore:manage`                        |
+| List/read copies        | `GET /api/v1/projects/:id/service-restores`, `GET /api/v1/service-restores/:id`                     | `service_backup:read`                           |
+| Remove a copy           | `DELETE /api/v1/service-restores/:id`                                                               | `service_restore:manage`                        |
 
-Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Policy updates accept `environment`, `resource`, `every_hours` and `enabled`. Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
+Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Policy updates accept `environment`, `resource`, `every_hours` and `enabled`. Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
 
 ## Qualification boundary
 
 PostgreSQL 17.11 has passed the Docker catalog and recovery drill, with local Trove and a separate native adapter drill against an isolated MinIO endpoint. The Kubernetes catalog, CLI, API and browser drill passed on arm64 Kubernetes 1.36.4, Cilium 1.20.3 and a retained local-path class. That drill covered pod replacement, backup persistence after a control-plane restart, isolated SQL recovery, scheduled backups and deletion of the exact temporary PV.
 
-AWS S3 acceptance, production CSI and cross-node qualification, high availability, point-in-time recovery, deliberate data destruction, automatic retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
+AWS S3 acceptance, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, automatic retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
 
 ## MySQL and MariaDB recovery
 

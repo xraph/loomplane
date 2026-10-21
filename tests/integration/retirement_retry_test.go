@@ -271,8 +271,10 @@ func TestRetirementHistoryMigrationPreservesExistingExecution(t *testing.T) {
 	older := migrate.NewGroup(migrations.GroupName)
 	var historyMigration *migrate.Migration
 	for _, migration := range groups[0].Migrations() {
-		if migration.Version == "20261020000700" {
-			historyMigration = migration
+		if migration.Version >= "20261020000700" {
+			if migration.Version == "20261020000700" {
+				historyMigration = migration
+			}
 			continue
 		}
 		older.MustRegister(migration)

@@ -26,6 +26,7 @@ type RetirementRetryInput struct {
 }
 
 type RetirementStore interface {
+	ListRetirements(context.Context, string, string, RetirementListInput) (*RetirementPage, error)
 	RetryRetirement(context.Context, string, string, string, string, RetirementGuard) (*Retirement, error)
 	RetirementHistory(context.Context, string, string, RetirementHistoryInput) (*RetirementHistory, error)
 	BeginRetirement(context.Context, *Retirement, RetirementGuard) (*Retirement, error)

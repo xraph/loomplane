@@ -90,6 +90,9 @@ func (e *Extension) backupRoutes(router forge.Router, guard identity.Guard) erro
 	if err := e.restoreRoutes(group); err != nil {
 		return err
 	}
+	if err := e.retirementRoutes(group); err != nil {
+		return err
+	}
 	return e.policyRoutes(group)
 }
 
