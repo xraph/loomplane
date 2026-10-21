@@ -39,6 +39,7 @@ type route struct {
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	g := r.Group("/api/v1/clouds/:cloudId", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud infrastructure"))
 	routes := []route{
+		{http.MethodGet, "/servers/:serverId/usage", "cloudServers.usage", e.serverUsage, nil, infra.ServerUsage{}, http.StatusOK},
 		{http.MethodPost, "/servers/:serverId/drain/preview", "cloudServers.previewDrain", e.previewDrain, nil, infra.DrainReview{}, http.StatusOK},
 		{http.MethodPost, "/servers/:serverId/drain/apply", "cloudServers.applyDrain", e.applyDrain, infra.ApplyInput{}, infra.Server{}, http.StatusOK},
 		{http.MethodPost, "/placements/preview-move", "cloudPlacements.previewMove", e.previewMove, infra.MoveInput{}, infra.MoveReview{}, http.StatusOK},

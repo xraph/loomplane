@@ -122,6 +122,7 @@ type Runtime interface {
 }
 
 type Deps struct {
+	PoolCleanup          PoolCleanup
 	Store                Store
 	Clouds               Clouds
 	Connections          Credentials

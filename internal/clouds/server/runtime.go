@@ -668,3 +668,29 @@ func labelPort(raw string) int {
 	}
 	return value
 }
+
+// RemovePending verifies the interrupted operation's runtime reference before
+// deleting its compute. Volumes remain attached to storage inventory (v=0).
+func (r *Runtime) RemovePending(ctx context.Context, iid id.ID, labels map[string]string) error {
+	if labels[owned.LabelRuntime] == "" {
+		return ErrOwned
+	}
+	c, err := r.Session(ctx, labels)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	for _, suffix := range []string{"", "-previous", "-previous-stopped"} {
+		info, inspectErr := r.inspect(ctx, c, ContainerName(iid)+suffix, iid, labels)
+		if errors.Is(inspectErr, ErrMissing) {
+			continue
+		}
+		if inspectErr != nil {
+			return inspectErr
+		}
+		if info.Config.Labels[owned.LabelRuntime] != labels[owned.LabelRuntime] {
+			return ErrOwned
+		}
+	}
+	return r.Remove(ctx, iid, labels)
+}

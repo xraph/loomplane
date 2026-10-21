@@ -13,10 +13,11 @@ import (
 
 // DrainReview fences the inventory the manager reviewed before disabling admission.
 type DrainReview struct {
-	ServerID       string `json:"server_id"`
-	ServerRevision int64  `json:"server_revision"`
-	Review         string `json:"review"`
-	Reservations   int    `json:"reservations"`
+	ServerID       string       `json:"server_id"`
+	ServerRevision int64        `json:"server_revision"`
+	Review         string       `json:"review"`
+	Reservations   int          `json:"reservations"`
+	Usage          *ServerUsage `json:"usage"`
 }
 type MoveInput struct {
 	ProjectID           string `json:"project_id"`
@@ -64,7 +65,11 @@ func (s *PgStore) previewDrain(ctx context.Context, org, cloud, id string) (*Dra
 		return nil, err
 	}
 	review := &DrainReview{ServerID: id, ServerRevision: v.Revision, Reservations: count}
-	review.Review = digest([]any{org, cloud, id, v.Revision, json.RawMessage(refs)})
+	review.Usage, err = s.serverUsage(ctx, org, cloud, id)
+	if err != nil {
+		return nil, err
+	}
+	review.Review = digest([]any{org, cloud, id, v.Revision, json.RawMessage(refs), review.Usage})
 	return review, nil
 }
 func (s *Service) ApplyDrain(ctx context.Context, p security.Principal, cloud, id string, in ApplyInput) (*Server, error) {

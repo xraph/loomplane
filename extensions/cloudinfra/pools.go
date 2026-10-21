@@ -77,3 +77,12 @@ func (e *Extension) acceptMove(c forge.Context) error {
 	v, err := e.svc.AcceptMove(c.Request().Context(), p, c.Param("cloudId"), in)
 	return result(c, http.StatusOK, v, err)
 }
+
+func (e *Extension) serverUsage(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	v, err := e.svc.ServerUsage(c.Request().Context(), p, c.Param("cloudId"), c.Param("serverId"))
+	return result(c, http.StatusOK, v, err)
+}

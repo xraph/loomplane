@@ -403,7 +403,7 @@ func (r *Runner) retainsCheckpoint(providerName string) bool {
 // Run carries out one action of a deployment. resume is the last
 // checkpoint an earlier attempt saved, or nil; heartbeat saves one and
 // tells Dispatch the activity is alive.
-func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) error {
+func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) (runErr error) {
 	ctx, heartbeat, stopHeartbeat := keepHeartbeat(ctx, resume, heartbeat, 30*time.Second)
 	defer stopHeartbeat()
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
@@ -427,10 +427,17 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			action = a
 		}
 	}
+	poolLock, err := r.beginPoolExecution(ctx, plan, action)
+	if err != nil {
+		return err
+	}
+	if poolLock != nil {
+		defer func() { runErr = errors.Join(runErr, poolLock.Finish(context.WithoutCancel(ctx))) }()
+	}
 	if err := r.authorizeSync(ctx, plan); err != nil {
 		return err
 	}
-	retainCheckpoint := plan.CloudSyncID != "" || r.retainsCheckpoint(action.Provider) || (step.Replaced != nil && r.retainsCheckpoint(step.Replaced.Provider))
+	retainCheckpoint := poolAction(action) || plan.CloudSyncID != "" || r.retainsCheckpoint(action.Provider) || (step.Replaced != nil && r.retainsCheckpoint(step.Replaced.Provider))
 	// The first move has not populated Step.Replaced yet. Its original provider
 	// can still require durable cleanup even when the destination does not.
 	if !retainCheckpoint && (action.Op == planning.Replace || action.Op == planning.Create) {
