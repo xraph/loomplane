@@ -51,7 +51,11 @@ func (SSHRuntime) Inspect(ctx context.Context, raw []byte, settings map[string]s
 	if err != nil {
 		return RuntimeHealth{}, err
 	}
-	return RuntimeHealth{DockerID: details["docker_id"], Architecture: details["architecture"], CPUs: cpus, MemoryBytes: memory, CheckedAt: time.Now().UTC()}, nil
+	effectiveCPU, effectiveMemory, capacityErr := client.EffectiveCapacity(ctx, cpus, memory)
+	if capacityErr != nil {
+		effectiveCPU, effectiveMemory = 0, 0
+	}
+	return RuntimeHealth{EffectiveCPUMillis: effectiveCPU, EffectiveMemoryBytes: effectiveMemory, DockerID: details["docker_id"], Architecture: details["architecture"], CPUs: cpus, MemoryBytes: memory, CheckedAt: time.Now().UTC()}, nil
 }
 
 // Enrollment contains only the host's public key. The bearer token is accepted

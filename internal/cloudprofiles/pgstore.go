@@ -22,7 +22,7 @@ var _ Store = (*PgStore)(nil)
 var _ Resolver = (*PgStore)(nil)
 
 const profileColumns = `id,org_id,project_id,name,revision,created_at,updated_at`
-const targetColumns = `id,org_id,project_id,cloud_id,name,display_name,provider,connection_id,region,revision,created_at,updated_at`
+const targetColumns = `id,org_id,project_id,cloud_id,name,display_name,provider,connection_id,region,revision,created_at,updated_at,runtime,pool_id`
 
 func scanProfile(row pgx.Row) (*Profile, error) {
 	var p Profile
@@ -34,8 +34,16 @@ func scanProfile(row pgx.Row) (*Profile, error) {
 }
 func scanTarget(row pgx.Row) (*Target, error) {
 	var t Target
-	if err := row.Scan(&t.ID, &t.OrgID, &t.ProjectID, &t.CloudID, &t.Name, &t.DisplayName, &t.Provider, &t.ConnectionID, &t.Region, &t.Revision, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	var connection *string
+	var pool *string
+	if err := row.Scan(&t.ID, &t.OrgID, &t.ProjectID, &t.CloudID, &t.Name, &t.DisplayName, &t.Provider, &connection, &t.Region, &t.Revision, &t.CreatedAt, &t.UpdatedAt, &t.Runtime, &pool); err != nil {
 		return nil, storeError(err)
+	}
+	if connection != nil {
+		t.ConnectionID = *connection
+	}
+	if pool != nil {
+		t.PoolID = *pool
 	}
 	t.CreatedAt, t.UpdatedAt = t.CreatedAt.UTC(), t.UpdatedAt.UTC()
 	return &t, nil
@@ -167,7 +175,7 @@ func (s *PgStore) CreateTarget(ctx context.Context, t *Target) error {
 	if _, err := s.GetProfile(ctx, t.OrgID, t.ProjectID, t.CloudID); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_cloud_targets (`+targetColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, t.ID, t.OrgID, t.ProjectID, t.CloudID, t.Name, t.DisplayName, t.Provider, t.ConnectionID, t.Region, t.Revision, t.CreatedAt, t.UpdatedAt)
+	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_cloud_targets (`+targetColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,nullif($8,''),$9,$10,$11,$12,$13,nullif($14,''))`, t.ID, t.OrgID, t.ProjectID, t.CloudID, t.Name, t.DisplayName, t.Provider, t.ConnectionID, t.Region, t.Revision, t.CreatedAt, t.UpdatedAt, targetRuntime(t), t.PoolID)
 	return storeError(err)
 }
 
@@ -207,7 +215,7 @@ func (s *PgStore) UpdateTarget(ctx context.Context, t *Target, previousRevision 
 		return err
 	}
 	defer rollbackSync(tx)
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name=$5,revision=$6,updated_at=$7 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND cloud_id=$3 AND id=$4 AND revision=$8 AND name=$9 AND provider=$10 AND connection_id=$11 AND region=$12`, t.OrgID, t.ProjectID, t.CloudID, t.ID, t.DisplayName, t.Revision, t.UpdatedAt, previousRevision, t.Name, t.Provider, t.ConnectionID, t.Region)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name=$5,revision=$6,updated_at=$7 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND cloud_id=$3 AND id=$4 AND revision=$8 AND name=$9 AND provider=$10 AND coalesce(connection_id,'')=$11 AND region=$12 AND runtime=$13 AND coalesce(pool_id,'')=$14`, t.OrgID, t.ProjectID, t.CloudID, t.ID, t.DisplayName, t.Revision, t.UpdatedAt, previousRevision, t.Name, t.Provider, t.ConnectionID, t.Region, targetRuntime(t), t.PoolID)
 	if err != nil {
 		return storeError(err)
 	}
@@ -311,4 +319,11 @@ func (s *PgStore) metadataTransaction(ctx context.Context, org, _ string) (drive
 		return nil, fmt.Errorf("%w: finish or revert the project Cloud sync before renaming a Cloud or target", ErrBusy)
 	}
 	return tx, nil
+}
+
+func targetRuntime(t *Target) string {
+	if t.Runtime == "" {
+		return "managed"
+	}
+	return t.Runtime
 }

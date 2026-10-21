@@ -76,6 +76,8 @@ type UpdateInput struct {
 
 // CreateTargetInput selects the initial placement of a new immutable slug.
 type CreateTargetInput struct {
+	Runtime      string `json:"runtime"`
+	PoolID       string `json:"pool_id,omitempty"`
 	Name         string `json:"name"`
 	DisplayName  string `json:"display_name"`
 	Provider     string `json:"provider"`
@@ -239,6 +241,15 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 		return nil, err
 	}
 	in.Provider, in.ConnectionID, in.Region = strings.TrimSpace(in.Provider), strings.TrimSpace(in.ConnectionID), strings.TrimSpace(in.Region)
+	if in.Runtime == "" {
+		in.Runtime = "managed"
+	}
+	if in.PoolID != "" && (in.Runtime != "server" || in.Provider != "server" || in.ConnectionID != "") {
+		return nil, ErrInvalid
+	}
+	if in.PoolID == "" && in.Runtime != "managed" {
+		return nil, ErrInvalid
+	}
 	if placementErr := s.placement(ctx, p.OrgID, in); placementErr != nil {
 		return nil, placementErr
 	}
@@ -247,7 +258,7 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 		return nil, fmt.Errorf("generate target id: %w", err)
 	}
 	now := s.now().UTC()
-	target := &Target{ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, CloudID: cloudID, Name: in.Name, DisplayName: display, Provider: in.Provider, ConnectionID: in.ConnectionID, Region: in.Region, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	target := &Target{Runtime: in.Runtime, PoolID: in.PoolID, ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, CloudID: cloudID, Name: in.Name, DisplayName: display, Provider: in.Provider, ConnectionID: in.ConnectionID, Region: in.Region, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := s.store.CreateTarget(ctx, target); err != nil {
 		return nil, err
 	}
@@ -255,6 +266,9 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	return target, nil
 }
 func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetInput) error {
+	if in.PoolID != "" {
+		return nil
+	}
 	if s.providers == nil || s.connections == nil {
 		return fmt.Errorf("%w: provider and account checks are unavailable", ErrInvalid)
 	}

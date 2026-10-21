@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
@@ -17,6 +18,19 @@ func (r *Runner) validateCloudPlacement(ctx context.Context, plan *planning.Plan
 }
 
 func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *planning.Plan, a planning.Action, conn *connections.Connection, retained bool) error {
+	if a.Provider == "server" && a.Op != planning.Delete && a.Op != planning.Keep && (a.Service == nil || a.Service.CloudPlacement == nil || a.Service.CloudPlacement.PoolID == "") {
+		if reader, ok := r.plans.(interface {
+			PooledConnections(context.Context, string) (map[string]bool, error)
+		}); ok {
+			hosts, err := reader.PooledConnections(ctx, plan.OrgID)
+			if err != nil {
+				return err
+			}
+			if hosts[a.ConnectionID] {
+				return fmt.Errorf("shared host requires a reviewed pool reservation")
+			}
+		}
+	}
 	if a.Service == nil || a.Service.CloudPlacement == nil || a.Op == planning.Delete || a.Op == planning.Keep && !a.AdoptCloudPlacement {
 		return nil
 	}
@@ -55,8 +69,19 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 		return stale("is missing from the assigned Cloud")
 	}
 	target := assignment.Targets[i]
-	if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || target.ConnectionID != pin.ConnectionID {
+	if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || (pin.PoolID == "" && target.ConnectionID != pin.ConnectionID) || target.PoolID != pin.PoolID {
 		return stale("changed since review or is outside this scope")
+	}
+	if pin.PoolID != "" {
+		validator, ok := r.plans.(interface {
+			ValidatePlacement(context.Context, string, string, string, string, string, cloudinfra.Placement) error
+		})
+		if !ok {
+			return stale("capacity reservation cannot be verified")
+		}
+		if err = validator.ValidatePlacement(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, plan.ID, a.Name, pin.PoolPlacement()); err != nil {
+			return fmt.Errorf("validate reserved capacity: %w", err)
+		}
 	}
 	if conn == nil {
 		conn, _, err = r.credentials.Credential(ctx, plan.OrgID, pin.ConnectionID)
@@ -70,6 +95,9 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	}
 	if conn == nil || conn.ID != pin.ConnectionID || conn.Cloud != prov.Cloud || conn.Status != connections.StatusReady {
 		return stale("connection is no longer ready for this provider")
+	}
+	if pin.PoolID != "" && conn.Generation != pin.ConnectionGeneration {
+		return stale("runtime generation changed")
 	}
 	if planning.OwnedCloud(conn.Cloud) && !reflect.DeepEqual(a.Service.TargetSettings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
 		return stale("settings changed since review")
@@ -122,4 +150,12 @@ func (r *Runner) adoptCloudPlacement(ctx context.Context, d *Deployment, plan *p
 		return heartbeat([]byte("cloud-placement-adopted"))
 	}
 	return fmt.Errorf("serving binding for %s is missing; plan again", a.Name)
+}
+
+func poolBinding(b *planning.Binding) bool {
+	if b == nil {
+		return false
+	}
+	var cfg planning.ServiceConfig
+	return json.Unmarshal(b.Config, &cfg) == nil && cfg.CloudPlacement != nil && cfg.CloudPlacement.PoolID != ""
 }

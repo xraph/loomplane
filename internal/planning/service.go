@@ -557,7 +557,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	var placements map[string]CloudPlacement
 	var resolved *manifest.Manifest
 	if resolutionErr == nil {
-		resolved, placements, resolutionErr = ResolveCloudTargets(resolutionManifest, plan.Environment, assignment, options)
+		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options)
+		if poolErr != nil {
+			resolutionErr = poolErr
+		} else {
+			resolved, placements, resolutionErr = ResolveCloudTargets(resolutionManifest, plan.Environment, assignment, options, pools)
+		}
 	}
 	var result *Result
 	if resolutionErr != nil {
@@ -569,6 +574,9 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
 		})
+	}
+	if resolutionErr == nil && poolRelocation(bindings, placements) {
+		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements)
 	}
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
@@ -595,10 +603,19 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	if err != nil {
 		return nil, fmt.Errorf("list cloud connections: %w", err)
 	}
+	pooled := map[string]bool{}
+	if reader, ok := s.store.(interface {
+		PooledConnections(context.Context, string) (map[string]bool, error)
+	}); ok {
+		pooled, err = reader.PooledConnections(ctx, orgID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	out := make([]ConnectionOption, 0, len(all))
 	for _, c := range all {
 		out = append(out, ConnectionOption{
-			Account: c.Account, ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
+			Pooled: pooled[c.ID], Account: c.Account, ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
 			PullReady: connections.RegistryPullReady(c),
 			HTTPS:     c.Details["certificate_arn"] != "", Region: c.Details["region"],
 			Details: maps.Clone(c.Details),

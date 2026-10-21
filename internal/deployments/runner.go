@@ -849,6 +849,9 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 	}
 	a := job.Action
 	if unreachable {
+		if poolBinding(bound) {
+			return errors.New("pooled server cleanup is blocked: restore the recorded connection before releasing capacity")
+		}
 		warn(fmt.Errorf("the connection that deployed %s has been removed, so Loomplane can't reach it to delete it, and stops tracking it. If %s still runs, delete it yourself, in the account that connection reached",
 			a.Name, locate(exec, bound)))
 		if err := job.Forget(ctx); err != nil {
@@ -952,7 +955,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 		}
 	}
 	conn, cred, err := r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
-	if errors.Is(err, connections.ErrNotFound) && job.Plan.CloudSyncID != "" {
+	if errors.Is(err, connections.ErrNotFound) && (job.Plan.CloudSyncID != "" || poolBinding(old)) {
 		return false, err
 	}
 	if errors.Is(err, connections.ErrNotFound) {

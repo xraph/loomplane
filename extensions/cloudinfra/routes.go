@@ -39,6 +39,13 @@ type route struct {
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	g := r.Group("/api/v1/clouds/:cloudId", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud infrastructure"))
 	routes := []route{
+		{http.MethodPost, "/servers/:serverId/drain/preview", "cloudServers.previewDrain", e.previewDrain, nil, infra.DrainReview{}, http.StatusOK},
+		{http.MethodPost, "/servers/:serverId/drain/apply", "cloudServers.applyDrain", e.applyDrain, infra.ApplyInput{}, infra.Server{}, http.StatusOK},
+		{http.MethodPost, "/placements/preview-move", "cloudPlacements.previewMove", e.previewMove, infra.MoveInput{}, infra.MoveReview{}, http.StatusOK},
+		{http.MethodPost, "/placements/accept-move", "cloudPlacements.acceptMove", e.acceptMove, infra.MoveInput{}, infra.MoveReview{}, http.StatusOK},
+		{http.MethodGet, "/pools", "cloudPools.list", e.pools, nil, PoolList{}, http.StatusOK},
+		{http.MethodPost, "/pools", "cloudPools.create", e.savePool, infra.PoolInput{}, infra.Pool{}, http.StatusOK},
+		{http.MethodPost, "/pools/:poolId", "cloudPools.update", e.savePool, infra.PoolInput{}, infra.Pool{}, http.StatusOK},
 		{http.MethodPost, "/servers/:serverId/check", "cloudServers.check", e.checkServer, nil, infra.Server{}, http.StatusOK},
 		{http.MethodGet, "/servers", "cloudServers.list", e.list, nil, ServerList{}, http.StatusOK},
 		{http.MethodGet, "/server-options/:connectionId", "cloudServers.options", e.options, nil, provider.ServerOptions{}, http.StatusOK},

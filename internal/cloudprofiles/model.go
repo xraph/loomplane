@@ -29,6 +29,8 @@ type Profile struct {
 
 // Target is one immutable slug and its desired deployment placement.
 type Target struct {
+	Runtime      string    `json:"runtime"`
+	PoolID       string    `json:"pool_id,omitempty"`
 	ID           string    `json:"id" forge:"id"`
 	OrgID        string    `json:"org_id"`
 	ProjectID    string    `json:"project_id"`

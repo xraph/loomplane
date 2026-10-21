@@ -48,12 +48,24 @@ func infraDockerFile(t *testing.T, container, path string, raw []byte) {
 }
 
 func TestCloudInfrastructureRealSSHAndDockerEnrollment(t *testing.T) {
+	cloudInfrastructureRuntimeFixture(t, false)
+}
+func TestServerPoolsEffectiveConstrainedRuntime(t *testing.T) {
+	cloudInfrastructureRuntimeFixture(t, true)
+}
+func cloudInfrastructureRuntimeFixture(t *testing.T, constrained bool) {
+	t.Helper()
 	if os.Getenv("LOOMPLANE_TEST_CLOUD_RUNTIME") != "1" {
 		t.Skip("set LOOMPLANE_TEST_CLOUD_RUNTIME=1 for isolated Docker/SSH verification")
 	}
 	f := newInfraFixture(t)
 	name := fmt.Sprintf("loomplane-cloudinfra-test-%d", time.Now().UnixNano())
-	infraDocker(t, "run", "-d", "--privileged", "--name", name, "--label", "loomplane.test=cloud-infrastructure", "-e", "DOCKER_TLS_CERTDIR=", "-p", "127.0.0.1::22", "docker:29-dind", "dockerd", "--host=unix:///var/run/docker.sock")
+	args := []string{"run", "-d", "--privileged", "--name", name, "--label", "loomplane.test=cloud-infrastructure", "-e", "DOCKER_TLS_CERTDIR=", "-p", "127.0.0.1::22"}
+	if constrained {
+		args = append(args, "--cpus=1", "--memory=768m")
+	}
+	args = append(args, "docker:29-dind", "dockerd", "--host=unix:///var/run/docker.sock")
+	infraDocker(t, args...)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -70,7 +82,7 @@ func TestCloudInfrastructureRealSSHAndDockerEnrollment(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	infraDocker(t, "exec", name, "sh", "-c", "apk add --no-cache openssh-server iproute2 && ssh-keygen -A && adduser -D -G docker loomplane && passwd -d loomplane && mkdir -p /home/loomplane/.ssh && chmod 700 /home/loomplane/.ssh")
+	infraDocker(t, "exec", name, "sh", "-c", "apk add --no-cache openssh-server iproute2 python3 && ssh-keygen -A && adduser -D -G docker loomplane && passwd -d loomplane && mkdir -p /home/loomplane/.ssh && chmod 700 /home/loomplane/.ssh")
 	port := strings.TrimPrefix(infraDocker(t, "port", name, "22/tcp"), "127.0.0.1:")
 	f.svc.Runtime = localSSHRuntime{port: port}
 	var bootstrap map[string]any
@@ -149,6 +161,19 @@ func TestCloudInfrastructureRealSSHAndDockerEnrollment(t *testing.T) {
 	v, err := f.store.GetServer(t.Context(), "org", "cloud", o.ServerID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if constrained {
+		if v.Health.EffectiveCPUMillis <= 0 || v.Health.EffectiveCPUMillis > 1000 || v.Health.EffectiveMemoryBytes <= 0 || v.Health.EffectiveMemoryBytes > 768<<20 {
+			t.Fatalf("constrained effective capacity: %+v", v.Health)
+		}
+		pool := &cloudinfra.Pool{ID: "constrained-pool", OrgID: "org", CloudID: "cloud", Name: "Constrained", Revision: 1, Members: []cloudinfra.PoolMember{{ServerID: v.ID, CPUMillis: 2000, MemoryBytes: 512 << 20}}}
+		if err = f.store.SavePool(t.Context(), pool, 0); err == nil {
+			t.Fatal("outer host CPU was reservable")
+		}
+		pool.Members[0].CPUMillis = 500
+		if err = f.store.SavePool(t.Context(), pool, 0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if v.Health.DockerID == "" || v.Health.CPUs < 1 || v.Health.MemoryBytes < 1 {
 		t.Fatalf("capacity unverified: %+v", v.Health)

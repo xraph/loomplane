@@ -22,6 +22,7 @@ var (
 
 // Server is organization capacity, independent of project release access.
 type Server struct {
+	Draining            bool          `json:"draining"`
 	StateRevision       int64         `json:"state_revision"`
 	ID                  string        `json:"id" forge:"id"`
 	OrgID               string        `json:"org_id"`
@@ -45,11 +46,13 @@ type Server struct {
 
 // RuntimeHealth comes from the pinned Docker daemon, never a provider size slug.
 type RuntimeHealth struct {
-	DockerID     string    `json:"docker_id"`
-	Architecture string    `json:"architecture"`
-	CPUs         int       `json:"cpus"`
-	MemoryBytes  int64     `json:"memory_bytes"`
-	CheckedAt    time.Time `json:"checked_at"`
+	EffectiveCPUMillis   int64     `json:"effective_cpu_millis"`
+	EffectiveMemoryBytes int64     `json:"effective_memory_bytes"`
+	DockerID             string    `json:"docker_id"`
+	Architecture         string    `json:"architecture"`
+	CPUs                 int       `json:"cpus"`
+	MemoryBytes          int64     `json:"memory_bytes"`
+	CheckedAt            time.Time `json:"checked_at"`
 }
 
 // ServerInput describes exactly one reviewed lifecycle change. Adoption refers
@@ -196,7 +199,7 @@ func (s *Service) CheckServer(ctx context.Context, p security.Principal, cloud, 
 	if checkErr != nil || health.DockerID != v.Health.DockerID {
 		v.Status = "unhealthy"
 	} else {
-		if v.Health.CPUs != health.CPUs || v.Health.MemoryBytes != health.MemoryBytes || v.Health.Architecture != health.Architecture {
+		if v.Health.EffectiveCPUMillis != health.EffectiveCPUMillis || v.Health.EffectiveMemoryBytes != health.EffectiveMemoryBytes || v.Health.CPUs != health.CPUs || v.Health.MemoryBytes != health.MemoryBytes || v.Health.Architecture != health.Architecture {
 			v.Revision++
 		}
 		v.Status = "ready"

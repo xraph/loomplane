@@ -432,6 +432,13 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelScaleMin] = strconv.Itoa(cfg.Scale.Min)
 		labels[owned.LabelScaleMax] = strconv.Itoa(cfg.Scale.Max)
 	}
+	if job.Action.Provider == "server" {
+		cpu, memory, err := planning.ServerResources(cfg.Size)
+		if err == nil {
+			sp.Resources.CPUMillis = int(cpu)
+			sp.Resources.MemoryMB = int(memory >> 20)
+		}
+	}
 	if cfg.Size != nil {
 		sp.Resources.CPUMillis = int(cfg.Size.CPU * 1000)
 		sp.Resources.MemoryMB = cfg.Size.Memory

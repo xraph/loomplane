@@ -46,6 +46,7 @@ type Input struct {
 
 // ConnectionOption is a cloud connection a plan could deploy with.
 type ConnectionOption struct {
+	Pooled    bool `json:"pooled,omitempty"`
 	Account   string
 	ID        string
 	Name      string

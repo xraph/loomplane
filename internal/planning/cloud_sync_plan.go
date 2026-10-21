@@ -15,6 +15,10 @@ import (
 // AppliedCloudPlan constructs migration actions from serving bindings only.
 // It never reads a current analysis, manifest, branch or environment variable.
 func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, _ ...*cloudprofiles.Assignment) *Result {
+	return appliedCloudPlan(bindings, assignment, targetID, options, registry, nil)
+}
+
+func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement) *Result {
 	p := &planner{in: Input{Providers: registry, Connections: options, CloudPlacements: map[string]CloudPlacement{}, Chosen: map[string]string{}}, services: map[string]*Action{}, resources: map[string]*Action{}, bindings: map[string]*Binding{}, clouds: map[string]bool{}, unready: map[string]string{}, held: map[string]string{}, removing: map[string]bool{}}
 	blocked := func(name, message string) {
 		p.problem(Finding{Code: "cloud-sync-blocked", Subject: ServiceSubject, Name: name, Message: message})
@@ -46,6 +50,14 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			continue
 		}
 		t := assignment.Targets[ti]
+		if t.PoolID != "" {
+			placement, found := pools[b.Name]
+			if !found || placement.PoolID != t.PoolID {
+				blocked(b.Name, "Pool placement needs a reviewed capacity selection.")
+				continue
+			}
+			t.ConnectionID = placement.ConnectionID
+		}
 		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == t.ConnectionID })
 		prov, err := registry.Get(t.Provider)
 		if err != nil {
@@ -80,11 +92,14 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 		if prov.Placed() && !prov.HasRegion(region) {
 			blocked(b.Name, "The destination does not support the applied region.")
 		}
-		if !prov.Scaling && (cfg.Scale != nil || cfg.Size != nil) {
+		if !prov.Scaling && prov.Cloud != "server" && (cfg.Scale != nil || cfg.Size != nil) {
 			blocked(b.Name, "The destination cannot preserve the applied scale and size settings.")
 		}
 		cfg.Provider, cfg.Region, cfg.Execution = prov.Name, region, runs.Execution
 		cfg.CloudPlacement = &CloudPlacement{GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: pin.RegionSource}
+		if placement, found := pools[b.Name]; found && t.PoolID != "" {
+			cfg.CloudPlacement = &placement
+		}
 		p.in.CloudPlacements[b.Name] = *cfg.CloudPlacement
 		set := manifest.Settings{Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size}
 		if OwnedCloud(prov.Cloud) {
