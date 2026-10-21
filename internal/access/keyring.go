@@ -110,3 +110,19 @@ func (k *SigningKeyring) Signer(ctx context.Context, scope domain.Scope) (*Snaps
 	}
 	return signer, nil
 }
+
+// Health reports expired configuration even when no agent currently requests it.
+func (k *SigningKeyring) Health(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if k == nil || len(k.signers) == 0 {
+		return ErrSigningKeys
+	}
+	for scope := range k.signers {
+		if _, err := k.Signer(ctx, scope); err != nil {
+			return err
+		}
+	}
+	return nil
+}

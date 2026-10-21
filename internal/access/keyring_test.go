@@ -132,7 +132,13 @@ func TestSigningKeyringRechecksExpiryAndCancellation(t *testing.T) {
 	if _, err := ring.Signer(ctx, scope); !errors.Is(err, context.Canceled) {
 		t.Fatal("canceled caller received signing authority", err)
 	}
+	if err := ring.Health(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	ring.signers[scope].key.NotAfter = time.Now().Add(-time.Second)
+	if err := ring.Health(t.Context()); err == nil {
+		t.Fatal("expired keyring healthy")
+	}
 	if _, err := ring.Signer(t.Context(), scope); err == nil {
 		t.Fatal("expired key remained available")
 	}

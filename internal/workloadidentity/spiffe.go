@@ -118,7 +118,16 @@ func ControlURI(a domain.AgentIdentity) (string, error) {
 	if err != nil {
 		return "", ErrIdentity
 	}
-	control, err := spiffeid.FromPath(id.TrustDomain(), controlPathPrefix+a.OrgID)
+	return ControlURIForOrganization(id.TrustDomain().Name(), a.OrgID)
+}
+
+// ControlURIForOrganization pins the runtime audience to one trust domain and organization.
+func ControlURIForOrganization(trustDomain, org string) (string, error) {
+	td, err := spiffeid.TrustDomainFromString(trustDomain)
+	if err != nil || td.Name() != trustDomain || !domain.ValidIdentitySegment(org) {
+		return "", ErrIdentity
+	}
+	control, err := spiffeid.FromPath(td, controlPathPrefix+org)
 	if err != nil {
 		return "", err
 	}

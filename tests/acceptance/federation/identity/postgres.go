@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/agent"
+	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/ops"
 	"github.com/xraph/loomplane/internal/runtimeapi"
 	"github.com/xraph/loomplane/internal/runtimecatalog"
@@ -104,19 +106,35 @@ func qualifyPersisted(ctx context.Context, issuer *workloadidentity.SPIREIssuer,
 	if err != nil {
 		return err
 	}
-	catalog, err := access.NewDistributor(policies, registry, func(context.Context, domain.Scope) (*access.SnapshotSigner, error) { return signer, nil })
+	keyDirectory, err := os.MkdirTemp("", "loomplane-runtime-keys-")
 	if err != nil {
 		return err
 	}
-	handler, err := runtimeapi.NewHandler(scope.OrgID, control, registry, enrollments, catalog, noWake{}, policies)
+	defer func() { err = errors.Join(err, os.RemoveAll(keyDirectory)) }()
+	keyFile := filepath.Join(keyDirectory, "signing.json")
+	keyBody, err := json.Marshal(map[string]any{"version": 1, "keys": []any{map[string]any{"org_id": scope.OrgID, "project_id": scope.ProjectID, "environment_id": scope.EnvironmentID, "private_key": base64.StdEncoding.EncodeToString(private), "not_before": signer.Key().NotBefore, "not_after": signer.Key().NotAfter}}})
 	if err != nil {
 		return err
 	}
-	endpoint, closeServer, err := startRuntime(ctx, handler, control)
+	if stepErr := os.WriteFile(keyFile, keyBody, 0o600); stepErr != nil {
+		return stepErr
+	}
+	runtime, err := runtimeapi.NewRuntime(config.FederationRuntimeConfig{Enabled: true, ListenAddress: "127.0.0.1:9443", OrganizationID: scope.OrgID, TrustDomain: control.Domain(), WorkloadAPI: socket, SigningKeysFile: keyFile}, db, noWake{})
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, closeServer()) }()
+	if stepErr := runtime.Start(ctx); stepErr != nil {
+		return stepErr
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		err = errors.Join(err, runtime.Stop(cleanup))
+	}()
+	if stepErr := runtime.Health(ctx); stepErr != nil {
+		return stepErr
+	}
+	endpoint := "https://" + runtime.Address()
 	audience, err := workloadidentity.ControlURI(first.Binding.Agent)
 	if err != nil {
 		return err

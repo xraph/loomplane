@@ -65,6 +65,9 @@ func (e *Extension) Register(app forge.App) error {
 		return err
 	}
 	e.bus.Warn = func(err error) { e.Logger().Warn("realtime wake-up publication failed", forge.F("error", err.Error())) }
+	if err = forge.ProvideValue(c, store.WakeSource(e.bus.Watch)); err != nil {
+		return fmt.Errorf("provide realtime wake source: %w", err)
+	}
 	if err = forge.ProvideValue(c, e.store); err != nil {
 		return fmt.Errorf("provide realtime store: %w", err)
 	}

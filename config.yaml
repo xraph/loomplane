@@ -125,3 +125,15 @@ providers:
 worker:
   # Where loomplane-worker serves its health checks, and nothing else.
   http_addr: "${LOOMPLANE_WORKER_HTTP_ADDR:-}"
+
+# Federation management and its separate mTLS agent listener are opt-in.
+# Provision SPIRE identity and scoped signing keys before enabling runtime.
+federation:
+  enabled: "${LOOMPLANE_FEDERATION_ENABLED:-false}"
+  runtime:
+    enabled: "${LOOMPLANE_FEDERATION_RUNTIME_ENABLED:-false}"
+    listen_address: "${LOOMPLANE_FEDERATION_RUNTIME_LISTEN_ADDRESS:-}"
+    organization_id: "${LOOMPLANE_FEDERATION_RUNTIME_ORGANIZATION_ID:-}"
+    trust_domain: "${LOOMPLANE_FEDERATION_RUNTIME_TRUST_DOMAIN:-}"
+    workload_api: "${LOOMPLANE_FEDERATION_RUNTIME_WORKLOAD_API:-}"
+    signing_keys_file: "${LOOMPLANE_FEDERATION_RUNTIME_SIGNING_KEYS_FILE:-}"
