@@ -4787,6 +4787,9 @@
           "region": {
             "type": "string"
           },
+          "region_source": {
+            "type": "string"
+          },
           "target_id": {
             "type": "string"
           },

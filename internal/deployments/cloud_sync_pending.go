@@ -124,18 +124,23 @@ func (r *Runner) CleanupRevertedCloudPlan(ctx context.Context, org, planID, comp
 				}
 			}
 		}
+		raw, e := json.Marshal(a.Service)
+		if e != nil {
+			return e
+		}
+		created := &planning.Binding{OrgID: org, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Subject: a.Subject, Name: a.Name, Provider: a.Provider, Region: a.Region, Engine: a.Engine, ConnectionID: a.ConnectionID, ExternalID: id, Config: raw, PlanID: plan.ID}
 		protected := false
 		for _, b := range bindings {
-			if b.Provider == a.Provider && b.ConnectionID == a.ConnectionID && b.ExternalID == id {
+			same, identityErr := r.sameBindingResource(ctx, org, created, b)
+			if identityErr != nil {
+				return identityErr
+			}
+			if same {
 				protected = true
+				break
 			}
 		}
 		if id != "" && !protected {
-			raw, e := json.Marshal(a.Service)
-			if e != nil {
-				return e
-			}
-			created := &planning.Binding{OrgID: org, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Subject: a.Subject, Name: a.Name, Provider: a.Provider, Region: a.Region, Engine: a.Engine, ConnectionID: a.ConnectionID, ExternalID: id, Config: raw, PlanID: plan.ID}
 			checkpoint := func(data []byte) error {
 				step.Checkpoint = append([]byte(nil), data...)
 				if e := r.store.UpdateStep(ctx, org, d.ID, *step); e != nil {

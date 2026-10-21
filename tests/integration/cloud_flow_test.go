@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/ctl"
 	"github.com/xraph/loomplane/internal/planning"
@@ -193,6 +195,10 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	if draft != nil {
 		t.Fatal("draft variable applied during switch")
 	}
+	c.must(http.StatusConflict, http.MethodPut, targets+"/"+frontend.ID, cloudprofiles.UpdateTargetInput{DisplayName: "Renamed during cleanup", Revision: 2}, nil)
+	var currentCloud cloudprofiles.Profile
+	c.must(http.StatusOK, http.MethodGet, base+"/clouds/"+cloud.ID, nil, &currentCloud)
+	c.must(http.StatusConflict, http.MethodPut, base+"/clouds/"+cloud.ID, cloudprofiles.UpdateInput{Name: "Renamed during cleanup", Revision: currentCloud.Revision}, nil)
 	c.must(http.StatusConflict, http.MethodDelete, "/api/v1/connections/"+old, nil, nil)
 	c.must(http.StatusConflict, http.MethodDelete, targets+"/"+frontend.ID, nil, nil)
 	c.must(http.StatusConflict, http.MethodDelete, base+"/clouds/"+cloud.ID, nil, nil)
@@ -214,7 +220,45 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 		t.Fatalf("cleanup failure escaped before CLI retry: %+v", got)
 	}
 	attemptBeforeCLI := got.Attempt
-	if err := command.Run([]string{"cloud-syncs", "retry", project, switched.ID, "--wait", "--timeout", "1m", "--json"}); err == nil {
+	acceptCLIRetry := func(previousAttempt int, releaseCleanup bool) {
+		t.Helper()
+		// Retry acceptance can run while this lock holds. Provider work cannot
+		// start until the response and any cleanup release are both recorded.
+		conn, err := pgx.Connect(t.Context(), cfg.Database.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close(t.Context()) }()
+		tx, err := conn.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(t.Context()) }()
+		if _, err = tx.Exec(t.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "cloud-sync/"+switched.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err = command.Run([]string{"cloud-syncs", "retry", project, switched.ID, "--json"}); err != nil {
+			t.Fatal(err)
+		}
+		var acceptedRetry cloudprofiles.Sync
+		if err = json.Unmarshal(output.Bytes(), &acceptedRetry); err != nil {
+			t.Fatal(err)
+		}
+		if acceptedRetry.ID != switched.ID || acceptedRetry.Status != cloudprofiles.SyncPending || acceptedRetry.Attempt <= previousAttempt {
+			t.Fatalf("CLI retry was not accepted: %+v", acceptedRetry)
+		}
+		if releaseCleanup {
+			if err = os.WriteFile(cleanupRelease, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err = tx.Commit(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		output.Reset()
+	}
+	acceptCLIRetry(attemptBeforeCLI, false)
+	if err := command.Run([]string{"cloud-syncs", "wait", project, switched.ID, "--timeout", "1m", "--json"}); err == nil {
 		t.Fatal("CLI retry ignored the held cleanup failure")
 	}
 	var failedRetry cloudprofiles.Sync
@@ -226,16 +270,13 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	}
 	t.Logf("CLI retry persisted cleanup failure at attempt %d", failedRetry.Attempt)
 	output.Reset()
-	// Ordinary runs release only after an actual failed CLI retry. Held runs
-	// leave release and the successful retry to the browser, then follow it.
-	recoveryCommand := "retry"
+	// Every run proves a failed retry before successful retry or browser recovery.
 	if os.Getenv("LOOMPLANE_CLOUD_FLOW_HOLD") != "" {
 		holdCloudFlow(t, c.base, project, cloud.ID, frontend.ID, env, switched.ID, cleanupRelease)
-		recoveryCommand = "wait"
-	} else if err := os.WriteFile(cleanupRelease, nil, 0600); err != nil {
-		t.Fatal(err)
+	} else {
+		acceptCLIRetry(failedRetry.Attempt, true)
 	}
-	if err := command.Run([]string{"cloud-syncs", recoveryCommand, project, switched.ID, "--wait", "--timeout", "1m", "--json"}); err != nil {
+	if err := command.Run([]string{"cloud-syncs", "wait", project, switched.ID, "--wait", "--timeout", "1m", "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	var successfulRetry cloudprofiles.Sync
@@ -245,7 +286,7 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	if successfulRetry.ID != switched.ID || successfulRetry.Status != cloudprofiles.SyncSucceeded || successfulRetry.Attempt <= failedRetry.Attempt {
 		t.Fatalf("cleanup recovery did not finish: %+v", successfulRetry)
 	}
-	t.Logf("Cleanup recovery completed at attempt %d through CLI %s", successfulRetry.Attempt, recoveryCommand)
+	t.Logf("Cleanup recovery completed at attempt %d through CLI wait", successfulRetry.Attempt)
 	vc.mu.Lock()
 	removed := append([]string{}, vc.removed...)
 	vc.mu.Unlock()

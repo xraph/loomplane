@@ -22,6 +22,8 @@ type CloudPlacement struct {
 	ConnectionID       string `json:"connection_id"`
 	AccountIdentity    string `json:"account_identity"`
 	Region             string `json:"region,omitempty"`
+	// RegionSource records the effective manifest override before defaults resolve.
+	RegionSource string `json:"region_source,omitempty"`
 }
 
 // ResolveCloudTargets returns an independent manifest with effective placement.
@@ -75,6 +77,10 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 		if identity == "" {
 			return nil, nil, fmt.Errorf("%s: target account identity is unverified; recheck Vercel or reconnect owned infrastructure under Integrations", path)
 		}
+		regionSource := "manifest"
+		if set.Region == "" {
+			regionSource = "default"
+		}
 		set.Provider = target.Provider
 		if set.Region == "" {
 			set.Region = target.Region
@@ -82,7 +88,7 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 		if OwnedCloud(c.Cloud) {
 			set.Target = c.ID
 		}
-		placements[name] = CloudPlacement{CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: target.Provider, ConnectionID: target.ConnectionID, AccountIdentity: identity, Region: set.Region}
+		placements[name] = CloudPlacement{CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: target.Provider, ConnectionID: target.ConnectionID, AccountIdentity: identity, Region: set.Region, RegionSource: regionSource}
 		set.CloudTarget = ""
 		s.Settings, s.Environments = set, nil
 		out.Services[name] = s

@@ -14,7 +14,7 @@ import (
 
 // AppliedCloudPlan constructs migration actions from serving bindings only.
 // It never reads a current analysis, manifest, branch or environment variable.
-func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, original ...*cloudprofiles.Assignment) *Result {
+func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, _ ...*cloudprofiles.Assignment) *Result {
 	p := &planner{in: Input{Providers: registry, Connections: options, CloudPlacements: map[string]CloudPlacement{}, Chosen: map[string]string{}}, services: map[string]*Action{}, resources: map[string]*Action{}, bindings: map[string]*Binding{}, clouds: map[string]bool{}, unready: map[string]string{}, held: map[string]string{}, removing: map[string]bool{}}
 	blocked := func(name, message string) {
 		p.problem(Finding{Code: "cloud-sync-blocked", Subject: ServiceSubject, Name: name, Message: message})
@@ -69,21 +69,9 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			continue
 		}
 		region := t.Region
-		// A service override survives a target default change.
-		oldDefault := pin.Region
-		if len(original) > 0 && original[0] != nil {
-			for _, oldTarget := range original[0].Targets {
-				if oldTarget.ID == pin.TargetID {
-					oldDefault = oldTarget.Region
-					if oldDefault == "" {
-						if oldProvider, e := registry.Get(oldTarget.Provider); e == nil {
-							oldDefault = oldProvider.DefaultRegion()
-						}
-					}
-				}
-			}
-		}
-		if cfg.Region != oldDefault {
+		// Historical bindings without provenance keep their applied region.
+		// Only an explicitly recorded default follows the target's region.
+		if pin.RegionSource != "default" {
 			region = cfg.Region
 		}
 		if region == "" {
@@ -96,7 +84,7 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			blocked(b.Name, "The destination cannot preserve the applied scale and size settings.")
 		}
 		cfg.Provider, cfg.Region, cfg.Execution = prov.Name, region, runs.Execution
-		cfg.CloudPlacement = &CloudPlacement{CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region}
+		cfg.CloudPlacement = &CloudPlacement{CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: pin.RegionSource}
 		p.in.CloudPlacements[b.Name] = *cfg.CloudPlacement
 		set := manifest.Settings{Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size}
 		if OwnedCloud(prov.Cloud) {

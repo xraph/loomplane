@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -88,5 +89,85 @@ func TestVercelUnpublishedProjectCheckpointAndCleanupRetry(t *testing.T) {
 	job.Resume = []byte(`{"deployment_id":"unknown-project"}`)
 	if _, err = executor.PendingCloudResource(t.Context(), job); err == nil {
 		t.Fatal("unknown resource identity guessed a cleanup target")
+	}
+}
+
+type pendingCleanupAuth struct{}
+
+func (pendingCleanupAuth) ValidateCloudSync(context.Context, *planning.Plan) error { return nil }
+func (pendingCleanupAuth) ValidateCloudSyncCleanup(context.Context, *planning.Plan, string) error {
+	return nil
+}
+
+type pendingArchive struct {
+	fakeSources
+	archive []byte
+}
+
+func (s *pendingArchive) Open(context.Context, string) (io.ReadCloser, int64, error) {
+	return io.NopCloser(bytes.NewReader(s.archive)), int64(len(s.archive)), nil
+}
+
+func TestRevertCleanupProtectsServingAccountAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name, originalTeam string
+		deletes            int
+		blocked            bool
+	}{
+		{"same verified account", "team-a", 0, false},
+		{"distinct account colliding project ID", "team-b", 1, false},
+		{"unverified original account", "", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deletes := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case req.Method == http.MethodDelete:
+					deletes++
+					w.WriteHeader(http.StatusNoContent)
+				case req.Method == http.MethodPost && req.URL.Path == "/v13/deployments":
+					_, _ = io.WriteString(w, `{"id":"failed-build"}`)
+				case req.URL.Path == "/v13/deployments/failed-build":
+					_, _ = io.WriteString(w, `{"id":"failed-build","readyState":"ERROR","errorMessage":"build failed"}`)
+				default:
+					_, _ = io.WriteString(w, `{"id":"serving-project","name":"web"}`)
+				}
+			}))
+			defer server.Close()
+			r, plan, plans, _, _ := cloudRunner(t)
+			plan.CloudSyncID = "forward-sync"
+			r.cloudSyncAuth = pendingCleanupAuth{}
+			r.executors["vercel"] = &Vercel{Client: vercel.New(server.URL)}
+			r.sources = &pendingArchive{archive: buildArchive(t, map[string]string{})}
+			a := &plan.Actions[0]
+			a.Op, a.Service.Env = planning.Replace, nil
+			original := &connections.Connection{ID: "original", Cloud: "vercel", Status: connections.StatusReady, Details: map[string]string{"team_id": tc.originalTeam}}
+			r.credentials.(targetCredentials)["original"] = original
+			oldCfg := *a.Service
+			oldCfg.CloudPlacement = nil
+			raw, _ := json.Marshal(oldCfg)
+			plans.bindings[a.ID] = &planning.Binding{ID: "serving", OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Subject: a.Subject, Name: a.Name, Provider: a.Provider, ConnectionID: "original", ExternalID: "serving-project", Config: raw}
+			id, _, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = r.FetchSource(t.Context(), plan.OrgID, id); err != nil {
+				t.Fatal(err)
+			}
+			if err = r.Run(t.Context(), plan.OrgID, id, a.ID, nil, func([]byte) error { return nil }); err == nil || !strings.Contains(err.Error(), "build failed") {
+				t.Fatalf("forward did not fail in provider build: %v", err)
+			}
+			err = r.CleanupRevertedCloudPlan(t.Context(), plan.OrgID, plan.ID, "compensation", func([]byte) error { return nil })
+			if (err != nil) != tc.blocked {
+				t.Fatalf("cleanup error %v, want blocked %v", err, tc.blocked)
+			}
+			if deletes != tc.deletes {
+				t.Fatalf("provider deletes %d, want %d", deletes, tc.deletes)
+			}
+			if plans.bindings[a.ID].ConnectionID != "original" {
+				t.Fatal("cleanup changed serving binding")
+			}
+		})
 	}
 }

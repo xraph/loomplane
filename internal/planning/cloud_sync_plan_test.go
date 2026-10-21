@@ -70,3 +70,72 @@ func TestAppliedCloudPlanEmptyAndAdoption(t *testing.T) {
 		t.Fatal("migration accepted missing historical variables")
 	}
 }
+
+func TestAppliedCloudRegionMatchesNextOrdinaryPlan(t *testing.T) {
+	for _, tc := range []struct{ name, defaults, settings, want string }{
+		{"service override equal default", "", "region: us-central1", "us-central1"},
+		{"environment override equal default", "", "environments: {production: {region: us-central1}}", "us-central1"},
+		{"manifest default equal target default", "defaults: {region: us-central1}\n", "", "us-central1"},
+		{"inherited target default", "", "", "us-east1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assigned, _ := cloudTargetFixture()
+			assigned.Targets = assigned.Targets[:1]
+			assigned.Targets[0].Provider, assigned.Targets[0].Region = "cloud-run", "us-central1"
+			conns := []ConnectionOption{{ID: "a", Cloud: "gcp", Ready: true, Account: "project-a", Details: map[string]string{"project_id": "project-a"}}}
+			doc := "version: 1\n" + tc.defaults + "services:\n  web: {source: cmd/api, cloud_target: frontend"
+			if tc.settings != "" {
+				doc += ", " + tc.settings
+			}
+			m := parse(t, doc+"}\n")
+			ordinary := func() *Result {
+				resolved, pins, err := ResolveCloudTargets(m, "production", assigned, conns)
+				if err != nil {
+					t.Fatal(err)
+				}
+				result := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: resolved, Providers: providers.Registry(), Connections: conns, CloudPlacements: pins})
+				if !result.Executable {
+					t.Fatalf("ordinary: %+v", result.Problems)
+				}
+				return result
+			}
+			first := action(t, ordinary(), "service:web")
+			first.Service.Repo, first.Service.CommitSHA = "app", "commit"
+			first.Service.AppliedInputs = &AppliedInputs{Variables: "vars", Source: &PlanSource{Alias: "app", CommitSHA: "commit"}, ArtifactKey: "artifact"}
+			raw, _ := json.Marshal(first.Service)
+			binding := &Binding{ID: "binding", CommitSHA: "commit", Subject: ServiceSubject, Name: "web", Provider: first.Provider, Region: first.Region, ConnectionID: first.ConnectionID, Config: raw}
+			before := *assigned
+			before.Targets = append([]cloudprofiles.Target(nil), assigned.Targets...)
+			assigned.Targets[0].Region = "us-east1"
+			assigned.Targets[0].Revision++
+			migrated := AppliedCloudPlan([]*Binding{binding}, assigned, assigned.Targets[0].ID, conns, providers.Registry(), &before)
+			if !migrated.Executable {
+				t.Fatalf("migration: %+v", migrated.Problems)
+			}
+			got := action(t, migrated, "service:web").Region
+			next := action(t, ordinary(), "service:web").Region
+			if got != tc.want || got != next {
+				t.Fatalf("migration region %q, next ordinary region %q, want %q", got, next, tc.want)
+			}
+			first.Service.CloudPlacement.RegionSource = ""
+			binding.Config, _ = json.Marshal(first.Service)
+			historical := AppliedCloudPlan([]*Binding{binding}, assigned, assigned.Targets[0].ID, conns, providers.Registry(), &before)
+			if !historical.Executable || action(t, historical, "service:web").Region != "us-central1" {
+				t.Fatalf("historical binding changed applied region: %+v", historical)
+			}
+			if tc.settings == "" && tc.defaults == "" {
+				assigned.Targets[0].Region = ""
+				inheritedProvider := action(t, ordinary(), "service:web")
+				inheritedProvider.Service.Repo, inheritedProvider.Service.CommitSHA = "app", "commit"
+				inheritedProvider.Service.AppliedInputs = first.Service.AppliedInputs
+				binding.Config, _ = json.Marshal(inheritedProvider.Service)
+				binding.Region = inheritedProvider.Region
+				assigned.Targets[0].Region = "us-east1"
+				migrated = AppliedCloudPlan([]*Binding{binding}, assigned, assigned.Targets[0].ID, conns, providers.Registry())
+				if !migrated.Executable || action(t, migrated, "service:web").Region != action(t, ordinary(), "service:web").Region {
+					t.Fatalf("provider-default inheritance diverged: %+v", migrated)
+				}
+			}
+		})
+	}
+}

@@ -255,6 +255,7 @@ export interface CloudPlacement {
   connectionId: string;
   provider: string;
   region?: string;
+  regionSource?: string;
   targetId: string;
   targetName: string;
   targetRevision: number;

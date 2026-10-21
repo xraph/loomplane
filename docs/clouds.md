@@ -58,6 +58,8 @@ The idempotency key belongs to acceptance. Reuse the same preview, digest and `-
 
 Switching migrates the release that currently serves, using each binding's saved source artifact and encrypted variable snapshot. It does not deploy an unapproved draft. Missing historical inputs block the switch. Future ordinary releases resolve the newly selected account from the saved target, while deployments already approved against an older revision must be reviewed again.
 
+A service region set in the manifest, its environment override or manifest defaults stays pinned when you change a target's default region. Services that inherit the target or provider default follow the new default. Older bindings without recorded region provenance keep their applied region during sync. Deploy an ordinary release to record that provenance before relying on a target default change to move them.
+
 ## Follow and recover a sync
 
 ```sh
@@ -67,18 +69,20 @@ loomctl cloud-syncs wait my-project csync_... --timeout 30m
 loomctl cloud-syncs retry my-project csync_... --wait --timeout 30m
 ```
 
+Finish or revert unfinished Cloud syncs before renaming a Cloud or target in the same project. This temporary project-wide restriction keeps the reviewed revisions valid through failed deployments, routing and cleanup recovery.
+
 Use `--json` for scripts. Cloud records use the same JSON fields as the HTTP API. Review-and-apply commands emit the preview followed by the sync as separate JSON documents. History is paginated; pass the returned `next` value as `--before` to read older operations.
 
-| State | Meaning and next action |
-| --- | --- |
-| `pending` | Accepted and persisted; Dispatch will schedule or recover it. |
-| `running` | Services are being reconciled from recorded inputs. |
-| `routing_pending` | Managed deployment finished, but you must verify external routing. |
+| State             | Meaning and next action                                                          |
+| ----------------- | -------------------------------------------------------------------------------- |
+| `pending`         | Accepted and persisted; Dispatch will schedule or recover it.                    |
+| `running`         | Services are being reconciled from recorded inputs.                              |
+| `routing_pending` | Managed deployment finished, but you must verify external routing.               |
 | `cleanup_pending` | Old resources are being removed. An error means cleanup needs recovery or retry. |
-| `failed` | Inspect per-environment errors, restore access or dependencies, then retry. |
-| `succeeded` | Every affected environment and its cleanup finished. |
-| `reverting` | A compensating operation owns the remaining work. Follow its sync ID. |
-| `reverted` | Compensation finished and original ownership was released. |
+| `failed`          | Inspect per-environment errors, restore access or dependencies, then retry.      |
+| `succeeded`       | Every affected environment and its cleanup finished.                             |
+| `reverting`       | A compensating operation owns the remaining work. Follow its sync ID.            |
+| `reverted`        | Compensation finished and original ownership was released.                       |
 
 Waits stop at success, failure, external routing, or a cleanup error. They continue through active cleanup. A timeout returns an error and the latest record so you can resume following its ID. Restarting Loomplane recovers committed work; a periodic recovery pass handles accepted operations whose enqueue failed. It does not grant new permissions.
 
@@ -108,23 +112,23 @@ Revert reviews compensation from the actual serving state. It refuses work that 
 
 All routes require organization and project authorization under `/api/v1/projects/:id`:
 
-| Route | Operation |
-| --- | --- |
-| `GET, POST /clouds` | `clouds.list`, `clouds.create` |
-| `GET, PUT, DELETE /clouds/:cloudId` | `clouds.get`, `clouds.update`, `clouds.delete` |
-| `GET, POST /clouds/:cloudId/targets` | `cloudTargets.list`, `cloudTargets.create` |
+| Route                                                 | Operation                                                        |
+| ----------------------------------------------------- | ---------------------------------------------------------------- |
+| `GET, POST /clouds`                                   | `clouds.list`, `clouds.create`                                   |
+| `GET, PUT, DELETE /clouds/:cloudId`                   | `clouds.get`, `clouds.update`, `clouds.delete`                   |
+| `GET, POST /clouds/:cloudId/targets`                  | `cloudTargets.list`, `cloudTargets.create`                       |
 | `GET, PUT, DELETE /clouds/:cloudId/targets/:targetId` | `cloudTargets.get`, `cloudTargets.update`, `cloudTargets.delete` |
-| `POST /cloud-changes/preview` | `cloudChanges.preview` |
-| `GET /cloud-changes/:previewId` | `cloudChanges.getPreview` |
-| `POST /cloud-changes/apply` | `cloudChanges.apply` |
-| `GET /environments/:environmentId/cloud` | `environmentClouds.get` |
-| `POST /environments/:environmentId/cloud/preview` | `environmentClouds.preview` |
-| `GET /cloud-syncs` | `cloudSyncs.list` |
-| `GET /cloud-syncs/:syncId` | `cloudSyncs.get` |
-| `POST /cloud-syncs/:syncId/retry` | `cloudSyncs.retry` |
-| `POST /cloud-syncs/:syncId/revert/preview` | `cloudSyncs.previewRevert` |
-| `POST /cloud-syncs/revert/apply` | `cloudSyncs.applyRevert` |
-| `POST /cloud-syncs/:syncId/routing` | `cloudSyncs.completeRouting` |
+| `POST /cloud-changes/preview`                         | `cloudChanges.preview`                                           |
+| `GET /cloud-changes/:previewId`                       | `cloudChanges.getPreview`                                        |
+| `POST /cloud-changes/apply`                           | `cloudChanges.apply`                                             |
+| `GET /environments/:environmentId/cloud`              | `environmentClouds.get`                                          |
+| `POST /environments/:environmentId/cloud/preview`     | `environmentClouds.preview`                                      |
+| `GET /cloud-syncs`                                    | `cloudSyncs.list`                                                |
+| `GET /cloud-syncs/:syncId`                            | `cloudSyncs.get`                                                 |
+| `POST /cloud-syncs/:syncId/retry`                     | `cloudSyncs.retry`                                               |
+| `POST /cloud-syncs/:syncId/revert/preview`            | `cloudSyncs.previewRevert`                                       |
+| `POST /cloud-syncs/revert/apply`                      | `cloudSyncs.applyRevert`                                         |
+| `POST /cloud-syncs/:syncId/routing`                   | `cloudSyncs.completeRouting`                                     |
 
 Acceptance takes `preview_id`, the preview's `revision` digest and `idempotency_key`, and returns HTTP 202 with the persisted sync ID. Assignment reads return `{ "assignment": null, "revision": 0 }` for an environment never assigned, with a higher generation after unassignment. Metadata updates use integer revisions. History accepts `before` and `limit` (30 by default, at most 100).
 

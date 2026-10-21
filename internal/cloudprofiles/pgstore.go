@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
 )
 
@@ -107,7 +108,12 @@ func (s *PgStore) UpdateProfile(ctx context.Context, p *Profile, previousRevisio
 	if previousRevision < 1 || p.Revision != previousRevision+1 {
 		return ErrConflict
 	}
-	tag, err := s.db.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name=$4,revision=$5,updated_at=$6 WHERE org_id=$1 AND project_id=$2 AND id=$3 AND revision=$7`, p.OrgID, p.ProjectID, p.ID, p.Name, p.Revision, p.UpdatedAt, previousRevision)
+	tx, err := s.metadataTransaction(ctx, p.OrgID, p.ProjectID)
+	if err != nil {
+		return err
+	}
+	defer rollbackSync(tx)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name=$4,revision=$5,updated_at=$6 WHERE org_id=$1 AND project_id=$2 AND id=$3 AND revision=$7`, p.OrgID, p.ProjectID, p.ID, p.Name, p.Revision, p.UpdatedAt, previousRevision)
 	if err != nil {
 		return storeError(err)
 	}
@@ -118,7 +124,7 @@ func (s *PgStore) UpdateProfile(ctx context.Context, p *Profile, previousRevisio
 	if n != 1 {
 		return ErrConflict
 	}
-	return nil
+	return tx.Commit()
 }
 
 // DeleteProfile removes an unassigned Cloud. Its targets cascade together.
@@ -177,7 +183,12 @@ func (s *PgStore) UpdateTarget(ctx context.Context, t *Target, previousRevision 
 	if previousRevision < 1 || t.Revision != previousRevision+1 {
 		return ErrConflict
 	}
-	tag, err := s.db.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name=$5,revision=$6,updated_at=$7 WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4 AND revision=$8 AND name=$9 AND provider=$10 AND connection_id=$11 AND region=$12`, t.OrgID, t.ProjectID, t.CloudID, t.ID, t.DisplayName, t.Revision, t.UpdatedAt, previousRevision, t.Name, t.Provider, t.ConnectionID, t.Region)
+	tx, err := s.metadataTransaction(ctx, t.OrgID, t.ProjectID)
+	if err != nil {
+		return err
+	}
+	defer rollbackSync(tx)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name=$5,revision=$6,updated_at=$7 WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4 AND revision=$8 AND name=$9 AND provider=$10 AND connection_id=$11 AND region=$12`, t.OrgID, t.ProjectID, t.CloudID, t.ID, t.DisplayName, t.Revision, t.UpdatedAt, previousRevision, t.Name, t.Provider, t.ConnectionID, t.Region)
 	if err != nil {
 		return storeError(err)
 	}
@@ -188,7 +199,7 @@ func (s *PgStore) UpdateTarget(ctx context.Context, t *Target, previousRevision 
 	if n != 1 {
 		return ErrConflict
 	}
-	return nil
+	return tx.Commit()
 }
 
 // DeleteTarget refuses deletion while any environment uses its Cloud.
@@ -241,4 +252,28 @@ func (s *PgStore) EnvironmentCloud(ctx context.Context, orgID, projectID, enviro
 		return nil, 0, fmt.Errorf("decode assigned targets: %w", err)
 	}
 	return a, *revision, nil
+}
+
+// metadataTransaction serializes edits with acceptance. Retained syncs pin both
+// Cloud and target revisions until recovery or compensation releases them.
+func (s *PgStore) metadataTransaction(ctx context.Context, org, project string) (driver.Tx, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	var id string
+	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, project).Scan(&id); err != nil {
+		rollbackSync(tx)
+		return nil, storeError(err)
+	}
+	var retained bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND status NOT IN ('succeeded','reverted'))`, org, project).Scan(&retained)
+	if err != nil || retained {
+		rollbackSync(tx)
+		if err != nil {
+			return nil, storeError(err)
+		}
+		return nil, fmt.Errorf("%w: finish or revert the project Cloud sync before renaming a Cloud or target", ErrBusy)
+	}
+	return tx, nil
 }
