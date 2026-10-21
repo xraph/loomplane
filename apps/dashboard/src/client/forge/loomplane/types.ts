@@ -113,6 +113,10 @@ export interface ApplyCloudInputBody {
   revision: string;
 }
 
+export interface ApplyInputBody {
+  review: string;
+}
+
 export interface Assignment {
   cloudId: string;
   cloudRevision: number;
@@ -165,6 +169,7 @@ export interface Binding {
   name: string;
   observedAt?: string;
   orgId: string;
+  physicalId?: string;
   planId: string;
   projectId: string;
   provider: string;
@@ -253,11 +258,18 @@ export interface CloudPlacement {
   assignmentRevision: number;
   cloudId: string;
   cloudRevision: number;
+  connectionGeneration?: number;
   connectionId: string;
+  cpuMillis?: number;
   grantRevision?: number;
+  memoryBytes?: number;
+  poolId?: string;
+  poolRevision?: number;
   provider: string;
   region?: string;
   regionSource?: string;
+  serverId?: string;
+  serverRevision?: number;
   targetId: string;
   targetName: string;
   targetRevision: number;
@@ -347,6 +359,7 @@ export interface Connection {
   createdAt: string;
   createdBy: string;
   details: Record<string, any>;
+  generation: number;
   id: string;
   message: string;
   missing: string[];
@@ -406,8 +419,10 @@ export interface CreateTargetInputBody {
   connectionId: string;
   displayName: string;
   name: string;
+  poolId?: string;
   provider: string;
   region: string;
+  runtime: string;
 }
 
 export interface CreateVariableInputBody {
@@ -499,6 +514,13 @@ export interface DeploymentList {
   next?: string;
 }
 
+export interface DrainReview {
+  reservations: number;
+  review: string;
+  serverId: string;
+  serverRevision: number;
+}
+
 export interface DriftCounts {
   changed: number;
   deployed: number;
@@ -540,6 +562,10 @@ export interface Endpoint {
   hostname?: string;
   ingressClass?: string;
   tlsSecret?: string;
+}
+
+export interface EnrollmentBody {
+  hostKey: string;
 }
 
 export interface EnvLink {
@@ -667,6 +693,13 @@ export interface Ignore {
   resources?: string[];
 }
 
+export interface InfrastructureAction {
+  id: string;
+  kind: string;
+  resourceId: string;
+  status: string;
+}
+
 export interface InfrastructureStatus {
   engine: string;
   providers: ProviderStatus[];
@@ -741,6 +774,31 @@ export interface ManifestDraft {
   yaml: string;
 }
 
+export interface MoveInput {
+  destinationServerId: string;
+  environmentId: string;
+  poolId: string;
+  projectId: string;
+  review?: string;
+  service: string;
+}
+
+export interface MoveInputBody {
+  destinationServerId: string;
+  environmentId: string;
+  poolId: string;
+  projectId: string;
+  review?: string;
+  service: string;
+}
+
+export interface MoveReview {
+  input: MoveInput;
+  placement: Placement;
+  review: string;
+  sourceServerId: string;
+}
+
 export interface NewKeyBody {
   access: string;
   expiresInDays?: number;
@@ -772,6 +830,40 @@ export interface NotificationList {
 
 export interface OK {
   ok: boolean;
+}
+
+export interface Operation {
+  accountId: string;
+  actions: InfrastructureAction[];
+  attempt: number;
+  attempted: boolean;
+  bootstrapExpiresAt: string;
+  cloudId: string;
+  connectionGeneration?: number;
+  connectionId: string;
+  connectionRevision: string;
+  createdAt: string;
+  enrolled: boolean;
+  estimatedHourlyUsd: number;
+  expiresAt: string;
+  hostKey?: string;
+  id: string;
+  input: ServerInput;
+  message: string;
+  orgId: string;
+  ownership: string;
+  provider: string;
+  publicIpv4: string[];
+  resourceId: string;
+  review: string;
+  serverId: string;
+  stateRevision: number;
+  status: string;
+  updatedAt: string;
+}
+
+export interface OperationList {
+  operations: (Operation | null)[];
 }
 
 export interface OrgInvitation {
@@ -810,6 +902,17 @@ export interface Package {
   requires?: Requirement[];
   runtime?: string;
   source?: string;
+}
+
+export interface Placement {
+  connectionGeneration: number;
+  connectionId: string;
+  cpuMillis: number;
+  memoryBytes: number;
+  poolId: string;
+  poolRevision: number;
+  serverId: string;
+  serverRevision: number;
 }
 
 export interface Plan {
@@ -910,6 +1013,37 @@ export interface PolicyInputBody {
 
 export interface PolicyList {
   policies: Policy[];
+}
+
+export interface Pool {
+  cloudId: string;
+  id: string;
+  members: PoolMember[];
+  name: string;
+  orgId: string;
+  revision: number;
+}
+
+export interface PoolInputBody {
+  members: {
+  cpuMillis: number;
+  draining: boolean;
+  memoryBytes: number;
+  serverId: string;
+}[];
+  name: string;
+  revision: number;
+}
+
+export interface PoolList {
+  pools: (Pool | null)[];
+}
+
+export interface PoolMember {
+  cpuMillis: number;
+  draining: boolean;
+  memoryBytes: number;
+  serverId: string;
 }
 
 export interface PreferenceInputBody {
@@ -1286,6 +1420,16 @@ export interface Runs {
   workload: string;
 }
 
+export interface RuntimeHealth {
+  architecture: string;
+  checkedAt: string;
+  cpus: number;
+  dockerId: string;
+  effectiveCpuMillis: number;
+  effectiveMemoryBytes: number;
+  memoryBytes: number;
+}
+
 export interface SaveInputBody {
   baseRevision?: number;
   manifest?: {
@@ -1305,6 +1449,87 @@ export interface SaveInputBody {
 export interface Scale {
   max: number;
   min: number;
+}
+
+export interface Server {
+  accountId: string;
+  cloudId: string;
+  connectionId: string;
+  createdAt: string;
+  creationOperationId: string;
+  draining: boolean;
+  health: RuntimeHealth;
+  id: string;
+  name: string;
+  orgId: string;
+  ownership: string;
+  provider: string;
+  region: string;
+  resourceId: string;
+  revision: number;
+  runtimeConnectionId: string;
+  size: string;
+  stateRevision: number;
+  status: string;
+  updatedAt: string;
+}
+
+export interface ServerImage {
+  bootstrap: boolean;
+  id: string;
+  name: string;
+  regions: string[];
+}
+
+export interface ServerInput {
+  cloudRevision: number;
+  confirmAdoption?: boolean;
+  connectionId?: string;
+  image?: string;
+  kind: string;
+  name?: string;
+  region?: string;
+  serverId?: string;
+  serverRevision?: number;
+  size?: string;
+}
+
+export interface ServerInputBody {
+  cloudRevision: number;
+  confirmAdoption?: boolean;
+  connectionId?: string;
+  image?: string;
+  kind: string;
+  name?: string;
+  region?: string;
+  serverId?: string;
+  serverRevision?: number;
+  size?: string;
+}
+
+export interface ServerList {
+  servers: (Server | null)[];
+}
+
+export interface ServerOptions {
+  images: ServerImage[];
+  regions: ServerRegion[];
+  sizes: ServerSize[];
+}
+
+export interface ServerRegion {
+  id: string;
+  name: string;
+}
+
+export interface ServerSize {
+  cpus: number;
+  diskGb: number;
+  hourlyUsd: number;
+  id: string;
+  memoryMib: number;
+  monthlyUsd: number;
+  regions: string[];
 }
 
 export interface Service {
@@ -1500,10 +1725,12 @@ export interface Target {
   id: string;
   name: string;
   orgId: string;
+  poolId?: string;
   projectId: string;
   provider: string;
   region: string;
   revision: number;
+  runtime: string;
   updatedAt: string;
 }
 

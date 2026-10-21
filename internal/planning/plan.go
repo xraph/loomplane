@@ -399,6 +399,9 @@ type Binding struct {
 	// ExternalID is the Ctrl Plane instance's ID, or the provider's ID for
 	// a resource Loomplane manages itself.
 	ExternalID string `json:"external_id"`
+	// PhysicalID identifies the immutable provider incarnation when the adapter
+	// can verify it. ExternalID may be a reusable native name.
+	PhysicalID string `json:"physical_id,omitempty"`
 	// Config is the ServiceConfig or ResourceConfig last applied.
 	Config json.RawMessage `json:"config"`
 	// URL is where a deployed service answers, which the services that

@@ -33,6 +33,7 @@ func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
 	g.MustRegister(
 		statements("20261025000100", "server_pools", serverPoolsUp, serverPoolsDown),
+		statements("20261024000300", "binding_physical_identity", bindingPhysicalIdentityUp, bindingPhysicalIdentityDown),
 		statements("20261024000200", "cloud_infrastructure_review_guards", cloudInfrastructureReviewUp, cloudInfrastructureReviewDown),
 		statements("20261024000100", "cloud_infrastructure", cloudInfrastructureUp, cloudInfrastructureDown),
 		statements("20261011000001", "create_projects", projectsUp, projectsDown),

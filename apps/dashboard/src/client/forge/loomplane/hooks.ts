@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudProjectGrantList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CloudProjectGrantList, CloudSyncList, CloudTargetList, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, Server, ServerList, ServerOptions, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -32,9 +32,25 @@ export const useOrganizationCloudSyncsCompleteRouting = mutation<Sync, Sync>(ops
 export const useOrganizationCloudsGet = query<Profile>(ops['organizationClouds.get']);
 export const useOrganizationCloudsUpdate = mutation<Profile, Profile>(ops['organizationClouds.update']);
 export const useOrganizationCloudsDelete = mutation(ops['organizationClouds.delete']);
+export const useInfrastructureOperationsList = query<OperationList>(ops['infrastructureOperations.list']);
+export const useInfrastructureOperationsGet = query<Operation>(ops['infrastructureOperations.get']);
+export const useInfrastructureOperationsApply = mutation<Operation, Operation>(ops['infrastructureOperations.apply']);
+export const useInfrastructureOperationsCancel = mutation<Operation, Operation>(ops['infrastructureOperations.cancel']);
+export const useInfrastructureOperationsRetry = mutation<Operation, Operation>(ops['infrastructureOperations.retry']);
+export const useCloudPlacementsAcceptMove = mutation(ops['cloudPlacements.acceptMove']);
+export const useCloudPlacementsPreviewMove = mutation(ops['cloudPlacements.previewMove']);
+export const useCloudPoolsList = query<PoolList>(ops['cloudPools.list']);
+export const useCloudPoolsCreate = mutation<Pool, Pool>(ops['cloudPools.create']);
+export const useCloudPoolsUpdate = mutation<Pool, Pool>(ops['cloudPools.update']);
 export const useOrganizationCloudsListGrants = query<CloudProjectGrantList>(ops['organizationClouds.listGrants']);
 export const useOrganizationCloudsGrantProject = mutation(ops['organizationClouds.grantProject']);
 export const useOrganizationCloudsRevokeProject = mutation(ops['organizationClouds.revokeProject']);
+export const useCloudServersOptions = query<ServerOptions>(ops['cloudServers.options']);
+export const useCloudServersList = query<ServerList>(ops['cloudServers.list']);
+export const useCloudServersPreview = mutation<Operation, Operation>(ops['cloudServers.preview']);
+export const useCloudServersCheck = mutation<Server, Server>(ops['cloudServers.check']);
+export const useCloudServersApplyDrain = mutation<Server, Server>(ops['cloudServers.applyDrain']);
+export const useCloudServersPreviewDrain = mutation(ops['cloudServers.previewDrain']);
 export const useOrganizationCloudTargetsList = query<CloudTargetList>(ops['organizationCloudTargets.list']);
 export const useOrganizationCloudTargetsCreate = mutation<Target, Target>(ops['organizationCloudTargets.create']);
 export const useOrganizationCloudTargetsGet = query<Target>(ops['organizationCloudTargets.get']);
@@ -56,6 +72,7 @@ export const useGithubConnect = mutation<GitHubInstallation, GitHubInstallation>
 export const useGithubDisconnect = mutation(ops['github.disconnect']);
 export const useGithubRepositories = query<ConnectedRepositoryList>(ops['github.repositories']);
 export const useInfrastructureGet = query<InfrastructureStatus>(ops['infrastructure.get']);
+export const useInfrastructureEnrollmentComplete = mutation(ops['infrastructureEnrollment.complete']);
 export const useInvitationsList = query<OrgInvitationList>(ops['invitations.list']);
 export const useInvitationsCreate = mutation(ops['invitations.create']);
 export const useMembersList = query<OrgMemberList>(ops['members.list']);

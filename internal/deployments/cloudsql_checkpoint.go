@@ -1,12 +1,8 @@
 package deployments
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"slices"
 	"strings"
 
@@ -15,39 +11,20 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 )
 
-type cloudSQLScope struct {
-	Mode       string `json:"mode"`
-	Deployment string `json:"deployment"`
-	Action     string `json:"action"`
-	Connection string `json:"connection"`
-	Account    string `json:"account"`
-	Project    string `json:"project"`
-	Region     string `json:"region"`
-	Instance   string `json:"instance"`
-	Resource   string `json:"resource"`
-}
-
 type cloudSQLState struct {
-	Version    int           `json:"cloud_sql_checkpoint"`
-	Scope      cloudSQLScope `json:"scope"`
-	Stage      string        `json:"stage"`
-	Operation  string        `json:"operation,omitempty"`
-	Uncertain  bool          `json:"uncertain,omitempty"`
+	Version    int                     `json:"cloud_sql_checkpoint"`
+	Scope      databaseCheckpointScope `json:"scope"`
+	Stage      string                  `json:"stage"`
+	Operation  string                  `json:"operation,omitempty"`
+	Uncertain  bool                    `json:"uncertain,omitempty"`
 	checkpoint func([]byte) error
 }
 
 func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, instance, mode string) (*cloudSQLState, error) {
-	if job.Connection == nil || job.Connection.Cloud != connections.GCP || job.Connection.Status != connections.StatusReady ||
-		job.Connection.Details["project_id"] != project || job.Connection.ID == "" || job.Deployment == nil || job.Deployment.ID == "" || job.Action.ID == "" ||
-		project == "" || region == "" || instance == "" || strings.ContainsAny(instance, "/:\\?#") || job.Checkpoint == nil {
-		return nil, errors.New("cloud sql checkpoint requires the original deployment, checked account and resource scope")
-	}
-	raw, err := json.Marshal(cfg)
+	scope, err := newDatabaseCheckpointScope(job, cfg, connections.GCP, project, region, instance, mode)
 	if err != nil {
-		return nil, fmt.Errorf("cloud sql checkpoint resource: %w", err)
+		return nil, err
 	}
-	scope := cloudSQLScope{Mode: mode, Deployment: job.Deployment.ID, Action: job.Action.ID, Connection: job.Connection.ID,
-		Account: connections.AccountIdentity(job.Connection.Cloud, job.Connection.Account, job.Connection.Details), Project: project, Region: region, Instance: instance, Resource: fmt.Sprintf("%x", sha256.Sum256(raw))}
 	state := &cloudSQLState{Version: 1, Scope: scope, Stage: "instance", checkpoint: job.Checkpoint}
 	stages := []string{"instance", "database", "user", "ready"}
 	if mode == "remove" {
@@ -57,17 +34,12 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 	if len(job.Resume) == 0 {
 		return state, nil
 	}
-	decoder := json.NewDecoder(bytes.NewReader(job.Resume))
-	decoder.DisallowUnknownFields()
 	var restored cloudSQLState
-	if err := decoder.Decode(&restored); err != nil {
-		return nil, fmt.Errorf("read cloud sql checkpoint: %w", err)
+	if err := decodeDatabaseCheckpoint(job.Resume, &restored); err != nil {
+		return nil, err
 	}
 	state = &restored
 	state.checkpoint = job.Checkpoint
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return nil, errors.New("invalid cloud sql checkpoint suffix")
-	}
 	if state.Version != 1 || state.Scope != scope || !slices.Contains(stages, state.Stage) ||
 		(state.Operation != "" && !state.Uncertain) || ((state.Stage == "ready" || state.Stage == "removed") && state.Uncertain) {
 		return nil, errors.New("cloud sql checkpoint does not match the original account, resource and operation")

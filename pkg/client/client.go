@@ -522,6 +522,7 @@ func (c *Client) Retry(ctx context.Context, deploymentID string) (*Deployment, e
 
 // Binding is what runs a service or resource in an environment now.
 type Binding struct {
+	PhysicalID    string     `json:"physical_id,omitempty"`
 	ID            string     `json:"id"`
 	EnvironmentID string     `json:"environment_id"`
 	Subject       string     `json:"subject"`

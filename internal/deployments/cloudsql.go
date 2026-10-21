@@ -147,7 +147,7 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	}
 	var password string
 	if state.Stage == "user" && state.Operation == "" {
-		password, _, err = keptPassword(ctx, job, rand.Text()+rand.Text())
+		password, err = keptPassword(ctx, job, rand.Text()+rand.Text())
 	} else {
 		var kept []byte
 		kept, err = job.Recall(ctx, passwordField)
@@ -176,19 +176,18 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 
 // keptPassword is a database user's password: the one kept for this
 // database, or fresh, kept before it's used so a retry sets the same one.
-// isNew reports which.
-func keptPassword(ctx context.Context, job *Job, fresh string) (password string, isNew bool, err error) {
+func keptPassword(ctx context.Context, job *Job, fresh string) (password string, err error) {
 	kept, err := job.Recall(ctx, passwordField)
 	if err == nil && len(kept) > 0 {
-		return string(kept), false, nil
+		return string(kept), nil
 	}
 	if err != nil && !errors.Is(err, ErrNoCredential) {
-		return "", false, err
+		return "", err
 	}
 	if err := job.Keep(ctx, passwordField, []byte(fresh)); err != nil {
-		return "", false, err
+		return "", err
 	}
-	return fresh, true, nil
+	return fresh, nil
 }
 
 // databaseName is the resource's name as a database name.

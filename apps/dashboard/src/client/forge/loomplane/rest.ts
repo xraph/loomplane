@@ -268,6 +268,203 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly cloudPlacements = {
+    /**
+     * cloudPlacements.acceptMove
+     */
+    acceptMove: async (cloudId: string, body: types.MoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/placements/accept-move`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["MoveInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["MoveReview"],
+      };
+
+      return this.request<types.MoveReview>(config);
+    },
+
+    /**
+     * cloudPlacements.previewMove
+     */
+    previewMove: async (cloudId: string, body: types.MoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/placements/preview-move`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["MoveInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["MoveReview"],
+      };
+
+      return this.request<types.MoveReview>(config);
+    },
+
+  };
+
+  public readonly cloudPools = {
+    /**
+     * cloudPools.create
+     */
+    create: async (cloudId: string, body: types.PoolInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Pool> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/pools`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["PoolInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Pool"],
+      };
+
+      return this.request<types.Pool>(config);
+    },
+
+    /**
+     * cloudPools.list
+     */
+    list: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PoolList> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/pools`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PoolList"],
+      };
+
+      return this.request<types.PoolList>(config);
+    },
+
+    /**
+     * cloudPools.update
+     */
+    update: async (cloudId: string, poolId: string, body: types.PoolInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Pool> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/pools/${encodeURIComponent(String(poolId))}`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["PoolInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Pool"],
+      };
+
+      return this.request<types.Pool>(config);
+    },
+
+  };
+
+  public readonly cloudServers = {
+    /**
+     * cloudServers.applyDrain
+     */
+    applyDrain: async (cloudId: string, serverId: string, body: types.ApplyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Server> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/servers/${encodeURIComponent(String(serverId))}/drain/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApplyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Server"],
+      };
+
+      return this.request<types.Server>(config);
+    },
+
+    /**
+     * cloudServers.check
+     */
+    check: async (cloudId: string, serverId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Server> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/servers/${encodeURIComponent(String(serverId))}/check`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Server"],
+      };
+
+      return this.request<types.Server>(config);
+    },
+
+    /**
+     * cloudServers.list
+     */
+    list: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ServerList> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/servers`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ServerList"],
+      };
+
+      return this.request<types.ServerList>(config);
+    },
+
+    /**
+     * cloudServers.options
+     */
+    options: async (cloudId: string, connectionId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ServerOptions> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/server-options/${encodeURIComponent(String(connectionId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ServerOptions"],
+      };
+
+      return this.request<types.ServerOptions>(config);
+    },
+
+    /**
+     * cloudServers.preview
+     */
+    preview: async (cloudId: string, body: types.ServerInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Operation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/servers/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ServerInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Operation"],
+      };
+
+      return this.request<types.Operation>(config);
+    },
+
+    /**
+     * cloudServers.previewDrain
+     */
+    previewDrain: async (cloudId: string, serverId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DrainReview> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/servers/${encodeURIComponent(String(serverId))}/drain/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DrainReview"],
+      };
+
+      return this.request<types.DrainReview>(config);
+    },
+
+  };
+
   public readonly cloudSyncs = {
     /**
      * cloudSyncs.applyRevert
@@ -1031,6 +1228,112 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.InfrastructureStatus>(config);
+    },
+
+  };
+
+  public readonly infrastructureEnrollment = {
+    /**
+     * Verify one-time server enrollment
+     */
+    complete: async (orgId: string, operationId: string, body: types.EnrollmentBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/infrastructure/enroll/${encodeURIComponent(String(orgId))}/${encodeURIComponent(String(operationId))}`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["EnrollmentBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+  };
+
+  public readonly infrastructureOperations = {
+    /**
+     * infrastructureOperations.apply
+     */
+    apply: async (cloudId: string, operationId: string, body: types.ApplyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Operation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/infrastructure-operations/${encodeURIComponent(String(operationId))}/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApplyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Operation"],
+      };
+
+      return this.request<types.Operation>(config);
+    },
+
+    /**
+     * infrastructureOperations.cancel
+     */
+    cancel: async (cloudId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Operation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/infrastructure-operations/${encodeURIComponent(String(operationId))}/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Operation"],
+      };
+
+      return this.request<types.Operation>(config);
+    },
+
+    /**
+     * infrastructureOperations.get
+     */
+    get: async (cloudId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Operation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/infrastructure-operations/${encodeURIComponent(String(operationId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Operation"],
+      };
+
+      return this.request<types.Operation>(config);
+    },
+
+    /**
+     * infrastructureOperations.list
+     */
+    list: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OperationList> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/infrastructure-operations`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OperationList"],
+      };
+
+      return this.request<types.OperationList>(config);
+    },
+
+    /**
+     * infrastructureOperations.retry
+     */
+    retry: async (cloudId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Operation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/infrastructure-operations/${encodeURIComponent(String(operationId))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Operation"],
+      };
+
+      return this.request<types.Operation>(config);
     },
 
   };

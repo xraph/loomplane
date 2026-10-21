@@ -126,6 +126,7 @@ type Outcome struct {
 	// ExternalID is what the provider calls it: a Ctrl Plane instance or a
 	// Vercel project.
 	ExternalID string
+	PhysicalID string
 	URL        string
 	// Image is the container image a build produced.
 	Image string
@@ -722,13 +723,13 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	old := job.Replaces
 	if old != nil {
-		destination := &planning.Binding{Provider: a.Provider, Region: a.Region, ConnectionID: connID, ExternalID: out.ExternalID}
+		destination := &planning.Binding{Provider: a.Provider, Region: a.Region, ConnectionID: connID, ExternalID: out.ExternalID, PhysicalID: out.PhysicalID}
 		if out.ExternalID != "" && out.ExternalID == old.ExternalID && old.Provider == a.Provider {
 			sameAccount, identityErr := r.sameBindingAccount(ctx, d.OrgID, old, destination)
 			if identityErr != nil {
 				return identityErr
 			}
-			if sameAccount && old.Region != a.Region {
+			if sameAccount && old.Region != a.Region && (old.PhysicalID == "" || out.PhysicalID == "") {
 				return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed", a.Provider, a.Name, placement(a.Provider, a.Region), old.ExternalID)
 			}
 		}
@@ -1143,6 +1144,9 @@ func (r *Runner) verify(ctx context.Context, url string) error {
 // replaced, when it moves now. Something it runs as again, after a move
 // back, isn't left to remove.
 func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, current *planning.Binding, out *Outcome, connID string, replaced *planning.Binding) (*planning.Binding, error) {
+	if current != nil && current.PhysicalID != "" && out.PhysicalID == "" && current.Provider == a.Provider && current.ExternalID == out.ExternalID && current.ConnectionID == connID {
+		return nil, errors.New("the provider omitted the known physical resource identity; binding update is blocked")
+	}
 	var cfg any = a.Service
 	if a.Subject == planning.ResourceSubject {
 		cfg = a.Resource
@@ -1154,7 +1158,7 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 	now := r.now().UTC()
 	b := &planning.Binding{
 		OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Subject: a.Subject, Name: a.Name,
-		Provider: a.Provider, Region: a.Region, Engine: a.Engine, ExternalID: out.ExternalID, Config: raw, URL: out.URL,
+		Provider: a.Provider, Region: a.Region, Engine: a.Engine, ExternalID: out.ExternalID, PhysicalID: out.PhysicalID, Config: raw, URL: out.URL,
 		ConnectionID: connID, Revision: out.Revision, CommitSHA: commitFor(d, a),
 		PlanID: d.PlanID, CreatedAt: now, UpdatedAt: now,
 	}

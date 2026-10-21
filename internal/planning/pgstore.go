@@ -285,7 +285,7 @@ func affected(r driver.Result) (bool, error) {
 
 const bindingColumns = `id, org_id, project_id, environment_id, subject, name, provider, region, engine,
 	external_id, config, url, connection_id, revision, commit_sha, drift, drift_message, observed_at,
-	plan_id, created_at, updated_at, replaced`
+	plan_id, created_at, updated_at, replaced, physical_id`
 
 // ListBindings implements Store.
 func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error) {
@@ -314,7 +314,7 @@ func scanBinding(row pgx.Row) (*Binding, error) {
 	var cfg, replaced []byte
 	if err := row.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region,
 		&b.Engine, &b.ExternalID, &cfg, &b.URL, &b.ConnectionID, &b.Revision, &b.CommitSHA, &b.Drift, &b.DriftMessage,
-		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt, &replaced); err != nil {
+		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt, &replaced, &b.PhysicalID); err != nil {
 		return nil, fmt.Errorf("scan binding: %w", err)
 	}
 	b.Config = cfg
@@ -391,17 +391,17 @@ func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {
 		return err
 	}
 	_, err = db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 		ON CONFLICT (environment_id, subject, name) DO UPDATE SET
 			provider = EXCLUDED.provider, region = EXCLUDED.region, engine = EXCLUDED.engine,
 			external_id = EXCLUDED.external_id, config = EXCLUDED.config, url = EXCLUDED.url,
 			connection_id = EXCLUDED.connection_id, revision = EXCLUDED.revision, commit_sha = EXCLUDED.commit_sha,
 			drift = EXCLUDED.drift, drift_message = EXCLUDED.drift_message, observed_at = EXCLUDED.observed_at,
-			plan_id = EXCLUDED.plan_id, updated_at = EXCLUDED.updated_at, replaced = EXCLUDED.replaced
+			plan_id = EXCLUDED.plan_id, updated_at = EXCLUDED.updated_at, replaced = EXCLUDED.replaced, physical_id = EXCLUDED.physical_id
 		WHERE loomplane_bindings.org_id = EXCLUDED.org_id`,
 		b.ID, b.OrgID, b.ProjectID, b.EnvironmentID, b.Subject, b.Name, b.Provider, b.Region, b.Engine,
 		b.ExternalID, cfg, b.URL, b.ConnectionID, b.Revision, b.CommitSHA, b.Drift, b.DriftMessage, b.ObservedAt,
-		b.PlanID, b.CreatedAt, b.UpdatedAt, replaced)
+		b.PlanID, b.CreatedAt, b.UpdatedAt, replaced, b.PhysicalID)
 	if err != nil {
 		return fmt.Errorf("put binding: %w", err)
 	}

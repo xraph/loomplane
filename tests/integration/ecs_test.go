@@ -349,7 +349,7 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 			port = "3306"
 		}
 		return `<DBInstance><DBInstanceIdentifier>` + id + `</DBInstanceIdentifier><Engine>` + in.Get("Engine") +
-			`</Engine><EngineVersion>` + in.Get("EngineVersion") + `.2</EngineVersion><DBInstanceStatus>` + status +
+			`</Engine><DbiResourceId>db-physical-` + id + `</DbiResourceId><TagList><Tag><Key>loomplane-operation</Key><Value>` + in.Get("Tags.Tag.1.Value") + `</Value></Tag></TagList><EngineVersion>` + in.Get("EngineVersion") + `.2</EngineVersion><DBInstanceStatus>` + status +
 			`</DBInstanceStatus><Endpoint><Address>` + id + `.abc.us-east-1.rds.amazonaws.com</Address><Port>` + port +
 			`</Port></Endpoint></DBInstance>`
 	}

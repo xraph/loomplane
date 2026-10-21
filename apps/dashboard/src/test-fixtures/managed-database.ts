@@ -46,6 +46,7 @@ export function managedDatabaseFixture(target: "rds" | "cloud-sql") {
   }
   const connection = {
     id: "selected",
+    generation: 1,
     name: "Selected account",
     cloud: provider.cloud,
     status: "ready",

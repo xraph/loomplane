@@ -1132,10 +1132,25 @@
           "cloud_revision": {
             "type": "integer"
           },
+          "connection_generation": {
+            "type": "integer"
+          },
           "connection_id": {
             "type": "string"
           },
+          "cpu_millis": {
+            "type": "integer"
+          },
           "grant_revision": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "pool_revision": {
             "type": "integer"
           },
           "provider": {
@@ -1146,6 +1161,12 @@
           },
           "region_source": {
             "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "server_revision": {
+            "type": "integer"
           },
           "target_id": {
             "type": "string"
@@ -2093,6 +2114,9 @@
           "org_id": {
             "type": "string"
           },
+          "physical_id": {
+            "type": "string"
+          },
           "plan_id": {
             "type": "string"
           },
@@ -2325,6 +2349,7 @@
       "Target": {
         "type": "object",
         "required": [
+          "runtime",
           "id",
           "org_id",
           "project_id",
@@ -2362,6 +2387,9 @@
           "org_id": {
             "type": "string"
           },
+          "pool_id": {
+            "type": "string"
+          },
           "project_id": {
             "type": "string"
           },
@@ -2374,6 +2402,9 @@
           "revision": {
             "type": "integer"
           },
+          "runtime": {
+            "type": "string"
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
@@ -2383,6 +2414,7 @@
       "Connection": {
         "type": "object",
         "required": [
+          "generation",
           "id",
           "org_id",
           "cloud",
@@ -2419,6 +2451,9 @@
           "details": {
             "type": "object",
             "additionalProperties": true
+          },
+          "generation": {
+            "type": "integer"
           },
           "id": {
             "type": "string",
@@ -3198,6 +3233,9 @@
             "org_id": {
               "type": "string"
             },
+            "physical_id": {
+              "type": "string"
+            },
             "plan_id": {
               "type": "string"
             },
@@ -3295,6 +3333,9 @@
               "type": "string"
             },
             "org_id": {
+              "type": "string"
+            },
+            "physical_id": {
               "type": "string"
             },
             "plan_id": {
@@ -3603,6 +3644,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "runtime",
             "id",
             "org_id",
             "project_id",
@@ -3640,6 +3682,9 @@
             "org_id": {
               "type": "string"
             },
+            "pool_id": {
+              "type": "string"
+            },
             "project_id": {
               "type": "string"
             },
@@ -3651,6 +3696,9 @@
             },
             "revision": {
               "type": "integer"
+            },
+            "runtime": {
+              "type": "string"
             },
             "updated_at": {
               "type": "string",
@@ -3667,6 +3715,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "runtime",
             "id",
             "org_id",
             "project_id",
@@ -3704,6 +3753,9 @@
             "org_id": {
               "type": "string"
             },
+            "pool_id": {
+              "type": "string"
+            },
             "project_id": {
               "type": "string"
             },
@@ -3715,6 +3767,9 @@
             },
             "revision": {
               "type": "integer"
+            },
+            "runtime": {
+              "type": "string"
             },
             "updated_at": {
               "type": "string",
@@ -3731,6 +3786,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "generation",
             "id",
             "org_id",
             "cloud",
@@ -3767,6 +3823,9 @@
             "details": {
               "type": "object",
               "additionalProperties": true
+            },
+            "generation": {
+              "type": "integer"
             },
             "id": {
               "type": "string",
@@ -3805,6 +3864,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "generation",
             "id",
             "org_id",
             "cloud",
@@ -3841,6 +3901,9 @@
             "details": {
               "type": "object",
               "additionalProperties": true
+            },
+            "generation": {
+              "type": "integer"
             },
             "id": {
               "type": "string",

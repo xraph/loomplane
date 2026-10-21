@@ -71,7 +71,7 @@ func (e *ElastiCache) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	}
 	// The token is set when the cache is made, so it's kept first and a
 	// retry reads the same one back.
-	token, _, err := keptPassword(ctx, job, rand.Text())
+	token, err := keptPassword(ctx, job, rand.Text())
 	if err != nil {
 		return nil, err
 	}
