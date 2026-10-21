@@ -43,6 +43,7 @@ type OwnedTarget struct {
 	Secrets     ResourceSecrets
 	Builder     *ImageBuilder
 	Ports       owned.PortReservations
+	Controllers ControllerReceipts
 	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
 	Backend     func(string, string) owned.Backend
 }
@@ -404,6 +405,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	cfg := job.Action.Service
 	sp, _ = spec(job, image, nil)
 	labels = map[string]string{owned.LabelOrg: job.Deployment.OrgID, owned.LabelProject: job.Deployment.ProjectID, owned.LabelEnvironment: job.Deployment.EnvironmentID, owned.LabelAction: job.Action.ID, owned.LabelService: job.Action.Name, owned.LabelConnection: job.Connection.ID, owned.LabelRuntime: state.RuntimeRef, owned.LabelPublic: strconv.FormatBool(cfg.Public), owned.LabelHealth: cfg.HealthPath, owned.LabelArchitecture: state.Image.Architecture, owned.LabelRevision: job.Deployment.ID + "/" + job.Action.ID}
+	labels[owned.LabelPlan] = job.Deployment.PlanID
 	if cfg.Workload == provider.Worker {
 		labels[owned.LabelHealth] = ""
 	}

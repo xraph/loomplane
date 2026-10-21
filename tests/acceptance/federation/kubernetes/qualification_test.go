@@ -137,6 +137,7 @@ func TestPreparedKubernetesIdentity(t *testing.T) {
 	t.Log("PASS retirement revokes enrollment and removes exact pod, configuration and account")
 	current, err := store.Get(ctx, destination.OrgID, destination.ID)
 	must(t, err)
+	proveControllerReceipts(ctx, t, db, client, *current)
 	proveApplicationIdentity(ctx, t, client, credentials, admin, *current)
 }
 

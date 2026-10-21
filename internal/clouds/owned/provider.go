@@ -15,6 +15,7 @@ import (
 
 const (
 	LabelOrg           = "loomplane.org"
+	LabelPlan          = "loomplane.plan"
 	LabelProject       = "loomplane.project"
 	LabelEnvironment   = "loomplane.environment"
 	LabelAction        = "loomplane.action"

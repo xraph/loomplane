@@ -41,9 +41,11 @@ class FixtureTests(unittest.TestCase):
         apps = next(d for d in roles if d["metadata"]["namespace"] == "apps")
         controllers = [r for r in apps["rules"] if r["apiGroups"] == ["apps"]]
         self.assertEqual(controllers, [
-            {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "create", "delete"]},
+            {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "create", "update", "delete"]},
             {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]},
         ])
+        self.assertIn({"apiGroups": [""], "resources": ["secrets"], "verbs": ["get", "create", "update", "delete"]}, apps["rules"])
+        self.assertIn({"apiGroups": [""], "resources": ["services"], "verbs": ["get"]}, apps["rules"])
         spire = next(d for d in roles if d["metadata"]["namespace"] == "spire")
         self.assertFalse(any(r["apiGroups"] == ["apps"] for r in spire["rules"]))
 

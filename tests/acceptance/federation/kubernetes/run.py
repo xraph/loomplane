@@ -150,8 +150,10 @@ plugins {
                         "verbs": ["get", "list", "create", "delete", "patch"],
                     }
                 ] + ([
-                    {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "create", "delete"]},
+                    {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "create", "update", "delete"]},
                     {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]},
+                    {"apiGroups": [""], "resources": ["secrets"], "verbs": ["get", "create", "update", "delete"]},
+                    {"apiGroups": [""], "resources": ["services"], "verbs": ["get"]},
                 ] if ns == "apps" else []),
             )
         )

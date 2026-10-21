@@ -88,7 +88,9 @@ func TestCloudCommandsBoundWaitsAndSurfaceActionableCheckpoints(t *testing.T) {
 				return "lp_test"
 			}})
 			started := time.Now()
-			err := app.Run([]string{"cloud-syncs", "wait", "app", "sync", "--timeout", "10ms", "--json"})
+			// Leave time for the local HTTP request under concurrent test load.
+			// The one-second bound below still detects unbounded polling.
+			err := app.Run([]string{"cloud-syncs", "wait", "app", "sync", "--timeout", "250ms", "--json"})
 			if status == "reverted" {
 				if err != nil {
 					t.Fatal(err)

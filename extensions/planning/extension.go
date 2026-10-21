@@ -43,6 +43,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
@@ -251,7 +252,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
 	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
 	serverTarget := &deployments.OwnedTarget{Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg)}
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, auditor); err != nil {
 		return err

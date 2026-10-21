@@ -385,8 +385,8 @@ installation work; no configuration flag currently enables this path.
 `RegisterWorkload` issues a service identity from a server-verified
 `WorkloadBinding`. You must resolve its service from an owned deployment and
 retain durable revocation intent before calling it. There is no management
-endpoint for caller-supplied selectors. The Kubernetes deployment verifier is available internally. Durable controller
-pins and the application registration journal are still pending, so agent launch
+endpoint for caller-supplied selectors. The Kubernetes deployment verifier is available internally. Controller receipts are retained by new Kubernetes deployments.
+The application registration journal is still pending, so agent launch
 does not issue service identities yet.
 
 The workload selector must match the destination's organization, project,
@@ -423,8 +423,10 @@ bindings, drifted workloads and mutable image tags are rejected.
 Pass that projection and a trusted `KubernetesWorkloadProfile` to
 `VerifyKubernetesWorkload`. The profile must retain the Deployment UID, generation
 and runtime revision from deployment or installation evidence. Reading a matching
-name or label is not enough to establish those pins. Production capture and
-persistence of this controller record still need to be wired.
+name or label is not enough to establish those pins. New Kubernetes service deployments save this controller record after readiness
+succeeds. A failed database write fails the operation and invokes the existing
+rollback path. Existing workloads need a successful deployment to establish a
+receipt; discovery does not adopt them.
 
 The verifier uses the current explicit connection and shared namespace, pod,
 node and SPIRE PSAT checks. It follows the pod's controlling ReplicaSet to the
@@ -449,5 +451,25 @@ selector to the pod UID and container name. A neighboring container or a changed
 image cannot satisfy that registration just by using the same service account.
 The local kind fixture exercises the real Deployment/ReplicaSet chain, CSI
 Workload API, PSAT parent and image selector, including a wrong-image registration
-and explicit revocation. It does not qualify production controller persistence,
+and explicit revocation. It does not qualify production application registration cleanup,
 StatefulSets, Miget or two-cluster application traffic.
+
+## Saved controller receipts
+
+Kubernetes deployment receipts retain the plan, runtime attempt reference,
+service, image, namespace identity and Deployment UID/generation. They contain
+no credentials. Retries can advance the generation of the same controller;
+a different UID needs a fresh attempt. Same-generation changes and delayed
+older results are rejected. The receipt and project event commit together.
+
+`LoadFederationController` matches a saved receipt to the current service binding
+and Ctrl Plane instance, including their plan and attempt reference. It derives
+the service account and container from that record. Before you issue an identity
+or grant access, authorize the caller and recheck the binding, instance and live
+owner chain with the required image proofs.
+
+Receipts survive process restarts. Deleting their connection or environment can
+remove these public records; a future registration journal must retain any
+parents it needs for revocation. Schema downgrade refuses to discard retained
+receipts. The application registration and cleanup journal is not wired yet,
+so these records do not enable production service issuance.

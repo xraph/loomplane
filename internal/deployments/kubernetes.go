@@ -61,5 +61,9 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 	}
 }
 func (e *OwnedTarget) kubernetesBackend(org, connection string) owned.Backend {
-	return &kubernetes.Runtime{Session: e.kubernetesSession(org, connection), Values: e.values}
+	runtime := &kubernetes.Runtime{Session: e.kubernetesSession(org, connection), Values: e.values}
+	if e.Controllers != nil {
+		runtime.RecordController = e.Controllers.RecordController
+	}
+	return runtime
 }

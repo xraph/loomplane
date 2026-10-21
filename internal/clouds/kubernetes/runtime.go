@@ -27,10 +27,11 @@ var ErrOwned = errors.New("the matching Kubernetes resource is not owned by this
 
 type Session func(context.Context, map[string]string) (*Client, error)
 type Runtime struct {
-	Session   Session
-	Values    owned.Values
-	WaitReady func(context.Context, *Client, string) error
-	Wait      time.Duration
+	Session          Session
+	Values           owned.Values
+	WaitReady        func(context.Context, *Client, string) error
+	RecordController func(context.Context, ControllerReceipt) error
+	Wait             time.Duration
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -300,6 +301,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	if checkErr := wait(ctx, c, name); checkErr != nil {
 		return nil, checkErr
+	}
+	if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
+		return nil, recordErr
 	}
 	endpoints := []cpprovider.Endpoint{}
 	for _, port := range servicePorts {
