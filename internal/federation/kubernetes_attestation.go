@@ -11,7 +11,6 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	agentv1 "github.com/spiffe/spire-api-sdk/proto/spire/api/server/agent/v1"
 	spiretypes "github.com/spiffe/spire-api-sdk/proto/spire/api/types"
-	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -26,22 +25,20 @@ import (
 // its pinned UID through the trusted installation path.
 type KubernetesAttestationProfile struct {
 	domain.Scope
-	DestinationID       string
-	ConnectionID        string
-	IdentityRevision    string
-	PodName             string
-	PodUID              string
-	ServiceAccount      string
-	Container           string
-	SPIRECluster        string
-	SPIRENamespace      string
-	SPIREServiceAccount string
+	DestinationID       string `json:"destination_id"`
+	ConnectionID        string `json:"connection_id"`
+	IdentityRevision    string `json:"identity_revision"`
+	PodName             string `json:"pod_name"`
+	PodUID              string `json:"pod_uid"`
+	ServiceAccount      string `json:"service_account"`
+	Container           string `json:"container"`
+	SPIRECluster        string `json:"spire_cluster"`
+	SPIRENamespace      string `json:"spire_namespace"`
+	SPIREServiceAccount string `json:"spire_service_account"`
 }
 
 // SPIRENodeReader reads node evidence through the authenticated SPIRE admin API.
-type SPIRENodeReader interface {
-	GetAgent(context.Context, *agentv1.GetAgentRequest, ...grpc.CallOption) (*spiretypes.Agent, error)
-}
+type SPIRENodeReader = workloadidentity.NodeReader
 
 // KubernetesAttestationResolver binds one installed agent to its actual pod and
 // an active k8s_psat parent. Only the node-UID SPIRE profile is supported.
@@ -72,7 +69,7 @@ func NewKubernetesAttestationResolver(raw []byte, settings map[string]string, tr
 }
 func validAttestationProfile(p KubernetesAttestationProfile) bool {
 	for _, v := range []string{p.OrgID, p.ProjectID, p.EnvironmentID, p.DestinationID, p.ConnectionID, p.PodUID} {
-		if v == "" || strings.ContainsAny(v, "/: \t\r\n") {
+		if !domain.ValidIdentitySegment(v) {
 			return false
 		}
 	}
@@ -122,7 +119,7 @@ func (r *KubernetesAttestationResolver) Resolve(ctx context.Context, d domain.De
 	if err != nil {
 		return denied, fmt.Errorf("read installed agent pod: %w", err)
 	}
-	if !currentPod(pod, p.PodUID, p.ServiceAccount) || pod.Spec.NodeName == "" {
+	if !installedPod(pod, p.PodUID, p.ServiceAccount) || pod.Spec.NodeName == "" {
 		return denied, ErrUnverified
 	}
 	found := false
@@ -177,7 +174,28 @@ func (r *KubernetesAttestationResolver) Resolve(ctx context.Context, d domain.De
 	return workloadidentity.Binding{Destination: d, ParentURI: parent.String(), CheckedAt: r.now().UTC(), Method: "kubernetes", Namespace: namespace, NamespaceUID: string(ns.UID), ServiceAccount: p.ServiceAccount, PodUID: p.PodUID, Container: p.Container, TTL: time.Minute}, nil
 }
 func currentPod(p *corev1.Pod, uid, serviceAccount string) bool {
-	return p != nil && p.DeletionTimestamp == nil && string(p.UID) == uid && p.Spec.ServiceAccountName == serviceAccount && p.Status.Phase == corev1.PodRunning
+	return podIdentityMatches(p, uid, serviceAccount) && p.Status.Phase == corev1.PodRunning
+}
+
+// A scheduled pod may be waiting for its enrollment configuration. Its immutable
+// UID and node pin the binding; SPIRE still attests the actual container at runtime.
+func installedPod(p *corev1.Pod, uid, serviceAccount string) bool {
+	if currentPod(p, uid, serviceAccount) {
+		return true
+	}
+	if !podIdentityMatches(p, uid, serviceAccount) || p.Status.Phase != corev1.PodPending {
+		return false
+	}
+	for _, condition := range p.Status.Conditions {
+		if condition.Type == corev1.PodScheduled {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+func podIdentityMatches(p *corev1.Pod, uid, serviceAccount string) bool {
+	return p != nil && p.DeletionTimestamp == nil && string(p.UID) == uid && p.Spec.ServiceAccountName == serviceAccount
 }
 func parentSelectors(selectors []*spiretypes.Selector) (map[string]string, error) {
 	if len(selectors) > 512 {

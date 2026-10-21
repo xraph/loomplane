@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/forge"
+
 	"github.com/xraph/loomplane/internal/access"
 	"github.com/xraph/loomplane/internal/config"
+	federation "github.com/xraph/loomplane/internal/federation"
 	"github.com/xraph/loomplane/internal/platform"
 )
 
@@ -62,5 +65,11 @@ func TestPlatformFederationIdentityRequiresAdmin(t *testing.T) {
 	})
 	if err := app.Start(ctx); err == nil || !strings.Contains(err.Error(), "federation identity administration") {
 		t.Fatal("startup bypassed administration or failed before identity wiring", err)
+	}
+	if _, injectErr := forge.InjectType[*federation.InstallationService](app.Container()); injectErr != nil {
+		t.Fatal("installation service not wired", injectErr)
+	}
+	if _, injectErr := forge.InjectType[*federation.EnrollmentService](app.Container()); injectErr != nil {
+		t.Fatal("enrollment service not wired", injectErr)
 	}
 }

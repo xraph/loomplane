@@ -12,8 +12,9 @@ ports. It uses the local SPIRE Workload API, authenticates the control plane,
 consumes one enrollment, observes registered services and applies signed policy
 before acknowledging it.
 
-The executable is available. Automated installation, trusted installation
-records, Kubernetes deployment and gateway enforcement are still being built.
+The executable and trusted Kubernetes installation records are available.
+Automated installation, launch-file delivery, verified service-target assignment,
+Kubernetes deployment and gateway enforcement are still being built.
 An acknowledgment currently proves installation in the agent's local policy
 state, not that a remote service is reachable through a gateway.
 

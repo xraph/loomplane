@@ -12,6 +12,7 @@ import (
 
 type cleanupAdmin interface {
 	EnrollmentIssuer
+	NodeReader
 	Health(context.Context) error
 	Close() error
 }

@@ -143,6 +143,7 @@ func TestKubernetesBindingChecksLiveResources(t *testing.T) {
 		{"namespace replacement", "namespaces", "", &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "workloads", UID: "replacement"}}},
 		{"node replacement", "nodes", "", &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node", UID: "replacement"}}},
 		{"SPIRE pod replacement", "pods", "spire", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "spire-agent", Namespace: "spire", UID: "replacement"}, Spec: corev1.PodSpec{NodeName: "node", ServiceAccountName: "spire-agent"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}},
+		{"SPIRE pod pending", "pods", "spire", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "spire-agent", Namespace: "spire", UID: "spire-pod-uid"}, Spec: corev1.PodSpec{NodeName: "node", ServiceAccountName: "spire-agent"}, Status: corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}}}}},
 		{"SPIRE pod moved", "pods", "spire", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "spire-agent", Namespace: "spire", UID: "spire-pod-uid"}, Spec: corev1.PodSpec{NodeName: "other", ServiceAccountName: "spire-agent"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,6 +174,59 @@ func TestKubernetesBindingChecksLiveResources(t *testing.T) {
 func TestKubernetesBindingConstructorUsesExplicitCredentials(t *testing.T) {
 	server := httptest.NewTLSServer(http.NotFoundHandler())
 	defer server.Close()
+	raw, _ := attestationCredential(server)
+	fixture, _, _ := kubernetesAttestationFixture()
+	resolver, err := NewKubernetesAttestationResolver(raw, nil, "example.test", fixture.nodes, fixture.profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolver.client.Config.Namespace != "workloads" || resolver.client.Config.REST.Host != server.URL {
+		t.Fatal("explicit connection lost")
+	}
+	if _, err = NewKubernetesAttestationResolver(nil, nil, "example.test", fixture.nodes, fixture.profile); err == nil {
+		t.Fatal("ambient Kubernetes credentials accepted")
+	}
+	profile := fixture.profile
+	profile.PodUID = ""
+	if _, err = NewKubernetesAttestationResolver(raw, nil, "example.test", fixture.nodes, profile); err == nil {
+		t.Fatal("unpinned pod accepted")
+	}
+	if _, err = NewKubernetesAttestationResolver(raw, nil, "example.test", nil, fixture.profile); err == nil {
+		t.Fatal("missing SPIRE authority accepted")
+	}
+}
+
+func TestKubernetesInstallationCanBindScheduledBootstrapPod(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		phase     corev1.PodPhase
+		scheduled corev1.ConditionStatus
+		node      string
+		want      bool
+	}{
+		{"scheduled awaiting configuration", corev1.PodPending, corev1.ConditionTrue, "node", true},
+		{"unscheduled", corev1.PodPending, corev1.ConditionFalse, "node", false},
+		{"missing node", corev1.PodPending, corev1.ConditionTrue, "", false},
+		{"completed", corev1.PodSucceeded, corev1.ConditionTrue, "node", false},
+		{"failed", corev1.PodFailed, corev1.ConditionTrue, "node", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver, d, pod := kubernetesAttestationFixture()
+			pod.Status.Phase = tc.phase
+			pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: tc.scheduled}}
+			pod.Spec.NodeName = tc.node
+			if _, err := resolver.client.Kube.CoreV1().Pods(pod.Namespace).Update(t.Context(), pod, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := resolver.Resolve(t.Context(), d)
+			if (err == nil) != tc.want {
+				t.Fatal("bootstrap scheduling decision", err)
+			}
+		})
+	}
+}
+
+func attestationCredential(server *httptest.Server) ([]byte, string) {
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 	raw := []byte(fmt.Sprintf(`apiVersion: v1
 kind: Config
@@ -193,23 +247,6 @@ contexts:
     user: agent
     namespace: workloads
 `, server.URL, base64.StdEncoding.EncodeToString(ca)))
-	fixture, _, _ := kubernetesAttestationFixture()
-	resolver, err := NewKubernetesAttestationResolver(raw, nil, "example.test", fixture.nodes, fixture.profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolver.client.Config.Namespace != "workloads" || resolver.client.Config.REST.Host != server.URL {
-		t.Fatal("explicit connection lost")
-	}
-	if _, err = NewKubernetesAttestationResolver(nil, nil, "example.test", fixture.nodes, fixture.profile); err == nil {
-		t.Fatal("ambient Kubernetes credentials accepted")
-	}
-	profile := fixture.profile
-	profile.PodUID = ""
-	if _, err = NewKubernetesAttestationResolver(raw, nil, "example.test", fixture.nodes, profile); err == nil {
-		t.Fatal("unpinned pod accepted")
-	}
-	if _, err = NewKubernetesAttestationResolver(raw, nil, "example.test", nil, fixture.profile); err == nil {
-		t.Fatal("missing SPIRE authority accepted")
-	}
+	digest := sha256.Sum256(ca)
+	return raw, hex.EncodeToString(digest[:])
 }

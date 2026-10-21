@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	agentv1 "github.com/spiffe/spire-api-sdk/proto/spire/api/server/agent/v1"
 	bundlev1 "github.com/spiffe/spire-api-sdk/proto/spire/api/server/bundle/v1"
 	entryv1 "github.com/spiffe/spire-api-sdk/proto/spire/api/server/entry/v1"
 	spiretypes "github.com/spiffe/spire-api-sdk/proto/spire/api/types"
@@ -20,6 +21,7 @@ import (
 
 type adminFixture struct {
 	entryv1.UnimplementedEntryServer
+	agentv1.UnimplementedAgentServer
 	bundlev1.UnimplementedBundleServer
 	mu               sync.Mutex
 	domain           string
@@ -86,6 +88,7 @@ func serveAdminFixture(t *testing.T, f *adminFixture) string {
 	}
 	server := grpc.NewServer()
 	entryv1.RegisterEntryServer(server, f)
+	agentv1.RegisterAgentServer(server, f)
 	bundlev1.RegisterBundleServer(server, f)
 	done := make(chan struct{})
 	go func() { defer close(done); _ = server.Serve(listener) }()
@@ -210,4 +213,25 @@ func TestAdminHealthRechecksServerAndClose(t *testing.T) {
 	if err := a.Health(ctx); err == nil {
 		t.Fatal("closed connection healthy")
 	}
+}
+
+func TestAdminReadsOnlyScopedKubernetesParentEvidence(t *testing.T) {
+	f := &adminFixture{domain: "loomplane.test"}
+	a, err := OpenAdmin(t.Context(), serveAdminFixture(t, f), "loomplane.test", "org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	request := &agentv1.GetAgentRequest{Id: &spiretypes.SPIFFEID{TrustDomain: "loomplane.test", Path: "/spire/agent/k8s_psat/cluster/node-uid"}}
+	if _, readErr := a.GetAgent(t.Context(), request); readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, id := range []*spiretypes.SPIFFEID{nil, {TrustDomain: "foreign.test", Path: request.Id.Path}, {TrustDomain: "loomplane.test", Path: "/spire/server"}, {TrustDomain: "loomplane.test", Path: "/spire/agent/join_token/fixture"}} {
+		if _, readErr := a.GetAgent(t.Context(), &agentv1.GetAgentRequest{Id: id}); readErr == nil {
+			t.Fatal("untrusted parent query accepted")
+		}
+	}
+}
+func (f *adminFixture) GetAgent(_ context.Context, r *agentv1.GetAgentRequest) (*spiretypes.Agent, error) {
+	return &spiretypes.Agent{Id: r.Id, AttestationType: "k8s_psat", X509SvidExpiresAt: time.Now().Add(time.Minute).Unix()}, nil
 }

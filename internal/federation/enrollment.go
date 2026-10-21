@@ -3,6 +3,8 @@ package federation
 import (
 	"context"
 
+	spiretypes "github.com/spiffe/spire-api-sdk/proto/spire/api/types"
+
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/runtimecatalog"
 	"github.com/xraph/loomplane/internal/security"
@@ -29,17 +31,11 @@ func NewEnrollmentService(destinations *Service, store EnrollmentBackend, resolv
 	return &EnrollmentService{destinations: destinations, store: store, resolve: resolve, issuer: issuer}
 }
 func (s *EnrollmentService) Enroll(ctx context.Context, p security.Principal, request domain.EnrollmentRequest) (*domain.Enrollment, error) {
-	if p.UserID == "" {
-		return nil, security.ErrUnauthenticated
+	if s == nil {
+		return nil, ErrDisabled
 	}
-	if p.ReadOnly {
-		return nil, security.ErrForbidden
-	}
-	if stepErr := s.destinations.authorize(ctx, p, security.DestinationManage, request.DestinationID); stepErr != nil {
-		return nil, stepErr
-	}
-	if stepErr := s.destinations.authorize(ctx, p, security.TrustManage, request.DestinationID); stepErr != nil {
-		return nil, stepErr
+	if err := s.destinations.authorizeTrustChange(ctx, p, request.DestinationID); err != nil {
+		return nil, err
 	}
 	d, err := s.destinations.verifiedDestination(ctx, p.OrgID, request.DestinationID)
 	if err != nil {
@@ -49,7 +45,7 @@ func (s *EnrollmentService) Enroll(ctx context.Context, p security.Principal, re
 	if !d.Capabilities.Supports(domain.WorkloadAttestation, d.Identity.Revision(), now) {
 		return nil, ErrUnverified
 	}
-	if s.resolve == nil || s.store == nil {
+	if s.resolve == nil || s.store == nil || s.issuer == nil {
 		return nil, ErrUnverified
 	}
 	b, exports, err := s.resolve(ctx, *d)
@@ -59,12 +55,31 @@ func (s *EnrollmentService) Enroll(ctx context.Context, p security.Principal, re
 	if b.Destination.ID != d.ID || b.Destination.Scope != d.Scope || b.Destination.Identity != d.Identity || b.Destination.Generation != d.Generation {
 		return nil, ErrIdentityChanged
 	}
+	guard := func(ctx context.Context) error {
+		if checkErr := s.destinations.authorizeTrustChange(ctx, p, d.ID); checkErr != nil {
+			return checkErr
+		}
+		current, checkErr := s.destinations.verifiedDestination(ctx, p.OrgID, d.ID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if current.Scope != d.Scope || current.Identity != d.Identity || current.Generation != d.Generation || current.ConnectionID != d.ConnectionID {
+			return ErrIdentityChanged
+		}
+		if !current.Capabilities.Supports(domain.WorkloadAttestation, current.Identity.Revision(), s.destinations.now()) {
+			return ErrUnverified
+		}
+		return nil
+	}
+	if checkErr := guard(ctx); checkErr != nil {
+		return nil, checkErr
+	}
 	r, err := s.store.Reserve(ctx, b, exports)
 	if err != nil {
 		return nil, err
 	}
 	s.record(ctx, p, "federation.enrollment.reserve", r)
-	if err := s.store.Issue(ctx, p.OrgID, r.ID, s.issuer); err != nil {
+	if err := s.store.Issue(ctx, p.OrgID, r.ID, guardedEnrollmentIssuer{EnrollmentIssuer: s.issuer, guard: guard}); err != nil {
 		s.record(ctx, p, "federation.enrollment.issue_failed", r)
 		return nil, err
 	}
@@ -76,4 +91,25 @@ func (s *EnrollmentService) record(ctx context.Context, p security.Principal, ac
 		return
 	}
 	s.destinations.audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", ProjectID: r.Binding.Agent.ProjectID, Principal: p, Attributes: map[string]any{"enrollment_id": r.ID, "destination_id": r.Binding.Agent.DestinationID, "agent_id": r.Binding.Agent.AgentID, "epoch": r.Binding.Agent.Epoch}})
+}
+
+// Failed post-issuance authorization leaves the durable pending record available
+// for cleanup. The handle never becomes ready for runtime enrollment.
+type guardedEnrollmentIssuer struct {
+	workloadidentity.EnrollmentIssuer
+	guard func(context.Context) error
+}
+
+func (i guardedEnrollmentIssuer) Register(ctx context.Context, b workloadidentity.Binding) (*spiretypes.Entry, error) {
+	if err := i.guard(ctx); err != nil {
+		return nil, err
+	}
+	entry, err := i.EnrollmentIssuer.Register(ctx, b)
+	if err != nil {
+		return nil, err
+	}
+	if err := i.guard(ctx); err != nil {
+		return nil, err
+	}
+	return entry, nil
 }

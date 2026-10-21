@@ -7,11 +7,14 @@ import (
 	"testing"
 	"time"
 
+	spiretypes "github.com/spiffe/spire-api-sdk/proto/spire/api/types"
+
 	"github.com/xraph/loomplane/internal/config"
 )
 
 type cleanupAdminFixture struct {
 	EnrollmentIssuer
+	NodeReader
 	closed atomic.Int32
 }
 
@@ -149,5 +152,44 @@ func TestCleanupRuntimeReportsBacklogWithoutFailingHealth(t *testing.T) {
 	}
 	if healthErr := runtime.Health(t.Context()); healthErr != nil {
 		t.Fatal("backlog conflated with worker failure", healthErr)
+	}
+}
+
+func TestCleanupRuntimeSharesAndFencesAdministrativeAuthority(t *testing.T) {
+	fixture := &adminFixture{domain: "loomplane.test", entries: map[string]*spiretypes.Entry{}}
+	cfg := cleanupConfig()
+	cfg.AdminSocket = serveAdminFixture(t, fixture)
+	runtime, err := NewCleanupRuntime(cfg, &cleanupFixture{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := bindingFixture(t)
+	if _, issueErr := runtime.Register(t.Context(), binding); issueErr == nil {
+		t.Fatal("authority available before startup")
+	}
+	if startErr := runtime.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if stopErr := runtime.Stop(ctx); stopErr != nil {
+			t.Error(stopErr)
+		}
+	})
+	if _, issueErr := runtime.Register(t.Context(), binding); issueErr != nil {
+		t.Fatal(issueErr)
+	}
+	if revokeErr := runtime.Revoke(t.Context(), binding.EntryID); revokeErr != nil {
+		t.Fatal(revokeErr)
+	}
+	if stopErr := runtime.Stop(t.Context()); stopErr != nil {
+		t.Fatal(stopErr)
+	}
+	if _, issueErr := runtime.Register(t.Context(), binding); issueErr == nil {
+		t.Fatal("authority retained after shutdown")
+	}
+	if _, readErr := runtime.GetAgent(t.Context(), nil); readErr == nil {
+		t.Fatal("parent reader retained after shutdown")
 	}
 }
