@@ -37,6 +37,7 @@ type CloudTarget struct {
 
 // CloudAssignment is the public Cloud API record.
 type CloudAssignment struct {
+	GrantRevision int64         `json:"grant_revision"`
 	CloudRevision int64         `json:"cloud_revision"`
 	OrgID         string        `json:"org_id"`
 	ProjectID     string        `json:"project_id"`
@@ -69,6 +70,7 @@ type CloudPlanSummary struct {
 
 // CloudEnvironmentChange is the public Cloud API record.
 type CloudEnvironmentChange struct {
+	ProjectID       string           `json:"project_id,omitempty"`
 	EnvironmentID   string           `json:"environment_id"`
 	Environment     string           `json:"environment"`
 	Services        []string         `json:"services"`
@@ -162,7 +164,12 @@ type CloudSyncPage struct {
 	Next  string      `json:"next,omitempty"`
 }
 
-func cloudPath(project string) string { return "/api/v1/projects/" + esc(project) }
+func cloudPath(project string) string {
+	if project == "" {
+		return "/api/v1"
+	}
+	return "/api/v1/projects/" + esc(project)
+}
 func (c *Client) Clouds(ctx context.Context, project string) ([]Cloud, error) {
 	var out struct {
 		Clouds []Cloud `json:"clouds"`
@@ -228,12 +235,12 @@ func (c *Client) PreviewEnvironmentCloud(ctx context.Context, project, environme
 }
 func (c *Client) PreviewCloudChange(ctx context.Context, project string, in CloudChangeInput) (*CloudPreview, error) {
 	var out CloudPreview
-	err := c.do(ctx, http.MethodPost, cloudPath(project)+"/cloud-changes/preview", in, &out)
+	err := c.do(ctx, http.MethodPost, cloudChangePath(project)+"/preview", in, &out)
 	return &out, err
 }
 func (c *Client) ApplyCloudChange(ctx context.Context, project string, in ApplyCloudInput) (*CloudSync, error) {
 	var out CloudSync
-	err := c.do(ctx, http.MethodPost, cloudPath(project)+"/cloud-changes/apply", in, &out)
+	err := c.do(ctx, http.MethodPost, cloudChangePath(project)+"/apply", in, &out)
 	return &out, err
 }
 func (c *Client) CloudSyncs(ctx context.Context, project, before string, limit int) (*CloudSyncPage, error) {
@@ -245,10 +252,15 @@ func (c *Client) CloudSyncs(ctx context.Context, project, before string, limit i
 		q.Set("limit", strconv.Itoa(limit))
 	}
 	var out CloudSyncPage
-	err := c.do(ctx, http.MethodGet, cloudPath(project)+"/cloud-syncs?"+q.Encode(), nil, &out)
+	err := c.do(ctx, http.MethodGet, syncCollectionPath(project)+"?"+q.Encode(), nil, &out)
 	return &out, err
 }
-func syncPath(project, id string) string { return cloudPath(project) + "/cloud-syncs/" + esc(id) }
+func syncPath(project, id string) string {
+	if project == "" {
+		return "/api/v1/clouds/syncs/" + esc(id)
+	}
+	return cloudPath(project) + "/cloud-syncs/" + esc(id)
+}
 func (c *Client) CloudSync(ctx context.Context, project, id string) (*CloudSync, error) {
 	var out CloudSync
 	err := c.do(ctx, http.MethodGet, syncPath(project, id), nil, &out)
@@ -266,7 +278,7 @@ func (c *Client) PreviewCloudRevert(ctx context.Context, project, id string) (*C
 }
 func (c *Client) ApplyCloudRevert(ctx context.Context, project string, in ApplyCloudInput) (*CloudSync, error) {
 	var out CloudSync
-	err := c.do(ctx, http.MethodPost, cloudPath(project)+"/cloud-syncs/revert/apply", in, &out)
+	err := c.do(ctx, http.MethodPost, syncCollectionPath(project)+"/revert/apply", in, &out)
 	return &out, err
 }
 func (c *Client) CompleteCloudRouting(ctx context.Context, project, id string, in CompleteCloudRoutingInput) (*CloudSync, error) {
@@ -295,6 +307,55 @@ func (c *Client) WaitCloudSync(ctx context.Context, project, id string) (*CloudS
 
 func (c *Client) CloudPreview(ctx context.Context, project, id string) (*CloudPreview, error) {
 	var out CloudPreview
-	err := c.do(ctx, http.MethodGet, cloudPath(project)+"/cloud-changes/"+esc(id), nil, &out)
+	err := c.do(ctx, http.MethodGet, cloudChangePath(project)+"/"+esc(id), nil, &out)
 	return &out, err
+}
+
+// CloudProjectGrant controls fresh placement on a Cloud's allowed targets.
+type CloudProjectGrant struct {
+	OrgID     string   `json:"org_id"`
+	CloudID   string   `json:"cloud_id"`
+	ProjectID string   `json:"project_id"`
+	TargetIDs []string `json:"target_ids"`
+	Revision  int64    `json:"revision"`
+	Revoked   bool     `json:"revoked"`
+}
+
+func (c *Client) OrganizationClouds(ctx context.Context) ([]Cloud, error) { return c.Clouds(ctx, "") }
+func (c *Client) CreateOrganizationCloud(ctx context.Context, in CloudCreateInput) (*Cloud, error) {
+	return c.CreateCloud(ctx, "", in)
+}
+func (c *Client) OrganizationCloud(ctx context.Context, id string) (*Cloud, error) {
+	return c.Cloud(ctx, "", id)
+}
+func (c *Client) CloudProjectGrants(ctx context.Context, cloud string) ([]CloudProjectGrant, error) {
+	var out struct {
+		Grants []CloudProjectGrant `json:"grants"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/v1/clouds/"+esc(cloud)+"/projects", nil, &out)
+	return out.Grants, err
+}
+func (c *Client) GrantCloudProject(ctx context.Context, cloud, project string, targets []string) (*CloudProjectGrant, error) {
+	var out CloudProjectGrant
+	err := c.do(ctx, http.MethodPut, "/api/v1/clouds/"+esc(cloud)+"/projects/"+esc(project), map[string]any{"target_ids": targets}, &out)
+	return &out, err
+}
+func (c *Client) RevokeCloudProject(ctx context.Context, cloud, project string) (*CloudProjectGrant, error) {
+	var out CloudProjectGrant
+	err := c.do(ctx, http.MethodDelete, "/api/v1/clouds/"+esc(cloud)+"/projects/"+esc(project), nil, &out)
+	return &out, err
+}
+
+func cloudChangePath(project string) string {
+	if project == "" {
+		return "/api/v1/clouds/changes"
+	}
+	return cloudPath(project) + "/cloud-changes"
+}
+
+func syncCollectionPath(project string) string {
+	if project == "" {
+		return "/api/v1/clouds/syncs"
+	}
+	return cloudPath(project) + "/cloud-syncs"
 }

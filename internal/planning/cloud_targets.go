@@ -12,6 +12,7 @@ import (
 
 // CloudPlacement pins the reviewed Cloud configuration and verified account.
 type CloudPlacement struct {
+	GrantRevision      int64  `json:"grant_revision,omitempty"`
 	CloudID            string `json:"cloud_id"`
 	CloudRevision      int64  `json:"cloud_revision"`
 	AssignmentRevision int64  `json:"assignment_revision"`
@@ -65,7 +66,7 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 		if target.Revision < 1 {
 			return nil, nil, fmt.Errorf("%s has no reviewed target revision", path)
 		}
-		if target.OrgID != assignment.OrgID || target.ProjectID != assignment.ProjectID || target.CloudID != assignment.CloudID {
+		if target.OrgID != assignment.OrgID || target.CloudID != assignment.CloudID {
 			return nil, nil, fmt.Errorf("%s: target is outside the assignment scope", path)
 		}
 		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == target.ConnectionID })
@@ -88,7 +89,7 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 		if OwnedCloud(c.Cloud) {
 			set.Target = c.ID
 		}
-		placements[name] = CloudPlacement{CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: target.Provider, ConnectionID: target.ConnectionID, AccountIdentity: identity, Region: set.Region, RegionSource: regionSource}
+		placements[name] = CloudPlacement{GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: target.Provider, ConnectionID: target.ConnectionID, AccountIdentity: identity, Region: set.Region, RegionSource: regionSource}
 		set.CloudTarget = ""
 		s.Settings, s.Environments = set, nil
 		out.Services[name] = s

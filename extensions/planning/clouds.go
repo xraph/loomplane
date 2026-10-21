@@ -78,6 +78,29 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 	const sync = syncs + "/:syncId"
 	const assignment = base + "/environments/:environmentId/cloud"
 	routes := []cloudRoute{
+		{http.MethodGet, "/clouds", "organizationClouds.list", e.listClouds, nil, CloudList{}, http.StatusOK},
+		{http.MethodPost, "/clouds", "organizationClouds.create", e.createCloud, cloudprofiles.CreateInput{}, cloudprofiles.Profile{}, http.StatusCreated},
+		{http.MethodGet, "/clouds/:cloudId", "organizationClouds.get", e.getCloud, nil, cloudprofiles.Profile{}, http.StatusOK},
+		{http.MethodPut, "/clouds/:cloudId", "organizationClouds.update", e.updateCloud, cloudprofiles.UpdateInput{}, cloudprofiles.Profile{}, http.StatusOK},
+		{http.MethodDelete, "/clouds/:cloudId", "organizationClouds.delete", e.deleteCloud, nil, nil, http.StatusNoContent},
+		{http.MethodGet, "/clouds/:cloudId/targets", "organizationCloudTargets.list", e.listCloudTargets, nil, CloudTargetList{}, http.StatusOK},
+		{http.MethodGet, "/clouds/:cloudId/targets/:targetId", "organizationCloudTargets.get", e.getCloudTarget, nil, cloudprofiles.Target{}, http.StatusOK},
+		{http.MethodPost, "/clouds/:cloudId/targets", "organizationCloudTargets.create", e.createCloudTarget, cloudprofiles.CreateTargetInput{}, cloudprofiles.Target{}, http.StatusCreated},
+		{http.MethodPut, "/clouds/:cloudId/targets/:targetId", "organizationCloudTargets.update", e.updateCloudTarget, cloudprofiles.UpdateTargetInput{}, cloudprofiles.Target{}, http.StatusOK},
+		{http.MethodDelete, "/clouds/:cloudId/targets/:targetId", "organizationCloudTargets.delete", e.deleteCloudTarget, nil, nil, http.StatusNoContent},
+		{http.MethodGet, "/clouds/:cloudId/projects", "organizationClouds.listGrants", e.listCloudProjectGrants, nil, CloudProjectGrantList{}, http.StatusOK},
+		{http.MethodPut, "/clouds/:cloudId/projects/:projectId", "organizationClouds.grantProject", e.grantCloudProject, CloudProjectGrantInput{}, cloudprofiles.ProjectGrant{}, http.StatusOK},
+		{http.MethodDelete, "/clouds/:cloudId/projects/:projectId", "organizationClouds.revokeProject", e.revokeCloudProject, nil, cloudprofiles.ProjectGrant{}, http.StatusOK},
+		{http.MethodPost, "/clouds/changes/preview", "organizationCloudChanges.preview", e.previewCloudChange, cloudprofiles.ChangeInput{}, cloudprofiles.Preview{}, http.StatusOK},
+		{http.MethodPost, "/clouds/changes/apply", "organizationCloudChanges.apply", e.applyCloudChange, ApplyCloudInput{}, cloudprofiles.Sync{}, http.StatusAccepted},
+		{http.MethodGet, "/clouds/changes/:previewId", "organizationCloudChanges.getPreview", e.getCloudPreview, nil, cloudprofiles.Preview{}, http.StatusOK},
+		{http.MethodGet, "/clouds/syncs", "organizationCloudSyncs.list", e.listCloudSyncs, nil, CloudSyncList{}, http.StatusOK},
+		{http.MethodGet, "/clouds/syncs/:syncId", "organizationCloudSyncs.get", e.getCloudSync, nil, cloudprofiles.Sync{}, http.StatusOK},
+		{http.MethodPost, "/clouds/syncs/:syncId/retry", "organizationCloudSyncs.retry", e.retryCloudSync, nil, cloudprofiles.Sync{}, http.StatusAccepted},
+		{http.MethodPost, "/clouds/syncs/:syncId/revert/preview", "organizationCloudSyncs.previewRevert", e.previewCloudRevert, nil, cloudprofiles.Preview{}, http.StatusOK},
+		{http.MethodPost, "/clouds/syncs/revert/apply", "organizationCloudSyncs.applyRevert", e.applyCloudRevert, ApplyCloudInput{}, cloudprofiles.Sync{}, http.StatusAccepted},
+		{http.MethodPost, "/clouds/syncs/:syncId/routing", "organizationCloudSyncs.completeRouting", e.completeCloudRouting, CompleteCloudRoutingInput{}, cloudprofiles.Sync{}, http.StatusAccepted},
+
 		{http.MethodGet, base + "/cloud-changes/:previewId", "cloudChanges.getPreview", e.getCloudPreview, nil, cloudprofiles.Preview{}, http.StatusOK},
 		{http.MethodGet, clouds, "clouds.list", e.listClouds, nil, CloudList{}, http.StatusOK},
 		{http.MethodPost, clouds, "clouds.create", e.createCloud, cloudprofiles.CreateInput{}, cloudprofiles.Profile{}, http.StatusCreated},
@@ -109,7 +132,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 		if rt.response != nil {
 			opts = append(opts, forge.WithResponseSchema(rt.status, "Result", rt.response))
 		}
-		if rt.name == "cloudSyncs.list" {
+		if rt.name == "cloudSyncs.list" || rt.name == "organizationCloudSyncs.list" {
 			opts = append(opts, forge.WithQuerySchema(PageQuery{}))
 		}
 		var err error
@@ -335,5 +358,39 @@ func (e *Extension) startCloudRecovery(ctx context.Context, every time.Duration)
 func (e *Extension) getCloudPreview(c forge.Context) error {
 	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
 		return e.plans.CloudPreview(ctx, p, c.Param("id"), c.Param("previewId"))
+	})
+}
+
+// CloudProjectGrantInput selects the target set. Empty means every Cloud target.
+type CloudProjectGrantInput struct {
+	TargetIDs []string `json:"target_ids"`
+}
+
+// CloudProjectGrantList includes revoked rows so grant history stays visible.
+type CloudProjectGrantList struct {
+	Grants []*cloudprofiles.ProjectGrant `json:"grants"`
+}
+
+func (CloudProjectGrantList) ForgeEnvelope() forge.EnvelopeDef {
+	return forge.EnvelopeDef{ItemsField: "grants"}
+}
+func (e *Extension) listCloudProjectGrants(c forge.Context) error {
+	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
+		v, err := e.cloudProfiles.ListProjectGrants(ctx, p, c.Param("cloudId"))
+		return CloudProjectGrantList{Grants: v}, err
+	})
+}
+func (e *Extension) grantCloudProject(c forge.Context) error {
+	in, err := cloudBody[CloudProjectGrantInput](c)
+	if err != nil {
+		return err
+	}
+	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
+		return e.cloudProfiles.GrantProject(ctx, p, c.Param("cloudId"), c.Param("projectId"), in.TargetIDs)
+	})
+}
+func (e *Extension) revokeCloudProject(c forge.Context) error {
+	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
+		return e.cloudProfiles.RevokeProject(ctx, p, c.Param("cloudId"), c.Param("projectId"))
 	})
 }

@@ -96,10 +96,23 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		return nil, err
 	}
 	defer rollbackSync(tx)
-	// Project lock orders overlapping multi-environment changes and idempotent calls.
-	var project string
-	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2 FOR UPDATE`, p.OrgID, p.ProjectID).Scan(&project); err != nil {
-		return nil, storeError(err)
+	if lockErr := LockOrganization(ctx, tx, p.OrgID); lockErr != nil {
+		return nil, lockErr
+	}
+	projects := []string{}
+	if p.ProjectID != "" {
+		projects = append(projects, p.ProjectID)
+	}
+	for _, env := range snapshot.Environments {
+		projects = append(projects, ParticipantProject(env.ProjectID, p.ProjectID))
+	}
+	slices.Sort(projects)
+	projects = slices.Compact(projects)
+	for _, project := range projects {
+		var id string
+		if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2 FOR UPDATE`, p.OrgID, project).Scan(&id); err != nil {
+			return nil, storeError(err)
+		}
 	}
 	existing, _, e := readSync(tx.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND (idempotency_key=$3 OR preview_id=$4) ORDER BY (idempotency_key=$3) DESC LIMIT 1`, p.OrgID, p.ProjectID, key, p.ID))
 	if e == nil {
@@ -117,6 +130,15 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	}
 	if storedRevision != p.Revision {
 		return nil, ErrConflict
+	}
+	for _, pin := range snapshot.Grants {
+		var revision int64
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_project_grants WHERE org_id=$1 AND cloud_id=$2 AND project_id=$3 AND NOT revoked FOR SHARE`, p.OrgID, pin.CloudID, pin.ProjectID).Scan(&revision); err != nil {
+			return nil, storeError(err)
+		}
+		if revision != pin.Revision {
+			return nil, ErrConflict
+		}
 	}
 	var originalSnapshot *Snapshot
 	if p.Reverts != "" {
@@ -140,7 +162,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 
 	for _, id := range slices.Sorted(maps.Keys(snapshot.ProfileRevisions)) {
 		var revision int64
-		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, id).Scan(&revision); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, id).Scan(&revision); err != nil {
 			return nil, storeError(err)
 		}
 		if revision != snapshot.ProfileRevisions[id] {
@@ -149,7 +171,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	}
 	for _, id := range slices.Sorted(maps.Keys(snapshot.TargetRevisions)) {
 		var revision int64
-		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_targets WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR SHARE`, p.OrgID, p.ProjectID, id).Scan(&revision); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_targets WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3 FOR SHARE`, p.OrgID, p.ProjectID, id).Scan(&revision); err != nil {
 			return nil, storeError(err)
 		}
 		if revision != snapshot.TargetRevisions[id] {
@@ -158,11 +180,11 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	}
 	if p.Input.TargetID != "" {
 		var rev int64
-		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID).Scan(&rev); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID).Scan(&rev); err != nil {
 			return nil, storeError(err)
 		}
 		var current []byte
-		if err = tx.QueryRow(ctx, `SELECT to_jsonb(t) FROM loomplane_cloud_targets t WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID).Scan(&current); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT to_jsonb(t) FROM loomplane_cloud_targets t WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 AND id=$4 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID).Scan(&current); err != nil {
 			return nil, storeError(err)
 		}
 		var target Target
@@ -188,7 +210,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	})
 	for _, env := range envs {
 		var id string
-		if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_environments WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, env.EnvironmentID).Scan(&id); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_environments WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID).Scan(&id); err != nil {
 			return nil, storeError(err)
 		}
 		var active bool
@@ -199,7 +221,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			return nil, ErrBusy
 		}
 		var generation int64
-		if queryErr := tx.QueryRow(ctx, `SELECT coalesce((SELECT revision FROM loomplane_cloud_assignments WHERE org_id=$1 AND project_id=$2 AND environment_id=$3),0)`, p.OrgID, p.ProjectID, env.EnvironmentID).Scan(&generation); queryErr != nil {
+		if queryErr := tx.QueryRow(ctx, `SELECT coalesce((SELECT revision FROM loomplane_cloud_assignments WHERE org_id=$1 AND project_id=$2 AND environment_id=$3),0)`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID).Scan(&generation); queryErr != nil {
 			return nil, queryErr
 		}
 		if generation != env.AssignmentRevision {
@@ -236,7 +258,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	if p.Input.TargetID != "" {
 		// Check the full assignment set too, including a newly assigned empty environment.
 		var ids []string
-		rows, qerr := tx.Query(ctx, `SELECT environment_id FROM loomplane_cloud_assignments WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 ORDER BY environment_id`, p.OrgID, p.ProjectID, p.Input.CloudID)
+		rows, qerr := tx.Query(ctx, `SELECT environment_id FROM loomplane_cloud_assignments WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 ORDER BY environment_id`, p.OrgID, p.ProjectID, p.Input.CloudID)
 		if qerr != nil {
 			return nil, qerr
 		}
@@ -260,7 +282,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if !slices.Equal(ids, reviewed) {
 			return nil, ErrConflict
 		}
-		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET provider=$5,connection_id=$6,region=$7,revision=revision+1,updated_at=$8 WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID, p.After.Provider, p.After.ConnectionID, p.After.Region, sync.CreatedAt)
+		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET provider=$5,connection_id=$6,region=$7,revision=revision+1,updated_at=$8 WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 AND id=$4`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID, p.After.Provider, p.After.ConnectionID, p.After.Region, sync.CreatedAt)
 	} else {
 		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES($1,$2,$3,nullif($4,''),1) ON CONFLICT(org_id,project_id,environment_id) DO UPDATE SET cloud_id=EXCLUDED.cloud_id,revision=loomplane_cloud_assignments.revision+1`, p.OrgID, p.ProjectID, p.Input.EnvironmentID, p.Input.CloudID)
 	}
@@ -286,7 +308,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		return nil, storeError(err)
 	}
 	for _, env := range envs {
-		_, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_sync_guards(org_id,project_id,environment_id,sync_id) VALUES($1,$2,$3,$4) ON CONFLICT(org_id,environment_id) DO UPDATE SET sync_id=EXCLUDED.sync_id`, p.OrgID, p.ProjectID, env.EnvironmentID, sync.ID)
+		_, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_sync_guards(org_id,project_id,environment_id,sync_id) VALUES($1,$2,$3,$4) ON CONFLICT(org_id,environment_id) DO UPDATE SET sync_id=EXCLUDED.sync_id`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID, sync.ID)
 		if err != nil {
 			return nil, err
 		}

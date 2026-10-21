@@ -141,7 +141,7 @@ func (r *Runner) CleanupCloudPlan(ctx context.Context, org, planID string, heart
 			if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 				return authErr
 			}
-			if validationErr := r.validateCloudPlacement(ctx, plan, a, nil); validationErr != nil {
+			if validationErr := r.validateCloudPlacementAuthority(ctx, plan, a, nil, true); validationErr != nil {
 				return validationErr
 			}
 			rc := readReplaceCheckpoint(step.Checkpoint)

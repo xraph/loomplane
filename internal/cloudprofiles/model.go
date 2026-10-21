@@ -1,4 +1,4 @@
-// Package cloudprofiles keeps project Clouds and their named deployment targets.
+// Package cloudprofiles keeps organization Clouds and their named deployment targets.
 package cloudprofiles
 
 import (
@@ -16,7 +16,7 @@ var (
 	ErrInUse    = errors.New("this cloud or target is assigned to an environment")
 )
 
-// Profile is a named set of targets in one project.
+// Profile is a named set of targets owned by one organization. ProjectID records creation provenance.
 type Profile struct {
 	ID        string    `json:"id" forge:"id"`
 	OrgID     string    `json:"org_id"`
@@ -45,6 +45,7 @@ type Target struct {
 
 // Assignment resolves an environment's desired Cloud and all of its targets.
 type Assignment struct {
+	GrantRevision int64    `json:"grant_revision"`
 	CloudRevision int64    `json:"cloud_revision"`
 	OrgID         string   `json:"org_id"`
 	ProjectID     string   `json:"project_id"`

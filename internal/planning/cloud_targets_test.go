@@ -84,7 +84,7 @@ func TestCloudTargetsResolutionFailuresAndOverrides(t *testing.T) {
 		{name: "missing assignment", message: "assigned", mutate: func(_ *cloudprofiles.Assignment, _ []ConnectionOption) *cloudprofiles.Assignment { return nil }},
 		{name: "missing target", doc: "cloud_target: missing", message: "missing"},
 		{name: "wrong scope", message: "scope", mutate: func(a *cloudprofiles.Assignment, _ []ConnectionOption) *cloudprofiles.Assignment {
-			a.Targets[0].ProjectID = "other"
+			a.Targets[0].OrgID = "other"
 			return a
 		}},
 		{name: "unready", message: "ready", mutate: func(a *cloudprofiles.Assignment, c []ConnectionOption) *cloudprofiles.Assignment {

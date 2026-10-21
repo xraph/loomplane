@@ -25,6 +25,7 @@ type ChangeInput struct {
 
 // EnvironmentChange describes the reviewed work in one environment.
 type EnvironmentChange struct {
+	ProjectID       string      `json:"project_id,omitempty"`
 	EnvironmentID   string      `json:"environment_id"`
 	Environment     string      `json:"environment"`
 	Services        []string    `json:"services"`
@@ -101,6 +102,8 @@ type Sync struct {
 // Snapshot is stored separately from API JSON. It contains references, never
 // plaintext variables or credentials. Plans hold per-binding applied inputs.
 type Snapshot struct {
+	Shared               bool                  `json:"shared,omitempty"`
+	Grants               []ProjectGrant        `json:"grants,omitempty"`
 	ProfileRevisions     map[string]int64      `json:"profile_revisions,omitempty"`
 	TargetRevisions      map[string]int64      `json:"target_revisions,omitempty"`
 	ConnectionIdentities map[string]string     `json:"connection_identities,omitempty"`
@@ -111,8 +114,17 @@ type Snapshot struct {
 
 // EnvironmentSnapshot compares the complete serving set during acceptance.
 type EnvironmentSnapshot struct {
+	ProjectID          string          `json:"project_id,omitempty"`
 	EnvironmentID      string          `json:"environment_id"`
 	AssignmentRevision int64           `json:"assignment_revision"`
 	Bindings           json.RawMessage `json:"bindings"`
 	Plan               json.RawMessage `json:"plan"`
+}
+
+// ParticipantProject preserves the original scope of legacy operation snapshots.
+func ParticipantProject(project, original string) string {
+	if project != "" {
+		return project
+	}
+	return original
 }

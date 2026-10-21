@@ -50,6 +50,8 @@ func storeError(err error) error {
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) {
 		switch pe.Code {
+		case "55P03":
+			return ErrBusy
 		case "23505":
 			return ErrExists
 		case "23503":
@@ -73,18 +75,32 @@ func (s *PgStore) CreateProfile(ctx context.Context, p *Profile) error {
 	if p.Revision != 1 {
 		return ErrInvalid
 	}
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_cloud_profiles (`+profileColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7)`, p.ID, p.OrgID, p.ProjectID, p.Name, p.Revision, p.CreatedAt, p.UpdatedAt)
-	return storeError(err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackSync(tx)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_profiles (`+profileColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7)`, p.ID, p.OrgID, p.ProjectID, p.Name, p.Revision, p.CreatedAt, p.UpdatedAt)
+	if err != nil {
+		return storeError(err)
+	}
+	if p.ProjectID != "" {
+		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_project_grants(org_id,cloud_id,project_id) VALUES($1,$2,$3)`, p.OrgID, p.ID, p.ProjectID)
+		if err != nil {
+			return storeError(err)
+		}
+	}
+	return tx.Commit()
 }
 
 // GetProfile reads a Cloud only within its organization and project.
 func (s *PgStore) GetProfile(ctx context.Context, orgID, projectID, id string) (*Profile, error) {
-	return scanProfile(s.db.QueryRow(ctx, `SELECT `+profileColumns+` FROM loomplane_cloud_profiles WHERE org_id=$1 AND project_id=$2 AND id=$3`, orgID, projectID, id))
+	return scanProfile(s.db.QueryRow(ctx, `SELECT `+profileColumns+` FROM loomplane_cloud_profiles c WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=$2 AND NOT g.revoked)) AND id=$3`, orgID, projectID, id))
 }
 
 // ListProfiles returns a deterministic list in the requested project.
 func (s *PgStore) ListProfiles(ctx context.Context, orgID, projectID string) ([]*Profile, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+profileColumns+` FROM loomplane_cloud_profiles WHERE org_id=$1 AND project_id=$2 ORDER BY name,id`, orgID, projectID)
+	rows, err := s.db.Query(ctx, `SELECT `+profileColumns+` FROM loomplane_cloud_profiles c WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=$2 AND NOT g.revoked)) ORDER BY name,id`, orgID, projectID)
 	if err != nil {
 		return nil, storeError(err)
 	}
@@ -113,7 +129,7 @@ func (s *PgStore) UpdateProfile(ctx context.Context, p *Profile, previousRevisio
 		return err
 	}
 	defer rollbackSync(tx)
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name=$4,revision=$5,updated_at=$6 WHERE org_id=$1 AND project_id=$2 AND id=$3 AND revision=$7`, p.OrgID, p.ProjectID, p.ID, p.Name, p.Revision, p.UpdatedAt, previousRevision)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name=$4,revision=$5,updated_at=$6 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND id=$3 AND revision=$7`, p.OrgID, p.ProjectID, p.ID, p.Name, p.Revision, p.UpdatedAt, previousRevision)
 	if err != nil {
 		return storeError(err)
 	}
@@ -129,7 +145,7 @@ func (s *PgStore) UpdateProfile(ctx context.Context, p *Profile, previousRevisio
 
 // DeleteProfile removes an unassigned Cloud. Its targets cascade together.
 func (s *PgStore) DeleteProfile(ctx context.Context, orgID, projectID, id string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM loomplane_cloud_profiles WHERE org_id=$1 AND project_id=$2 AND id=$3`, orgID, projectID, id)
+	tag, err := s.db.Exec(ctx, `DELETE FROM loomplane_cloud_profiles c WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=$2 AND NOT g.revoked)) AND id=$3`, orgID, projectID, id)
 	if err != nil {
 		return deleteError(err)
 	}
@@ -148,18 +164,21 @@ func (s *PgStore) CreateTarget(ctx context.Context, t *Target) error {
 	if t.Revision != 1 {
 		return ErrInvalid
 	}
+	if _, err := s.GetProfile(ctx, t.OrgID, t.ProjectID, t.CloudID); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_cloud_targets (`+targetColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, t.ID, t.OrgID, t.ProjectID, t.CloudID, t.Name, t.DisplayName, t.Provider, t.ConnectionID, t.Region, t.Revision, t.CreatedAt, t.UpdatedAt)
 	return storeError(err)
 }
 
 // GetTarget reads one target by its full scope.
 func (s *PgStore) GetTarget(ctx context.Context, orgID, projectID, cloudID, id string) (*Target, error) {
-	return scanTarget(s.db.QueryRow(ctx, `SELECT `+targetColumns+` FROM loomplane_cloud_targets WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4`, orgID, projectID, cloudID, id))
+	return scanTarget(s.db.QueryRow(ctx, `SELECT `+targetColumns+` FROM loomplane_cloud_targets t WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=t.org_id AND g.cloud_id=t.cloud_id AND g.project_id=$2 AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids)))) AND cloud_id=$3 AND id=$4`, orgID, projectID, cloudID, id))
 }
 
 // ListTargets returns targets ordered by slug and ID.
 func (s *PgStore) ListTargets(ctx context.Context, orgID, projectID, cloudID string) ([]*Target, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+targetColumns+` FROM loomplane_cloud_targets WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 ORDER BY name,id`, orgID, projectID, cloudID)
+	rows, err := s.db.Query(ctx, `SELECT `+targetColumns+` FROM loomplane_cloud_targets t WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=t.org_id AND g.cloud_id=t.cloud_id AND g.project_id=$2 AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids)))) AND cloud_id=$3 ORDER BY name,id`, orgID, projectID, cloudID)
 	if err != nil {
 		return nil, storeError(err)
 	}
@@ -188,7 +207,7 @@ func (s *PgStore) UpdateTarget(ctx context.Context, t *Target, previousRevision 
 		return err
 	}
 	defer rollbackSync(tx)
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name=$5,revision=$6,updated_at=$7 WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4 AND revision=$8 AND name=$9 AND provider=$10 AND connection_id=$11 AND region=$12`, t.OrgID, t.ProjectID, t.CloudID, t.ID, t.DisplayName, t.Revision, t.UpdatedAt, previousRevision, t.Name, t.Provider, t.ConnectionID, t.Region)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name=$5,revision=$6,updated_at=$7 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND cloud_id=$3 AND id=$4 AND revision=$8 AND name=$9 AND provider=$10 AND connection_id=$11 AND region=$12`, t.OrgID, t.ProjectID, t.CloudID, t.ID, t.DisplayName, t.Revision, t.UpdatedAt, previousRevision, t.Name, t.Provider, t.ConnectionID, t.Region)
 	if err != nil {
 		return storeError(err)
 	}
@@ -204,7 +223,7 @@ func (s *PgStore) UpdateTarget(ctx context.Context, t *Target, previousRevision 
 
 // DeleteTarget refuses deletion while any environment uses its Cloud.
 func (s *PgStore) DeleteTarget(ctx context.Context, orgID, projectID, cloudID, id string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM loomplane_cloud_targets WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4`, orgID, projectID, cloudID, id)
+	tag, err := s.db.Exec(ctx, `DELETE FROM loomplane_cloud_targets t WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=t.org_id AND g.cloud_id=t.cloud_id AND g.project_id=$2 AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids)))) AND cloud_id=$3 AND id=$4`, orgID, projectID, cloudID, id)
 	if err != nil {
 		return deleteError(err)
 	}
@@ -227,17 +246,27 @@ func (s *PgStore) Resolve(ctx context.Context, orgID, projectID, environmentID s
 
 // EnvironmentCloud reads the nullable assignment and its generation atomically.
 func (s *PgStore) EnvironmentCloud(ctx context.Context, orgID, projectID, environmentID string) (*Assignment, int64, error) {
+	return s.environmentCloud(ctx, orgID, projectID, environmentID, false)
+}
+
+// RetainedAssignment reads an existing placement for reviewed removal or reassignment.
+func (s *PgStore) RetainedAssignment(ctx context.Context, org, project, env string) (*Assignment, error) {
+	a, _, err := s.environmentCloud(ctx, org, project, env, true)
+	return a, err
+}
+func (s *PgStore) environmentCloud(ctx context.Context, orgID, projectID, environmentID string, retained bool) (*Assignment, int64, error) {
 	var cloudID *string
-	var revision, cloudRevision *int64
+	var revision, cloudRevision, grantRevision *int64
 	var targets []byte
-	err := s.db.QueryRow(ctx, `SELECT a.cloud_id,a.revision,c.revision,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
+	err := s.db.QueryRow(ctx, `SELECT a.cloud_id,a.revision,c.revision,g.revision,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
  FROM loomplane_environments e
  JOIN loomplane_projects p ON p.org_id=e.org_id AND p.id=e.project_id
  LEFT JOIN loomplane_cloud_assignments a ON a.org_id=e.org_id AND a.project_id=e.project_id AND a.environment_id=e.id
- LEFT JOIN loomplane_cloud_profiles c ON c.org_id=a.org_id AND c.project_id=a.project_id AND c.id=a.cloud_id
- LEFT JOIN loomplane_cloud_targets t ON t.org_id=a.org_id AND t.project_id=a.project_id AND t.cloud_id=a.cloud_id
+ LEFT JOIN loomplane_cloud_profiles c ON c.org_id=a.org_id AND c.id=a.cloud_id
+ LEFT JOIN loomplane_cloud_project_grants g ON g.org_id=a.org_id AND g.cloud_id=a.cloud_id AND g.project_id=a.project_id AND NOT g.revoked
+ LEFT JOIN loomplane_cloud_targets t ON t.org_id=a.org_id AND t.cloud_id=a.cloud_id AND ($4 OR (g.revision IS NOT NULL AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids))))
  WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$3
- GROUP BY e.id,a.cloud_id,a.revision,c.revision`, orgID, projectID, environmentID).Scan(&cloudID, &revision, &cloudRevision, &targets)
+ GROUP BY e.id,a.cloud_id,a.revision,c.revision,g.revision`, orgID, projectID, environmentID, retained).Scan(&cloudID, &revision, &cloudRevision, &grantRevision, &targets)
 	if err != nil {
 		return nil, 0, storeError(err)
 	}
@@ -247,7 +276,14 @@ func (s *PgStore) EnvironmentCloud(ctx context.Context, orgID, projectID, enviro
 		}
 		return nil, 0, nil
 	}
-	a := &Assignment{OrgID: orgID, ProjectID: projectID, EnvironmentID: environmentID, CloudID: *cloudID, Revision: *revision, CloudRevision: *cloudRevision}
+	if grantRevision == nil {
+		if !retained {
+			return nil, *revision, ErrNotFound
+		}
+		zero := int64(0)
+		grantRevision = &zero
+	}
+	a := &Assignment{GrantRevision: *grantRevision, OrgID: orgID, ProjectID: projectID, EnvironmentID: environmentID, CloudID: *cloudID, Revision: *revision, CloudRevision: *cloudRevision}
 	if err = json.Unmarshal(targets, &a.Targets); err != nil {
 		return nil, 0, fmt.Errorf("decode assigned targets: %w", err)
 	}
@@ -256,18 +292,17 @@ func (s *PgStore) EnvironmentCloud(ctx context.Context, orgID, projectID, enviro
 
 // metadataTransaction serializes edits with acceptance. Retained syncs pin both
 // Cloud and target revisions until recovery or compensation releases them.
-func (s *PgStore) metadataTransaction(ctx context.Context, org, project string) (driver.Tx, error) {
+func (s *PgStore) metadataTransaction(ctx context.Context, org, _ string) (driver.Tx, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	var id string
-	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, project).Scan(&id); err != nil {
+	if err = LockOrganization(ctx, tx, org); err != nil {
 		rollbackSync(tx)
-		return nil, storeError(err)
+		return nil, err
 	}
 	var retained bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND status NOT IN ('succeeded','reverted'))`, org, project).Scan(&retained)
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_syncs WHERE org_id=$1 AND status NOT IN ('succeeded','reverted'))`, org).Scan(&retained)
 	if err != nil || retained {
 		rollbackSync(tx)
 		if err != nil {

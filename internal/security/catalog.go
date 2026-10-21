@@ -49,6 +49,8 @@ var (
 	InfrastructureRead   = Permission{"infrastructure", "read"}
 	InfrastructureModify = Permission{"infrastructure", "modify"}
 
+	OrganizationCloudManage = Permission{"organization_cloud", "manage"}
+
 	CloudAccountRead   = Permission{"cloud_account", "read"}
 	CloudAccountManage = Permission{"cloud_account", "manage"}
 
@@ -97,7 +99,7 @@ func Catalog() []RoleDef {
 		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun, VariableManage, GrantPropose,
 	)
 	admin := append(clone(developer),
-		BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
+		OrganizationCloudManage, BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
 		RepositoryConnect, OrganizationVariableManage, DestinationManage, NetworkManage, ExportManage, GrantApprove, GrantRevoke, TrustManage,
 	)
 	owner := append(clone(admin), OrganizationAdminister, BackupRetire)

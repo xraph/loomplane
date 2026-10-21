@@ -41,7 +41,10 @@ func (s *Service) syncStore() (cloudprofiles.SyncStore, error) {
 	return st, nil
 }
 func (s *Service) authorizeCloudSync(ctx context.Context, p security.Principal, project string) error {
-	for _, permission := range []security.Permission{security.CloudAccountManage, security.DeploymentApprove} {
+	if project == "" {
+		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
+	}
+	for _, permission := range []security.Permission{security.DeploymentApprove} {
 		if err := s.authz.Require(ctx, p, permission, project); err != nil {
 			return err
 		}
@@ -75,9 +78,15 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	if err != nil {
 		return nil, err
 	}
+	if in.TargetID != "" {
+		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
+			return nil, authErr
+		}
+		snapshot.Shared = true
+	}
 	var desired *cloudprofiles.Assignment
 	if in.TargetID != "" {
-		before, e := st.GetTarget(ctx, p.OrgID, project, in.CloudID, in.TargetID)
+		before, e := st.GetTarget(ctx, p.OrgID, "", in.CloudID, in.TargetID)
 		if e != nil {
 			return nil, e
 		}
@@ -89,7 +98,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		after.Revision++
 		after.UpdatedAt = preview.CreatedAt
 		preview.Before, preview.After = before, &after
-		profile, e := st.GetProfile(ctx, p.OrgID, project, in.CloudID)
+		profile, e := st.GetProfile(ctx, p.OrgID, "", in.CloudID)
 		if e != nil {
 			return nil, e
 		}
@@ -114,13 +123,44 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			desired.Targets = append(desired.Targets, *t)
 		}
 	}
-	environments, err := s.projects.ListEnvironments(ctx, p.OrgID, project)
+	var environments []*projects.Environment
+	if snapshot.Shared {
+		shared, ok := st.(interface {
+			AssignedEnvironments(context.Context, string, string) ([]*projects.Environment, error)
+		})
+		if !ok {
+			return nil, cloudprofiles.ErrInvalid
+		}
+		environments, err = shared.AssignedEnvironments(ctx, p.OrgID, in.CloudID)
+	} else {
+		environments, err = s.projects.ListEnvironments(ctx, p.OrgID, project)
+	}
 	if err != nil {
 		return nil, err
 	}
+	if reverts != "" {
+		original, retained, e := st.GetSync(ctx, p.OrgID, project, reverts)
+		if e != nil {
+			return nil, e
+		}
+		snapshot.Shared = retained.Shared
+		allowed := map[string]bool{}
+		for _, env := range retained.Environments {
+			allowed[cloudprofiles.ParticipantProject(env.ProjectID, original.ProjectID)+"/"+env.EnvironmentID] = true
+		}
+		environments = slices.DeleteFunc(environments, func(e *projects.Environment) bool { return !allowed[e.ProjectID+"/"+e.ID] })
+	}
 	found := in.EnvironmentID == ""
 	for _, env := range environments {
+		project := env.ProjectID
 		assignment, e := st.Resolve(ctx, p.OrgID, project, env.ID)
+		if e != nil && in.TargetID == "" {
+			if retained, ok := st.(interface {
+				RetainedAssignment(context.Context, string, string, string) (*cloudprofiles.Assignment, error)
+			}); ok {
+				assignment, e = retained.RetainedAssignment(ctx, p.OrgID, project, env.ID)
+			}
+		}
 		if e != nil {
 			return nil, e
 		}
@@ -151,6 +191,28 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			}
 			preview.BeforeAssignment, preview.AfterAssignment = assignment, after
 		}
+		if after != nil {
+			if grants, ok := st.(cloudprofiles.GrantStore); ok {
+				g, grantErr := grants.GetProjectGrant(ctx, p.OrgID, after.CloudID, project)
+				if grantErr != nil {
+					return nil, grantErr
+				}
+				if g.Revoked {
+					return nil, cloudprofiles.ErrNotFound
+				}
+				if after.GrantRevision > 0 && after.GrantRevision != g.Revision {
+					return nil, cloudprofiles.ErrConflict
+				}
+				for _, target := range after.Targets {
+					if len(g.TargetIDs) > 0 && !slices.Contains(g.TargetIDs, target.ID) {
+						return nil, cloudprofiles.ErrConflict
+					}
+				}
+
+				after.GrantRevision = g.Revision
+				snapshot.Grants = append(snapshot.Grants, *g)
+			}
+		}
 		for _, pin := range []*cloudprofiles.Assignment{assignment, after} {
 			if pin == nil {
 				continue
@@ -179,7 +241,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		for _, finding := range result.Problems {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+finding.Name+": "+finding.Message)
 		}
-		change := cloudprofiles.EnvironmentChange{EnvironmentID: env.ID, Environment: env.Name, Services: []string{}, Status: cloudprofiles.SyncPending}
+		change := cloudprofiles.EnvironmentChange{ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, Services: []string{}, Status: cloudprofiles.SyncPending}
 		change.Summary = cloudprofiles.PlanSummary{Create: plan.Summary.Create, Update: plan.Summary.Update, Replace: plan.Summary.Replace, Delete: plan.Summary.Delete, Keep: plan.Summary.Keep}
 		for _, a := range plan.Actions {
 			if a.AdoptCloudPlacement {
@@ -219,7 +281,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if e != nil {
 			return nil, e
 		}
-		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
+		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
 		preview.Environments = append(preview.Environments, change)
 	}
 	if !found {
@@ -281,6 +343,11 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 	preview, snapshot, err := st.GetPreview(ctx, p.OrgID, project, previewID)
 	if err != nil {
 		return nil, err
+	}
+	if preview.Input.TargetID != "" {
+		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
+			return nil, authErr
+		}
 	}
 	if preview.Revision != revision {
 		return nil, cloudprofiles.ErrConflict
@@ -380,7 +447,7 @@ func (s *Service) validateSnapshotConnections(ctx context.Context, org string, s
 
 // CloudSync reads one project's operation.
 func (s *Service) CloudSync(ctx context.Context, p security.Principal, project, id string) (*cloudprofiles.Sync, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, project); err != nil {
+	if err := s.authorizeCloudRead(ctx, p, project); err != nil {
 		return nil, err
 	}
 	st, err := s.syncStore()
@@ -388,19 +455,26 @@ func (s *Service) CloudSync(ctx context.Context, p security.Principal, project, 
 		return nil, err
 	}
 	sync, _, err := st.GetSync(ctx, p.OrgID, project, id)
+	if err == nil {
+		s.filterCloudParticipants(ctx, p, sync, project)
+	}
 	return sync, err
 }
 
 // CloudSyncs reads project operation history.
 func (s *Service) CloudSyncs(ctx context.Context, p security.Principal, project string) ([]*cloudprofiles.Sync, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, project); err != nil {
+	if err := s.authorizeCloudRead(ctx, p, project); err != nil {
 		return nil, err
 	}
 	st, err := s.syncStore()
 	if err != nil {
 		return nil, err
 	}
-	return st.ListSyncs(ctx, p.OrgID, project)
+	syncs, err := st.ListSyncs(ctx, p.OrgID, project)
+	for _, sync := range syncs {
+		s.filterCloudParticipants(ctx, p, sync, project)
+	}
+	return syncs, err
 }
 
 // RetryCloudSync authorizes remaining work with the current caller.
@@ -415,6 +489,9 @@ func (s *Service) RetryCloudSync(ctx context.Context, p security.Principal, proj
 	sync, snapshot, err := st.GetSync(ctx, p.OrgID, project, id)
 	if err != nil {
 		return nil, err
+	}
+	if authErr := s.authorizeStoredCloudSync(ctx, p, sync, snapshot); authErr != nil {
+		return nil, authErr
 	}
 	if sync.Status != cloudprofiles.SyncFailed && sync.Status != cloudprofiles.SyncCleanup {
 		return nil, cloudprofiles.ErrConflict
@@ -451,6 +528,9 @@ func (s *Service) CompleteCloudRouting(ctx context.Context, p security.Principal
 	sync, snapshot, err := st.GetSync(ctx, p.OrgID, project, id)
 	if err != nil {
 		return nil, err
+	}
+	if authErr := s.authorizeStoredCloudSync(ctx, p, sync, snapshot); authErr != nil {
+		return nil, authErr
 	}
 	if sync.Status != cloudprofiles.SyncRouting {
 		return nil, cloudprofiles.ErrConflict
@@ -495,7 +575,7 @@ func decodeCloudBindings(raw []byte) ([]*Binding, error) {
 
 // CloudSyncPage returns persisted operations after enforcing the full project scope.
 func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, project string, before page.Cursor, limit int) ([]*cloudprofiles.Sync, page.Cursor, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, project); err != nil {
+	if err := s.authorizeCloudRead(ctx, p, project); err != nil {
 		return nil, page.Cursor{}, err
 	}
 	if _, err := s.projects.GetProject(ctx, p.OrgID, project); err != nil {
@@ -507,7 +587,11 @@ func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, proje
 	if !ok {
 		return nil, page.Cursor{}, errors.New("cloud sync pagination unavailable")
 	}
-	return st.ListSyncPage(ctx, p.OrgID, project, before, limit)
+	syncs, next, err := st.ListSyncPage(ctx, p.OrgID, project, before, limit)
+	for _, sync := range syncs {
+		s.filterCloudParticipants(ctx, p, sync, project)
+	}
+	return syncs, next, err
 }
 
 func (s *Service) recordCloudSync(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, action string) {
@@ -526,5 +610,27 @@ func (s *Service) CloudPreview(ctx context.Context, p security.Principal, projec
 		return nil, err
 	}
 	preview, _, err := st.GetPreview(ctx, p.OrgID, project, id)
+	if err == nil && preview.Input.TargetID != "" {
+		err = s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
+	}
 	return preview, err
+}
+
+func (s *Service) authorizeCloudRead(ctx context.Context, p security.Principal, project string) error {
+	if project == "" {
+		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
+	}
+	return s.authz.Require(ctx, p, security.DeploymentRead, project)
+}
+func (s *Service) filterCloudParticipants(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, project string) {
+	if project == "" || s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID) == nil {
+		return
+	}
+	sync.Environments = slices.DeleteFunc(sync.Environments, func(e cloudprofiles.EnvironmentChange) bool {
+		return cloudprofiles.ParticipantProject(e.ProjectID, sync.ProjectID) != project
+	})
+	// Shared failures can contain another project's service error.
+	if sync.TargetID != "" {
+		sync.Error = ""
+	}
 }

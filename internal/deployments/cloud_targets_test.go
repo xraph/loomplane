@@ -28,13 +28,13 @@ func cloudRunner(t *testing.T) (*Runner, *planning.Plan, *fakePlans, *recorder, 
 	a := &plan.Actions[0]
 	a.Service.Public = false
 	a.ConnectionID = "cloud-account"
-	a.Service.CloudPlacement = &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 2, AssignmentRevision: 3, TargetID: "target", TargetRevision: 4, TargetName: "frontend", Provider: a.Provider, ConnectionID: a.ConnectionID}
+	a.Service.CloudPlacement = &planning.CloudPlacement{GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, AssignmentRevision: 3, TargetID: "target", TargetRevision: 4, TargetName: "frontend", Provider: a.Provider, ConnectionID: a.ConnectionID}
 	c := &connections.Connection{ID: a.ConnectionID, Cloud: "vercel", Status: connections.StatusReady, Details: map[string]string{"team_id": "team-a"}}
 	a.Service.CloudPlacement.AccountIdentity = connections.AccountIdentity(c.Cloud, c.Account, c.Details)
 	exec := &recorder{}
 	r, _, plans := newRunner(t, plan, exec, nil)
 	r.credentials = targetCredentials{a.ConnectionID: c}
-	resolved := &cloudResolver{assignment: &cloudprofiles.Assignment{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: "cloud", CloudRevision: 2, Revision: 3, Targets: []cloudprofiles.Target{{ID: "target", OrgID: plan.OrgID, ProjectID: plan.ProjectID, CloudID: "cloud", Name: "frontend", Provider: a.Provider, ConnectionID: a.ConnectionID, Revision: 4}}}}
+	resolved := &cloudResolver{assignment: &cloudprofiles.Assignment{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, Revision: 3, Targets: []cloudprofiles.Target{{ID: "target", OrgID: plan.OrgID, ProjectID: plan.ProjectID, CloudID: "cloud", Name: "frontend", Provider: a.Provider, ConnectionID: a.ConnectionID, Revision: 4}}}}
 	r.cloudProfiles = resolved
 	return r, plan, plans, exec, resolved
 }
@@ -44,6 +44,7 @@ func TestRunnerCloudTargetRevalidatesBeforeStartAndRun(t *testing.T) {
 		name   string
 		change func(*Runner, *cloudResolver)
 	}{
+		{"grant", func(_ *Runner, c *cloudResolver) { c.assignment.GrantRevision++ }},
 		{"assignment", func(_ *Runner, c *cloudResolver) { c.assignment.Revision++ }},
 		{"cloud", func(_ *Runner, c *cloudResolver) { c.assignment.CloudRevision++ }},
 		{"target", func(_ *Runner, c *cloudResolver) { c.assignment.Targets[0].Revision++ }},
@@ -348,5 +349,14 @@ func TestRunnerCloudAdoptionRevalidatesOwnedConnectionSettings(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLegacyCloudPlacementCannotReuseChangedGrant(t *testing.T) {
+	runner, plan, _, _, resolver := cloudRunner(t)
+	plan.Actions[0].Service.CloudPlacement.GrantRevision = 0
+	resolver.assignment.GrantRevision = 2
+	if err := runner.validateCloudPlacement(t.Context(), plan, plan.Actions[0], nil); err == nil {
+		t.Fatal("legacy placement reused a changed project grant")
 	}
 }

@@ -90,6 +90,14 @@ type UpdateTargetInput struct {
 }
 
 func (s *Service) scope(ctx context.Context, p security.Principal, projectID string, permission security.Permission) error {
+	if permission == security.CloudAccountManage || projectID == "" {
+		if err := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); err != nil {
+			return err
+		}
+	}
+	if projectID == "" {
+		return nil
+	}
 	if err := s.authz.Require(ctx, p, permission, projectID); err != nil {
 		return err
 	}

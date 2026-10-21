@@ -13,6 +13,10 @@ import (
 )
 
 func (r *Runner) validateCloudPlacement(ctx context.Context, plan *planning.Plan, a planning.Action, conn *connections.Connection) error {
+	return r.validateCloudPlacementAuthority(ctx, plan, a, conn, false)
+}
+
+func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *planning.Plan, a planning.Action, conn *connections.Connection, retained bool) error {
 	if a.Service == nil || a.Service.CloudPlacement == nil || a.Op == planning.Delete || a.Op == planning.Keep && !a.AdoptCloudPlacement {
 		return nil
 	}
@@ -27,11 +31,23 @@ func (r *Runner) validateCloudPlacement(ctx context.Context, plan *planning.Plan
 	if pin.Provider != a.Provider || a.Service.Provider != a.Provider || pin.ConnectionID != a.ConnectionID || pin.Region != a.Region || a.Service.Region != a.Region {
 		return stale("differs from the reviewed action")
 	}
-	assignment, err := r.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+	var assignment *cloudprofiles.Assignment
+	var err error
+	if retained {
+		reader, ok := r.cloudProfiles.(interface {
+			RetainedAssignment(context.Context, string, string, string) (*cloudprofiles.Assignment, error)
+		})
+		if !ok {
+			return stale("has no retained cleanup resolver")
+		}
+		assignment, err = reader.RetainedAssignment(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+	} else {
+		assignment, err = r.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+	}
 	if err != nil {
 		return fmt.Errorf("revalidate Cloud target for %s: %w", a.Name, err)
 	}
-	if assignment == nil || assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.EnvironmentID != plan.EnvironmentID || assignment.CloudID != pin.CloudID || assignment.CloudRevision != pin.CloudRevision || assignment.Revision != pin.AssignmentRevision {
+	if assignment == nil || assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.EnvironmentID != plan.EnvironmentID || assignment.CloudID != pin.CloudID || assignment.CloudRevision != pin.CloudRevision || assignment.Revision != pin.AssignmentRevision || !retained && (pin.GrantRevision > 0 && assignment.GrantRevision != pin.GrantRevision || pin.GrantRevision == 0 && assignment.GrantRevision > 1) {
 		return stale("assignment changed since review or is outside this scope")
 	}
 	i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.ID == pin.TargetID })
@@ -39,7 +55,7 @@ func (r *Runner) validateCloudPlacement(ctx context.Context, plan *planning.Plan
 		return stale("is missing from the assigned Cloud")
 	}
 	target := assignment.Targets[i]
-	if target.OrgID != plan.OrgID || target.ProjectID != plan.ProjectID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || target.ConnectionID != pin.ConnectionID {
+	if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || target.ConnectionID != pin.ConnectionID {
 		return stale("changed since review or is outside this scope")
 	}
 	if conn == nil {

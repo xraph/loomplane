@@ -84,7 +84,7 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			blocked(b.Name, "The destination cannot preserve the applied scale and size settings.")
 		}
 		cfg.Provider, cfg.Region, cfg.Execution = prov.Name, region, runs.Execution
-		cfg.CloudPlacement = &CloudPlacement{CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: pin.RegionSource}
+		cfg.CloudPlacement = &CloudPlacement{GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: pin.RegionSource}
 		p.in.CloudPlacements[b.Name] = *cfg.CloudPlacement
 		set := manifest.Settings{Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size}
 		if OwnedCloud(prov.Cloud) {

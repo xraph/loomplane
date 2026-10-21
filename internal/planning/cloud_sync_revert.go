@@ -23,6 +23,9 @@ func (s *Service) PreviewCloudRevert(ctx context.Context, p security.Principal, 
 	if err != nil {
 		return nil, err
 	}
+	if authErr := s.authorizeStoredCloudSync(ctx, p, sync, snapshot); authErr != nil {
+		return nil, authErr
+	}
 	if sync.Status == cloudprofiles.SyncRunning || sync.Status == cloudprofiles.SyncPending || sync.Status == cloudprofiles.SyncReverted || sync.Status == cloudprofiles.SyncReverting {
 		return nil, cloudprofiles.ErrBusy
 	}
@@ -41,7 +44,7 @@ func (s *Service) PreviewCloudRevert(ctx context.Context, p security.Principal, 
 	}
 	var in cloudprofiles.ChangeInput
 	if sync.TargetID != "" {
-		current, e := st.GetTarget(ctx, p.OrgID, project, sync.CloudID, sync.TargetID)
+		current, e := st.GetTarget(ctx, p.OrgID, "", sync.CloudID, sync.TargetID)
 		if e != nil {
 			return nil, e
 		}
