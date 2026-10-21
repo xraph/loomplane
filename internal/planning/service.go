@@ -546,10 +546,14 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
-	resolutionManifest, needsCloud, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
+	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
 	var assignment *cloudprofiles.Assignment
-	if resolutionErr == nil && needsCloud && s.cloudProfiles != nil {
+	if resolutionErr == nil && (needs.Explicit || needs.Fallback) && s.cloudProfiles != nil {
 		assignment, resolutionErr = s.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+		// A revoked grant only matters to services that ask for the Cloud.
+		if !needs.Explicit && errors.Is(resolutionErr, cloudprofiles.ErrNotFound) {
+			assignment, resolutionErr = nil, nil
+		}
 		if resolutionErr == nil && assignment != nil && (assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.EnvironmentID != plan.EnvironmentID) {
 			resolutionErr = fmt.Errorf("cloud assignment is outside this organization, project or environment scope")
 		}
@@ -557,11 +561,11 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	var placements map[string]CloudPlacement
 	var resolved *manifest.Manifest
 	if resolutionErr == nil {
-		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options)
+		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held)
 		if poolErr != nil {
 			resolutionErr = poolErr
 		} else {
-			resolved, placements, resolutionErr = ResolveCloudTargets(resolutionManifest, plan.Environment, assignment, options, pools)
+			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held)
 		}
 	}
 	routes, routeErr := s.releaseRoutes(ctx, plan)
@@ -570,7 +574,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	}
 	var result *Result
 	if resolutionErr != nil {
-		result = &Result{Problems: []Finding{{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}}, Actions: []Action{}, Connections: map[string]string{}}
+		finding := Finding{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}
+		var placementErr *CloudPlacementError
+		if errors.As(resolutionErr, &placementErr) {
+			finding = Finding{Code: placementErr.Code, Subject: ServiceSubject, Name: strings.TrimSuffix(strings.TrimPrefix(placementErr.Path, "services."), ".cloud_tags"), Path: placementErr.Path, Message: placementErr.Message}
+		}
+		result = &Result{Problems: []Finding{finding}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
 		result = Compute(Input{
 			Catalog: plan.Catalog, Routes: routes,

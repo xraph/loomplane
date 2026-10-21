@@ -83,6 +83,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodGet, "/clouds/:cloudId", "organizationClouds.get", e.getCloud, nil, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodPut, "/clouds/:cloudId", "organizationClouds.update", e.updateCloud, cloudprofiles.UpdateInput{}, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodDelete, "/clouds/:cloudId", "organizationClouds.delete", e.deleteCloud, nil, nil, http.StatusNoContent},
+		{http.MethodPut, "/clouds/:cloudId/default-placement", "organizationClouds.setDefaultPlacement", e.setCloudDefaultPlacement, cloudprofiles.SetDefaultPlacementInput{}, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodGet, "/clouds/:cloudId/targets", "organizationCloudTargets.list", e.listCloudTargets, nil, CloudTargetList{}, http.StatusOK},
 		{http.MethodGet, "/clouds/:cloudId/targets/:targetId", "organizationCloudTargets.get", e.getCloudTarget, nil, cloudprofiles.Target{}, http.StatusOK},
 		{http.MethodPost, "/clouds/:cloudId/targets", "organizationCloudTargets.create", e.createCloudTarget, cloudprofiles.CreateTargetInput{}, cloudprofiles.Target{}, http.StatusCreated},
@@ -107,6 +108,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodGet, cloud, "clouds.get", e.getCloud, nil, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodPut, cloud, "clouds.update", e.updateCloud, cloudprofiles.UpdateInput{}, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodDelete, cloud, "clouds.delete", e.deleteCloud, nil, nil, http.StatusNoContent},
+		{http.MethodPut, cloud + "/default-placement", "clouds.setDefaultPlacement", e.setCloudDefaultPlacement, cloudprofiles.SetDefaultPlacementInput{}, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodGet, targets, "cloudTargets.list", e.listCloudTargets, nil, CloudTargetList{}, http.StatusOK},
 		{http.MethodGet, target, "cloudTargets.get", e.getCloudTarget, nil, cloudprofiles.Target{}, http.StatusOK},
 		{http.MethodPost, targets, "cloudTargets.create", e.createCloudTarget, cloudprofiles.CreateTargetInput{}, cloudprofiles.Target{}, http.StatusCreated},
@@ -202,6 +204,15 @@ func (e *Extension) updateCloud(c forge.Context) error {
 	}
 	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
 		return e.cloudProfiles.Update(ctx, p, c.Param("id"), c.Param("cloudId"), in)
+	})
+}
+func (e *Extension) setCloudDefaultPlacement(c forge.Context) error {
+	in, err := cloudBody[cloudprofiles.SetDefaultPlacementInput](c)
+	if err != nil {
+		return err
+	}
+	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
+		return e.cloudProfiles.SetDefaultPlacement(ctx, p, c.Param("id"), c.Param("cloudId"), in)
 	})
 }
 func (e *Extension) deleteCloud(c forge.Context) error {

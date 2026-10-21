@@ -65,6 +65,9 @@ func (p *planner) routedReplacements() bool {
 }
 
 func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) error {
+	if _, err := cloudinfra.ReviewedRouteDrain(route, 60); err != nil {
+		return err
+	}
 	if b == nil || a.Service == nil || a.Provider != "server" || b.Provider != "server" {
 		return fmt.Errorf("%s needs a reviewed server destination for its route", a.Name)
 	}

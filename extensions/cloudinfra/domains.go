@@ -42,6 +42,7 @@ type RemoveRouteInput struct {
 func (e *Extension) domainRoutes(r forge.Router, guard identity.Guard) error {
 	group := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Domains"))
 	routes := []route{
+		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/ttl", "domainRoutes.updateTTL", e.updateDomainRouteTTL, infra.RouteTTLInput{}, infra.Route{}, http.StatusOK},
 		{http.MethodGet, "/projects/:projectId/domain-routes/:routeId/operations", "domainRoutes.history", e.domainRouteHistory, nil, DomainOperationList{}, http.StatusOK},
 		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/prepare-handoff", "domainRoutes.prepareHandoff", e.prepareDomainHandoff, infra.HandoffInput{}, infra.RouteOperation{}, http.StatusAccepted},
 		{http.MethodPost, "/projects/:projectId/route-operations/:operationId/cutover", "domainRoutes.cutover", e.cutoverDomainHandoff, nil, infra.RouteOperation{}, http.StatusAccepted},
@@ -266,4 +267,17 @@ func (e *Extension) domainRouteHistory(c forge.Context) error {
 	}
 	v, err := e.svc.RouteHistory(c.Request().Context(), p, c.Param("projectId"), c.Param("routeId"))
 	return result(c, http.StatusOK, DomainOperationList{v}, err)
+}
+
+func (e *Extension) updateDomainRouteTTL(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	var in infra.RouteTTLInput
+	if err = c.BindJSON(&in); err != nil {
+		return result(c, 0, nil, infra.ErrInvalid)
+	}
+	v, err := e.svc.UpdateRouteTTL(c.Request().Context(), p, c.Param("projectId"), c.Param("routeId"), in)
+	return result(c, http.StatusOK, v, err)
 }

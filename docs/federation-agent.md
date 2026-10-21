@@ -386,8 +386,9 @@ installation work; no configuration flag currently enables this path.
 `WorkloadBinding`. You must resolve its service from an owned deployment and
 retain durable revocation intent before calling it. There is no management
 endpoint for caller-supplied selectors. The Kubernetes deployment verifier is available internally. Controller receipts are retained by new Kubernetes deployments.
-The application registration journal is still pending, so agent launch
-does not issue service identities yet.
+The internal application journal retains issuance and revocation intent. Agent
+launch does not call it yet; production service issuance still needs the
+application installation and authorization path.
 
 The workload selector must match the destination's organization, project,
 environment and ID. An application binding cannot carry agent authority. Both
@@ -468,8 +469,43 @@ the service account and container from that record. Before you issue an identity
 or grant access, authorize the caller and recheck the binding, instance and live
 owner chain with the required image proofs.
 
-Receipts survive process restarts. Deleting their connection or environment can
-remove these public records; a future registration journal must retain any
-parents it needs for revocation. Schema downgrade refuses to discard retained
-receipts. The application registration and cleanup journal is not wired yet,
-so these records do not enable production service issuance.
+Receipts survive process restarts. Application registrations retain their exact
+controller receipt and destination until cleanup finishes, which also prevents
+deleting the connection or environment. Receipts without registrations remain
+public evidence that can be removed with their parents. Schema downgrade refuses
+to discard retained receipts.
+
+## Application issuance journal
+
+`WorkloadStore` reserves a server-generated SPIRE entry ID before creating it.
+You supply verified workload evidence, its saved controller receipt and a guard
+that rechecks authorization, the current instance and live pod ownership. The
+store also verifies any bounded OCI index or import-wrapper proof linking the
+runtime image selector to the deployed digest. It checks the current committed
+service binding, connection, destination
+generation and exact receipt in PostgreSQL. These checks run before creation and
+again before accepting its result. It supports the qualified Kubernetes profile.
+
+The one-time create claim commits before the SPIRE request. A second caller cannot
+repeat it. If the response is lost, the record stays unresolved across restarts.
+The cleanup worker retries deletion but retains the journal and its parent
+references: a successful delete could have preceded a delayed create. Resolving
+that uncertainty still needs an operator reconciliation workflow; there is no
+automatic release or reset for it.
+
+A confirmed creation that races revocation stays marked for another delete.
+After confirmed deletion of a settled creation, the journal retains its parents
+for the larger of the certificate lifetime and maximum policy lease, plus clock
+skew. Cleanup then removes the record and releases its trust reference. SPIRE's
+pruning timestamp never counts as confirmed deletion.
+
+Application cleanup shares the existing sequential identity worker. Each journal
+gets part of its time and item budget so an enrollment timeout does not consume
+the whole sweep. Changed bindings, controller receipts and destination state, or
+the local cleanup deadline, make application records eligible for revocation.
+Every journal transition commits with its project event.
+
+This is an internal lifecycle API. The live Kubernetes fixture uses it with a
+fixture-created controller and explicit CSI installation. Production installation,
+artifact proof retrieval, policy withdrawal and gateway assignment remain separate
+work. No public route or agent-launch flag enables application issuance.

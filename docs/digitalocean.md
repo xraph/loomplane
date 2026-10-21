@@ -42,7 +42,7 @@ Every other target here deploys the exact commit a plan approved. App Platform c
 
 It points the app at the branch your project reads, starts the deployment itself, and watches the commit App Platform reports for every component. If it's the approved commit, the deployment goes ahead. If someone pushed to the branch after you approved the plan, Loomplane cancels the deployment before it goes live and the step fails with both commits in the message. In the rare case a wrong build gets live before the check sees it, Loomplane rolls the app back to what ran before, or deletes the app if nothing approved ever ran there.
 
-The practical upshot: don't push to a branch while a plan for it waits for approval. If your repository's default branch isn't `main`, set the branch on the project's repository in Loomplane, because a repository left on its default branch is built from `main`. Get it wrong and the commit check catches it and tells you.
+The practical upshot: don't push to a branch while a plan for it waits for approval. If your repository's default branch isn't `main`, set the branch on the project's repository in Loomplane, because a repository left on its default branch is built from `main`. Get it wrong and the commit check catches it and tells you. To deploy another branch for a while, such as a quiet one nobody pushes to, analyse it with **Another branch**: a plan builds the branch its analysis read.
 
 ## Databases
 

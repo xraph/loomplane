@@ -24,6 +24,57 @@ loomctl clouds assign my-project env_... --cloud cloud_... --revision 0 \
 
 The first assignment uses revision `0`. Read `clouds assignment` before later changes: an unassigned environment can have a nonzero revision because unassignment retains its generation. You must use that revision when assigning it again. An environment from another project returns a scoped error, never an empty assignment.
 
+## Pick a target by tags
+
+You don't have to name a target. Give your targets tags, then ask for the tags you need:
+
+```sh
+loomctl cloud-targets create my-project cloud_... \
+  --name eu-gpu --provider cloud-run --connection conn_... --tags eu,gpu
+loomctl cloud-targets update my-project cloud_... target_... \
+  --display-name "EU GPU" --tags eu,gpu,large --revision 1
+```
+
+```yaml
+version: 1
+defaults:
+  cloud_tags: [eu]
+services:
+  web:
+    source: node:apps/web
+    cloud_tags: [frontend, eu]
+  trainer:
+    source: python:trainer
+    cloud_tags: [gpu]
+    environments:
+      staging: { cloud_target: shared-gpu }
+```
+
+Over HTTP, send `tags` when you create a target or update one. Leave `tags` out of an update and they stay as they are. Send `[]` and they're removed (`--clear-tags` in `loomctl`). A tag is a lowercase slug of up to 32 characters, and a target carries at most 16.
+
+A service resolves to the one target that carries every tag it lists. Loomplane only looks at the targets your project's grant allows, so a tag on a target you haven't been granted matches nothing. When no target matches, the plan fails with a `cloud-tag-unmatched` finding. When two or more match, it fails with `cloud-tag-ambiguous` and names each of them, so you can add a tag that only one of them carries or name the target with `cloud_target`.
+
+`cloud_target` and `cloud_tags` can't sit together at the same level. An environment override that sets one replaces whichever the service set, so staging above uses `shared-gpu` by name. `defaults.cloud_tags` applies to every service that sets no `cloud_target`, `cloud_tags`, `provider` or `target` of its own, and it can't be combined with `defaults.provider`. Like `cloud_target`, tags conflict with an effective direct `provider` or `target`, including one inherited from defaults.
+
+Changing a target's tags advances its revision. The next plan resolves against the new tags, and a plan approved against the old ones has to be planned again. Adding a new target with the same tags doesn't touch anything already approved, but the next plan will report the overlap.
+
+## One provider without targets
+
+A Cloud can have a default placement: one provider, one connection and an optional region. When a Cloud has no targets, that default is the only place its services go, so a targetless Cloud always uses exactly one provider and account. Its connection has to be ready and belong to that provider's cloud.
+
+```sh
+curl -X PUT .../api/v1/clouds/cloud_.../default-placement \
+  -d '{"default_placement":{"provider":"vercel","connection_id":"conn_...","region":"iad1"},"revision":1}'
+```
+
+You can also pass `default_placement` when you create the Cloud. Send `"default_placement": null` to clear it.
+
+A service uses the default when it has no placement of its own: no `cloud_target`, no `cloud_tags`, and no effective `provider` or `target`. That keeps working after you add targets. Each target brings its own provider, and several providers are fine once targets exist, but adding a target only places the services that name or tag it. Your untagged services stay on the default. A service with its own `provider` keeps its direct placement.
+
+The default reaches a project only when its grant covers the whole Cloud. If an organization admin granted your project a chosen set of targets, your services can use those targets but not the default.
+
+You can set a first default at any time, because the services it places had nowhere to go before. Once an environment uses the Cloud, Loomplane refuses to replace or clear the default (HTTP 409), because that would move serving services without a reviewed sync. You'd unassign the Cloud from those environments first. Renaming the Cloud keeps its default. A Cloud reassignment does go through review: services placed by the old Cloud's default move to the new Cloud's default, and the review blocks if the new Cloud has none your project can use.
+
 ## Adopt an existing service
 
 Keep your existing manifest until you choose to adopt a Cloud. Create a target with the service's current provider, connection and region, assign that Cloud to its environment, and save a manifest revision that sets `cloud_target` while removing effective direct `provider` and `target` settings. Check inherited defaults and environment overrides too. A service cannot resolve both forms of placement.
@@ -116,6 +167,7 @@ All routes require organization and project authorization under `/api/v1/project
 | ----------------------------------------------------- | ---------------------------------------------------------------- |
 | `GET, POST /clouds`                                   | `clouds.list`, `clouds.create`                                   |
 | `GET, PUT, DELETE /clouds/:cloudId`                   | `clouds.get`, `clouds.update`, `clouds.delete`                   |
+| `PUT /clouds/:cloudId/default-placement`              | `clouds.setDefaultPlacement`                                     |
 | `GET, POST /clouds/:cloudId/targets`                  | `cloudTargets.list`, `cloudTargets.create`                       |
 | `GET, PUT, DELETE /clouds/:cloudId/targets/:targetId` | `cloudTargets.get`, `cloudTargets.update`, `cloudTargets.delete` |
 | `POST /cloud-changes/preview`                         | `cloudChanges.preview`                                           |

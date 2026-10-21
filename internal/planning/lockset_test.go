@@ -52,3 +52,32 @@ func TestLockset(t *testing.T) {
 		})
 	}
 }
+
+func TestLockset_branchComesFromTheAnalysis(t *testing.T) {
+	sources := []*discovery.Source{{ID: "src_api", Alias: "api", Repository: "acme/api", Ref: "main"}}
+	deployed := map[string]*DeployedSource{"src_api": {SourceID: "src_api", AnalysisID: "anl_api1", CommitSHA: "api1"}}
+	for _, tt := range []struct {
+		name, analysisRef, want string
+	}{
+		// "Another branch" analyses do-test; its commit is on do-test.
+		{"a branch analysed on purpose", "do-test", "do-test"},
+		{"the source's own branch", "", "main"},
+		// A commit or tag isn't a branch a builder can follow.
+		{"a commit analysed on purpose", "0123456789abcdef0123456789abcdef01234567", "main"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			latest := map[string]*discovery.Analysis{"src_api": {ID: "anl_api2", CommitSHA: "api2", Ref: tt.analysisRef}}
+			got, err := lockset(sources, latest, deployed, nil, "production")
+			if err != nil || got[0].Ref != tt.want {
+				t.Fatalf("ref %q, %v; want %q", got[0].Ref, err, tt.want)
+			}
+		})
+	}
+	// A held repository stays on its own branch.
+	sources = []*discovery.Source{sources[0], {ID: "src_web", Alias: "web", Repository: "acme/web"}}
+	latest := map[string]*discovery.Analysis{"src_api": {ID: "anl_api2", CommitSHA: "api2", Ref: "do-test"}, "src_web": {ID: "anl_web2", CommitSHA: "web2"}}
+	got, err := lockset(sources, latest, deployed, []string{"web"}, "production")
+	if err != nil || got[0].Alias != "api" || got[0].InScope || got[0].Ref != "main" {
+		t.Fatalf("held: %v, %+v", err, got)
+	}
+}

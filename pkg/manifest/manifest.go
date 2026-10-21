@@ -116,6 +116,9 @@ func (m *Manifest) LinkNames() []string { return sortedKeys(m.Links) }
 type Defaults struct {
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
+	// CloudTags select a Cloud target for every service that sets no
+	// cloud_target, cloud_tags, provider or target of its own.
+	CloudTags []string `json:"cloud_tags,omitempty" yaml:"cloud_tags,omitempty"`
 }
 
 // Service is something the application runs.
@@ -157,8 +160,11 @@ type Build struct {
 type Settings struct {
 	// CloudTarget names a target in the environment's assigned Cloud.
 	CloudTarget string `json:"cloud_target,omitempty" yaml:"cloud_target,omitempty"`
-	Provider    string `json:"provider,omitempty" yaml:"provider,omitempty"`
-	Region      string `json:"region,omitempty" yaml:"region,omitempty"`
+	// CloudTags select the one target in the assigned Cloud that carries
+	// every tag. Planning fails rather than guessing when none or several do.
+	CloudTags []string `json:"cloud_tags,omitempty" yaml:"cloud_tags,omitempty"`
+	Provider  string   `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Region    string   `json:"region,omitempty" yaml:"region,omitempty"`
 	// Target names the server or cluster connection for this service.
 	Target string `json:"target,omitempty" yaml:"target,omitempty"`
 	// Endpoint configures public access on owned infrastructure.
@@ -412,6 +418,10 @@ func (m *Manifest) Validate() error {
 	if m.Defaults.Region != "" && !tokenRE.MatchString(m.Defaults.Region) {
 		add("defaults.region", "%q isn't a region name", m.Defaults.Region)
 	}
+	checkCloudTags(add, "defaults.cloud_tags", m.Defaults.CloudTags)
+	if len(m.Defaults.CloudTags) > 0 && m.Defaults.Provider != "" {
+		add("defaults.cloud_tags", "can't be set with defaults.provider; choose Cloud tags or a default provider")
+	}
 	if len(m.Services) > MaxServices {
 		add("services", "has %d services; the most is %d", len(m.Services), MaxServices)
 	}
@@ -522,9 +532,32 @@ func checkToken(add func(string, string, ...any), path, what, value string) {
 	}
 }
 
+// MaxCloudTags bounds how many tags one service selects a target by.
+const MaxCloudTags = 8
+
+func checkCloudTags(add func(string, string, ...any), path string, tags []string) {
+	if len(tags) > MaxCloudTags {
+		add(path, "has %d tags; the most is %d", len(tags), MaxCloudTags)
+	}
+	seen := map[string]bool{}
+	for _, tag := range tags {
+		if len(tag) > 32 || !cloudTargetRE.MatchString(tag) {
+			add(path, "%q must be a lowercase tag of at most 32 characters", tag)
+		}
+		if seen[tag] {
+			add(path, "names %q twice", tag)
+		}
+		seen[tag] = true
+	}
+}
+
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
 	if s.CloudTarget != "" && (len(s.CloudTarget) > 48 || !cloudTargetRE.MatchString(s.CloudTarget)) {
 		add(path+".cloud_target", "must be a lowercase target slug of at most 48 characters")
+	}
+	checkCloudTags(add, path+".cloud_tags", s.CloudTags)
+	if s.CloudTarget != "" && len(s.CloudTags) > 0 {
+		add(path+".cloud_tags", "can't be set with cloud_target; name the target or select it by tags")
 	}
 	checkToken(add, path+".provider", "provider", s.Provider)
 	checkToken(add, path+".region", "region", s.Region)
@@ -725,7 +758,7 @@ func (s Service) For(env string, d Defaults) Settings {
 	out.Provider, out.Region = place(out.Provider, out.Region, d)
 	o, ok := s.Environments[env]
 	if !ok {
-		return out
+		return cloudTagDefaults(out, d)
 	}
 	if o.Provider != "" && o.Provider != out.Provider {
 		out.Target, out.Endpoint = "", nil
@@ -734,8 +767,12 @@ func (s Service) For(env string, d Defaults) Settings {
 		out.Endpoint = nil
 	}
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
+	// An environment names its target one way, replacing the service's.
 	if o.CloudTarget != "" {
-		out.CloudTarget = o.CloudTarget
+		out.CloudTarget, out.CloudTags = o.CloudTarget, nil
+	}
+	if len(o.CloudTags) > 0 {
+		out.CloudTarget, out.CloudTags = "", o.CloudTags
 	}
 	if o.Target != "" {
 		out.Target = o.Target
@@ -763,6 +800,15 @@ func (s Service) For(env string, d Defaults) Settings {
 	}
 	if o.Enabled != nil {
 		out.Enabled = o.Enabled
+	}
+	return cloudTagDefaults(out, d)
+}
+
+// cloudTagDefaults gives a service with no placement of its own the
+// manifest's default Cloud tags.
+func cloudTagDefaults(out Settings, d Defaults) Settings {
+	if len(d.CloudTags) > 0 && out.CloudTarget == "" && len(out.CloudTags) == 0 && out.Provider == "" && out.Target == "" {
+		out.CloudTags = slices.Clone(d.CloudTags)
 	}
 	return out
 }

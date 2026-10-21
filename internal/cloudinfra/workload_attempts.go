@@ -75,8 +75,8 @@ func (s *PgStore) BeginWorkloadAttempt(ctx context.Context, a WorkloadAttempt, r
 	}
 	// A different plan needs a settled predecessor. Same-plan takeover must
 	// advance the existing physical fence before its first external mutation.
-	err = tx.QueryRow(ctx, `INSERT INTO loomplane_workload_attempts(org_id,project_id,environment_id,service,plan_id,deployment_id) VALUES($1,$2,$3,$4,$5,$6)
-	ON CONFLICT(org_id,environment_id,service) DO UPDATE SET plan_id=EXCLUDED.plan_id,deployment_id=EXCLUDED.deployment_id,generation=loomplane_workload_attempts.generation+1,active=true,settled=false
+	err = tx.QueryRow(ctx, `INSERT INTO loomplane_workload_attempts(org_id,project_id,environment_id,service,plan_id,deployment_id,effects_started) VALUES($1,$2,$3,$4,$5,$6,false)
+	ON CONFLICT(org_id,environment_id,service) DO UPDATE SET plan_id=EXCLUDED.plan_id,deployment_id=EXCLUDED.deployment_id,generation=loomplane_workload_attempts.generation+1,active=true,settled=false,effects_started=CASE WHEN loomplane_workload_attempts.settled THEN false ELSE loomplane_workload_attempts.effects_started END
 	WHERE NOT loomplane_workload_attempts.legacy_unfenced AND loomplane_workload_attempts.project_id=EXCLUDED.project_id AND ((loomplane_workload_attempts.plan_id=EXCLUDED.plan_id AND loomplane_workload_attempts.deployment_id=EXCLUDED.deployment_id) OR (loomplane_workload_attempts.settled AND NOT $7)) RETURNING generation`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, finalizing).Scan(&a.Generation)
 	if err != nil {
 		return nil, fmt.Errorf("%w: recover the prior service attempt before starting another release", ErrConflict)
@@ -102,7 +102,7 @@ func GuardWorkloadWrite(ctx context.Context, tx driver.Tx) error {
 
 func (s *PgStore) FinishWorkloadAttempt(ctx context.Context, a WorkloadAttempt, settled bool) error {
 	var generation int64
-	err := s.db.QueryRow(ctx, `UPDATE loomplane_workload_attempts SET active=false,settled=$8 WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND service=$4 AND plan_id=$5 AND deployment_id=$6 AND generation=$7 AND active RETURNING generation`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, a.Generation, settled).Scan(&generation)
+	err := s.db.QueryRow(ctx, `UPDATE loomplane_workload_attempts SET active=false,settled=($8 OR NOT effects_started) WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND service=$4 AND plan_id=$5 AND deployment_id=$6 AND generation=$7 AND active AND NOT legacy_unfenced RETURNING generation`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, a.Generation, settled).Scan(&generation)
 	if err != nil {
 		return errors.Join(ErrConflict, err)
 	}
@@ -123,6 +123,16 @@ func guardRouteAttachment(ctx context.Context, tx driver.Tx, route *Route, kind 
 	}
 	if busy {
 		return fmt.Errorf("%w: finish or recover the service deployment before changing its routes", ErrBusy)
+	}
+	return nil
+}
+
+// MarkWorkloadEffects persists uncertainty before entering a remote mutation.
+func (s *PgStore) MarkWorkloadEffects(ctx context.Context, a WorkloadAttempt) error {
+	var generation int64
+	err := s.db.QueryRow(ctx, `UPDATE loomplane_workload_attempts SET effects_started=true WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND service=$4 AND plan_id=$5 AND deployment_id=$6 AND generation=$7 AND active AND NOT settled AND NOT legacy_unfenced RETURNING generation`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, a.Generation).Scan(&generation)
+	if err != nil {
+		return errors.Join(ErrConflict, err)
 	}
 	return nil
 }

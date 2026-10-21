@@ -737,6 +737,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 		return authErr
 	}
+	if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+		return effectErr
+	}
 	if _, fenced := server.EffectFenceFrom(ctx); fenced {
 		if fenceErr := preparePoolEffects(ctx, exec, job); fenceErr != nil {
 			return fenceErr
@@ -907,6 +910,9 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		}
 	} else {
 		job.Progress(StepDeploying, "Removing "+a.Name)
+		if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+			return effectErr
+		}
 		removalCtx, fenceErr := preparePoolRemoval(ctx, exec, job, bound)
 		if fenceErr != nil {
 			return fenceErr
@@ -1055,6 +1061,9 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	job.Progress(StepDeploying, "Removing the one it replaces on "+placement(old.Provider, old.Region))
 	if authErr := r.authorizeCloudRemoval(ctx, job); authErr != nil {
 		return false, authErr
+	}
+	if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+		return false, effectErr
 	}
 	removalCtx, fenceErr := preparePoolRemoval(ctx, exec, &gone, old)
 	if fenceErr != nil {

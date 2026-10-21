@@ -61,7 +61,7 @@ func reviewFederationPlacements(in FederationInput, destinations map[string]*dom
 		} else if prov, err := in.Providers.Get(set.Provider); err != nil || prov.Cloud != d.Identity.Provider || !prov.Available {
 			fail("federation-placement-provider", "The service needs an available provider for this destination's cloud.")
 		}
-		if set.CloudTarget != "" {
+		if set.CloudTarget != "" || len(set.CloudTags) > 0 {
 			fail("federation-placement-cloud", "Resolve the assigned Cloud target before reviewing this placement.")
 		}
 		cloud, hasCloud := in.CloudPlacements[placement.Service]

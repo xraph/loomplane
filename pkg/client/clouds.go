@@ -10,13 +10,21 @@ import (
 
 // Cloud is the public Cloud API record.
 type Cloud struct {
-	ID        string    `json:"id" forge:"id"`
-	OrgID     string    `json:"org_id"`
-	ProjectID string    `json:"project_id"`
-	Name      string    `json:"name"`
-	Revision  int64     `json:"revision"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID               string          `json:"id" forge:"id"`
+	OrgID            string          `json:"org_id"`
+	ProjectID        string          `json:"project_id"`
+	Name             string          `json:"name"`
+	DefaultPlacement *CloudPlacement `json:"default_placement"`
+	Revision         int64           `json:"revision"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
+// CloudPlacement is a Cloud's single default provider, account and region.
+type CloudPlacement struct {
+	Provider     string `json:"provider"`
+	ConnectionID string `json:"connection_id"`
+	Region       string `json:"region"`
 }
 
 // CloudTarget is the public Cloud API record.
@@ -30,6 +38,7 @@ type CloudTarget struct {
 	Provider     string    `json:"provider"`
 	ConnectionID string    `json:"connection_id"`
 	Region       string    `json:"region"`
+	Tags         []string  `json:"tags"`
 	Revision     int64     `json:"revision"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -45,6 +54,8 @@ type CloudAssignment struct {
 	CloudID       string        `json:"cloud_id"`
 	Revision      int64         `json:"revision"`
 	Targets       []CloudTarget `json:"targets"`
+	// DefaultPlacement is present when the project's grant covers the whole Cloud.
+	DefaultPlacement *CloudPlacement `json:"default_placement,omitempty"`
 }
 
 // CloudChangeInput is the public Cloud API record.
@@ -121,7 +132,14 @@ type CloudSync struct {
 }
 
 type CloudCreateInput struct {
-	Name string `json:"name"`
+	Name             string          `json:"name"`
+	DefaultPlacement *CloudPlacement `json:"default_placement,omitempty"`
+}
+
+// CloudDefaultPlacementInput replaces the default; nil clears it.
+type CloudDefaultPlacementInput struct {
+	DefaultPlacement *CloudPlacement `json:"default_placement"`
+	Revision         int64           `json:"revision"`
 }
 
 type CloudUpdateInput struct {
@@ -130,16 +148,19 @@ type CloudUpdateInput struct {
 }
 
 type CloudCreateTargetInput struct {
-	Name         string `json:"name"`
-	DisplayName  string `json:"display_name"`
-	Provider     string `json:"provider"`
-	ConnectionID string `json:"connection_id"`
-	Region       string `json:"region"`
+	Name         string   `json:"name"`
+	DisplayName  string   `json:"display_name"`
+	Provider     string   `json:"provider"`
+	ConnectionID string   `json:"connection_id"`
+	Region       string   `json:"region"`
+	Tags         []string `json:"tags,omitempty"`
 }
 
+// CloudUpdateTargetInput keeps a target's tags when Tags is nil.
 type CloudUpdateTargetInput struct {
-	DisplayName string `json:"display_name"`
-	Revision    int64  `json:"revision"`
+	DisplayName string    `json:"display_name"`
+	Tags        *[]string `json:"tags,omitempty"`
+	Revision    int64     `json:"revision"`
 }
 
 type EnvironmentCloud struct {
@@ -190,6 +211,11 @@ func (c *Client) Cloud(ctx context.Context, project, id string) (*Cloud, error) 
 func (c *Client) UpdateCloud(ctx context.Context, project, id string, in CloudUpdateInput) (*Cloud, error) {
 	var out Cloud
 	err := c.do(ctx, http.MethodPut, cloudPath(project)+"/clouds/"+esc(id), in, &out)
+	return &out, err
+}
+func (c *Client) SetCloudDefaultPlacement(ctx context.Context, project, id string, in CloudDefaultPlacementInput) (*Cloud, error) {
+	var out Cloud
+	err := c.do(ctx, http.MethodPut, cloudPath(project)+"/clouds/"+esc(id)+"/default-placement", in, &out)
 	return &out, err
 }
 func (c *Client) DeleteCloud(ctx context.Context, project, id string) error {

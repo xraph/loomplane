@@ -360,3 +360,42 @@ func TestLegacyCloudPlacementCannotReuseChangedGrant(t *testing.T) {
 		t.Fatal("legacy placement reused a changed project grant")
 	}
 }
+
+// defaultCloudRunner pins the action to the Cloud's default instead of a target.
+func defaultCloudRunner(t *testing.T) (*Runner, *planning.Plan, *recorder, *cloudResolver) {
+	t.Helper()
+	r, plan, _, exec, c := cloudRunner(t)
+	a := &plan.Actions[0]
+	pin := a.Service.CloudPlacement
+	pin.Default, pin.TargetID, pin.TargetName, pin.TargetRevision = true, "", "", 0
+	c.assignment.Targets = nil
+	c.assignment.DefaultPlacement = &cloudprofiles.DefaultPlacement{Provider: a.Provider, ConnectionID: a.ConnectionID, Region: a.Region}
+	return r, plan, exec, c
+}
+
+func TestRunnerCloudDefaultRevalidatesBeforeStart(t *testing.T) {
+	r, plan, _, _ := defaultCloudRunner(t)
+	if _, _, err := r.Start(t.Context(), plan.OrgID, plan.ID); err != nil {
+		t.Fatalf("reviewed default placement refused: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*cloudResolver)
+	}{
+		{"cleared", func(c *cloudResolver) { c.assignment.DefaultPlacement = nil }},
+		{"other account", func(c *cloudResolver) { c.assignment.DefaultPlacement.ConnectionID = "other" }},
+		{"other provider", func(c *cloudResolver) { c.assignment.DefaultPlacement.Provider = "netlify" }},
+		{"cloud revision", func(c *cloudResolver) { c.assignment.CloudRevision++ }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, plan, exec, c := defaultCloudRunner(t)
+			tc.change(c)
+			if _, _, err := r.Start(t.Context(), plan.OrgID, plan.ID); err == nil {
+				t.Fatal("stale default placement started")
+			}
+			if len(exec.jobs) != 0 {
+				t.Fatal("stale default placement reached the provider")
+			}
+		})
+	}
+}
