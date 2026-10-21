@@ -108,6 +108,20 @@ func usableRetentionPoint(b *Backup, now time.Time) bool {
 	return b.Token != "" && b.Object.Key == b.objectKey()
 }
 
+func verifiedRetentionPoint(now time.Time, points []RetentionEntry) *Backup {
+	var latest *Backup
+	for i := range points {
+		b := &points[i].Backup
+		if !usableRetentionPoint(b, now) || b.RestoredAt == nil || b.RestoredAt.Before(*b.CompletedAt) || b.RestoredAt.After(now) {
+			continue
+		}
+		if latest == nil || b.CompletedAt.After(*latest.CompletedAt) || b.CompletedAt.Equal(*latest.CompletedAt) && b.ID > latest.ID {
+			latest = b
+		}
+	}
+	return latest
+}
+
 func previewRetention(now time.Time, input RetentionInput, anchor *Backup, inventory []RetentionEntry) (*RetentionPreview, error) {
 	if err := input.Validate(); err != nil {
 		return nil, err
@@ -143,12 +157,8 @@ func previewRetention(now time.Time, input RetentionInput, anchor *Backup, inven
 		return strings.Compare(b.Backup.ID, a.Backup.ID)
 	})
 	verified := ""
-	for _, point := range points {
-		b := &point.Backup
-		if usableRetentionPoint(b, now) && b.RestoredAt != nil && !b.RestoredAt.Before(*b.CompletedAt) && !b.RestoredAt.After(now) {
-			verified = b.ID
-			break
-		}
+	if witness := verifiedRetentionPoint(now, points); witness != nil {
+		verified = witness.ID
 	}
 	cutoff, kept := now.Add(-time.Duration(input.OlderThanDays)*24*time.Hour), 0
 	for _, point := range points {

@@ -21,11 +21,17 @@ func scanRestore(row pgx.Row) (*Restore, error) {
 	return &r, nil
 }
 func (s *PgStore) CreateRestore(ctx context.Context, r *Restore) (*Restore, error) {
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_service_restores(id,org_id,project_id,backup_id,status,request_id,created_by,created_at,expires_at) VALUES($1,$2,$3,$4,'queued',$5,$6,$7,$8) ON CONFLICT(org_id,project_id,request_id) DO NOTHING`, r.ID, r.OrgID, r.ProjectID, r.BackupID, r.RequestID, r.CreatedBy, r.CreatedAt, r.ExpiresAt)
+	_, err := s.db.Exec(ctx, `WITH available AS (
+ SELECT id FROM loomplane_service_backups WHERE org_id=$2 AND project_id=$3 AND id=$4 AND status='succeeded' FOR UPDATE
+ ) INSERT INTO loomplane_service_restores(id,org_id,project_id,backup_id,status,request_id,created_by,created_at,expires_at)
+ SELECT $1,$2,$3,id,'queued',$5,$6,$7,$8 FROM available ON CONFLICT(org_id,project_id,request_id) DO NOTHING`, r.ID, r.OrgID, r.ProjectID, r.BackupID, r.RequestID, r.CreatedBy, r.CreatedAt, r.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
 	result, err := scanRestore(s.db.QueryRow(ctx, `SELECT `+restoreColumns+` FROM loomplane_service_restores WHERE org_id=$1 AND project_id=$2 AND request_id=$3`, r.OrgID, r.ProjectID, r.RequestID))
+	if errors.Is(err, ErrNotFound) {
+		return nil, ErrConflict
+	}
 	if err != nil {
 		return nil, err
 	}
