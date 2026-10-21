@@ -47,8 +47,10 @@ func (r *Runner) CleanupPoolReservation(ctx context.Context, org, planID, servic
 		return err
 	}
 	for _, b := range bindings {
-		if b.Subject == action.Subject && b.Name == service && b.ConnectionID == action.ConnectionID {
-			return errors.New("a serving binding still owns this host; recover the accepted deployment before cleanup")
+		for _, retained := range append([]planning.Binding{*b}, b.Replaced...) {
+			if retained.Subject == action.Subject && retained.Name == service && retained.PlanID == planID {
+				return errors.New("a current or retained binding still owns this exact plan; recover the accepted deployment before cleanup")
+			}
 		}
 	}
 	conn, credential, err := r.credentials.Credential(ctx, org, action.ConnectionID)
@@ -129,7 +131,7 @@ func (e *OwnedTarget) CleanupPoolWorkload(ctx context.Context, job *Job, raw []b
 			return saveErr
 		}
 	}
-	if cp.Labels[owned.LabelOrg] != job.Deployment.OrgID || cp.Labels[owned.LabelProject] != job.Deployment.ProjectID || cp.Labels[owned.LabelEnvironment] != job.Deployment.EnvironmentID || cp.Labels[owned.LabelService] != job.Action.Name || cp.Labels[owned.LabelConnection] != job.Connection.ID || cp.RuntimeRef == "" || cp.Labels[owned.LabelRuntime] != cp.RuntimeRef {
+	if cp.Labels[owned.LabelOrg] != job.Deployment.OrgID || cp.Labels[owned.LabelProject] != job.Deployment.ProjectID || cp.Labels[owned.LabelEnvironment] != job.Deployment.EnvironmentID || cp.Labels[owned.LabelService] != job.Action.Name || cp.Labels[owned.LabelConnection] != job.Connection.ID || (len(job.Action.Routes) > 0 && cp.Labels[labelReleaseAttempt] != job.Deployment.ID+"/"+job.Action.ID) || cp.RuntimeRef == "" || cp.Labels[owned.LabelRuntime] != cp.RuntimeRef {
 		return errors.New("cleanup checkpoint ownership differs")
 	}
 	if err := validateRuntimeRef(job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, cp.RuntimeRef); err != nil {
@@ -150,6 +152,11 @@ func (e *OwnedTarget) CleanupPoolWorkload(ctx context.Context, job *Job, raw []b
 	})
 	if !ok {
 		return errors.New("runtime cannot prove exact pending ownership")
+	}
+	if e.RouteGuard != nil {
+		if routeErr := e.RouteGuard.ValidateRuntimeRemoval(ctx, job.Deployment.OrgID, job.Deployment.ProjectID, cp.InstanceID); routeErr != nil {
+			return routeErr
+		}
 	}
 	if removeErr := pending.RemovePending(ctx, iid, cp.Labels); removeErr != nil {
 		return removeErr

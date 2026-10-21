@@ -20,6 +20,8 @@ type IngressTransition struct {
 }
 
 type HandoffInput struct {
+	operationID string
+
 	Revision           int64  `json:"revision"`
 	DestinationCloudID string `json:"destination_cloud_id"`
 }
@@ -81,6 +83,9 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	opID, err := randomID("routeop")
 	if err != nil {
 		return nil, err
+	}
+	if in.operationID != "" {
+		opID = in.operationID
 	}
 	op := &RouteOperation{ID: opID, Kind: "prepare", Status: "pending", Attempt: 1, Revision: 1, Route: destination, Source: source, DesiredRecord: desired, PreviousReceipt: source.Receipt, Principal: p}
 	if checkErr := st.AcceptRoute(ctx, op); checkErr != nil {

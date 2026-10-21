@@ -564,19 +564,27 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			resolved, placements, resolutionErr = ResolveCloudTargets(resolutionManifest, plan.Environment, assignment, options, pools)
 		}
 	}
+	routes, routeErr := s.releaseRoutes(ctx, plan)
+	if routeErr != nil {
+		return nil, "", routeErr
+	}
 	var result *Result
 	if resolutionErr != nil {
 		result = &Result{Problems: []Finding{{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
 		result = Compute(Input{
-			Catalog:    plan.Catalog,
+			Catalog: plan.Catalog, Routes: routes,
 			Federation: federation, CloudPlacements: placements,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
 		})
 	}
 	if resolutionErr == nil && poolRelocation(bindings, placements) {
-		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements)
+		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements, routes)
+	}
+	if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings); routeErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "route-capacity", Message: routeErr.Error()})
+		result.Executable = false
 	}
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,

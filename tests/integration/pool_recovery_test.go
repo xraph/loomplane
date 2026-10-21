@@ -307,6 +307,7 @@ func TestServerPoolsLostSessionLiveExecutor(t *testing.T) {
 			awaitPoolGeneration(t, e.preparing, 1)
 			awaitPoolGeneration(t, e.entered, 1)
 			killPoolLockSession(t, f)
+			assertBusyRouteAttachment(t, f, "api")
 			svc := poolRecoveryService(f, runner)
 			principal := security.Principal{OrgID: "org", UserID: "manager"}
 			if resume {

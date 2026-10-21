@@ -120,6 +120,9 @@ func (s *Service) RecoverReservation(ctx context.Context, p security.Principal, 
 	if _, err = lock.tx.Exec(ctx, `UPDATE loomplane_pool_execution SET phase='released',storage_retained=$4,revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3`, p.OrgID, in.PlanID, in.Service, v.Started); err != nil {
 		return nil, err
 	}
+	if _, err = lock.tx.Exec(ctx, `UPDATE loomplane_workload_attempts SET active=false,settled=true,generation=generation+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3`, p.OrgID, in.PlanID, in.Service); err != nil {
+		return nil, err
+	}
 	if commitErr := lock.tx.Commit(); commitErr != nil {
 		return nil, commitErr
 	}

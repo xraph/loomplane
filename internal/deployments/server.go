@@ -30,6 +30,8 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
+const labelReleaseAttempt = "loomplane.release.attempt"
+
 const labelRegistry = "loomplane.registry"
 const labelRegistrySettings = "loomplane.registry.settings"
 const labelImage = owned.LabelImage
@@ -37,6 +39,8 @@ const labelImage = owned.LabelImage
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
 type OwnedTarget struct {
+	RouteGuard RuntimeRemovalGuard
+
 	Cloud       string
 	Ctrl        CtrlPlane
 	Credentials Credentials
@@ -104,7 +108,8 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 			}
 			return nil, errors.New("the SSH server or Docker identity changed; check the connection and plan again")
 		}
-		client.RequireFence = labels["loomplane.pool"] != ""
+		_, fenced := server.EffectFenceFrom(ctx)
+		client.RequireFence = labels["loomplane.pool"] != "" || fenced
 		client.Config.Details = details
 		return client, nil
 	}
@@ -196,6 +201,7 @@ func (e *OwnedTarget) Register(org, connection string) string {
 }
 
 type ownedState struct {
+	CandidateName string                   `json:"candidate_name,omitempty"`
 	EffectStage   string                   `json:"effect_stage,omitempty"`
 	Image         ImageArtifact            `json:"image"`
 	RuntimeRef    string                   `json:"runtime_ref,omitempty"`
@@ -251,6 +257,18 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		}
 		job.Resume = raw
 		return nil
+	}
+	if len(job.Action.Routes) > 0 {
+		if state.CandidateName != "" && state.CandidateName != name {
+			return nil, errors.New("routed candidate identity changed")
+		}
+		state.CandidateName = name
+		if state.EffectStage == "" {
+			state.EffectStage = "building"
+		}
+		if saveErr := save(); saveErr != nil {
+			return nil, saveErr
+		}
 	}
 	for _, ref := range []string{state.RuntimeRef, state.PriorLabels[owned.LabelRuntime]} {
 		if refErr := validateRuntimeRef(job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, ref); refErr != nil {
@@ -367,6 +385,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	if inst == nil {
 		inst, err = e.Ctrl.Instances.Create(ctx, instance.CreateRequest{Name: name, ProviderName: key, Services: []cpprovider.ServiceSpec{sp}, Labels: labels})
 		if err != nil {
+			if len(job.Action.Routes) > 0 {
+				return nil, err
+			}
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			failed, findErr := e.Ctrl.Instances.GetBySlug(cleanup, strings.ToLower(name))
@@ -419,6 +440,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	cfg := job.Action.Service
 	sp, _ = spec(job, image, nil)
 	labels = map[string]string{owned.LabelOrg: job.Deployment.OrgID, owned.LabelProject: job.Deployment.ProjectID, owned.LabelEnvironment: job.Deployment.EnvironmentID, owned.LabelAction: job.Action.ID, owned.LabelService: job.Action.Name, owned.LabelConnection: job.Connection.ID, owned.LabelRuntime: state.RuntimeRef, owned.LabelPublic: strconv.FormatBool(cfg.Public), owned.LabelHealth: cfg.HealthPath, owned.LabelArchitecture: state.Image.Architecture, owned.LabelRevision: job.Deployment.ID + "/" + job.Action.ID}
+	if len(job.Action.Routes) > 0 {
+		labels[labelReleaseAttempt] = job.Deployment.ID + "/" + job.Action.ID
+	}
 	labels[owned.LabelPlan] = job.Deployment.PlanID
 	if cfg.CloudPlacement != nil && cfg.CloudPlacement.PoolID != "" {
 		labels["loomplane.pool"] = cfg.CloudPlacement.PoolID
@@ -517,6 +541,11 @@ func (e *OwnedTarget) validateTarget(ctx context.Context, labels map[string]stri
 }
 
 func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
+	if e.RouteGuard != nil {
+		if routeErr := e.RouteGuard.ValidateRuntimeRemoval(ctx, b.OrgID, b.ProjectID, b.ExternalID); routeErr != nil {
+			return routeErr
+		}
+	}
 	if b.ExternalID == "" {
 		return nil
 	}

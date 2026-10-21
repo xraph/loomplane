@@ -186,6 +186,9 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, route.OrgID); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := guardRouteAttachment(ctx, tx, route, op.Kind); checkErr != nil {
+		return checkErr
+	}
 	if op.Kind == "apply" {
 		current, lookupErr := scanRouteBinding(tx.QueryRow(ctx, routeBindingQuery+" FOR SHARE OF b,g,t,s,c,i", route.OrgID, route.ProjectID, route.Input.EnvironmentID, route.Input.Service, route.Input.CloudID, route.Input.Port))
 		if lookupErr != nil {

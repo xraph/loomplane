@@ -86,12 +86,13 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	pin.ServerID = "host-new"
 	pin.CPUMillis = 1000
 	pin.MemoryBytes = 512 << 20
-	result := appliedCloudPlan([]*Binding{binding}, assigned, "", options, providers.Registry(), map[string]CloudPlacement{"api": pin})
+	route := cloudinfra.Route{ID: "reviewed-route", Status: "ready", Input: cloudinfra.RouteInput{Service: "api"}, Binding: cloudinfra.RouteBinding{BindingID: binding.ID, InstanceID: binding.ExternalID}}
+	result := appliedCloudPlan([]*Binding{binding}, assigned, "", options, providers.Registry(), map[string]CloudPlacement{"api": pin}, []cloudinfra.Route{route})
 	if !result.Executable {
 		t.Fatalf("relocation blocked: %+v", result.Problems)
 	}
 	moved := action(t, result, "service:api")
-	if moved.Op != Replace || !reflect.DeepEqual(moved.Service.AppliedInputs, cfg.AppliedInputs) || moved.Service.CommitSHA != "original" {
+	if len(moved.Routes) != 1 || moved.Routes[0].ID != route.ID || moved.Op != Replace || !reflect.DeepEqual(moved.Service.AppliedInputs, cfg.AppliedInputs) || moved.Service.CommitSHA != "original" {
 		t.Fatal("relocation replaced serving snapshots")
 	}
 	withoutRegistry := append([]ConnectionOption{}, options[:2]...)

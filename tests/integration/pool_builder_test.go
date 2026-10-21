@@ -218,6 +218,7 @@ func verifyPoolSourceBuildFence(t *testing.T, host string, cfg *server.Config, r
 		time.Sleep(50 * time.Millisecond)
 	}
 	killPoolLockSession(t, f)
+	assertBusyRouteAttachment(t, f, "api")
 	resumed := make(chan error, 1)
 	go func() {
 		resumed <- runner.Run(t.Context(), "org", dep, "service:api", nil, func([]byte) error { return nil })

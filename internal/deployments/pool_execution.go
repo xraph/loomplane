@@ -79,7 +79,7 @@ func (e *OwnedTarget) PreparePoolEffects(ctx context.Context, job *Job) error {
 // preparePoolRemoval drains mutations on the recorded source before exact
 // removal. It does not acquire new placement authority or delete storage.
 func preparePoolRemoval(ctx context.Context, executor Executor, job *Job, bound *planning.Binding) (context.Context, error) {
-	if !poolBinding(bound) {
+	if _, fenced := server.EffectFenceFrom(ctx); !poolBinding(bound) && !fenced {
 		return ctx, nil
 	}
 	var cfg planning.ServiceConfig

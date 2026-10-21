@@ -19,6 +19,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/planning"
@@ -171,6 +172,8 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
+	routes ReleaseRoutes
+
 	cloudSyncAuth CloudSyncAuthorizer
 	cloudProfiles cloudprofiles.Resolver
 	store         Store
@@ -191,6 +194,8 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	Routes ReleaseRoutes
+
 	CloudSyncAuth CloudSyncAuthorizer
 	CloudProfiles cloudprofiles.Resolver
 	Logs          LogSink
@@ -212,7 +217,7 @@ type RunnerDeps struct {
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
-		cloudSyncAuth: d.CloudSyncAuth,
+		cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
 		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
@@ -428,13 +433,6 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			action = a
 		}
 	}
-	admission, err := r.directServerAdmission(ctx, plan, action)
-	if err != nil {
-		return err
-	}
-	if admission != nil {
-		defer func() { _ = admission.Rollback() }() //nolint:errcheck // releasing a read-only admission lock
-	}
 	poolLock, err := r.beginPoolExecution(ctx, plan, action)
 	if err != nil {
 		return err
@@ -442,6 +440,18 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if poolLock != nil {
 		ctx = poolEffectContext(poolLock.Context(ctx))
 		defer func() { runErr = errors.Join(runErr, poolLock.Finish(context.WithoutCancel(ctx))) }()
+	}
+	ctx, finishAttempt, err := r.beginWorkloadAttempt(ctx, d, action, false)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, finishAttempt(runErr == nil && len(action.Routes) == 0)) }()
+	admission, err := r.directServerAdmission(ctx, plan, action)
+	if err != nil {
+		return err
+	}
+	if admission != nil {
+		defer func() { _ = admission.Rollback() }() //nolint:errcheck // releasing a read-only admission lock
 	}
 	if err := r.authorizeSync(ctx, plan); err != nil {
 		return err
@@ -664,7 +674,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		// redeploy it. A step that replaced what's bound now, as a retry
 		// after later deployments moved the action back can find, isn't
 		// one of these.
-		if plan.CloudSyncID != "" {
+		if plan.CloudSyncID != "" || len(a.Routes) > 0 {
 			return nil
 		}
 		if rerr := r.removeReplaced(ctx, job, current, step.Replaced, warn, rc, heartbeat); rerr != nil {
@@ -673,7 +683,10 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		step.Replaced = nil
 		return nil
 	}
-	moving := moves(current, a, connID)
+	if routeErr := r.validateReleaseRoutes(ctx, job, current); routeErr != nil {
+		return routeErr
+	}
+	moving := moves(current, a, connID) || len(a.Routes) > 0
 	if moving && a.Op != planning.Replace && (a.Op != planning.Create || current.Drift != planning.DriftMissing) && current.Provider == a.Provider && current.Region == a.Region {
 		// Only the planner moves something to another connection, since
 		// only it deploys again what uses it, or refuses when something
@@ -724,12 +737,14 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 		return authErr
 	}
-	if poolLock != nil {
+	if _, fenced := server.EffectFenceFrom(ctx); fenced {
 		if fenceErr := preparePoolEffects(ctx, exec, job); fenceErr != nil {
 			return fenceErr
 		}
-		if fenceErr := poolLock.Attempt(ctx); fenceErr != nil {
-			return fenceErr
+		if poolLock != nil {
+			if fenceErr := poolLock.Attempt(ctx); fenceErr != nil {
+				return fenceErr
+			}
 		}
 	}
 	out, err := exec.Apply(ctx, job)
@@ -770,7 +785,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" {
+	if plan.CloudSyncID != "" || len(a.Routes) > 0 {
 		return nil
 	}
 	if rerr := r.removeReplaced(ctx, job, bound, step.Replaced, warn, rc, heartbeat); rerr != nil {
@@ -868,6 +883,13 @@ func (rc *replaceCheckpoint) encode() []byte {
 func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound *planning.Binding, unreachable bool,
 	step *Step, rc *replaceCheckpoint, heartbeat func([]byte) error,
 ) error {
+	if r.routes != nil {
+		for _, retained := range append([]planning.Binding{*bound}, bound.Replaced...) {
+			if routeErr := r.routes.ValidateRuntimeRemoval(ctx, bound.OrgID, bound.ProjectID, retained.ExternalID); routeErr != nil {
+				return routeErr
+			}
+		}
+	}
 	var warnings []string
 	warn := func(err error) { warnings = append(warnings, err.Error()) }
 	if err := r.removeReplaced(ctx, job, bound, nil, warn, rc, heartbeat); err != nil {
@@ -1236,6 +1258,11 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
+	}
+	if reason == "" && d.Status != StatusFailed {
+		if cleanupErr := r.finishRoutedRelease(ctx, d); cleanupErr != nil {
+			return cleanupErr
+		}
 	}
 	status := StatusSucceeded
 	if reason != "" {

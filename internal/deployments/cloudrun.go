@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -448,6 +449,22 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 // next plan then sees the move and replaces it properly. An instance that
 // only holds the slug keeps it, and this one takes the next free name.
 func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (inst *instance.Instance, name string, err error) {
+	if len(job.Action.Routes) > 0 {
+		sum := sha256.Sum256([]byte(job.Deployment.ID + "/" + job.Action.ID))
+		name = fmt.Sprintf("%s-release-%x", instanceName(job), sum[:8])
+		inst, err = ctrl.Instances.GetBySlug(ctx, strings.ToLower(name))
+		if errors.Is(err, ctrlplane.ErrNotFound) {
+			return nil, name, nil
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		if inst.ProviderName != key || inst.TenantID != job.Deployment.OrgID || inst.Labels[labelReleaseAttempt] != job.Deployment.ID+"/"+job.Action.ID || replaced(job, inst) {
+			return nil, "", errors.New("routed candidate name belongs to another runtime")
+		}
+		return inst, name, nil
+	}
+
 	if inst, err = boundInstance(ctx, ctrl, job, key); err != nil {
 		return nil, "", err
 	}

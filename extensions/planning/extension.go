@@ -31,6 +31,7 @@ import (
 	"github.com/xraph/vault/secret"
 	vaultpg "github.com/xraph/vault/store/postgres"
 
+	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
@@ -112,7 +113,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 func (e *Extension) Dependencies() []string {
 	return []string{
 		identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
-		connectionsext.Name, environmentsext.Name, realtimeext.Name, troveext.ExtensionName,
+		cloudinfraext.Name, connectionsext.Name, environmentsext.Name, realtimeext.Name, troveext.ExtensionName,
 	}
 }
 
@@ -253,7 +254,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	resourceSecrets := deployments.NewVaultResourceSecrets(
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
 	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
-	serverTarget := &deployments.OwnedTarget{Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
+	routeService, err := forge.InjectType[*cloudinfra.Service](c)
+	if err != nil {
+		return err
+	}
+	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
 	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg)}
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Credentials: clouds}, auditor); err != nil {
@@ -285,7 +290,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return nil
 	}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
-		Logs:          logStore,
+		Logs: logStore, Routes: routeService,
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{

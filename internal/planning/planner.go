@@ -131,6 +131,10 @@ func Compute(in Input) *Result {
 	p.planGateways()
 	p.checkTargetPlacements()
 	p.readdress()
+	for p.routedReplacements() {
+		p.readdress()
+	}
+	p.readdress()
 	p.heldAddresses()
 	p.gatewayHeld()
 	p.heldDrift()

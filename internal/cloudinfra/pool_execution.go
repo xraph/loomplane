@@ -8,6 +8,8 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/grove/driver"
+
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
 
 // PoolExecutionLock coordinates admission across processes. The host effect
@@ -41,11 +43,34 @@ func (s *PgStore) BeginPoolExecution(ctx context.Context, org, plan, service str
 	if err != nil {
 		return nil, err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		l.Close()
+		return nil, err
+	}
+	defer rollback(tx)
+	if err = cloudprofiles.LockOrganization(ctx, tx, org); err != nil {
+		l.Close()
+		return nil, err
+	}
+	var environment string
+	if err = tx.QueryRow(ctx, `SELECT environment_id FROM loomplane_plans WHERE org_id=$1 AND id=$2`, org, plan).Scan(&environment); err != nil {
+		l.Close()
+		return nil, err
+	}
+	if err = LockRouteWorkload(ctx, tx, org, environment, service); err != nil {
+		l.Close()
+		return nil, err
+	}
 	var generation int64
-	err = s.db.QueryRow(ctx, `UPDATE loomplane_pool_execution SET active=true,generation=generation+1,revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND phase='reserved' RETURNING generation`, org, plan, service).Scan(&generation)
+	err = tx.QueryRow(ctx, `UPDATE loomplane_pool_execution SET active=true,generation=generation+1,revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND phase='reserved' RETURNING generation`, org, plan, service).Scan(&generation)
 	if err != nil {
 		l.Close()
 		return nil, fmt.Errorf("%w: placement was closed for recovery", ErrConflict)
+	}
+	if err = tx.Commit(); err != nil {
+		l.Close()
+		return nil, err
 	}
 	l.generation = generation
 	return l, nil
@@ -94,13 +119,12 @@ func (l *PoolExecutionLock) Finish(ctx context.Context) error {
 // session loss cannot leave the publication running without its ownership lock.
 func GuardPoolWrite(ctx context.Context, tx driver.Tx) error {
 	scope, ok := ExecutionFrom(ctx)
-	if !ok {
-		return nil
+	if ok {
+		var generation int64
+		err := tx.QueryRow(ctx, `SELECT generation FROM loomplane_pool_execution WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND generation=$4 AND active AND phase='reserved' FOR UPDATE`, scope.Org, scope.Plan, scope.Service, scope.Generation).Scan(&generation)
+		if err != nil {
+			return fmt.Errorf("%w: stale worker cannot publish progress", ErrConflict)
+		}
 	}
-	var generation int64
-	err := tx.QueryRow(ctx, `SELECT generation FROM loomplane_pool_execution WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND generation=$4 AND active AND phase='reserved' FOR UPDATE`, scope.Org, scope.Plan, scope.Service, scope.Generation).Scan(&generation)
-	if err != nil {
-		return fmt.Errorf("%w: stale worker cannot publish progress", ErrConflict)
-	}
-	return nil
+	return GuardWorkloadWrite(ctx, tx)
 }
