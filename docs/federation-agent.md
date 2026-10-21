@@ -379,3 +379,36 @@ certificate expires. New requests remain denied after policy expiry or revocatio
 This HTTP adapter does not qualify gRPC, TCP, remote upstream TLS, dynamic route
 replacement, DNS or two-cluster reachability. Those require separate runtime and
 installation work; no configuration flag currently enables this path.
+
+## Application registration
+
+`RegisterWorkload` issues a service identity from a server-verified
+`WorkloadBinding`. You must resolve its service from an owned deployment and
+retain durable revocation intent before calling it. There is no management
+endpoint for caller-supplied selectors. The deployment verifier and application
+registration journal are still pending, so agent launch does not issue service
+identities yet.
+
+The workload selector must match the destination's organization, project,
+environment and ID. An application binding cannot carry agent authority. Both
+registration paths share the exact pod/container or executable attestation checks
+and reject changed selectors, identities, privileges or lifetimes in SPIRE's
+response, including an existing registration returned by a retry.
+
+Application certificates have a requested lifetime of 30 seconds to five minutes.
+`PruneAfter` sets a pruning threshold within five minutes of checked evidence,
+but it does not impose an issuance or authorization deadline. SPIRE may continue
+serving certificates after that timestamp. Its
+[pinned server reference](https://github.com/spiffe/spire/blob/v1.15.4/doc/spire_server.md#spire-server-entry-create)
+describes entry expiry as a data management feature. The local live qualification
+also observed usable identities beyond it.
+
+You must explicitly revoke the registration and enforce signed access-policy
+leases at the HTTP boundary. Certificates already issued can remain valid until
+their own deadlines. Never use `PruneAfter` to authorize traffic or to mark
+revocation complete.
+
+The lifecycle-owned SPIRE client registers and revokes both agents and services.
+It denies control-plane, privileged and foreign-organization deletion. Application
+registration uses the existing administrative connection; it does not add a
+worker, background renewal or deployment action.

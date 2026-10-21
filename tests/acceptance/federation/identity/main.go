@@ -43,7 +43,7 @@ func main() {
 	}
 }
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	if err := os.MkdirAll("/tmp", 0o700); err != nil {
 		return err
@@ -287,6 +287,9 @@ plugins {
 	}
 	fmt.Println("PASS expired credential denied while rotated credential remains valid")
 	if err := qualifyRuntime(ctx, conn, issuer, "unix://"+serverSocket, source, binding, "unix://"+filepath.Join(dir, "agent", "agent.sock")); err != nil {
+		return err
+	}
+	if err := qualifyWorkload(ctx, issuer, binding, "unix://"+filepath.Join(dir, "agent", "agent.sock"), trust, verifier); err != nil {
 		return err
 	}
 	fresh, runErr = source.GetX509SVID()

@@ -65,6 +65,9 @@ func (i *SPIREIssuer) Register(ctx context.Context, binding Binding) (*spiretype
 	if err != nil {
 		return nil, err
 	}
+	return i.registerEntry(ctx, entry)
+}
+func (i *SPIREIssuer) registerEntry(ctx context.Context, entry *spiretypes.Entry) (*spiretypes.Entry, error) {
 	response, err := i.client.BatchCreateEntry(ctx, &entryv1.BatchCreateEntryRequest{Entries: []*spiretypes.Entry{entry}})
 	if err != nil {
 		return nil, err
@@ -103,12 +106,18 @@ func validEntryID(id string) bool {
 	return err == nil && parsed.String() == id
 }
 func (i *SPIREIssuer) entry(b Binding) (*spiretypes.Entry, error) {
-	now := i.now()
-	if !validEntryID(b.EntryID) || b.CheckedAt.IsZero() || b.CheckedAt.Before(now.Add(-5*time.Minute)) || b.CheckedAt.After(now.Add(30*time.Second)) || b.Destination.Quarantined || b.Destination.Generation < 1 || b.Destination.Identity.Revision() == "" || b.Agent.Scope != b.Destination.Scope || b.Agent.DestinationID != b.Destination.ID {
+	if b.Agent.Scope != b.Destination.Scope || b.Agent.DestinationID != b.Destination.ID {
 		return nil, ErrIdentity
 	}
 	uri, err := AgentURI(i.domain, b.Agent)
 	if err != nil || b.Agent.URI != uri {
+		return nil, ErrIdentity
+	}
+	return i.attestedEntry(b, uri)
+}
+func (i *SPIREIssuer) attestedEntry(b Binding, uri string) (*spiretypes.Entry, error) {
+	now := i.now()
+	if !validEntryID(b.EntryID) || b.CheckedAt.IsZero() || b.CheckedAt.Before(now.Add(-5*time.Minute)) || b.CheckedAt.After(now.Add(30*time.Second)) || b.Destination.Quarantined || b.Destination.Generation < 1 || b.Destination.Identity.Revision() == "" {
 		return nil, ErrIdentity
 	}
 	parent, err := spiffeid.FromString(b.ParentURI)

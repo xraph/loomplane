@@ -7,11 +7,14 @@ import (
 	"sync"
 	"time"
 
+	spiretypes "github.com/spiffe/spire-api-sdk/proto/spire/api/types"
+
 	"github.com/xraph/loomplane/internal/config"
 )
 
 type cleanupAdmin interface {
 	EnrollmentIssuer
+	RegisterWorkload(context.Context, WorkloadBinding) (*spiretypes.Entry, error)
 	NodeReader
 	Health(context.Context) error
 	Close() error
