@@ -23,7 +23,7 @@ func TestOrdinaryComputeRetainsRoutedRuntimeBeforeConsumerPropagation(t *testing
 	desired := in.Manifest.Services["api"]
 	desired.Size = &manifest.Size{CPU: 1, Memory: 1024}
 	in.Manifest.Services["api"] = desired
-	route := cloudinfra.Route{ID: "route", Status: "ready", Input: cloudinfra.RouteInput{Service: "api"}, Binding: cloudinfra.RouteBinding{BindingID: "binding", InstanceID: "source"}}
+	route := cloudinfra.Route{ID: "route", Status: "ready", Input: cloudinfra.RouteInput{ExternalTTLSeconds: 60, Service: "api"}, Binding: cloudinfra.RouteBinding{BindingID: "binding", InstanceID: "source"}}
 	in.Routes = []cloudinfra.Route{route}
 	result := Compute(in)
 	if !result.Executable {
@@ -32,6 +32,10 @@ func TestOrdinaryComputeRetainsRoutedRuntimeBeforeConsumerPropagation(t *testing
 	changed := action(t, result, "service:api")
 	if changed.Op != Replace || len(changed.Routes) != 1 || changed.Routes[0].ID != "route" {
 		t.Fatal("ordinary update overwrites routed instance", changed)
+	}
+	in.Routes[0].Input.ExternalTTLSeconds = 0
+	if missing := Compute(in); missing.Executable {
+		t.Fatal("missing external TTL permitted replacement planning")
 	}
 	consumer := &Action{ID: "service:consumer", Name: "consumer", Op: Keep, Provider: "server", Service: &ServiceConfig{Env: []EnvLink{{From: "api", Subject: ServiceSubject}}}}
 	p := planner{services: map[string]*Action{"api": &changed, "consumer": consumer}, bindings: map[string]*Binding{bound.ID: bound}}
@@ -51,7 +55,7 @@ func TestRoutedReplacementAllowsDistinctPortsOnSameDaemon(t *testing.T) {
 	next := old
 	next.Endpoint = &manifest.Endpoint{HostPort: 8081}
 	a := Action{Name: "api", Provider: "server", Service: &next}
-	route := cloudinfra.Route{Status: "ready", Binding: cloudinfra.RouteBinding{BindingID: bound.ID, InstanceID: bound.ExternalID}}
+	route := cloudinfra.Route{Status: "ready", Input: cloudinfra.RouteInput{ExternalTTLSeconds: 60}, Binding: cloudinfra.RouteBinding{BindingID: bound.ID, InstanceID: bound.ExternalID}}
 	if err = routedReplacementAllowed(&a, bound, route); err != nil {
 		t.Fatal("distinct explicit port denied", err)
 	}

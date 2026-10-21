@@ -33,6 +33,10 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		return err
 	}
 	for _, source := range in.Routes {
+		drain, drainErr := ReviewedRouteDrain(source, in.DrainSeconds)
+		if drainErr != nil {
+			return drainErr
+		}
 		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
 			return ErrInvalid
 		}
@@ -86,7 +90,7 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 			return reconcileErr
 		}
 		if release == nil {
-			release, err = s.ReleaseRouteHandoff(ctx, p, in.ProjectID, preparedID, max(60, in.DrainSeconds))
+			release, err = s.ReleaseRouteHandoff(ctx, p, in.ProjectID, preparedID, drain)
 			if err != nil {
 				return err
 			}
@@ -181,4 +185,23 @@ func (s *Service) ValidateRuntimeRemoval(ctx context.Context, org, project, inst
 		return fmt.Errorf("remove the domain route and finish its retained handoff before deleting runtime %s", instance)
 	}
 	return nil
+}
+
+// ReviewedRouteDrain never infers an external record's previous TTL from DNS observations.
+func ReviewedRouteDrain(source Route, minimum int) (int, error) {
+	bound := source.Input.ExternalTTLSeconds
+	if bound != 0 && (bound < 60 || bound > 86400) {
+		return 0, ErrInvalid
+	}
+	if (source.Receipt == nil || source.Receipt.TTL <= 0) && bound == 0 {
+		return 0, fmt.Errorf("%w: review the external DNS TTL using the route TTL update, then plan again before replacing its runtime", ErrConflict)
+	}
+	drain := max(60, minimum, bound)
+	if source.Receipt != nil {
+		drain = max(drain, source.Receipt.TTL)
+	}
+	if drain > 86400 {
+		return 0, fmt.Errorf("%w: DNS TTL exceeds the supported 86400 second drain bound", ErrInvalid)
+	}
+	return drain, nil
 }

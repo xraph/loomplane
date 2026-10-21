@@ -2,7 +2,10 @@ package cloudinfra
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -50,5 +53,58 @@ func TestReleaseCoordinatorResumesExactOperationAndRefreshesReceipt(t *testing.T
 				t.Fatal("failed operation was not resumed exactly once", st.retries)
 			}
 		})
+	}
+}
+
+type ttlReleaseStore struct {
+	releaseOperationStore
+	source, destination Route
+	accepted            *RouteOperation
+}
+
+func (s *ttlReleaseStore) Route(context.Context, string, string, string) (*Route, error) {
+	v := s.destination
+	return &v, nil
+}
+func (s *ttlReleaseStore) RouteOperation(_ context.Context, _ string, id string) (*RouteOperation, error) {
+	v := RouteOperation{ID: id, Kind: "prepare", Status: "succeeded", Source: &s.source, Route: s.destination, PreviousReceipt: s.source.Receipt}
+	return &v, nil
+}
+func (s *ttlReleaseStore) RouteOperations(context.Context, string, string, string) ([]*RouteOperation, error) {
+	return []*RouteOperation{{ID: "cutover", Kind: "cutover", Status: "succeeded", HandoffID: releasePrepareID("plan/action", s.source.ID), Route: s.destination}}, nil
+}
+func (s *ttlReleaseStore) AcceptRoute(_ context.Context, op *RouteOperation) error {
+	s.accepted = op
+	return ErrPending
+}
+func TestReleaseCoordinatorUsesReviewedExternalTTL(t *testing.T) {
+	for _, bound := range []int{0, 3600, 86401} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			source := Route{ID: "route", OrgID: "org", ProjectID: "project", Status: "ready", Input: RouteInput{EnvironmentID: "env", Service: "web", ExternalTTLSeconds: bound}, Binding: RouteBinding{InstanceID: "old"}}
+			destination := source
+			destination.Binding.InstanceID = "new"
+			destination.UpdatedAt = time.Now()
+			destination.Revision = 2
+			st := &ttlReleaseStore{source: source, destination: destination}
+			svc := NewService(Deps{Store: st, Domains: st, Authz: cleanupTestAuth{}})
+			err := svc.ReconcileReleaseRoutes(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, ReleaseRouteRequest{Key: "plan/action", ProjectID: "project", EnvironmentID: "env", Service: "web", InstanceID: "new", Routes: []Route{source}, DrainSeconds: 60})
+			if bound == 3600 {
+				if !errors.Is(err, ErrPending) || st.accepted == nil || st.accepted.NotBefore.Sub(destination.UpdatedAt) != time.Hour {
+					t.Fatal("reviewed TTL lost before release", err, st.accepted)
+				}
+
+				st.accepted = nil
+				_, err = svc.ReleaseRouteHandoff(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, "project", releasePrepareID("plan/action", source.ID), 60)
+				if !errors.Is(err, ErrPending) || st.accepted == nil || st.accepted.NotBefore.Sub(destination.UpdatedAt) != time.Hour {
+					t.Fatal("explicit release reduced persisted bound", err)
+				}
+			} else if err == nil || st.accepted != nil {
+				t.Fatal("missing or invalid TTL reached release", err)
+			}
+		})
+	}
+	source := Route{Input: RouteInput{ExternalTTLSeconds: 3600}, Receipt: &provider.DNSRecord{TTL: 7200}}
+	if delay, err := ReviewedRouteDrain(source, 60); err != nil || delay != 7200 {
+		t.Fatal("receipt TTL reduced", delay, err)
 	}
 }

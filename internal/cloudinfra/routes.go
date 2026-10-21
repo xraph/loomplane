@@ -13,12 +13,13 @@ import (
 )
 
 type RouteInput struct {
-	ZoneID        string `json:"zone_id"`
-	CloudID       string `json:"cloud_id"`
-	EnvironmentID string `json:"environment_id"`
-	Service       string `json:"service"`
-	Hostname      string `json:"hostname"`
-	Port          int    `json:"port"`
+	ExternalTTLSeconds int    `json:"external_ttl_seconds,omitempty"`
+	ZoneID             string `json:"zone_id"`
+	CloudID            string `json:"cloud_id"`
+	EnvironmentID      string `json:"environment_id"`
+	Service            string `json:"service"`
+	Hostname           string `json:"hostname"`
+	Port               int    `json:"port"`
 }
 
 type RouteBinding struct {
@@ -126,7 +127,7 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 		return nil, err
 	}
 	in.Hostname, err = NormalizeHostname(in.Hostname)
-	if err != nil || in.Port < 1 || in.Port > 65535 {
+	if err != nil || in.Port < 1 || in.Port > 65535 || (in.ExternalTTLSeconds != 0 && (in.ExternalTTLSeconds < 60 || in.ExternalTTLSeconds > 86400)) {
 		return nil, ErrInvalid
 	}
 	zone, err := st.Zone(ctx, p.OrgID, in.ZoneID)
