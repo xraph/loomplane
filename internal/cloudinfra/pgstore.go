@@ -89,23 +89,8 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 		return err
 	}
 	defer rollback(tx)
-	if checkErr := cloudprofiles.LockOrganization(ctx, tx, o.OrgID); checkErr != nil {
+	if checkErr := lockInfrastructureScope(ctx, tx, o); checkErr != nil {
 		return checkErr
-	}
-	var cloudRevision int64
-	if checkErr := tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, o.OrgID, o.CloudID).Scan(&cloudRevision); checkErr != nil {
-		return storeError(checkErr)
-	}
-	if cloudRevision != o.Input.CloudRevision {
-		return ErrConflict
-	}
-	var connectionRevision time.Time
-	var connectionGeneration int64
-	if checkErr := tx.QueryRow(ctx, `SELECT updated_at,generation FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND (status='ready' OR $3='disconnect') FOR UPDATE`, o.OrgID, o.ConnectionID, o.Input.Kind).Scan(&connectionRevision, &connectionGeneration); checkErr != nil {
-		return storeError(checkErr)
-	}
-	if (o.ConnectionGeneration == 0 && !connectionRevision.Equal(o.ConnectionRevision)) || (o.ConnectionGeneration != 0 && connectionGeneration != o.ConnectionGeneration) {
-		return ErrConflict
 	}
 	if o.Input.Kind != "create" && o.Input.Kind != "adopt" {
 		var revision int64
@@ -117,23 +102,11 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 		}
 	}
 	if o.Input.Kind == "adopt" {
-		var used bool
-		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_connection_uses WHERE org_id=$1 AND connection_id=$2 AND kind NOT IN ('cloud_server','infrastructure_operation'))`, o.OrgID, o.ConnectionID).Scan(&used); checkErr != nil {
-			return checkErr
-		}
-		if used {
-			return ErrConflict
-		}
-		v := &Server{CreationOperationID: o.ID, ID: o.ServerID, OrgID: o.OrgID, CloudID: o.CloudID, Name: o.Input.Name, Ownership: o.Ownership, Provider: o.Provider, ConnectionID: o.ConnectionID, RuntimeConnectionID: o.ConnectionID, AccountID: o.AccountID, ResourceID: o.ResourceID, Revision: 1, StateRevision: 1, Status: "provisioning", CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
-		body, marshalErr := json.Marshal(v)
-		if marshalErr != nil {
-			return marshalErr
-		}
-		// The connection row lock serializes this claim with workload admission.
-		if _, insertErr := tx.Exec(ctx, `INSERT INTO loomplane_cloud_servers(id,org_id,cloud_id,connection_id,runtime_connection_id,provider,account_id,resource_id,ownership,revision,status,body) VALUES($1,$2,$3,$4,$4,$5,$6,$7,'adopted',1,'provisioning',$8)`, v.ID, v.OrgID, v.CloudID, v.ConnectionID, v.Provider, v.AccountID, v.ResourceID, body); insertErr != nil {
-			return storeError(insertErr)
+		if _, claimErr := claimAdoption(ctx, tx, o); claimErr != nil {
+			return claimErr
 		}
 	}
+
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return err
@@ -292,4 +265,102 @@ func (s *PgStore) RetireServer(ctx context.Context, v *Server) error {
 		return ErrConflict
 	}
 	return tx.Commit()
+}
+
+func lockInfrastructureScope(ctx context.Context, tx driver.Tx, o *Operation) error {
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, o.OrgID); checkErr != nil {
+		return checkErr
+	}
+	var cloudRevision int64
+	if checkErr := tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, o.OrgID, o.CloudID).Scan(&cloudRevision); checkErr != nil {
+		return storeError(checkErr)
+	}
+	if cloudRevision != o.Input.CloudRevision {
+		return ErrConflict
+	}
+	var connectionRevision time.Time
+	var connectionGeneration int64
+	if checkErr := tx.QueryRow(ctx, `SELECT updated_at,generation FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND (status='ready' OR $3='disconnect') FOR UPDATE`, o.OrgID, o.ConnectionID, o.Input.Kind).Scan(&connectionRevision, &connectionGeneration); checkErr != nil {
+		return storeError(checkErr)
+	}
+	if (o.ConnectionGeneration == 0 && !connectionRevision.Equal(o.ConnectionRevision)) || (o.ConnectionGeneration != 0 && connectionGeneration != o.ConnectionGeneration) {
+		return ErrConflict
+	}
+	return nil
+}
+
+func claimAdoption(ctx context.Context, tx driver.Tx, o *Operation) (*Server, error) {
+	var used bool
+	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_connection_uses WHERE org_id=$1 AND connection_id=$2 AND kind NOT IN ('cloud_server','infrastructure_operation'))`, o.OrgID, o.ConnectionID).Scan(&used); checkErr != nil {
+		return nil, checkErr
+	}
+	if used {
+		return nil, ErrConflict
+	}
+	v := &Server{CreationOperationID: o.ID, ID: o.ServerID, OrgID: o.OrgID, CloudID: o.CloudID, Name: o.Input.Name, Ownership: o.Ownership, Provider: o.Provider, ConnectionID: o.ConnectionID, RuntimeConnectionID: o.ConnectionID, AccountID: o.AccountID, ResourceID: o.ResourceID, Revision: 1, StateRevision: 1, Status: "provisioning", CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
+	var existing []byte
+	lookupErr := tx.QueryRow(ctx, `SELECT body FROM loomplane_cloud_servers WHERE org_id=$1 AND cloud_id=$2 AND id=$3 FOR UPDATE`, o.OrgID, o.CloudID, o.ServerID).Scan(&existing)
+	if lookupErr == nil {
+		var old Server
+		if err := json.Unmarshal(existing, &old); err != nil {
+			return nil, err
+		}
+		if old.CreationOperationID != o.ID || old.ConnectionID != o.ConnectionID || old.RuntimeConnectionID != "" || old.Provider != o.Provider || old.AccountID != o.AccountID || old.ResourceID != o.ResourceID || old.Ownership != "adopted" || old.Status != "provisioning" {
+			return nil, ErrConflict
+		}
+		old.RuntimeConnectionID = o.ConnectionID
+		old.StateRevision++
+		v = &old
+	} else if !errors.Is(lookupErr, pgx.ErrNoRows) {
+		return nil, lookupErr
+	}
+	body, marshalErr := json.Marshal(v)
+	if marshalErr != nil {
+		return nil, marshalErr
+	}
+	// The connection row lock serializes this claim with workload admission.
+	if lookupErr == nil {
+		if _, updateErr := tx.Exec(ctx, `UPDATE loomplane_cloud_servers SET runtime_connection_id=$3,body=$4 WHERE org_id=$1 AND id=$2`, v.OrgID, v.ID, v.RuntimeConnectionID, body); updateErr != nil {
+			return nil, storeError(updateErr)
+		}
+		return v, nil
+	}
+	if _, insertErr := tx.Exec(ctx, `INSERT INTO loomplane_cloud_servers(id,org_id,cloud_id,connection_id,runtime_connection_id,provider,account_id,resource_id,ownership,revision,status,body) VALUES($1,$2,$3,$4,$4,$5,$6,$7,'adopted',1,'provisioning',$8)`, v.ID, v.OrgID, v.CloudID, v.ConnectionID, v.Provider, v.AccountID, v.ResourceID, body); insertErr != nil {
+		return nil, storeError(insertErr)
+	}
+	return v, nil
+}
+
+// ClaimAdoption recovers accepted operations written before transactional claims.
+func (s *PgStore) ClaimAdoption(ctx context.Context, org, cloud, id string) (*Server, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	o, err := scanOperation(tx.QueryRow(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, org, cloud, id))
+	if err != nil {
+		return nil, err
+	}
+	if o.Input.Kind != "adopt" || o.Ownership != "adopted" {
+		return nil, ErrConflict
+	}
+	if scopeErr := lockInfrastructureScope(ctx, tx, o); scopeErr != nil {
+		return nil, scopeErr
+	}
+	var status string
+	if err = tx.QueryRow(ctx, `SELECT status FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3 FOR UPDATE`, org, cloud, id).Scan(&status); err != nil {
+		return nil, storeError(err)
+	}
+	if status != "pending" && status != "running" && status != "waiting" {
+		return nil, ErrConflict
+	}
+	v, err := claimAdoption(ctx, tx, o)
+	if err != nil {
+		return nil, err
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, commitErr
+	}
+	return v, nil
 }

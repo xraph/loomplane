@@ -12,6 +12,7 @@ type Store interface {
 	GetOperation(context.Context, string, string, string) (*Operation, error)
 	ListOperations(context.Context, string, string) ([]*Operation, error)
 	Accept(context.Context, *Operation) error
+	ClaimAdoption(context.Context, string, string, string) (*Server, error)
 	SaveOperation(context.Context, *Operation) error
 	GetServer(context.Context, string, string, string) (*Server, error)
 	ListServers(context.Context, string, string) ([]*Server, error)

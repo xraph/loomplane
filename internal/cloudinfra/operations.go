@@ -385,6 +385,10 @@ func (s *Service) execute(ctx context.Context, o *Operation) error {
 		return err
 	}
 	v, err := s.Store.GetServer(ctx, o.OrgID, o.CloudID, o.ServerID)
+	if o.Input.Kind == "adopt" && (errors.Is(err, ErrNotFound) || (err == nil && v.RuntimeConnectionID == "")) {
+		// Older accepted operations did not reserve their host until execution.
+		v, err = s.Store.ClaimAdoption(ctx, o.OrgID, o.CloudID, o.ID)
+	}
 	if errors.Is(err, ErrNotFound) && o.Input.Kind == "create" {
 		v = &Server{CreationOperationID: o.ID, ID: o.ServerID, OrgID: o.OrgID, CloudID: o.CloudID, Name: o.Input.Name, Ownership: o.Ownership, Provider: o.Provider, ConnectionID: o.ConnectionID, AccountID: o.AccountID, ResourceID: o.ResourceID, Region: o.Input.Region, Size: o.Input.Size, Revision: 1, Status: "provisioning", CreatedAt: o.CreatedAt, UpdatedAt: s.now().UTC()}
 		err = s.Store.SaveServer(ctx, v)

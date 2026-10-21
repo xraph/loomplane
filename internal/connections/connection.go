@@ -95,7 +95,7 @@ func (c *Connection) normalize() {
 
 // RegistryPullReady permits an existing pinned image when only push is missing.
 func RegistryPullReady(c *Connection) bool {
-	if c == nil || c.Cloud != Registry {
+	if c == nil || c.Cloud != Registry || c.Message == replacementInProgressMessage {
 		return false
 	}
 	if c.Status == StatusReady {
