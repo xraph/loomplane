@@ -16,7 +16,8 @@ The executable, trusted Kubernetes installation records and Kubernetes launch
 builder are available. The builder creates pod definitions and delivers immutable
 configuration to an exact scheduled pod. Automated installation and restart
 coordination, verified service-target assignment and gateway enforcement are still
-being built. The launch builder is not yet wired to a management route or worker.
+being built. The opt-in launch service is registered in the application, but its
+management route and automatic worker are still pending.
 An acknowledgment currently proves installation in the agent's local policy
 state, not that a remote service is reachable through a gateway.
 
@@ -138,6 +139,42 @@ does not install CSI or SPIRE, start the agent or qualify workload identity.
 LOOMPLANE_AGENT_INSTALL_TEST_KUBECONFIG=/absolute/path/to/test-kubeconfig \
   go test -race -tags=integration ./internal/agentinstall -run TestKubernetesLaunchAPI -count=1
 ```
+
+## Guarded launch delivery
+
+Enable the internal launch service only after configuring identity administration
+and the agent listener:
+
+| Environment variable | Required value |
+| --- | --- |
+| `LOOMPLANE_FEDERATION_LAUNCH_ENABLED` | `true` (default: `false`) |
+| `LOOMPLANE_FEDERATION_LAUNCH_CONTROL_ENDPOINT` | Public HTTPS origin of the separate agent listener |
+| `LOOMPLANE_FEDERATION_LAUNCH_AGENT_IMAGE` | Agent image pinned by SHA-256 digest |
+| `LOOMPLANE_FEDERATION_LAUNCH_TRUST_GENERATION` | Positive generation for the public signing trust |
+
+The launch service uses destination, enrollment and attempt IDs. You cannot pass
+identity selectors, credentials, service targets or signing keys through its
+request. It checks destination and trust-management permission, current provider
+qualification, the saved installation and a ready enrollment. It then verifies
+live Kubernetes/SPIRE evidence again before writing through the destination's
+explicit connection. The management Kubernetes client refuses redirects, keeping
+credentialed requests on the selected cluster endpoint.
+
+The listener supplies a copy of its loaded public signing key for the exact
+organization, project and environment. Delivery fails while that listener is
+stopped or unhealthy, or when its scope has no signing key. Editing the key file
+without restarting the listener does not change delivered trust.
+
+Enrollment reads, bootstrap authentication and consumption share the same ready,
+expiry, destination and latest-epoch checks. Delivery rechecks those records and
+human authority after provider reads. A newer enrollment fences an older pending
+handle immediately. A consumed handle cannot deliver another launch file.
+
+The application currently wires consumer installations only. Exporting agents
+still need verified service-target assignments. Launch delivery performs one
+ConfigMap create and returns its UID; it does not prepare resources, retry a lost
+response or recover an interrupted attempt. Those operations need the durable
+installation coordinator. Management API, CLI and dashboard controls are pending.
 
 ## Shutdown and restart
 

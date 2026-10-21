@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"strings"
 	"time"
 
@@ -40,8 +41,14 @@ func New(cfg *Config) (*Client, error) {
 	rc := rest.CopyConfig(cfg.REST)
 	rc.Timeout, rc.QPS, rc.Burst = 15*time.Second, 20, 40
 	rc.ContentType, rc.AcceptContentTypes = "application/json", "application/json"
-	client, err := kubeclient.NewForConfig(rc)
+	httpClient, err := rest.HTTPClientFor(rc)
 	if err != nil {
+		return nil, fmt.Errorf("create Kubernetes transport: %w", err)
+	}
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client, err := kubeclient.NewForConfigAndClient(rc, httpClient)
+	if err != nil {
+		httpClient.CloseIdleConnections()
 		return nil, fmt.Errorf("create Kubernetes client: %w", err)
 	}
 	copyConfig := *cfg

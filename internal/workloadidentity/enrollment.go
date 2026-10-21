@@ -103,11 +103,8 @@ func (s *EnrollmentStore) checkDestination(ctx context.Context, tx driver.Tx, b 
 	}
 	return nil
 }
-func loadEnrollment(ctx context.Context, tx driver.Tx, org, id string, lock bool) (*EnrollmentRecord, string, error) {
-	query := `SELECT body,phase,created_at,expires_at FROM loomplane_federation_enrollments WHERE org_id=$1 AND id=$2`
-	if lock {
-		query += ` FOR UPDATE`
-	}
+func loadEnrollment(ctx context.Context, tx driver.Tx, org, id string) (*EnrollmentRecord, string, error) {
+	query := `SELECT body,phase,created_at,expires_at FROM loomplane_federation_enrollments WHERE org_id=$1 AND id=$2 FOR UPDATE`
 	var raw []byte
 	var phase string
 	var created, expires time.Time
@@ -140,7 +137,7 @@ func (s *EnrollmentStore) Issue(ctx context.Context, org, id string, issuer Enro
 		return err
 	}
 	defer func() { err = enrollmentFinish(tx, err) }()
-	r, phase, err := loadEnrollment(ctx, tx, org, id, true)
+	r, phase, err := loadEnrollment(ctx, tx, org, id)
 	if err != nil {
 		return err
 	}
@@ -177,23 +174,15 @@ type PendingRegistry struct {
 func (p PendingRegistry) CheckAgent(ctx context.Context, a domain.AgentIdentity) error {
 	return p.Store.CheckPending(ctx, p.ID, a)
 }
-func (s *EnrollmentStore) CheckPending(ctx context.Context, id string, a domain.AgentIdentity) (err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *EnrollmentStore) CheckPending(ctx context.Context, id string, a domain.AgentIdentity) error {
+	r, err := s.Ready(ctx, a.OrgID, id)
 	if err != nil {
 		return err
 	}
-	defer func() { err = enrollmentFinish(tx, err) }()
-	r, phase, err := loadEnrollment(ctx, tx, a.OrgID, id, false)
-	if err != nil {
-		return err
-	}
-	if phase != "ready" || r.Binding.Agent != a || !r.ExpiresAt.After(s.now()) {
+	if r.Binding.Agent != a {
 		return ErrIdentity
 	}
-	if stepErr := s.checkDestination(ctx, tx, r.Binding); stepErr != nil {
-		return stepErr
-	}
-	return tx.Commit()
+	return nil
 }
 
 // Consume rechecks the authenticated identity and consumes the handle in the
@@ -204,22 +193,15 @@ func (s *EnrollmentStore) Consume(ctx context.Context, id string, a domain.Agent
 		return err
 	}
 	defer func() { err = enrollmentFinish(tx, err) }()
-	r, phase, err := loadEnrollment(ctx, tx, a.OrgID, id, true)
+	r, phase, err := loadEnrollment(ctx, tx, a.OrgID, id)
 	if err != nil {
 		return err
 	}
-	if phase != "ready" || r.Binding.Agent != a || !r.ExpiresAt.After(s.now()) {
+	if r.Binding.Agent != a {
 		return ErrIdentity
 	}
-	if stepErr := s.checkDestination(ctx, tx, r.Binding); stepErr != nil {
+	if stepErr := s.checkReady(ctx, tx, r, phase); stepErr != nil {
 		return stepErr
-	}
-	var epoch uint64
-	if stepErr := tx.QueryRow(ctx, `SELECT epoch FROM loomplane_federation_enrollment_epochs WHERE org_id=$1 AND destination_id=$2 FOR UPDATE`, a.OrgID, a.DestinationID).Scan(&epoch); stepErr != nil {
-		return stepErr
-	}
-	if epoch != a.Epoch {
-		return ErrIdentity
 	}
 	if stepErr := runtimecatalog.DeactivateTx(ctx, tx, a.OrgID, a.DestinationID, ""); stepErr != nil {
 		return stepErr
@@ -263,7 +245,7 @@ func (s *EnrollmentStore) beginRevoke(ctx context.Context, org, id string, onlyE
 		return nil, err
 	}
 	defer func() { err = enrollmentFinish(tx, err) }()
-	r, _, err := loadEnrollment(ctx, tx, org, id, true)
+	r, _, err := loadEnrollment(ctx, tx, org, id)
 	if errors.Is(err, ErrIdentity) {
 		return nil, tx.Commit()
 	}

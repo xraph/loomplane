@@ -30,7 +30,10 @@ func (c FederationConfig) Validate() error {
 	if c.Runtime.Enabled && c.Identity.Enabled && (c.Runtime.OrganizationID != c.Identity.OrganizationID || c.Runtime.TrustDomain != c.Identity.TrustDomain) {
 		return errors.New("federation runtime and identity must use the same organization and trust domain")
 	}
-	return errors.Join(c.Runtime.Validate(), c.Identity.Validate())
+	if c.Launch.Enabled && (!c.Runtime.Enabled || !c.Identity.Enabled) {
+		return errors.New("federation launch requires runtime and identity")
+	}
+	return errors.Join(c.Runtime.Validate(), c.Identity.Validate(), c.Launch.Validate())
 }
 
 // FederationIdentityConfig enables local SPIRE administration and enrollment cleanup.
@@ -82,6 +85,24 @@ func (c FederationRuntimeConfig) Validate() error {
 	}
 	if !filepath.IsAbs(c.SigningKeysFile) || filepath.Clean(c.SigningKeysFile) != c.SigningKeysFile {
 		return errors.New("federation.runtime.signing_keys_file requires a canonical absolute path")
+	}
+	return nil
+}
+
+// FederationLaunchConfig enables guarded delivery to an already recorded pod.
+type FederationLaunchConfig struct {
+	Enabled         bool
+	ControlEndpoint string
+	AgentImage      string
+	TrustGeneration int64
+}
+
+func (c FederationLaunchConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if !domain.ValidControlEndpoint(c.ControlEndpoint) || !domain.ValidAgentImage(c.AgentImage) || c.TrustGeneration < 1 {
+		return errors.New("federation launch requires an HTTPS origin, a pinned agent image and a positive trust generation")
 	}
 	return nil
 }

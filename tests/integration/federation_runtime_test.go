@@ -73,3 +73,34 @@ func TestPlatformFederationIdentityRequiresAdmin(t *testing.T) {
 		t.Fatal("enrollment service not wired", injectErr)
 	}
 }
+
+func TestPlatformFederationLaunchWiring(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Storage.URL = "file://" + t.TempDir()
+	cfg.Dashboard.Dir = t.TempDir()
+	cfg.Federation = config.FederationConfig{Enabled: true,
+		Identity: config.FederationIdentityConfig{Enabled: true, OrganizationID: "org", TrustDomain: "loomplane.test", AdminSocket: "unix:///nonexistent/loomplane-server.sock"},
+		Runtime:  config.FederationRuntimeConfig{Enabled: true, OrganizationID: "org", TrustDomain: "loomplane.test", ListenAddress: "127.0.0.1:9443", WorkloadAPI: "unix:///nonexistent/agent.sock", SigningKeysFile: filepath.Join(t.TempDir(), "keys.json")},
+		Launch:   config.FederationLaunchConfig{Enabled: true, ControlEndpoint: "https://control.example:9443", AgentImage: "registry.example/agent@sha256:" + strings.Repeat("a", 64), TrustGeneration: 1},
+	}
+	app, err := platform.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		if err := app.Stop(cleanup); err != nil {
+			t.Log("failed startup cleanup:", err)
+		}
+	})
+	if err := app.Start(ctx); err == nil || !strings.Contains(err.Error(), "federation identity administration") {
+		t.Fatal("startup bypassed configured identity", err)
+	}
+	if _, err := forge.InjectType[*federation.LaunchService](app.Container()); err != nil {
+		t.Fatal("launch service not wired", err)
+	}
+}

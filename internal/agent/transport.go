@@ -64,11 +64,10 @@ func NewTransport(endpoint, controlURI string, source CredentialSource, agent do
 	return client, nil
 }
 func parseControlEndpoint(endpoint string) (*url.URL, error) {
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+	if !domain.ValidControlEndpoint(endpoint) {
 		return nil, ErrClosed
 	}
-	return u, nil
+	return url.Parse(endpoint)
 }
 func (t *Transport) Close() { t.http.CloseIdleConnections() }
 func (t *Transport) credentialDeadline(limit time.Duration) (time.Time, error) {

@@ -110,6 +110,20 @@ func (e *Extension) Register(app forge.App) error {
 			return err
 		}
 	}
+	if e.cfg.Federation.Launch.Enabled {
+		installations, injectErr := forge.InjectType[*domain.InstallationService](c)
+		if injectErr != nil {
+			return injectErr
+		}
+		credentials, injectErr := forge.InjectType[*connections.Service](c)
+		if injectErr != nil {
+			return injectErr
+		}
+		launch := domain.NewLaunchService(installations, workloadidentity.NewEnrollmentStore(pg, e.cfg.Federation.Identity.TrustDomain), credentials, e.runtime.PublicSigningKey, e.cfg.Federation.Launch, e.cfg.Federation.Identity.OrganizationID)
+		if provideErr := forge.ProvideValue(c, launch); provideErr != nil {
+			return provideErr
+		}
+	}
 	return nil
 }
 

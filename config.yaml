@@ -129,6 +129,11 @@ worker:
 # Federation management and its separate mTLS agent listener are opt-in.
 # Provision SPIRE identity and scoped signing keys before enabling runtime.
 federation:
+  launch:
+    enabled: "${LOOMPLANE_FEDERATION_LAUNCH_ENABLED:-false}"
+    control_endpoint: "${LOOMPLANE_FEDERATION_LAUNCH_CONTROL_ENDPOINT:-}"
+    agent_image: "${LOOMPLANE_FEDERATION_LAUNCH_AGENT_IMAGE:-}"
+    trust_generation: "${LOOMPLANE_FEDERATION_LAUNCH_TRUST_GENERATION:-0}"
   enabled: "${LOOMPLANE_FEDERATION_ENABLED:-false}"
   identity:
     enabled: "${LOOMPLANE_FEDERATION_IDENTITY_ENABLED:-false}"

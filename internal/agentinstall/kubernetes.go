@@ -7,8 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,7 +37,6 @@ const (
 )
 
 var ErrLaunch = errors.New("agent launch does not match the enrolled installation")
-var pinnedImage = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-9]{64}$`)
 
 // KubernetesPlan describes one process attempt. The controller must retain the
 // attempt ID and created resource UIDs for recovery and conditional cleanup.
@@ -51,7 +48,7 @@ type KubernetesPlan struct {
 
 func NewKubernetesPlan(namespace, attemptID, image string, publisher bool) (*KubernetesPlan, error) {
 	id, err := uuid.Parse(attemptID)
-	if err != nil || id.String() != attemptID || id == uuid.Nil || len(validation.IsDNS1123Label(namespace)) != 0 || !pinnedImage.MatchString(image) || strings.Contains(image, "//") {
+	if err != nil || id.String() != attemptID || id == uuid.Nil || len(validation.IsDNS1123Label(namespace)) != 0 || !domain.ValidAgentImage(image) {
 		return nil, ErrLaunch
 	}
 	return &KubernetesPlan{namespace: namespace, name: "loomplane-agent-" + attemptID, image: image, publisher: publisher}, nil

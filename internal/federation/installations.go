@@ -40,25 +40,11 @@ func VerifyKubernetesInstallation(credentials InstallationCredentials, nodes SPI
 		if scopeErr != nil || d.OrgID != org || credentials == nil || nodes == nil || d.Identity.Provider != "kubernetes" || !profileMatchesDestination(p, d) {
 			return workloadidentity.Binding{}, ErrUnverified
 		}
-		connection, raw, err := credentials.Credential(ctx, d.OrgID, d.ConnectionID)
-		defer clear(raw)
+		client, err := openInstallationKubernetes(ctx, credentials, org, d)
 		if err != nil {
 			return workloadidentity.Binding{}, err
 		}
-		if connection == nil || connection.OrgID != d.OrgID || connection.ID != d.ConnectionID {
-			return workloadidentity.Binding{}, ErrIdentityChanged
-		}
-		physical, err := ConnectionIdentity(connection, time.Now())
-		if err != nil {
-			return workloadidentity.Binding{}, err
-		}
-		if physical != d.Identity {
-			return workloadidentity.Binding{}, ErrIdentityChanged
-		}
-		resolver, err := NewKubernetesAttestationResolver(raw, connection.Details, trustDomain, nodes, p)
-		if err != nil {
-			return workloadidentity.Binding{}, err
-		}
+		resolver := &KubernetesAttestationResolver{client: client, nodes: nodes, profile: p, domain: trustDomain, now: time.Now}
 		return resolver.Resolve(ctx, d)
 	}
 }

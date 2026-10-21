@@ -77,6 +77,7 @@ type FederationConfig struct {
 	Enabled  bool
 	Runtime  FederationRuntimeConfig
 	Identity FederationIdentityConfig
+	Launch   FederationLaunchConfig
 }
 
 // ProvidersConfig adds deployment targets Loomplane doesn't ship with.
@@ -390,6 +391,10 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Federation.Runtime.TrustDomain, "federation.runtime.trust_domain")
 	r.str(&c.Federation.Runtime.WorkloadAPI, "federation.runtime.workload_api")
 	r.str(&c.Federation.Runtime.SigningKeysFile, "federation.runtime.signing_keys_file")
+	r.boolean(&c.Federation.Launch.Enabled, "federation.launch.enabled")
+	r.str(&c.Federation.Launch.ControlEndpoint, "federation.launch.control_endpoint")
+	r.str(&c.Federation.Launch.AgentImage, "federation.launch.agent_image")
+	r.int64(&c.Federation.Launch.TrustGeneration, "federation.launch.trust_generation")
 	r.boolean(&c.Federation.Identity.Enabled, "federation.identity.enabled")
 	r.str(&c.Federation.Identity.OrganizationID, "federation.identity.organization_id")
 	r.str(&c.Federation.Identity.TrustDomain, "federation.identity.trust_domain")
