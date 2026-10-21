@@ -97,6 +97,7 @@ func Group() *migrate.Group {
 		statements("20261020000401", "cloud_events", cloudEventsUp, cloudEventsDown),
 		statements("20261019000100", "plan_source_refs", planSourceRefsUp, planSourceRefsDown),
 		WorkloadControllersMigration(),
+		WorkloadRegistrationsMigration(),
 		NotificationsMigration(),
 	)
 	return g
