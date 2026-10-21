@@ -55,3 +55,21 @@ func TestRetirementListPaginatesEqualTimesWithoutCrossingScope(t *testing.T) {
 		}
 	}
 }
+
+func TestRetirementListCanResolveOneBackupWithoutReadingOtherHistories(t *testing.T) {
+	_, store := retirementFixture(t)
+	r, err := store.BeginRetirement(t.Context(), retirementRequest(), func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.ListRetirements(t.Context(), "o", "p", recovery.RetirementListInput{BackupID: "b"})
+	if err != nil || len(page.Retirements) != 1 || page.Retirements[0].ID != r.ID {
+		t.Fatalf("point retirement lookup: %+v %v", page, err)
+	}
+	for _, scope := range [][3]string{{"o", "p", "other-backup"}, {"foreign", "p", "b"}, {"o", "foreign-project", "b"}} {
+		page, err = store.ListRetirements(t.Context(), scope[0], scope[1], recovery.RetirementListInput{BackupID: scope[2]})
+		if err != nil || len(page.Retirements) != 0 {
+			t.Fatalf("point filter crossed scope: %+v %v", page, err)
+		}
+	}
+}

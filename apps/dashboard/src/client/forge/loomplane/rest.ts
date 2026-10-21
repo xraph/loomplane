@@ -1918,11 +1918,15 @@ export class RESTClient extends Client {
 
     /**
      */
-    history: async (id: string, before?: string, limit?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementHistory> => {
+    history: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementHistory> => {
       let __path = `/api/v1/service-backup-retirements/${encodeURIComponent(String(id))}/history`;
       const queryParams: Record<string, any> = {};
-      queryParams['before'] = before;
-      queryParams['limit'] = limit;
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -1940,11 +1944,18 @@ export class RESTClient extends Client {
 
     /**
      */
-    list: async (id: string, before?: string, limit?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementPage> => {
+    list: async (id: string, backupId?: string | undefined, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementPage> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/service-backup-retirements`;
       const queryParams: Record<string, any> = {};
-      queryParams['before'] = before;
-      queryParams['limit'] = limit;
+      if (backupId !== undefined) {
+        queryParams['backup_id'] = backupId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;

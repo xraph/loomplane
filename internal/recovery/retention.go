@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -22,10 +23,13 @@ type RetentionInput struct {
 }
 
 type RetentionPoint struct {
-	BackupID string `json:"backup_id"`
-	Bytes    int64  `json:"bytes"`
-	Eligible bool   `json:"eligible"`
-	Reason   string `json:"reason"`
+	BackupID                  string    `json:"backup_id"`
+	CreatedAt                 time.Time `json:"created_at"`
+	DeletionSupported         bool      `json:"deletion_supported"`
+	DeletionUnavailableReason string    `json:"deletion_unavailable_reason,omitempty"`
+	Bytes                     int64     `json:"bytes"`
+	Eligible                  bool      `json:"eligible"`
+	Reason                    string    `json:"reason"`
 }
 
 type RetentionPreview struct {
@@ -72,7 +76,29 @@ func (s *Service) PreviewRetention(ctx context.Context, p security.Principal, id
 	if err != nil {
 		return nil, err
 	}
-	return previewRetention(time.Now().UTC(), input, anchor, points)
+	preview, err := previewRetention(time.Now().UTC(), input, anchor, points)
+	if err != nil {
+		return nil, err
+	}
+	captured := make(map[string]backupfiles.Object, len(points))
+	for _, point := range points {
+		captured[point.Backup.ID] = point.Backup.Object
+	}
+	for i := range preview.Points {
+		point := &preview.Points[i]
+		object := captured[point.BackupID]
+		switch {
+		case s.Files == nil:
+			point.DeletionUnavailableReason = "Backup storage is unavailable."
+		case object.DestinationID == "":
+			point.DeletionUnavailableReason = "This older recovery point has no captured storage identity."
+		case s.Files.CanDelete(object) != nil:
+			point.DeletionUnavailableReason = "The configured storage cannot safely delete this captured recovery point."
+		default:
+			point.DeletionSupported = true
+		}
+	}
+	return preview, nil
 }
 
 // Validate bounds the age and minimum count without accessing recovery data.
@@ -160,6 +186,7 @@ func previewRetention(now time.Time, input RetentionInput, anchor *Backup, inven
 	if witness := verifiedRetentionPoint(now, points); witness != nil {
 		verified = witness.ID
 	}
+	pendingRetirement := slices.ContainsFunc(points, func(point RetentionEntry) bool { return point.Backup.Status == "retiring" })
 	cutoff, kept := now.Add(-time.Duration(input.OlderThanDays)*24*time.Hour), 0
 	for _, point := range points {
 		b := &point.Backup
@@ -184,7 +211,10 @@ func previewRetention(now time.Time, input RetentionInput, anchor *Backup, inven
 		case !b.CompletedAt.Before(cutoff):
 			reason = "recent"
 		}
-		p := RetentionPoint{BackupID: b.ID, Bytes: b.Object.Size, Eligible: reason == "eligible", Reason: reason}
+		if reason == "eligible" && pendingRetirement {
+			reason = "retirement_active"
+		}
+		p := RetentionPoint{BackupID: b.ID, CreatedAt: b.CreatedAt, Bytes: b.Object.Size, Eligible: reason == "eligible", Reason: reason}
 		preview.Points = append(preview.Points, p)
 		if p.Eligible {
 			preview.EligibleCount++

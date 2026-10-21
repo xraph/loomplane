@@ -35,6 +35,30 @@ func TestRetirementAPIIsScopedAndVerifiesBytesBeforeRetry(t *testing.T) {
 	defer running.stop()
 	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
+	var contract struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name     string `json:"name"`
+				In       string `json:"in"`
+				Required bool   `json:"required"`
+			} `json:"parameters"`
+		} `json:"paths"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/openapi.json", nil, &contract)
+	for path, queryCount := range map[string]int{"/api/v1/projects/{id}/service-backup-retirements": 3, "/api/v1/service-backup-retirements/{id}/history": 2} {
+		count := 0
+		for _, parameter := range contract.Paths[path]["get"].Parameters {
+			if parameter.In == "query" {
+				count++
+				if parameter.Required {
+					t.Fatalf("optional retirement query marked required: %s %s", path, parameter.Name)
+				}
+			}
+		}
+		if count != queryCount {
+			t.Fatalf("retirement query schema lost fields: %s %d", path, count)
+		}
+	}
 	var session struct {
 		OrgID string `json:"org_id"`
 	}
@@ -96,6 +120,13 @@ func TestRetirementAPIIsScopedAndVerifiesBytesBeforeRetry(t *testing.T) {
 		if _, err = db.Exec(t.Context(), `INSERT INTO loomplane_service_backups(id,org_id,project_id,environment_id,connection_id,name,status,request_id,source,object,token,created_by,created_at,completed_at,restored_at)
  VALUES($1,$2,$3,$4,'retirement-connection','database','succeeded',$1,$5,$6,'attempt','fixture',now()-$7*interval '1 day'-interval '1 minute',now()-$7*interval '1 day',CASE WHEN $1='witness' THEN now() END)`, id, session.OrgID, project.ID, environment, source, raw, age); err != nil {
 			t.Fatal(err)
+		}
+	}
+	var capability recovery.RetentionPreview
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/service-backups/candidate-a/retention-preview?older_than_days=7&keep_last=1", nil, &capability)
+	for _, point := range capability.Points {
+		if !point.DeletionSupported {
+			t.Fatalf("local captured object deletion unavailable: %+v", point)
 		}
 	}
 	var readKey struct {
@@ -177,6 +208,11 @@ func TestRetirementAPIIsScopedAndVerifiesBytesBeforeRetry(t *testing.T) {
 	var second recovery.Retirement
 	if err = json.Unmarshal(output, &second); err != nil || second.Status != "succeeded" {
 		t.Fatalf("CLI retirement result: %+v %v", second, err)
+	}
+	var resolved recovery.RetirementPage
+	reader.must(http.StatusOK, http.MethodGet, listPath+"?backup_id=candidate-a", nil, &resolved)
+	if len(resolved.Retirements) != 1 || resolved.Retirements[0].ID != retirement.ID {
+		t.Fatalf("point-scoped API lookup: %+v", resolved)
 	}
 	var page recovery.RetirementPage
 	reader.must(http.StatusOK, http.MethodGet, listPath+"?limit=1", nil, &page)

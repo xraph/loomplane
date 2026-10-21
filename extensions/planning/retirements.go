@@ -92,7 +92,7 @@ func (e *Extension) listRetirements(c forge.Context) error {
 	if err != nil {
 		return err
 	}
-	page, err := e.backups.ListRetirements(c.Request().Context(), p, c.Param("id"), recovery.RetirementListInput{Before: before, Limit: limit})
+	page, err := e.backups.ListRetirements(c.Request().Context(), p, c.Param("id"), recovery.RetirementListInput{Before: before, Limit: limit, BackupID: c.Query("backup_id")})
 	if err != nil {
 		return fail(err)
 	}

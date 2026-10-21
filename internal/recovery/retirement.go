@@ -50,8 +50,8 @@ type RetirementEvent struct {
 }
 
 type RetirementHistoryInput struct {
-	Before string `json:"before,omitempty" query:"before"`
-	Limit  int    `json:"limit,omitempty" query:"limit"`
+	Before string `json:"before,omitempty" query:"before,omitempty"`
+	Limit  int    `json:"limit,omitempty" query:"limit,omitempty"`
 }
 
 type RetirementHistory struct {

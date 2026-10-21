@@ -3052,9 +3052,15 @@
             }
           },
           {
+            "name": "backup_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "before",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -3062,7 +3068,6 @@
           {
             "name": "limit",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "integer"
             }
@@ -3694,7 +3699,6 @@
           {
             "name": "before",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -3702,7 +3706,6 @@
           {
             "name": "limit",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "integer"
             }
@@ -7731,6 +7734,8 @@
         "type": "object",
         "required": [
           "backup_id",
+          "created_at",
+          "deletion_supported",
           "bytes",
           "eligible",
           "reason"
@@ -7741,6 +7746,16 @@
           },
           "bytes": {
             "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deletion_supported": {
+            "type": "boolean"
+          },
+          "deletion_unavailable_reason": {
+            "type": "string"
           },
           "eligible": {
             "type": "boolean"

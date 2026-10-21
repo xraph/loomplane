@@ -9,10 +9,13 @@ import (
 )
 
 type RetentionPoint struct {
-	BackupID string `json:"backup_id"`
-	Bytes    int64  `json:"bytes"`
-	Eligible bool   `json:"eligible"`
-	Reason   string `json:"reason"`
+	CreatedAt                 time.Time `json:"created_at"`
+	BackupID                  string    `json:"backup_id"`
+	DeletionSupported         bool      `json:"deletion_supported"`
+	DeletionUnavailableReason string    `json:"deletion_unavailable_reason,omitempty"`
+	Bytes                     int64     `json:"bytes"`
+	Eligible                  bool      `json:"eligible"`
+	Reason                    string    `json:"reason"`
 }
 
 type RetentionPreview struct {

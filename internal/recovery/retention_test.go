@@ -202,3 +202,53 @@ func TestRetentionPreviewDoesNotUseInvalidPointsAsReplacements(t *testing.T) {
 		}
 	}
 }
+
+func TestRetentionPreviewReportsDeletionCapabilityPerCapturedPoint(t *testing.T) {
+	s, _, records := retirementWorkerFixture(t)
+	s.Authz = allowed{}
+	candidate := records.points["candidate"]
+	candidate.Status = "succeeded"
+	legacy := *candidate
+	legacy.ID = "legacy-point"
+	legacy.Object.Key = "org/project/environment/legacy-point/attempt.dump"
+	legacy.Object.DestinationID = ""
+	moved := *candidate
+	moved.ID = "moved-point"
+	moved.Object.Key = "org/project/environment/moved-point/attempt.dump"
+	moved.Object.DestinationID = strings.Repeat("f", 64)
+	s.Store = &retentionStore{lookupStore: &lookupStore{record: candidate}, entries: []RetentionEntry{{Backup: *candidate}, {Backup: *records.points["witness"]}, {Backup: legacy}, {Backup: moved}}}
+	preview, err := s.PreviewRetention(t.Context(), security.Principal{OrgID: "org"}, candidate.ID, RetentionInput{OlderThanDays: 7, KeepLast: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range preview.Points {
+		supported := point.BackupID == "candidate" || point.BackupID == "witness"
+		if point.DeletionSupported != supported || !supported && point.DeletionUnavailableReason == "" {
+			t.Fatalf("misreported deletion capability: %+v", point)
+		}
+	}
+	s.Files = nil
+	preview, err = s.PreviewRetention(t.Context(), security.Principal{OrgID: "org"}, candidate.ID, RetentionInput{OlderThanDays: 7, KeepLast: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range preview.Points {
+		if point.DeletionSupported || point.DeletionUnavailableReason == "" {
+			t.Fatalf("unconfigured storage offered deletion: %+v", point)
+		}
+	}
+}
+
+func TestRetentionPreviewProtectsSourceUntilEarlierRetirementFinishes(t *testing.T) {
+	points := []RetentionEntry{{Backup: retentionBackup(t, "pending", 40, false)}, {Backup: retentionBackup(t, "otherwise-eligible", 50, false)}, {Backup: retentionBackup(t, "witness", 1, true)}}
+	points[0].Backup.Status = "retiring"
+	preview, err := previewRetention(retentionNow, RetentionInput{OlderThanDays: 7, KeepLast: 1}, &points[1].Backup, points)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range preview.Points {
+		if point.BackupID == "otherwise-eligible" && (point.Eligible || point.Reason != "retirement_active") {
+			t.Fatalf("earlier retirement was invisible in preview: %+v", point)
+		}
+	}
+}

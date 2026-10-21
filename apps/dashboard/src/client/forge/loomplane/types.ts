@@ -1093,6 +1093,9 @@ export interface RetentionInput {
 export interface RetentionPoint {
   backupId: string;
   bytes: number;
+  createdAt: string;
+  deletionSupported: boolean;
+  deletionUnavailableReason?: string;
   eligible: boolean;
   reason: string;
 }

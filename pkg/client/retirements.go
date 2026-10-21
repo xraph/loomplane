@@ -36,8 +36,9 @@ type ServiceRetirement struct {
 }
 
 type RetirementPageInput struct {
-	Before string
-	Limit  int
+	BackupID string // optional filter for retirement records, not history events
+	Before   string
+	Limit    int
 }
 
 type RetirementPage struct {
@@ -65,6 +66,9 @@ type RetirementHistory struct {
 
 func retirementQuery(in RetirementPageInput) string {
 	values := url.Values{}
+	if in.BackupID != "" {
+		values.Set("backup_id", in.BackupID)
+	}
 	if in.Before != "" {
 		values.Set("before", in.Before)
 	}

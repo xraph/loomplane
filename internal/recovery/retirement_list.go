@@ -10,8 +10,9 @@ import (
 )
 
 type RetirementListInput struct {
-	Before string `json:"before,omitempty" query:"before"`
-	Limit  int    `json:"limit,omitempty" query:"limit"`
+	BackupID string `json:"backup_id,omitempty" query:"backup_id,omitempty"`
+	Before   string `json:"before,omitempty" query:"before,omitempty"`
+	Limit    int    `json:"limit,omitempty" query:"limit,omitempty"`
 }
 
 type RetirementPage struct {
@@ -35,6 +36,9 @@ func retirementPageLimit(limit int) (int, error) {
 }
 
 func (in RetirementListInput) bounds() (limit int, before retirementListCursor, err error) {
+	if len(in.BackupID) > 256 {
+		return 0, before, ErrInvalid
+	}
 	limit, err = retirementPageLimit(in.Limit)
 	if err != nil {
 		return 0, before, err
@@ -71,8 +75,8 @@ func (s *PgStore) ListRetirements(ctx context.Context, org, project string, in R
 		timeBound = before.CreatedAt
 	}
 	rows, err := s.db.Query(ctx, `SELECT `+retirementColumns+` FROM loomplane_backup_retirements
- WHERE org_id=$1 AND project_id=$2 AND ($3::timestamptz IS NULL OR (created_at,id)<($3,$4))
- ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, timeBound, before.ID, limit+1)
+ WHERE org_id=$1 AND project_id=$2 AND ($3::timestamptz IS NULL OR (created_at,id)<($3,$4)) AND ($6='' OR backup_id=$6)
+ ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, timeBound, before.ID, limit+1, in.BackupID)
 	if err != nil {
 		return nil, err
 	}
