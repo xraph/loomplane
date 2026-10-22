@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,5 +116,41 @@ func TestClusterChecksRefuseLoomplanesOwnServices(t *testing.T) {
 		if host, _, _ := strings.Cut(addr, ":"); dialErr.Error() != host+" resolves to an address Loomplane doesn't connect to from its own network" {
 			t.Fatalf("%s: %v", addr, dialErr)
 		}
+	}
+}
+
+func TestDialGuardServesWhatItKnowsWhileItLooksUpAgain(t *testing.T) {
+	f := &guardFixture{now: time.Unix(1_700_000_000, 0)}
+	g := f.guard()
+	db := netip.MustParseAddrPort("10.1.2.3:5432")
+	if g.allows(t.Context(), db) {
+		t.Fatal("dialed the database")
+	}
+	// Once what it knows is stale, one check looks the services up again
+	// and stalls on DNS; another isn't held up meanwhile.
+	f.now = f.now.Add(2 * dialGuardTTL)
+	lookup, entered, release := g.Lookup, make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	g.Lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
+		once.Do(func() { close(entered) })
+		<-release
+		return lookup(ctx, host)
+	}
+	refreshed := make(chan bool)
+	go func() { refreshed <- g.allows(context.Background(), db) }()
+	<-entered
+	other := make(chan bool)
+	go func() { other <- g.allows(context.Background(), db) }()
+	select {
+	case allowed := <-other:
+		if allowed {
+			t.Fatal("a check during the lookup dialed the database")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a check waited on another's DNS lookup")
+	}
+	close(release)
+	if <-refreshed {
+		t.Fatal("the refreshing check dialed the database")
 	}
 }

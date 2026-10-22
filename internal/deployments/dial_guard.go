@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"strconv"
@@ -49,9 +50,10 @@ type DialGuard struct {
 
 	now func() time.Time
 
-	mu       sync.Mutex
-	at       time.Time
-	resolved map[string][]netip.AddrPort
+	mu         sync.Mutex
+	at         time.Time
+	resolved   map[string][]netip.AddrPort
+	refreshing bool // a check is looking the services up again
 }
 
 // Dial dials an endpoint from Loomplane's own network. The guard runs on
@@ -128,28 +130,42 @@ func loomplaneDials(ip netip.Addr) bool {
 
 // services is every address, with its port, of the services Loomplane
 // depends on, looked up again once what's kept is a minute old. A failed
-// lookup keeps what was known of that service before.
+// lookup keeps what was known of that service before. Lookups run outside
+// the lock: while one check looks the services up again, others use what
+// was known. Only before anything is known does a check look them up
+// itself.
 func (g *DialGuard) services(ctx context.Context) map[netip.AddrPort]bool {
 	if g == nil || len(g.Services) == 0 {
 		return nil
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	now := time.Now
 	if g.now != nil {
 		now = g.now
 	}
-	if g.resolved == nil || now().Sub(g.at) >= dialGuardTTL {
+	g.mu.Lock()
+	stale := g.resolved == nil || now().Sub(g.at) >= dialGuardTTL
+	refresh := stale && (g.resolved == nil || !g.refreshing)
+	if refresh {
+		g.refreshing = true
+	}
+	g.mu.Unlock()
+	if refresh {
+		found := map[string][]netip.AddrPort{}
+		for _, service := range g.Services {
+			if addrs, err := g.resolve(ctx, service); err == nil {
+				found[service] = addrs
+			}
+		}
+		g.mu.Lock()
 		if g.resolved == nil {
 			g.resolved = map[string][]netip.AddrPort{}
 		}
-		for _, service := range g.Services {
-			if addrs, err := g.resolve(ctx, service); err == nil {
-				g.resolved[service] = addrs
-			}
-		}
-		g.at = now()
+		maps.Copy(g.resolved, found)
+		g.at, g.refreshing = now(), false
+		g.mu.Unlock()
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	all := map[netip.AddrPort]bool{}
 	for _, addrs := range g.resolved {
 		for _, ap := range addrs {
