@@ -299,6 +299,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		}
 		return nil
 	}
+	gatewayStore := dbgateway.NewStore(pg)
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		Logs: logStore, Routes: routeService,
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
@@ -309,10 +310,21 @@ func (e *Extension) Register(fapp forge.App) error {
 		Providers:            catalog,
 		Executors:            executors,
 		Resources:            resourceSecrets,
-		DatabaseGateways:     dbgateway.NewStore(pg),
+		DatabaseGateways:     gatewayStore,
 		DatabaseGatewayTrust: databaseGatewayTrust(c),
 		PublicURL:            e.cfg.PublicURL,
 		Telemetry:            metrics,
+	})
+	// Deleting a project or environment takes its database gateways' records
+	// with it, and this deletes their keys from Vault and warns about a
+	// gateway still running in a cloud.
+	projectSvc, injectErr := forge.InjectType[*projects.Service](c)
+	if injectErr != nil {
+		return fmt.Errorf("planning needs the projects extension: %w", injectErr)
+	}
+	projectSvc.AddReaper(&deployments.DatabaseGatewayReaper{
+		Gateways: gatewayStore, Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
+		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err
