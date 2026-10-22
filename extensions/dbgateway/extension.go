@@ -165,7 +165,31 @@ type resourceURLs struct {
 	secrets deployments.ResourceSecrets
 }
 
-var _ dbgateway.ResourceURLs = resourceURLs{}
+var (
+	_ dbgateway.ResourceURLs = resourceURLs{}
+	_ dbgateway.URLVersions  = resourceURLs{}
+)
+
+// versionedSecrets is ResourceSecrets that can say which version of a
+// credential it holds without reading it, as *deployments.VaultResourceSecrets
+// does.
+type versionedSecrets interface {
+	Version(ctx context.Context, key string) (string, error)
+}
+
+// URLVersion implements dbgateway.URLVersions. Secrets that can't say fail
+// it, and the service compiles every poll as it would without it.
+func (u resourceURLs) URLVersion(ctx context.Context, org, environmentID, resource string) (string, error) {
+	vs, ok := u.secrets.(versionedSecrets)
+	if !ok {
+		return "", errors.New("these resource secrets keep no versions")
+	}
+	v, err := vs.Version(ctx, deployments.ResourceURLKey(org, environmentID, resource))
+	if errors.Is(err, deployments.ErrNoCredential) {
+		return "", dbgateway.ErrNoURL
+	}
+	return v, err
+}
 
 func (u resourceURLs) URL(ctx context.Context, org, environmentID, resource string) (string, error) {
 	v, err := u.secrets.Get(ctx, deployments.ResourceURLKey(org, environmentID, resource))

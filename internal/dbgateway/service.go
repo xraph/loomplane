@@ -96,6 +96,9 @@ type Service struct {
 	// verifiers caches route verifiers between compiles, so a poll that
 	// finds nothing changed derives no key.
 	verifiers *verifierCache
+	// compiled remembers what each gateway's last compile was made from,
+	// so a poll that finds nothing changed compiles nothing.
+	compiled *compiledCache
 
 	// OnSkip, when set, hears about the routes a snapshot left out each
 	// time a gateway's snapshot changes.
@@ -117,7 +120,7 @@ func newService(store storage, urls ResourceURLs, key ed25519.PrivateKey, trust 
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: store, urls: urls, key: key, trust: trust, now: now, verifiers: newVerifierCache()}
+	return &Service{store: store, urls: urls, key: key, trust: trust, now: now, verifiers: newVerifierCache(), compiled: newCompiledCache()}
 }
 
 // Configured reports whether the service has a key to sign snapshots with,
@@ -164,6 +167,12 @@ func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*pla
 	if after >= math.MaxInt64 {
 		return nil, fmt.Errorf("%w: snapshot version %d", ErrInvalid, after)
 	}
+	// Read before compiling, so a change made meanwhile shows up as new
+	// inputs at the next poll rather than hiding behind this compile.
+	inputs, cheap := s.inputs(ctx, gw)
+	if cheap && s.unchanged(ctx, gw, inputs, after) {
+		return nil, nil
+	}
 	// Sign only a version whose stored digest is the one compiled
 	// here. A concurrent writer that stored other content gets one more
 	// compile and bump; after that the stored pair is used only if a fresh
@@ -188,6 +197,9 @@ func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*pla
 		}
 		if stored != digest {
 			continue
+		}
+		if cheap {
+			s.compiled.put(gw.ID, inputs, digest)
 		}
 		if after > version {
 			// The gateway holds a version this store never reached,

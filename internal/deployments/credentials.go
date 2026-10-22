@@ -80,3 +80,18 @@ func (v *VaultResourceSecrets) Delete(ctx context.Context, key string) error {
 	}
 	return nil
 }
+
+// Version says which version of a resource credential is stored without
+// decrypting it or counting as an access: its id, version number and update
+// time, which change whenever it is written again, deleted and written back
+// included. A missing one is ErrNoCredential.
+func (v *VaultResourceSecrets) Version(ctx context.Context, key string) (string, error) {
+	m, err := v.svc.GetMeta(ctx, key, ResourceVaultAppID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return "", ErrNoCredential
+	}
+	if err != nil {
+		return "", fmt.Errorf("read resource credential metadata: %w", err)
+	}
+	return fmt.Sprintf("%s/%d/%d", m.ID, m.Version, m.UpdatedAt.UnixNano()), nil
+}

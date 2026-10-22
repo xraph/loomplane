@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -157,16 +159,44 @@ func (m *memStore) Report(_ context.Context, _, _ string, r plane.Report, _ time
 	return m.live, nil
 }
 
-// memURLs is a ResourceURLs over a map; err fails every lookup.
+// memURLs is a ResourceURLs over a map; err fails every lookup and
+// versionErr every version lookup. reads counts the addresses read, and
+// versions the versions.
 type memURLs struct {
-	mu   sync.Mutex
-	urls map[string]string
-	err  error
+	mu         sync.Mutex
+	urls       map[string]string
+	err        error
+	versionErr error
+	reads      int
+	versions   int
+}
+
+// URLVersion is a hash of the address, which changes when it does.
+func (u *memURLs) URLVersion(_ context.Context, org, env, resource string) (string, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.versions++
+	if u.err != nil {
+		return "", u.err
+	}
+	if u.versionErr != nil {
+		return "", u.versionErr
+	}
+	if org != "org_1" || env != "env_1" {
+		return "", fmt.Errorf("asked for %s/%s", org, env)
+	}
+	v, ok := u.urls[resource]
+	if !ok {
+		return "", ErrNoURL
+	}
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:8]), nil
 }
 
 func (u *memURLs) URL(_ context.Context, org, env, resource string) (string, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.reads++
 	if u.err != nil {
 		return "", u.err
 	}
