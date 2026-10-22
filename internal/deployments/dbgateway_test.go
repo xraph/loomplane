@@ -409,7 +409,8 @@ func TestResourceAddressGateway(t *testing.T) {
 	if value != "postgres://app:pw@db.nyc3.db.example.com:5432/orders?sslmode=require" {
 		t.Fatalf("value %q", value)
 	}
-	if len(extra) != 1 || extra["DATABASE_URL_GATEWAY"] != "https://db-gateway-xyz.run.app" {
+	if len(extra) != 2 || extra["DATABASE_URL_GATEWAY"] != (linkExtra{Value: "https://db-gateway-xyz.run.app"}) ||
+		extra["DATABASE_URL_DIRECT"] != (linkExtra{Value: doDSN, Secret: true}) {
 		t.Fatalf("extra %v", extra)
 	}
 }
@@ -588,7 +589,7 @@ func TestAppliedInputsUseGatewayAddress(t *testing.T) {
 	if err = json.Unmarshal(secrets[a.Service.AppliedInputs.Variables], &captured); err != nil {
 		t.Fatal(err)
 	}
-	if captured.ResourceValues["DATABASE_URL"] != want || captured.GatewayValues["DATABASE_URL_GATEWAY"] != extra["DATABASE_URL_GATEWAY"] {
+	if captured.ResourceValues["DATABASE_URL"] != want || captured.GatewayValues["DATABASE_URL_GATEWAY"] != extra["DATABASE_URL_GATEWAY"].Value {
 		t.Fatalf("captured %+v, want %q %v", captured, want, extra)
 	}
 	env, secret, err := r.env(ctx, gatewayDeployment, a, services, resources)
@@ -864,5 +865,94 @@ func TestRunRetriesAPartialDatabaseGatewayDelete(t *testing.T) {
 	}
 	if len(store.gateways) != 0 || plans.bindings["service:db-gateway"] != nil || exec.removed != 2 {
 		t.Fatalf("after the retry: %d gateways, binding %v, %d removes", len(store.gateways), plans.bindings["service:db-gateway"] != nil, exec.removed)
+	}
+}
+
+// R92: an app linked to a gateway-served database also gets the database's
+// own address in <KEY>_DIRECT, for what speaks Postgres over TCP, such as a
+// migration, which the gateway doesn't serve yet. It holds the credentials,
+// so it's secret, and a variable someone set of that name wins.
+func TestGatewayLinkedAppsGetTheirDirectAddress(t *testing.T) {
+	ctx := t.Context()
+	const gatewayDSN = "postgres://app:pw@db.nyc3.db.example.com:5432/orders?sslmode=require"
+	secrets := snapshotSecrets{
+		resourceKey("org_1", "env_1", "db", ResourceURL):    []byte(doDSN),
+		resourceKey("org_1", "env_1", "cache", ResourceURL): []byte("redis://:pw@cache:6379"),
+	}
+	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
+	resources := map[string]*planning.Binding{
+		"db": {Subject: planning.ResourceSubject, Name: "db"}, "cache": {Subject: planning.ResourceSubject, Name: "cache"},
+	}
+	links := []planning.EnvLink{
+		{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject},
+		{Key: "REDIS_URL", From: "cache", Subject: planning.ResourceSubject},
+	}
+	check := func(t *testing.T, env map[string]string, secret map[string]bool, direct string, directSecret bool) {
+		t.Helper()
+		if env["DATABASE_URL"] != gatewayDSN || !secret["DATABASE_URL"] ||
+			env["DATABASE_URL_GATEWAY"] != "https://db-gateway-xyz.run.app" || secret["DATABASE_URL_GATEWAY"] ||
+			env["DATABASE_URL_DIRECT"] != direct || secret["DATABASE_URL_DIRECT"] != directSecret {
+			t.Fatalf("served link: env %v secret %v", env, secret)
+		}
+		if _, ok := env["REDIS_URL_GATEWAY"]; ok {
+			t.Fatalf("an unserved link got a gateway address: %v", env)
+		}
+		if _, ok := env["REDIS_URL_DIRECT"]; ok {
+			t.Fatalf("an unserved link got a direct address: %v", env)
+		}
+		if env["REDIS_URL"] != "redis://:pw@cache:6379" {
+			t.Fatalf("unserved link: %v", env)
+		}
+	}
+
+	// Without a snapshot, read afresh.
+	r := NewRunner(RunnerDeps{Variables: fakeVariables{"svc": {}}, Resources: secrets})
+	plain := planning.Action{ID: "service:plain", Name: "plain", Service: &planning.ServiceConfig{Service: "svc", Env: links}}
+	env, secret, err := r.env(ctx, gatewayDeployment, plain, services, resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(t, env, secret, doDSN, true)
+
+	// Through the applied-inputs snapshot, which captures what the app gets.
+	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc", Env: links}}
+	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &a, services); err != nil {
+		t.Fatal(err)
+	}
+	if env, secret, err = r.env(ctx, gatewayDeployment, a, services, resources); err != nil {
+		t.Fatal(err)
+	}
+	check(t, env, secret, doDSN, true)
+	var captured appliedVariables
+	if err = json.Unmarshal(secrets[a.Service.AppliedInputs.Variables], &captured); err != nil {
+		t.Fatal(err)
+	}
+	if captured.ResourceValues["DATABASE_URL"] != env["DATABASE_URL"] || captured.GatewayValues["DATABASE_URL_GATEWAY"] != env["DATABASE_URL_GATEWAY"] ||
+		captured.GatewayValues["DATABASE_URL_DIRECT"] != env["DATABASE_URL_DIRECT"] || !captured.GatewaySecrets["DATABASE_URL_DIRECT"] ||
+		captured.GatewaySecrets["DATABASE_URL_GATEWAY"] || len(captured.GatewayValues) != 2 {
+		t.Fatalf("captured %+v, the app got %v", captured, env)
+	}
+	// A retry from the snapshot hands out the same, with the same secrecy.
+	retry := planning.Action{ID: a.ID, Name: "web", Service: a.Service}
+	again, againSecret, err := r.env(ctx, gatewayDeployment, retry, services, resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(t, again, againSecret, doDSN, true)
+
+	// A variable someone set of that name wins, with the secrecy they gave it.
+	r.variables = fakeVariables{"svc": {"DATABASE_URL_DIRECT": "postgres://mine"}}
+	for _, snapshot := range []bool{false, true} {
+		b := planning.Action{ID: "service:own", Name: "own", Service: &planning.ServiceConfig{Service: "svc", Env: links}}
+		if snapshot {
+			b.ID = "service:own-pinned"
+			if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if env, secret, err = r.env(ctx, gatewayDeployment, b, services, resources); err != nil {
+			t.Fatal(err)
+		}
+		check(t, env, secret, "postgres://mine", false)
 	}
 }

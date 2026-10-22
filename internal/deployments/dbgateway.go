@@ -25,6 +25,20 @@ import (
 // DATABASE_URL_GATEWAY, for a driver that reaches Postgres over HTTP.
 const GatewaySuffix = "_GATEWAY"
 
+// DirectSuffix ends the variable that carries a gateway-served resource's
+// own address, unchanged, beside the one pointed at the gateway:
+// DATABASE_URL gets DATABASE_URL_DIRECT, for what speaks Postgres over TCP,
+// such as a migration, which the gateway doesn't serve yet. It holds the
+// resource's credentials, so it's secret.
+const DirectSuffix = "_DIRECT"
+
+// linkExtra is a variable Loomplane sets beside a resource link's own, and
+// whether it's secret.
+type linkExtra struct {
+	Value  string
+	Secret bool
+}
+
 // The fields a database gateway's private keys are kept under in Vault.
 const (
 	dbGatewaySigningField = "signing_key"
@@ -318,9 +332,10 @@ func dbGatewayControlURL(public string) (string, error) {
 // resourceAddress is what app gets in key for resource: the address kept
 // for it, or, when the environment's database gateway serves it, that
 // address pointed at the gateway, with the gateway's own address in
-// key+GatewaySuffix. services are the environment's service bindings. The
+// key+GatewaySuffix and the address kept for it, unchanged and secret, in
+// key+DirectSuffix. services are the environment's service bindings. The
 // address holds the resource's credentials, so no error repeats it.
-func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string, services map[string]*planning.Binding, resource, key string) (value string, extra map[string]string, err error) {
+func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string, services map[string]*planning.Binding, resource, key string) (value string, extra map[string]linkExtra, err error) {
 	if r.resources == nil {
 		return "", nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", app, resource)
 	}
@@ -351,7 +366,10 @@ func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string,
 		q.Del("port")
 		u.RawQuery = q.Encode()
 	}
-	return u.String(), map[string]string{key + GatewaySuffix: gw.URL}, nil
+	return u.String(), map[string]linkExtra{
+		key + GatewaySuffix: {Value: gw.URL},
+		key + DirectSuffix:  {Value: string(raw), Secret: true},
+	}, nil
 }
 
 // servingGateway returns the database gateway binding that serves resource,
@@ -369,10 +387,17 @@ func servingGateway(services map[string]*planning.Binding, resource string) (gw 
 	return nil, ""
 }
 
-// setUnset sets k to v unless env has it already, as a variable someone set
-// wins over an address Loomplane would set.
-func setUnset(env map[string]string, k, v string) {
-	if _, set := env[k]; !set {
-		env[k] = v
+// setExtras sets each extra env doesn't have already, as a variable someone
+// set wins over an address Loomplane would set, and marks the secret ones
+// it sets.
+func setExtras(env map[string]string, secret map[string]bool, extras map[string]linkExtra) {
+	for k, x := range extras {
+		if _, set := env[k]; set {
+			continue
+		}
+		env[k] = x.Value
+		if x.Secret {
+			secret[k] = true
+		}
 	}
 }

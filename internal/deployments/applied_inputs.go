@@ -14,11 +14,13 @@ import (
 
 // appliedVariables contains user variables and resource addresses. Service
 // addresses are resolved against the serving bindings each time the pinned
-// service runs. GatewayValues are the <KEY>_GATEWAY addresses that go with a
-// resource behind the database gateway, which aren't secret.
+// service runs. GatewayValues are the variables that go with a resource
+// behind the database gateway: <KEY>_GATEWAY, the gateway's address, and
+// <KEY>_DIRECT, the resource's own, which GatewaySecrets marks secret.
 type appliedVariables struct {
 	ResourceValues map[string]string `json:"resource_values,omitempty"`
 	GatewayValues  map[string]string `json:"gateway_values,omitempty"`
+	GatewaySecrets map[string]bool   `json:"gateway_secrets,omitempty"`
 	Values         map[string]string `json:"values"`
 	Secrets        map[string]bool   `json:"secrets"`
 }
@@ -68,7 +70,7 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 			}
 			ref = resourceKey(d.OrgID, d.EnvironmentID, "applied-inputs/"+d.ID, id.String())
 		}
-		resourceValues, gatewayValues := map[string]string{}, map[string]string{}
+		resourceValues, gatewayValues, gatewaySecrets := map[string]string{}, map[string]string{}, map[string]bool{}
 		for _, link := range cfg.Env {
 			if link.Subject != planning.ResourceSubject {
 				continue
@@ -81,11 +83,14 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 				return fmt.Errorf("capture applied resource variable: %w", e)
 			}
 			resourceValues[link.Key] = value
-			for k, v := range extra {
-				gatewayValues[k] = v
+			for k, x := range extra {
+				gatewayValues[k] = x.Value
+				if x.Secret {
+					gatewaySecrets[k] = true
+				}
 			}
 		}
-		raw, err = json.Marshal(appliedVariables{Values: values, Secrets: secrets, ResourceValues: resourceValues, GatewayValues: gatewayValues})
+		raw, err = json.Marshal(appliedVariables{Values: values, Secrets: secrets, ResourceValues: resourceValues, GatewayValues: gatewayValues, GatewaySecrets: gatewaySecrets})
 		if err == nil {
 			err = r.resources.Put(ctx, ref, raw)
 		}

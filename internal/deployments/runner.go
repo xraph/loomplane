@@ -1149,7 +1149,7 @@ func placement(prov, region string) string {
 // each thing it needs. A variable someone set wins over an address
 // Loomplane would set, so you can point a service elsewhere.
 func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services, resources map[string]*planning.Binding) (env map[string]string, secret map[string]bool, err error) {
-	resourceValues, gatewayValues := map[string]string{}, map[string]string{}
+	resourceValues, gatewayValues, gatewaySecrets := map[string]string{}, map[string]string{}, map[string]bool{}
 	if a.Service.Generated() {
 		// A gateway gets the addresses it routes to and nothing else: none
 		// of the project's variables, and so none of its secrets.
@@ -1167,7 +1167,7 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			return nil, nil, snapshotErr
 		}
 		env, secret = snapshot.Values, snapshot.Secrets
-		resourceValues, gatewayValues = snapshot.ResourceValues, snapshot.GatewayValues
+		resourceValues, gatewayValues, gatewaySecrets = snapshot.ResourceValues, snapshot.GatewayValues, snapshot.GatewaySecrets
 		if env == nil {
 			env = map[string]string{}
 		}
@@ -1184,9 +1184,13 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 		if link.Subject == planning.ResourceSubject {
 			if pinned, ok := resourceValues[link.Key]; ok {
 				env[link.Key], secret[link.Key] = pinned, true
-				if gw, ok := gatewayValues[link.Key+GatewaySuffix]; ok {
-					setUnset(env, link.Key+GatewaySuffix, gw)
+				pinnedExtras := map[string]linkExtra{}
+				for _, k := range []string{link.Key + GatewaySuffix, link.Key + DirectSuffix} {
+					if v, ok := gatewayValues[k]; ok {
+						pinnedExtras[k] = linkExtra{Value: v, Secret: gatewaySecrets[k]}
+					}
 				}
+				setExtras(env, secret, pinnedExtras)
 				continue
 			}
 			if a.Service.AppliedInputs != nil && a.Service.AppliedInputs.Variables != "" {
@@ -1201,9 +1205,7 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 				return nil, nil, err
 			}
 			env[link.Key], secret[link.Key] = addr, true
-			for k, v := range extra {
-				setUnset(env, k, v)
-			}
+			setExtras(env, secret, extra)
 			continue
 		}
 		if link.Address != "" {
