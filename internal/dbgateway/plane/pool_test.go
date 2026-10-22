@@ -23,6 +23,7 @@ type poolServer struct {
 	queries []string
 	fail    map[string]string // query substring -> SQLSTATE
 	status  byte              // ReadyForQuery status; 0 means 'I'
+	report  []pgproto3.ParameterStatus
 	closed  chan struct{}
 }
 
@@ -68,6 +69,7 @@ func (s *poolServer) serve(conn net.Conn) {
 			}
 		}
 		st := s.status
+		report := append([]pgproto3.ParameterStatus(nil), s.report...)
 		s.mu.Unlock()
 		if st == 0 {
 			st = 'I'
@@ -76,6 +78,9 @@ func (s *poolServer) serve(conn net.Conn) {
 			b.Send(&pgproto3.ErrorResponse{Severity: "ERROR", Code: code, Message: "scripted failure"})
 		} else {
 			b.Send(&pgproto3.CommandComplete{CommandTag: []byte("OK")})
+			for i := range report {
+				b.Send(&report[i])
+			}
 		}
 		b.Send(&pgproto3.ReadyForQuery{TxStatus: st})
 		if b.Flush() != nil {
@@ -323,20 +328,21 @@ func TestPoolReplaysParams(t *testing.T) {
 		t.Errorf("startup params = %v, want %v", got, cfg.Params)
 	}
 	if q := d.server(0).recorded(); len(q) != 0 {
-		t.Fatalf("defaults needed replay: %q", q)
+		t.Fatalf("route defaults needed replay: %q", q)
 	}
 
-	// Differing and new keys are SET in sorted order, before Acquire returns.
-	l = mustAcquire(t, p, map[string]string{"search_path": "app, public", "application_name": "b", "bogus": "x"})
-	want := []string{"SET application_name TO b; SET search_path TO app, public"}
+	// Overrides are SET in sorted key order, before Acquire returns. Unknown
+	// keys are ignored.
+	l = mustAcquire(t, p, map[string]string{"search_path": "app, public", "application_name": "'b'", "bogus": "x"})
+	want := []string{"SET application_name TO 'b'; SET search_path TO app, public"}
 	if q := d.server(0).recorded(); !reflect.DeepEqual(q, want) {
 		t.Fatalf("replay = %q, want %q", q, want)
 	}
 	l.Release(LeaseClean)
 
-	// Keys that are no longer wanted are RESET, and defaults are restored.
+	// Overrides that are no longer wanted are RESET.
 	l = mustAcquire(t, p, nil)
-	want = append(want, "SET application_name TO gw; RESET search_path")
+	want = append(want, "RESET application_name; RESET search_path")
 	if q := d.server(0).recorded(); !reflect.DeepEqual(q, want) {
 		t.Fatalf("replay = %q, want %q", q, want)
 	}
@@ -347,6 +353,95 @@ func TestPoolReplaysParams(t *testing.T) {
 	l.Release(LeaseClean)
 	if q := d.server(0).recorded(); len(q) != len(want) {
 		t.Fatalf("redundant replay: %q", q)
+	}
+}
+
+func TestPoolResetsOverrideToRouteDefault(t *testing.T) {
+	cfg := PoolConfig{Params: map[string]string{"timezone": "Europe/London"}}
+	p, d := newTestPool(t, cfg, 1)
+
+	l := mustAcquire(t, p, map[string]string{"timezone": "'UTC'"})
+	conn := l.Conn()
+	l.Release(LeaseClean)
+	l = mustAcquire(t, p, nil)
+	if l.Conn() != conn {
+		t.Fatal("expected the same connection")
+	}
+	l.Release(LeaseClean)
+	want := []string{"SET timezone TO 'UTC'", "RESET timezone"}
+	if q := d.server(0).recorded(); !reflect.DeepEqual(q, want) {
+		t.Fatalf("queries = %q, want %q", q, want)
+	}
+}
+
+func TestPoolSetOverrides(t *testing.T) {
+	p, d := newTestPool(t, PoolConfig{}, 1)
+	l := mustAcquire(t, p, nil)
+	conn := l.Conn()
+	l.SetOverrides(map[string]string{"search_path": "x", "bogus": "y"})
+	l.Release(LeaseClean)
+	l.SetOverrides(map[string]string{"timezone": "'UTC'"}) // after Release: ignored
+
+	// The connection already carries search_path, so asking for it is free.
+	l = mustAcquire(t, p, map[string]string{"search_path": "x"})
+	if l.Conn() != conn {
+		t.Fatal("expected the same connection")
+	}
+	l.Release(LeaseClean)
+	if q := d.server(0).recorded(); len(q) != 0 {
+		t.Fatalf("queries = %q, want no replay", q)
+	}
+
+	// Asking for none undoes it.
+	l = mustAcquire(t, p, nil)
+	l.Release(LeaseClean)
+	if q := d.server(0).recorded(); !reflect.DeepEqual(q, []string{"RESET search_path"}) {
+		t.Fatalf("queries = %q, want RESET search_path", q)
+	}
+
+	// SetOverrides copies its argument.
+	m := map[string]string{"search_path": "x"}
+	l = mustAcquire(t, p, nil)
+	l.SetOverrides(m)
+	m["search_path"] = "changed"
+	l.Release(LeaseClean)
+	l = mustAcquire(t, p, map[string]string{"search_path": "x"})
+	l.Release(LeaseClean)
+	if q := d.server(0).recorded(); len(q) != 1 {
+		t.Fatalf("queries = %q: the pool kept the caller's map", q)
+	}
+}
+
+func TestPoolRecordsParameterStatus(t *testing.T) {
+	p, d := newTestPool(t, PoolConfig{}, 1)
+	d.onNew = func(s *poolServer) {
+		s.report = []pgproto3.ParameterStatus{{Name: "TimeZone", Value: "UTC"}}
+	}
+	l := mustAcquire(t, p, map[string]string{"timezone": "'UTC'"})
+	defer l.Release(LeaseClean)
+	if got := l.Conn().Params["TimeZone"]; got != "UTC" {
+		t.Fatalf("Params[TimeZone] = %q, want UTC", got)
+	}
+}
+
+func TestPoolCancelAfterReplyClosesConn(t *testing.T) {
+	p, d := newTestPool(t, PoolConfig{}, 1)
+	l := mustAcquire(t, p, nil)
+	l.Release(LeaseClean)
+
+	// Cancel the context after the reply is read and before roundTrip looks
+	// at it: the connection may be left with a deadline in the past.
+	ctx, cancel := context.WithCancel(t.Context())
+	roundTripDone = cancel
+	t.Cleanup(func() { roundTripDone = nil })
+	_, err := p.Acquire(ctx, map[string]string{"timezone": "'UTC'"})
+	roundTripDone = nil
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Acquire = %v, want context.Canceled", err)
+	}
+	waitFor(t, "connection to close", func() bool { return isClosed(d.server(0)) })
+	if s := p.Stats(); s.Open != 0 || s.Idle != 0 {
+		t.Fatalf("stats = %+v, want the connection dropped", s)
 	}
 }
 
@@ -581,13 +676,16 @@ func TestPoolReleaseIsIdempotent(t *testing.T) {
 }
 
 func TestPoolIdle(t *testing.T) {
-	p, d := newTestPool(t, PoolConfig{Idle: time.Minute}, 2)
 	base := time.Now()
-	p.now = func() time.Time { return base }
+	var offset atomic.Int64 // nanoseconds past base
+	d := &poolDialer{}
+	p := newPool(PoolConfig{Idle: time.Minute}, d, func() time.Time { return base.Add(time.Duration(offset.Load())) })
+	t.Cleanup(p.Close)
+	p.SetLimit(2)
 	a := mustAcquire(t, p, nil)
 	b := mustAcquire(t, p, nil)
 	a.Release(LeaseClean)
-	p.now = func() time.Time { return base.Add(40 * time.Second) }
+	offset.Store(int64(40 * time.Second))
 	b.Release(LeaseClean)
 
 	p.reap(base.Add(59 * time.Second))

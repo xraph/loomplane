@@ -35,8 +35,9 @@ const (
 type LeaseState int
 
 const (
-	// LeaseClean: the connection is idle and holds only the parameters the
-	// lease asked for. It goes straight back to the pool.
+	// LeaseClean: the connection is idle and holds only the overrides the
+	// lease asked for (or recorded with SetOverrides). It goes straight back
+	// to the pool.
 	LeaseClean LeaseState = iota
 	// LeaseDirtyTxn: a transaction may still be open. The pool rolls it back.
 	LeaseDirtyTxn
@@ -63,11 +64,14 @@ type PoolConfig struct {
 // owns, including ones being dialed and ones leased out.
 type PoolStats struct{ Open, Idle, Waiting, Limit int }
 
-// pooled is a backend connection with the pool's own bookkeeping. applied is
-// the set of KnownParams values in effect on the connection.
+// pooled is a backend connection with the pool's own bookkeeping. overrides
+// are the KnownParams values a client has set on top of the route defaults, as
+// raw SQL text. The defaults themselves are never tracked: they only reach the
+// connection through the startup packet. A new connection, and one that has
+// been through DISCARD ALL, has no overrides.
 type pooled struct {
 	conn      *BackendConn
-	applied   map[string]string
+	overrides map[string]string
 	idleSince time.Time
 }
 
@@ -104,6 +108,12 @@ type Pool struct {
 // NewPool returns a pool for cfg and starts its idle reaper. The limit starts
 // at 1; the router sets the real one with SetLimit.
 func NewPool(cfg PoolConfig, d Dialer) *Pool {
+	return newPool(cfg, d, time.Now)
+}
+
+// newPool is NewPool with the clock injected, so tests can set it before the
+// reaper starts.
+func newPool(cfg PoolConfig, d Dialer, now func() time.Time) *Pool {
 	if cfg.Wait <= 0 {
 		cfg.Wait = defaultPoolWait
 	}
@@ -114,7 +124,7 @@ func NewPool(cfg PoolConfig, d Dialer) *Pool {
 	p := &Pool{
 		cfg:    cfg,
 		dialer: d,
-		now:    time.Now,
+		now:    now,
 		limit:  1,
 		stop:   make(chan struct{}),
 		reaped: make(chan struct{}),
@@ -165,25 +175,16 @@ func sameParams(a, b map[string]string) bool {
 	return true
 }
 
-// desired is what a lease asked for: the route defaults overlaid with params,
-// restricted to KnownParams.
-func (p *Pool) desired(params map[string]string) map[string]string {
-	out := onlyKnown(p.cfg.Params)
-	for k, v := range onlyKnown(params) {
-		out[k] = v
-	}
-	return out
-}
-
-// replaySQL is the simple Query that moves a connection from applied to
-// want: SET for each new or differing key and RESET for each key no longer
-// wanted, in sorted key order. Values go in as raw SQL text.
-func replaySQL(applied, want map[string]string) string {
-	keys := make([]string, 0, len(applied)+len(want))
+// replaySQL is the simple Query that moves a connection from the overrides it
+// has to the ones wanted: SET for each wanted override that is missing or
+// differs, and RESET for each override it has that is no longer wanted, in
+// sorted key order. Values go in as raw SQL text.
+func replaySQL(have, want map[string]string) string {
+	keys := make([]string, 0, len(have)+len(want))
 	for k := range want {
 		keys = append(keys, k)
 	}
-	for k := range applied {
+	for k := range have {
 		if _, ok := want[k]; !ok {
 			keys = append(keys, k)
 		}
@@ -195,7 +196,7 @@ func replaySQL(applied, want map[string]string) string {
 		switch {
 		case !wanted:
 			parts = append(parts, "RESET "+k)
-		case applied[k] != v || !hasKey(applied, k):
+		case have[k] != v || !hasKey(have, k):
 			parts = append(parts, "SET "+k+" TO "+v)
 		}
 	}
@@ -241,14 +242,27 @@ type Lease struct {
 // Conn returns the leased connection.
 func (l *Lease) Conn() *BackendConn { return l.pc.conn }
 
-// Acquire leases a connection whose session parameters match the route
-// defaults overlaid with params (unknown keys are ignored). It prefers an idle
+// SetOverrides records overrides (restricted to KnownParams, copied) as the
+// KnownParams values the client has set on this connection, so they count as
+// applied once the lease is released clean. The session calls it when the
+// client ran a known-parameter SET or RESET during the lease. Like the rest of
+// a Lease it belongs to one goroutine; after Release it does nothing.
+func (l *Lease) SetOverrides(overrides map[string]string) {
+	if l.done.Load() {
+		return
+	}
+	l.pc.overrides = onlyKnown(overrides)
+}
+
+// Acquire leases a connection carrying exactly the client's overrides in
+// params (raw SQL values, unknown keys ignored) on top of the route defaults.
+// It prefers an idle
 // connection that already matches, then any idle one, then dials if the pool
 // is under its limit, and otherwise queues behind earlier callers. The queue
 // is bounded by ctx and the pool's wait limit; at the limit Acquire returns
 // ErrPoolTimeout.
 func (p *Pool) Acquire(ctx context.Context, params map[string]string) (*Lease, error) {
-	want := p.desired(params)
+	want := onlyKnown(params)
 
 	p.mu.Lock()
 	if p.closed {
@@ -281,11 +295,11 @@ func (p *Pool) Acquire(ctx context.Context, params map[string]string) (*Lease, e
 }
 
 // takeIdleLocked removes and returns an idle connection, preferring one whose
-// applied parameters equal want and otherwise the most recently used.
+// overrides equal want and otherwise the most recently used.
 func (p *Pool) takeIdleLocked(want map[string]string) *pooled {
 	i := len(p.idle) - 1
 	for j := len(p.idle) - 1; j >= 0; j-- {
-		if sameParams(p.idle[j].applied, want) {
+		if sameParams(p.idle[j].overrides, want) {
 			i = j
 			break
 		}
@@ -334,12 +348,12 @@ func (p *Pool) ready(ctx context.Context, pc *pooled, slot bool, want map[string
 			return nil, err
 		}
 	}
-	if sql := replaySQL(pc.applied, want); sql != "" {
+	if sql := replaySQL(pc.overrides, want); sql != "" {
 		if _, err := roundTrip(ctx, pc.conn, sql); err != nil {
 			p.discard(pc)
 			return nil, fmt.Errorf("set backend session parameters: %w", err)
 		}
-		pc.applied = copyParams(want)
+		pc.overrides = copyParams(want)
 	}
 	return &Lease{p: p, pc: pc}, nil
 }
@@ -355,7 +369,7 @@ func (p *Pool) dial(ctx context.Context) (*pooled, error) {
 	if conn.Statements == nil {
 		conn.Statements = map[string]bool{}
 	}
-	pc := &pooled{conn: conn, applied: onlyKnown(p.cfg.Params)}
+	pc := &pooled{conn: conn, overrides: map[string]string{}}
 	p.mu.Lock()
 	closed := p.closed
 	p.mu.Unlock()
@@ -425,9 +439,9 @@ func (p *Pool) release(pc *pooled, state LeaseState) {
 		case LeaseSession:
 			if keep = resetConn(pc, "DISCARD ALL"); keep {
 				// DISCARD ALL includes RESET ALL, which returns every
-				// parameter to its startup value.
+				// parameter to its startup value: no overrides remain.
 				pc.conn.Statements = map[string]bool{}
-				pc.applied = onlyKnown(p.cfg.Params)
+				pc.overrides = map[string]string{}
 			}
 		default: // LeaseBroken, or a state this pool doesn't know.
 			keep = false
@@ -461,21 +475,37 @@ func resetConn(pc *pooled, sql string) bool {
 	return err == nil && status == 'I'
 }
 
+// roundTripDone, when set by a test, runs after the reply is read and before
+// roundTrip checks whether its context was cancelled.
+var roundTripDone func()
+
 // roundTrip sends one simple Query and reads until ReadyForQuery, returning
 // the transaction status. A backend error comes back as a wrapped
-// *pgconn.PgError. Any I/O failure marks the connection broken.
+// *pgconn.PgError. ParameterStatus messages update c.Params. Any I/O failure,
+// and a context cancelled while the exchange was finishing, mark the
+// connection broken: its deadline may already be in the past.
 func roundTrip(ctx context.Context, c *BackendConn, sql string) (byte, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = c.Conn.SetDeadline(dl)
 	}
 	// Cancelling ctx must unblock a read that is waiting on the backend.
 	stop := context.AfterFunc(ctx, func() { _ = c.Conn.SetDeadline(time.Unix(1, 0)) })
-	defer func() {
-		if stop() {
-			_ = c.Conn.SetDeadline(time.Time{})
-		}
-	}()
 
+	status, err := exchange(ctx, c, sql)
+	if roundTripDone != nil {
+		roundTripDone()
+	}
+	if !stop() {
+		// The cancel landed after the reply: the hook that moves the deadline
+		// has run or is running, so the connection can't be trusted.
+		c.Broken = true
+		return 0, ctx.Err()
+	}
+	_ = c.Conn.SetDeadline(time.Time{})
+	return status, err
+}
+
+func exchange(ctx context.Context, c *BackendConn, sql string) (byte, error) {
 	c.Frontend.Send(&pgproto3.Query{String: sql})
 	if err := c.Frontend.Flush(); err != nil {
 		c.Broken = true
@@ -489,6 +519,11 @@ func roundTrip(ctx context.Context, c *BackendConn, sql string) (byte, error) {
 			return 0, ctxOr(ctx, err)
 		}
 		switch m := msg.(type) {
+		case *pgproto3.ParameterStatus:
+			if c.Params == nil {
+				c.Params = map[string]string{}
+			}
+			c.Params[m.Name] = m.Value
 		case *pgproto3.ErrorResponse:
 			pgErr = pgconn.ErrorResponseToPgError(m)
 		case *pgproto3.ReadyForQuery:
