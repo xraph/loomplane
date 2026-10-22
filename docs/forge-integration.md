@@ -33,7 +33,7 @@ The dashboard (`apps/dashboard`) pins:
 | React, Vite, Tailwind, TypeScript | 19.3, 8.3, 4, 6.0 |
 | pnpm | 11.5.0, declared in `packageManager` |
 
-pnpm 11 refuses any package published in the last 24 hours, and the dashboard keeps that policy on. The Forge client sat at 1.12.7 for a day because of it, since 1.12.8 was too new when the lockfile was made; it's on 1.12.8 now. Expect the same wait whenever you take a Forge release on the day it ships. The `packageManager` field makes any pnpm switch to 11.5.0, so everyone resolves under the same policy.
+pnpm 11 refuses any package published in the last 24 hours, and the dashboard keeps that policy on. The Forge client sat at 1.12.7 for a day because of it, since 1.12.8 was too new when the lockfile was made. The same thing will happen with 1.13.0, which sits in `minimumReleaseAgeExclude` in `apps/dashboard/pnpm-workspace.yaml` until it's old enough. Expect the same wait whenever you take a Forge release on the day it ships. The `packageManager` field makes any pnpm switch to 11.5.0, so everyone resolves under the same policy.
 
 There are no `replace` directives. Loomplane resolves these versions through the module proxy. Every xraph module is on a released version. The indirect `mimetype` dependency is v1.4.16 because its author retracted v1.4.15 for quadratic processing of crafted CDF files.
 
@@ -110,7 +110,7 @@ What we found:
 - Most of authsome's hook events (`session.create`, `device.register`, `org.create`, `rbac.role.assign`, `org.invitation.accept`) carry no audit category, and Chronicle refuses an event without one. Every one of them was logged as `audit record failed` and never stored. `extensions/identity/audit.go` hands authsome an emitter that files them under `auth`; an event that names its own category keeps it.
 - Sign-up doesn't sign you in; the dashboard sends you to sign in afterwards.
 - authsome's own invitation endpoint sets no expiry, so its links never lapse. Loomplane creates invitations itself (`POST /api/v1/invitations` in `extensions/identity/members.go`) with a week's expiry and no role above your own. Herald sends the invitation when SMTP is configured. You also get a manual link and an explicit delivery outcome.
-- Accepting (`POST /authsome/v1/orgs/invitations/accept`) adds the account with the invited email, whoever is signed in. The dashboard asks before accepting and tells you when the invitation went to a different account.
+- Accepting (`POST /authsome/v1/orgs/invitations/accept`) adds you to the organization, but only if you're signed in as the invited account. Any other account gets a 403 on the email mismatch. The dashboard asks before accepting and tells you when the invitation went to a different account.
 - Removing a member leaves their session alone, still naming the organization. `GET /api/v1/session` answers 403 for someone who isn't a member any more, which the dashboard treats like a session with no organization.
 
 Config: `identity.base_path`, `identity.app_id`, `identity.publishable_key`, `identity.require_email_verification`, and `secret_key`, from which authsome's token encryption key is derived with HKDF (`internal/security/keys.go`).
