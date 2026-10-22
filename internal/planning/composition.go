@@ -16,9 +16,11 @@ import (
 
 // EndpointCheck is what checking an external endpoint from a target
 // found. Found is false when the organization has no such endpoint; Err
-// says why the check couldn't run. Neither Err nor Report holds the DSN.
+// says why the check couldn't run. Name is the endpoint's name, which
+// findings use in place of its ID. Neither Err nor Report holds the DSN.
 type EndpointCheck struct {
 	ID     string
+	Name   string
 	Engine string
 	Found  bool
 	Report *catalogconnect.Report
@@ -340,6 +342,9 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 		check, ok = p.in.Endpoints[id]
 	}
 	label := "endpoint " + id
+	if check.Name != "" {
+		label = "endpoint " + check.Name
+	}
 	const unavailable, incompatible = "catalog-endpoint-unavailable", "catalog-endpoint-incompatible"
 	switch {
 	case !ok || (check.Found && check.Err == "" && check.Report == nil):

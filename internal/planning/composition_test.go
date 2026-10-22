@@ -432,7 +432,7 @@ func findCode(fs []Finding, code string) *Finding {
 }
 
 func TestExternalDependencyNeedsAPassingCheck(t *testing.T) {
-	r := externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4"}}})
+	r := externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4"}}})
 	if !r.Executable {
 		t.Fatalf("passing endpoint blocked: %+v", r.Problems)
 	}
@@ -459,20 +459,20 @@ func TestExternalDependencyNeedsAPassingCheck(t *testing.T) {
 }
 
 func TestExternalDependencyMissingExtension(t *testing.T) {
-	r := externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4", Missing: []string{"timescaledb"}}}})
+	r := externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4", Missing: []string{"timescaledb"}}}})
 	p := findCode(r.Problems, "catalog-endpoint-incompatible")
-	if r.Executable || p == nil || p.Message != "endpoint "+prodPG+" lacks the timescaledb extension" || p.Name != "app" || p.Path != "resources.app.uses.postgres.external" {
+	if r.Executable || p == nil || p.Message != "endpoint prod-pg lacks the timescaledb extension" || p.Name != "app" || p.Path != "resources.app.uses.postgres.external" {
 		t.Fatalf("missing extension accepted: %+v", r.Problems)
 	}
 
 	// An endpoint that answered and is too old, or of another engine, is
 	// incompatible too.
-	r = externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "15.2", Problems: []string{"PostgreSQL 15.2 is older than 16"}}}})
-	if p = findCode(r.Problems, "catalog-endpoint-incompatible"); r.Executable || p == nil || !strings.Contains(p.Message, "PostgreSQL 15.2 is older than 16") {
+	r = externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "15.2", Problems: []string{"PostgreSQL 15.2 is older than 16"}}}})
+	if p = findCode(r.Problems, "catalog-endpoint-incompatible"); r.Executable || p == nil || p.Message != "endpoint prod-pg can't be used: PostgreSQL 15.2 is older than 16" {
 		t.Fatalf("old endpoint accepted: %+v", r.Problems)
 	}
-	r = externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Found: true, Engine: "redis", Report: &catalogconnect.Report{Version: "8.2.1"}}})
-	if p = findCode(r.Problems, "catalog-endpoint-incompatible"); r.Executable || p == nil || !strings.Contains(p.Message, "redis") {
+	r = externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Name: "prod-pg", Found: true, Engine: "redis", Report: &catalogconnect.Report{Version: "8.2.1"}}})
+	if p = findCode(r.Problems, "catalog-endpoint-incompatible"); r.Executable || p == nil || !strings.HasPrefix(p.Message, "endpoint prod-pg runs redis") {
 		t.Fatalf("redis endpoint accepted for postgres: %+v", r.Problems)
 	}
 }
@@ -480,13 +480,17 @@ func TestExternalDependencyMissingExtension(t *testing.T) {
 func TestExternalDependencyUnreachableOrUnknown(t *testing.T) {
 	for name, check := range map[string]EndpointCheck{
 		"unknown":     {ID: prodPG},
-		"error":       {ID: prodPG, Found: true, Engine: "postgres", Err: "the SSH server or Docker identity changed"},
-		"unreachable": {ID: prodPG, Found: true, Engine: "postgres", Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: connection refused"}}},
+		"error":       {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Err: "the SSH server or Docker identity changed"},
+		"unreachable": {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: connection refused"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: check})
 			p := findCode(r.Problems, "catalog-endpoint-unavailable")
-			if r.Executable || p == nil || p.Name != "app" || p.Path != "resources.app.uses.postgres.external" || !strings.Contains(p.Message, prodPG) {
+			label := "endpoint prod-pg"
+			if !check.Found {
+				label = "endpoint " + prodPG
+			}
+			if r.Executable || p == nil || p.Name != "app" || p.Path != "resources.app.uses.postgres.external" || !strings.Contains(p.Message, label) {
 				t.Fatalf("endpoint accepted: %+v", r.Problems)
 			}
 			for _, want := range []string{check.Err, firstOf(check.Report)} {
@@ -523,8 +527,8 @@ func TestExternalChecksLandOnTheirTarget(t *testing.T) {
 		"  far: {kind: sample, provider: server, target: " + targetB + ", uses: {postgres: {external: " + prodPG + "}}}\n"
 	req := *recipestest.Sample().Dependencies[0].External
 	r := externalPlan(t, doc, map[string]EndpointCheck{
-		endpointKey(prodPG, targetA, req): {ID: prodPG, Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4"}},
-		endpointKey(prodPG, targetB, req): {ID: prodPG, Found: true, Engine: "postgres", Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
+		endpointKey(prodPG, targetA, req): {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4"}},
+		endpointKey(prodPG, targetB, req): {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
 	})
 	if len(r.Problems) != 1 || r.Problems[0].Code != "catalog-endpoint-unavailable" || r.Problems[0].Name != "far" {
 		t.Fatalf("problems: %+v", r.Problems)

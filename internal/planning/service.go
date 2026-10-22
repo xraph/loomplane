@@ -720,7 +720,7 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 			case err != nil:
 				found[u.id] = EndpointCheck{ID: u.id, Err: err.Error()}
 			default:
-				found[u.id] = EndpointCheck{ID: u.id, Engine: e.Engine, Found: true}
+				found[u.id] = EndpointCheck{ID: u.id, Name: e.Name, Engine: e.Engine, Found: true}
 			}
 		}
 		if found[u.id].Found {

@@ -156,8 +156,8 @@ func TestCreatePlanChecksEndpointsThroughTheTarget(t *testing.T) {
 		t.Fatalf("checks: %v", endpoints.checks)
 	}
 	want := map[string]EndpointCheck{
-		endpointKey(prodPG, targetA, req): {ID: prodPG, Engine: "postgres", Found: true, Report: &catalogconnect.Report{Version: "16.4"}},
-		endpointKey(prodPG, targetB, req): {ID: prodPG, Engine: "postgres", Found: true, Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
+		endpointKey(prodPG, targetA, req): {ID: prodPG, Name: "prod-pg", Engine: "postgres", Found: true, Report: &catalogconnect.Report{Version: "16.4"}},
+		endpointKey(prodPG, targetB, req): {ID: prodPG, Name: "prod-pg", Engine: "postgres", Found: true, Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
 		otherPG:                           {ID: otherPG},
 	}
 	if !reflect.DeepEqual(checks, want) {
@@ -174,6 +174,10 @@ func TestCreatePlanChecksEndpointsThroughTheTarget(t *testing.T) {
 			t.Fatalf("unexpected problem: %+v", p)
 		}
 		unavailable = append(unavailable, p.Name)
+		// A known endpoint is named by its name, an unknown one by its ID.
+		if want := map[string]string{"far": "endpoint prod-pg ", "lost": "endpoint " + otherPG + " "}[p.Name]; !strings.HasPrefix(p.Message, want) {
+			t.Fatalf("%s: %q doesn't start with %q", p.Name, p.Message, want)
+		}
 	}
 	slices.Sort(unavailable)
 	if !slices.Equal(unavailable, []string{"far", "lost"}) {
