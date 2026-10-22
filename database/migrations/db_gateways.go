@@ -20,6 +20,9 @@ var dbGatewaysUp = []string{
  CONSTRAINT loomplane_db_gateways_sealing_key CHECK(octet_length(sealing_public_key)=32),
  FOREIGN KEY(org_id,project_id,environment_id) REFERENCES loomplane_environments(org_id,project_id,id) ON DELETE CASCADE
  )`,
+	// A gateway names itself by id alone in its signed requests, so an id is
+	// unique across organizations, and looking one up is indexed.
+	`CREATE UNIQUE INDEX IF NOT EXISTS loomplane_db_gateways_id_unique ON loomplane_db_gateways(id)`,
 	`CREATE TABLE IF NOT EXISTS loomplane_db_gateway_routes (
  org_id TEXT NOT NULL, gateway_id TEXT NOT NULL, id TEXT NOT NULL, resource TEXT NOT NULL,
  salt BYTEA NOT NULL, state TEXT NOT NULL DEFAULT 'active', updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

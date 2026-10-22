@@ -183,6 +183,24 @@ func TestEnsureGatewayMapsConstraintErrors(t *testing.T) {
 	if _, _, err = s.EnsureGateway(ctx, taken); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("taken id: %v, want ErrInvalid", err)
 	}
+	// An id is unique across organizations too: a gateway's signed request
+	// names it without its organization.
+	for _, q := range []string{
+		`INSERT INTO loomplane_projects (id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES ('proj_2','org_2','P','p2','active','usr_2',now(),now())`,
+		`INSERT INTO loomplane_environments (id,org_id,project_id,name,kind,created_at,updated_at) VALUES ('env_3','org_2','proj_2','production','production',now(),now())`,
+	} {
+		if _, err = s.db.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	elsewhere := newGateway(t, "env_3", "main")
+	elsewhere.OrgID, elsewhere.ProjectID, elsewhere.ID = "org_2", "proj_2", first.ID
+	if _, _, err = s.EnsureGateway(ctx, elsewhere); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("id taken in another organization: %v, want ErrInvalid", err)
+	}
+	if got, gerr := s.GatewayByID(ctx, first.ID); gerr != nil || got.OrgID != "org_1" {
+		t.Fatalf("GatewayByID after the refused insert: %+v %v", got, gerr)
+	}
 	id, err := NewGatewayID()
 	if err != nil || !idGrammar.MatchString(id) || id == first.ID {
 		t.Fatalf("NewGatewayID %q: %v", id, err)

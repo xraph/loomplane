@@ -180,8 +180,8 @@ func (s *Store) EnsureGateway(ctx context.Context, g Gateway) (Gateway, bool, er
 
 // gatewayInsertError maps the insert's constraint failures onto the store's
 // errors: a missing environment (the foreign key) is ErrNotFound, and an id
-// another gateway of the organization already has (the primary key) is
-// ErrInvalid. The id grammar the CHECK constraint and idPattern enforce is
+// another gateway already has, in this organization (the primary key) or
+// any other (the unique id index), is ErrInvalid. The id grammar the CHECK constraint and idPattern enforce is
 // the plane's gateway id grammar, gatewayIDPattern in plane/run.go, since
 // the id reaches the gateway as LOOMPLANE_DBGW_ID.
 func gatewayInsertError(err error, g Gateway) error {
@@ -192,7 +192,7 @@ func gatewayInsertError(err error, g Gateway) error {
 	switch {
 	case pgErr.Code == "23503":
 		return fmt.Errorf("%w: environment %s of project %s", ErrNotFound, g.EnvironmentID, g.ProjectID)
-	case pgErr.Code == "23505" && pgErr.ConstraintName == "loomplane_db_gateways_pkey":
+	case pgErr.Code == "23505" && (pgErr.ConstraintName == "loomplane_db_gateways_pkey" || pgErr.ConstraintName == "loomplane_db_gateways_id_unique"):
 		return fmt.Errorf("%w: gateway id %s is taken", ErrInvalid, g.ID)
 	}
 	return err
