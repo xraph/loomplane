@@ -1,9 +1,9 @@
 import type {
   Build,
   Connection,
-  Endpoint,
   Graph,
   Manifest,
+  ManifestEndpoint,
   Provider,
 } from "@/client/forge/loomplane/types"
 
@@ -15,7 +15,7 @@ export type PlacementFields = {
   enabled?: boolean
   target?: string
   build?: Build
-  endpoint?: Endpoint
+  endpoint?: ManifestEndpoint
   healthPath?: string
 }
 type Entry = PlacementFields & {
@@ -124,7 +124,7 @@ export function placementSettings(
   // Manifest maps are opaque JSON in the generated contract. Normalize their
   // snake_case members at this boundary; placement writes use generated codecs.
   const raw = rawEndpoint as
-    | (Endpoint & {
+    | (ManifestEndpoint & {
         host_port?: number
         ingress_class?: string
         tls_secret?: string

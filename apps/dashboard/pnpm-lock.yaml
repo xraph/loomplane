@@ -31,11 +31,11 @@ importers:
         specifier: ^5.3.0
         version: 5.3.0
       '@forge-go/client-core':
-        specifier: 1.12.8
-        version: 1.12.8
+        specifier: 1.13.0
+        version: 1.13.0
       '@forge-go/client-react':
-        specifier: 1.12.8
-        version: 1.12.8(@forge-go/client-core@1.12.8)(react@19.3.0)
+        specifier: 1.13.0
+        version: 1.13.0(@forge-go/client-core@1.13.0)(react@19.3.0)
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.3(vite@8.3.4(@types/node@24.19.2)(jiti@2.7.0))
@@ -450,13 +450,13 @@ packages:
   '@fontsource-variable/geist@5.3.0':
     resolution: {integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA==}
 
-  '@forge-go/client-core@1.12.8':
-    resolution: {integrity: sha512-E7agZOuP8748yytE19V5at5+fvkQy9JrjI00GPAwjle8qT8FGTUimeocC3WFf5PiG6oIWCM5dZn0qI4Q2JynGQ==}
+  '@forge-go/client-core@1.13.0':
+    resolution: {integrity: sha512-rc3pJagpG5KErwpGKU3LwMld+3MCSYJIJy6drvqC5Pz5fbHH74D+z1FfL7hE3Fl5Bw6SrmVUbk3HkjOKAAIeYg==}
 
-  '@forge-go/client-react@1.12.8':
-    resolution: {integrity: sha512-adaGyaM6TLabs3gbU+NIuZjQfYDmR4fZIIPW8zaEFgWsVtbbMMjisp6a010BMeFmKEM5DEtVI8m9S+e9pnCzPQ==}
+  '@forge-go/client-react@1.13.0':
+    resolution: {integrity: sha512-EAWCeoGgUm17/PZNSfbEBUU0XfS0e+lwQ3p1iu5LdIrFFHvvfhf2ry/c6eOPeNM/Lj6PcG4mhi3QKrhf0gk06w==}
     peerDependencies:
-      '@forge-go/client-core': ^1.12.8
+      '@forge-go/client-core': ^1.13.0
       react: ^18.0.0 || ^19.0.0
 
   '@hono/node-server@2.1.4':
@@ -3897,11 +3897,11 @@ snapshots:
 
   '@fontsource-variable/geist@5.3.0': {}
 
-  '@forge-go/client-core@1.12.8': {}
+  '@forge-go/client-core@1.13.0': {}
 
-  '@forge-go/client-react@1.12.8(@forge-go/client-core@1.12.8)(react@19.3.0)':
+  '@forge-go/client-react@1.13.0(@forge-go/client-core@1.13.0)(react@19.3.0)':
     dependencies:
-      '@forge-go/client-core': 1.12.8
+      '@forge-go/client-core': 1.13.0
       react: 19.3.0
 
   '@hono/node-server@2.1.4(hono@4.13.13)':

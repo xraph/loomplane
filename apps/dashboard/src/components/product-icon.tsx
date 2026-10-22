@@ -1,16 +1,18 @@
 // A product's own mark, such as PostgreSQL's elephant or Vercel's
 // triangle, on a white tile. Anything without a mark gets a plain icon.
-import type { LucideIcon } from "lucide-react"
+import type { ComponentType, CSSProperties } from "react"
 
 import { productLogos, type ProductKey } from "@/components/product-logos"
 import { cn } from "@/lib/utils"
 
+// icon sizes a fallback that reads only its className, as mark does
+// through style for one that takes both.
 const sizes = {
-  xs: { tile: "size-5 rounded-[6px]", mark: 12 },
-  sm: { tile: "size-7 rounded-lg", mark: 15 },
-  md: { tile: "size-8 rounded-[9px]", mark: 17 },
-  lg: { tile: "size-10 rounded-[11px]", mark: 20 },
-  xl: { tile: "size-11 rounded-xl", mark: 22 },
+  xs: { tile: "size-5 rounded-[6px]", mark: 12, icon: "size-3" },
+  sm: { tile: "size-7 rounded-lg", mark: 15, icon: "size-[15px]" },
+  md: { tile: "size-8 rounded-[9px]", mark: 17, icon: "size-[17px]" },
+  lg: { tile: "size-10 rounded-[11px]", mark: 20, icon: "size-5" },
+  xl: { tile: "size-11 rounded-xl", mark: 22, icon: "size-[22px]" },
 } as const
 
 export type ProductIconSize = keyof typeof sizes
@@ -59,8 +61,15 @@ export function ProductIcon({
   className,
 }: {
   product?: ProductKey
-  /** Drawn when there's no product mark. */
-  fallback?: LucideIcon
+  /**
+   * Drawn when there's no product mark: a Lucide icon, or any icon that
+   * takes a className.
+   */
+  fallback?: ComponentType<{
+    className?: string
+    style?: CSSProperties
+    "aria-hidden"?: boolean | "true" | "false"
+  }>
   /** The accessible name; defaults to the product's name. */
   label?: string
   size?: ProductIconSize
@@ -82,6 +91,7 @@ export function ProductIcon({
       ) : Fallback ? (
         <Fallback
           aria-hidden="true"
+          className={cn("shrink-0", s.icon)}
           style={{ width: s.mark, height: s.mark }}
         />
       ) : null}

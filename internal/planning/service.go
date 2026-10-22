@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/discovery"
@@ -19,6 +21,7 @@ import (
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/manifest"
@@ -75,6 +78,22 @@ type Workflow interface {
 	Cancel(ctx context.Context, planID, reason string) error
 }
 
+// EndpointChecker checks the external endpoints composed resources
+// connect. *catalogconnect.Checker is the real one.
+type EndpointChecker interface {
+	// Endpoint returns an endpoint without its DSN, or
+	// catalogconnect.ErrNotFound.
+	Endpoint(ctx context.Context, orgID, id string) (*catalogconnect.Endpoint, error)
+	Check(ctx context.Context, orgID, endpointID string, req recipes.Requirement, dial catalogconnect.DialFunc) (*catalogconnect.Report, error)
+}
+
+// TargetDialer opens connections from a deployment target's network: over
+// a server's SSH connection, or from Loomplane for a cluster. Closing the
+// io.Closer ends what the dial goes through.
+type TargetDialer interface {
+	TargetDial(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
+}
+
 // Service is the plan API, and the planner the deployment workflow calls.
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
@@ -96,6 +115,9 @@ type Service struct {
 	now               func() time.Time
 	warn              func(msg string, err error)
 	telemetry         *telemetry.Recorder
+	kinds             *recipes.Registry
+	endpoints         EndpointChecker
+	dialer            TargetDialer
 }
 
 // Deps are what a Service needs.
@@ -121,6 +143,12 @@ type Deps struct {
 	Warn func(msg string, err error)
 	// Telemetry counts plans and decisions. It may be nil.
 	Telemetry *telemetry.Recorder
+	// Kinds are the catalog's kinds. Nil means recipes.Default().
+	Kinds *recipes.Registry
+	// Endpoints checks the external endpoints composed resources connect,
+	// through Dialer. Without either, no external endpoint can be used.
+	Endpoints EndpointChecker
+	Dialer    TargetDialer
 }
 
 // NewService returns a Service.
@@ -134,6 +162,7 @@ func NewService(d Deps) *Service {
 		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry,
+		kinds: d.Kinds, endpoints: d.Endpoints, dialer: d.Dialer,
 	}
 }
 
@@ -547,8 +576,13 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", err
 	}
 	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
+	// A composed resource on one of the Cloud's targets is placed there too.
+	composed := composedResources(rev.Manifest, plan.Environment, s.kinds)
 	var assignment *cloudprofiles.Assignment
-	if resolutionErr == nil && (needs.Explicit || needs.Fallback) && s.cloudProfiles != nil {
+	// composedLookup says only composed resources asked for the Cloud.
+	composedLookup := false
+	if resolutionErr == nil && (needs.Explicit || needs.Fallback || len(composed) > 0) && s.cloudProfiles != nil {
+		composedLookup = !needs.Explicit && !needs.Fallback
 		assignment, resolutionErr = s.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
 		// A revoked grant only matters to services that ask for the Cloud.
 		if !needs.Explicit && errors.Is(resolutionErr, cloudprofiles.ErrNotFound) {
@@ -576,16 +610,23 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if resolutionErr != nil {
 		finding := Finding{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}
 		var placementErr *CloudPlacementError
-		if errors.As(resolutionErr, &placementErr) {
+		switch {
+		case errors.As(resolutionErr, &placementErr):
 			finding = Finding{Code: placementErr.Code, Subject: ServiceSubject, Name: strings.TrimSuffix(strings.TrimPrefix(placementErr.Path, "services."), ".cloud_tags"), Path: placementErr.Path, Message: placementErr.Message}
+		case composedLookup:
+			finding = Finding{Code: "cloud-target", Subject: ResourceSubject, Name: composed[0], Path: "resources." + composed[0] + ".target", Message: resolutionErr.Error()}
 		}
 		result = &Result{Problems: []Finding{finding}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
+		placed := map[string]CloudPlacement{}
+		maps.Copy(placed, placements)
+		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
 		result = Compute(Input{
 			Catalog: plan.Catalog, Routes: routes,
-			Federation: federation, CloudPlacements: placements,
+			Federation: federation, CloudPlacements: placed,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
+			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
 		})
 	}
 	if resolutionErr == nil && poolRelocation(bindings, placements) {
@@ -639,6 +680,113 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 		})
 	}
 	return out, nil
+}
+
+// checkEndpoints checks each external endpoint the manifest's composed
+// resources connect, from each resource's target, for Compute to report
+// on. An endpoint resources share on one target, against one requirement,
+// is checked once. Without a checker and a dialer nothing is checked, so
+// no external endpoint can be used.
+func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string, m *manifest.Manifest) map[string]EndpointCheck {
+	if s.endpoints == nil || s.dialer == nil || m == nil {
+		return nil
+	}
+	kinds := s.kinds
+	if kinds == nil {
+		kinds = recipes.Default()
+	}
+	type use struct {
+		id, connection string
+		req            recipes.Requirement
+		consumer       catalogconnect.Consumer
+	}
+	uses := map[string]use{} // by endpointKey
+	for _, name := range slices.Sorted(maps.Keys(m.Resources)) {
+		r := m.Resources[name]
+		kind, ok := kinds.Kind(r.Kind)
+		if !ok || r.Target == "" || !manifest.On(r.For(environment, m.Defaults).Enabled) {
+			continue
+		}
+		for _, dep := range kind.Dependencies {
+			id := r.Uses[dep.Name].External
+			if id == "" || dep.External == nil {
+				continue
+			}
+			consumer := catalogconnect.ConsumerOf(kind, dep.Name)
+			uses[endpointKey(id, r.Target, *dep.External, consumer)] = use{id: id, connection: r.Target, req: *dep.External, consumer: consumer}
+		}
+	}
+	if len(uses) == 0 {
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(uses))
+	// Look each endpoint up once, and dial only for the ones that exist.
+	found := map[string]EndpointCheck{}
+	targets := map[string][]string{}
+	for _, key := range keys {
+		u := uses[key]
+		if _, ok := found[u.id]; !ok {
+			e, err := s.endpoints.Endpoint(ctx, orgID, u.id)
+			switch {
+			case errors.Is(err, catalogconnect.ErrNotFound):
+				found[u.id] = EndpointCheck{ID: u.id}
+			case err != nil:
+				found[u.id] = EndpointCheck{ID: u.id, Err: err.Error()}
+			default:
+				found[u.id] = EndpointCheck{ID: u.id, Name: e.Name, Engine: e.Engine, Found: true}
+			}
+		}
+		if found[u.id].Found {
+			targets[u.connection] = append(targets[u.connection], key)
+		}
+	}
+	checks := map[string]EndpointCheck{}
+	for _, connection := range slices.Sorted(maps.Keys(targets)) {
+		dial, closer, err := s.dialer.TargetDial(ctx, orgID, connection)
+		for _, key := range targets[connection] {
+			u := uses[key]
+			c := found[u.id]
+			if err != nil {
+				c.Err = "the target connection failed: " + err.Error()
+				checks[key] = c
+				continue
+			}
+			report, checkErr := s.endpoints.Check(catalogconnect.WithConsumer(ctx, u.consumer), orgID, u.id, u.req, dial)
+			switch {
+			case errors.Is(checkErr, catalogconnect.ErrNotFound):
+				c = EndpointCheck{ID: u.id}
+			case checkErr != nil:
+				c.Err = checkErr.Error()
+			default:
+				c.Report = report
+			}
+			checks[key] = c
+		}
+		if closer != nil {
+			if closeErr := closer.Close(); closeErr != nil {
+				s.warn("close the target connection an endpoint check used", closeErr)
+			}
+		}
+	}
+	// An endpoint checked once is under its ID, and one checked from more
+	// than one target, or for more than one requirement, under each key.
+	times := map[string]int{}
+	for _, u := range uses {
+		times[u.id]++
+	}
+	out := make(map[string]EndpointCheck, len(uses))
+	for _, key := range keys {
+		u := uses[key]
+		c, ok := checks[key]
+		if !ok {
+			c = found[u.id]
+		}
+		if times[u.id] == 1 {
+			key = u.id
+		}
+		out[key] = c
+	}
+	return out
 }
 
 // permanent reports whether planning can never succeed, so retrying is

@@ -36,6 +36,8 @@ func Group() *migrate.Group {
 		statements("20261105000300", "kubernetes_routes", kubernetesRoutesUp, nil),
 		statements("20261105000200", "notification_kinds", notificationKindsUp, nil),
 		statements("20261105000100", "domain_registrations", domainRegistrationsUp, domainRegistrationsDown),
+		statements("20261030000200", "catalog_proxy_sessions", catalogProxySessionsUp, catalogProxySessionsDown),
+		statements("20261030000100", "catalog_endpoints", catalogEndpointsUp, catalogEndpointsDown),
 		statements("20261029000500", "cloud_default_switch", cloudDefaultSwitchUp, cloudDefaultSwitchDown),
 		statements("20261029000400", "cloud_tags", cloudTagsUp, cloudTagsDown),
 		statements("20261028000400", "workload_attempt_safety", workloadAttemptSafetyUp, nil),

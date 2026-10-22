@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -16,8 +17,10 @@ import (
 )
 
 // runtimePod keeps workload environment, ports, resource limits and readiness
-// identical across Deployment and StatefulSet runtimes.
-func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values owned.RuntimeValues, runtimeSecret *corev1.Secret, pulls []corev1.LocalObjectReference) (*corev1.PodTemplateSpec, []corev1.ServicePort, error) {
+// identical across Deployment and StatefulSet runtimes. A workload with its
+// own ServiceAccount runs as it and gets its token; others keep the
+// namespace default, and a catalog component doesn't mount its token.
+func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values owned.RuntimeValues, runtimeSecret *corev1.Secret, pulls []corev1.LocalObjectReference, serviceAccount string) (*corev1.PodTemplateSpec, []corev1.ServicePort, error) {
 	env := []corev1.EnvVar{}
 	for _, key := range slices.Sorted(maps.Keys(spec.Env)) {
 		if _, secret := values.Env[key]; !secret {
@@ -48,12 +51,97 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		}
 		container.Resources = corev1.ResourceRequirements{Requests: limits.DeepCopy(), Limits: limits}
 	}
-	if health := labels[owned.LabelHealth]; health != "" && len(ports) > 0 {
-		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(int(ports[0].ContainerPort))}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}
+	switch protocol, health := labels[owned.LabelHealthProtocol], labels[owned.LabelHealth]; {
+	case protocol != "" && protocol != "redis":
+		return nil, nil, fmt.Errorf("unsupported readiness protocol %q", protocol)
+	case protocol == "redis" && len(ports) > 0:
+		// The kubelet has no RESP probe; an open port is the closest it gets.
+		port, err := healthPort(spec, labels)
+		if err != nil {
+			return nil, nil, err
+		}
+		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}
+	case health != "" && len(ports) > 0:
+		port, err := healthPort(spec, labels)
+		if err != nil {
+			return nil, nil, err
+		}
+		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}
 	}
-	template := &corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{owned.LabelRevision: labels[owned.LabelRevision]}}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}, ImagePullSecrets: pulls}}
+	var volumes []corev1.Volume
+	if len(values.Files) > 0 {
+		fallback := int32(owned.DefaultFileMode)
+		source := &corev1.SecretVolumeSource{SecretName: runtimeSecret.Name, DefaultMode: &fallback}
+		for i, p := range slices.Sorted(maps.Keys(values.Files)) {
+			mode := int32(values.FileMode(p)) //nolint:gosec // permission bits, at most 0o777
+			source.Items = append(source.Items, corev1.KeyToPath{Key: fileKey(i), Path: fileKey(i), Mode: &mode})
+			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: runtimeFilesVolume, MountPath: p, SubPath: fileKey(i), ReadOnly: true})
+		}
+		volumes = []corev1.Volume{{Name: runtimeFilesVolume, VolumeSource: corev1.VolumeSource{Secret: source}}}
+	}
+	template := &corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{owned.LabelRevision: labels[owned.LabelRevision]}}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}, ImagePullSecrets: pulls, Volumes: volumes}}
 	if architecture := labels[owned.LabelArchitecture]; architecture != "" {
 		template.Spec.NodeSelector = map[string]string{"kubernetes.io/arch": architecture}
 	}
+	switch {
+	case serviceAccount != "":
+		automount := true
+		template.Spec.ServiceAccountName, template.Spec.AutomountServiceAccountToken = serviceAccount, &automount
+	case labels[owned.LabelCatalogComponent] != "":
+		// A catalog component or job without Kubernetes rules has no use
+		// for the namespace default account's token.
+		automount := false
+		template.Spec.AutomountServiceAccountToken = &automount
+	}
+	if raw := labels[owned.LabelFSGroup]; raw != "" {
+		group, err := strconv.ParseInt(raw, 10, 32)
+		if err != nil || group < 1 {
+			return nil, nil, errors.New("invalid volume group")
+		}
+		// OnRootMismatch changes ownership once, not on every start.
+		policy := corev1.FSGroupChangeOnRootMismatch
+		template.Spec.SecurityContext = &corev1.PodSecurityContext{FSGroup: &group, FSGroupChangePolicy: &policy}
+	}
 	return template, servicePorts, nil
+}
+
+// runtimeFilesVolume is the volume a workload's rendered files are
+// mounted from, one subPath each.
+const runtimeFilesVolume = "runtime-files"
+
+// fileKey is the runtime Secret key of the i-th rendered file in path
+// order.
+func fileKey(i int) string { return "file-" + strconv.Itoa(i) }
+
+// runtimeSecretData is what a workload's runtime Secret holds: its secret
+// variables by name, and its rendered files as file-0, file-1 and on in
+// path order. A catalog component's variable names have no "-"; one
+// that clashes anyway is refused before anything is written.
+func runtimeSecretData(values owned.RuntimeValues) (map[string][]byte, error) {
+	data := map[string][]byte{}
+	for key, value := range values.Env {
+		data[key] = []byte(value)
+	}
+	for i, p := range slices.Sorted(maps.Keys(values.Files)) {
+		if _, clash := data[fileKey(i)]; clash {
+			return nil, fmt.Errorf("the variable %s clashes with a rendered file's key", fileKey(i))
+		}
+		data[fileKey(i)] = values.Files[p]
+	}
+	return data, nil
+}
+
+// healthPort is the container port readiness probes: the one LabelHealthPort
+// names, which the workload must declare, otherwise its first port.
+func healthPort(spec cpprovider.ServiceSpec, labels map[string]string) (int, error) {
+	declared := labels[owned.LabelHealthPort]
+	if declared == "" {
+		return spec.Ports[0].Container, nil
+	}
+	for _, port := range spec.Ports {
+		if strconv.Itoa(port.Container) == declared {
+			return port.Container, nil
+		}
+	}
+	return 0, errors.New("the readiness port isn't one of the workload's ports")
 }

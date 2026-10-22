@@ -155,6 +155,15 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	if !routes.Ready {
 		out.Details["route_prerequisites"] = "missing: " + strings.Join(routes.Missing, ", ")
 	}
+	if err := c.checkJobPermissions(ctx, out); err != nil {
+		return nil, err
+	}
+	if err := c.checkServiceProxyPermissions(ctx, out); err != nil {
+		return nil, err
+	}
+	if err := c.checkAccessPermissions(ctx, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

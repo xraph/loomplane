@@ -399,3 +399,75 @@ func TestRunnerCloudDefaultRevalidatesBeforeStart(t *testing.T) {
 		})
 	}
 }
+
+// componentAdoptionRunner has one Keep that records a composed component's
+// reviewed Cloud placement on its running binding.
+func componentAdoptionRunner(t *testing.T) (*Runner, *planning.Plan, *fakePlans, *recorder) {
+	t.Helper()
+	plan := webAndAPI()
+	c := &connections.Connection{ID: "conn_s", Cloud: "server", Status: connections.StatusReady, Details: map[string]string{"host": "edge.example.com", "user": "deploy", "docker_socket": "/var/run/docker.sock", "docker_id": "daemon-a"}}
+	pin := &planning.CloudPlacement{GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, AssignmentRevision: 3, TargetID: "target", TargetRevision: 4, TargetName: "edge-host", Provider: "server", ConnectionID: c.ID, AccountIdentity: connections.AccountIdentity(c.Cloud, c.Account, c.Details), RegionSource: "default"}
+	cfg := &planning.ResourceConfig{Provider: "server", Target: c.ID, TargetSettings: planning.ReviewedConnectionSettings(c.Cloud, c.Details), Kind: "sample", CloudPlacement: pin}
+	plan.Actions = []planning.Action{{ID: "resource:edge--api", Op: planning.Keep, Subject: planning.ResourceSubject, Name: "edge--api", Provider: "server", ConnectionID: c.ID, Engine: "loomplane", Step: 1, Resource: cfg, AdoptCloudPlacement: true}}
+	exec := &recorder{}
+	r, _, plans := newRunner(t, plan, exec, nil)
+	r.providers = providers.Registry()
+	r.credentials = targetCredentials{c.ID: c}
+	r.cloudProfiles = &cloudResolver{assignment: &cloudprofiles.Assignment{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, Revision: 3, Targets: []cloudprofiles.Target{{ID: "target", OrgID: plan.OrgID, ProjectID: plan.ProjectID, CloudID: "cloud", Name: "edge-host", Provider: "server", ConnectionID: c.ID, Revision: 4}}}}
+	applied := *cfg
+	applied.CloudPlacement = nil
+	raw, err := json.Marshal(applied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &planning.Binding{ID: "existing", OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Subject: planning.ResourceSubject, Name: "edge--api", Provider: "server", ConnectionID: c.ID, ExternalID: "container-a", Revision: "running", Config: raw}
+	plans.bindings["resource:edge--api"] = b
+	plan.Actions[0].CloudAdoption = planning.ReviewCloudAdoption(b)
+	return r, plan, plans, exec
+}
+
+func TestRunnerComposedComponentAdoptsItsCloudPlacement(t *testing.T) {
+	r, plan, plans, exec := componentAdoptionRunner(t)
+	a := plan.Actions[0]
+	id, steps, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+	if err != nil || len(steps) != 1 {
+		t.Fatalf("adoption step omitted: %v %v", steps, err)
+	}
+	if err = r.Run(t.Context(), plan.OrgID, id, a.ID, nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	b := plans.bindings[a.ID]
+	var recorded planning.ResourceConfig
+	if err = json.Unmarshal(b.Config, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if len(exec.jobs) != 0 || b.ExternalID != "container-a" || b.Revision != "running" || recorded.CloudPlacement == nil || *recorded.CloudPlacement != *a.Resource.CloudPlacement {
+		t.Fatalf("adoption redeployed or didn't record the placement: %+v, provider calls=%d", b, len(exec.jobs))
+	}
+}
+
+func TestRunnerComposedComponentAdoptionRejectsAChangedBinding(t *testing.T) {
+	r, plan, plans, exec := componentAdoptionRunner(t)
+	a := plan.Actions[0]
+	b := plans.bindings[a.ID]
+	var applied planning.ResourceConfig
+	if err := json.Unmarshal(b.Config, &applied); err != nil {
+		t.Fatal(err)
+	}
+	applied.Version = "2"
+	raw, err := json.Marshal(applied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Config = raw
+	id, _, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Run(t.Context(), plan.OrgID, id, a.ID, nil, func([]byte) error { return nil }); err == nil {
+		t.Fatal("changed component binding adopted")
+	}
+	if string(plans.bindings[a.ID].Config) != string(raw) || len(exec.jobs) != 0 {
+		t.Fatal("rejected adoption changed the binding or the provider")
+	}
+}

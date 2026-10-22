@@ -20,7 +20,10 @@ type appliedVariables struct {
 	Secrets        map[string]bool   `json:"secrets"`
 }
 
-func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *planning.Action) error {
+// captureAppliedVariables pins what a service is deployed with. resources
+// are the environment's resource bindings by name, which a per-consumer
+// output is issued from.
+func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *planning.Action, resources map[string]*planning.Binding) error {
 	if a.Service == nil || a.Service.Gateway != nil || r.resources == nil {
 		return nil
 	}
@@ -70,7 +73,20 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 			if _, overridden := values[link.Key]; overridden {
 				continue
 			}
-			value, e := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			if _, consumer := consumerOutput(link); consumer {
+				// Issued again on every release, and kept only here.
+				value, e := r.bindConsumer(ctx, d, a.Name, link, resources)
+				if e != nil {
+					return e
+				}
+				resourceValues[link.Key] = value
+				continue
+			}
+			field, e := linkField(link)
+			if e != nil {
+				return e
+			}
+			value, e := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, field))
 			if e != nil {
 				return fmt.Errorf("capture applied resource variable: %w", e)
 			}

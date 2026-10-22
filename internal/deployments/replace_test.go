@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"path"
@@ -59,6 +60,8 @@ type placed struct {
 	mu      sync.Mutex
 	applies []*Job
 	removes []*Job
+	// warn is a warning each Remove gives its step.
+	warn error
 }
 
 func (p *placed) Apply(ctx context.Context, job *Job) (*Outcome, error) {
@@ -100,6 +103,9 @@ func (p *placed) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 		p.onRemove()
 	}
 	p.log.add("remove " + p.provider + " " + b.ExternalID)
+	if p.warn != nil {
+		job.Warn(p.warn)
+	}
 	if cerr := job.Checkpoint([]byte("rm-" + p.provider)); cerr != nil {
 		return cerr
 	}
@@ -626,5 +632,80 @@ func TestElsewhereError_saysWhatWasRecorded(t *testing.T) {
 	e.ConnectionID = ""
 	if msg := e.Error(); !strings.Contains(msg, "Choose the connection that deployed it") || strings.Contains(msg, "recorded") {
 		t.Fatalf("unreadable key: %s", msg)
+	}
+}
+
+// A warning an executor gives while it removes what a delete names lands
+// on the step, which still succeeds.
+func TestRunner_aRemovalsWarningLandsOnItsStep(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-run", log: log, warn: errors.New("the admin sessions open on api couldn't be ended")}
+	del := apiMoves()
+	del.Actions[0].Op, del.Actions[0].Service, del.Actions[0].Provider = planning.Delete, nil, "cloud-run"
+	r, store, plans, _ := moveRunner(t, del, onCloudRun(), map[string]Executor{"cloud-run": exec})
+	id, err := runAll(t, r, del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	s := d.Step("service:api")
+	if d.Status != StatusSucceeded || !slices.Equal(s.Warnings, []string{"the admin sessions open on api couldn't be ended"}) {
+		t.Fatalf("deleting: %s: %s, warnings %q", d.Status, d.Error, s.Warnings)
+	}
+	if _, ok := plans.bindings["service:api"]; ok {
+		t.Fatal("the binding is still there")
+	}
+}
+
+// Deleting a composed resource whose connection is gone can't reach its
+// components, but still ends the admin sessions open on it, and a failure
+// to only warns.
+func TestRunner_aDeleteWhoseConnectionIsGoneEndsAComposedResourcesSessions(t *testing.T) {
+	for _, revokeErr := range []error{nil, errors.New("the session store is down")} {
+		var revoked []string
+		exec := &OwnedTarget{Cloud: connections.Server, CompositionRemoved: func(_ context.Context, orgID, environmentID, resource string) error {
+			revoked = append(revoked, orgID+"/"+environmentID+"/"+resource)
+			return revokeErr
+		}}
+		cfg, err := json.Marshal(planning.ResourceConfig{Provider: connections.Server, Target: "conn_old", Kind: "sample", Version: "1",
+			Composition: &planning.CompositionConfig{Kind: "sample", Version: "1", Revision: "1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		was := &planning.Binding{ID: "bind_app", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ResourceSubject,
+			Name: "app", Provider: connections.Server, ExternalID: "catalog/app", ConnectionID: "conn_old", Config: cfg}
+		plan := webAndAPI()
+		plan.Actions = []planning.Action{{ID: "resource:app", Op: planning.Delete, Subject: planning.ResourceSubject, Name: "app", Provider: connections.Server, Step: 1}}
+		r, store, plans, _ := moveRunner(t, plan, was, map[string]Executor{connections.Server: exec})
+		r.credentials = goneCredentials{gone: map[string]bool{"conn_old": true}}
+
+		ctx := t.Context()
+		id, _, err := r.Start(ctx, plan.OrgID, plan.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.FetchSource(ctx, plan.OrgID, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(ctx, plan.OrgID, id, "resource:app", nil, func([]byte) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Finish(ctx, plan.OrgID, id, ""); err != nil {
+			t.Fatal(err)
+		}
+		d, _ := store.GetDeployment(ctx, "org_1", id)
+		s := d.Step("resource:app")
+		if !slices.Equal(revoked, []string{"org_1/env_1/app"}) {
+			t.Fatalf("revoked %q", revoked)
+		}
+		warned := slices.ContainsFunc(s.Warnings, func(w string) bool {
+			return strings.Contains(w, "the admin sessions open on app couldn't be ended") && strings.Contains(w, "the session store is down")
+		})
+		if d.Status != StatusSucceeded || warned != (revokeErr != nil) {
+			t.Fatalf("deployment %s: %s, warnings %q", d.Status, d.Error, s.Warnings)
+		}
+		if _, ok := plans.bindings["resource:app"]; ok {
+			t.Fatal("the binding is still there")
+		}
 	}
 }

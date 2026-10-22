@@ -117,11 +117,43 @@ type Job struct {
 	// Attach are the resources a service needs, which some providers have
 	// to wire to it: a Cloud SQL instance Cloud Run mounts.
 	Attach []*planning.Binding
+
+	// files are a catalog component's rendered files, which an owned
+	// target keeps in Vault beside its runtime values.
+	files []runtimeFile
+	// replacing is a Remove of what an action ran as before it moved.
+	// What's kept under the action's name is the replacement's then.
+	replacing bool
+	// warn adds a warning to the step, or is nil.
+	warn func(error)
+}
+
+// Warn adds a warning to the step an executor runs in, for something that
+// went wrong without failing it. A step that can't take warnings drops
+// it.
+func (j *Job) Warn(err error) {
+	if j.warn != nil && err != nil {
+		j.warn(err)
+	}
 }
 
 // ResourceURL is the field a resource executor keeps its address under,
 // which the services that need it get.
 const ResourceURL = "url"
+
+// linkField is the field of a resource a service's variable reads: its
+// address, or one of a composed resource's outputs, which it keeps as
+// "output:<name>". A "consumer:<name>" output isn't kept: it's issued to
+// the service as its variables are captured.
+func linkField(link planning.EnvLink) (string, error) {
+	switch {
+	case link.Field == "":
+		return ResourceURL, nil
+	case link.Field == ResourceURL, strings.HasPrefix(link.Field, "output:") && len(link.Field) > len("output:"):
+		return link.Field, nil
+	}
+	return "", fmt.Errorf("%s reads %s of %s, which this Loomplane can't give it yet", link.Key, link.Field, link.From)
+}
 
 // Outcome is what an executor did.
 type Outcome struct {
@@ -183,6 +215,8 @@ type Runner struct {
 	sources       Sources
 	providers     *provider.Registry
 	executors     map[string]Executor
+	catalogHooks  map[string]CatalogHooks
+	observers     []ReleaseObserver
 	resources     ResourceSecrets
 	telemetry     *telemetry.Recorder
 	logs          LogSink
@@ -212,6 +246,32 @@ type RunnerDeps struct {
 	Resources ResourceSecrets
 	// Telemetry records how deployments go. It may be nil.
 	Telemetry *telemetry.Recorder
+	// CatalogHooks are composed catalog kinds' hooks, by kind: the same
+	// ones the owned targets run.
+	CatalogHooks map[string]CatalogHooks
+	// Observers hear of each service binding a deployment writes or
+	// deletes. What they fail at only warns.
+	Observers []ReleaseObserver
+}
+
+// Release is a service binding a deployment step wrote, or deleted
+// (Removed), as a ReleaseObserver hears of it.
+type Release struct {
+	OrgID, ProjectID, EnvironmentID string
+	Binding                         *planning.Binding
+	Removed                         bool
+}
+
+// ReleaseObserver hears of each service binding a deployment step writes
+// or deletes, once that's done. Each call has 10 seconds; an error never
+// fails the step, and lands on it as a warning naming the service.
+// Resource bindings aren't observed, and neither are writes that only
+// record metadata about what's already deployed: adopting a Cloud
+// placement, or recording that another connection deployed it (see
+// Runner.deployedElsewhere). Each observer gets its own copy of the
+// binding.
+type ReleaseObserver interface {
+	Released(ctx context.Context, r Release) error
 }
 
 // NewRunner returns a Runner.
@@ -219,7 +279,7 @@ func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
 		cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -596,7 +656,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
 	}
-	if captureErr := r.captureAppliedVariables(ctx, d, &a); captureErr != nil {
+	if captureErr := r.captureAppliedVariables(ctx, d, &a, resources); captureErr != nil {
 		return captureErr
 	}
 	pinAppliedSource(d, plan, &a)
@@ -649,7 +709,13 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	rc := readReplaceCheckpoint(resume)
 	job.Resume = rc.Apply
 	if deleting {
-		return r.deleteBound(ctx, job, exec, current, unreachable, step, rc, heartbeat)
+		if derr := r.deleteBound(ctx, job, exec, current, unreachable, step, rc, heartbeat); derr != nil {
+			return derr
+		}
+		// What the service was issued goes with it, once it's gone.
+		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, nil, resources)...)
+		step.Warnings = append(step.Warnings, r.released(ctx, d, current, true)...)
+		return nil
 	}
 	// A failure removing what an earlier move left only warns: the plan
 	// keeps warning about it, and a permanent one, such as a revoked
@@ -788,6 +854,11 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
+	// A service that no longer needs a per-consumer output gives it back.
+	if a.Service != nil {
+		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, a.Service, resources)...)
+	}
+	step.Warnings = append(step.Warnings, r.released(ctx, d, bound, false)...)
 	if plan.CloudSyncID != "" || len(a.Routes) > 0 {
 		return nil
 	}
@@ -905,6 +976,12 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		}
 		warn(fmt.Errorf("the connection that deployed %s has been removed, so Loomplane can't reach it to delete it, and stops tracking it. If %s still runs, delete it yourself, in the account that connection reached",
 			a.Name, locate(exec, bound)))
+		// What Loomplane itself keeps open on it still ends.
+		if remover, ok := exec.(unreachableRemover); ok {
+			job.warn = warn
+			remover.removedUnreachable(ctx, job, bound)
+			job.warn = nil
+		}
 		if err := job.Forget(ctx); err != nil {
 			return err
 		}
@@ -917,7 +994,10 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		if fenceErr != nil {
 			return fenceErr
 		}
-		if err := exec.Remove(removalCtx, job, bound); err != nil {
+		job.warn = warn
+		err := exec.Remove(removalCtx, job, bound)
+		job.warn = nil
+		if err != nil {
 			return err
 		}
 	}
@@ -926,6 +1006,12 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 	}
 	step.Warnings = append(step.Warnings, warnings...)
 	return nil
+}
+
+// unreachableRemover is an executor with something of its own to end when
+// what it deployed is deleted through a connection that's gone.
+type unreachableRemover interface {
+	removedUnreachable(ctx context.Context, job *Job, b *planning.Binding)
 }
 
 // removeReplaced removes what an action ran as before it moved, which its
@@ -1058,6 +1144,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	// What's kept under the action's name, such as a database's address,
 	// is the replacement's now.
 	gone.Forget = func(context.Context) error { return nil }
+	gone.replacing = true
 	job.Progress(StepDeploying, "Removing the one it replaces on "+placement(old.Provider, old.Region))
 	if authErr := r.authorizeCloudRemoval(ctx, job); authErr != nil {
 		return false, authErr
@@ -1152,7 +1239,14 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			if resources[link.From] == nil || r.resources == nil {
 				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
 			}
-			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			if _, consumer := consumerOutput(link); consumer {
+				return nil, nil, fmt.Errorf("%s's %s for %s is issued when its variables are captured, and none was", link.From, link.Field, a.Name)
+			}
+			field, err := linkField(link)
+			if err != nil {
+				return nil, nil, err
+			}
+			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, field))
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s needs %s: %w", a.Name, link.From, err)
 			}
@@ -1201,6 +1295,45 @@ func (r *Runner) verify(ctx context.Context, url string) error {
 		case <-time.After(3 * time.Second):
 		}
 	}
+}
+
+// releaseObserverTimeout is how long each release observer has.
+const releaseObserverTimeout = 10 * time.Second
+
+// released tells the release observers of a service binding a step wrote,
+// or deleted (removed). It returns what they failed at as warnings naming
+// the service: the binding has changed already, so failing the step
+// wouldn't undo it. A resource binding isn't observed.
+func (r *Runner) released(ctx context.Context, d *Deployment, b *planning.Binding, removed bool) []string {
+	if b == nil || b.Subject != planning.ServiceSubject {
+		return nil
+	}
+	var warnings []string
+	for _, observer := range r.observers {
+		observed, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseObserverTimeout)
+		err := observer.Released(observed, Release{OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Binding: cloneBinding(b), Removed: removed})
+		cancel()
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", b.Name, err))
+		}
+	}
+	return warnings
+}
+
+// cloneBinding is a copy of b that shares nothing with it, so an observer
+// can't change what the step holds.
+func cloneBinding(b *planning.Binding) *planning.Binding {
+	c := *b
+	c.Config = slices.Clone(b.Config)
+	if b.ObservedAt != nil {
+		at := *b.ObservedAt
+		c.ObservedAt = &at
+	}
+	c.Replaced = nil
+	for _, old := range b.Replaced {
+		c.Replaced = append(c.Replaced, *cloneBinding(&old))
+	}
+	return &c
 }
 
 // bind records what runs an action now, with what it ran as before it

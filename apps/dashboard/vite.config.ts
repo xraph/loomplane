@@ -36,6 +36,8 @@ export default defineConfig({
       "/openapi.json": api,
       "/asyncapi.json": api,
       "/_/": api,
+      // A catalog service's admin, through Loomplane's sandboxed proxy.
+      "/catalog-admin/": { target: api, ws: true },
     },
   },
   build: {

@@ -110,7 +110,9 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			blocked(b.Name, "The destination cannot preserve the applied scale and size settings.")
 		}
 		cfg.Provider, cfg.Region, cfg.Execution = prov.Name, region, runs.Execution
-		cfg.CloudPlacement = &CloudPlacement{Default: pin.Default, GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: pin.RegionSource}
+		placed := targetPlacement(assignment, t, identity, region, pin.RegionSource)
+		placed.Default = pin.Default
+		cfg.CloudPlacement = &placed
 		if placement, found := pools[b.Name]; found && t.PoolID != "" {
 			cfg.CloudPlacement = &placement
 		}

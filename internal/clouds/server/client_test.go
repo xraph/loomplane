@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -81,15 +82,32 @@ func sshFixture(t *testing.T) (*Config, ssh.Signer) {
 				defer ss.Close()
 				go ssh.DiscardRequests(requests)
 				for channel := range channels {
-					var payload struct {
-						Path, Reserved string
-						Reserved2      uint32
+					network, address := "unix", ""
+					if channel.ChannelType() == "direct-tcpip" {
+						// A TCP forward to an address the server can reach.
+						var forward struct {
+							Host       string
+							Port       uint32
+							OriginHost string
+							OriginPort uint32
+						}
+						if ssh.Unmarshal(channel.ExtraData(), &forward) != nil {
+							_ = channel.Reject(ssh.Prohibited, "forward refused")
+							continue
+						}
+						network, address = "tcp", net.JoinHostPort(forward.Host, strconv.Itoa(int(forward.Port)))
+					} else {
+						var payload struct {
+							Path, Reserved string
+							Reserved2      uint32
+						}
+						if channel.ChannelType() != "direct-streamlocal@openssh.com" || ssh.Unmarshal(channel.ExtraData(), &payload) != nil || payload.Path != socket {
+							_ = channel.Reject(ssh.Prohibited, "socket refused")
+							continue
+						}
+						address = payload.Path
 					}
-					if channel.ChannelType() != "direct-streamlocal@openssh.com" || ssh.Unmarshal(channel.ExtraData(), &payload) != nil || payload.Path != socket {
-						_ = channel.Reject(ssh.Prohibited, "socket refused")
-						continue
-					}
-					remote, dialErr := (&net.Dialer{}).DialContext(t.Context(), "unix", payload.Path)
+					remote, dialErr := (&net.Dialer{}).DialContext(t.Context(), network, address)
 					if dialErr != nil {
 						_ = channel.Reject(ssh.ConnectionFailed, "socket unavailable")
 						continue
@@ -159,5 +177,45 @@ func TestClient_canceledDial(t *testing.T) {
 			_ = c.Close()
 		}
 		t.Fatalf("canceled dial: %v", err)
+	}
+}
+
+func TestClient_dialsTCPThroughPinnedSSH(t *testing.T) {
+	cfg, _ := sshFixture(t)
+	upstream, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		conn, acceptErr := upstream.Accept()
+		if acceptErr != nil {
+			return
+		}
+		_, _ = io.WriteString(conn, "seen from the server")
+		_ = conn.Close()
+	}()
+	c, err := Dial(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	conn, err := c.DialContext(t.Context(), "tcp", upstream.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(conn)
+	_ = conn.Close()
+	if err != nil || string(got) != "seen from the server" {
+		t.Fatalf("read %q: %v", got, err)
+	}
+	// Only TCP: a Unix socket on the server, such as Docker's, isn't an
+	// endpoint.
+	if conn, err := c.DialContext(t.Context(), "unix", cfg.Socket); err == nil {
+		_ = conn.Close()
+		t.Fatal("dialed a Unix socket on the server")
+	}
+	if _, err := (&Client{}).DialContext(t.Context(), "tcp", upstream.Addr().String()); err == nil {
+		t.Fatal("a client that isn't connected dialed")
 	}
 }

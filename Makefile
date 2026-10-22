@@ -1,5 +1,5 @@
 .PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent \
-	image test test-go test-dashboard test-integration acceptance acceptance-infrastructure lint lint-go lint-dashboard \
+	image test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	gen-client check-client setup clean
 
 .DEFAULT_GOAL := help
@@ -77,6 +77,10 @@ acceptance: ## Deploy to real clouds and take it down again; costs money (docs/a
 acceptance-infrastructure: ## Verify SSH/Docker and kind with isolated targets, then remove them
 	python3 -m unittest discover -s tests/acceptance/infrastructure -p 'test_*.py'
 	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' python3 tests/acceptance/infrastructure/run.py
+
+acceptance-catalog: ## Deploy a test-only composed catalog kind to isolated SSH/Docker and kind targets, then remove them
+	python3 -m unittest discover -s tests/acceptance/infrastructure -p 'test_*.py'
+	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' python3 tests/acceptance/infrastructure/run.py --suite catalog
 
 lint: lint-go lint-dashboard ## Lint Go and the dashboard
 

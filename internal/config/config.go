@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -210,6 +211,10 @@ type PlanningConfig struct {
 	// ApprovalWindow is how long a plan waits for someone to approve or
 	// reject it. After that it expires, and you plan again.
 	ApprovalWindow time.Duration
+	// EndpointDeniedCIDRs are ranges an endpoint check from Loomplane's
+	// own network never connects to, at any port, besides its own host
+	// and the services it depends on. A bare address is one host.
+	EndpointDeniedCIDRs []netip.Prefix
 }
 
 // DriftConfig schedules the drift check.
@@ -386,6 +391,7 @@ func FromSource(src Getter) (Config, error) {
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
+	r.prefixes(&c.Planning.EndpointDeniedCIDRs, "planning.endpoint_denied_cidrs")
 	r.str(&c.Storage.URL, "storage.url")
 	r.str(&c.Storage.ArtifactBucket, "storage.artifact_bucket")
 	r.str(&c.Storage.BackupURL, "storage.backup_url")
@@ -585,6 +591,29 @@ func (r *reader) names(dst *[]string, key string) {
 		if s = strings.TrimSpace(s); s != "" {
 			*dst = append(*dst, s)
 		}
+	}
+}
+
+// prefixes reads a list of CIDR ranges, as a list or a comma-separated
+// string. A bare address is a range of one.
+func (r *reader) prefixes(dst *[]netip.Prefix, key string) {
+	var items []string
+	before := len(r.errs)
+	r.names(&items, key)
+	if len(r.errs) > before {
+		return
+	}
+	for _, item := range items {
+		p, err := netip.ParsePrefix(item)
+		if err != nil {
+			addr, aerr := netip.ParseAddr(item)
+			if aerr != nil {
+				r.fail(key, "a list of CIDR ranges, such as 10.20.0.0/16", item)
+				continue
+			}
+			p = netip.PrefixFrom(addr.WithZone(""), addr.BitLen())
+		}
+		*dst = append(*dst, p.Masked())
 	}
 }
 

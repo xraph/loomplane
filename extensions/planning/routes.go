@@ -9,6 +9,8 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/activity"
+	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/catalogproxy"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/page"
@@ -243,10 +245,43 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithResponseSchema(http.StatusOK, "Activity", activity.ActivitySummary{}),
 		}},
 	}
+	catalogRoutes := []route{
+		{http.MethodGet, "/catalog/kinds", e.listCatalogKinds, []forge.RouteOption{
+			forge.WithName("catalogKinds.list"),
+			forge.WithSummary("The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run"),
+			forge.WithResponseSchema(http.StatusOK, "Kinds", CatalogKindList{}),
+		}},
+		{http.MethodGet, "/catalog/endpoints", e.listCatalogEndpoints, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.list"),
+			forge.WithSummary("The external databases and caches a catalog service can connect to, without their DSNs"),
+			forge.WithResponseSchema(http.StatusOK, "Endpoints", EndpointList{}),
+		}},
+		{http.MethodPost, "/catalog/endpoints", e.createCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.create"),
+			forge.WithSummary("Register an external Postgres or Redis; its DSN is kept in Vault and never returned"),
+			forge.WithRequestSchema(catalogconnect.CreateInput{}),
+			forge.WithResponseSchema(http.StatusCreated, "The endpoint", catalogconnect.Endpoint{}),
+		}},
+		{http.MethodPost, "/catalog/endpoints/checks", e.checkCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.check"),
+			forge.WithSummary("Check a Postgres or Redis DSN from a target against what a kind's dependency needs, before storing it; the DSN isn't stored or returned"),
+			forge.WithRequestSchema(catalogconnect.CheckInput{}),
+			forge.WithResponseSchema(http.StatusOK, "What the check found", catalogconnect.CheckResult{}),
+		}},
+		{http.MethodDelete, "/catalog/endpoints/:id", e.deleteCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.delete"),
+			forge.WithSummary("Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes"),
+		}},
+		{http.MethodPost, "/projects/:projectId/environments/:environmentId/catalog/:resource/admin-sessions", e.openCatalogAdmin, []forge.RouteOption{
+			forge.WithName("catalogAdmin.open"),
+			forge.WithSummary("Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure"),
+			forge.WithResponseSchema(http.StatusCreated, "The session: open its URL on this origin", catalogproxy.Session{}),
+		}},
+	}
 	groups := []struct {
 		tag    string
 		routes []route
-	}{{"Manifests", manifestRoutes}, {"Plans", planRoutes}, {"Activity", activityRoutes}}
+	}{{"Manifests", manifestRoutes}, {"Plans", planRoutes}, {"Activity", activityRoutes}, {"Catalog", catalogRoutes}}
 	for _, grp := range groups {
 		g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags(grp.tag))
 		for _, rt := range grp.routes {
@@ -258,6 +293,8 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 				err = g.POST(rt.path, rt.handler, rt.opts...)
 			case http.MethodPut:
 				err = g.PUT(rt.path, rt.handler, rt.opts...)
+			case http.MethodDelete:
+				err = g.DELETE(rt.path, rt.handler, rt.opts...)
 			}
 			if err != nil {
 				return err
