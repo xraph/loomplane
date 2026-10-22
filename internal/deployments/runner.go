@@ -1200,7 +1200,7 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			if resources[link.From] == nil || r.resources == nil {
 				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
 			}
-			addr, extra, err := r.resourceAddress(ctx, d, a.Name, services, link.From, link.Key)
+			addr, extra, err := r.resourceAddress(ctx, d, a.Name, services, link)
 			if err != nil {
 				return nil, nil, err
 			}

@@ -233,11 +233,13 @@ type EnvLink struct {
 	// they share a network: http://name:port through ECS Service Connect.
 	// Empty means its public URL, known once it's deployed.
 	Address string `json:"address,omitempty"`
-	// Gateway says the service reaches the resource through the database
-	// gateway, so its variables hold the gateway's address. It's part of
-	// the configuration, so a resource opting in or out redeploys what
-	// needs it.
-	Gateway bool `json:"gateway,omitempty"`
+	// Gateway is set when the service reaches the resource through the
+	// database gateway, so its variables hold the gateway's address. It's
+	// the suffix the gateway names the resource's host under,
+	// <region>.db.<domain>, and empty for a direct link. It's part of the
+	// configuration, so a resource opting in or out, or the gateway moving
+	// to another region or DNS zone, redeploys what needs it.
+	Gateway string `json:"gateway,omitempty"`
 }
 
 // ResourceConfig is everything a resource is provisioned from.

@@ -437,7 +437,7 @@ func TestDatabaseGatewayOptInAndOutRedeploysApps(t *testing.T) {
 	if len(direct.Problems) > 0 {
 		t.Fatalf("problems: %+v", direct.Problems)
 	}
-	if link := action(t, direct, "service:api").Service.Env[0]; link.Gateway {
+	if link := action(t, direct, "service:api").Service.Env[0]; link.Gateway != "" {
 		t.Fatalf("a direct link is marked as through the gateway: %+v", link)
 	}
 	// A link that isn't through the gateway is written as it always was,
@@ -451,7 +451,7 @@ func TestDatabaseGatewayOptInAndOutRedeploysApps(t *testing.T) {
 
 	in := dbgwCompute(t, optedIn, exampleZone, deployed(t, direct)...)
 	api := action(t, in, "service:api")
-	if api.Op != Update || !api.Service.Env[0].Gateway || !slices.Contains(api.DependsOn, "service:db-gateway") {
+	if api.Op != Update || api.Service.Env[0].Gateway != "us-east1.db.example.com" || !slices.Contains(api.DependsOn, "service:db-gateway") {
 		t.Fatalf("opting in left api %s (%s) with %+v", api.Op, api.Reason, api.Service.Env)
 	}
 	if again := dbgwCompute(t, optedIn, exampleZone, deployed(t, in)...); action(t, again, "service:api").Op != Keep {
@@ -459,7 +459,7 @@ func TestDatabaseGatewayOptInAndOutRedeploysApps(t *testing.T) {
 	}
 
 	out := dbgwCompute(t, dbgwSameCloud, exampleZone, deployed(t, in)...)
-	if api := action(t, out, "service:api"); api.Op != Update || api.Service.Env[0].Gateway {
+	if api := action(t, out, "service:api"); api.Op != Update || api.Service.Env[0].Gateway != "" {
 		t.Fatalf("opting out left api %s with %+v", api.Op, api.Service.Env)
 	}
 	if gw := action(t, out, "service:db-gateway"); gw.Op != Delete {
@@ -476,9 +476,10 @@ func TestDatabaseGatewayNewAddressRedeploysApps(t *testing.T) {
 	if gw := action(t, moved, "service:db-gateway"); gw.Op != Replace {
 		t.Fatalf("db-gateway is %s", gw.Op)
 	}
+	// Its hosts move with it, so the links change too.
 	for _, name := range []string{"api", "web"} {
-		if a := action(t, moved, "service:"+name); a.Op != Update || !strings.Contains(a.Reason, "db-gateway") {
-			t.Fatalf("%s is %s (%s) while the gateway moves", name, a.Op, a.Reason)
+		if a := action(t, moved, "service:"+name); a.Op != Update || a.Service.Env[0].Gateway != "us-east4.db.example.com" {
+			t.Fatalf("%s is %s (%s) with %+v while the gateway moves", name, a.Op, a.Reason, a.Service.Env)
 		}
 	}
 
@@ -492,8 +493,51 @@ func TestDatabaseGatewayNewAddressRedeploysApps(t *testing.T) {
 	if gw := action(t, again, "service:db-gateway"); gw.Op != Create {
 		t.Fatalf("db-gateway is %s", gw.Op)
 	}
-	if a := action(t, again, "service:api"); a.Op != Update {
-		t.Fatalf("api is %s while the gateway is created again", a.Op)
+	// Its hosts keep their names, so only the new address redeploys api.
+	if a := action(t, again, "service:api"); a.Op != Update || !strings.Contains(a.Reason, "db-gateway") {
+		t.Fatalf("api is %s (%s) while the gateway is created again", a.Op, a.Reason)
+	}
+}
+
+// The links record the suffix the gateway names hosts under, so a new DNS
+// zone, which renames every host and leaves the gateway's own address
+// alone, still redeploys each app at its new host. A held app can't
+// follow, so it's a problem.
+func TestDatabaseGatewayZoneChangeRedeploysApps(t *testing.T) {
+	otherZone := []cloudinfra.ProjectZone{{ID: "zone_b", Name: "other.org", Verified: true}}
+	first := dbgwCompute(t, dbgwManifest, exampleZone)
+	for _, name := range []string{"api", "web"} {
+		if link := action(t, first, "service:"+name).Service.Env[0]; link.Gateway != "us-east1.db.example.com" {
+			t.Fatalf("%s's link %+v doesn't record the gateway's suffix", name, link)
+		}
+	}
+	live := deployed(t, first)
+
+	moved := dbgwCompute(t, dbgwManifest, otherZone, live...)
+	if len(moved.Problems) > 0 {
+		t.Fatalf("problems: %+v", moved.Problems)
+	}
+	if gw := action(t, moved, "service:db-gateway"); gw.Op != Update || gw.Service.DatabaseGateway.Suffix != "us-east1.db.other.org" {
+		t.Fatalf("db-gateway is %s with %+v", gw.Op, gw.Service.DatabaseGateway)
+	}
+	for _, name := range []string{"api", "web"} {
+		a := action(t, moved, "service:"+name)
+		if a.Op != Update || a.Service.Env[0].Gateway != "us-east1.db.other.org" || !slices.Contains(a.DependsOn, "service:db-gateway") {
+			t.Fatalf("%s is %s (%s) with %+v after the zone changed", name, a.Op, a.Reason, a.Service.Env)
+		}
+	}
+	if again := dbgwCompute(t, dbgwManifest, otherZone, deployed(t, moved)...); action(t, again, "service:api").Op != Keep {
+		t.Fatal("re-planning after the zone change redeployed api")
+	}
+
+	in := dbgwInput(t, dbgwManifest, otherZone, live...)
+	in.Held = map[string]bool{"other": true}
+	r := Compute(in)
+	if got := heldUsers(r); !slices.Equal(got, []string{"api", "web"}) || r.Executable {
+		t.Fatalf("held users %v, executable %v, problems %+v", got, r.Executable, r.Problems)
+	}
+	if f := finding(t, r.Problems, "db-gateway-held-user"); !strings.Contains(f.Message, "moves the gateway's hosts from us-east1.db.example.com to us-east1.db.other.org") {
+		t.Fatalf("finding = %+v", f)
 	}
 }
 

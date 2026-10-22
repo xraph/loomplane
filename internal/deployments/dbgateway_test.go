@@ -380,18 +380,26 @@ func gatewayBinding(t *testing.T, url string) *planning.Binding {
 
 const doDSN = "postgres://app:pw@db.do.example:25060/orders?sslmode=require"
 
+// gatewayLink is a plan's link to db through the gateway gatewayBinding
+// deploys.
+var gatewayLink = planning.EnvLink{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject, Gateway: "nyc3.db.example.com"}
+
+// A direct link gets the address kept for the resource, whatever the
+// deployed gateway serves: an app planned off the gateway is never pointed
+// back at it.
 func TestResourceAddressPassThrough(t *testing.T) {
 	secrets := snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(doDSN), resourceKey("org_1", "env_1", "cache", ResourceURL): []byte("redis://:pw@cache:6379")}
 	r := NewRunner(RunnerDeps{Resources: secrets})
 	for name, services := range map[string]map[string]*planning.Binding{
-		"no gateway":            {"api": {URL: "https://api.example.com"}},
-		"gateway serves others": {"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")},
+		"no gateway":                 {"api": {URL: "https://api.example.com"}},
+		"gateway serves others":      {"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")},
+		"opted out, gateway running": {"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")},
 	} {
 		resource := "db"
 		if name == "gateway serves others" {
 			resource = "cache"
 		}
-		value, extra, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, resource, "DATABASE_URL")
+		value, extra, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, planning.EnvLink{Key: "DATABASE_URL", From: resource, Subject: planning.ResourceSubject})
 		if err != nil || value != string(secrets[resourceKey("org_1", "env_1", resource, ResourceURL)]) || extra != nil {
 			t.Errorf("%s: %q %v %v", name, value, extra, err)
 		}
@@ -402,7 +410,7 @@ func TestResourceAddressGateway(t *testing.T) {
 	secrets := snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(doDSN)}
 	r := NewRunner(RunnerDeps{Resources: secrets})
 	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app"), "api": {URL: "https://api"}}
-	value, extra, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, "db", "DATABASE_URL")
+	value, extra, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, gatewayLink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +428,7 @@ func TestResourceAddressGatewayDropsHostOverrides(t *testing.T) {
 	dsn := "postgres://app:pw@db.do.example:25060/orders?sslmode=require&host=evil.example&hostaddr=10.0.0.1&port=6543"
 	r := NewRunner(RunnerDeps{Resources: snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(dsn)}})
 	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
-	value, _, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, "db", "DATABASE_URL")
+	value, _, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, gatewayLink)
 	if err != nil || value != "postgres://app:pw@db.nyc3.db.example.com:5432/orders?sslmode=require" {
 		t.Fatalf("value %q: %v", value, err)
 	}
@@ -552,14 +560,25 @@ func TestRunDeletingTheDatabaseGatewayRemovesItsRecordAndKeys(t *testing.T) {
 }
 
 func TestResourceAddressGatewayFailuresHoldNoSecrets(t *testing.T) {
-	for name, tc := range map[string]struct{ dsn, url, want string }{
-		"no address yet": {doDSN, "", "web needs the database gateway, which has no address yet"},
-		"not https":      {doDSN, "http://db-gateway-xyz.run.app", "isn't https"},
-		"bad dsn":        {"postgres://app:pw@[db.do.example:25060/orders", "https://db-gateway-xyz.run.app", "isn't a URL"},
+	moved := gatewayLink
+	moved.Gateway = "eu-west1.db.example.com"
+	for name, tc := range map[string]struct {
+		dsn, url, want string
+		link           planning.EnvLink
+		noGateway      bool
+	}{
+		"no address yet":     {dsn: doDSN, url: "", want: "web needs the database gateway, which has no address yet", link: gatewayLink},
+		"not https":          {dsn: doDSN, url: "http://db-gateway-xyz.run.app", want: "isn't https", link: gatewayLink},
+		"bad dsn":            {dsn: "postgres://app:pw@[db.do.example:25060/orders", url: "https://db-gateway-xyz.run.app", want: "isn't a URL", link: gatewayLink},
+		"no gateway serving": {dsn: doDSN, want: "web reaches db through the database gateway, which doesn't serve it yet", link: gatewayLink, noGateway: true},
+		"another suffix":     {dsn: doDSN, url: "https://db-gateway-xyz.run.app", want: "names its hosts under nyc3.db.example.com", link: moved},
 	} {
 		r := NewRunner(RunnerDeps{Resources: snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(tc.dsn)}})
 		services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, tc.url)}
-		_, _, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, "db", "DATABASE_URL")
+		if tc.noGateway {
+			services = map[string]*planning.Binding{"api": {URL: "https://api.example.com"}}
+		}
+		_, _, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, tc.link)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v", name, err)
 			continue
@@ -577,11 +596,11 @@ func TestAppliedInputsUseGatewayAddress(t *testing.T) {
 	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
 	resources := map[string]*planning.Binding{"db": {Subject: planning.ResourceSubject, Name: "db"}}
 	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc",
-		Env: []planning.EnvLink{{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject}}}}
+		Env: []planning.EnvLink{gatewayLink}}}
 	if err := r.captureAppliedVariables(ctx, gatewayDeployment, &a, services); err != nil {
 		t.Fatal(err)
 	}
-	want, extra, err := r.resourceAddress(ctx, gatewayDeployment, "web", services, "db", "DATABASE_URL")
+	want, extra, err := r.resourceAddress(ctx, gatewayDeployment, "web", services, gatewayLink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +640,7 @@ func TestEnvWithoutASnapshotPointsAtTheGateway(t *testing.T) {
 	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
 	resources := map[string]*planning.Binding{"db": {Subject: planning.ResourceSubject, Name: "db"}}
 	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc",
-		Env: []planning.EnvLink{{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject}}}}
+		Env: []planning.EnvLink{gatewayLink}}}
 	for set, want := range map[string]string{"": "https://db-gateway-xyz.run.app", "https://mine": "https://mine"} {
 		vars := fakeVariables{"svc": {}}
 		if set != "" {
@@ -633,6 +652,17 @@ func TestEnvWithoutASnapshotPointsAtTheGateway(t *testing.T) {
 			env["DATABASE_URL_GATEWAY"] != want || !secret["DATABASE_URL"] || secret["DATABASE_URL_GATEWAY"] {
 			t.Errorf("set %q: env %v secret %v: %v", set, env, secret, err)
 		}
+	}
+
+	// The link decides, not the deployed gateway: planned without it, the
+	// app gets the database's own address while the gateway still serves
+	// it.
+	direct := a
+	direct.Service = &planning.ServiceConfig{Service: "svc", Env: []planning.EnvLink{{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject}}}
+	r := NewRunner(RunnerDeps{Variables: fakeVariables{"svc": {}}, Resources: secrets})
+	env, secret, err := r.env(t.Context(), gatewayDeployment, direct, services, resources)
+	if err != nil || env["DATABASE_URL"] != doDSN || !secret["DATABASE_URL"] || len(env) != 1 {
+		t.Fatalf("direct link: env %v secret %v: %v", env, secret, err)
 	}
 }
 
@@ -686,7 +716,7 @@ func TestRunDeploysTheDatabaseGatewayAndPointsAppsAtIt(t *testing.T) {
 			ID: "service:api", Op: planning.Create, Subject: planning.ServiceSubject, Name: "api", Provider: "cloud-run", Step: 2,
 			DependsOn: []string{gw.ID},
 			Service: &planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:api", Public: true,
-				Env: []planning.EnvLink{{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject}}},
+				Env: []planning.EnvLink{{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject, Gateway: "us-central1.db.example.com"}}},
 		}},
 	}
 	secrets := snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(doDSN)}
@@ -884,7 +914,7 @@ func TestGatewayLinkedAppsGetTheirDirectAddress(t *testing.T) {
 		"db": {Subject: planning.ResourceSubject, Name: "db"}, "cache": {Subject: planning.ResourceSubject, Name: "cache"},
 	}
 	links := []planning.EnvLink{
-		{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject},
+		gatewayLink,
 		{Key: "REDIS_URL", From: "cache", Subject: planning.ResourceSubject},
 	}
 	check := func(t *testing.T, env map[string]string, secret map[string]bool, direct string, directSecret bool) {
@@ -955,4 +985,97 @@ func TestGatewayLinkedAppsGetTheirDirectAddress(t *testing.T) {
 		}
 		check(t, env, secret, "postgres://mine", false)
 	}
+}
+
+// optOutRun deploys a plan in which db opts out of a running gateway that
+// serves db and orders, with api's link to db planned direct, and returns
+// what api was deployed with. gateway is the plan's db-gateway action.
+func optOutRun(t *testing.T, gateway planning.Action) *Job {
+	t.Helper()
+	url, client := tlsAnswering(t)
+	secrets := snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(doDSN)}
+	gw, _, _ := mintGateway(t, secrets, dbgateway.Gateway{OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Name: "db-gateway",
+		Provider: "cloud-run", Region: "us-central1", Suffix: "us-central1.db.example.com"})
+	store := &fakeDBGateways{gateways: []dbgateway.Gateway{gw}, routes: map[string][]string{gw.ID: {"db", "orders"}}}
+	served := dbGatewayAction().Service
+	served.DatabaseGateway.Resources = []string{"db", "orders"}
+	cfg, err := json.Marshal(served)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &planning.Plan{
+		ID: "plan_out", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production",
+		Status: planning.StatusApproved, Executable: true, Connections: map[string]string{"gcp": "conn_g"},
+		Actions: []planning.Action{{
+			ID: "service:api", Op: planning.Update, Subject: planning.ServiceSubject, Name: "api", Provider: "cloud-run", Step: 1,
+			Service: &planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:api", Public: true,
+				Env: []planning.EnvLink{{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject}}},
+		}, gateway},
+	}
+	plans := &fakePlans{plan: plan, bindings: map[string]*planning.Binding{
+		"resource:db": {ID: "bind_db", Subject: planning.ResourceSubject, Name: "db", Provider: "digitalocean"},
+		"service:db-gateway": {
+			ID: "bind_gw", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject, Name: "db-gateway",
+			Provider: "cloud-run", Region: "us-central1", ConnectionID: "conn_g", ExternalID: "ext-db-gateway", URL: url + "/db-gateway", Config: cfg,
+		},
+	}}
+	exec := &removing{recorder: &recorder{url: url}, gateways: store}
+	r := NewRunner(RunnerDeps{
+		Store: &memStore{d: map[string]*Deployment{}}, Plans: plans, Credentials: fakeCredentials{}, Variables: fakeVariables{},
+		Sources: &fakeSources{}, Providers: available(t), Executors: map[string]Executor{"cloud-run": exec}, Resources: secrets,
+		DatabaseGateways: store, PublicURL: "https://loomplane.example.com",
+		DatabaseGatewayTrust: func() ([]plane.TrustKey, error) { return []plane.TrustKey{testTrustKey(t)}, nil },
+	})
+	r.http, r.verifyWait = client, time.Second
+	if _, err = runAll(t, r, plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range exec.jobs {
+		if job.Action.Name != "api" {
+			continue
+		}
+		if job.Action.Service.AppliedInputs == nil {
+			t.Fatal("api's variables weren't captured")
+		}
+		var captured appliedVariables
+		if err = json.Unmarshal(secrets[job.Action.Service.AppliedInputs.Variables], &captured); err != nil {
+			t.Fatal(err)
+		}
+		if captured.ResourceValues["DATABASE_URL"] != doDSN || len(captured.GatewayValues) != 0 {
+			t.Fatalf("captured %+v, want the direct address alone", captured)
+		}
+		return job
+	}
+	t.Fatal("api wasn't deployed")
+	return nil
+}
+
+func wantDirect(t *testing.T, job *Job) {
+	t.Helper()
+	if job.Env["DATABASE_URL"] != doDSN || !job.Secrets["DATABASE_URL"] {
+		t.Fatalf("api env %v, want the direct address", job.Env)
+	}
+	for _, k := range []string{"DATABASE_URL_GATEWAY", "DATABASE_URL_DIRECT"} {
+		if _, ok := job.Env[k]; ok {
+			t.Fatalf("api got %s after opting out: %v", k, job.Env)
+		}
+	}
+}
+
+// Turning the gateway off updates the app before the gateway is deleted,
+// and the app gets the database's own address, not the gateway it's about
+// to lose.
+func TestRunFullOptOutPointsAppsDirect(t *testing.T) {
+	gone := planning.Action{ID: "service:db-gateway", Op: planning.Delete, Subject: planning.ServiceSubject,
+		Name: "db-gateway", Provider: "cloud-run", Region: "us-central1", ConnectionID: "conn_g", Step: 2}
+	wantDirect(t, optOutRun(t, gone))
+}
+
+// Taking one database off the gateway gets the app its own address even
+// when the app deploys before the gateway drops the route.
+func TestRunPartialOptOutPointsAppsDirect(t *testing.T) {
+	kept := dbGatewayAction()
+	kept.Op, kept.Step = planning.Update, 2
+	kept.Service.DatabaseGateway.Resources = []string{"orders"}
+	wantDirect(t, optOutRun(t, kept))
 }

@@ -329,13 +329,19 @@ func dbGatewayControlURL(public string) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-// resourceAddress is what app gets in key for resource: the address kept
-// for it, or, when the environment's database gateway serves it, that
-// address pointed at the gateway, with the gateway's own address in
-// key+GatewaySuffix and the address kept for it, unchanged and secret, in
-// key+DirectSuffix. services are the environment's service bindings. The
-// address holds the resource's credentials, so no error repeats it.
-func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string, services map[string]*planning.Binding, resource, key string) (value string, extra map[string]linkExtra, err error) {
+// resourceAddress is what app gets in link.Key for the resource it links:
+// the address kept for it, or, when the plan links it through the
+// database gateway, that address pointed at the gateway under the link's
+// suffix, with the gateway's own address in Key+GatewaySuffix and the
+// address kept for it, unchanged and secret, in Key+DirectSuffix. The plan
+// decides, not what's deployed: an app whose resource opts out gets the
+// direct address even while the gateway still runs, as it does until the
+// plan removes it after the app. services are the environment's service
+// bindings, and one of them has to be the gateway serving the resource
+// under that suffix. The address holds the resource's credentials, so no
+// error repeats it.
+func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string, services map[string]*planning.Binding, link planning.EnvLink) (value string, extra map[string]linkExtra, err error) {
+	resource, key := link.From, link.Key
 	if r.resources == nil {
 		return "", nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", app, resource)
 	}
@@ -343,11 +349,16 @@ func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string,
 	if err != nil {
 		return "", nil, fmt.Errorf("%s needs %s: %w", app, resource, err)
 	}
-	gw, suffix := servingGateway(services, resource)
-	if gw == nil {
+	if link.Gateway == "" {
 		return string(raw), nil, nil
 	}
-	if gw.URL == "" {
+	gw, suffix := servingGateway(services, resource)
+	switch {
+	case gw == nil:
+		return "", nil, fmt.Errorf("%s reaches %s through the database gateway, which doesn't serve it yet", app, resource)
+	case suffix != link.Gateway:
+		return "", nil, fmt.Errorf("%s reaches %s through the database gateway at %s, and the gateway names its hosts under %s; deploy the gateway first", app, resource, link.Gateway, suffix)
+	case gw.URL == "":
 		return "", nil, fmt.Errorf("%s needs the database gateway, which has no address yet", app)
 	}
 	if u, perr := neturl.Parse(gw.URL); perr != nil || u.Scheme != "https" || u.Host == "" {

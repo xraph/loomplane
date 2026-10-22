@@ -167,10 +167,11 @@ func (p *planner) checkDatabaseGatewayHTTPS(a *Action, connection string) {
 
 // heldGatewayUser reports each resource a held user was deployed to reach
 // through the database gateway that this plan takes off it, by removing
-// the gateway or dropping the resource from it. The user keeps the
-// gateway's address, so it would lose its database. heldAddresses calls
-// it with the user's deployed links. A gateway this plan wants and can't
-// plan isn't removed, and a problem says why already.
+// the gateway, dropping the resource from it or naming its hosts under
+// another suffix. The user keeps the gateway address it was deployed
+// with, so it would lose its database. heldAddresses calls it with the
+// user's deployed links. A gateway this plan wants and can't plan isn't
+// removed, and a problem says why already.
 func (p *planner) heldGatewayUser(name, who, scope string, env []EnvLink) {
 	gw := p.services[dbGatewayName]
 	if gw != nil && (gw.Service == nil || gw.Service.DatabaseGateway == nil) {
@@ -181,16 +182,21 @@ func (p *planner) heldGatewayUser(name, who, scope string, env []EnvLink) {
 	}
 	var seen []string
 	for _, e := range env {
-		if !e.Gateway || e.Subject != ResourceSubject || slices.Contains(seen, e.From) {
+		if e.Gateway == "" || e.Subject != ResourceSubject || slices.Contains(seen, e.From) {
 			continue
 		}
 		seen = append(seen, e.From)
 		fate := "this plan removes the database gateway"
 		if gw != nil {
-			if slices.Contains(gw.Service.DatabaseGateway.Resources, e.From) {
+			served := gw.Service.DatabaseGateway
+			switch {
+			case !slices.Contains(served.Resources, e.From):
+				fate = "this plan takes " + e.From + " off the database gateway"
+			case served.Suffix != e.Gateway:
+				fate = "this plan moves the gateway's hosts from " + e.Gateway + " to " + served.Suffix
+			default:
 				continue
 			}
-			fate = "this plan takes " + e.From + " off the database gateway"
 		}
 		p.problem(Finding{
 			Code: "db-gateway-held-user", Subject: ServiceSubject, Name: name, Path: "services." + name,
@@ -207,7 +213,7 @@ func (p *planner) linkTargets(e EnvLink) []*Action {
 	if dep := p.planned(e.Subject, e.From); dep != nil {
 		out = append(out, dep)
 	}
-	if gw := p.services[dbGatewayName]; e.Gateway && e.Subject == ResourceSubject && gw != nil && gw.Service != nil && gw.Service.DatabaseGateway != nil {
+	if gw := p.services[dbGatewayName]; e.Gateway != "" && e.Subject == ResourceSubject && gw != nil && gw.Service != nil && gw.Service.DatabaseGateway != nil {
 		out = append(out, gw)
 	}
 	return out
@@ -257,11 +263,13 @@ func (p *planner) dbGatewayDomain(path string) (string, bool) {
 }
 
 // dependOnDatabaseGateway marks each link a service has to a resource
-// behind the gateway, which redeploys the service when that changes, and
-// orders every service that needs one after the gateway, wherever it
-// runs, moving what runs after those services along with them. A held
-// service keeps the links it was deployed with.
+// behind the gateway with the suffix the resource's host is named under,
+// which redeploys the service when the resource opts in or the suffix
+// changes. It orders every service that needs one after the gateway,
+// wherever it runs, moving what runs after those services along with
+// them. A held service keeps the links it was deployed with.
 func (p *planner) dependOnDatabaseGateway(gw *Action, resources []string) {
+	suffix := gw.Service.DatabaseGateway.Suffix
 	behind := func(e EnvLink) bool { return e.Subject == ResourceSubject && slices.Contains(resources, e.From) }
 	for _, name := range p.in.Manifest.ServiceNames() {
 		a := p.services[name]
@@ -270,8 +278,8 @@ func (p *planner) dependOnDatabaseGateway(gw *Action, resources []string) {
 		}
 		marked := false
 		for i, e := range a.Service.Env {
-			if behind(e) && !e.Gateway {
-				a.Service.Env[i].Gateway, marked = true, true
+			if behind(e) && e.Gateway != suffix {
+				a.Service.Env[i].Gateway, marked = suffix, true
 			}
 		}
 		// The links are part of the configuration, so the comparison with

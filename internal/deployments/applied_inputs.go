@@ -26,8 +26,9 @@ type appliedVariables struct {
 }
 
 // captureAppliedVariables pins what the service gets in this deployment.
-// services are the environment's service bindings, which say whether a
-// resource it needs is behind the database gateway.
+// The service's planned links say whether it reaches a resource through
+// the database gateway, and services, the environment's service bindings,
+// say where that gateway is.
 func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *planning.Action, services map[string]*planning.Binding) error {
 	if a.Service == nil || a.Service.Generated() || r.resources == nil {
 		return nil
@@ -78,7 +79,7 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 			if _, overridden := values[link.Key]; overridden {
 				continue
 			}
-			value, extra, e := r.resourceAddress(ctx, d, a.Name, services, link.From, link.Key)
+			value, extra, e := r.resourceAddress(ctx, d, a.Name, services, link)
 			if e != nil {
 				return fmt.Errorf("capture applied resource variable: %w", e)
 			}
