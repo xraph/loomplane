@@ -23,9 +23,10 @@ const vaultPage = 500
 // VaultSecrets keeps secret values in Vault, encrypted with AES-256-GCM
 // and versioned on every write.
 //
-// Vault's secrets are unique by key and app, with no tenant in the key:
-// its tenant scoping doesn't reach them. So every key here is built from
-// the organization and the variable's own ID, both from Loomplane's
+// Vault scopes a secret by tenant only when the context carries one
+// (its own scope.WithTenantID), and Loomplane never sets it, so every
+// secret here is an app-level one. Every key is built from the
+// organization and the variable's own ID, both from Loomplane's
 // records and never from anything a caller sent, and one organization's
 // key can't name another's secret.
 type VaultSecrets struct {

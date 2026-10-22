@@ -21,7 +21,8 @@ const VaultKeyLabel = "loomplane/vault cloud credentials v1"
 // VaultSecrets keeps credentials in Vault, encrypted with AES-256-GCM
 // and versioned on every write.
 //
-// Vault's secrets carry no tenant, so every key is built from the
+// Loomplane never puts a Vault tenant on the context, so every secret is
+// an app-level one and every key is built from the
 // organization's and the connection's IDs, both from Loomplane's records
 // and never from what a caller sent.
 type VaultSecrets struct {
