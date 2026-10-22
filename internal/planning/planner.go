@@ -1913,6 +1913,17 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 				}
 			}
 		}
+		// A composed resource and its components adopt their placement the
+		// same way. An engine never has one.
+		if a.Resource != nil && a.Resource.CloudPlacement != nil {
+			var previous ResourceConfig
+			if json.Unmarshal(b.Config, &previous) == nil {
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Resource.CloudPlacement
+				if a.AdoptCloudPlacement {
+					a.CloudAdoption = ReviewCloudAdoption(b)
+				}
+			}
+		}
 	}
 }
 

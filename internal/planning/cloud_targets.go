@@ -79,25 +79,28 @@ func composedResources(m *manifest.Manifest, environment string, kinds *recipes.
 	return out
 }
 
-// composedPlacements places each composed resource whose target is a
-// direct-connection target of the assignment, as a service on that target
-// is placed. Pool targets aren't matched.
-func composedPlacements(m *manifest.Manifest, environment string, kinds *recipes.Registry, assignment *cloudprofiles.Assignment, options []ConnectionOption) map[string]CloudPlacement {
+// composedPlacements places each of the named composed resources whose
+// target is a direct-connection target of the assignment, as a service on
+// that target is placed. Pool targets aren't matched. A placement pins
+// reviewed revisions and a verified account, as the runner checks it
+// before it records one; without them the resource isn't placed.
+func composedPlacements(m *manifest.Manifest, environment string, names []string, assignment *cloudprofiles.Assignment, options []ConnectionOption) map[string]CloudPlacement {
 	out := map[string]CloudPlacement{}
-	if assignment == nil {
+	if assignment == nil || assignment.CloudRevision < 1 || assignment.Revision < 1 {
 		return out
 	}
-	for _, name := range composedResources(m, environment, kinds) {
+	for _, name := range names {
 		r := m.Resources[name]
 		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool {
-			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == r.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID
+			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == r.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID && t.Revision > 0
 		})
-		if i < 0 {
+		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == r.Target })
+		if i < 0 || ci < 0 {
 			continue
 		}
-		identity := ""
-		if ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == r.Target }); ci >= 0 {
-			identity = connections.AccountIdentity(options[ci].Cloud, options[ci].Account, options[ci].Details)
+		identity := connections.AccountIdentity(options[ci].Cloud, options[ci].Account, options[ci].Details)
+		if identity == "" {
+			continue
 		}
 		set := r.For(environment, m.Defaults)
 		regionSource := "manifest"
@@ -314,6 +317,12 @@ func (p *planner) allCloudActionsPinned(cloud string) bool {
 // SameProviderConfig compares applied inputs without placement bookkeeping.
 // Keep metadata actions use it to reject a changed serving configuration.
 func SameProviderConfig(before json.RawMessage, after *ServiceConfig) bool {
+	return len(changes(before, after)) == 0
+}
+
+// SameResourceConfig is SameProviderConfig for a composed resource or one
+// of its components.
+func SameResourceConfig(before json.RawMessage, after *ResourceConfig) bool {
 	return len(changes(before, after)) == 0
 }
 

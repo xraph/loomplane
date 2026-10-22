@@ -31,10 +31,10 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 			}
 		}
 	}
-	if a.Service == nil || a.Service.CloudPlacement == nil || a.Op == planning.Delete || a.Op == planning.Keep && !a.AdoptCloudPlacement {
+	pin, reviewed := reviewedPlacement(a)
+	if pin == nil || a.Op == planning.Delete || a.Op == planning.Keep && !a.AdoptCloudPlacement {
 		return nil
 	}
-	pin := a.Service.CloudPlacement
 	stale := func(reason string) error { return fmt.Errorf("cloud target for %s %s; plan again", a.Name, reason) }
 	if r.cloudProfiles == nil {
 		return stale("cannot be revalidated because the Cloud resolver is unavailable")
@@ -42,7 +42,7 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	if pin.AccountIdentity == "" || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || !pin.Default && pin.TargetRevision < 1 {
 		return stale("has no verified identity or revision")
 	}
-	if pin.Provider != a.Provider || a.Service.Provider != a.Provider || pin.ConnectionID != a.ConnectionID || pin.Region != a.Region || a.Service.Region != a.Region {
+	if pin.Provider != a.Provider || reviewed.provider != a.Provider || pin.ConnectionID != a.ConnectionID || pin.Region != a.Region || reviewed.region != a.Region {
 		return stale("differs from the reviewed action")
 	}
 	var assignment *cloudprofiles.Assignment
@@ -107,7 +107,7 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	if pin.PoolID != "" && conn.Generation != pin.ConnectionGeneration {
 		return stale("runtime generation changed")
 	}
-	if planning.OwnedCloud(conn.Cloud) && !reflect.DeepEqual(a.Service.TargetSettings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
+	if planning.OwnedCloud(conn.Cloud) && !reflect.DeepEqual(reviewed.settings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
 		return stale("settings changed since review")
 	}
 	identity := connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details)
@@ -121,6 +121,10 @@ func (r *Runner) adoptCloudPlacement(ctx context.Context, d *Deployment, plan *p
 	if err := r.validateCloudPlacement(ctx, plan, a, nil); err != nil {
 		return err
 	}
+	pin, _ := reviewedPlacement(a)
+	if pin == nil {
+		return fmt.Errorf("cloud placement adoption for %s has no reviewed placement; plan again", a.Name)
+	}
 	bindings, err := r.plans.ListBindings(ctx, d.OrgID, d.EnvironmentID)
 	if err != nil {
 		return err
@@ -129,13 +133,13 @@ func (r *Runner) adoptCloudPlacement(ctx context.Context, d *Deployment, plan *p
 		if string(b.Subject)+":"+b.Name != a.ID {
 			continue
 		}
-		if b.OrgID != d.OrgID || b.ProjectID != d.ProjectID || b.EnvironmentID != d.EnvironmentID || b.Provider != a.Provider || b.Region != a.Region || b.ConnectionID != a.ConnectionID || b.Drift != "" || !planning.SameProviderConfig(b.Config, a.Service) {
+		if b.OrgID != d.OrgID || b.ProjectID != d.ProjectID || b.EnvironmentID != d.EnvironmentID || b.Provider != a.Provider || b.Region != a.Region || b.ConnectionID != a.ConnectionID || b.Drift != "" || !sameAppliedConfig(b.Config, a) {
 			return fmt.Errorf("serving binding for %s changed since this metadata adoption was reviewed; plan again", a.Name)
 		}
 		if !planning.MatchesCloudAdoption(b, a.CloudAdoption) {
-			var applied planning.ServiceConfig
 			ref := a.CloudAdoption
-			if ref == nil || ref.BindingID != b.ID || ref.ExternalID != b.ExternalID || ref.Revision != b.Revision || ref.PlanID != b.PlanID || json.Unmarshal(b.Config, &applied) != nil || applied.CloudPlacement == nil || *applied.CloudPlacement != *a.Service.CloudPlacement {
+			applied := appliedPlacement(b.Config, a)
+			if ref == nil || ref.BindingID != b.ID || ref.ExternalID != b.ExternalID || ref.Revision != b.Revision || ref.PlanID != b.PlanID || applied == nil || *applied != *pin {
 				return fmt.Errorf("serving binding for %s changed since this metadata adoption was reviewed; plan again", a.Name)
 			}
 			step.URL = b.URL
@@ -146,7 +150,7 @@ func (r *Runner) adoptCloudPlacement(ctx context.Context, d *Deployment, plan *p
 		if !ok {
 			return fmt.Errorf("cloud placement adoption requires atomic binding storage")
 		}
-		updated, adoptionErr := store.AdoptCloudPlacement(ctx, b, a.Service.CloudPlacement, r.now().UTC())
+		updated, adoptionErr := store.AdoptCloudPlacement(ctx, b, pin, r.now().UTC())
 		if adoptionErr != nil {
 			return adoptionErr
 		}
@@ -158,6 +162,52 @@ func (r *Runner) adoptCloudPlacement(ctx context.Context, d *Deployment, plan *p
 		return heartbeat([]byte("cloud-placement-adopted"))
 	}
 	return fmt.Errorf("serving binding for %s is missing; plan again", a.Name)
+}
+
+// reviewedConfig is what an action's Cloud placement pins it to.
+type reviewedConfig struct {
+	provider, region string
+	settings         map[string]string
+}
+
+// reviewedPlacement is an action's Cloud placement: a service's, or a
+// composed resource's or component's. Nothing else has one.
+func reviewedPlacement(a planning.Action) (*planning.CloudPlacement, reviewedConfig) {
+	switch {
+	case a.Service != nil:
+		return a.Service.CloudPlacement, reviewedConfig{a.Service.Provider, a.Service.Region, a.Service.TargetSettings}
+	case a.Resource != nil:
+		return a.Resource.CloudPlacement, reviewedConfig{a.Resource.Provider, a.Resource.Region, a.Resource.TargetSettings}
+	}
+	return nil, reviewedConfig{}
+}
+
+// sameAppliedConfig reports whether a binding still runs the action's
+// reviewed configuration, apart from its placement.
+func sameAppliedConfig(applied []byte, a planning.Action) bool {
+	switch {
+	case a.Service != nil:
+		return planning.SameProviderConfig(applied, a.Service)
+	case a.Resource != nil:
+		return planning.SameResourceConfig(applied, a.Resource)
+	}
+	return false
+}
+
+// appliedPlacement is the placement a binding already records.
+func appliedPlacement(applied []byte, a planning.Action) *planning.CloudPlacement {
+	if a.Service != nil {
+		var cfg planning.ServiceConfig
+		if json.Unmarshal(applied, &cfg) != nil {
+			return nil
+		}
+		return cfg.CloudPlacement
+	}
+	var cfg planning.ResourceConfig
+	if json.Unmarshal(applied, &cfg) != nil {
+		return nil
+	}
+	return cfg.CloudPlacement
 }
 
 func poolBinding(b *planning.Binding) bool {

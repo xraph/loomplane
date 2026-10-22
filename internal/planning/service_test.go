@@ -243,6 +243,30 @@ func (s *approvalStore) Decide(_ context.Context, _, _, status, _, _ string, _ t
 	return true, nil
 }
 
+// edgeDetails are a checked server's, with the Docker daemon that
+// verifies its account.
+func edgeDetails(id string) map[string]string {
+	return map[string]string{"host": id + ".example.com", "user": "deploy", "docker_socket": "/var/run/docker.sock", "architecture": "arm64", "docker_id": "daemon-" + id}
+}
+
+// edgeClouds are two ready, checked and verified servers.
+type edgeClouds struct{}
+
+func (edgeClouds) All(context.Context, string) ([]*connections.Connection, error) {
+	out := make([]*connections.Connection, 0, 2)
+	for _, id := range []string{targetA, targetB} {
+		out = append(out, &connections.Connection{ID: id, OrgID: "org", Name: id, Cloud: connections.Server, Status: connections.StatusReady, Details: edgeDetails(id)})
+	}
+	return out, nil
+}
+
+// failingResolver can't read the environment's assignment.
+type failingResolver struct{}
+
+func (failingResolver) Resolve(context.Context, string, string, string) (*cloudprofiles.Assignment, error) {
+	return nil, errors.New("cloud assignments are unavailable")
+}
+
 // edgeService plans doc as a catalog plan in an environment assigned
 // cloud_1, whose one target is reached through targets.
 func edgeService(t *testing.T, doc string, targets ...cloudprofiles.Target) (*Service, *Plan, *targetResolver) {
@@ -250,7 +274,7 @@ func edgeService(t *testing.T, doc string, targets ...cloudprofiles.Target) (*Se
 	resolver := &targetResolver{assignment: &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud_1", CloudRevision: 2, Revision: 3, GrantRevision: 4, Targets: targets}}
 	service := NewService(Deps{
 		Store: catalogStore{}, Manifests: catalogManifest{revision: &manifests.Revision{Manifest: parse(t, doc)}}, Providers: providers.Registry(),
-		Connections: serverClouds{}, Kinds: recipestest.Registry(t), CloudProfiles: resolver,
+		Connections: edgeClouds{}, Kinds: recipestest.Registry(t), CloudProfiles: resolver,
 	})
 	plan := &Plan{Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
 	return service, plan, resolver
@@ -268,7 +292,10 @@ func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) 
 		t.Fatalf("resolved the assignment %d times", resolver.calls)
 	}
 	want := CloudPlacement{GrantRevision: 4, CloudID: "cloud_1", CloudRevision: 2, AssignmentRevision: 3, TargetID: "t1", TargetRevision: 5, TargetName: "edge-host", Provider: "server", ConnectionID: targetA,
-		AccountIdentity: connections.AccountIdentity(connections.Server, "", map[string]string{"host": targetA + ".example.com", "user": "deploy", "docker_socket": "/var/run/docker.sock"}), RegionSource: "default"}
+		AccountIdentity: connections.AccountIdentity(connections.Server, "", edgeDetails(targetA)), RegionSource: "default"}
+	if want.AccountIdentity == "" {
+		t.Fatal("fixture account isn't verified")
+	}
 	for _, id := range []string{"resource:edge", "resource:edge--api"} {
 		a := findAction(result, id)
 		if a == nil || a.Resource.CloudPlacement == nil || *a.Resource.CloudPlacement != want {
@@ -295,7 +322,9 @@ func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) 
 	other.ConnectionID = targetB
 	pooled := edgeHost
 	pooled.PoolID = "pool_1"
-	for name, targets := range map[string][]cloudprofiles.Target{"no matching target": {other}, "a pool target": {pooled}, "no targets": nil} {
+	unreviewed := edgeHost
+	unreviewed.Revision = 0
+	for name, targets := range map[string][]cloudprofiles.Target{"no matching target": {other}, "a pool target": {pooled}, "no targets": nil, "an unreviewed target": {unreviewed}} {
 		t.Run(name, func(t *testing.T) {
 			s, p, _ := edgeService(t, doc, targets...)
 			r, _, planErr := s.compute(t.Context(), p)
@@ -320,5 +349,23 @@ func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) 
 	result, _, err = service.compute(t.Context(), plan)
 	if err != nil || !result.Executable || resolver.calls != 0 {
 		t.Fatalf("engine plan: %+v, %v, %d lookups", result, err, resolver.calls)
+	}
+}
+
+// A failed lookup only composed resources asked for is reported on the
+// composed resource, not on services.
+func TestCreatePlanReportsACloudLookupFailureOnTheComposedResource(t *testing.T) {
+	doc := "version: 1\nresources:\n  edge: {kind: sample, provider: server, target: " + targetA + "}\n"
+	service, plan, _ := edgeService(t, doc)
+	service.cloudProfiles = failingResolver{}
+	result, _, err := service.compute(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Executable || len(result.Problems) != 1 {
+		t.Fatalf("lookup failure: %+v", result)
+	}
+	if f := result.Problems[0]; f.Code != "cloud-target" || f.Subject != ResourceSubject || f.Name != "edge" || f.Path != "resources.edge.target" || f.Message != "cloud assignments are unavailable" {
+		t.Fatalf("finding: %+v", f)
 	}
 }

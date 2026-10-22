@@ -746,3 +746,39 @@ func TestEnginesNeverGetACloudPlacement(t *testing.T) {
 		t.Fatalf("engine plan changed:\n%s", got)
 	}
 }
+
+// A composed resource deployed before its environment's Cloud was assigned
+// adopts its placement without a redeploy: the resource and each component
+// keep running and record it. Its provisioned database doesn't.
+func TestDeployedCompositionAdoptsItsCloudPlacement(t *testing.T) {
+	plan := func(bindings []*Binding) *Result {
+		return Compute(Input{
+			Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, edgeApp), Providers: providers.Registry(),
+			Connections: composedConnections(t), Kinds: recipestest.Registry(t), Bindings: bindings,
+			CloudPlacements: map[string]CloudPlacement{"edge": edgePlacement()},
+		})
+	}
+	unplaced := composedPlan(t, recipestest.Registry(t), edgeApp)
+	r := plan(boundFrom(t, unplaced))
+	if !r.Executable {
+		t.Fatalf("plan blocked: %+v", r.Problems)
+	}
+	composed := []string{"resource:edge", "resource:edge--migrate", "resource:edge--api", "resource:edge--worker"}
+	for _, id := range composed {
+		a := findAction(r, id)
+		if a == nil || a.Op != Keep || !a.AdoptCloudPlacement || a.CloudAdoption == nil || a.CloudAdoption.BindingID != "binding-"+a.Name {
+			t.Fatalf("%s doesn't adopt its placement: %+v", id, a)
+		}
+	}
+	if a := findAction(r, "resource:edge--postgres"); a == nil || a.Op != Keep || a.AdoptCloudPlacement || a.CloudAdoption != nil {
+		t.Fatalf("provisioned database adopts a placement: %+v", a)
+	}
+
+	// Once recorded, the same placement is a plain Keep.
+	r = plan(boundFrom(t, r))
+	for _, id := range append(composed, "resource:edge--postgres") {
+		if a := findAction(r, id); a == nil || a.Op != Keep || a.AdoptCloudPlacement || a.CloudAdoption != nil {
+			t.Fatalf("%s isn't a plain Keep: %+v", id, a)
+		}
+	}
+}
