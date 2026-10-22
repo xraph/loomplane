@@ -50,8 +50,10 @@ type ComponentRun struct {
 	Component recipes.ResolvedComponent
 	// Env is what the component gets, secrets included.
 	Env map[string]string
-	// Secrets are the composition's generated secrets the component
-	// reads, by GeneratedSecret.Name.
+	// Secrets are every generated secret the composition declares, by
+	// GeneratedSecret.Name, whether or not this component reads it (a
+	// hook may need one to reach the component, such as an admin
+	// password). They stay in process and never go into a spec.
 	Secrets map[string][]byte
 	// Channel reaches a control port of a component already running in
 	// this composition: the component itself once it has started (in
