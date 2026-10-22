@@ -95,7 +95,7 @@ services:
 
 Loomplane passes the Dockerfile to the build by its path from the context, so it can sit anywhere. A service without a Dockerfile is built from its source, and a `build` on it is ignored with a warning.
 
-A service gets a variable for each thing it `needs`. A resource's is named for its kind: `DATABASE_URL` for Postgres and MySQL, `REDIS_URL`, `MEMCACHED_SERVERS`, `MONGODB_URI`, `AMQP_URL`, `KAFKA_BROKERS`, `NATS_URL`, `STORAGE_URL`, `SEARCH_URL`, `CLICKHOUSE_URL`. Another service's is its name in capitals and `_URL`: `API_URL`. When two needs would share a name, each gets its own name's instead (`ANALYTICS_URL`). A variable you set yourself wins, so you can point a service somewhere else.
+A service gets a variable for each thing it `needs`. A resource's is named for its kind: `DATABASE_URL` for Postgres, MySQL and MariaDB, `REDIS_URL` for Redis and Valkey, `MEMCACHED_SERVERS`, `MONGODB_URI`, `AMQP_URL`, `KAFKA_BROKERS`, `NATS_URL`, `STORAGE_URL`, `SEARCH_URL`, `CLICKHOUSE_URL`. Another service's is its name in capitals and `_URL`: `API_URL`. A MariaDB or Valkey resource used to get its name in capitals and `_URL` (`DB_URL`), so a service you deployed that way keeps that variable beside the new one, and the plan warns you to move off it. When two needs would share a name, each gets its own name's instead (`ANALYTICS_URL`). A variable you set yourself wins, so you can point a service somewhere else.
 
 Resource addresses hold credentials, so they're secrets: they reach the service through its cloud's secret store, never as plain variables.
 

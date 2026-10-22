@@ -11,6 +11,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/graph"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -1506,6 +1507,47 @@ func (p *planner) buildContext(name, base string, b *manifest.Build, gs *graph.S
 	}
 }
 
+// resourceEnvKey is the conventional variable name for a resource kind, or
+// "" when the kind has none. The recipe registry names the kinds Loomplane
+// runs itself, and envKeys the rest.
+func resourceEnvKey(kind string) string {
+	if key := recipes.EnvKey(kind); key != "" {
+		return key
+	}
+	return envKeys[kind]
+}
+
+// linkResource gives a service the variable for a resource it needs. A
+// service that was deployed with the variable this resource used to get
+// (MariaDB's was DB_URL, Valkey's CACHE_URL) keeps it beside the new one, so
+// the next release doesn't break it, and the plan says to move off it.
+func (p *planner) linkResource(name string, a *Action, need, key, path string) {
+	a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+	legacy := envName(need) + "_URL"
+	if legacy == key || !p.deployedWith(a.ID, need, legacy) {
+		return
+	}
+	a.Service.Env = append(a.Service.Env, EnvLink{Key: legacy, From: need, Subject: ResourceSubject})
+	p.warn(Finding{
+		Code: "env-key-renamed", Subject: ServiceSubject, Name: name, Path: path,
+		Message: fmt.Sprintf("%s still gets %s for %s, as it was deployed, and now also gets %s. Move it to %s, then remove the old variable.", name, legacy, need, key, key),
+	})
+}
+
+// deployedWith reports whether the service's last applied config gave it
+// the variable key for the thing it needs.
+func (p *planner) deployedWith(id, need, key string) bool {
+	b := p.bindings[id]
+	if b == nil || len(b.Config) == 0 {
+		return false
+	}
+	var cfg ServiceConfig
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		return false
+	}
+	return slices.ContainsFunc(cfg.Env, func(e EnvLink) bool { return e.From == need && e.Key == key })
+}
+
 // link gives a service the variables for what it needs, and orders it
 // after them.
 func (p *planner) link(name string, a *Action) {
@@ -1516,7 +1558,7 @@ func (p *planner) link(name string, a *Action) {
 	count := map[string]int{}
 	for i, need := range needs {
 		if r, ok := m.Resources[need]; ok {
-			keys[i] = envKeys[r.Kind]
+			keys[i] = resourceEnvKey(r.Kind)
 		}
 		if keys[i] == "" {
 			keys[i] = envName(need) + "_URL"
@@ -1550,7 +1592,7 @@ func (p *planner) link(name string, a *Action) {
 				if l := p.reachOver(sc, rc); l != nil {
 					// Over the link, the resource's private address works.
 					p.throughLink(a, l)
-					a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+					p.linkResource(name, a, need, key, base)
 					a.DependsOn = append(a.DependsOn, dep.ID)
 					continue
 				}
@@ -1565,7 +1607,7 @@ func (p *planner) link(name string, a *Action) {
 				continue
 			}
 
-			a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+			p.linkResource(name, a, need, key, base)
 			a.DependsOn = append(a.DependsOn, dep.ID)
 			continue
 		}
