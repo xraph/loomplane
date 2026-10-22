@@ -44,6 +44,8 @@ It points the app at the branch your project reads, starts the deployment itself
 
 The practical upshot: don't push to a branch while a plan for it waits for approval. If your repository's default branch isn't `main`, set the branch on the project's repository in Loomplane, because a repository left on its default branch is built from `main`. Get it wrong and the commit check catches it and tells you. To deploy another branch for a while, such as a quiet one nobody pushes to, analyse it with **Another branch**: a plan builds the branch its analysis read.
 
+A brand-new app's `ondigitalocean.app` address takes a few minutes to appear in DNS after App Platform says it's live. Loomplane waits for it in public DNS, for up to ten minutes, before it checks that the service answers, so this machine never caches the name as missing. If it still isn't there, the step says the app is deployed and that retrying it checks again.
+
 ## Databases
 
 | Manifest kind | Made on DigitalOcean | Versions |
