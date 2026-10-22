@@ -6,9 +6,12 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/azure/azuretest"
@@ -316,5 +319,169 @@ func TestAzureSecretName(t *testing.T) {
 	a, b := azureSecretName("API_KEY"), azureSecretName("API-KEY")
 	if a == b || !strings.HasPrefix(a, "env-api-key-") || strings.ContainsAny(a, "_ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
 		t.Fatalf("%q %q", a, b)
+	}
+}
+
+// shortPullWaits makes a test wait out a role's propagation in
+// milliseconds.
+func shortPullWaits(t *testing.T, wait time.Duration) {
+	t.Helper()
+	oldWait, oldRetry := azurePullWait, azurePullRetry
+	azurePullWait, azurePullRetry = wait, 10*time.Millisecond
+	t.Cleanup(func() { azurePullWait, azurePullRetry = oldWait, oldRetry })
+}
+
+// azurePullConf is the registry entry, secrets and identity of the app
+// Loomplane PUT last.
+func azurePullConf(t *testing.T, f *azuretest.Fake, name string) (reg map[string]any, secrets []string, identity map[string]any) {
+	t.Helper()
+	f.Lock()
+	defer f.Unlock()
+	app := f.Apps[name]
+	conf := app["properties"].(map[string]any)["configuration"].(map[string]any)
+	reg = conf["registries"].([]any)[0].(map[string]any)
+	for _, s := range conf["secrets"].([]any) {
+		secrets = append(secrets, s.(map[string]any)["name"].(string))
+	}
+	identity, _ = app["identity"].(map[string]any)
+	return reg, secrets, identity
+}
+
+func TestAzure_pullsWithTheIdentityWhenItMay(t *testing.T) {
+	f := azuretest.New(t)
+	f.NotActions = nil
+	job := azureJob(t, apiConfig())
+	if _, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	id := "/subscriptions/" + azuretest.Subscription + "/resourceGroups/loomplane/providers/Microsoft.ManagedIdentity/userAssignedIdentities/" + azure.PullIdentity
+	reg, secrets, identity := azurePullConf(t, f, AzureName(job))
+	if reg["identity"] != id || reg["server"] != azure.RegistryName(azuretest.Subscription, "loomplane")+".azurecr.io" {
+		t.Fatalf("registry %v", reg)
+	}
+	if _, has := reg["passwordSecretRef"]; has {
+		t.Fatalf("the registry has a password: %v", reg)
+	}
+	if _, has := reg["username"]; has {
+		t.Fatalf("the registry has a user: %v", reg)
+	}
+	if slices.Contains(secrets, azureRegistrySecret) || len(secrets) != 1 {
+		t.Fatalf("secrets %v", secrets)
+	}
+	users, _ := identity["userAssignedIdentities"].(map[string]any)
+	if _, has := users[id]; identity["type"] != "UserAssigned" || !has || len(users) != 1 {
+		t.Fatalf("identity %v", identity)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if f.IdentityPuts != 1 || len(f.RoleAssignments) != 1 || f.RoleAssignments[0].PrincipalID != azuretest.PullPrincipal {
+		t.Fatalf("identity puts %d, role assignments %+v", f.IdentityPuts, f.RoleAssignments)
+	}
+}
+
+func TestAzure_grantsThePullBeforeTheBuild(t *testing.T) {
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.FailBuild = true
+	if _, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig())); err == nil {
+		t.Fatal("a failed build deployed")
+	}
+	f.Lock()
+	defer f.Unlock()
+	// The role propagates while the build runs.
+	if f.IdentityPuts != 1 || len(f.RoleAssignments) != 1 || len(f.Tasks) != 1 {
+		t.Fatalf("identity puts %d, role assignments %+v, tasks %d", f.IdentityPuts, f.RoleAssignments, len(f.Tasks))
+	}
+}
+
+func TestAzure_fallsBackToTheAdminUser(t *testing.T) {
+	f := azuretest.New(t)
+	job := azureJob(t, apiConfig())
+	if _, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	reg, secrets, identity := azurePullConf(t, f, AzureName(job))
+	if reg["passwordSecretRef"] != azureRegistrySecret || reg["username"] == "" || reg["username"] == nil {
+		t.Fatalf("registry %v", reg)
+	}
+	if _, has := reg["identity"]; has || identity != nil {
+		t.Fatalf("registry %v, identity %v", reg, identity)
+	}
+	if !slices.Contains(secrets, azureRegistrySecret) {
+		t.Fatalf("secrets %v", secrets)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if f.IdentityPuts != 0 || len(f.RoleAssignments) != 0 {
+		t.Fatalf("identity puts %d, role assignments %+v", f.IdentityPuts, f.RoleAssignments)
+	}
+}
+
+func TestAzure_waitsForTheRoleToPropagate(t *testing.T) {
+	shortPullWaits(t, time.Minute)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PullDeniedFor = 2
+	exec := &Azure{Client: azure.New(f.URL())}
+	job := azureJob(t, apiConfig())
+	out, err := exec.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The third revision is the one that pulled, and it's ready.
+	s, err := azureSession(t.Context(), exec.Client, job.Connection, job.Credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := s.GetApp(t.Context(), out.ExternalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third := AzureName(job) + "--3"
+	if p := live.Properties; p.LatestRevisionName != third || p.LatestReadyRevision != third {
+		t.Fatalf("latest %q, ready %q", p.LatestRevisionName, p.LatestReadyRevision)
+	}
+}
+
+func TestAzure_givesUpWhenThePullNeverWorks(t *testing.T) {
+	shortPullWaits(t, 150*time.Millisecond)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PullDeniedFor = 1000
+	_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+	if err == nil || !strings.Contains(err.Error(), "identity") || !strings.Contains(err.Error(), "retry the deployment") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestAzure_waitsForEntraToKnowTheIdentity(t *testing.T) {
+	shortPullWaits(t, time.Minute)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PrincipalMissingFor = 2
+	if _, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig())); err != nil {
+		t.Fatal(err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.RoleAssignments) != 1 {
+		t.Fatalf("role assignments %+v", f.RoleAssignments)
+	}
+}
+
+func TestAzure_givesUpWhenEntraNeverKnowsTheIdentity(t *testing.T) {
+	shortPullWaits(t, 50*time.Millisecond)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PrincipalMissingFor = 1000
+	_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+	var ae *azure.APIError
+	if !errors.As(err, &ae) || ae.Code != "PrincipalNotFound" || !strings.Contains(err.Error(), "retry the deployment") {
+		t.Fatalf("err %v", err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.Tasks) != 0 || len(f.Apps) != 0 {
+		t.Fatalf("built %d, apps %v", len(f.Tasks), f.Apps)
 	}
 }

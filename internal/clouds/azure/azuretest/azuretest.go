@@ -46,11 +46,21 @@ type Fake struct {
 	// Actions are what the principal may do; a Contributor's by default.
 	Actions, NotActions []string
 	// FailBuild makes every ACR Tasks run fail.
-	FailBuild  bool
-	groups     map[string]string // name → location
-	registered map[string]bool
-	resources  map[string]map[string]any // lower-cased resource ID → body
-	polls      map[string]int
+	FailBuild bool
+	// PrincipalMissingFor makes the first N role assignments fail with
+	// PrincipalNotFound, as they do while Entra ID hasn't replicated a new
+	// identity yet.
+	PrincipalMissingFor int
+	// PullDeniedFor makes the first N container app revisions made after
+	// a role assignment fail to pull their image, as they do while the
+	// assignment propagates.
+	PullDeniedFor   int
+	principalMissed int
+	pullDenied      map[string]bool   // lower-cased revision name
+	groups          map[string]string // name → location
+	registered      map[string]bool
+	resources       map[string]map[string]any // lower-cased resource ID → body
+	polls           map[string]int
 	// Uploads are the source tarballs, by relative path.
 	Uploads map[string][]byte
 	// Tasks are the ACR Tasks files of the runs started, decoded.
@@ -71,6 +81,7 @@ func New(t *testing.T) *Fake {
 		Actions: []string{"*"}, NotActions: []string{"Microsoft.Authorization/*/Write", "Microsoft.Authorization/*/Delete"},
 		groups: map[string]string{}, registered: map[string]bool{}, resources: map[string]map[string]any{},
 		polls: map[string]int{}, Uploads: map[string][]byte{}, Apps: map[string]map[string]any{},
+		pullDenied: map[string]bool{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Server.Close)
@@ -186,8 +197,8 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			props["provisioningState"] = "InProgress"
 		} else if props["provisioningState"] == "InProgress" {
 			props["provisioningState"] = "Succeeded"
-			if kind == "microsoft.app/containerapps" {
-				props["latestReadyRevisionName"] = props["latestRevisionName"]
+			if latest, _ := props["latestRevisionName"].(string); kind == "microsoft.app/containerapps" && !f.pullDenied[strings.ToLower(latest)] {
+				props["latestReadyRevisionName"] = latest
 			}
 		}
 		f.polls[id]++
@@ -221,6 +232,9 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			}
 			body["revision"] = float64(rev)
 			props["latestRevisionName"] = name + "--" + string(rune('0'+rev))
+			if len(f.RoleAssignments) > 0 && len(f.pullDenied) < f.PullDeniedFor {
+				f.pullDenied[strings.ToLower(props["latestRevisionName"].(string))] = true
+			}
 			if conf, _ := props["configuration"].(map[string]any); conf != nil {
 				if ing, _ := conf["ingress"].(map[string]any); ing != nil {
 					ing["fqdn"] = strings.TrimPrefix(f.Server.URL, "http://") + "/apps/" + name
@@ -267,6 +281,11 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			notFound("ParentResourceNotFound")
 			return
 		}
+		if f.principalMissed < f.PrincipalMissingFor {
+			f.principalMissed++
+			reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "PrincipalNotFound", "message": "Principal " + PullPrincipal + " does not exist in the directory " + Tenant + "."}})
+			return
+		}
 		key := strings.ToLower(canonical) + "/" + rest[3]
 		for _, have := range f.RoleAssignments {
 			if strings.ToLower(have.Scope)+"/"+strings.ToLower(have.Name) == key {
@@ -281,6 +300,9 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			RoleDefinitionID: str("roleDefinitionId"), PrincipalID: str("principalId"), PrincipalType: str("principalType"),
 		})
 		reply(http.StatusCreated, map[string]any{"properties": props})
+	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions" && f.pullDenied[rest[1]]:
+		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioned", "runningState": "Failed",
+			"runningStateDetails": "Failed to pull image: UNAUTHORIZED: authentication required"}})
 	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions":
 		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioning", "runningState": "Processing"}})
 	default:

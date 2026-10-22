@@ -15,6 +15,10 @@ If you prefer the CLI, `az ad sp create-for-rbac --role Contributor --scopes /su
 
 Loomplane signs in as the principal before it keeps the secret. A wrong or expired secret is refused with Entra ID's own AADSTS code, so you can tell a mistyped secret from an expired one. Then it asks Azure what the principal's role assignments allow in the resource group, or in the subscription while the group isn't there yet, and lists every action a deployment needs that they leave out. A connection that lacks any is incomplete until you grant them and check it again. Contributor has them all.
 
+Contributor can't assign roles, though, and that decides how your apps pull their images. Give the principal Owner on the resource group, or Role Based Access Control Administrator there as well as Contributor, and each app pulls from the registry as a managed identity called `loomplane-pull`, which holds the AcrPull role on that registry and nothing else. With Contributor alone, apps pull with the registry's admin user, and its password goes into each app as a secret. The connection shows which one you get under `registry_pull`: `identity` or `admin`. Every deployment asks Azure again, so a role you add later counts from the next one. Check the connection again to update what it shows.
+
+Azure takes a while to let a new identity pull. The first deployment after you grant the role can sit at "Waiting for the pull identity's role to reach the container registry" for a few minutes, and Loomplane waits up to ten. If that runs out, retry the deployment.
+
 The subscription also needs the `Microsoft.App` and `Microsoft.ContainerRegistry` resource providers. Loomplane registers them on the first deployment if you haven't, which Contributor on the subscription may do. With Contributor on just a resource group, register them yourself under the subscription's **Resource providers**.
 
 The subscription and resource group are the connection's account. You can replace the secret, or switch to another principal with access to the same group, and nothing that uses the connection has to change.
@@ -39,7 +43,8 @@ The regions are `eastus`, `eastus2`, `centralus`, `westus2`, `westus3`, `canadac
 
 Everything lives in the connection's resource group, which Loomplane makes in the first region you deploy to if it isn't there:
 
-- One Basic container registry, named from a hash of the subscription and resource group, since registry names are global across Azure. Its admin user is what your apps pull with.
+- One Basic container registry, named from a hash of the subscription and resource group, since registry names are global across Azure. Its admin user stays on, even when your apps pull with the identity.
+- The `loomplane-pull` managed identity, when the principal may assign roles.
 - One Container Apps environment per region, called `loomplane-<region>`. It's consumption only, with no Log Analytics workspace.
 - A container app for each service in each environment, named after the service, the environment and the project.
 

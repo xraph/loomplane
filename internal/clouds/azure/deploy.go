@@ -116,8 +116,9 @@ func (s *Session) registryPath() string {
 }
 
 // EnsureRegistry makes the resource group's registry in location, unless
-// it's there, and waits until it can be built into. Its admin user is
-// what Container Apps pulls with.
+// it's there, and waits until it can be built into. Container Apps pulls
+// with its admin user unless the principal may give apps a pull
+// identity.
 func (s *Session) EnsureRegistry(ctx context.Context, location string) (*Registry, error) {
 	var r Registry
 	_, err := s.do(ctx, http.MethodGet, s.registryPath(), registryVersion, nil, &r)
@@ -403,7 +404,15 @@ type App struct {
 	ID         string            `json:"id,omitempty"`
 	Location   string            `json:"location"`
 	Tags       map[string]string `json:"tags,omitempty"`
+	Identity   *ManagedIdentity  `json:"identity,omitempty"`
 	Properties AppProperties     `json:"properties"`
+}
+
+// ManagedIdentity is what an app may act as: Type "UserAssigned" with
+// the identities' resource IDs as keys.
+type ManagedIdentity struct {
+	Type                   string              `json:"type"`
+	UserAssignedIdentities map[string]struct{} `json:"userAssignedIdentities,omitempty"`
 }
 
 // AppProperties are a container app's.
@@ -435,11 +444,14 @@ type Ingress struct {
 	FQDN string `json:"fqdn,omitempty"`
 }
 
-// AppRegistry is a registry an app pulls from.
+// AppRegistry is a registry an app pulls from: as Identity, a managed
+// identity's resource ID, or as Username with the password in an app
+// secret.
 type AppRegistry struct {
 	Server            string `json:"server"`
-	Username          string `json:"username"`
-	PasswordSecretRef string `json:"passwordSecretRef"`
+	Identity          string `json:"identity,omitempty"`
+	Username          string `json:"username,omitempty"`
+	PasswordSecretRef string `json:"passwordSecretRef,omitempty"`
 }
 
 // Secret is an app secret. Azure never returns its value.
@@ -553,8 +565,19 @@ type revision struct {
 	} `json:"properties"`
 }
 
+// PullError is a revision that didn't start because it couldn't pull
+// its image, as while a pull identity's role propagates.
+type PullError struct {
+	Revision, Detail string
+}
+
+func (e *PullError) Error() string {
+	return fmt.Sprintf("revision %s didn't start: %s", e.Revision, e.Detail)
+}
+
 // WaitApp waits until the app's newest revision is provisioned and ready,
-// and fails if it can't be.
+// and fails if it can't be: with a PullError when the revision couldn't
+// pull its image.
 func (s *Session) WaitApp(ctx context.Context, id string) (*App, error) {
 	for {
 		a, err := s.GetApp(ctx, id)
@@ -579,6 +602,9 @@ func (s *Session) WaitApp(ctx context.Context, id string) (*App, error) {
 					detail := strings.TrimSpace(rp.ProvisioningError + " " + rp.RunningDetails)
 					if detail == "" {
 						detail = "it failed"
+					}
+					if lower := strings.ToLower(detail); strings.Contains(lower, "pull") || strings.Contains(lower, "unauthorized") {
+						return nil, &PullError{Revision: p.LatestRevisionName, Detail: detail}
 					}
 					return nil, fmt.Errorf("revision %s didn't start: %s", p.LatestRevisionName, detail)
 				}
