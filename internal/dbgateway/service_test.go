@@ -881,6 +881,30 @@ func TestPauseFindsOnlyTheProjectsRoute(t *testing.T) {
 	}
 }
 
+// An admin of another organization, even one with a project of the same id,
+// sees none of this organization's gateways and can't pause its routes.
+func TestManagementStaysInsideTheOrganization(t *testing.T) {
+	h, _, audit := managedHarness(t)
+	h.svc.Authz.(*roleAuthz).roles["usr_elsewhere"] = security.RoleAdmin
+	elsewhere := security.Principal{OrgID: "org_2", UserID: "usr_elsewhere"}
+	ctx := t.Context()
+	list, err := h.svc.ProjectGateways(ctx, elsewhere, "proj_1")
+	if err != nil || len(list) != 0 {
+		t.Fatalf("another organization's list: %+v %v, want none", list, err)
+	}
+	for _, state := range []string{"paused", "active"} {
+		if _, err := h.svc.SetRouteState(ctx, elsewhere, "proj_1", h.gw.ID, "dbgr_1", state); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("another organization setting %s: %v, want ErrNotFound", state, err)
+		}
+	}
+	if st := h.store.routes[h.gw.ID][0].State; st != "active" {
+		t.Fatalf("route is %s", st)
+	}
+	if ev := audit.list(); len(ev) != 0 {
+		t.Fatalf("audited %v", ev)
+	}
+}
+
 // Without an authorizer the management methods refuse everyone.
 func TestManagementWithoutAnAuthorizer(t *testing.T) {
 	h := newServiceHarness(t)

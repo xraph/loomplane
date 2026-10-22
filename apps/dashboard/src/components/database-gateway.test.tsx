@@ -22,9 +22,14 @@ afterEach(() => {
 
 const seen = new Date().toISOString()
 
-function fixture({ empty = false } = {}) {
+// fixture serves one gateway. After a pause or resume the list reports
+// serverSays when it's set, as when someone else changed the route since.
+function fixture({
+  empty = false,
+  serverSays,
+}: { empty?: boolean; serverSays?: string } = {}) {
   const calls: string[] = []
-  let state = "active"
+  let listed = "active"
   vi.stubGlobal(
     "fetch",
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -32,7 +37,8 @@ function fixture({ empty = false } = {}) {
       const method = init?.method ?? "GET"
       calls.push(`${method} ${new URL(url, "http://x").pathname}`)
       if (method === "POST") {
-        state = url.endsWith("/pause") ? "paused" : "active"
+        const state = url.endsWith("/pause") ? "paused" : "active"
+        listed = serverSays ?? state
         return Response.json({
           id: "dbgr_1",
           gateway_id: "dbgw_1",
@@ -40,6 +46,7 @@ function fixture({ empty = false } = {}) {
           state,
         })
       }
+      const state = listed
       return Response.json({
         gateways: empty
           ? []
@@ -137,6 +144,27 @@ it("pauses a route through dbGateways.pauseRoute and shows it paused", async () 
   )
   expect(await screen.findByRole("button", { name: "Pause" })).toBeVisible()
   expect(container.textContent).not.toContain("—")
+})
+
+it("shows the server's state after a pause, not the one it asked for", async () => {
+  const calls = fixture({ serverSays: "active" })
+  show()
+  await userEvent.click(await screen.findByRole("button", { name: "Pause" }))
+  expect(calls).toContain(
+    "POST /api/v1/projects/proj_1/db-gateways/dbgw_1/routes/dbgr_1/pause"
+  )
+  // The pause answered paused, but the list read afterwards says active.
+  await vi.waitFor(() =>
+    expect(
+      calls.filter((c) => c === "GET /api/v1/projects/proj_1/db-gateways")
+        .length
+    ).toBeGreaterThan(1)
+  )
+  expect(
+    await screen.findByRole("button", { name: "Pause" })
+  ).not.toBeDisabled()
+  expect(screen.getByText("Active")).toBeInTheDocument()
+  expect(screen.queryByText("Paused")).toBeNull()
 })
 
 it("offers pause only to admins", async () => {

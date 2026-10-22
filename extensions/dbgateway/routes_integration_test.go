@@ -291,6 +291,20 @@ func TestManagementRoutesAgainstTheStore(t *testing.T) {
 	if out = callAs(t, r, http.MethodPost, "/api/v1/projects/proj_2/db-gateways/"+gw.ID+"/routes/"+route.ID+"/pause", "usr_admin"); out.Code != http.StatusNotFound {
 		t.Fatalf("a pause through another project: %d, want 404", out.Code)
 	}
+	// An admin of another organization sees no gateway and can't pause.
+	elsewhere := func(method, uri string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), method, uri, nil)
+		req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org_2", UserID: "usr_admin"}))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+	if out = elsewhere(http.MethodGet, "/api/v1/projects/proj_1/db-gateways"); out.Code != http.StatusOK || strings.Contains(out.Body.String(), gw.ID) {
+		t.Fatalf("another organization's list: %d %s", out.Code, out.Body.String())
+	}
+	if out = elsewhere(http.MethodPost, pause); out.Code != http.StatusNotFound {
+		t.Fatalf("another organization's pause: %d, want 404", out.Code)
+	}
 	routes, err := store.Routes(ctx, "org_1", gw.ID)
 	if err != nil || routes[0].State != "active" {
 		t.Fatalf("after refused pauses: %+v %v", routes, err)

@@ -68,7 +68,12 @@ export function DatabaseGateways({ project }: { project: string }) {
   return (
     <section aria-label="Database gateways" className="grid gap-4">
       {gateways.map((g) => (
-        <GatewayCard key={g.id} project={project} gateway={g} />
+        <GatewayCard
+          key={g.id}
+          project={project}
+          gateway={g}
+          reload={refetch}
+        />
       ))}
     </section>
   )
@@ -77,9 +82,11 @@ export function DatabaseGateways({ project }: { project: string }) {
 function GatewayCard({
   project,
   gateway,
+  reload,
 }: {
   project: string
   gateway: GatewayStatus
+  reload: () => Promise<unknown>
 }) {
   return (
     <Card>
@@ -92,7 +99,7 @@ function GatewayCard({
       </CardHeader>
       <CardContent className="grid gap-4">
         <Instances instances={gateway.instances} />
-        <Routes project={project} gateway={gateway} />
+        <Routes project={project} gateway={gateway} reload={reload} />
       </CardContent>
     </Card>
   )
@@ -125,29 +132,35 @@ function Instances({ instances }: { instances: InstanceStatus[] }) {
 function Routes({
   project,
   gateway,
+  reload,
 }: {
   project: string
   gateway: GatewayStatus
+  reload: () => Promise<unknown>
 }) {
   const { can } = useOrganization()
   const admin = can("infrastructure:modify")
   const pause = useMutation(useDbGatewaysPauseRoute)
   const resume = useMutation(useDbGatewaysResumeRoute)
-  // What a pause or resume answered, until the list catches up.
-  const [changed, setChanged] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState("")
+  // The list is the only source of a route's state: after a pause or
+  // resume the card reads it again rather than trusting the answer, so it
+  // shows what the server holds even if something else changed it since.
   async function toggle(route: RouteStatus, paused: boolean) {
     setBusy(route.id)
     try {
       const vars = {
         path: { id: project, gatewayId: gateway.id, routeId: route.id },
       }
-      const out = paused
-        ? await resume.mutateAsync(vars)
-        : await pause.mutateAsync(vars)
-      setChanged((c) => ({ ...c, [route.id]: out.state }))
+      if (paused) await resume.mutateAsync(vars)
+      else await pause.mutateAsync(vars)
     } catch (error) {
       toast.error(messageOf(error, "The route could not be changed"))
+    }
+    try {
+      await reload()
+    } catch {
+      // The list shows its own error.
     } finally {
       setBusy("")
     }
@@ -168,7 +181,7 @@ function Routes({
         </TableHeader>
         <TableBody>
           {gateway.routes.map((r) => {
-            const paused = (changed[r.id] ?? r.state) === "paused"
+            const paused = r.state === "paused"
             return (
               <TableRow key={r.id}>
                 <TableCell className="font-medium">{r.resource}</TableCell>

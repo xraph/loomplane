@@ -37,6 +37,7 @@ import {
   Structure,
   useAnalyses,
 } from "@/components/architecture"
+import { DatabaseGateways } from "@/components/database-gateway"
 import { DeployTab } from "@/components/deploy"
 import { EnvironmentCards } from "@/components/environment-manager"
 import { Page, PageHeading } from "@/components/page"
@@ -99,7 +100,6 @@ import {
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ServiceRecovery } from "@/pages/service-catalog"
-import { DatabaseGateways } from "@/components/database-gateway"
 import { projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
