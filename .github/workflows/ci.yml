@@ -25,8 +25,8 @@ jobs:
       contents: read
       security-events: write
     with:
-      go-versions: '["1.26.9"]'
-      primary-go-version: "1.26.9"
+      go-versions: '["1.26.10"]'
+      primary-go-version: "1.26.10"
       os: '["ubuntu-latest"]'
       # Root make test also runs the dashboard, which has its own job.
       prefer-makefile: false

@@ -228,7 +228,7 @@ function NewProjectForm({
             type="button"
             variant="outline"
             size="sm"
-            className="rounded-full"
+
             onClick={() => {
               setIcon(randomIcon())
               setColor(randomColor())

@@ -32,6 +32,8 @@ const GroupName = "loomplane"
 func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
 	g.MustRegister(
+		statements("20261029000400", "cloud_tags", cloudTagsUp, cloudTagsDown),
+		statements("20261028000400", "workload_attempt_safety", workloadAttemptSafetyUp, nil),
 		statements("20261028000300", "workload_attempts", workloadAttemptsUp, nil),
 		statements("20261028000200", "shared_sync_capacity_ledger", []string{serverCapacitySQL}, nil),
 		statements("20261028000100", "shared_sync_admission", sharedSyncAdmissionUp, nil),
@@ -96,6 +98,7 @@ func Group() *migrate.Group {
 		statements("20261020000401", "cloud_events", cloudEventsUp, cloudEventsDown),
 		statements("20261019000100", "plan_source_refs", planSourceRefsUp, planSourceRefsDown),
 		WorkloadControllersMigration(),
+		WorkloadRegistrationsMigration(),
 		NotificationsMigration(),
 	)
 	return g

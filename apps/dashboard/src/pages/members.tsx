@@ -85,10 +85,7 @@ export function Members() {
           description="Everyone in this organization, and what each of them can do."
           actions={
             mayManage && (
-              <Button
-                className="rounded-full"
-                onClick={() => setInviting(true)}
-              >
+              <Button onClick={() => setInviting(true)}>
                 <UserPlusIcon />
                 Invite
               </Button>

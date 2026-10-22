@@ -1,11 +1,10 @@
 import { useCallback, useRef, useState } from "react"
-import { DatabaseIcon } from "lucide-react"
+import { CheckIcon, ChevronLeftIcon, DatabaseIcon, ZapIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import {
   useConnectionsList,
   useProvidersList,
-  useProjectsList,
   useEnvironmentsList,
   useBindingsList,
   useServiceBackupsList,
@@ -20,7 +19,7 @@ import {
 import type { Restore } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { messageOf } from "@/client/errors"
-import { Page, PageHeading } from "@/components/page"
+import { Page } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { QueryError } from "@/components/query-error"
 import {
@@ -31,7 +30,11 @@ import {
   ZeroStateContent,
   ZeroStateMedia,
 } from "@/components/zero-state"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { CloudGlyph } from "@/components/cloud-glyph"
+import { ProductIcon } from "@/components/product-icon"
+import { cn } from "@/lib/utils"
+import { catalog } from "@/pages/services"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -65,11 +68,7 @@ import {
 import { useOrganization } from "@/lib/organization"
 import { databaseTargetProvider } from "@/lib/catalog-targets"
 import { deployDatabase } from "@/lib/catalog"
-import {
-  databaseRecipes,
-  isDatabaseKind,
-  type DatabaseKind,
-} from "@/lib/catalog-recipes"
+import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
 import { Link } from "@/lib/router"
 import { formatDate } from "@/lib/format"
 import { recoverySelection } from "@/lib/service-recovery"
@@ -85,88 +84,129 @@ import {
 import { NativeRecovery } from "@/components/native-recovery"
 import { ManagedDatabaseSettings } from "@/components/managed-database-settings"
 
-export function ServiceCatalog() {
-  const { can } = useOrganization()
-  const projects = useQuery(useProjectsList)
-  const [project, setProject] = useState("")
-  const selected = project || projects.data?.projects[0]?.id || ""
-  const { busy: projectBusy } = useDeploymentWrites(selected)
+/**
+ * ServiceCatalog deploys one engine and recovers what's deployed: the page a
+ * catalog card opens. kind picks the engine it starts on.
+ */
+export function ServiceCatalog({
+  kind = "postgres",
+}: { kind?: DatabaseKind } = {}) {
+  const recipe = databaseRecipes[kind]
+  const entry = catalog.find((e) => e.kind === kind)
   return (
     <>
-      <SiteHeader crumbs={[{ label: "Services" }]} />
-      <Page className="gap-5">
-        <PageHeading
-          title="Services"
-          description="Deploy databases with persistent storage and native backups."
-        />
-        <DatabaseDeployment
-          onCreated={(id) => {
-            setProject(id)
-            void projects.refetch()
-          }}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold">Service recovery</h2>
-          <Select
-            value={selected}
-            onValueChange={(value) => setProject(value ?? "")}
-          >
-            <SelectTrigger
-              aria-label="Recovery project"
-              disabled={projectBusy}
-              className="w-full sm:w-64"
-            >
-              <SelectValue placeholder="Choose a project">
-                {projects.data?.projects.find((p) => p.id === selected)?.name ??
-                  "Choose a project"}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {projects.data?.projects.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      <SiteHeader
+        crumbs={[
+          { label: "Services", to: "/services" },
+          { label: recipe.title },
+        ]}
+      />
+      <Page>
+        <Link
+          to="/services"
+          className="-mb-2 inline-flex items-center gap-1.5 self-start text-[13px] text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeftIcon className="size-3.5" />
+          Service catalog
+        </Link>
+        <header className="flex flex-wrap items-center gap-4">
+          <ProductIcon
+            product={entry?.product}
+            fallback={ZapIcon}
+            label={recipe.title}
+            size="xl"
+          />
+          <div className="grid min-w-0 flex-1 gap-1">
+            <h1 className="flex flex-wrap items-baseline gap-2 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl">
+              {recipe.title}
+              <span className="font-mono text-sm font-normal text-muted-foreground">
+                {recipe.version}
+              </span>
+            </h1>
+            <p className="max-w-[72ch] text-[13.5px] leading-relaxed text-muted-foreground">
+              {entry?.blurb ?? recipe.description}
+            </p>
+          </div>
+        </header>
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <DatabaseDeployment key={kind} kind={kind} />
+          <WhatYouGet kind={kind} />
         </div>
-        {projects.status === "error" ? (
-          <QueryError
-            error={projects.error}
-            fallback="Could not load projects"
-            retry={projects.refetch}
-          />
-        ) : projects.status === "pending" ? (
-          <p role="status">Loading projects…</p>
-        ) : !selected ? (
-          <CatalogEmpty
-            title="No service projects yet"
-            description="Deploy a database above to create a project with persistent storage."
-          />
-        ) : !can("service_backup:read") ? (
-          <Alert>
-            <AlertDescription>
-              You need service backup read access to view recovery points.
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <ServiceRecovery key={selected} project={selected} />
-        )}
       </Page>
     </>
   )
 }
+
+/** WhatYouGet is the engine's profile, and where its backups live after. */
+function WhatYouGet({ kind }: { kind: DatabaseKind }) {
+  const recipe = databaseRecipes[kind]
+  const entry = catalog.find((e) => e.kind === kind)
+  return (
+    <aside
+      aria-label="What you get"
+      className="grid gap-3 rounded-[14px] bg-subtle p-4 ring-1 ring-border"
+    >
+      <h2 className="text-[13px] font-semibold">What you get</h2>
+      <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+        {recipe.description}
+      </p>
+      {entry && (
+        <ul className="grid gap-1.5 text-[12.5px]">
+          {entry.features.map((f) => (
+            <li key={f} className="flex items-center gap-2">
+              <CheckIcon className="size-3.5 text-overdye" />
+              {f}
+            </li>
+          ))}
+          <li className="flex items-center gap-2 text-muted-foreground">
+            <span className="size-3.5" />
+            Runs on {entry.runsOn}
+          </li>
+        </ul>
+      )}
+      <p className="border-t pt-3 text-[12px] leading-relaxed text-muted-foreground">
+        Point-in-time recovery isn&apos;t available yet. Once it&apos;s
+        deployed, backups, test restores and recovery copies are on the
+        service&apos;s project page, under Backups.
+      </p>
+    </aside>
+  )
+}
+
+// What each connected account would run the database as.
+function targetMode(
+  provider: string | undefined,
+  details: Record<string, string>
+): string {
+  if (provider === "rds") return `Managed · Amazon RDS · ${details.region}`
+  if (provider === "cloud-sql")
+    return `Managed · Cloud SQL · ${details.project_id}`
+  if (provider === "kubernetes")
+    return `Single instance · Kubernetes · ${details.namespace}`
+  return "Single instance · Docker"
+}
+
+// The accounts that can run each engine, for the empty state.
+const runsOnClouds: Record<DatabaseKind, string[]> = {
+  postgres: ["aws", "gcp", "server", "kubernetes"],
+  mysql: ["server"],
+  mariadb: ["server"],
+  redis: ["server"],
+  valkey: ["server"],
+}
+
 function DatabaseDeployment({
+  kind,
   onCreated,
 }: {
-  onCreated: (id: string) => void
+  kind: DatabaseKind
+  onCreated?: (id: string) => void
 }) {
   const { can } = useOrganization()
   const connections = useQuery(useConnectionsList)
   const providers = useQuery(useProvidersList)
   const offers =
     providers.status === "success" ? (providers.data?.providers ?? []) : []
-  const [kind, setKind] = useState<DatabaseKind>("postgres")
   const targets =
     connections.data?.connections.filter((connection) => {
       const provider = databaseTargetProvider(connection, kind)
@@ -177,7 +217,7 @@ function DatabaseDeployment({
       )
     }) ?? []
   const recipe = databaseRecipes[kind]
-  const [name, setName] = useState<string>("PostgreSQL")
+  const [name, setName] = useState<string>(recipe.title)
   const [target, setTarget] = useState("")
   const [regionChoice, setRegionChoice] = useState({ target: "", value: "" })
   const [daily, setDaily] = useState(true)
@@ -250,7 +290,7 @@ function DatabaseDeployment({
         setProgress,
         (id) => {
           setCreated(id)
-          onCreated(id)
+          onCreated?.(id)
         }
       )
       toast.success(`${recipe.title} deployed`)
@@ -261,57 +301,10 @@ function DatabaseDeployment({
     }
   }
   return (
-    <section className="rounded-xl border p-4" aria-label="Deploy database">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <DatabaseIcon className="size-5" />
-        <h2 className="font-semibold">Database</h2>
-        <div className="min-w-40">
-          <Label className="sr-only" htmlFor="database-engine">
-            Database engine
-          </Label>
-          <Select
-            value={kind}
-            disabled={locked}
-            onValueChange={(value) => {
-              if (!isDatabaseKind(value)) return
-              if (name === recipe.title) setName(databaseRecipes[value].title)
-              setKind(value)
-              setTarget("")
-            }}
-          >
-            <SelectTrigger id="database-engine" className="w-full">
-              <SelectValue>
-                {recipe.title} {recipe.version}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {Object.entries(databaseRecipes).map(([value, entry]) => (
-                <SelectItem key={value} value={value}>
-                  {entry.title} {entry.version}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <Badge variant="secondary">
-          {managed
-            ? `Managed · ${selectedProvider?.title}`
-            : targetProvider
-              ? `Single instance · ${targetProvider === "kubernetes" ? "Kubernetes" : "Docker"}`
-              : "Choose a target"}
-        </Badge>
-      </div>
-      {managed && profile ? (
-        <ManagedDatabaseSettings profile={profile} />
-      ) : targetProvider ? (
-        <p className="mb-4 text-sm text-muted-foreground">
-          {targetProvider === "kubernetes"
-            ? `Private endpoint, restricted application role and a 10 GiB retained PVC on ${selectedTarget?.details.storage_class}. Restore copies require an enforcing NetworkPolicy CNI. Keep backups outside this cluster.`
-            : recipe.description}{" "}
-          Point-in-time recovery is not available in this profile.
-        </p>
-      ) : null}
+    <section
+      aria-label="Deploy database"
+      className="grid gap-5 rounded-[14px] bg-card p-5 ring-1 ring-border"
+    >
       {providers.status === "error" && connections.status !== "error" && (
         <QueryError
           error={providers.error}
@@ -326,7 +319,9 @@ function DatabaseDeployment({
           retry={connections.refetch}
         />
       ) : connections.status === "pending" || providers.status === "pending" ? (
-        <p role="status">Loading checked targets…</p>
+        <p role="status" className="text-[13px] text-muted-foreground">
+          Loading checked targets…
+        </p>
       ) : providers.status === "error" &&
         !targets.length ? null : !targets.length ? (
         <CatalogEmpty
@@ -341,6 +336,11 @@ function DatabaseDeployment({
               : "Add and check an SSH server connection before deploying a database."
           }
         >
+          <span className="flex basis-full justify-center gap-1.5">
+            {runsOnClouds[kind].map((c) => (
+              <CloudGlyph key={c} cloud={c} size="sm" />
+            ))}
+          </span>
           <Button
             variant="outline"
             nativeButton={false}
@@ -355,119 +355,166 @@ function DatabaseDeployment({
             event.preventDefault()
             void deploy()
           }}
-          className="flex flex-wrap items-end gap-3"
+          className="grid gap-5"
         >
-          <div className="grid min-w-0 basis-full gap-1.5 sm:min-w-40 sm:flex-1 sm:basis-0">
-            <Label htmlFor="database-name">Project name</Label>
-            <Input
-              id="database-name"
-              value={name}
-              maxLength={100}
-              required
-              disabled={locked || !allowed}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          <div className="grid min-w-0 basis-full gap-1.5 sm:min-w-48 sm:flex-1 sm:basis-0">
-            <Label htmlFor="database-target">Deployment target</Label>
-            <Select
-              value={selected}
-              disabled={locked || !allowed}
-              onValueChange={(value) => setTarget(value ?? "")}
+          <fieldset className="grid gap-2">
+            <legend className="mb-2 text-[13px] font-semibold">
+              Where it runs
+            </legend>
+            <div
+              role="radiogroup"
+              aria-label="Deployment target"
+              className="grid gap-2 sm:grid-cols-2"
             >
-              <SelectTrigger id="database-target" className="w-full">
-                <SelectValue>
-                  {targets.find((c) => c.id === selected)?.name ??
-                    "Choose a target"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {targets.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {managed && (
-            <div className="grid min-w-0 basis-full gap-1.5 sm:min-w-40 sm:flex-1 sm:basis-0">
-              <Label htmlFor="database-region">Region</Label>
-              {targetProvider === "rds" ? (
-                <Input id="database-region" readOnly value={region} />
-              ) : (
-                <Select
-                  value={region}
-                  onValueChange={(value) =>
-                    setRegionChoice({ target: selected, value: value ?? "" })
-                  }
-                  disabled={locked || !allowed}
-                >
-                  <SelectTrigger id="database-region" className="w-full">
-                    <SelectValue>{region || "Choose a region"}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {regions.map((value) => (
-                      <SelectItem key={value} value={value}>
-                        {value}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
+              {targets.map((c) => {
+                const on = c.id === selected
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    disabled={locked || !allowed}
+                    onClick={() => setTarget(c.id)}
+                    className={cn(
+                      "flex min-w-0 items-center gap-3 rounded-xl bg-card px-3 py-2.5 text-left ring-1 transition-shadow disabled:opacity-60",
+                      on
+                        ? "ring-2 ring-primary"
+                        : "ring-border hover:ring-foreground/25"
+                    )}
+                  >
+                    <CloudGlyph cloud={c.cloud} size="md" />
+                    <span className="grid min-w-0 gap-0.5">
+                      <span className="truncate text-[13px] font-medium">
+                        {c.name}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {targetMode(databaseTargetProvider(c, kind), c.details)}
+                      </span>
+                    </span>
+                  </button>
+                )
+              })}
             </div>
-          )}
-          {!managed && can("service_backup:manage") && (
-            <label className="flex h-9 items-center gap-2 text-sm">
-              <Checkbox
-                checked={daily}
-                onCheckedChange={(value) => setDaily(!!value)}
-                disabled={locked}
+            <Link
+              to="/integrations"
+              className="justify-self-start text-[12.5px] font-medium text-brand-ink hover:underline"
+            >
+              Connect another account
+            </Link>
+          </fieldset>
+          {managed && profile ? (
+            <ManagedDatabaseSettings profile={profile} />
+          ) : targetProvider === "kubernetes" ? (
+            <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+              Private endpoint, restricted application role and a 10 GiB
+              retained PVC on {selectedTarget?.details.storage_class}. Restore
+              copies require an enforcing NetworkPolicy CNI. Keep backups
+              outside this cluster.
+            </p>
+          ) : null}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid min-w-0 gap-1.5">
+              <Label htmlFor="database-name">Project name</Label>
+              <Input
+                id="database-name"
+                value={name}
+                maxLength={100}
+                required
+                disabled={locked || !allowed}
+                onChange={(e) => setName(e.target.value)}
               />
-              Daily backups
-            </label>
-          )}
-          <Button
-            type="submit"
-            disabled={
-              locked ||
-              !allowed ||
-              !name.trim() ||
-              !selected ||
-              (managed && !region)
-            }
-          >
-            {pending ? "Deploying…" : `Deploy ${recipe.title}`}
-          </Button>
+              <span className="text-xs text-muted-foreground">
+                {recipe.title} gets its own project, so its backups and
+                variables stay with it.
+              </span>
+            </div>
+            {managed && (
+              <div className="grid min-w-0 content-start gap-1.5">
+                <Label htmlFor="database-region">Region</Label>
+                {targetProvider === "rds" ? (
+                  <Input id="database-region" readOnly value={region} />
+                ) : (
+                  <Select
+                    value={region}
+                    onValueChange={(value) =>
+                      setRegionChoice({ target: selected, value: value ?? "" })
+                    }
+                    disabled={locked || !allowed}
+                  >
+                    <SelectTrigger id="database-region" className="w-full">
+                      <SelectValue>{region || "Choose a region"}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {regions.map((value) => (
+                        <SelectItem key={value} value={value}>
+                          {value}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+            {!managed && can("service_backup:manage") ? (
+              <label className="flex items-center gap-2 text-[13px]">
+                <Checkbox
+                  checked={daily}
+                  onCheckedChange={(value) => setDaily(!!value)}
+                  disabled={locked}
+                />
+                Daily backups
+              </label>
+            ) : managed && selectedTarget ? (
+              <span className="text-xs break-words text-muted-foreground">
+                Cloud account: {selectedTarget.account}
+              </span>
+            ) : (
+              <span />
+            )}
+            <Button
+              type="submit"
+              disabled={
+                locked ||
+                !allowed ||
+                !name.trim() ||
+                !selected ||
+                (managed && !region)
+              }
+            >
+              {pending ? "Deploying…" : `Deploy ${recipe.title}`}
+            </Button>
+          </div>
         </form>
       )}
-      {managed && selectedTarget && (
-        <p className="mt-2 text-xs break-words text-muted-foreground">
-          Cloud account: {selectedTarget.account}
-        </p>
-      )}
       {!allowed && (
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="text-[13px] text-muted-foreground">
           Deployment requires project creation, project update and deployment
           approval access.
         </p>
       )}
       {progress && !error && (
-        <p role="status" className="mt-3 text-sm">
+        <p role="status" className="text-[13px]">
           {progress}
         </p>
       )}
       {error && (
-        <Alert variant="destructive" className="mt-3">
+        <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
       {created && (
-        <div className="mt-2 flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-overdye-tint px-4 py-3">
+          <span className="flex-1 text-[13px]">
+            {recipe.title} is on its own project now, with its backups under
+            Backups.
+          </span>
           <Link
             to="/projects/$id"
             params={{ id: created }}
-            className="inline-block text-sm underline"
+            className={buttonVariants({ size: "sm" })}
           >
             Open service project
           </Link>
@@ -489,7 +536,8 @@ function DatabaseDeployment({
     </section>
   )
 }
-function ServiceRecovery({ project }: { project: string }) {
+
+export function ServiceRecovery({ project }: { project: string }) {
   const [showNative, setShowNative] = useState(false)
   const { can } = useOrganization()
   const environments = useQuery(useEnvironmentsList, { path: { id: project } })
@@ -905,7 +953,7 @@ function CatalogEmpty({
   children?: React.ReactNode
 }) {
   return (
-    <ZeroState className="border">
+    <ZeroState>
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
           <DatabaseIcon />

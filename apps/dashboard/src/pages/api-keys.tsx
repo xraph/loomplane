@@ -93,7 +93,7 @@ export function ApiKeys() {
               : "Keys for the CLI, CI and scripts. Each acts as you, with your role, in this organization only."
           }
           actions={
-            <Button className="rounded-full" onClick={() => setCreating(true)}>
+            <Button onClick={() => setCreating(true)}>
               <KeyRoundIcon />
               New key
             </Button>

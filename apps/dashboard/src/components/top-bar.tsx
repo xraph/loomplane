@@ -43,7 +43,7 @@ export function TopBar({
   after?: ReactNode
 }) {
   return (
-    <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/80 px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70 md:px-4">
+    <header className="sticky top-0 z-20 flex h-[52px] shrink-0 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75 md:px-4">
       <SidebarTrigger className="-ml-1" />
       <Separator
         orientation="vertical"
@@ -86,7 +86,7 @@ export function TopBar({
           variant="outline"
           size="sm"
           onClick={onSearch}
-          className="hidden w-60 justify-start rounded-full bg-muted/40 pl-3 text-muted-foreground shadow-none md:inline-flex"
+          className="hidden w-64 justify-start rounded-[10px] bg-subtle pl-3 text-muted-foreground shadow-none md:inline-flex"
         >
           <SearchIcon />
           Search or run a command

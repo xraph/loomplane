@@ -41,6 +41,11 @@ func (r *Runner) validateReleaseRoutes(ctx context.Context, job *Job, current *p
 		return errors.New("the service routes changed since review; plan again before changing its runtime")
 	}
 	if len(routes) > 0 {
+		for _, route := range routes {
+			if _, checkErr := cloudinfra.ReviewedRouteDrain(route, 60); checkErr != nil {
+				return checkErr
+			}
+		}
 		if current == nil || job.Action.Op != planning.Replace || job.Action.Service == nil || job.Action.Service.CloudPlacement == nil || job.Action.Service.CloudPlacement.Allocation == "" {
 			return errors.New("routed release requires reviewed retained-instance capacity; plan again")
 		}
@@ -143,6 +148,9 @@ func (r *Runner) cleanupRoutedAction(ctx context.Context, d *Deployment, plan *p
 		step := fresh.Step(a.ID)
 		job := &Job{Deployment: fresh, Plan: plan, Action: a, Binding: bound, Progress: func(string, string) {}}
 		in := cloudinfra.ReleaseRouteRequest{Key: plan.ID + "/" + a.ID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Service: a.Name, CloudID: a.Service.CloudPlacement.CloudID, InstanceID: bound.ExternalID, Routes: a.Routes, DrainSeconds: 60}
+		if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+			return effectErr
+		}
 		if routeErr := r.routes.ReconcileReleaseRoutes(ctx, principal(job), in); routeErr != nil {
 			return fmt.Errorf("route %s: %w", a.Name, routeErr)
 		}
@@ -177,4 +185,16 @@ func (r *Runner) beginWorkloadAttempt(ctx context.Context, d *Deployment, a plan
 	return ctx, func(settled bool) error {
 		return infra.FinishWorkloadAttempt(context.WithoutCancel(ctx), *attempt, settled)
 	}, nil
+}
+
+func (r *Runner) markWorkloadEffects(ctx context.Context) error {
+	a, ok := cloudinfra.WorkloadAttemptFrom(ctx)
+	if !ok {
+		return nil
+	}
+	st, ok := r.store.(*PgStore)
+	if !ok {
+		return errors.New("workload effects require durable attempt storage")
+	}
+	return cloudinfra.NewPgStore(st.db).MarkWorkloadEffects(ctx, a)
 }

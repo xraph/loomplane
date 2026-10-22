@@ -136,7 +136,7 @@ export function ProjectPage({ id }: { id: string }) {
       <>
         <TopBar crumbs={[{ label: "Overview", path: "/" }, { label: id }]} />
         <Page>
-          <Empty className="border border-dashed">
+          <Empty>
             <EmptyHeader>
               <EmptyTitle>No project called {id}</EmptyTitle>
               <EmptyDescription>
@@ -260,7 +260,7 @@ export function ProjectPage({ id }: { id: string }) {
             key={r.id}
             className="items-center gap-y-1 rounded-xl border-dashed border-weld/60 bg-[color-mix(in_oklch,var(--weld)_5%,var(--card))] p-4 has-[>svg]:gap-x-3 md:has-[>svg]:grid-cols-[auto_1fr_auto]"
           >
-            <SparklesIcon className="text-weld-ink size-5!" />
+            <SparklesIcon className="size-5! text-weld-ink" />
             <AlertTitle>
               Loomplane thinks {proj.name} uses a {r.kind.toLowerCase()} that
               isn't in loomplane.yaml
@@ -1402,7 +1402,7 @@ function NothingDiscovered({
   onDeploy: () => void
 }) {
   return (
-    <Empty className="border border-dashed">
+    <Empty>
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <FolderGit2Icon />

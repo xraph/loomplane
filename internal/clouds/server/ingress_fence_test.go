@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -66,6 +67,12 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 					}
 					_ = json.NewEncoder(w).Encode(map[string]any{"Id": container, "State": map[string]any{"Running": true}, "Config": map[string]any{"Image": IngressImage, "Labels": map[string]string{"loomplane.org": "org", "loomplane.ingress": owner}}})
 				case "/exec/" + execution + "/start":
+					// Docker reads the start request before completing the stream.
+					// Closing while Python is still sending its body causes EPIPE.
+					if _, readErr := io.Copy(io.Discard, r.Body); readErr != nil {
+						t.Error(readErr)
+						return
+					}
 					starts.Add(1)
 					conn, buf, hijackErr := w.(http.Hijacker).Hijack()
 					if hijackErr != nil {
@@ -82,10 +89,12 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 			})}
 			go func() { _ = api.Serve(listener) }()
 			t.Cleanup(func() { _ = api.Close() })
+			var diagnostics bytes.Buffer
 			run := func(mode string, generation int) string {
 				q, _ := json.Marshal(map[string]any{"Headers": map[string][]string{}, "Mode": mode, "Daemon": daemon, "Socket": socket, "Method": "POST", "Path": "/exec/" + execution + "/start", "Fence": EffectFence{Operation: "org/ingress/server", Generation: int64(generation)}})
 				body, _ := json.Marshal(map[string]bool{"Detach": tc.detach, "Tty": false})
-				cmd := exec.CommandContext(t.Context(), python, "-c", strings.Replace(effectFenceScript, "range(120)", "range(2)", 1))
+				cmd := exec.CommandContext(t.Context(), python, "-c", strings.Replace(strings.Replace(effectFenceScript, "range(120)", "range(2)", 1), "except Exception: fail()", "except Exception:\n import traceback;traceback.print_exc();fail()", 1))
+				cmd.Stderr = &diagnostics
 				cmd.Stdin = bytes.NewReader(append(append(q, '\n'), body...))
 				if tc.lostCaller && mode == "ingress-exec" && generation == 1 && starts.Load() == 0 {
 					pipe, pipeErr := cmd.StdoutPipe()
@@ -118,7 +127,7 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 				t.Fatal(err)
 			}
 			if state.Dirty == tc.clean {
-				t.Fatalf("dirty %v, clean expected %v", state.Dirty, tc.clean)
+				t.Fatalf("dirty %v, clean expected %v: %s", state.Dirty, tc.clean, diagnostics.String())
 			}
 			if (tc.foreign || tc.detach) && starts.Load() != 0 {
 				t.Fatal("unapproved exec reached Docker")

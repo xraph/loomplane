@@ -83,7 +83,13 @@ import {
 import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Tabs,
+  TabsContent,
+  TabsCount,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
 import {
   analysisKey,
   ecosystemLabel,
@@ -92,6 +98,7 @@ import {
 } from "@/lib/architecture"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { ServiceRecovery } from "@/pages/service-catalog"
 import { projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -117,7 +124,7 @@ export function ProjectDetail({ id }: { id: string }) {
       <Page>
         {project.status === "error" &&
           (missing ? (
-            <Empty className="border border-dashed">
+            <Empty preview={false}>
               <EmptyHeader>
                 <EmptyTitle>No such project here</EmptyTitle>
                 <EmptyDescription>
@@ -286,10 +293,7 @@ function Body({
               <AnalyzeActions project={project} running={analyses.running} />
             )}
             {can("deployment:create") && isReady(project.status) && (
-              <Button
-                className="rounded-full"
-                onClick={() => openDeploy({ project: project.id })}
-              >
+              <Button onClick={() => openDeploy({ project: project.id })}>
                 <RocketIcon />
                 Deploy
               </Button>
@@ -366,7 +370,7 @@ function Body({
           key={r.id}
           className="items-center gap-y-1 rounded-xl border-dashed border-weld/60 bg-[color-mix(in_oklch,var(--weld)_5%,var(--card))] p-4 has-[>svg]:gap-x-3 md:has-[>svg]:grid-cols-[auto_1fr_auto]"
         >
-          <SparklesIcon className="text-weld-ink size-5!" />
+          <SparklesIcon className="size-5! text-weld-ink" />
           <AlertTitle>
             Loomplane thinks {project.name} needs {needName(r.kind)}, but
             isn&apos;t sure
@@ -380,7 +384,6 @@ function Body({
           <div className="col-start-2 mt-2 flex gap-2 md:col-start-3 md:row-span-2 md:row-start-1 md:mt-0">
             <Button
               variant="outline"
-              className="rounded-full"
               onClick={() => setSelected({ kind: "resource", id: r.id })}
             >
               Review
@@ -389,28 +392,32 @@ function Body({
         </Alert>
       ))}
 
-      <Tabs defaultValue="graph">
-        <TabsList
-          variant="line"
-          className="mb-2 max-w-full justify-start overflow-x-auto"
-        >
+      {/* A service project from the catalog has no repository to graph, so
+          it opens on its backups. */}
+      <Tabs
+        defaultValue={
+          project.icon === "database" &&
+          project.repositories.length === 0 &&
+          can("service_backup:read")
+            ? "backups"
+            : "graph"
+        }
+      >
+        <TabsList variant="line" className="mb-3 max-w-full overflow-x-auto">
           <TabsTrigger value="graph">Graph</TabsTrigger>
           <TabsTrigger value="services">
             Services
-            {graph && (
-              <span className="text-muted-foreground tabular-nums">
-                {graph.services.length}
-              </span>
-            )}
+            {graph && <TabsCount>{graph.services.length}</TabsCount>}
           </TabsTrigger>
           <TabsTrigger value="variables">Variables</TabsTrigger>
           <TabsTrigger value="deploy">Deploy</TabsTrigger>
+          {can("service_backup:read") && (
+            <TabsTrigger value="backups">Backups</TabsTrigger>
+          )}
           <TabsTrigger value="analyses">
             Analyses
             {analyses.list.length > 0 && (
-              <span className="text-muted-foreground tabular-nums">
-                {analyses.list.length}
-              </span>
+              <TabsCount>{analyses.list.length}</TabsCount>
             )}
           </TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -484,6 +491,11 @@ function Body({
             <AnalysisHistory analyses={analyses.list} />
           )}
         </TabsContent>
+        {can("service_backup:read") && (
+          <TabsContent value="backups" className="grid gap-4">
+            <ServiceRecovery project={project.id} />
+          </TabsContent>
+        )}
         <TabsContent value="settings" className="grid gap-6">
           <Details project={project} />
           {can("project:delete") && <DeleteProject project={project} />}
@@ -677,11 +689,7 @@ function DeleteProject({ project }: { project: Project }) {
         <AlertDialog open={open} onOpenChange={setOpen}>
           <AlertDialogTrigger
             render={
-              <Button
-                variant="destructive"
-                className="rounded-full"
-                disabled={remove.isPending}
-              />
+              <Button variant="destructive" disabled={remove.isPending} />
             }
           >
             Delete project

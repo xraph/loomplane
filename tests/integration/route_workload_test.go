@@ -59,6 +59,9 @@ func TestRouteWorkloadAttachmentSurvivesRestart(t *testing.T) {
 	if err = f.store.AcceptRoute(ctx, op); !errors.Is(err, cloudinfra.ErrBusy) {
 		t.Fatal("attachment passed active direct attempt", err)
 	}
+	if err = f.store.MarkWorkloadEffects(ctx, *first); err != nil {
+		t.Fatal(err)
+	}
 	reopened := cloudinfra.NewPgStore(f.db)
 	next, err := reopened.BeginWorkloadAttempt(ctx, in, nil, false)
 	if err != nil || next.Generation != first.Generation+1 {
@@ -182,6 +185,9 @@ func TestRouteWorkloadUpgradeRefusesUnfencedLegacyAttempt(t *testing.T) {
 	}
 	if err := f.store.AcceptRoute(ctx, op); !errors.Is(err, cloudinfra.ErrBusy) {
 		t.Fatal("legacy in-flight runtime accepted route", err)
+	}
+	if err := federationMigration(t, "20261028000400").Up(ctx, pgmigrate.New(f.db)); err != nil {
+		t.Fatal(err)
 	}
 	_, err := f.store.BeginWorkloadAttempt(ctx, cloudinfra.WorkloadAttempt{Org: "org", Project: "proj", Environment: "env", Service: "web", Plan: "legacy-direct", Deployment: "legacy-worker"}, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "pre-upgrade unfenced worker") {

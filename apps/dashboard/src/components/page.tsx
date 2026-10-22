@@ -13,7 +13,7 @@ export function Page({
   return (
     <div
       className={cn(
-        "mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-8 px-4 pt-6 pb-16 md:px-8 lg:px-10",
+        "mx-auto flex w-full max-w-[1240px] flex-1 flex-col gap-5 px-4 pt-6 pb-12 md:px-7",
         className
       )}
     >
@@ -36,14 +36,14 @@ export function PageHeading({
   children?: ReactNode
 }) {
   return (
-    <header className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-      <div className="grid min-w-0 grid-cols-1 gap-2">
+    <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+      <div className="grid min-w-0 grid-cols-1 gap-1">
         {eyebrow}
-        <h1 className="text-[28px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-[32px]">
+        <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-2xl">
           {title}
         </h1>
         {description && (
-          <p className="max-w-[68ch] text-[15px] text-pretty text-muted-foreground">
+          <p className="max-w-[72ch] text-[13.5px] leading-relaxed text-pretty text-muted-foreground">
             {description}
           </p>
         )}

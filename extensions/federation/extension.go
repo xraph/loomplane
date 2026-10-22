@@ -79,9 +79,9 @@ func (e *Extension) Register(app forge.App) error {
 		return fmt.Errorf("provide federation access service: %w", err)
 	}
 	if e.cfg.Federation.Identity.Enabled {
-		e.cleanup, err = workloadidentity.NewCleanupRuntime(e.cfg.Federation.Identity, workloadidentity.NewEnrollmentStore(pg, e.cfg.Federation.Identity.TrustDomain), func(result workloadidentity.CleanupResult, sweepErr error) {
+		e.cleanup, err = workloadidentity.NewCleanupRuntime(e.cfg.Federation.Identity, workloadidentity.CleanupStores{workloadidentity.NewEnrollmentStore(pg, e.cfg.Federation.Identity.TrustDomain), workloadidentity.NewWorkloadStore(pg, e.cfg.Federation.Identity.TrustDomain)}, func(result workloadidentity.CleanupResult, sweepErr error) {
 			if sweepErr != nil && !errors.Is(sweepErr, context.Canceled) {
-				e.Logger().Warn("federation enrollment cleanup incomplete", forge.F("org_id", e.cfg.Federation.Identity.OrganizationID), forge.F("attempted", result.Attempted), forge.F("deleted", result.Deleted), forge.F("failed", result.Failed), forge.F("error", sweepErr.Error()))
+				e.Logger().Warn("federation identity cleanup incomplete", forge.F("org_id", e.cfg.Federation.Identity.OrganizationID), forge.F("attempted", result.Attempted), forge.F("deleted", result.Deleted), forge.F("failed", result.Failed), forge.F("error", sweepErr.Error()))
 			}
 		})
 		if err != nil {

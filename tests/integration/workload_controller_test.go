@@ -120,10 +120,17 @@ func TestWorkloadControllerReceiptPersistence(t *testing.T) {
 	if _, err = db.Exec(ctx, `DELETE FROM loomplane_workload_controllers`); err != nil {
 		t.Fatal(err)
 	}
+	journal := federationMigration(t, "20261025000400")
+	if err = journal.Down(ctx, pgmigrate.New(db)); err != nil {
+		t.Fatal(err)
+	}
 	if err = m.Down(ctx, pgmigrate.New(db)); err != nil {
 		t.Fatal(err)
 	}
 	if err = m.Up(ctx, pgmigrate.New(db)); err != nil {
+		t.Fatal(err)
+	}
+	if err = journal.Up(ctx, pgmigrate.New(db)); err != nil {
 		t.Fatal(err)
 	}
 }

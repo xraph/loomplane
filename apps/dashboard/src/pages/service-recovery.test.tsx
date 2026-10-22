@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
-import { ServiceCatalog } from "@/pages/service-catalog"
+import { ServiceRecovery } from "@/pages/service-catalog"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ can: () => true }),
@@ -28,7 +28,11 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-function recoveryFixture({ removed = false, everyHours = 6, kind = "postgres" } = {}) {
+function recoveryFixture({
+  removed = false,
+  everyHours = 6,
+  kind = "postgres",
+} = {}) {
   const writes: { url: string; body: Record<string, unknown> }[] = []
   let enabled = true
   let cadence = everyHours
@@ -147,7 +151,7 @@ function recoveryFixture({ removed = false, everyHours = 6, kind = "postgres" } 
   )
   render(
     <ClientProvider client={forgeClient}>
-      <ServiceCatalog />
+      <ServiceRecovery project="p" />
     </ClientProvider>
   )
   return writes
@@ -225,8 +229,15 @@ it("saves a changed cadence without pausing an enabled schedule", async () => {
   })
 })
 
-it.each(["mysql", "mariadb"])("offers recovery controls for a deployed %s recipe", async (kind) => {
-  recoveryFixture({kind})
-  expect(await screen.findByRole("button", {name:"Back up now"})).toBeEnabled()
-  expect(screen.getByRole("button", {name:"Pause backup schedule"})).toBeEnabled()
-})
+it.each(["mysql", "mariadb"])(
+  "offers recovery controls for a deployed %s recipe",
+  async (kind) => {
+    recoveryFixture({ kind })
+    expect(
+      await screen.findByRole("button", { name: "Back up now" })
+    ).toBeEnabled()
+    expect(
+      screen.getByRole("button", { name: "Pause backup schedule" })
+    ).toBeEnabled()
+  }
+)

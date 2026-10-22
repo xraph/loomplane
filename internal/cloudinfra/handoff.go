@@ -284,6 +284,7 @@ func (s *Service) ReleaseRouteHandoff(ctx context.Context, p security.Principal,
 	if current.Status != "ready" {
 		return nil, ErrConflict
 	}
+	drainSeconds = max(drainSeconds, prepared.Source.Input.ExternalTTLSeconds, prepared.Route.Input.ExternalTTLSeconds, current.Input.ExternalTTLSeconds)
 	if current.Receipt != nil {
 		drainSeconds = max(drainSeconds, current.Receipt.TTL)
 	}

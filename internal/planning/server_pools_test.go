@@ -86,7 +86,7 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	pin.ServerID = "host-new"
 	pin.CPUMillis = 1000
 	pin.MemoryBytes = 512 << 20
-	route := cloudinfra.Route{ID: "reviewed-route", Status: "ready", Input: cloudinfra.RouteInput{Service: "api"}, Binding: cloudinfra.RouteBinding{BindingID: binding.ID, InstanceID: binding.ExternalID}}
+	route := cloudinfra.Route{ID: "reviewed-route", Status: "ready", Input: cloudinfra.RouteInput{ExternalTTLSeconds: 60, Service: "api"}, Binding: cloudinfra.RouteBinding{BindingID: binding.ID, InstanceID: binding.ExternalID}}
 	result := appliedCloudPlan([]*Binding{binding}, assigned, "", options, providers.Registry(), map[string]CloudPlacement{"api": pin}, []cloudinfra.Route{route})
 	if !result.Executable {
 		t.Fatalf("relocation blocked: %+v", result.Problems)

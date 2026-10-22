@@ -68,7 +68,7 @@ func TestRoutedReplacementPhysicalHostIdentity(t *testing.T) {
 			next.TargetSettings = map[string]string{"docker_id": tc.newDaemon}
 			next.CloudPlacement = &CloudPlacement{ServerID: tc.newServer}
 			a := &Action{Name: "api", Provider: "server", Service: &next}
-			route := cloudinfra.Route{Status: "ready", Binding: cloudinfra.RouteBinding{BindingID: b.ID, InstanceID: b.ExternalID}}
+			route := cloudinfra.Route{Input: cloudinfra.RouteInput{ExternalTTLSeconds: 60}, Status: "ready", Binding: cloudinfra.RouteBinding{BindingID: b.ID, InstanceID: b.ExternalID}}
 			err = routedReplacementAllowed(a, b, route)
 			if (err != nil) != tc.blocked {
 				t.Fatalf("blocked=%v, error=%v", tc.blocked, err)

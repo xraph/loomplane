@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/xraph/ctrlplane/id"
+	"github.com/xraph/grove/drivers/pgdriver"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,13 +28,13 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-func proveApplicationIdentity(ctx context.Context, t *testing.T, client kubernetes.Interface, credentials *fixtureCredentials, admin *workloadidentity.Admin, d domain.Destination) {
+func proveApplicationIdentity(ctx context.Context, t *testing.T, db *pgdriver.PgDB, client kubernetes.Interface, credentials *fixtureCredentials, admin *workloadidentity.Admin, d domain.Destination) {
 	t.Helper()
 	instance := id.New(id.PrefixInstance)
 	image := os.Getenv("AGENT_IMAGE")
 	var imageIndexes [][]byte
 	must(t, json.Unmarshal([]byte(os.Getenv("APPLICATION_IMAGE_INDEXES")), &imageIndexes))
-	saved := planning.Binding{ID: "application-binding", OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Subject: planning.ServiceSubject, Name: "api", Provider: "kubernetes", Engine: provider.CtrlPlane, ExternalID: instance.String(), ConnectionID: d.ConnectionID, Revision: image}
+	saved := planning.Binding{ID: "application-binding", OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Subject: planning.ServiceSubject, Name: "api", Provider: "kubernetes", Engine: provider.CtrlPlane, ExternalID: instance.String(), ConnectionID: d.ConnectionID, Revision: image, PlanID: "fixture-plan"}
 	binding, err := deployments.FederationWorkloadDeployment(&saved)
 	must(t, err)
 	selector := domain.WorkloadSelector{Scope: d.Scope, DestinationID: d.ID, ServiceID: binding.ServiceID}
@@ -55,6 +56,7 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, client kubernet
 	verify := fed.VerifyKubernetesWorkload(credentials, admin, "loomplane.test", d.OrgID)
 	var application workloadidentity.WorkloadBinding
 	var podName string
+	var profile fed.KubernetesWorkloadProfile
 	wait(ctx, t, "owned application controller and running image", func() error {
 		pods, listErr := client.CoreV1().Pods("apps").List(ctx, metav1.ListOptions{LabelSelector: owned.LabelInstance + "=" + instance.String()})
 		if listErr != nil {
@@ -65,7 +67,7 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, client kubernet
 		}
 		pod := pods.Items[0]
 		podName = pod.Name
-		profile := fed.KubernetesWorkloadProfile{KubernetesAttestationProfile: fed.KubernetesAttestationProfile{Scope: d.Scope, DestinationID: d.ID, ConnectionID: d.ConnectionID, IdentityRevision: d.Identity.Revision(), PodName: pod.Name, PodUID: string(pod.UID), ServiceAccount: pod.Spec.ServiceAccountName, Container: binding.Container, SPIRECluster: "qualification", SPIRENamespace: "spire", SPIREServiceAccount: "spire-agent"}, BindingID: binding.BindingID, DeploymentUID: string(created.UID), DeploymentGeneration: created.Generation, RuntimeRevision: revision, ImageIndexes: imageIndexes}
+		profile = fed.KubernetesWorkloadProfile{KubernetesAttestationProfile: fed.KubernetesAttestationProfile{Scope: d.Scope, DestinationID: d.ID, ConnectionID: d.ConnectionID, IdentityRevision: d.Identity.Revision(), PodName: pod.Name, PodUID: string(pod.UID), ServiceAccount: pod.Spec.ServiceAccountName, Container: binding.Container, SPIRECluster: "qualification", SPIRENamespace: "spire", SPIREServiceAccount: "spire-agent"}, BindingID: binding.BindingID, DeploymentUID: string(created.UID), DeploymentGeneration: created.Generation, RuntimeRevision: revision, ImageIndexes: imageIndexes}
 		var verifyErr error
 		application, verifyErr = verify(ctx, d, binding, profile)
 		return verifyErr
@@ -79,8 +81,34 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, client kubernet
 	wrong.ContainerImage = "localhost/loomplane-psat@sha256:" + strings.Repeat("0", 64)
 	_, err = admin.RegisterWorkload(ctx, wrong)
 	must(t, err)
-	_, err = admin.RegisterWorkload(ctx, application)
-	must(t, err)
+	// The fixture created this controller and retained the API response above.
+	receipt := kube.ControllerReceipt{Scope: d.Scope, ConnectionID: d.ConnectionID, InstanceID: instance.String(), PlanID: saved.PlanID, RuntimeRef: "application-fixture", ServiceID: saved.Name, Container: binding.Container, Image: image, Namespace: "apps", NamespaceUID: d.Identity.NamespaceUID, ClusterCA: d.Identity.Account, ServiceAccount: application.Binding.ServiceAccount, DeploymentUID: string(created.UID), DeploymentGeneration: created.Generation, RuntimeRevision: revision}
+	must(t, kube.NewControllerStore(db).RecordController(ctx, receipt))
+	must(t, planning.NewPgStore(db).PutBinding(ctx, &saved))
+	application.Binding.EntryID = ""
+	journal := workloadidentity.NewWorkloadStore(db, "loomplane.test")
+	guard := func(check context.Context) error {
+		verified, verifyErr := verify(check, d, binding, profile)
+		if verifyErr != nil {
+			return verifyErr
+		}
+		if verified.Binding.ParentURI != application.Binding.ParentURI || verified.ContainerImage != application.ContainerImage {
+			return workloadidentity.ErrIdentity
+		}
+		return nil
+	}
+	pod, podErr := client.CoreV1().Pods("apps").Get(ctx, podName, metav1.GetOptions{})
+	must(t, podErr)
+	node, nodeErr := client.CoreV1().Nodes().Get(ctx, pod.Spec.NodeName, metav1.GetOptions{})
+	must(t, nodeErr)
+	record, reserveErr := journal.Reserve(ctx, workloadidentity.WorkloadIntent{BindingID: saved.ID, Controller: receipt, Workload: application, ImageIndexes: imageIndexes, OperatingSystem: node.Status.NodeInfo.OperatingSystem, Architecture: node.Status.NodeInfo.Architecture}, guard)
+	if reserveErr != nil {
+		t.Fatalf("reserve application journal: %v", reserveErr)
+	}
+	if issueErr := journal.Issue(ctx, d.OrgID, record.ID, admin, guard); issueErr != nil {
+		t.Fatalf("issue application journal: %v", issueErr)
+	}
+	application.Binding.EntryID = record.Intent.Workload.Binding.EntryID
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -98,9 +126,15 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, client kubernet
 		return nil
 	}
 	wait(ctx, t, "application SPIRE identity and image selector", func() error { return probeLog("APPLICATION_IDENTITY_VERIFIED") })
-	must(t, admin.Revoke(ctx, application.Binding.EntryID))
+	reopened := workloadidentity.NewWorkloadStore(db, "loomplane.test")
+	must(t, reopened.Revoke(ctx, d.OrgID, record.ID, admin))
+	retained, readErr := reopened.Get(ctx, d.OrgID, record.ID)
+	must(t, readErr)
+	if retained.Phase != "draining" || !retained.Settled {
+		t.Fatal("journal lost revocation drain", retained)
+	}
 	wait(ctx, t, "application revocation through Workload API", func() error { return probeLog("APPLICATION_IDENTITY_REVOKED") })
-	t.Log("PASS deployment-owned application obtains exact CSI/SPIRE identity, wrong image denied and explicit revocation observed")
+	t.Log("PASS deployment-owned application obtains exact CSI/SPIRE identity through durable journal, wrong image denied and reopened journal revokes with retained drain")
 }
 
 func TestApplicationWorkloadProbe(t *testing.T) {

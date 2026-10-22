@@ -44,10 +44,13 @@ const goTo = {
   o: "/",
   d: "/deployments",
   p: "/projects",
+  s: "/services",
+  c: "/clouds",
   i: "/infrastructure",
   a: "/activity",
   v: "/variables",
   m: "/members",
+  k: "/api-keys",
 } as const
 
 function isEditable(target: EventTarget | null) {
@@ -154,10 +157,13 @@ export function ShellProvider({ children }: { children: ReactNode }) {
         [["G", "O"], "Overview"],
         [["G", "D"], "Deployments"],
         [["G", "P"], "Projects"],
+        [["G", "S"], "Services"],
+        [["G", "C"], "Clouds"],
         [["G", "I"], "Infrastructure"],
         [["G", "A"], "Activity"],
         [["G", "V"], "Variables"],
         [["G", "M"], "Members"],
+        [["G", "K"], "API keys"],
       ],
     },
   ]

@@ -128,7 +128,7 @@ function StorageEmpty({
   action: string
 }) {
   return (
-    <ZeroState className="border">
+    <ZeroState>
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
           <DatabaseIcon />

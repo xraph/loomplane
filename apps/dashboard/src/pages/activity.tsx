@@ -8,12 +8,12 @@ import {
   TriangleAlertIcon,
 } from "lucide-react"
 import { useState, type ReactNode } from "react"
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 
 import { messageOf } from "@/client/errors"
 import { useActivityGet } from "@/client/forge/loomplane/hooks"
 import type { ActivitySummary } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
+import { DotStackChart } from "@/components/dots"
 import { Page, PageHeading, SectionHeading } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -24,21 +24,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  type ChartConfig,
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
 const windows = [7, 30, 90] as const
-
-const chartConfig = {
-  succeeded: { label: "Succeeded", color: "var(--chart-2)" },
-  failed: { label: "Failed", color: "var(--destructive)" },
-} satisfies ChartConfig
 
 export function Activity() {
   const [days, setDays] = useState<number>(30)
@@ -148,46 +137,25 @@ function Summary({ data }: { data: ActivitySummary }) {
               No deployments in these {data.days} days.
             </p>
           ) : (
-            <ChartContainer config={chartConfig} className="h-64 w-full">
-              <BarChart
-                data={data.daily}
-                margin={{ left: 0, right: 8, top: 8 }}
-              >
-                <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  tickLine={false}
-                  axisLine={false}
-                  minTickGap={24}
-                  tickFormatter={(v: string) => shortDate(v)}
-                />
-                <YAxis
-                  allowDecimals={false}
-                  tickLine={false}
-                  axisLine={false}
-                  width={28}
-                />
-                <ChartTooltip
-                  content={
-                    <ChartTooltipContent
-                      labelFormatter={(v) => shortDate(String(v))}
-                    />
-                  }
-                />
-                <Bar
-                  dataKey="succeeded"
-                  stackId="d"
-                  fill="var(--color-succeeded)"
-                  radius={[0, 0, 2, 2]}
-                />
-                <Bar
-                  dataKey="failed"
-                  stackId="d"
-                  fill="var(--color-failed)"
-                  radius={[2, 2, 0, 0]}
-                />
-              </BarChart>
-            </ChartContainer>
+            <div className="grid gap-3">
+              <div className="flex justify-end gap-4 text-[12.5px] text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-[3px] bg-overdye" />
+                  Succeeded
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-[3px] bg-failed" />
+                  Failed
+                </span>
+              </div>
+              <DotStackChart
+                data={data.daily.map((d) => ({
+                  label: shortDate(d.date),
+                  succeeded: d.succeeded,
+                  failed: d.failed,
+                }))}
+              />
+            </div>
           )}
         </CardContent>
       </Card>

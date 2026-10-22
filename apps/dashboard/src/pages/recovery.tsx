@@ -63,7 +63,7 @@ export function RecoveryPage({
             }}
           />
         ) : (
-          <ZeroState>
+          <ZeroState preview={false}>
             <ZeroStateHeader>
               <ZeroStateTitle>This reset link is incomplete</ZeroStateTitle>
               <ZeroStateDescription>

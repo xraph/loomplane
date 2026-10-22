@@ -35,7 +35,7 @@ function NativeEmpty({
   children: React.ReactNode
 }) {
   return (
-    <ZeroState className="p-3">
+    <ZeroState variant="inline" className="p-3">
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
           <CloudIcon />

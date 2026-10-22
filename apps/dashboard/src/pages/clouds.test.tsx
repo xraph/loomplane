@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
-import { Clouds } from "./clouds"
+import { CloudsWorkspace } from "./clouds"
 import { ChangeReview } from "@/components/cloud-targets/change-review"
 import { SyncHistory } from "@/components/cloud-targets/sync-history"
 
@@ -72,6 +72,8 @@ function fixture(
     failure?: string
     noClouds?: boolean
     noEnvironments?: boolean
+    /** One Cloud over two DigitalOcean accounts and a Vercel one. */
+    spread?: boolean
   } = {}
 ) {
   const writes: { url: string; body: Record<string, unknown> }[] = []
@@ -135,7 +137,32 @@ function fixture(
         }
       if (path.endsWith("/clouds")) body = { clouds: profiles }
       if (path.endsWith("/cloud")) body = { assignment: null, revision: 0 }
-      if (path.endsWith("/targets")) body = { targets: [target] }
+      if (path.endsWith("/targets"))
+        body = {
+          targets: options.spread
+            ? [
+                target,
+                {
+                  ...target,
+                  id: "api",
+                  name: "api",
+                  display_name: "API",
+                  provider: "digitalocean",
+                  connection_id: "do-1",
+                  region: "nyc3",
+                },
+                {
+                  ...target,
+                  id: "worker",
+                  name: "worker",
+                  display_name: "Worker",
+                  provider: "digitalocean",
+                  connection_id: "do-2",
+                  region: "ams3",
+                },
+              ]
+            : [target],
+        }
       if (path.endsWith("/targets/target")) body = target
       if (path.endsWith("/connections"))
         body = {
@@ -147,6 +174,24 @@ function fixture(
               account: "Team A",
               status: "ready",
             },
+            ...(options.spread
+              ? [
+                  {
+                    id: "do-1",
+                    name: "Production DO",
+                    cloud: "digitalocean",
+                    account: "prod-team",
+                    status: "ready",
+                  },
+                  {
+                    id: "do-2",
+                    name: "EU DO",
+                    cloud: "digitalocean",
+                    account: "eu-team",
+                    status: "ready",
+                  },
+                ]
+              : []),
           ],
         }
       if (path.endsWith("/cloud-syncs")) body = { syncs: [] }
@@ -160,14 +205,25 @@ const show = (children: React.ReactNode) =>
 it("keeps denied access distinct and does not fetch Cloud data", async () => {
   denied = true
   const { reads } = fixture()
-  show(<Clouds />)
+  show(<CloudsWorkspace />)
   expect(screen.getByText("Cloud access is restricted")).toBeInTheDocument()
   expect(reads.some((r) => r.endsWith("/clouds"))).toBe(false)
+})
+it("shows a Cloud spread over several accounts of one provider", async () => {
+  fixture({ spread: true })
+  show(<CloudsWorkspace />)
+  expect(
+    await screen.findByText("3 targets across 3 accounts on 2 providers")
+  ).toBeInTheDocument()
+  expect(screen.getByText("Production DO")).toBeInTheDocument()
+  expect(screen.getByText("EU DO")).toBeInTheDocument()
+  expect(screen.getByText("2 accounts")).toBeInTheDocument()
+  expect(screen.getByText("ams3")).toBeInTheDocument()
 })
 it("distinguishes filtered targets, clears the filter and discards old project/environment scope", async () => {
   const user = userEvent.setup()
   const { reads } = fixture()
-  show(<Clouds />)
+  show(<CloudsWorkspace />)
   await screen.findByText("Frontend")
   await user.type(
     screen.getByRole("textbox", { name: "Filter targets" }),
@@ -199,7 +255,7 @@ it("distinguishes filtered targets, clears the filter and discards old project/e
 it("creates a Cloud and refreshes the generated list", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ noClouds: true })
-  show(<Clouds />)
+  show(<CloudsWorkspace />)
   await screen.findByText("Create your first Cloud")
   await user.click(screen.getAllByRole("button", { name: "New Cloud" })[0])
   await user.type(
@@ -216,7 +272,7 @@ it("creates a Cloud and refreshes the generated list", async () => {
 })
 it("shows read errors without presenting an empty Cloud result", async () => {
   fixture({ failure: "list" })
-  show(<Clouds />)
+  show(<CloudsWorkspace />)
   await screen.findByText("Cloud read failed.")
   expect(screen.queryByText("Create your first Cloud")).not.toBeInTheDocument()
 })
@@ -487,7 +543,7 @@ it.each(["empty", "environments", "list"])(
       noEnvironments: state === "empty",
       failure: state === "empty" ? undefined : state,
     })
-    show(<Clouds />)
+    show(<CloudsWorkspace />)
     if (state === "empty") await screen.findByText("No environments yet")
     else if (state === "environments")
       await screen.findByText("Environment read failed.")
@@ -620,7 +676,7 @@ it.each([false, true])(
 it("explains retained preview protection when deleting an unassigned Cloud", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ failure: "delete" })
-  show(<Clouds />)
+  show(<CloudsWorkspace />)
   await user.click(await screen.findByRole("button", { name: "Manage Cloud" }))
   await user.click(screen.getByRole("button", { name: "Delete Cloud" }))
   await user.click(screen.getByRole("button", { name: "Confirm delete Cloud" }))

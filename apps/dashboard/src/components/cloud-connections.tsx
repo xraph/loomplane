@@ -136,7 +136,7 @@ function CloudTile({
       className="flex flex-col gap-4 rounded-xl border bg-background/50 p-4"
     >
       <div className="flex items-start gap-3">
-        <CloudGlyph cloud={cloud} className="size-9 rounded-lg text-[11px]" />
+        <CloudGlyph cloud={cloud} size="lg" />
         <div className="grid min-w-0 flex-1 gap-0.5">
           <h3 className="font-medium">{title}</h3>
           <p className="text-xs text-muted-foreground">
@@ -147,7 +147,7 @@ function CloudTile({
           <Button
             variant="outline"
             size="sm"
-            className="rounded-full"
+
             onClick={() => setConnecting(true)}
           >
             <PlusIcon />
@@ -177,7 +177,7 @@ function CloudTile({
   )
 }
 
-const statusLabels: Record<string, string> = {
+export const statusLabels: Record<string, string> = {
   ready: "Ready",
   incomplete: "Missing permissions",
   failed: "Refused",
@@ -247,7 +247,7 @@ function ConnectionRow({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  className="rounded-full text-muted-foreground"
+                  className="text-muted-foreground"
                   aria-label={`${c.name} options`}
                 />
               }
@@ -327,7 +327,7 @@ function ConnectionRow({
   )
 }
 
-function RemoveDialog({
+export function RemoveDialog({
   connection: c,
   open,
   onOpenChange,
@@ -532,7 +532,8 @@ function ConnectForm({
                   <FieldLabel>Cloud</FieldLabel>
                   <ToggleGroup
                     variant="outline"
-                    spacing={0}
+                    spacing={1}
+                    className="flex-wrap"
                     value={[cloud]}
                     onValueChange={(v) => {
                       if (v[0]) setCloud(v[0])
@@ -585,7 +586,7 @@ function ConnectForm({
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="rounded-full"
+
                     onClick={() => file.current?.click()}
                   >
                     <UploadIcon />
@@ -759,12 +760,12 @@ function ConnectForm({
             <Button
               type="button"
               variant="ghost"
-              className="rounded-full"
+
               onClick={() => close(false)}
             >
               Cancel
             </Button>
-            <Button type="submit" className="rounded-full" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy && <Spinner />}
               {replacing ? "Check and replace" : "Check and connect"}
             </Button>

@@ -20,6 +20,7 @@ type AssignmentIntent = {
   revision: number
 }
 type ReviewProps = {
+  /** The project, or "" for a Cloud the organization owns. */
   projectId: string
   title: string
   change?: ChangeInputBody
@@ -57,6 +58,10 @@ function ReviewContent({
   const previewAssignment = useMutation(api.useEnvironmentCloudsPreview)
   const previewRevert = useMutation(api.useCloudSyncsPreviewRevert)
   const apply = useMutation(api.useCloudChangesApply)
+  const previewOrgChange = useMutation(api.useOrganizationCloudChangesPreview)
+  const applyOrg = useMutation(api.useOrganizationCloudChangesApply)
+  // An organization's Cloud reviews target changes at the organization.
+  const org = projectId === ""
   const applyRevert = useMutation(api.useCloudSyncsApplyRevert)
   const { can } = useOrganization()
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -88,10 +93,12 @@ function ReviewContent({
               revision: latestAssignment!.revision,
             },
           })
-        : previewChange.mutateAsync({
-            path: { id: projectId },
-            body: latestChange!,
-          })
+        : org
+          ? previewOrgChange.mutateAsync({ body: latestChange! })
+          : previewChange.mutateAsync({
+              path: { id: projectId },
+              body: latestChange!,
+            })
     void load
       .then((value) => {
         if (current) setPreview(value)
@@ -117,15 +124,19 @@ function ReviewContent({
     idempotency.current = crypto.randomUUID()
     try {
       if (change?.targetId) {
-        const current = await api
-          .useCloudTargetsGet({
-            path: {
-              id: projectId,
-              cloudId: change.cloudId,
-              targetId: change.targetId,
-            },
-          })
-          .refetch()
+        const current = await (
+          org
+            ? api.useOrganizationCloudTargetsGet({
+                path: { cloudId: change.cloudId, targetId: change.targetId },
+              })
+            : api.useCloudTargetsGet({
+                path: {
+                  id: projectId,
+                  cloudId: change.cloudId,
+                  targetId: change.targetId,
+                },
+              })
+        ).refetch()
         setLatestChange({ ...change, revision: current.revision })
       } else if (assignment) {
         const current = await api
@@ -144,7 +155,7 @@ function ReviewContent({
       setStale(true)
     }
   }
-  const busy = apply.isPending || applyRevert.isPending
+  const busy = apply.isPending || applyRevert.isPending || applyOrg.isPending
   const submit = async () => {
     if (!preview || busy || stale) return
     setError("")
@@ -158,6 +169,7 @@ function ReviewContent({
     }
     try {
       if (revert) await applyRevert.mutateAsync(args)
+      else if (org) await applyOrg.mutateAsync({ body: args.body })
       else await apply.mutateAsync(args)
       onApplied()
     } catch (err) {
@@ -229,7 +241,7 @@ function ReviewContent({
                   </p>
                 )}
                 {env.externalRouting && (
-                  <p className="text-weld-ink text-xs">
+                  <p className="text-xs text-weld-ink">
                     External routing must be confirmed before cleanup.
                   </p>
                 )}

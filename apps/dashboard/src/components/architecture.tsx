@@ -183,7 +183,7 @@ export function AnalyzeActions({
       {single && (
         <Button
           variant="outline"
-          className="rounded-full"
+
           onClick={() => setChoosing(true)}
           disabled={busy}
         >
@@ -191,11 +191,7 @@ export function AnalyzeActions({
           Another branch
         </Button>
       )}
-      <Button
-        className="rounded-full"
-        onClick={() => void run("")}
-        disabled={busy}
-      >
+      <Button onClick={() => void run("")} disabled={busy}>
         {busy ? <Spinner /> : <ScanSearchIcon />}
         {running ? "Analyzing" : "Analyze"}
       </Button>
@@ -349,7 +345,7 @@ export function ConnectRepository({
   }
 
   return (
-    <Empty className="border border-dashed">
+    <Empty>
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <FolderGit2Icon />
@@ -411,7 +407,7 @@ export function NotAnalyzed({
   const repo = repositoriesLabel(project.repositories)
   const many = project.repositories.length > 1
   return (
-    <Empty className="border border-dashed">
+    <Empty>
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <ScanSearchIcon />
@@ -445,7 +441,6 @@ function AnalyzeOnce({ project }: { project: Project }) {
   const invalidate = useInvalidate()
   return (
     <Button
-      className="rounded-full"
       disabled={start.isPending}
       onClick={() =>
         start

@@ -226,7 +226,7 @@ function ManifestCard({
   if (current.status === "error" && statusOf(current.error) === 404) {
     if (!analysis) {
       return (
-        <Empty className="border border-dashed">
+        <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <FileCodeIcon />
@@ -425,7 +425,7 @@ export function ManifestEditor({
             {dirty && (
               <Button
                 variant="ghost"
-                className="rounded-full"
+
                 onClick={() => {
                   setText(yaml)
                   setConflict(false)
@@ -437,7 +437,6 @@ export function ManifestEditor({
               </Button>
             )}
             <Button
-              className="rounded-full"
               disabled={(!dirty && !drafted) || save.isPending || conflict}
               onClick={() => void submit()}
             >
@@ -662,7 +661,7 @@ function PlanControls({
       </Select>
       <Button
         size="sm"
-        className="rounded-full"
+
         disabled={
           !environment ||
           busy ||
@@ -886,7 +885,7 @@ function PlanBody({
           can("deployment:create") && (
             <Button
               variant="outline"
-              className="rounded-full"
+
               disabled={create.isPending}
               onClick={() => void replan()}
             >
@@ -1148,7 +1147,7 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
         <Button
           size="sm"
           variant="outline"
-          className="rounded-full"
+
           disabled={save.isPending}
           onClick={() =>
             void apply(
@@ -1163,7 +1162,7 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
       <Button
         size="sm"
         variant="ghost"
-        className="rounded-full"
+
         disabled={save.isPending}
         onClick={() =>
           void apply(
@@ -1323,7 +1322,7 @@ function Decide({ plan }: { plan: Plan }) {
       <div className="flex justify-end gap-2">
         <Button
           variant="ghost"
-          className="rounded-full"
+
           disabled={busy}
           onClick={() => void decide(false)}
         >
@@ -1331,7 +1330,6 @@ function Decide({ plan }: { plan: Plan }) {
           Reject
         </Button>
         <Button
-          className="rounded-full"
           disabled={busy || plan.problems.length > 0}
           onClick={() => void decide(true)}
         >
@@ -1547,7 +1545,7 @@ function RetryDeployment({ deployment: d }: { deployment: Deployment }) {
     <div className="flex flex-wrap items-center gap-3">
       <Button
         variant="outline"
-        className="rounded-full"
+
         disabled={retry.isPending}
         onClick={() => void run()}
       >

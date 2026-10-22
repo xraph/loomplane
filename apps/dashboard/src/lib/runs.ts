@@ -469,3 +469,21 @@ export function runLog(
   }
   return out.sort((a, b) => a.ts - b.ts)
 }
+
+/** changesLine says in a few words what a run's plan does. */
+export function changesLine(r: Run): string {
+  const p = r.plan
+  if (p.status === "planning") return "Working out the plan"
+  if (p.status === "failed") return "Planning failed"
+  if (p.problems.length > 0) {
+    return `${p.problems.length} ${p.problems.length === 1 ? "problem" : "problems"} to fix`
+  }
+  const s = p.summary
+  const parts = [
+    s.create && `${s.create} to create`,
+    s.update && `${s.update} to update`,
+    s.replace && `${s.replace} to replace`,
+    s.delete && `${s.delete} to delete`,
+  ].filter(Boolean)
+  return parts.length ? parts.join(", ") : "Nothing to change"
+}

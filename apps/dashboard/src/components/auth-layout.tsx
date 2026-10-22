@@ -22,7 +22,9 @@ export function AuthLayout({
         <header className="auth-toolbar">
           <ModeToggle />
         </header>
-        <div className="auth-content">{children}</div>
+        <div className="auth-content">
+          <div className="auth-panel">{children}</div>
+        </div>
         <footer className="auth-footer">Loomplane by Xraph</footer>
       </section>
     </main>
