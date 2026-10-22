@@ -56,7 +56,7 @@ func TestConfigFromEnv(t *testing.T) {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 	if cfg.GatewayID != "gw-1" || cfg.ControlURL != "https://loomplane.example.com" ||
-		cfg.Suffix != "us-east-1.db.example.com" || cfg.StateDir != "/tmp/dbgw" || cfg.Port != 8080 {
+		cfg.Suffix != "us-east-1.db.example.com" || cfg.StateDir != "/tmp/dbgw" || cfg.Port != 8080 || cfg.DrainLimit != 8*time.Second {
 		t.Fatalf("config = %+v", cfg)
 	}
 	seed, _ := base64.StdEncoding.DecodeString(env["LOOMPLANE_DBGW_SIGNING_KEY"])
@@ -77,12 +77,13 @@ func TestConfigFromEnv(t *testing.T) {
 
 	env["LOOMPLANE_DBGW_STATE_DIR"] = "/var/lib/dbgw"
 	env["PORT"] = "9000"
+	env["LOOMPLANE_DBGW_DRAIN_SECONDS"] = "25"
 	cfg, err = ConfigFromEnv(getenv(env))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.StateDir != "/var/lib/dbgw" || cfg.Port != 9000 {
-		t.Errorf("StateDir, Port = %q, %d", cfg.StateDir, cfg.Port)
+	if cfg.StateDir != "/var/lib/dbgw" || cfg.Port != 9000 || cfg.DrainLimit != 25*time.Second {
+		t.Errorf("StateDir, Port, DrainLimit = %q, %d, %v", cfg.StateDir, cfg.Port, cfg.DrainLimit)
 	}
 }
 
@@ -166,6 +167,9 @@ func TestConfigFromEnvRejects(t *testing.T) {
 		{"port not a number", "PORT", "http"},
 		{"port zero", "PORT", "0"},
 		{"port too big", "PORT", "70000"},
+		{"drain not a number", "LOOMPLANE_DBGW_DRAIN_SECONDS", "8s"},
+		{"drain zero", "LOOMPLANE_DBGW_DRAIN_SECONDS", "0"},
+		{"drain over an hour", "LOOMPLANE_DBGW_DRAIN_SECONDS", "3601"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -635,6 +639,7 @@ func TestRunRemovesStaleTempFiles(t *testing.T) {
 
 func TestRunDrainsOnCancel(t *testing.T) {
 	s := newRunSetup(t, "")
+	s.cfg.DrainLimit = 300 * time.Millisecond
 	ctrl := newFakeControl(t, s.pub)
 	s.cfg.ControlURL = ctrl.srv.URL
 	snap := s.snapshot(t, 1)
@@ -649,6 +654,9 @@ func TestRunDrainsOnCancel(t *testing.T) {
 	rt := r.router.Load()
 	if rt == nil || rt.Draining() {
 		t.Fatal("router missing or draining before cancel")
+	}
+	if rt.drainLimit != 300*time.Millisecond {
+		t.Fatalf("drain limit %v, want the configured 300ms", rt.drainLimit)
 	}
 
 	r.cancel()
@@ -724,6 +732,7 @@ func TestRunRejectsBadConfig(t *testing.T) {
 		"no trust keys":    func(c *Config) { c.TrustKeys = nil },
 		"no suffix":        func(c *Config) { c.Suffix = "" },
 		"no state dir":     func(c *Config) { c.StateDir = "" },
+		"negative drain":   func(c *Config) { c.DrainLimit = -time.Second },
 		"http control url": func(c *Config) { c.ControlURL = "http://loomplane.example.com" },
 		"control url with a password": func(c *Config) {
 			c.ControlURL = "https://user:pw@loomplane.example.com"

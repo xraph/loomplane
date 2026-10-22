@@ -47,11 +47,15 @@ const (
 
 	// readHeaderTimeout bounds how long a client has to send request headers.
 	readHeaderTimeout = 10 * time.Second
-	// shutdownDrainLimit bounds Router.Drain on shutdown, and
-	// shutdownHTTPLimit the HTTP server's own shutdown after it.
-	shutdownDrainLimit = 30 * time.Second
-	shutdownHTTPLimit  = 10 * time.Second
-	// finalReportLimit bounds the report sent as the gateway starts to drain.
+	// shutdownSlack is what a shutdown takes on top of the drain limit: the
+	// grace cancelled sessions get to close, and the HTTP server's own
+	// shutdown. With the default 8s drain limit the whole shutdown takes
+	// under 10s.
+	shutdownSlack = 1500 * time.Millisecond
+	// maxDrainSeconds bounds LOOMPLANE_DBGW_DRAIN_SECONDS.
+	maxDrainSeconds = 3600
+	// finalReportLimit bounds the report sent as the gateway starts to
+	// drain, which runs beside the drain.
 	finalReportLimit = 5 * time.Second
 )
 
@@ -68,6 +72,9 @@ type Config struct {
 	SealingKey *ecdh.PrivateKey
 	// TrustKeys are the control-plane keys whose snapshots the gateway accepts.
 	TrustKeys []TrustKey
+	// DrainLimit is how long a shutdown lets live sessions run before it
+	// ends them. Zero means 8s.
+	DrainLimit time.Duration
 }
 
 var (
@@ -84,6 +91,7 @@ var (
 //	LOOMPLANE_DBGW_TRUST_KEYS   JSON array of {"public_key", "not_before", "not_after"}
 //	LOOMPLANE_DBGW_SUFFIX       the zone logical hosts live in; lowercased, dots trimmed
 //	LOOMPLANE_DBGW_STATE_DIR    where the last-good snapshot lives (default /tmp/dbgw)
+//	LOOMPLANE_DBGW_DRAIN_SECONDS  how long a shutdown lets sessions run (default 8)
 //	PORT                        the listening port (default 8080)
 //
 // Errors name the variable and never repeat a key.
@@ -137,6 +145,15 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	cfg.StateDir = get("LOOMPLANE_DBGW_STATE_DIR")
 	if cfg.StateDir == "" {
 		cfg.StateDir = defaultStateDir
+	}
+
+	cfg.DrainLimit = drainLimit
+	if s := get("LOOMPLANE_DBGW_DRAIN_SECONDS"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 || n > maxDrainSeconds {
+			return Config{}, fmt.Errorf("LOOMPLANE_DBGW_DRAIN_SECONDS: whole seconds from 1 to %d", maxDrainSeconds)
+		}
+		cfg.DrainLimit = time.Duration(n) * time.Second
 	}
 
 	cfg.Port = defaultPort
@@ -197,6 +214,8 @@ func (c Config) validate() error {
 		return errors.New("run: no state directory")
 	case c.Port < 0 || c.Port > 65535:
 		return errors.New("run: bad port")
+	case c.DrainLimit < 0:
+		return errors.New("run: negative drain limit")
 	}
 	// The same rules as ConfigFromEnv, so a Config built in code can't send
 	// signed requests over plain http to another host.
@@ -296,6 +315,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) error {
 		path:   filepath.Join(cfg.StateDir, lastGoodName),
 	}
 	g.router = NewRouter(g.store, cfg.SealingKey, cfg.GatewayID, PgDialer{}, g.client, cfg.Suffix)
+	if cfg.DrainLimit > 0 {
+		g.router.drainLimit = cfg.DrainLimit
+	}
 	if opts.routerHook != nil {
 		opts.routerHook(g.router)
 	}
@@ -329,19 +351,28 @@ func run(ctx context.Context, cfg Config, opts runOptions) error {
 	stopLoops()
 	loops.Wait()
 
+	// The whole shutdown fits in the drain limit and a little slack, so it
+	// ends before the platform kills the instance. The draining report goes
+	// out beside the drain, rather than before it, for the same reason.
 	slog.Info("database gateway draining")
-	final, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalReportLimit)
-	g.report(final, true)
-	cancel()
-	drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownDrainLimit)
+	deadline := time.Now().Add(g.router.drainLimit + shutdownSlack)
+	reported := make(chan struct{})
+	go func() {
+		defer close(reported)
+		final, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalReportLimit)
+		defer cancel()
+		g.report(final, true)
+	}()
+	drain, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	g.router.Drain(drain)
 	cancel()
 	endSessions()
-	down, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownHTTPLimit)
+	down, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	defer cancel()
 	if err := srv.Shutdown(down); err != nil {
 		_ = srv.Close()
 	}
+	<-reported
 	if failure != nil && !errors.Is(failure, http.ErrServerClosed) {
 		return fmt.Errorf("run: serve: %w", failure)
 	}

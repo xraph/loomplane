@@ -28,9 +28,14 @@ const (
 	holdLimit = 10 * time.Second
 	// pauseLimit is how long a new transaction waits on a paused route.
 	pauseLimit = 30 * time.Second
-	// drainLimit is how long a retired route, or a draining gateway, lets
-	// live sessions run before it ends them.
-	drainLimit = 30 * time.Second
+	// retireLimit is how long a retired route lets its live sessions run
+	// before it ends them.
+	retireLimit = 30 * time.Second
+	// drainLimit is how long a draining gateway lets live sessions run
+	// before it ends them, unless Run is configured otherwise. With the
+	// grace its cancelled sessions get to close, a shutdown fits inside
+	// the 10s Cloud Run gives an instance between SIGTERM and SIGKILL.
+	drainLimit = 8 * time.Second
 	// wakeRetry is how often a dial that found the backend waking is retried.
 	wakeRetry = 250 * time.Millisecond
 	// closeGrace is how long a cancelled session has to end on its own,
@@ -133,7 +138,7 @@ func NewRouter(store *Store, key *ecdh.PrivateKey, gatewayID string, d Dialer, h
 		mockServer:  make([]byte, 32),
 		holdLimit:   holdLimit,
 		pauseLimit:  pauseLimit,
-		retireLimit: drainLimit,
+		retireLimit: retireLimit,
 		drainLimit:  drainLimit,
 		wakeRetry:   wakeRetry,
 		closeGrace:  closeGrace,
@@ -302,9 +307,11 @@ func (r *Router) Draining() bool {
 }
 
 // Drain shuts the router down. New connections get 57P01 at once. Live
-// sessions end at their next idle point, and those still running after 30s
-// (or when ctx ends) are cancelled. Then every pool and hub closes. Calling
-// it again waits for the first call and does nothing more.
+// sessions end at their next idle point, and those still running after the
+// drain limit, 8s by default (or when ctx ends), are cancelled. They get a
+// short grace to close, which also ends with ctx, and then every pool and
+// hub closes. Calling it again waits for the first call and does nothing
+// more.
 func (r *Router) Drain(ctx context.Context) {
 	r.drainOnce.Do(func() {
 		r.applyMu.Lock()
@@ -336,6 +343,7 @@ func (r *Router) Drain(ctx context.Context) {
 		select {
 		case <-idle:
 		case <-grace.C:
+		case <-ctx.Done():
 		}
 		grace.Stop()
 		for _, h := range handles {
