@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -90,6 +91,13 @@ func (p *planner) planComposed(name string) {
 	if !ok {
 		return
 	}
+	if kind.Placement == recipes.PlacementDependency {
+		p.problem(Finding{
+			Code: "catalog-kind-dependency-only", Subject: ResourceSubject, Name: name, Path: base + ".kind",
+			Message: fmt.Sprintf("%s is only added as part of another catalog service", kind.Name),
+		})
+		return
+	}
 	set := r.For(p.in.Environment, m.Defaults)
 	var able []*provider.Provider
 	for _, prov := range p.in.Providers.List() {
@@ -143,6 +151,10 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: base, Message: err.Error()})
 		return
 	}
+	// A component that requires an optional dependency runs only with it.
+	if off := offDependencies(r, kind); len(off) > 0 {
+		composition = composition.Without(off)
+	}
 	if prov.Cloud == "kubernetes" && !p.clusterRuns(name, base, kind, composition, connection) {
 		return
 	}
@@ -162,7 +174,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		return cfg
 	}
 
-	choices, uses := p.dependencies(name, base, r, kind, prov, set)
+	choices, uses := p.dependencies(name, base, r, kind, prov, set, connection, region)
 
 	var parts []string
 	last := 1
@@ -224,9 +236,10 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 
 // clusterRuns reports, as problems, what a cluster connection lacks to run
 // a composition: retained storage when a component keeps a volume, Job
-// permissions when one is a job, and the service proxy when one has a
-// control port. A composition never needs the database recovery
-// permissions; a dependency it provisions checks its own.
+// permissions when one is a job, the service proxy when one has a control
+// port, and permission to manage Roles when one has Kubernetes rules. A
+// composition never needs the database recovery permissions; a dependency
+// it provisions checks its own.
 func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition *recipes.Composition, connection *ConnectionOption) bool {
 	ok := true
 	if i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Volume != nil }); i >= 0 && ValidateKubernetesDatabaseSettings(connection.Details) != nil {
@@ -255,6 +268,13 @@ func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition 
 		ok = false
 		break
 	}
+	if slices.ContainsFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return len(c.KubernetesRules) > 0 }) && connection.Details["rbac"] != "ready" {
+		p.problem(Finding{
+			Code: "catalog-rbac-unavailable", Subject: ResourceSubject, Name: name, Path: base,
+			Message: fmt.Sprintf("%s needs a Role in namespace %s to discover Services. Let Loomplane create serviceaccounts, roles and rolebindings there, and get, list and watch services, endpoints and endpointslices, then check the connection again.", kind.Title, connection.Details["namespace"]),
+		})
+		ok = false
+	}
 	return ok
 }
 
@@ -262,7 +282,7 @@ func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition 
 // plans the ones it provisions, and returns the choices with the actions
 // its first components run after. A bound resource keeps the choices it
 // was deployed with: switching one needs a restore Loomplane doesn't do.
-func (p *planner) dependencies(name, base string, r manifest.Resource, kind recipes.Kind, prov *provider.Provider, set manifest.ResourceSettings) (choices map[string]DependencyChoice, uses []string) {
+func (p *planner) dependencies(name, base string, r manifest.Resource, kind recipes.Kind, prov *provider.Provider, set manifest.ResourceSettings, connection *ConnectionOption, region string) (choices map[string]DependencyChoice, uses []string) {
 	m := p.in.Manifest
 	for _, dep := range slices.Sorted(maps.Keys(r.Uses)) {
 		if !slices.ContainsFunc(kind.Dependencies, func(d recipes.Dependency) bool { return d.Name == dep }) {
@@ -276,14 +296,8 @@ func (p *planner) dependencies(name, base string, r manifest.Resource, kind reci
 	choices = map[string]DependencyChoice{}
 	for _, dep := range kind.Dependencies {
 		path := base + ".uses." + dep.Name
-		u, chosen := r.Uses[dep.Name]
-		on := !dep.Optional || dep.Default
-		if chosen && u.Enabled != nil {
-			on = *u.Enabled
-		}
-		if u.Resource != "" || u.External != "" {
-			on = true
-		}
+		u := r.Uses[dep.Name]
+		on := dependencyOn(r, dep)
 		if !dep.Optional && !on {
 			p.problem(Finding{
 				Code: "catalog-dependency-required", Subject: ResourceSubject, Name: name, Path: path + ".enabled",
@@ -319,12 +333,36 @@ func (p *planner) dependencies(name, base string, r manifest.Resource, kind reci
 				uses = append(uses, a.ID)
 			}
 		case DependencyNew:
-			if a := p.provision(name, base, r, dep, choice.Resource, prov, set); a != nil {
+			if a := p.provision(name, base, r, dep, choice.Resource, prov, set, connection, region); a != nil {
 				uses = append(uses, a.ID)
 			}
 		}
 	}
 	return choices, uses
+}
+
+// dependencyOn reports whether a composed resource uses a dependency: a
+// required one always, an optional one by default or when uses turns it
+// on, and either when it's connected.
+func dependencyOn(r manifest.Resource, dep recipes.Dependency) bool {
+	u, chosen := r.Uses[dep.Name]
+	on := !dep.Optional || dep.Default
+	if chosen && u.Enabled != nil {
+		on = *u.Enabled
+	}
+	return on || u.Resource != "" || u.External != ""
+}
+
+// offDependencies are a composed resource's optional dependencies that are
+// off, which the components requiring them go without.
+func offDependencies(r manifest.Resource, kind recipes.Kind) map[string]bool {
+	off := map[string]bool{}
+	for _, dep := range kind.Dependencies {
+		if dep.Optional && !dependencyOn(r, dep) {
+			off[dep.Name] = true
+		}
+	}
+	return off
 }
 
 // ComponentProtection is how a component's data is protected: as its
@@ -451,10 +489,15 @@ func (p *planner) sameTarget(name string, connected *Action) bool {
 }
 
 // provision plans a dependency a composed resource gets one of its own of:
-// an ordinary database of the dependency's first kind, named for it.
-func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.Dependency, action string, prov *provider.Provider, set manifest.ResourceSettings) *Action {
+// an ordinary database of the dependency's first kind, named for it, or
+// the one component of a dependency-only kind.
+func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.Dependency, action string, prov *provider.Provider, set manifest.ResourceSettings, connection *ConnectionOption, region string) *Action {
 	kind := firstKind(dep)
-	if _, ok := p.kinds().Engine(kind); !ok {
+	if only, ok := p.kinds().Kind(kind); ok && only.Placement == recipes.PlacementDependency {
+		return p.provisionComponent(name, base, dep, only, action, prov, connection, region)
+	}
+	engine, ok := p.kinds().Engine(kind)
+	if !ok {
 		why := "which this Loomplane doesn't know"
 		if p.kinds().Composed(kind) {
 			why = "which can't be provisioned as a dependency yet"
@@ -469,6 +512,14 @@ func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.
 		return nil
 	}
 	offer, ok := prov.Provisioning(kind)
+	if !ok && prov.Cloud == "kubernetes" && (kind == "redis" || kind == "valkey") {
+		// A cluster runs a cache only as a composition's dependency, so
+		// the provider doesn't offer one on its own.
+		offer, ok = provider.Provisions{Creates: "Retained " + engine.Title + " StatefulSet"}, true
+		for _, release := range engine.Releases {
+			offer.Versions = append(offer.Versions, release.Version)
+		}
+	}
 	if !ok {
 		p.problem(Finding{
 			Code: "provider-cant-provision", Subject: ResourceSubject, Name: action, Path: base + ".provider",
@@ -498,6 +549,48 @@ func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.
 	}
 	p.configureCatalog(action, base, manifest.Resource{Kind: kind, Provider: prov.Name, Target: r.Target}, cfg, a)
 	p.diff(a, cfg, cfg.Provider, cfg.Region)
+	p.resources[action] = a
+	p.actions = append(p.actions, a)
+	return a
+}
+
+// provisionComponent plans the one process of a dependency-only kind as
+// a component action of its own, named for the dependency. It publishes
+// its own outputs and secrets, so it's its own resource; no composition
+// action is planned for it.
+func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, kind recipes.Kind, action string, prov *provider.Provider, connection *ConnectionOption, region string) *Action {
+	path := base + ".uses." + dep.Name
+	if p.componentNameTaken(name, dep.Name) {
+		return nil
+	}
+	if !slices.Contains(kind.Targets, prov.Cloud) {
+		p.problem(Finding{
+			Code: "catalog-target-unsupported", Subject: ResourceSubject, Name: name, Path: path,
+			Message: fmt.Sprintf("%s can't run %s, which %s needs for %s. Choose an existing server.", prov.Title, kind.Title, name, dep.Name),
+		})
+		return nil
+	}
+	composition, err := p.kinds().Resolve(kind.Name, dep.Version, connection.Details["architecture"], prov.Cloud)
+	if err != nil {
+		p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: path, Message: err.Error()})
+		return nil
+	}
+	if prov.Cloud == "kubernetes" && !p.clusterRuns(name, base, kind, composition, connection) {
+		return nil
+	}
+	c := composition.Components[0]
+	cfg := &ResourceConfig{
+		Provider: prov.Name, Region: region, Target: connection.ID, TargetSettings: ReviewedConnectionSettings(connection.Cloud, connection.Details),
+		Kind: kind.Name, Version: composition.Version,
+		Component: &ComponentConfig{Kind: kind.Name, Resource: action, Revision: composition.Revision, Component: c, Protection: ComponentProtection(c.Component)},
+	}
+	a := &Action{
+		ID: actionID(ResourceSubject, action), Subject: ResourceSubject, Name: action,
+		Provider: prov.Name, ConnectionID: connection.ID, Region: region, Engine: provider.ResourceEngine, Creates: componentCreates(kind.Title, c.Component),
+		Resource: cfg, Step: 1,
+	}
+	p.diff(a, cfg, cfg.Provider, cfg.Region)
+	p.namedChanges(a)
 	p.resources[action] = a
 	p.actions = append(p.actions, a)
 	return a
@@ -605,23 +698,108 @@ func (p *planner) namedChanges(a *Action) {
 
 // linkComposition gives a service a variable for each of a composed
 // resource's outputs: its primary output under "url", the others by name,
-// and per-consumer ones issued to the service itself. A key two of the
-// service's needs would share is named for the need instead.
-func (p *planner) linkComposition(a *Action, need string, outputs []recipes.Output, count map[string]int) {
+// and per-consumer ones issued to the service itself, with the options it
+// chose. A key two of the service's needs would share is named for the
+// need instead.
+func (p *planner) linkComposition(a *Action, need string, outputs []recipes.Output, options map[string]string, count map[string]int) {
 	for i, o := range outputs {
 		key := o.EnvKey
 		if key == "" || count[key] > 1 {
 			key = envName(need) + "_" + envName(o.Name)
 		}
-		field := "output:" + o.Name
+		link := EnvLink{Key: key, From: need, Subject: ResourceSubject, Field: "output:" + o.Name}
 		switch {
 		case o.PerConsumer:
-			field = "consumer:" + o.Name
+			link.Field, link.Options = "consumer:"+o.Name, maps.Clone(options)
 		case i == 0:
-			field = "url"
+			link.Field = "url"
 		}
-		a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject, Field: field})
+		a.Service.Env = append(a.Service.Env, link)
 	}
+}
+
+// consumerOptions checks what a service sets for a need under need_options
+// against the options the need's kind takes, and returns the ones it set.
+// A need that isn't a composed catalog resource takes none.
+func (p *planner) consumerOptions(service, need string, takes []recipes.ConsumerOption) map[string]string {
+	given := p.in.Manifest.Services[service].NeedOptions[need]
+	base := "services." + service + ".need_options." + need
+	finding := func(code, name, message string) Finding {
+		return Finding{Code: code, Subject: ServiceSubject, Name: service, Path: base + "." + name, Message: message}
+	}
+	for _, name := range slices.Sorted(maps.Keys(given)) {
+		if !slices.ContainsFunc(takes, func(o recipes.ConsumerOption) bool { return o.Name == name }) {
+			p.problem(finding("catalog-consumer-option-unknown", name, fmt.Sprintf("%s takes no option called %s.", need, name)))
+		}
+	}
+	var out map[string]string
+	for _, o := range takes {
+		value := given[o.Name]
+		title := strings.ToLower(o.Title)
+		if value == "" {
+			if o.Required {
+				p.problem(finding("catalog-consumer-option-missing", o.Name, fmt.Sprintf("%s needs %s without a %s. Set need_options.%s.%s.", service, need, title, need, o.Name)))
+			}
+			continue
+		}
+		// The pattern has to match the whole value.
+		if pattern, err := regexp.Compile("^(?:" + o.Pattern + ")$"); o.Pattern != "" && (err != nil || !pattern.MatchString(value)) {
+			p.problem(finding("catalog-consumer-option-invalid", o.Name, fmt.Sprintf("%s's %s for %s is %s, which doesn't match %s.", service, title, need, value, o.Pattern)))
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[o.Name] = value
+	}
+	return out
+}
+
+// optionChanges says which consumer options of a service's links changed,
+// as "<need> <option>", in place of one change to all its variables.
+func (p *planner) optionChanges(a *Action) {
+	b := p.bindings[a.ID]
+	i := slices.IndexFunc(a.Changes, func(c Change) bool { return c.Field == "env" })
+	if b == nil || i < 0 || a.Service == nil {
+		return
+	}
+	var old ServiceConfig
+	if json.Unmarshal(b.Config, &old) != nil {
+		return
+	}
+	var named []Change
+	for _, now := range a.Service.Env {
+		if !strings.HasPrefix(now.Field, "consumer:") {
+			continue
+		}
+		j := slices.IndexFunc(old.Env, func(e EnvLink) bool { return e.Key == now.Key && e.From == now.From && e.Field == now.Field })
+		if j < 0 {
+			continue
+		}
+		was := old.Env[j].Options
+		names := maps.Clone(now.Options)
+		if names == nil {
+			names = map[string]string{}
+		}
+		maps.Copy(names, was)
+		for _, name := range slices.Sorted(maps.Keys(names)) {
+			c := Change{Field: now.From + " " + name, From: was[name], To: now.Options[name]}
+			if c.From != c.To && !slices.Contains(named, c) {
+				named = append(named, c)
+			}
+		}
+	}
+	withoutOptions := func(env []EnvLink) string {
+		out := slices.Clone(env)
+		for k := range out {
+			out[k].Options = nil
+		}
+		return render(out)
+	}
+	if len(named) == 0 || withoutOptions(old.Env) != withoutOptions(a.Service.Env) {
+		return
+	}
+	a.Changes = slices.Insert(slices.Delete(a.Changes, i, i+1), i, named...)
 }
 
 func componentCreates(title string, c recipes.Component) string {
@@ -670,6 +848,12 @@ func (p *planner) composedBindings() map[string]composedBinding {
 		}
 		switch {
 		case cfg.Component != nil:
+			// A dependency-only kind's component names itself as its
+			// resource. The composed resource that provisioned it, whose
+			// binding sorts first, is its parent.
+			if _, provisioned := out[id]; provisioned && cfg.Component.Resource == b.Name {
+				continue
+			}
 			out[id] = composedBinding{parent: cfg.Component.Resource, stateless: cfg.Component.Protection != recipes.ProtectionRebuildable}
 		case cfg.Composition != nil:
 			out[id] = composedBinding{parent: b.Name, last: true, stateless: true}

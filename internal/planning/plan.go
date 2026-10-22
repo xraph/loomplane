@@ -222,6 +222,9 @@ type EnvLink struct {
 	// "consumer:<name>" for one issued to this service alone. It's empty
 	// for everything else, which gives its address.
 	Field string `json:"field,omitempty"`
+	// Options are what the service chose for a "consumer:" link, from
+	// services.<name>.need_options.<need>. No other link has them.
+	Options map[string]string `json:"options,omitempty"`
 }
 
 // ResourceConfig is everything a resource is provisioned from.

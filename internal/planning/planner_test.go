@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -144,7 +145,7 @@ func TestCompute_fresh(t *testing.T) {
 	if api.Service.Port != 8080 || api.Service.Image != "services/api/Dockerfile" || api.Service.Scale.Max != 3 {
 		t.Errorf("api config = %+v", api.Service)
 	}
-	if len(api.Service.Env) != 1 || api.Service.Env[0] != (EnvLink{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject}) {
+	if len(api.Service.Env) != 1 || !reflect.DeepEqual(api.Service.Env[0], EnvLink{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject}) {
 		t.Errorf("api env = %+v", api.Service.Env)
 	}
 
@@ -2585,7 +2586,7 @@ func TestMariaDBAndValkeyConsumersGetConventionalKeys(t *testing.T) {
 		{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject},
 		{Key: "REDIS_URL", From: "cache", Subject: ResourceSubject},
 	} {
-		if !slices.Contains(got, want) {
+		if !slices.ContainsFunc(got, func(e EnvLink) bool { return reflect.DeepEqual(e, want) }) {
 			t.Errorf("api env lacks %+v: %+v", want, got)
 		}
 	}

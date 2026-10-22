@@ -782,3 +782,321 @@ func TestDeployedCompositionAdoptsItsCloudPlacement(t *testing.T) {
 		}
 	}
 }
+
+// graphApp is a kind that may use a dependency-only graph database: an
+// API, a job that rebuilds the graph and runs only with it, and a worker
+// that starts after the job.
+func graphApp() recipes.Kind {
+	image := recipes.Image{Repository: "registry.example/graph-app", Digests: map[string]string{
+		"amd64": "sha256:cb2ffce7d6a5fca5f8615339cc171c74dfe47017c634894dd43e33e10cb4cbba",
+		"arm64": "sha256:01873eef9d70a2cf2ee33aab65b3496fcfc9674a5707b42b12fe19e7ae0c5ce7",
+	}}
+	graphURL := recipes.EnvVar{Name: "GRAPH_URL", From: &recipes.Ref{Dependency: "falkordb", Field: recipes.FieldURL}, Requires: "falkordb"}
+	return recipes.Kind{
+		Name:      "graphapp",
+		Title:     "Graph app",
+		Placement: recipes.PlacementAppProject,
+		Targets:   []string{"server", "kubernetes"},
+		Releases: []recipes.Release{{
+			Version: "1", Product: "1.0.0", Revision: "1",
+			Images: map[string]recipes.Image{"api": image, "rebuild-graph": image, "worker": image},
+		}},
+		Dependencies: []recipes.Dependency{{Name: "falkordb", Title: "FalkorDB", Kinds: []string{"graph"}, Optional: true}},
+		Components: []recipes.Component{
+			{
+				Name:      "api",
+				Role:      recipes.RoleProcess,
+				Ports:     []recipes.Port{{Name: "http", Container: 8080, Protocol: "http", Routable: true}},
+				Env:       []recipes.EnvVar{graphURL},
+				Readiness: &recipes.HTTPProbe{Port: "http", Path: "/readyz"},
+			},
+			{
+				Name:     "rebuild-graph",
+				Role:     recipes.RoleJob,
+				Env:      []recipes.EnvVar{{Name: "GRAPH_URL", From: &recipes.Ref{Dependency: "falkordb", Field: recipes.FieldURL}}},
+				After:    []string{"api"},
+				Requires: "falkordb",
+			},
+			{
+				Name:      "worker",
+				Role:      recipes.RoleProcess,
+				Ports:     []recipes.Port{{Name: "health", Container: 8081, Protocol: "http"}},
+				Readiness: &recipes.HTTPProbe{Port: "health", Path: "/healthz"},
+				After:     []string{"rebuild-graph"},
+			},
+		},
+		Outputs: []recipes.Output{{Name: "url", EnvKey: "GRAPH_APP_URL", From: &recipes.Ref{Component: "api", Field: "url:http"}}},
+	}
+}
+
+// graphKinds is a registry with the graph database and graphApp.
+func graphKinds(t *testing.T) *recipes.Registry {
+	t.Helper()
+	kinds := recipes.NewRegistry()
+	for _, kind := range []recipes.Kind{recipestest.Graph(), graphApp()} {
+		if err := kinds.Register(kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return kinds
+}
+
+const (
+	graphOff = "version: 1\nresources:\n  app: {kind: graphapp, provider: server, target: " + targetA + "}\n"
+	graphOn  = "version: 1\nresources:\n  app: {kind: graphapp, provider: server, target: " + targetA + ", uses: {falkordb: {enabled: true}}}\n"
+)
+
+func TestDependencyOnlyKindPlansAsOneComponentAction(t *testing.T) {
+	r := composedPlan(t, graphKinds(t), graphOn)
+	if !r.Executable {
+		t.Fatalf("plan blocked: %+v", r.Problems)
+	}
+	a := findAction(r, "resource:app--falkordb")
+	if a == nil || a.Step != 1 || a.Op != Create || a.ConnectionID != targetA || a.Creates != "Graph server container" || a.Resource.Composition != nil || a.Resource.Catalog != nil || a.Resource.CloudPlacement != nil {
+		t.Fatalf("falkordb: %+v", a)
+	}
+	c := a.Resource.Component
+	if c == nil || c.Kind != "graph" || c.Resource != "app--falkordb" || c.Protection != recipes.ProtectionRebuildable || c.Component.Name != "server" || c.Revision != "1" || !strings.Contains(c.Component.Image, "graph@sha256:4a2d7b2e") {
+		t.Fatalf("falkordb component: %+v", c)
+	}
+	for _, other := range r.Actions {
+		if strings.HasPrefix(other.Name, "app--falkordb-") || (other.Resource != nil && other.Resource.Composition != nil && other.Resource.Composition.Kind == "graph") {
+			t.Fatalf("a nested action for the dependency: %+v", other)
+		}
+	}
+	if got := findAction(r, "resource:app").Resource.Composition.Dependencies["falkordb"]; got != (DependencyChoice{Mode: DependencyNew, Resource: "app--falkordb", Kind: "graph"}) {
+		t.Fatalf("choice: %+v", got)
+	}
+	if api := findAction(r, "resource:app--api"); api == nil || !slices.Equal(api.DependsOn, []string{"resource:app--falkordb"}) || api.Step != 2 {
+		t.Fatalf("api: %+v", api)
+	}
+
+	// On a cluster its volume needs retained storage, like any component's.
+	cluster := func(c ConnectionOption) *Result {
+		return Compute(Input{
+			Environment: "production", Graph: &graph.Graph{}, Providers: providers.Registry(), Kinds: graphKinds(t), Connections: []ConnectionOption{c},
+			Manifest: parse(t, "version: 1\nresources:\n  app: {kind: graphapp, provider: kubernetes, target: "+targetA+", uses: {falkordb: {enabled: true}}}\n"),
+		})
+	}
+	conn := clusterCatalogConnection(t)
+	conn.Details["jobs"] = "ready"
+	if r := cluster(conn); !r.Executable || findAction(r, "resource:app--falkordb").Resource.TargetSettings["storage_class_uid"] != "class-identity" {
+		t.Fatalf("falkordb on a cluster: %+v", r.Problems)
+	}
+	conn = clusterWorkloadConnection(t)
+	conn.Details["jobs"] = "ready"
+	if r := cluster(conn); r.Executable || !hasCode(r.Problems, "catalog-storage-unavailable") || findAction(r, "resource:app--falkordb") != nil {
+		t.Fatalf("falkordb on a cluster without retained storage: %+v", r.Problems)
+	}
+}
+
+func TestRequiredComponentFollowsItsDependency(t *testing.T) {
+	steps := func(r *Result) map[string]int {
+		out := map[string]int{}
+		for _, a := range r.Actions {
+			out[a.Name] = a.Step
+		}
+		return out
+	}
+	r := composedPlan(t, graphKinds(t), graphOn)
+	if !r.Executable {
+		t.Fatalf("plan blocked: %+v", r.Problems)
+	}
+	if got, want := steps(r), map[string]int{"app--falkordb": 1, "app--api": 2, "app--rebuild-graph": 3, "app--worker": 4, "app": 5}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("steps with the dependency: %v", got)
+	}
+
+	r = composedPlan(t, graphKinds(t), graphOff)
+	if !r.Executable {
+		t.Fatalf("plan blocked: %+v", r.Problems)
+	}
+	if got, want := steps(r), map[string]int{"app--api": 2, "app--worker": 2, "app": 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("steps without the dependency: %v", got)
+	}
+	if worker := findAction(r, "resource:app--worker"); len(worker.DependsOn) != 0 || len(worker.Resource.Component.Component.After) != 0 {
+		t.Fatalf("worker still waits for the job: %+v", worker)
+	}
+	if parent := findAction(r, "resource:app"); !slices.Equal(parent.DependsOn, []string{"resource:app--api", "resource:app--worker"}) {
+		t.Fatalf("parent: %+v", parent.DependsOn)
+	}
+}
+
+func TestDependencyOnlyKindRefusedStandalone(t *testing.T) {
+	r := composedPlan(t, graphKinds(t), "version: 1\nresources:\n  g: {kind: graph, provider: server, target: "+targetA+"}\n")
+	p := findCode(r.Problems, "catalog-kind-dependency-only")
+	if r.Executable || p == nil || p.Subject != ResourceSubject || p.Name != "g" || p.Path != "resources.g.kind" || p.Message != "graph is only added as part of another catalog service" {
+		t.Fatalf("standalone dependency-only kind accepted: %+v", r.Problems)
+	}
+	if len(r.Actions) != 0 {
+		t.Fatalf("actions: %+v", r.Actions)
+	}
+}
+
+func TestOptionalRebuildableDependencyMayTurnOnAndOff(t *testing.T) {
+	off := boundFrom(t, composedPlan(t, graphKinds(t), graphOff))
+	r := composedPlan(t, graphKinds(t), graphOn, off...)
+	if !r.Executable || hasCode(r.Problems, "catalog-dependency-migration-required") {
+		t.Fatalf("turning it on refused: %+v", r.Problems)
+	}
+	if a := findAction(r, "resource:app--falkordb"); a == nil || a.Op != Create {
+		t.Fatalf("falkordb: %+v", a)
+	}
+
+	on := boundFrom(t, r)
+	r = composedPlan(t, graphKinds(t), graphOff, on...)
+	if !r.Executable || hasCode(r.Problems, "catalog-dependency-migration-required") {
+		t.Fatalf("turning it off refused: %+v", r.Problems)
+	}
+	for _, name := range []string{"app--falkordb", "app--rebuild-graph"} {
+		if a := findAction(r, "resource:"+name); a == nil || a.Op != Delete || a.Reason != "app no longer has "+name+"." {
+			t.Fatalf("%s: %+v", name, a)
+		}
+	}
+	if findAction(r, "resource:app--falkordb").Step <= findAction(r, "resource:app--rebuild-graph").Step {
+		t.Fatal("the dependency goes before the component that used it")
+	}
+}
+
+// tenanted is statelessSample with a primary output issued to each
+// consuming service for the tenant it chooses.
+func tenanted(t *testing.T) *recipes.Registry {
+	t.Helper()
+	kind := statelessSample(t)
+	kind.Outputs = []recipes.Output{{Name: "url", EnvKey: "SAMPLE_URL", PerConsumer: true}}
+	kind.ConsumerOptions = []recipes.ConsumerOption{{Name: "tenant", Title: "Tenant", Pattern: "[a-z][a-z0-9-]*", Required: true}}
+	return registryOf(t, kind)
+}
+
+func tenantDoc(options string) string {
+	need := ""
+	if options != "" {
+		need = ", need_options: {app: {" + options + "}}"
+	}
+	return sampleApp + "services:\n  web: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [app]" + need + "}\n"
+}
+
+func TestConsumerOptionsLandOnTheLink(t *testing.T) {
+	r := composedPlan(t, tenanted(t), tenantDoc("tenant: acme"))
+	if !r.Executable {
+		t.Fatalf("plan blocked: %+v", r.Problems)
+	}
+	want := []EnvLink{{Key: "SAMPLE_URL", From: "app", Subject: ResourceSubject, Field: "consumer:url", Options: map[string]string{"tenant": "acme"}}}
+	if web := findAction(r, "service:web"); !reflect.DeepEqual(web.Service.Env, want) {
+		t.Fatalf("env: %+v", web.Service.Env)
+	}
+
+	// Only a consumer link carries them.
+	r = composedPlan(t, recipestest.Registry(t), sampleApp+"services:\n  web: {source: cmd/api, provider: server, target: "+targetA+", public: false, needs: [app]}\n")
+	data, err := json.Marshal(findAction(r, "service:web").Service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"options"`)) {
+		t.Fatalf("options on a link that isn't a consumer's: %s", data)
+	}
+}
+
+func TestConsumerOptionProblems(t *testing.T) {
+	for _, tc := range []struct{ name, options, code, path, message string }{
+		{"missing", "", "catalog-consumer-option-missing", "services.web.need_options.app.tenant", "web needs app without a tenant. Set need_options.app.tenant."},
+		{"invalid", "tenant: Acme!", "catalog-consumer-option-invalid", "services.web.need_options.app.tenant", ""},
+		{"unknown", "tenant: acme, region: eu", "catalog-consumer-option-unknown", "services.web.need_options.app.region", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := composedPlan(t, tenanted(t), tenantDoc(tc.options))
+			p := findCode(r.Problems, tc.code)
+			if r.Executable || p == nil || p.Subject != ServiceSubject || p.Name != "web" || p.Path != tc.path || (tc.message != "" && p.Message != tc.message) {
+				t.Fatalf("want %s: %+v", tc.code, r.Problems)
+			}
+		})
+	}
+}
+
+// boundAll is what a deployment of every action of r would have bound.
+func boundAll(t *testing.T, r *Result) []*Binding {
+	t.Helper()
+	out := boundFrom(t, r)
+	for _, a := range r.Actions {
+		if a.Service == nil {
+			continue
+		}
+		raw, err := json.Marshal(a.Service)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, &Binding{ID: "binding-" + a.Name, Subject: a.Subject, Name: a.Name, Provider: a.Provider, ConnectionID: a.ConnectionID, ExternalID: "instance-" + a.Name, Engine: a.Engine, Config: raw})
+	}
+	return out
+}
+
+func TestChangingAConsumerOptionUpdatesTheService(t *testing.T) {
+	bindings := boundAll(t, composedPlan(t, tenanted(t), tenantDoc("tenant: acme")))
+	if r := composedPlan(t, tenanted(t), tenantDoc("tenant: acme"), bindings...); findAction(r, "service:web").Op != Keep {
+		t.Fatalf("unchanged service: %+v", findAction(r, "service:web"))
+	}
+	r := composedPlan(t, tenanted(t), tenantDoc("tenant: beta"), bindings...)
+	if !r.Executable {
+		t.Fatalf("plan blocked: %+v", r.Problems)
+	}
+	web := findAction(r, "service:web")
+	if web.Op != Update || !reflect.DeepEqual(web.Changes, []Change{{Field: "app tenant", From: "acme", To: "beta"}}) {
+		t.Fatalf("web: %s %+v", web.Op, web.Changes)
+	}
+}
+
+func TestRedisDependencyRunsOnKubernetes(t *testing.T) {
+	doc := "version: 1\nresources:\n  app: {kind: sample, provider: kubernetes, target: " + targetA + ", uses: {cache: {enabled: true}}}\n"
+	plan := func(c ConnectionOption, doc string) *Result {
+		return Compute(Input{
+			Environment: "production", Graph: &graph.Graph{}, Providers: providers.Registry(), Kinds: recipestest.Registry(t),
+			Manifest: parse(t, doc), Connections: []ConnectionOption{c},
+		})
+	}
+	c := clusterCatalogConnection(t)
+	c.Details["service_proxy"], c.Details["jobs"] = "ready", "ready"
+	r := plan(c, doc)
+	if !r.Executable {
+		t.Fatalf("cache dependency on a cluster blocked: %+v", r.Problems)
+	}
+	cache := findAction(r, "resource:app--cache")
+	want, err := recipes.KubernetesCache("redis", "8.2", "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cache == nil || cache.Step != 1 || cache.ConnectionID != targetA || cache.Resource.Kind != "redis" || !reflect.DeepEqual(cache.Resource.Catalog, want) || cache.Resource.TargetSettings["namespace_uid"] != "namespace-identity" {
+		t.Fatalf("cache: %+v", cache)
+	}
+
+	delete(c.Details, "postgres_recovery_permissions")
+	r = plan(c, doc)
+	i := slices.IndexFunc(r.Problems, func(f Finding) bool { return f.Name == "app--cache" })
+	if r.Executable || i < 0 || r.Problems[i].Code != "catalog-recovery-unavailable" || r.Problems[i].Message != "Check pod exec, network-policy and temporary-volume cleanup permissions before deploying this cache." {
+		t.Fatalf("cache without recovery permissions: %+v", r.Problems)
+	}
+
+	// A standalone cache still isn't offered on a cluster (ruling R13).
+	c = clusterCatalogConnection(t)
+	r = plan(c, "version: 1\nresources:\n  cache: {kind: redis, provider: kubernetes, target: "+targetA+"}\n")
+	if r.Executable || !hasCode(r.Problems, "provider-cant-provision") {
+		t.Fatalf("standalone cache on a cluster: %+v", r.Problems)
+	}
+}
+
+func TestCompositionWithKubernetesRulesNeedsRBAC(t *testing.T) {
+	kind := statelessSample(t)
+	kind.Components[0].KubernetesRules = []recipes.KubernetesRule{{APIGroups: []string{""}, Resources: []string{"services"}, Verbs: []string{"get", "list", "watch"}}}
+	c := clusterWorkloadConnection(t)
+	r := clusterComposedPlan(t, registryOf(t, kind), c)
+	p := findCode(r.Problems, "catalog-rbac-unavailable")
+	const message = "Sample needs a Role in namespace apps to discover Services. Let Loomplane create serviceaccounts, roles and rolebindings there, and get, list and watch services, endpoints and endpointslices, then check the connection again."
+	if r.Executable || p == nil || p.Subject != ResourceSubject || p.Name != "app" || p.Path != "resources.app" || p.Message != message {
+		t.Fatalf("rules accepted without RBAC: %+v", r.Problems)
+	}
+	c.Details["rbac"] = "ready"
+	if r := clusterComposedPlan(t, registryOf(t, kind), c); !r.Executable {
+		t.Fatalf("rules with RBAC blocked: %+v", r.Problems)
+	}
+	if r := clusterComposedPlan(t, registryOf(t, statelessSample(t)), clusterWorkloadConnection(t)); hasCode(r.Problems, "catalog-rbac-unavailable") {
+		t.Fatalf("RBAC required without rules: %+v", r.Problems)
+	}
+}

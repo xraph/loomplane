@@ -1578,12 +1578,13 @@ func (p *planner) link(name string, a *Action) {
 	keys := make([]string, len(needs))
 	// A composed catalog resource gives a variable for each output.
 	outputs := make([][]recipes.Output, len(needs))
+	takes := make([][]recipes.ConsumerOption, len(needs))
 	composed := make([]bool, len(needs))
 	count := map[string]int{}
 	for i, need := range needs {
 		if r, ok := m.Resources[need]; ok {
 			if kind, ok := p.kinds().Kind(r.Kind); ok {
-				outputs[i], composed[i] = kind.Outputs, true
+				outputs[i], takes[i], composed[i] = kind.Outputs, kind.ConsumerOptions, true
 				for _, o := range kind.Outputs {
 					count[o.EnvKey]++
 				}
@@ -1601,6 +1602,7 @@ func (p *planner) link(name string, a *Action) {
 		if count[key] > 1 {
 			key = envName(need) + "_URL"
 		}
+		options := p.consumerOptions(name, need, takes[i])
 		if r, ok := m.Resources[need]; ok {
 			dep := p.resources[need]
 			if dep == nil {
@@ -1624,7 +1626,7 @@ func (p *planner) link(name string, a *Action) {
 				}
 			}
 			if composed[i] {
-				p.linkComposition(a, need, outputs[i], count)
+				p.linkComposition(a, need, outputs[i], options, count)
 				a.DependsOn = append(a.DependsOn, dep.ID)
 				continue
 			}
@@ -1724,6 +1726,7 @@ func (p *planner) link(name string, a *Action) {
 	// The variables are part of the configuration, so the comparison with
 	// what's deployed has to happen after them.
 	p.diff(a, a.Service, a.Provider, a.Region)
+	p.optionChanges(a)
 }
 
 // Targets the planner knows how services on them reach each other.
