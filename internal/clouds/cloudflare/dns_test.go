@@ -411,3 +411,59 @@ func TestCloudflareDNSCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestCloudflareDNSProxiedReceiptIsPatchedBackNotReportedDone(t *testing.T) {
+	f, c, cred, zone := newDNSFixture(t)
+	receipt := provider.DNSRecord{ID: "rec9", ZoneID: zone.ID, Name: "app", Type: "A", Value: "192.0.2.1", TTL: 60, Owner: "loomplane:route:r"}
+	f.records = []cfRecord{{ID: "rec9", Name: "app.example.test", Type: "A", Content: "192.0.2.1", TTL: 60, Comment: "loomplane:route:r", Proxied: true}}
+	// The state is otherwise the desired one, yet the orange cloud is on.
+	got, err := c.UpsertRecord(t.Context(), cred, provider.DNSUpsertRequest{Zone: zone, Record: receipt, Expected: &receipt})
+	if err != nil || got != receipt || f.writes != 1 || f.records[0].Proxied || f.lastBody["proxied"] != false {
+		t.Fatalf("%+v %v writes=%d %+v", got, err, f.writes, f.records)
+	}
+	// Reconciling never writes: a proxied record is unexpected state.
+	f.records[0].Proxied = true
+	if _, err = c.UpsertRecord(t.Context(), cred, provider.DNSUpsertRequest{Zone: zone, Record: receipt, Expected: &receipt, ReconcileOnly: true}); !errors.Is(err, provider.ErrInfrastructureDrift) || f.writes != 1 {
+		t.Fatalf("reconcile: %v writes=%d", err, f.writes)
+	}
+}
+
+func TestCloudflareDNSReconcilesALostUpdateWithoutWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*dnsFixture)
+		want   error
+	}{
+		{name: "update landed"},
+		{name: "prior state still present", change: func(f *dnsFixture) { f.records[0].Content = "192.0.2.1" }, want: provider.ErrInfrastructureAmbiguous},
+		{name: "foreign owner", change: func(f *dnsFixture) { f.records[0].Comment = "loomplane:route:other" }, want: provider.ErrInfrastructureDrift},
+		{name: "unexpected value", change: func(f *dnsFixture) { f.records[0].Content = "192.0.2.77" }, want: provider.ErrInfrastructureDrift},
+		{name: "unexpected ttl", change: func(f *dnsFixture) { f.records[0].TTL = 120 }, want: provider.ErrInfrastructureDrift},
+		{name: "automatic ttl", change: func(f *dnsFixture) { f.records[0].TTL = 1 }, want: provider.ErrInfrastructureDrift},
+		{name: "proxied", change: func(f *dnsFixture) { f.records[0].Proxied = true }, want: provider.ErrInfrastructureDrift},
+		{name: "record missing", change: func(f *dnsFixture) { f.records = nil }, want: provider.ErrInfrastructureDrift},
+		{name: "other id holds the desired state", change: func(f *dnsFixture) { f.records[0].ID = "rec_new" }, want: provider.ErrInfrastructureDrift},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c, cred, zone := newDNSFixture(t)
+			prior := provider.DNSRecord{ID: "rec1", ZoneID: zone.ID, Name: "app", Type: "A", Value: "192.0.2.1", TTL: 60, Owner: "loomplane:route:r"}
+			desired := prior
+			desired.Value = "192.0.2.2"
+			f.records = []cfRecord{{ID: "rec1", Name: "app.example.test", Type: "A", Content: "192.0.2.2", TTL: 60, Comment: "loomplane:route:r"}}
+			if tc.change != nil {
+				tc.change(f)
+			}
+			got, err := c.UpsertRecord(t.Context(), cred, provider.DNSUpsertRequest{Zone: zone, Record: desired, Expected: &prior, ReconcileOnly: true})
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("%+v %v", got, err)
+				}
+			} else if err != nil || got != desired {
+				t.Fatalf("landed update: %+v %v", got, err)
+			}
+			if f.writes != 0 {
+				t.Fatal("reconciliation wrote to Cloudflare")
+			}
+		})
+	}
+}

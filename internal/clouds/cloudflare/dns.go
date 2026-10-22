@@ -261,19 +261,22 @@ func (r infrastructureRecord) record(zone provider.DNSZone, receiptID string) (p
 }
 
 // listRecords reads every record of the zone. receiptID is the one record
-// that may be owned although proxied.
-func (c *Client) listRecords(ctx context.Context, credential provider.InfrastructureCredential, zone provider.DNSZone, receiptID string) ([]provider.DNSRecord, error) {
-	if err := c.checkZone(ctx, credential, zone); err != nil {
-		return nil, err
+// that may be owned although proxied. proxied holds the IDs of every
+// proxied record, which the contract's records can't show.
+func (c *Client) listRecords(ctx context.Context, credential provider.InfrastructureCredential, zone provider.DNSZone, receiptID string) (result []provider.DNSRecord, proxied map[string]bool, err error) {
+	if err = c.checkZone(ctx, credential, zone); err != nil {
+		return nil, nil, err
 	}
-	result := []provider.DNSRecord{}
+	result = []provider.DNSRecord{}
+	proxied = map[string]bool{}
 	seen := map[string]bool{}
-	err := eachPage(ctx, c, credential.Token, "/zones/"+url.PathEscape(zone.ID)+"/dns_records", nil, "DNS:Read", func(records []infrastructureRecord) error {
+	err = eachPage(ctx, c, credential.Token, "/zones/"+url.PathEscape(zone.ID)+"/dns_records", nil, "DNS:Read", func(records []infrastructureRecord) error {
 		for _, r := range records {
 			if r.ID == "" || seen[r.ID] {
 				return provider.ErrInfrastructurePagination
 			}
 			seen[r.ID] = true
+			proxied[r.ID] = r.Proxied
 			record, err := r.record(zone, receiptID)
 			if err != nil {
 				return err
@@ -283,15 +286,42 @@ func (c *Client) listRecords(ctx context.Context, credential provider.Infrastruc
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return result, nil
+	return result, proxied, nil
 }
 
 // ListRecords reads all records, foreign and proxied ones included, so
 // callers can see what already holds a name.
 func (c *Client) ListRecords(ctx context.Context, credential provider.InfrastructureCredential, zone provider.DNSZone) ([]provider.DNSRecord, error) {
-	return c.listRecords(ctx, credential, zone, "")
+	records, _, err := c.listRecords(ctx, credential, zone, "")
+	return records, err
+}
+
+// reconcileUpdate settles an update that may or may not have landed,
+// reading only. Cloudflare keeps a record's ID on PATCH, so the record with
+// the receipt's ID is the desired state (done), still the prior state (the
+// update didn't land, so unresolved) or something else (drift). A proxied
+// record is never the desired state.
+func reconcileUpdate(req provider.DNSUpsertRequest, records []provider.DNSRecord, proxied map[string]bool) (provider.DNSRecord, error) {
+	if _, _, err := provider.PlanDNSUpsert(req, []provider.DNSRecord{*req.Expected}, true); err != nil {
+		return provider.DNSRecord{}, err
+	}
+	for _, current := range records {
+		if current.ID != req.Expected.ID {
+			continue
+		}
+		switch {
+		case proxied[current.ID]:
+			return provider.DNSRecord{}, provider.ErrInfrastructureDrift
+		case current == req.Record:
+			return current, nil
+		case current == *req.Expected:
+			return provider.DNSRecord{}, provider.ErrInfrastructureAmbiguous
+		}
+		return provider.DNSRecord{}, provider.ErrInfrastructureDrift
+	}
+	return provider.DNSRecord{}, provider.ErrInfrastructureDrift
 }
 
 // UpsertRecord creates or updates one record Loomplane owns. A record is
@@ -302,13 +332,20 @@ func (c *Client) UpsertRecord(ctx context.Context, credential provider.Infrastru
 	if req.Expected != nil {
 		receipt = req.Expected.ID
 	}
-	records, err := c.listRecords(ctx, credential, req.Zone, receipt)
+	records, proxied, err := c.listRecords(ctx, credential, req.Zone, receipt)
 	if err != nil {
 		return provider.DNSRecord{}, err
 	}
+	if req.ReconcileOnly && req.Expected != nil {
+		return reconcileUpdate(req, records, proxied)
+	}
 	prior, done, err := provider.PlanDNSUpsert(req, records, true)
-	if err != nil || done {
+	if err != nil {
 		return prior, err
+	}
+	// Loomplane writes records unproxied; one flipped to proxied is not done.
+	if done && !(req.Expected != nil && proxied[prior.ID]) {
+		return prior, nil
 	}
 	in := struct {
 		Type    string `json:"type"`
@@ -353,7 +390,7 @@ func (c *Client) DeleteRecord(ctx context.Context, credential provider.Infrastru
 	if err := provider.ValidateDNSRecord(req.Expected); err != nil {
 		return err
 	}
-	records, err := c.listRecords(ctx, credential, req.Zone, req.Expected.ID)
+	records, _, err := c.listRecords(ctx, credential, req.Zone, req.Expected.ID)
 	if err != nil {
 		return err
 	}
