@@ -35,6 +35,18 @@ Read APIs never return stored credential values. New API keys and webhook signin
 
 All of it depends on `secret_key`. Keep it out of the repository and away from your backups. Losing it loses every credential and secret; leaking it, with a copy of the database, exposes them.
 
+## DNS challenge credentials
+
+A wildcard certificate is proven through DNS, so whatever serves the wildcard has to write a TXT record in its zone, and for that it holds a Cloudflare token of its own. You give it a second Cloudflare connection, with Zone Read and DNS Edit on that one zone and nothing else. [domains.md](domains.md#the-dns-challenge-token) lists the checks. They run when you attach the token and again before every write to a server or cluster, so if somebody widens the token in Cloudflare later, Loomplane refuses to copy it anywhere.
+
+| Where | How it's held |
+|---|---|
+| Loomplane | Vault, like every other connection credential |
+| A server serving a wildcard | `/config/dns/<zone>.token` in the proxy's config volume, readable only by its owner (0400). Caddy's config names the file through a `{file...}` placeholder, so the saved config, the admin API's readback and the logs never hold the token. It's removed when the last wildcard route for that zone leaves the server. |
+| A Kubernetes namespace serving a wildcard | A Secret, under `api-token`, that the zone's DNS-01 Issuer reads. It goes with the Issuer once no wildcard route in the namespace needs it. |
+
+This is a trade-off, and you should know what it costs. Anyone with Docker access to the host can read that token file. On Kubernetes, so can anyone allowed to read Secrets in that namespace. What they get is the power to edit one zone's DNS records. They can't touch your other zones, your account or your registrar, and that's the reason the token is a separate, narrow one. Application containers never receive DNS credentials. Loomplane also checks each token against the format Caddy's Cloudflare module accepts before writing it, because the module prints a token it refuses in its error.
+
 ## What runs where
 
 Nothing from a repository runs on a Loomplane machine. Analysis only reads files, in pure Go parsers behind size and file-count limits. Builds run on the clouds' own builders (Cloud Build, CodeBuild, Vercel), in your accounts. Gateways and provider plugins run on your infrastructure, and application traffic never passes through Loomplane.
