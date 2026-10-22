@@ -43,6 +43,9 @@ type Service struct {
 	secrets Secrets
 	authz   Authorizer
 	now     func() time.Time
+	// Audit records each create, delete and check, never a DSN. It may be
+	// nil.
+	Audit Auditor
 }
 
 // NewService returns a Service.
@@ -56,7 +59,18 @@ const maxName = 100
 // Create registers an endpoint. The DSN goes to Vault; the row and the
 // returned Endpoint hold only the parts that aren't secret. It needs
 // SecretManage.
-func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInput) (*Endpoint, error) {
+func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInput) (e *Endpoint, err error) {
+	defer func() {
+		event := AuditEvent{Action: AuditCreate, Principal: p, Engine: in.Engine, Address: dsnAddress(in.DSN), Outcome: outcomeOf(err)}
+		if err == nil {
+			event.EndpointID = e.ID
+		}
+		s.record(ctx, event)
+	}()
+	return s.create(ctx, p, in)
+}
+
+func (s *Service) create(ctx context.Context, p security.Principal, in CreateInput) (*Endpoint, error) {
 	if err := s.authz.Require(ctx, p, security.SecretManage, ""); err != nil {
 		return nil, err
 	}
@@ -108,9 +122,17 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]*Endpoint, 
 // Delete removes an endpoint and its DSN. It needs SecretManage, and
 // returns ErrInUse while a binding connects to the endpoint; the DSN stays
 // in Vault then. Nothing on the endpoint itself changes.
-func (s *Service) Delete(ctx context.Context, p security.Principal, id string) error {
+func (s *Service) Delete(ctx context.Context, p security.Principal, id string) (err error) {
+	event := AuditEvent{Action: AuditDelete, Principal: p, EndpointID: id}
+	defer func() {
+		event.Outcome = outcomeOf(err)
+		s.record(ctx, event)
+	}()
 	if err := s.authz.Require(ctx, p, security.SecretManage, ""); err != nil {
 		return err
+	}
+	if e, gerr := s.store.Get(ctx, p.OrgID, id); gerr == nil {
+		event.Engine, event.Address = e.Engine, e.address()
 	}
 	if err := s.store.Delete(ctx, p.OrgID, id); err != nil {
 		return err

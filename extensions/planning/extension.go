@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/xraph/chronicle"
@@ -97,6 +98,8 @@ type Extension struct {
 	catalogAdmin        *catalogproxy.Service
 	endpointChecks      *catalogconnect.Checker
 	endpointDialer      endpointDialer
+	checkLimit          *checkLimiter // nil is checksPerMinute (see checks)
+	checkLimitOnce      sync.Once
 	catalogKinds        *recipes.Registry // nil is recipes.Default()
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
@@ -261,6 +264,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
 	// An external endpoint's DSN is a resource credential too.
 	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
+	e.endpoints.Audit = endpointAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
 	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
 	routeService, err := forge.InjectType[*cloudinfra.Service](c)
 	if err != nil {

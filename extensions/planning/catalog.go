@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // CatalogKindList is the body of GET /api/v1/catalog/kinds. It declares no
@@ -82,18 +83,51 @@ func (e *Extension) deleteCatalogEndpoint(c forge.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// checkCatalogEndpoint checks a DSN before it's stored, from the target
+// it will be reached from. Each person may check checksPerMinute a minute
+// in each organization, and every check is audited, without its DSN.
 func (e *Extension) checkCatalogEndpoint(c forge.Context) error {
 	p, err := principal(c)
 	if err != nil {
 		return err
 	}
+	ctx := c.Request().Context()
+	allowed, first := e.checks().allow(p)
 	var in catalogconnect.CheckInput
-	if err = c.BindJSON(&in); err != nil {
+	bindErr := c.BindJSON(&in)
+	if !allowed {
+		if first {
+			e.endpoints.RecordCheck(ctx, p, in, catalogconnect.OutcomeRateLimited)
+		}
+		return forge.NewHTTPError(http.StatusTooManyRequests, fmt.Sprintf("Too many endpoint checks. You can check %d a minute; try again shortly.", checksPerMinute))
+	}
+	if bindErr != nil {
+		e.endpoints.RecordCheck(ctx, p, in, catalogconnect.OutcomeInvalid)
 		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"engine": "postgres", "dsn": "postgres://...", "target": "...", "kind": "...", "dependency": "..."}`)
 	}
-	ctx := c.Request().Context()
-	if err = e.endpoints.AuthorizeCheck(ctx, p); err != nil {
+	result, err := e.checkEndpoint(c, p, in)
+	outcome := catalogconnect.OutcomeSuccess
+	switch {
+	case err != nil && security.StatusFor(err) == http.StatusForbidden:
+		outcome = catalogconnect.OutcomeDenied
+	case errors.Is(err, catalogconnect.ErrInvalid):
+		outcome = catalogconnect.OutcomeInvalid
+	case err != nil || !result.OK:
+		outcome = catalogconnect.OutcomeFailure
+	}
+	e.endpoints.RecordCheck(ctx, p, in, outcome)
+	if err != nil {
 		return fail(err)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
+// checkEndpoint runs an authorized check. Its errors are the service's,
+// for fail.
+func (e *Extension) checkEndpoint(c forge.Context, p security.Principal, in catalogconnect.CheckInput) (catalogconnect.CheckResult, error) {
+	ctx := c.Request().Context()
+	if err := e.endpoints.AuthorizeCheck(ctx, p); err != nil {
+		return catalogconnect.CheckResult{}, err
 	}
 	kinds := e.catalogKinds
 	if kinds == nil {
@@ -101,38 +135,38 @@ func (e *Extension) checkCatalogEndpoint(c forge.Context) error {
 	}
 	kind, ok := kinds.Kind(in.Kind)
 	if !ok {
-		return fail(fmt.Errorf("%w: Loomplane has no catalog kind %q", catalogconnect.ErrInvalid, in.Kind))
+		return catalogconnect.CheckResult{}, fmt.Errorf("%w: Loomplane has no catalog kind %q", catalogconnect.ErrInvalid, in.Kind)
 	}
 	i := slices.IndexFunc(kind.Dependencies, func(d recipes.Dependency) bool { return d.Name == in.Dependency })
 	if i < 0 {
-		return fail(fmt.Errorf("%w: %s has no %q dependency", catalogconnect.ErrInvalid, kind.Title, in.Dependency))
+		return catalogconnect.CheckResult{}, fmt.Errorf("%w: %s has no %q dependency", catalogconnect.ErrInvalid, kind.Title, in.Dependency)
 	}
 	dep := kind.Dependencies[i]
 	if dep.External == nil {
-		return fail(fmt.Errorf("%w: %s can't connect %s to an external endpoint", catalogconnect.ErrInvalid, kind.Title, dep.Title))
+		return catalogconnect.CheckResult{}, fmt.Errorf("%w: %s can't connect %s to an external endpoint", catalogconnect.ErrInvalid, kind.Title, dep.Title)
 	}
 	req := *dep.External
 	if in.Target == "" {
-		return fail(fmt.Errorf("%w: name the target connection the endpoint is checked from", catalogconnect.ErrInvalid))
+		return catalogconnect.CheckResult{}, fmt.Errorf("%w: name the target connection the endpoint is checked from", catalogconnect.ErrInvalid)
 	}
 	if in.Engine != "" && in.Engine != req.Engine {
-		return c.JSON(http.StatusOK, catalogconnect.CheckResult{Problems: []string{
+		return catalogconnect.CheckResult{Problems: []string{
 			fmt.Sprintf("this is a %s endpoint, and %s's %s dependency needs %s", catalogconnect.EngineTitle(in.Engine), kind.Title, dep.Name, catalogconnect.EngineTitle(req.Engine)),
-		}})
+		}}, nil
 	}
 	dial, closer, err := e.endpointDialer.TargetDial(ctx, p.OrgID, in.Target)
 	if errors.Is(err, connections.ErrNotFound) {
-		return fail(err)
+		return catalogconnect.CheckResult{}, err
 	}
 	if err != nil {
-		return c.JSON(http.StatusOK, catalogconnect.CheckResult{Problems: []string{"the target connection failed: " + err.Error()}})
+		return catalogconnect.CheckResult{Problems: []string{"the target connection failed: " + err.Error()}}, nil
 	}
 	if closer != nil {
 		defer func() { _ = closer.Close() }() // a check only reads
 	}
 	report, err := e.endpointChecks.CheckDSN(catalogconnect.WithConsumer(ctx, catalogconnect.ConsumerOf(kind, dep.Name)), in.DSN, req, dial)
 	if err != nil {
-		return fail(err)
+		return catalogconnect.CheckResult{}, err
 	}
 	result := report.Result()
 	// A cluster has nothing inside it to dial from, so its check runs from
@@ -140,5 +174,5 @@ func (e *Extension) checkCatalogEndpoint(c forge.Context) error {
 	if cloud, cerr := e.endpointDialer.TargetCloud(ctx, p.OrgID, in.Target); cerr == nil && cloud == connections.Kubernetes {
 		result.Notes = append(result.Notes, "Checked from Loomplane, not from inside the cluster.")
 	}
-	return c.JSON(http.StatusOK, result)
+	return result, nil
 }

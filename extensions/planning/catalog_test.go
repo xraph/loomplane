@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/forge"
 
@@ -280,6 +281,8 @@ func TestCheckRouteResolvesTheRequirement(t *testing.T) {
 		endpointChecks: &catalogconnect.Checker{Endpoints: svc, Probers: map[string]catalogconnect.Prober{"postgres": prober}},
 		endpointDialer: dialer,
 		catalogKinds:   recipestest.Registry(t),
+		// This test checks more than a person may in a minute.
+		checkLimit: newCheckLimiter(100, time.Minute),
 	}
 	r := forge.NewRouter()
 	if err := ext.routes(r, nil); err != nil {
