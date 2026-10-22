@@ -64,9 +64,10 @@ func TestAcceptanceDomains(t *testing.T) {
 }
 
 // cloudflareGuard stands between Loomplane and Cloudflare. It refuses any
-// production registrar path and anything to do with transfers, so a
-// mistaken configuration can't buy a real domain, and it records every
-// registrar request it passes on.
+// production registrar path, anything to do with transfers and any write to
+// a zone itself, so a mistaken configuration can't buy a real domain or
+// leave a zone behind in the real account. With records false it refuses
+// DNS record writes too. It records every registrar request it passes on.
 type cloudflareGuard struct {
 	srv     *httptest.Server
 	mu      sync.Mutex
@@ -74,7 +75,48 @@ type cloudflareGuard struct {
 	refused []string
 }
 
-func newCloudflareGuard(t *testing.T) *cloudflareGuard {
+// zoneWrite is a request that changes a zone, or with records a DNS record
+// in one. The zones API is the production account's even in sandbox mode.
+func zoneWrite(r *http.Request, records bool) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return false
+	}
+	_, rest, ok := strings.Cut(r.URL.Path, "/client/v4/zones")
+	if !ok || (rest != "" && !strings.HasPrefix(rest, "/")) {
+		return false
+	}
+	// "", "/{id}": the zone itself. Anything deeper is the zone's records.
+	if strings.Count(strings.Trim(rest, "/"), "/") < 1 {
+		return true
+	}
+	return !records
+}
+
+func TestCloudflareGuardRefusesZoneWrites(t *testing.T) {
+	for _, tc := range []struct {
+		method, path string
+		records      bool
+		refused      bool
+	}{
+		{http.MethodPost, "/client/v4/zones", true, true},
+		{http.MethodPatch, "/client/v4/zones/z1", true, true},
+		{http.MethodDelete, "/client/v4/zones/z1/", true, true},
+		{http.MethodGet, "/client/v4/zones", false, false},
+		{http.MethodPost, "/client/v4/zones/z1/dns_records", true, false},
+		{http.MethodPost, "/client/v4/zones/z1/dns_records", false, true},
+		{http.MethodPut, "/client/v4/zones/z1/dns_records/r1", false, true},
+		{http.MethodGet, "/client/v4/zones/z1/dns_records", false, false},
+		{http.MethodPost, "/client/v4/zonesx", false, false},
+		{http.MethodPost, "/client/v4/accounts/a/registrar-sandbox/registrations", false, false},
+	} {
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		if got := zoneWrite(r, tc.records); got != tc.refused {
+			t.Errorf("%s %s records=%v: refused %v, want %v", tc.method, tc.path, tc.records, got, tc.refused)
+		}
+	}
+}
+
+func newCloudflareGuard(t *testing.T, records bool) *cloudflareGuard {
 	t.Helper()
 	target, err := url.Parse(cloudflareAPI)
 	if err != nil {
@@ -87,7 +129,7 @@ func newCloudflareGuard(t *testing.T) *cloudflareGuard {
 		request := r.Method + " " + r.URL.Path
 		g.mu.Lock()
 		switch {
-		case slices.Contains(segments, "registrar") || strings.Contains(r.URL.Path, "transfer"):
+		case slices.Contains(segments, "registrar") || strings.Contains(r.URL.Path, "transfer") || zoneWrite(r, records):
 			g.refused = append(g.refused, request)
 			g.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
@@ -107,13 +149,14 @@ func newCloudflareGuard(t *testing.T) *cloudflareGuard {
 func (g *cloudflareGuard) endpoint() string { return g.srv.URL + "/client/v4" }
 
 // sandboxOnly fails unless every registrar request so far went to the
-// sandbox, and returns those requests.
+// sandbox and nothing wrote to a zone it shouldn't, and returns the
+// sandbox requests.
 func (g *cloudflareGuard) sandboxOnly(t *testing.T) []string {
 	t.Helper()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.refused) > 0 {
-		t.Fatalf("Loomplane sent requests outside the registrar sandbox, refused here: %v", g.refused)
+		t.Fatalf("Loomplane sent requests the guard refuses (outside the registrar sandbox, or a zone write): %v", g.refused)
 	}
 	return slices.Clone(g.sandbox)
 }
@@ -227,7 +270,8 @@ func domainsTimeout(t *testing.T) time.Duration {
 func acceptanceRegistrar(t *testing.T) {
 	vars, missing := domainsVars("LOOMPLANE_CF_SANDBOX_TOKEN", "LOOMPLANE_CF_ACCOUNT_ID")
 	skipDomainsGap(t, missing)
-	guard := newCloudflareGuard(t)
+	// A sandbox registration writes nothing to the real account's zones.
+	guard := newCloudflareGuard(t, false)
 	c, _ := domainsApp(t, guard, nil)
 
 	conn := connectDomains(t, c, "cloudflare", "Cloudflare sandbox", vars["LOOMPLANE_CF_SANDBOX_TOKEN"], map[string]string{"account_id": vars["LOOMPLANE_CF_ACCOUNT_ID"]})
@@ -287,7 +331,7 @@ func acceptanceRegistrar(t *testing.T) {
 		time.Sleep(5 * time.Second)
 		domainsCall(t, c, http.StatusOK, http.MethodGet, "/api/v1/domain-registrations/"+reg.ID, nil, &reg)
 	}
-	t.Logf("%s is %s, expires %s", name, reg.Status, reg.DomainExpiresAt.Format(time.DateOnly))
+	t.Logf("%s is %s, expires %s: %s", name, reg.Status, reg.DomainExpiresAt.Format(time.DateOnly), reg.Message)
 	if !reg.AutoRenew {
 		t.Fatal("auto-renew is off after registration")
 	}
@@ -310,6 +354,10 @@ func acceptanceRegistrar(t *testing.T) {
 	if purchases != 1 {
 		t.Fatalf("%d registration requests reached the sandbox after approval, want one", purchases)
 	}
+	// The zone hand-off may still be running; give it a moment, then make
+	// sure it didn't try to create the zone.
+	time.Sleep(10 * time.Second)
+	guard.sandboxOnly(t)
 }
 
 // acceptanceRoutes deploys a service to a disposable cluster and gives it
@@ -331,7 +379,7 @@ func acceptanceRoutes(t *testing.T) {
 	zoneName := strings.ToLower(strings.TrimSuffix(vars["LOOMPLANE_ACCEPTANCE_ZONE"], "."))
 	timeout := domainsTimeout(t)
 
-	guard := newCloudflareGuard(t)
+	guard := newCloudflareGuard(t, true)
 	source := tarball(t, "routes-"+exampleSHA, map[string]string{
 		"go.mod":          "module example.test/routes\n\ngo 1.26\n",
 		"cmd/web/main.go": "package main\n\nimport \"net/http\"\n\nfunc main() {\n\t_ = http.ListenAndServe(\":80\", http.NotFoundHandler())\n}\n",

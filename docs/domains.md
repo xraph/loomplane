@@ -48,7 +48,7 @@ clouds:
   cloudflare_registrar_sandbox: true
 ```
 
-Registrar calls then go to `/accounts/{account_id}/registrar-sandbox/...`, and the register dialog marks itself **Sandbox**. Development and CI always use it. Since the sandbox makes no zone, a sandbox registration stays at `zone_pending`, which is as far as it can go.
+Registrar calls then go to `/accounts/{account_id}/registrar-sandbox/...`, and the register dialog marks itself **Sandbox**. Development and CI always use it. DNS has no sandbox, though. The zones API is your real account, so Loomplane never creates a zone for a sandbox registration: it stays at `zone_pending` with "Sandbox registrations don't create a DNS zone." That's as far as it can go, unless you already have a zone with that name in the account, in which case Loomplane adopts it the way it would any other.
 
 Loomplane reads the setting when it starts. If you switch it, select **Check again** on each Cloudflare connection before you buy anything. Until you do, a preview won't quote a price, because the connection still records the old mode. The review step takes its **Sandbox** label and "Nothing is charged" from the registrar Loomplane is running against, and a purchase approved under one mode ends `failed` under the other with nothing bought.
 
@@ -225,7 +225,7 @@ Every path sits under `/api/v1`. Approval takes the `review` token from the prev
 
 `TestAcceptanceDomains` checks all of this against the real thing, in two parts that skip separately. Each part names the variables it's missing and skips before it opens a database or sends a request.
 
-The registrar part needs `LOOMPLANE_CF_SANDBOX_TOKEN` and `LOOMPLANE_CF_ACCOUNT_ID`, a Cloudflare token with Registrar access and its account. It runs Loomplane in sandbox mode behind a guard that refuses any production registrar path or transfer request. Then it checks the token's permissions, lists extensions, searches, checks, previews and approves a `.com` with auto-renew on, waits for `succeeded` or `zone_pending`, turns auto-renew off and reads it back.
+The registrar part needs `LOOMPLANE_CF_SANDBOX_TOKEN` and `LOOMPLANE_CF_ACCOUNT_ID`, a Cloudflare token with Registrar access and its account. It runs Loomplane in sandbox mode behind a guard that refuses any production registrar path, any transfer request and any write to the account's zones. Then it checks the token's permissions, lists extensions, searches, checks, previews and approves a `.com` with auto-renew on, waits for `succeeded` or `zone_pending`, turns auto-renew off and reads it back.
 
 The route part needs a real zone and a disposable cluster on top of those two:
 

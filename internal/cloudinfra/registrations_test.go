@@ -651,6 +651,31 @@ func TestSucceededRegistrationBecomesManagedZone(t *testing.T) {
 	}
 }
 
+func TestSandboxRegistrationNeverCreatesAZone(t *testing.T) {
+	env := newRegistrationEnv(t)
+	env.sandbox()
+	op := approvedRegistration(t, env.svc)
+	for range 2 {
+		if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID)
+	if got.Status != RegistrationZonePending || got.Message != "Sandbox registrations don't create a DNS zone." || env.dns.creates != 0 || env.registrar.posts != 1 || len(env.domains.zones) != 0 {
+		t.Fatalf("%+v creates=%d posts=%d", got, env.dns.creates, env.registrar.posts)
+	}
+
+	// A zone that already exists in the account is still adopted.
+	env.dns.zone = &provider.DNSZone{ID: "cf_zone", Name: "acme.dev", AccountID: "account", Verified: true}
+	if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = env.svc.GetRegistration(t.Context(), admin, op.ID)
+	if got.Status != RegistrationSucceededStatus || env.dns.creates != 0 || len(env.domains.zones) != 1 {
+		t.Fatalf("%+v creates=%d", got, env.dns.creates)
+	}
+}
+
 func TestRegistrationZoneIsCreatedOnceAcrossALostSave(t *testing.T) {
 	env := newRegistrationEnv(t)
 	env.dns.zone = &provider.DNSZone{ID: "cf_zone", Name: "acme.dev", AccountID: "account", Verified: true}

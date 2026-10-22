@@ -806,6 +806,11 @@ func (s *Service) handOffZone(ctx context.Context, st RegistrationStore, reg *Re
 	}
 	current, err := dns.GetZone(ctx, cred, reg.Name)
 	if errors.Is(err, provider.ErrInfrastructureNotFound) {
+		if reg.Sandbox {
+			// DNS calls always reach the production account, and a sandbox
+			// purchase must leave nothing there.
+			return s.sandboxZonePending(ctx, st, reg)
+		}
 		current, err = dns.CreateZone(ctx, cred, provider.DNSZoneSpec{Name: reg.Name})
 	}
 	if err != nil {
@@ -837,6 +842,17 @@ func (s *Service) handOffZone(ctx context.Context, st RegistrationStore, reg *Re
 	}
 	s.domainAudit(ctx, reg.Principal, "domain.zone.write", zone.ID, "")
 	return s.zoneHandedOff(ctx, st, reg, zone)
+}
+
+// sandboxZonePending leaves a sandbox registration at zone_pending, as far
+// as it can go without a zone someone added to the account themselves.
+func (s *Service) sandboxZonePending(ctx context.Context, st RegistrationStore, reg *Registration) error {
+	const message = "Sandbox registrations don't create a DNS zone."
+	if reg.Message == message {
+		return nil
+	}
+	reg.Message = message
+	return s.saveRegistration(ctx, st, reg)
 }
 
 func (s *Service) registrationDNS(ctx context.Context, reg *Registration) (provider.DNSAdapter, provider.InfrastructureCredential, error) {
