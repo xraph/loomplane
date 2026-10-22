@@ -75,14 +75,29 @@ func (s *Session) register(ctx context.Context, namespaces ...string) error {
 	return nil
 }
 
+// missingPolls is how many times a resource Azure can't find yet is
+// polled again after its PUT before the 404 counts. Tests shorten it.
+var missingPolls = 30
+
 // provisioned waits for the resource at path to finish provisioning, and
 // fails if it didn't succeed. state reads the resource's state from what
 // GET returns into out: its provisioningState, or for a flexible server,
-// which reports Ready instead, its state.
+// which reports Ready instead, its state. It's called right after the
+// PUT, and Azure can answer 404 for a while after accepting one, so a
+// 404 counts only after missingPolls of them.
 func (s *Session) provisioned(ctx context.Context, path, version, what string, out any, state func() string) error {
-	for {
-		if _, err := s.do(ctx, http.MethodGet, path, version, nil, out); err != nil {
-			return err
+	for missing := 0; ; {
+		_, gerr := s.do(ctx, http.MethodGet, path, version, nil, out)
+		if IsNotFound(gerr) && missing < missingPolls {
+			missing++
+			progress(ctx, "Waiting for Azure to make "+what)
+			if werr := s.wait(ctx); werr != nil {
+				return werr
+			}
+			continue
+		}
+		if gerr != nil {
+			return gerr
 		}
 		switch st := state(); strings.ToLower(st) {
 		case "succeeded", "ready":

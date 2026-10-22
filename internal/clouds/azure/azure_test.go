@@ -597,6 +597,40 @@ func TestFlexibleServer_aDisabledServerFails(t *testing.T) {
 	}
 }
 
+func TestEnsure_waitsForWhatAzureCantFindYet(t *testing.T) {
+	f := azuretest.New(t)
+	// Azure can answer 404 for a while after it accepts the PUT.
+	f.NotFoundAfterPut = 3
+	s := fakeSession(t, f)
+	ctx := t.Context()
+	if err := s.EnsureGroup(ctx, "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnsureFlexibleServer(ctx, FlexibleServer{Engine: "postgres", Name: "db", Location: "westeurope", Version: "16", Login: "loomplane", Password: "Pw-1"}); err != nil {
+		t.Fatal(err)
+	}
+	// The cluster and its database each answer 404 three times.
+	if _, _, err := s.EnsureManagedRedis(ctx, "cache", "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsure_aServerAzureNeverFindsFails(t *testing.T) {
+	old := missingPolls
+	missingPolls = 3
+	t.Cleanup(func() { missingPolls = old })
+	f := azuretest.New(t)
+	f.NotFoundAfterPut = 1000
+	s := fakeSession(t, f)
+	if err := s.EnsureGroup(t.Context(), "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.EnsureFlexibleServer(t.Context(), FlexibleServer{Engine: "postgres", Name: "db", Location: "westeurope", Version: "16", Login: "loomplane", Password: "Pw-1"})
+	if !IsNotFound(err) {
+		t.Fatalf("err %v", err)
+	}
+}
+
 func TestManagedRedis(t *testing.T) {
 	f := azuretest.New(t)
 	s := fakeSession(t, f)

@@ -96,6 +96,10 @@ type Fake struct {
 	// rule name, as "server/rule".
 	ServerPuts    []map[string]any
 	FirewallRules map[string]map[string]any
+	// NotFoundAfterPut makes each resource Loomplane makes answer 404 to
+	// its first N GETs, as Azure can while it's still making one.
+	NotFoundAfterPut int
+	unseen           map[string]int // lower-cased resource ID → 404s left
 	// ServerState is the state a flexible server settles in once it's
 	// done provisioning: Ready unless it's set.
 	ServerState string
@@ -114,7 +118,7 @@ func New(t *testing.T) *Fake {
 		Actions: []string{"*"}, NotActions: []string{"Microsoft.Authorization/*/Write", "Microsoft.Authorization/*/Delete"},
 		groups: map[string]string{}, registered: map[string]bool{}, resources: map[string]map[string]any{},
 		polls: map[string]int{}, Uploads: map[string][]byte{}, Apps: map[string]map[string]any{},
-		pullDenied: map[string]bool{}, provisionFailed: map[string]bool{}, FirewallRules: map[string]map[string]any{},
+		pullDenied: map[string]bool{}, provisionFailed: map[string]bool{}, unseen: map[string]int{}, FirewallRules: map[string]map[string]any{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Server.Close)
@@ -221,7 +225,10 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 	// GET reports provisioning once, then the final state.
 	getAt := func(id string) {
 		res := f.resources[id]
-		if res == nil {
+		if res == nil || f.unseen[id] > 0 {
+			if res != nil {
+				f.unseen[id]--
+			}
 			notFound("ResourceNotFound")
 			return
 		}
@@ -322,6 +329,9 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 					ing["fqdn"] = strings.TrimPrefix(f.Server.URL, "http://") + "/apps/" + name
 				}
 			}
+		}
+		if f.resources[id] == nil {
+			f.unseen[id] = f.NotFoundAfterPut
 		}
 		f.resources[id], f.polls[id] = body, 0
 		reply(http.StatusCreated, body)
@@ -430,6 +440,9 @@ func (f *Fake) redisDatabase(r *http.Request, reply func(int, any), notFound, ge
 		}
 		body["id"], body["name"], body["properties"] = canonical+"/databases/"+rest[1], rest[1], props
 		props["provisioningState"] = "InProgress"
+		if f.resources[key] == nil {
+			f.unseen[key] = f.NotFoundAfterPut
+		}
 		f.resources[key], f.polls[key] = body, 0
 		reply(http.StatusCreated, body)
 	case len(rest) == 3 && rest[2] == "listkeys" && r.Method == http.MethodPost:
