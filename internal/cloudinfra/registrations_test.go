@@ -771,6 +771,99 @@ func TestRegistrantContactStaysInVault(t *testing.T) {
 	}
 }
 
+// conflictingFinish loses the first save of a given status to another
+// writer.
+type conflictingFinish struct {
+	*memoryRegistrations
+	status string
+	lost   bool
+}
+
+func (s *conflictingFinish) SaveRegistration(ctx context.Context, reg *Registration) error {
+	if !s.lost && reg.Status == s.status {
+		s.lost = true
+		return ErrConflict
+	}
+	return s.memoryRegistrations.SaveRegistration(ctx, reg)
+}
+
+// failingDeletes refuses to delete secrets until err is cleared.
+type failingDeletes struct {
+	memorySecrets
+	err error
+}
+
+func (f *failingDeletes) Delete(ctx context.Context, org, id string) error {
+	if f.err != nil {
+		return f.err
+	}
+	return f.memorySecrets.Delete(ctx, org, id)
+}
+
+func TestRegistrantOutlivesALostFinalSave(t *testing.T) {
+	env := newRegistrationEnv(t)
+	contact := &provider.RegistrantContact{Email: "owner@acme.dev", Phone: "+1.5555550100", Name: "Ada Owner", Street: "1 Main St", City: "Springfield", PostalCode: "12345", CountryCode: "US"}
+	op, err := env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.dev", Registrant: contact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.svc.ApproveRegistration(t.Context(), admin, op.ID, RegistrationApproval{Review: op.Review, Currency: "USD", RegistrationCost: "10.11"}); err != nil {
+		t.Fatal(err)
+	}
+	key := "org/domain-registration/" + op.ID + "/registrant"
+	// The name looks taken, but the final save loses to another writer.
+	env.svc.Registrations = &conflictingFinish{memoryRegistrations: env.store, status: RegistrationFailedStatus}
+	env.registrar.reason = "domain_unavailable"
+	if err = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); !errors.Is(err, ErrConflict) {
+		t.Fatal("lost save", err)
+	}
+	if _, ok := env.secrets[key]; !ok {
+		t.Fatal("the contact went before the final status was saved")
+	}
+	// The retry finds the name free again and still has the contact to buy with.
+	env.registrar.reason = ""
+	if err = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); !errors.Is(err, ErrPending) {
+		t.Fatal("retry", err)
+	}
+	if len(env.registrar.specs) != 1 || env.registrar.specs[0].Registrant == nil || *env.registrar.specs[0].Registrant != *contact {
+		t.Fatalf("the retry bought without the contact: %+v", env.registrar.specs)
+	}
+}
+
+func TestLeftoverRegistrantIsDroppedOnTheNextPass(t *testing.T) {
+	env := newRegistrationEnv(t)
+	secrets := &failingDeletes{memorySecrets: env.secrets, err: errors.New("vault unavailable")}
+	env.svc.Secrets = secrets
+	contact := &provider.RegistrantContact{Email: "owner@acme.dev", Phone: "+1.5555550100", Name: "Ada Owner", Street: "1 Main St", City: "Springfield", PostalCode: "12345", CountryCode: "US"}
+	op, err := env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.dev", Registrant: contact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.svc.ApproveRegistration(t.Context(), admin, op.ID, RegistrationApproval{Review: op.Review, Currency: "USD", RegistrationCost: "10.11"}); err != nil {
+		t.Fatal(err)
+	}
+	env.registrar.reason = "domain_unavailable"
+	if err = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err == nil {
+		t.Fatal("a failed delete was dropped")
+	}
+	key := "org/domain-registration/" + op.ID + "/registrant"
+	got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID)
+	if _, ok := env.secrets[key]; !ok || got.Status != RegistrationFailedStatus {
+		t.Fatalf("after a failed delete: %+v", got)
+	}
+	secrets.err = nil
+	if err = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := env.secrets[key]; ok || env.registrar.posts != 0 {
+		t.Fatalf("leftover contact kept, posts=%d", env.registrar.posts)
+	}
+	// A contact that's already gone is no error.
+	if err = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRecoverRegistrationsRequeuesWorkInFlight(t *testing.T) {
 	env := newRegistrationEnv(t)
 	op := approvedRegistration(t, env.svc)

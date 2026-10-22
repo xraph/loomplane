@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -551,7 +552,11 @@ func (s *Service) ReconcileRegistration(ctx context.Context, org, id string, hea
 			return err
 		}
 		if reg.Status != RegistrationApproved && reg.Status != RegistrationRegistering && reg.Status != RegistrationZonePending {
-			return nil
+			if reg.Status == RegistrationPreview {
+				return nil
+			}
+			// A final row may still hold a contact its first delete missed.
+			return s.dropRegistrant(ctx, reg)
 		}
 		if heartbeat != nil {
 			if checkErr := heartbeat([]byte(`{"stage":"registration"}`)); checkErr != nil {
@@ -880,15 +885,12 @@ func registrationDashboard(accountID string) string {
 	return "https://dash.cloudflare.com/" + url.PathEscape(accountID) + "/domains/registrations"
 }
 
-// finishRegistration saves a final status. The registrant contact is
-// deleted first, so no final registration leaves one in Vault. The outbox
-// keeps one notice per status, so a retry can't send it twice.
+// finishRegistration saves a final status, then deletes the registrant
+// contact. A save lost to another writer keeps the contact for the attempt
+// that follows. A delete that fails fails the step, and its retry finds the
+// final row and drops the contact then. The outbox keeps one notice per
+// status, so a retry can't send it twice.
 func (s *Service) finishRegistration(ctx context.Context, st RegistrationStore, reg *Registration) error {
-	if reg.CustomRegistrant {
-		if err := s.Secrets.Delete(ctx, reg.OrgID, registrantKey(reg.ID)); err != nil {
-			return err
-		}
-	}
 	if err := s.saveRegistration(ctx, st, reg); err != nil {
 		return err
 	}
@@ -898,7 +900,20 @@ func (s *Service) finishRegistration(ctx context.Context, st RegistrationStore, 
 	if err := s.notifyResult(ctx, st, reg); err != nil {
 		s.registrationAuditError(ctx, reg.Principal, "domain.registration.notice_pending", reg, err)
 	}
-	return nil
+	return s.dropRegistrant(ctx, reg)
+}
+
+// dropRegistrant deletes a registration's contact from Vault. One that's
+// already gone is fine.
+func (s *Service) dropRegistrant(ctx context.Context, reg *Registration) error {
+	if !reg.CustomRegistrant {
+		return nil
+	}
+	err := s.Secrets.Delete(ctx, reg.OrgID, registrantKey(reg.ID))
+	if errors.Is(err, connections.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) saveRegistration(ctx context.Context, st RegistrationStore, reg *Registration) error {
