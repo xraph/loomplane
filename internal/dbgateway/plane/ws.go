@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	// wsReadLimit caps one WebSocket message. A client may pipeline a lot
-	// of Postgres messages into one.
+	// wsReadLimit caps one WebSocket message, and the body of one Postgres
+	// message. A client may pipeline a lot of Postgres messages into one
+	// WebSocket message.
 	wsReadLimit = 64 << 20
 	// wsStartupTimeout is how long a client has to send its StartupMessage
 	// after the upgrade.
@@ -46,8 +47,9 @@ type wsHandler struct {
 	// runs under this one instead and ends when it does.
 	base context.Context
 
-	up                                     websocket.Upgrader
-	startupTimeout, pingInterval, readWait time.Duration
+	up                                                websocket.Upgrader
+	readLimit                                         int64
+	startupTimeout, pingInterval, readWait, writeWait time.Duration
 }
 
 // WebSocketHandler serves Postgres over WebSocket at /v2?address=<host>:<port>.
@@ -66,9 +68,11 @@ func WebSocketHandlerContext(base context.Context, r *Router) http.Handler {
 		// Clients authenticate with a password and carry no cookies, so
 		// there is nothing for a cross-origin page to ride on.
 		up:             websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
+		readLimit:      wsReadLimit,
 		startupTimeout: wsStartupTimeout,
 		pingInterval:   wsPingInterval,
 		readWait:       wsReadTimeout,
+		writeWait:      wsReadTimeout,
 	}
 }
 
@@ -88,7 +92,8 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	ws := newWSConn(c)
-	ws.conn.SetReadLimit(wsReadLimit)
+	ws.writeWait = h.writeWait
+	c.SetReadLimit(h.readLimit)
 	// The connection is closed when the handler returns, and with it
 	// everything below that reads or writes it.
 	defer ws.Close()
@@ -105,6 +110,10 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	go ws.ping(h.pingInterval, done)
 
 	be := pgproto3.NewBackend(ws, ws)
+	// Without this, a message header declaring a 2 GiB body makes pgproto3
+	// allocate it before the first byte of the body arrives, and
+	// authentication reads one before it checks the password.
+	be.SetMaxBodyLen(int(h.readLimit))
 	_ = c.SetReadDeadline(time.Now().Add(h.startupTimeout))
 	startup, err := readWSStartup(be, ws)
 	if err != nil {
@@ -172,13 +181,14 @@ type wsConn struct {
 	// Reads come from one goroutine at a time, so cur needs no lock.
 	cur io.Reader
 
-	wmu sync.Mutex // serialises Write
+	wmu       sync.Mutex // serialises Write
+	writeWait time.Duration
 
 	readWait  atomic.Int64 // ns; 0 until startup is done
 	closeOnce sync.Once
 }
 
-func newWSConn(c *websocket.Conn) *wsConn { return &wsConn{conn: c} }
+func newWSConn(c *websocket.Conn) *wsConn { return &wsConn{conn: c, writeWait: wsReadTimeout} }
 
 // extendRead pushes the read deadline out by the read timeout, once startup
 // has set one.
@@ -230,11 +240,17 @@ func wsReadError(err error) error {
 	return err
 }
 
-// Write sends p as one binary message.
+// Write sends p as one binary message. A client that stops reading fails the
+// write once the write timeout passes. A failed write leaves the WebSocket
+// unusable, so it closes the socket: the session's reader then fails too, and
+// the session ends instead of holding its backend connection for good.
 func (c *wsConn) Write(p []byte) (int, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeWait))
 	if err := c.conn.WriteMessage(websocket.BinaryMessage, p); err != nil {
+		// No close frame: the stream is broken mid-message.
+		c.closeOnce.Do(func() { _ = c.conn.Close() })
 		return 0, err
 	}
 	return len(p), nil

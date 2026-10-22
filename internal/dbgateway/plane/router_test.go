@@ -1066,3 +1066,37 @@ func TestRouterSameSealedCredentialKeepsPool(t *testing.T) {
 		t.Fatal("an unchanged route replaced its pool")
 	}
 }
+
+func TestRouterAuthTimeout(t *testing.T) {
+	h := newRouterHarness(t, nil, nil)
+	h.apply(h.route("r1", "orders"))
+	h.r.authLimit = 200 * time.Millisecond
+
+	// A client that sends its startup and never a password is cut off.
+	c := h.start(hostFor("orders"), nil, "")
+	if got := c.recv(); got != "AuthenticationCleartextPassword" {
+		t.Fatalf("first message = %q, want AuthenticationCleartextPassword", got)
+	}
+	start := time.Now()
+	if err := c.wait(); err == nil {
+		t.Fatal("Serve returned nil for a client that never logged in")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("took %v to close a silent client, want about 200ms", d)
+	}
+	if h.dialer.dials() != 0 {
+		t.Fatal("a client that never logged in dialed the backend")
+	}
+}
+
+func TestRouterAuthTimeoutStopsAfterLogin(t *testing.T) {
+	h := newRouterHarness(t, nil, nil)
+	h.apply(h.route("r1", "orders"))
+	h.r.authLimit = 200 * time.Millisecond
+
+	c := h.connect("orders")
+	// Idle well past the limit: a logged-in session isn't on the clock.
+	time.Sleep(600 * time.Millisecond)
+	want(t, "query after idling", c.query("SELECT 1"), selectOne)
+	c.terminate()
+}

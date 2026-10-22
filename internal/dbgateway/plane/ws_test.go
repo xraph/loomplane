@@ -41,12 +41,43 @@ func newWSRig(t *testing.T) *wsRig {
 	hd := WebSocketHandlerContext(base, h.r).(*wsHandler)
 	mux := http.NewServeMux()
 	mux.Handle("/v2", hd)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewUnstartedServer(mux)
+	srv.Listener = smallBuffers{srv.Listener}
+	srv.Start()
 	t.Cleanup(func() {
 		cancel()
 		srv.Close()
 	})
 	return &wsRig{t: t, h: h, hd: hd, srv: srv, cancel: cancel}
+}
+
+// smallBuffers makes the server's sockets hold little, so a client that
+// stops reading backs a write up after kilobytes rather than megabytes.
+type smallBuffers struct{ net.Listener }
+
+func (l smallBuffers) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetWriteBuffer(4096)
+			_ = tc.SetReadBuffer(4096)
+		}
+	}
+	return c, err
+}
+
+// smallDialer is a dialer whose sockets hold little, for the same reason.
+var smallDialer = &websocket.Dialer{
+	NetDial: func(network, addr string) (net.Conn, error) {
+		c, err := net.Dial(network, addr)
+		if err == nil {
+			if tc, ok := c.(*net.TCPConn); ok {
+				_ = tc.SetReadBuffer(4096)
+				_ = tc.SetWriteBuffer(4096)
+			}
+		}
+		return c, err
+	},
 }
 
 func (g *wsRig) url(query string) string {
@@ -62,7 +93,7 @@ func (g *wsRig) dial(address string) *wsClient {
 
 func (g *wsRig) dialQuery(query string) *wsClient {
 	g.t.Helper()
-	c, resp, err := websocket.DefaultDialer.Dial(g.url(query), nil)
+	c, resp, err := smallDialer.Dial(g.url(query), nil)
 	if err != nil {
 		g.t.Fatalf("dial: %v (response %v)", err, resp)
 	}
@@ -514,6 +545,147 @@ func TestWSConnCloseIsIdempotent(t *testing.T) {
 	}
 	if _, err := server.Write([]byte("x")); err == nil {
 		t.Fatal("Write after Close succeeded")
+	}
+}
+
+// oversizedHeader is the header of a message that declares a body of just
+// under 2 GiB, the way a client would try to make the gateway allocate it.
+func oversizedHeader(kind byte) []byte {
+	return []byte{kind, 0x7F, 0xFF, 0xFF, 0xFF}
+}
+
+func TestWSOversizedMessageBodyCloses(t *testing.T) {
+	// Before the password, which is when the gateway is reading for it.
+	t.Run("before login", func(t *testing.T) {
+		g := newWSRig(t)
+		c := g.dial(wsTestAddress)
+		c.frame(startupBytes(t, appStartup))
+		if got := c.recv(); got != "AuthenticationCleartextPassword" {
+			t.Fatalf("first message = %q, want AuthenticationCleartextPassword", got)
+		}
+		c.frame(oversizedHeader('p'))
+		c.expectClosed()
+		if n := g.h.dialer.dials(); n != 0 {
+			t.Fatalf("an oversized message dialed %d backends", n)
+		}
+	})
+	t.Run("after login", func(t *testing.T) {
+		g := newWSRig(t)
+		c := g.dial(wsTestAddress)
+		c.login(g)
+		c.frame(oversizedHeader('Q'))
+		c.expectClosed()
+	})
+	t.Run("just over the limit", func(t *testing.T) {
+		g := newWSRig(t)
+		g.hd.readLimit = 1024
+		c := g.dial(wsTestAddress)
+		c.login(g)
+		// A body of 1025 bytes is refused at its header, with only five
+		// bytes sent.
+		c.frame([]byte{'Q', 0, 0, 0x04, 0x05})
+		c.expectClosed()
+	})
+}
+
+func TestWSMessageOverReadLimitCloses1009(t *testing.T) {
+	g := newWSRig(t)
+	g.hd.readLimit = 1024
+	c := g.dial(wsTestAddress)
+	c.login(g)
+
+	// One WebSocket message larger than the limit, though it holds nothing
+	// but valid Postgres messages.
+	var big []byte
+	for len(big) <= 2048 {
+		big = append(big, frontendBytes(t, &pgproto3.Query{String: "SELECT 1"})...)
+	}
+	c.frame(big)
+	err := c.expectClosed()
+	var ce *websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != websocket.CloseMessageTooBig {
+		t.Fatalf("closed with %v, want close code %d", err, websocket.CloseMessageTooBig)
+	}
+}
+
+func TestWSBusySessionDoesNotCostTheConnection(t *testing.T) {
+	g := newWSRig(t)
+	g.hd.pingInterval = 50 * time.Millisecond
+	g.hd.readWait = 300 * time.Millisecond
+	g.h.r.pauseLimit = 5 * time.Second
+	c := g.dial(wsTestAddress)
+	c.login(g)
+
+	// The route pauses, and the next query waits for it to resume. While it
+	// waits, the reader is held up behind it and isn't reading the socket,
+	// so pongs go unread for longer than the read timeout. The connection
+	// has to survive that.
+	paused := g.h.route("r1", "orders")
+	paused.State = RouteStatePaused
+	g.h.apply(paused)
+	c.frame(frontendBytes(t, &pgproto3.Query{String: "SELECT 1"}))
+	time.Sleep(900 * time.Millisecond)
+	g.h.apply(g.h.route("r1", "orders"))
+	want(t, "the query that waited", c.readUntilReady(), selectOne)
+
+	c.frame(frontendBytes(t, &pgproto3.Query{String: "SELECT 1"}))
+	want(t, "query after the wait", c.readUntilReady(), selectOne)
+}
+
+func TestWSStalledClientWriteTimesOut(t *testing.T) {
+	g := newWSRig(t)
+	g.hd.writeWait = 300 * time.Millisecond
+	c := g.dial(wsTestAddress)
+	c.login(g)
+
+	// Ask for far more result than the socket buffers hold, and never read
+	// any of it.
+	row := strings.Repeat("x", 1<<20)
+	var queries []pgproto3.FrontendMessage
+	for i := 0; i < 8; i++ {
+		queries = append(queries, &pgproto3.Query{String: "SELECT " + row})
+	}
+	// Sent from the side: the gateway closes the connection under it.
+	all := frontendBytes(t, queries...)
+	go func() { _ = c.c.WriteMessage(websocket.BinaryMessage, all) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		g.h.r.mu.Lock()
+		live := len(g.h.r.sessions)
+		g.h.r.mu.Unlock()
+		if live == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session is still live, stuck writing to a client that stopped reading")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestWSConnWriteTimesOut(t *testing.T) {
+	server, _ := wsPair(t)
+	server.writeWait = 200 * time.Millisecond
+	// The client never reads, so the socket buffers fill and a write blocks.
+	chunk := make([]byte, 1<<20)
+	done := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := server.Write(chunk); err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-done:
+		var ne net.Error
+		if !errors.As(err, &ne) || !ne.Timeout() {
+			t.Fatalf("Write failed with %v, want a timeout", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Write to a client that doesn't read never gave up")
 	}
 }
 

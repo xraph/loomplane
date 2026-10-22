@@ -32,6 +32,10 @@ const (
 	// telling its client why, before the router closes the client's
 	// connection under it.
 	closeGrace = time.Second
+	// authLimit is how long a client has, from the start of Serve, to finish
+	// authenticating before the router closes its connection, like
+	// Postgres's authentication_timeout.
+	authLimit = 10 * time.Second
 	// replicationLimit is how many replication connections one gateway
 	// instance relays at once.
 	replicationLimit = 2
@@ -80,7 +84,7 @@ type Router struct {
 
 	// Limits, set from the constants above. Tests shorten them before the
 	// router serves anything.
-	holdLimit, pauseLimit, retireLimit, drainLimit, wakeRetry, closeGrace time.Duration
+	holdLimit, pauseLimit, retireLimit, drainLimit, wakeRetry, closeGrace, authLimit time.Duration
 
 	instances atomic.Int64 // live gateway instances; 0 until SetInstances
 
@@ -124,6 +128,7 @@ func NewRouter(store *Store, key *ecdh.PrivateKey, gatewayID string, d Dialer, h
 		drainLimit:  drainLimit,
 		wakeRetry:   wakeRetry,
 		closeGrace:  closeGrace,
+		authLimit:   authLimit,
 		routes:      map[string]*routeHandle{},
 		labels:      map[string]*routeHandle{},
 		retiring:    map[*routeHandle]struct{}{},
@@ -379,6 +384,11 @@ func (r *Router) Serve(ctx context.Context, be *pgproto3.Backend, conn io.Closer
 		// block on the client for good.
 		return errNoConn
 	}
+	// A client that never sends its password would otherwise hold a goroutine
+	// and a socket for as long as it likes. The timer stops once the login
+	// has succeeded or failed.
+	authTimer := time.AfterFunc(r.authLimit, func() { _ = conn.Close() })
+	defer authTimer.Stop()
 	deadline := time.Now().Add(r.holdLimit)
 	if r.Draining() {
 		SendError(be, "57P01", msgShuttingDown)
@@ -418,7 +428,7 @@ func (r *Router) Serve(ctx context.Context, be *pgproto3.Backend, conn io.Closer
 	stop := closeOnDone(sctx, conn, r.closeGrace)
 	defer stop()
 
-	err = r.serveRoute(sctx, be, conn, h, role, startup, pipelined, deadline)
+	err = r.serveRoute(sctx, be, conn, h, role, startup, pipelined, deadline, authTimer)
 	// A session the router cancelled hears why, if its connection still
 	// takes writes. One that ended on its own has told its client already.
 	if errors.Is(err, context.Canceled) && ctx.Err() == nil {
@@ -433,11 +443,13 @@ func (r *Router) Serve(ctx context.Context, be *pgproto3.Backend, conn io.Closer
 }
 
 // serveRoute authenticates the client against the route and serves it.
-func (r *Router) serveRoute(ctx context.Context, be *pgproto3.Backend, conn io.Closer, h *routeHandle, role string, startup map[string]string, pipelined *pgproto3.PasswordMessage, deadline time.Time) error {
+func (r *Router) serveRoute(ctx context.Context, be *pgproto3.Backend, conn io.Closer, h *routeHandle, role string, startup map[string]string, pipelined *pgproto3.PasswordMessage, deadline time.Time, authTimer *time.Timer) error {
 	// Phase 1 transports are WebSocket only, where the client sends its
 	// password in cleartext inside TLS. The Phase 2 TCP listener will choose
 	// SCRAM here.
-	if err := AuthenticateCleartext(be, h.verifier(role), pipelined); err != nil {
+	err := AuthenticateCleartext(be, h.verifier(role), pipelined)
+	authTimer.Stop()
+	if err != nil {
 		if errors.Is(err, ErrAuth) {
 			SendError(be, "28P01", `password authentication failed for user "`+role+`"`)
 		}
