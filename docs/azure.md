@@ -45,10 +45,12 @@ Everything lives in the connection's resource group, which Loomplane makes in th
 
 A service with a Dockerfile builds from it. Anything else goes through Google's buildpacks, run by `pack` in the same ACR Tasks run, the way Cloud Run and ECS build it. They handle Go, Node, Python, Java and more; a Python service's `start` command in the manifest becomes its entrypoint. Each deployment builds the commit the plan approved, tagged with its first twelve characters, and the app runs that image in a single active revision. A public service takes HTTPS traffic from anywhere on the app's own address. A private one only takes traffic from apps in its environment. `size` picks the smallest consumption size that fits, a quarter CPU at a time with twice as many GiB of memory, up to 4 CPUs and 8 GiB. `scale` sets the minimum and maximum replicas; without it Container Apps scales the app with traffic, down to zero.
 
+A worker runs as a container app with no ingress, since it serves nothing. Nothing calls a worker to wake it, so it never scales to zero: the minimum is one replica even if you set `scale.min` to 0. A static site runs as a container app too, so it needs a Dockerfile that builds the site and serves the built files, with nginx or any other web server. Buildpacks don't make a file server, so the plan stops with a finding if a static site has no Dockerfile. Its address is public, on the port you set or on port 80.
+
 Secret variables go in as app secrets, which Azure never shows again. The rest are plain environment variables.
 
 Removing a service from the manifest deletes its container app. The registry and the environment stay for the group's other apps.
 
 ## What it can't do yet
 
-Container Apps only runs HTTP services and web apps for now: no workers, static sites or databases. A private service only takes traffic from its own environment, and the planner doesn't give other services its address yet, so a service that needs one is asked to make it public. Build logs are under **Services**, **Tasks**, **Runs** in the container registry, and Loomplane shows the deployment's progress.
+Container Apps runs HTTP services, web apps, workers and static sites for now, but not databases. A private service only takes traffic from its own environment, and the planner doesn't give other services its address yet, so a service that needs one is asked to make it public. Build logs are under **Services**, **Tasks**, **Runs** in the container registry, and Loomplane shows the deployment's progress.

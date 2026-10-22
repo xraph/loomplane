@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -47,7 +48,10 @@ const (
 	// azureRegistrySecret is the app secret the registry's password is
 	// kept in.
 	azureRegistrySecret = "registry-password"
-	azureLogNote        = "ACR Tasks' build logs are under Services, Tasks, Runs in the container registry. Progress remains available."
+	// azureStaticPort is the ingress port of a static site that sets none:
+	// the web server in its image.
+	azureStaticPort = 80
+	azureLogNote    = "ACR Tasks' build logs are under Services, Tasks, Runs in the container registry. Progress remains available."
 )
 
 // azureState is what an Azure action checkpoints, so a retry picks up the
@@ -82,7 +86,7 @@ func azureSession(ctx context.Context, client *azure.Client, conn *connections.C
 // Apply implements Executor.
 func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	cfg := job.Action.Service
-	if cfg == nil || cfg.Execution == provider.Static {
+	if cfg == nil {
 		return nil, fmt.Errorf("%w: azure container apps runs services, not %s", ErrNoExecutor, job.Action.Subject)
 	}
 	s, err := azureSession(ctx, a.Client, job.Connection, job.Credential)
@@ -222,8 +226,16 @@ func azureApp(job *Job, cfg *planning.ServiceConfig, location, environment, serv
 		Registries:          []azure.AppRegistry{{Server: server, Username: login.Username, PasswordSecretRef: azureRegistrySecret}},
 		Secrets:             []azure.Secret{{Name: azureRegistrySecret, Value: login.Password}},
 	}
-	if cfg.Port > 0 {
-		conf.Ingress = &azure.Ingress{External: cfg.Public, TargetPort: cfg.Port, Transport: "auto"}
+	// A worker serves nothing, so it gets no ingress. A static site is the
+	// public web server in its image.
+	if cfg.Workload != provider.Worker {
+		port, external := cfg.Port, cfg.Public
+		if cfg.Workload == provider.StaticSite {
+			port, external = cmp.Or(port, azureStaticPort), true
+		}
+		if port > 0 {
+			conf.Ingress = &azure.Ingress{External: external, TargetPort: port, Transport: "auto"}
+		}
 	}
 	c := azure.Container{Name: azureContainer, Image: image, Resources: azureResources(cfg.Size)}
 	for _, k := range slices.Sorted(maps.Keys(job.Env)) {
@@ -236,7 +248,15 @@ func azureApp(job *Job, cfg *planning.ServiceConfig, location, environment, serv
 		c.Env = append(c.Env, azure.EnvVar{Name: k, SecretRef: secret})
 	}
 	t := azure.Template{Containers: []azure.Container{c}}
-	if cfg.Scale != nil {
+	switch {
+	case cfg.Workload == provider.Worker:
+		// Nothing calls a worker to wake it, so it never scales to zero.
+		scale := &azure.Scale{MinReplicas: 1}
+		if cfg.Scale != nil {
+			scale.MinReplicas, scale.MaxReplicas = max(1, cfg.Scale.Min), cfg.Scale.Max
+		}
+		t.Scale = scale
+	case cfg.Scale != nil:
 		t.Scale = &azure.Scale{MinReplicas: cfg.Scale.Min, MaxReplicas: cfg.Scale.Max}
 	}
 	return azure.App{

@@ -593,6 +593,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 		cfg.CloudPlacement = &placement
 	}
 	p.checkRender(name, base, cfg)
+	p.checkAzure(name, base, cfg)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
@@ -1672,6 +1673,19 @@ func (p *planner) checkRender(name, base string, cfg *ServiceConfig) {
 			Message: fmt.Sprintf("Render starts a Node service with npm start, and %s's package.json has no start script. Add one, or a Dockerfile.", name),
 		})
 	}
+}
+
+// checkAzure reports what Azure can't build: Container Apps runs a static
+// site as a container, and buildpacks don't produce a static file server,
+// so it needs a Dockerfile that serves the built files.
+func (p *planner) checkAzure(name, base string, cfg *ServiceConfig) {
+	if cfg.Provider != azureApps || cfg.Workload != provider.StaticSite || cfg.Image != "" {
+		return
+	}
+	p.problem(Finding{
+		Code: "azure-static-needs-dockerfile", Subject: ServiceSubject, Name: name, Path: base + ".source",
+		Message: fmt.Sprintf("Azure runs a static site as a container, and buildpacks don't make a file server, so %s needs a Dockerfile that serves the built files. Add one, or run %s somewhere else.", name, name),
+	})
 }
 
 func ecosystemTitle(e discovery.Ecosystem) string {

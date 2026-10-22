@@ -221,11 +221,74 @@ func TestAzure_buildsWithoutADockerfileUsingBuildpacks(t *testing.T) {
 	}
 }
 
-func TestAzure_refusesWhatItCantBuild(t *testing.T) {
+func TestAzure_refusesAnActionWithoutAService(t *testing.T) {
 	exec := &Azure{Client: azure.New("http://127.0.0.1:1")}
-	static := &planning.ServiceConfig{Source: "web", Workload: provider.StaticSite, Execution: provider.Static}
-	if _, err := exec.Apply(t.Context(), azureJob(t, static)); err == nil {
-		t.Fatal("ran a static site")
+	job := azureJob(t, nil)
+	if _, err := exec.Apply(t.Context(), job); err == nil {
+		t.Fatal("ran an action with no service")
+	}
+}
+
+func azureIngress(t *testing.T, f *azuretest.Fake, name string) (map[string]any, map[string]any) {
+	t.Helper()
+	f.Lock()
+	defer f.Unlock()
+	props := f.Apps[name]["properties"].(map[string]any)
+	conf := props["configuration"].(map[string]any)
+	ingress, _ := conf["ingress"].(map[string]any)
+	return conf, ingress
+}
+
+func TestAzure_workersHaveNoIngressAndNeverScaleToZero(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		scale    *manifest.Scale
+		min, max any
+	}{
+		{"scaled to zero", &manifest.Scale{Min: 0, Max: 3}, float64(1), float64(3)},
+		{"no scale", nil, float64(1), nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := azuretest.New(t)
+			cfg := &planning.ServiceConfig{Source: "services/api", Image: "services/api/Dockerfile", Port: 9090,
+				Workload: provider.Worker, Execution: provider.Container, Scale: tt.scale}
+			job := azureJob(t, cfg)
+			out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.URL != "" {
+				t.Fatalf("a worker has the address %q", out.URL)
+			}
+			conf, ingress := azureIngress(t, f, AzureName(job))
+			if _, has := conf["ingress"]; has || ingress != nil {
+				t.Fatalf("a worker has ingress: %v", conf["ingress"])
+			}
+			f.Lock()
+			defer f.Unlock()
+			scale := f.Apps[AzureName(job)]["properties"].(map[string]any)["template"].(map[string]any)["scale"].(map[string]any)
+			if scale["minReplicas"] != tt.min || scale["maxReplicas"] != tt.max {
+				t.Fatalf("scale %v", scale)
+			}
+		})
+	}
+}
+
+func TestAzure_aStaticSiteIsAPublicContainerApp(t *testing.T) {
+	f := azuretest.New(t)
+	cfg := &planning.ServiceConfig{Source: "services/api", Image: "services/api/Dockerfile",
+		Workload: provider.StaticSite, Execution: provider.Container}
+	job := azureJob(t, cfg)
+	out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.URL == "" {
+		t.Fatal("a static site has no address")
+	}
+	_, ingress := azureIngress(t, f, AzureName(job))
+	if ingress["external"] != true || ingress["targetPort"] != float64(80) {
+		t.Fatalf("ingress %v", ingress)
 	}
 }
 

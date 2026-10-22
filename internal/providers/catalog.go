@@ -132,6 +132,8 @@ func Catalog() []provider.Provider {
 			Runs: []provider.Runs{
 				{Workload: provider.HTTPService, Execution: provider.Container, Creates: "Container app"},
 				{Workload: provider.WebApp, Execution: provider.Container, Creates: "Container app"},
+				{Workload: provider.Worker, Execution: provider.Container, Creates: "Container app with no ingress"},
+				{Workload: provider.StaticSite, Execution: provider.Container, Creates: "Container app serving the built site"},
 			},
 			Regions: azureRegions, Scaling: true,
 			// Built and run by a Loomplane adapter (internal/deployments,
