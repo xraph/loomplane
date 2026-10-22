@@ -123,7 +123,7 @@ func (s *Service) reserveRoutedPlacements(ctx context.Context, plan *Plan, resul
 					if err := json.Unmarshal(b.Config, &old); err != nil {
 						return err
 					}
-					if old.CloudPlacement != nil {
+					if old.CloudPlacement != nil && old.CloudPlacement.PoolID != "" {
 						req.StickyServerID = old.CloudPlacement.ServerID
 					}
 				}

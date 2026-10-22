@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
@@ -469,5 +470,63 @@ func TestRunnerComposedComponentAdoptionRejectsAChangedBinding(t *testing.T) {
 	}
 	if string(plans.bindings[a.ID].Config) != string(raw) || len(exec.jobs) != 0 {
 		t.Fatal("rejected adoption changed the binding or the provider")
+	}
+}
+
+// reservationPlans counts reservation checks and fails every one.
+type reservationPlans struct {
+	*fakePlans
+	checks *int
+}
+
+func (p reservationPlans) ValidatePlacement(context.Context, string, string, string, string, string, cloudinfra.Placement) error {
+	*p.checks++
+	return errors.New("no capacity reservation")
+}
+
+func (reservationPlans) PooledConnections(context.Context, string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+// The Cloud server a direct target records is metadata for domain
+// routes, not a pool reservation: neither adopting it nor deploying with
+// it checks capacity.
+func TestRunnerDirectTargetServerSkipsReservationChecks(t *testing.T) {
+	r, plan, plans, exec := componentAdoptionRunner(t)
+	a := &plan.Actions[0]
+	a.Resource.CloudPlacement.ServerID = "server_1"
+	checks := 0
+	r.plans = reservationPlans{plans, &checks}
+	id, _, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Run(t.Context(), plan.OrgID, id, a.ID, nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var recorded planning.ResourceConfig
+	if err = json.Unmarshal(plans.bindings[a.ID].Config, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded.CloudPlacement == nil || recorded.CloudPlacement.ServerID != "server_1" || len(exec.jobs) != 0 {
+		t.Fatalf("adoption didn't record the server: %+v, provider calls=%d", recorded.CloudPlacement, len(exec.jobs))
+	}
+	update := *a
+	update.Op, update.AdoptCloudPlacement, update.CloudAdoption = planning.Update, false, nil
+	if err = r.validateCloudPlacement(t.Context(), plan, update, nil); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 0 {
+		t.Fatalf("a direct target's server checked %d reservations", checks)
+	}
+	// A pool placement still does.
+	update.Resource = &planning.ResourceConfig{}
+	*update.Resource = *a.Resource
+	pin := *a.Resource.CloudPlacement
+	pin.PoolID = "pool"
+	update.Resource.CloudPlacement = &pin
+	r.cloudProfiles.(*cloudResolver).assignment.Targets[0].PoolID = "pool"
+	if err = r.validateCloudPlacement(t.Context(), plan, update, nil); err == nil || checks != 1 {
+		t.Fatalf("pool placement skipped its reservation check: %v, checks=%d", err, checks)
 	}
 }
