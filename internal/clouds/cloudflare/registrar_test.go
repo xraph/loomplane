@@ -41,6 +41,7 @@ type registrarFixture struct {
 	postState   string // default in_progress
 	postRaw     string // replaces the whole POST answer
 	postDrop    bool   // closes the connection without answering
+	redirectTo  string // Location header on a failed POST answer
 	statusCode  int    // answer to registration-status, default 200
 	statusName  string // domain_name in registration-status, default the requested one
 	statusState string // default succeeded
@@ -125,6 +126,9 @@ func (f *registrarFixture) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(body)
 	}
 	fail := func(code int) {
+		if f.redirectTo != "" {
+			w.Header().Set("Location", f.redirectTo)
+		}
 		w.WriteHeader(code)
 		fmt.Fprint(w, `{"success":false,"errors":[{"code":10000,"message":"secret-token `+contactEmail+`"}],"result":null}`)
 	}
@@ -352,6 +356,9 @@ func TestRegisterUncertainOutcomesAreAmbiguousAndLeakNothing(t *testing.T) {
 		"server error":   func(f *registrarFixture) { f.postStatus = 500 },
 		"bad gateway":    func(f *registrarFixture) { f.postStatus = 502 },
 		"conflict":       func(f *registrarFixture) { f.postStatus = 409 },
+		"see other":      func(f *registrarFixture) { f.postStatus, f.redirectTo = 303, f.url+"/elsewhere" },
+		"temporary":      func(f *registrarFixture) { f.postStatus, f.redirectTo = 307, f.url+"/elsewhere" },
+		"permanent":      func(f *registrarFixture) { f.postStatus, f.redirectTo = 308, "https://evil.example/registrations" },
 		"dropped":        func(f *registrarFixture) { f.postDrop = true },
 		"undecodable":    func(f *registrarFixture) { f.postStatus, f.postRaw = 202, `{"success":true,"result":"`+contactEmail },
 		"result missing": func(f *registrarFixture) { f.postStatus, f.postRaw = 201, `{"success":true,"errors":[],"result":null}` },
@@ -420,8 +427,24 @@ func TestReconcileOnlyNeverPosts(t *testing.T) {
 		t.Fatalf("%+v %v posts=%d", res, err, f.posts)
 	}
 	f.statusCode = 500
-	if _, err = f.register(provider.DomainRegistrationSpec{Name: "acme.dev", ReconcileOnly: true}); err == nil || f.posts != 0 {
+	if _, err = f.register(provider.DomainRegistrationSpec{Name: "acme.dev", ReconcileOnly: true}); !errors.Is(err, provider.ErrInfrastructureAmbiguous) || f.posts != 0 {
 		t.Fatalf("%v posts=%d", err, f.posts)
+	}
+	// A refused or revoked token, or a cancelled read, says nothing about
+	// whether the earlier POST landed.
+	f.statusCode = 403
+	if _, err = f.register(provider.DomainRegistrationSpec{Name: "acme.dev", ReconcileOnly: true}); !errors.Is(err, provider.ErrInfrastructureAmbiguous) || !errors.Is(err, provider.ErrInfrastructureScope) || f.posts != 0 {
+		t.Fatalf("403: %v posts=%d", err, f.posts)
+	}
+	f.statusCode = 0
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err = f.client.RegisterDomain(ctx, f.cred, provider.DomainRegistrationSpec{Name: "acme.dev", ReconcileOnly: true}); !errors.Is(err, provider.ErrInfrastructureAmbiguous) || !errors.Is(err, context.Canceled) || f.posts != 0 {
+		t.Fatalf("cancelled: %v posts=%d", err, f.posts)
+	}
+	// Validation before anything is sent stays a plain refusal.
+	if _, err = f.register(provider.DomainRegistrationSpec{Name: "Acme", ReconcileOnly: true}); !errors.Is(err, provider.ErrInfrastructureInvalid) || errors.Is(err, provider.ErrInfrastructureAmbiguous) {
+		t.Fatal(err)
 	}
 }
 

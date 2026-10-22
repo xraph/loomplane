@@ -346,14 +346,14 @@ func (c *Client) ownStatusLink(link, accountID, name string) bool {
 // ErrInfrastructureAmbiguous, and the caller then reconciles with
 // ReconcileOnly, which never posts.
 func (c *Client) RegisterDomain(ctx context.Context, credential provider.InfrastructureCredential, spec provider.DomainRegistrationSpec) (provider.DomainRegistrationResult, error) {
+	if spec.ReconcileOnly {
+		return c.reconcile(ctx, credential, spec.Name)
+	}
 	if err := checkCredential(ctx, credential); err != nil {
 		return provider.DomainRegistrationResult{}, err
 	}
 	if err := registrarName(spec.Name); err != nil {
 		return provider.DomainRegistrationResult{}, err
-	}
-	if spec.ReconcileOnly {
-		return c.reconcile(ctx, credential, spec.Name)
 	}
 	data, err := json.Marshal(registerBody{DomainName: spec.Name, AutoRenew: spec.AutoRenew, PrivacyMode: spec.PrivacyMode, Contacts: contacts(spec.Registrant)})
 	if err != nil {
@@ -399,16 +399,18 @@ func registerFailure(err error) error {
 	return unknown
 }
 
-// reconcile reads what an earlier attempt left. It can't tell "never sent"
-// from "not visible yet", so a missing registration is ambiguous too.
+// reconcile reads what an earlier attempt left. It runs when a POST may
+// have landed, so nothing it can't read says the registration doesn't
+// exist: a missing registration, a refused token, a cancelled read and an
+// unreadable answer are all ambiguous. Only a request that was invalid
+// before anything was sent is a plain refusal.
 func (c *Client) reconcile(ctx context.Context, credential provider.InfrastructureCredential, name string) (provider.DomainRegistrationResult, error) {
 	res, err := c.RegistrationStatus(ctx, credential, name)
 	switch {
 	case err == nil:
 		res.Reconciled = true
 		return res, nil
-	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, provider.ErrInfrastructureInvalid), errors.Is(err, provider.ErrInfrastructureAmbiguous),
-		errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, provider.ErrInfrastructureInvalid), errors.Is(err, provider.ErrInfrastructureAmbiguous):
 		return provider.DomainRegistrationResult{}, err
 	}
 	return provider.DomainRegistrationResult{}, errors.Join(provider.ErrInfrastructureAmbiguous, err)

@@ -48,7 +48,10 @@ type Client struct {
 // registrarSandbox points registrar calls at the sandbox, which never
 // charges anyone.
 func New(endpoint string, registrarSandbox bool) *Client {
-	c := &Client{endpoint: DefaultEndpoint, registrarSandbox: registrarSandbox, http: &http.Client{Timeout: requestTimeout}}
+	// A redirect is an answer, not a second request: following one would
+	// send a POST again, or turn it into a GET whose refusal means nothing.
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	c := &Client{endpoint: DefaultEndpoint, registrarSandbox: registrarSandbox, http: &http.Client{Timeout: requestTimeout, CheckRedirect: noRedirect}}
 	if endpoint != "" {
 		c.endpoint = strings.TrimRight(endpoint, "/")
 	}
