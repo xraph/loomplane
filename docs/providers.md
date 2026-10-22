@@ -1,6 +1,6 @@
 # Writing a provider
 
-A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel, ECS on Fargate, Render, DigitalOcean App Platform, Azure Container Apps, SSH/Docker servers and Kubernetes for services, and Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage, S3 and DigitalOcean Managed Databases for resources. The [DigitalOcean guide](digitalocean.md) covers how App Platform deploys an approved commit when it can only build a branch, and the [Azure guide](azure.md) covers the service principal Container Apps deploys with. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
+A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel, ECS on Fargate, Render, DigitalOcean App Platform, Azure Container Apps, SSH/Docker servers and Kubernetes for services, and Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage, S3, DigitalOcean Managed Databases, Azure Database for PostgreSQL and MySQL, and Azure Managed Redis for resources. The [DigitalOcean guide](digitalocean.md) covers how App Platform deploys an approved commit when it can only build a branch, and the [Azure guide](azure.md) covers the service principal Container Apps deploys with and the databases it makes. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
 
 ## Your servers and clusters
 

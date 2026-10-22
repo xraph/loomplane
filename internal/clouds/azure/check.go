@@ -16,10 +16,11 @@ const (
 )
 
 // Actions are what a service principal needs for Loomplane to build a
-// service with ACR Tasks and run it on Container Apps, in the resource
-// group it deploys to. Each is checked before a connection counts as
-// ready. The Contributor role on the resource group or the subscription
-// has them all.
+// service with ACR Tasks and run it on Container Apps, and to make
+// Postgres and MySQL flexible servers and Azure Managed Redis, in the
+// resource group it deploys to. Each is checked before a connection counts as ready. The
+// Contributor role on the resource group or the subscription has them
+// all.
 var Actions = []string{
 	"Microsoft.Resources/subscriptions/resourceGroups/read",
 	"Microsoft.ContainerRegistry/registries/read",
@@ -34,6 +35,20 @@ var Actions = []string{
 	"Microsoft.App/containerApps/read",
 	"Microsoft.App/containerApps/write",
 	"Microsoft.App/containerApps/delete",
+	"Microsoft.DBforPostgreSQL/flexibleServers/read",
+	"Microsoft.DBforPostgreSQL/flexibleServers/write",
+	"Microsoft.DBforPostgreSQL/flexibleServers/delete",
+	"Microsoft.DBforPostgreSQL/flexibleServers/firewallRules/write",
+	"Microsoft.DBforMySQL/flexibleServers/read",
+	"Microsoft.DBforMySQL/flexibleServers/write",
+	"Microsoft.DBforMySQL/flexibleServers/delete",
+	"Microsoft.DBforMySQL/flexibleServers/firewallRules/write",
+	"Microsoft.Cache/redisEnterprise/read",
+	"Microsoft.Cache/redisEnterprise/write",
+	"Microsoft.Cache/redisEnterprise/delete",
+	"Microsoft.Cache/redisEnterprise/databases/read",
+	"Microsoft.Cache/redisEnterprise/databases/write",
+	"Microsoft.Cache/redisEnterprise/databases/listKeys/action",
 }
 
 // createGroup is what making the resource group takes, needed only while
@@ -42,7 +57,12 @@ const createGroup = "Microsoft.Resources/subscriptions/resourceGroups/write"
 
 // Namespaces are the resource providers a subscription must have
 // registered. Loomplane registers one that isn't, which takes the
-// namespace's register action.
+// namespace's register action. A database's namespace, Microsoft.Cache
+// for Redis among them, isn't one of them: it's registered when a
+// deployment first makes that database, so a subscription that only runs
+// apps needn't have it. Nor is Microsoft.ManagedIdentity, which making
+// the pull identity registers, so one that pulls as the admin user
+// needn't have it.
 var Namespaces = []string{"Microsoft.App", "Microsoft.ContainerRegistry"}
 
 // Subscription is the subscription a principal deploys to.
@@ -174,20 +194,47 @@ func (s *Session) groupExists(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// checkScope is where a deployment's permissions are read: the resource
+// group, or the subscription while the group isn't there. A principal
+// that may not even read the group is checked in the group, where it
+// may do nothing.
+func (s *Session) checkScope(ctx context.Context) (scope string, groupMissing bool, err error) {
+	exists, err := s.groupExists(ctx)
+	if isForbidden(err) {
+		return s.group(), false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if !exists {
+		return s.subscription(), true, nil
+	}
+	return s.group(), false, nil
+}
+
+// permissionsOrNone is permissions, except that a principal without any
+// role at scope may not read its own permissions there: it may do none
+// of it.
+func (s *Session) permissionsOrNone(ctx context.Context, scope string) ([]permission, error) {
+	perms, err := s.permissions(ctx, scope)
+	if isForbidden(err) {
+		return nil, nil
+	}
+	return perms, err
+}
+
 // Missing returns which actions a deployment needs the principal lacks,
 // in the order Actions lists them: Actions in the resource group, or in
 // the subscription along with making the group while it isn't there,
 // and registering each of Namespaces the subscription hasn't.
 func (s *Session) Missing(ctx context.Context) ([]string, error) {
-	exists, err := s.groupExists(ctx)
-	if err != nil && !isForbidden(err) {
+	scope, groupMissing, err := s.checkScope(ctx)
+	if err != nil {
 		return nil, err
 	}
 	want := Actions
-	scope := s.group()
-	if !exists && err == nil {
+	if groupMissing {
 		want = append([]string{createGroup}, Actions...)
-		scope = s.subscription()
 	}
 	var subscriptionWide []string
 	for _, ns := range Namespaces {
@@ -199,12 +246,7 @@ func (s *Session) Missing(ctx context.Context) ([]string, error) {
 			subscriptionWide = append(subscriptionWide, ns+"/register/action")
 		}
 	}
-	perms, err := s.permissions(ctx, scope)
-	if isForbidden(err) {
-		// A principal without any role in the group may not read its
-		// own permissions there: it may do none of it.
-		perms, err = nil, nil
-	}
+	perms, err := s.permissionsOrNone(ctx, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -217,10 +259,7 @@ func (s *Session) Missing(ctx context.Context) ([]string, error) {
 	if len(subscriptionWide) > 0 {
 		subPerms := perms
 		if scope != s.subscription() {
-			if subPerms, err = s.permissions(ctx, s.subscription()); isForbidden(err) {
-				subPerms, err = nil, nil
-			}
-			if err != nil {
+			if subPerms, err = s.permissionsOrNone(ctx, s.subscription()); err != nil {
 				return nil, err
 			}
 		}

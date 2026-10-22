@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	cloudprogress "github.com/xraph/loomplane/internal/clouds/progress"
@@ -44,7 +45,13 @@ func (s *Session) EnsureGroup(ctx context.Context, location string) error {
 // EnsureRegistered registers each of Namespaces the subscription hasn't,
 // and waits until they are.
 func (s *Session) EnsureRegistered(ctx context.Context) error {
-	for _, ns := range Namespaces {
+	return s.register(ctx, Namespaces...)
+}
+
+// register registers each of namespaces the subscription hasn't, and
+// waits until they are.
+func (s *Session) register(ctx context.Context, namespaces ...string) error {
+	for _, ns := range namespaces {
 		ok, err := s.registered(ctx, ns)
 		if err != nil {
 			return err
@@ -68,18 +75,34 @@ func (s *Session) EnsureRegistered(ctx context.Context) error {
 	return nil
 }
 
+// missingPolls is how many times a resource Azure can't find yet is
+// polled again after its PUT before the 404 counts. Tests shorten it.
+var missingPolls = 30
+
 // provisioned waits for the resource at path to finish provisioning, and
 // fails if it didn't succeed. state reads the resource's state from what
-// GET returns into out.
+// GET returns into out: its provisioningState, or for a flexible server,
+// which reports Ready instead, its state. It's called right after the
+// PUT, and Azure can answer 404 for a while after accepting one, so a
+// 404 counts only after missingPolls of them.
 func (s *Session) provisioned(ctx context.Context, path, version, what string, out any, state func() string) error {
-	for {
-		if _, err := s.do(ctx, http.MethodGet, path, version, nil, out); err != nil {
-			return err
+	for missing := 0; ; {
+		_, gerr := s.do(ctx, http.MethodGet, path, version, nil, out)
+		if IsNotFound(gerr) && missing < missingPolls {
+			missing++
+			progress(ctx, "Waiting for Azure to make "+what)
+			if werr := s.wait(ctx); werr != nil {
+				return werr
+			}
+			continue
+		}
+		if gerr != nil {
+			return gerr
 		}
 		switch st := state(); strings.ToLower(st) {
-		case "succeeded":
+		case "succeeded", "ready":
 			return nil
-		case "failed", "canceled", "cancelled", "upgradefailed":
+		case "failed", "canceled", "cancelled", "upgradefailed", "disabled", "dropping":
 			return fmt.Errorf("azure couldn't make %s: provisioning %s", what, strings.ToLower(st))
 		default:
 			progress(ctx, "Waiting for Azure to make "+what+" ("+st+")")
@@ -115,8 +138,9 @@ func (s *Session) registryPath() string {
 }
 
 // EnsureRegistry makes the resource group's registry in location, unless
-// it's there, and waits until it can be built into. Its admin user is
-// what Container Apps pulls with.
+// it's there, and waits until it can be built into. Container Apps pulls
+// with its admin user unless the principal may give apps a pull
+// identity.
 func (s *Session) EnsureRegistry(ctx context.Context, location string) (*Registry, error) {
 	var r Registry
 	_, err := s.do(ctx, http.MethodGet, s.registryPath(), registryVersion, nil, &r)
@@ -198,26 +222,76 @@ func (s *Session) UploadSource(ctx context.Context, src io.Reader, size int64) (
 	return up.RelativePath, nil
 }
 
-// BuildRequest is a Docker build ACR Tasks runs on uploaded source.
+// BuildRequest is a build ACR Tasks runs on uploaded source: a Docker
+// build, or a buildpack build when Pack is set.
 type BuildRequest struct {
 	// Source is where UploadSource put the source.
 	Source string
 	// Image is the repository and tag to push, without the registry.
 	Image string
-	// Dockerfile and Context are paths in the source.
+	// Dockerfile and Context are paths in the source. Pack replaces them.
 	Dockerfile, Context string
+	// Pack builds with buildpacks instead of a Dockerfile.
+	Pack *PackBuild
 }
 
-// task is the ACR Tasks file for a build: docker build, then push.
+// PackBuild is a build by the pack CLI, for a service that has no
+// Dockerfile.
+type PackBuild struct {
+	// Image is the container image that has pack in it, and Builder the
+	// buildpack builder it uses.
+	Image, Builder string
+	// Path is the directory in the source to build.
+	Path string
+	// Env are KEY=VALUE variables for the builder.
+	Env []string
+}
+
+// unsafeInTask is what a value spliced into a task file may not hold.
+const unsafeInTask = " \t\r\n\"'`$\\{}"
+
+// task is the ACR Tasks file for a build: docker build or pack build,
+// then push.
 func (b BuildRequest) task() (string, error) {
+	ref := "{{.Run.Registry}}/" + b.Image
+	if b.Pack != nil {
+		return b.packTask(ref)
+	}
 	for _, v := range []string{b.Image, b.Dockerfile, b.Context} {
-		if v == "" || strings.ContainsAny(v, " \t\r\n\"'`$\\{}") {
+		if v == "" || strings.ContainsAny(v, unsafeInTask) {
 			return "", fmt.Errorf("ACR Tasks can't build from %q", v)
 		}
 	}
-	ref := "{{.Run.Registry}}/" + b.Image
 	return "version: v1.1.0\nsteps:\n" +
 		"  - build: -t " + ref + " -f " + b.Dockerfile + " " + b.Context + "\n" +
+		"  - push:\n    - \"" + ref + "\"\n", nil
+}
+
+// packTask is the task file for a buildpack build. The command line gets
+// each variable's name and the step's env its value, quoted, so a value
+// with spaces in it (a start command) is never split.
+func (b BuildRequest) packTask(ref string) (string, error) {
+	p := b.Pack
+	for _, v := range []string{b.Image, p.Image, p.Builder, p.Path} {
+		if v == "" || strings.ContainsAny(v, unsafeInTask) {
+			return "", fmt.Errorf("ACR Tasks can't build from %q", v)
+		}
+	}
+	cmd := p.Image + " build " + ref + " --builder " + p.Builder + " --path " + p.Path
+	var env []string
+	for _, e := range p.Env {
+		name, value, ok := strings.Cut(e, "=")
+		if !ok || name == "" || strings.ContainsAny(name, unsafeInTask) || strings.ContainsAny(value, "\r\n") {
+			return "", fmt.Errorf("ACR Tasks can't build with the variable %q", name)
+		}
+		cmd += " --env " + name
+		env = append(env, strconv.Quote(e))
+	}
+	step := "  - cmd: " + cmd + "\n    entryPoint: pack\n"
+	if len(env) > 0 {
+		step += "    env: [" + strings.Join(env, ", ") + "]\n"
+	}
+	return "version: v1.1.0\nsteps:\n" + step +
 		"  - push:\n    - \"" + ref + "\"\n", nil
 }
 
@@ -352,7 +426,15 @@ type App struct {
 	ID         string            `json:"id,omitempty"`
 	Location   string            `json:"location"`
 	Tags       map[string]string `json:"tags,omitempty"`
+	Identity   *ManagedIdentity  `json:"identity,omitempty"`
 	Properties AppProperties     `json:"properties"`
+}
+
+// ManagedIdentity is what an app may act as: Type "UserAssigned" with
+// the identities' resource IDs as keys.
+type ManagedIdentity struct {
+	Type                   string              `json:"type"`
+	UserAssignedIdentities map[string]struct{} `json:"userAssignedIdentities,omitempty"`
 }
 
 // AppProperties are a container app's.
@@ -384,11 +466,14 @@ type Ingress struct {
 	FQDN string `json:"fqdn,omitempty"`
 }
 
-// AppRegistry is a registry an app pulls from.
+// AppRegistry is a registry an app pulls from: as Identity, a managed
+// identity's resource ID, or as Username with the password in an app
+// secret.
 type AppRegistry struct {
 	Server            string `json:"server"`
-	Username          string `json:"username"`
-	PasswordSecretRef string `json:"passwordSecretRef"`
+	Identity          string `json:"identity,omitempty"`
+	Username          string `json:"username,omitempty"`
+	PasswordSecretRef string `json:"passwordSecretRef,omitempty"`
 }
 
 // Secret is an app secret. Azure never returns its value.
@@ -401,6 +486,9 @@ type Secret struct {
 type Template struct {
 	Containers []Container `json:"containers"`
 	Scale      *Scale      `json:"scale,omitempty"`
+	// RevisionSuffix names the revision a PUT makes. Container Apps only
+	// makes one when the template changes, so a new suffix forces it.
+	RevisionSuffix string `json:"revisionSuffix,omitempty"`
 }
 
 // Container is an app's container.
@@ -479,10 +567,15 @@ func (s *Session) GetApp(ctx context.Context, id string) (*App, error) {
 }
 
 // PutApp creates or replaces the container app called name, and returns
-// its resource ID without waiting for it.
+// its resource ID without waiting for it. A PUT Azure refuses because the
+// app couldn't pull its image is a PullError that wraps Azure's answer.
 func (s *Session) PutApp(ctx context.Context, name string, app App) (string, error) {
 	var out App
 	if _, err := s.do(ctx, http.MethodPut, s.AppPath(name), appsVersion, app, &out); err != nil {
+		var ae *APIError
+		if errors.As(err, &ae) && ae.Status == http.StatusBadRequest && pullFailure(ae.Message) {
+			return "", &PullError{Detail: ae.Message, Err: err}
+		}
 		return "", err
 	}
 	if out.ID == "" {
@@ -502,8 +595,51 @@ type revision struct {
 	} `json:"properties"`
 }
 
+// PullError is an app that couldn't pull its image, as while a pull
+// identity's role propagates: a revision that didn't start, an app whose
+// provisioning failed, or a PUT Azure refused. Err is what Azure said,
+// when that's the error to show.
+type PullError struct {
+	Revision, Detail string
+	Err              error
+}
+
+func (e *PullError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("revision %s didn't start: %s", e.Revision, e.Detail)
+}
+
+func (e *PullError) Unwrap() error { return e.Err }
+
+// pullFailure reports whether Azure's detail says an image couldn't be
+// pulled.
+func pullFailure(detail string) bool {
+	lower := strings.ToLower(detail)
+	return strings.Contains(lower, "pull") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "managed identity")
+}
+
+// revisionDetail is why the app's revision called name isn't serving, or
+// "" when it hasn't failed.
+func (s *Session) revisionDetail(ctx context.Context, id, name string) (string, error) {
+	var rev revision
+	if _, err := s.do(ctx, http.MethodGet, id+"/revisions/"+url.PathEscape(name), appsVersion, nil, &rev); err != nil && !IsNotFound(err) {
+		return "", err
+	}
+	rp := rev.Properties
+	if !strings.EqualFold(rp.ProvisioningState, "Failed") && !strings.EqualFold(rp.RunningState, "Failed") {
+		return "", nil
+	}
+	if detail := strings.TrimSpace(rp.ProvisioningError + " " + rp.RunningDetails); detail != "" {
+		return detail, nil
+	}
+	return "it failed", nil
+}
+
 // WaitApp waits until the app's newest revision is provisioned and ready,
-// and fails if it can't be.
+// and fails if it can't be: with a PullError when the revision, or the
+// app's own provisioning, failed because it couldn't pull its image.
 func (s *Session) WaitApp(ctx context.Context, id string) (*App, error) {
 	for {
 		a, err := s.GetApp(ctx, id)
@@ -513,22 +649,32 @@ func (s *Session) WaitApp(ctx context.Context, id string) (*App, error) {
 		p := a.Properties
 		switch strings.ToLower(p.ProvisioningState) {
 		case "failed", "canceled":
-			return nil, fmt.Errorf("azure couldn't deploy the container app: provisioning %s", strings.ToLower(p.ProvisioningState))
+			failed := fmt.Errorf("azure couldn't deploy the container app: provisioning %s", strings.ToLower(p.ProvisioningState))
+			if p.LatestRevisionName == "" {
+				return nil, failed
+			}
+			detail, derr := s.revisionDetail(ctx, id, p.LatestRevisionName)
+			if derr != nil || detail == "" {
+				return nil, failed
+			}
+			failed = fmt.Errorf("%w: %s", failed, detail)
+			if pullFailure(detail) {
+				return nil, &PullError{Revision: p.LatestRevisionName, Detail: detail, Err: failed}
+			}
+			return nil, failed
 		case "succeeded":
 			if p.LatestRevisionName != "" && p.LatestRevisionName == p.LatestReadyRevision {
 				return a, nil
 			}
 			if p.LatestRevisionName != "" {
-				var rev revision
-				if _, err := s.do(ctx, http.MethodGet, id+"/revisions/"+url.PathEscape(p.LatestRevisionName), appsVersion, nil, &rev); err != nil && !IsNotFound(err) {
-					return nil, err
+				detail, derr := s.revisionDetail(ctx, id, p.LatestRevisionName)
+				if derr != nil {
+					return nil, derr
 				}
-				rp := rev.Properties
-				if strings.EqualFold(rp.ProvisioningState, "Failed") || strings.EqualFold(rp.RunningState, "Failed") {
-					detail := strings.TrimSpace(rp.ProvisioningError + " " + rp.RunningDetails)
-					if detail == "" {
-						detail = "it failed"
-					}
+				if pullFailure(detail) {
+					return nil, &PullError{Revision: p.LatestRevisionName, Detail: detail}
+				}
+				if detail != "" {
 					return nil, fmt.Errorf("revision %s didn't start: %s", p.LatestRevisionName, detail)
 				}
 			}

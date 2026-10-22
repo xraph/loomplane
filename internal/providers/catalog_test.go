@@ -63,12 +63,12 @@ func TestRegistry_capabilities(t *testing.T) {
 	}{
 		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
 		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "server", "kubernetes"}},
-		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "server", "kubernetes"}},
-		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "server", "kubernetes"}},
-		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "server"}},
+		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "azure-database", "server", "kubernetes"}},
+		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "azure-database", "server"}},
 		{"mariadb", names(r.Provisioning("mariadb")), []string{"server"}},
-		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache", "server"}},
+		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache", "azure-managed-redis", "server"}},
 		{"valkey", names(r.Provisioning("valkey")), []string{"server"}},
 		{"kafka", names(r.Provisioning("kafka")), nil},
 	}

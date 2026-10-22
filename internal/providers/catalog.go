@@ -127,11 +127,13 @@ func Catalog() []provider.Provider {
 		{
 			Name: "azure-container-apps", Title: "Azure Container Apps", Cloud: "azure",
 			BuildLogs: "unavailable", LogNote: "ACR Tasks' build logs are under Services, Tasks, Runs in the container registry Loomplane makes; progress remains available.",
-			Description: "Builds a service's Dockerfile with ACR Tasks and runs it on Azure Container Apps, which scales it with traffic, down to zero if you let it.",
+			Description: "Builds a service with ACR Tasks, from its Dockerfile or with Google's buildpacks, and runs it on Azure Container Apps, which scales it with traffic, down to zero if you let it.",
 			Model:       provider.Build,
 			Runs: []provider.Runs{
 				{Workload: provider.HTTPService, Execution: provider.Container, Creates: "Container app"},
 				{Workload: provider.WebApp, Execution: provider.Container, Creates: "Container app"},
+				{Workload: provider.Worker, Execution: provider.Container, Creates: "Container app with no ingress"},
+				{Workload: provider.StaticSite, Execution: provider.Container, Creates: "Container app serving the built site"},
 			},
 			Regions: azureRegions, Scaling: true,
 			// Built and run by a Loomplane adapter (internal/deployments,
@@ -210,6 +212,31 @@ func Catalog() []provider.Provider {
 			Regions:     awsRegions,
 			// A private bucket the environment's ECS tasks reach through
 			// their role (internal/deployments).
+			Available: true,
+		},
+		{
+			Name: "azure-database", Title: "Azure Database for PostgreSQL and MySQL", Cloud: "azure",
+			Description: "Managed Postgres and MySQL flexible servers on Azure, reached over TLS from Azure's services.",
+			Model:       provider.Managed,
+			Provisions: []provider.Provisions{
+				{Kind: "postgres", Creates: "Azure Database for PostgreSQL flexible server", Versions: []string{"17", "16", "15"}},
+				{Kind: "mysql", Creates: "Azure Database for MySQL flexible server", Versions: []string{"8.4", "8.0.21"}},
+			},
+			Regions: azureRegions,
+			// Provisioned by Loomplane with public access and a firewall
+			// rule that lets in Azure's services (internal/deployments,
+			// internal/clouds/azure).
+			Available: true,
+		},
+		{
+			Name: "azure-managed-redis", Title: "Azure Managed Redis", Cloud: "azure",
+			Description: "Managed Redis on Azure, reached over TLS with an access key.",
+			Model:       provider.Managed,
+			Provisions:  []provider.Provisions{{Kind: "redis", Creates: "Azure Managed Redis cluster"}},
+			Regions:     azureRegions,
+			// Provisioned by Loomplane on the smallest Balanced size, its
+			// key read from Azure on every apply (internal/deployments,
+			// internal/clouds/azure).
 			Available: true,
 		},
 		{

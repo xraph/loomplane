@@ -6,9 +6,12 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/azure/azuretest"
@@ -183,16 +186,112 @@ func TestAzure_aFailedBuildDeploysNothing(t *testing.T) {
 	}
 }
 
-func TestAzure_refusesWhatItCantBuild(t *testing.T) {
-	exec := &Azure{Client: azure.New("http://127.0.0.1:1")}
+func TestAzure_buildsWithoutADockerfileUsingBuildpacks(t *testing.T) {
+	f := azuretest.New(t)
+	exec := &Azure{Client: azure.New(f.URL())}
 	cfg := apiConfig()
 	cfg.Image = ""
-	if _, err := exec.Apply(t.Context(), azureJob(t, cfg)); err == nil || !strings.Contains(err.Error(), "Dockerfile") {
-		t.Fatalf("no dockerfile: %v", err)
+	cfg.Ecosystem = "go"
+	cfg.Source = "services/api"
+	job := azureJob(t, cfg)
+	out, err := exec.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
 	}
-	static := &planning.ServiceConfig{Source: "web", Workload: provider.StaticSite, Execution: provider.Static}
-	if _, err := exec.Apply(t.Context(), azureJob(t, static)); err == nil {
-		t.Fatal("ran a static site")
+	image := azure.RegistryName(azuretest.Subscription, "loomplane") + ".azurecr.io/api-23456789:" + doApproved[:12]
+	if out.Image != image {
+		t.Fatalf("image %q, want %q", out.Image, image)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.Tasks) != 1 {
+		t.Fatalf("tasks %v", f.Tasks)
+	}
+	for _, want := range []string{
+		"cmd: gcr.io/k8s-skaffold/pack build {{.Run.Registry}}/api-23456789:",
+		"--builder gcr.io/buildpacks/builder:latest",
+		"--path acme-mono-0123456 ",
+		"--env GOOGLE_BUILDABLE",
+		`env: ["GOOGLE_BUILDABLE=./services/api"]`,
+		"entryPoint: pack",
+	} {
+		if !strings.Contains(f.Tasks[0], want) {
+			t.Fatalf("task lacks %q:\n%s", want, f.Tasks[0])
+		}
+	}
+	if strings.Contains(f.Tasks[0], "build: -t") {
+		t.Fatalf("a docker build step:\n%s", f.Tasks[0])
+	}
+}
+
+func TestAzure_refusesAnActionWithoutAService(t *testing.T) {
+	exec := &Azure{Client: azure.New("http://127.0.0.1:1")}
+	job := azureJob(t, nil)
+	if _, err := exec.Apply(t.Context(), job); err == nil {
+		t.Fatal("ran an action with no service")
+	}
+}
+
+func azureIngress(t *testing.T, f *azuretest.Fake, name string) (map[string]any, map[string]any) {
+	t.Helper()
+	f.Lock()
+	defer f.Unlock()
+	props := f.Apps[name]["properties"].(map[string]any)
+	conf := props["configuration"].(map[string]any)
+	ingress, _ := conf["ingress"].(map[string]any)
+	return conf, ingress
+}
+
+func TestAzure_workersHaveNoIngressAndNeverScaleToZero(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		scale    *manifest.Scale
+		min, max any
+	}{
+		{"scaled to zero", &manifest.Scale{Min: 0, Max: 3}, float64(1), float64(3)},
+		{"no scale", nil, float64(1), nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := azuretest.New(t)
+			cfg := &planning.ServiceConfig{Source: "services/api", Image: "services/api/Dockerfile", Port: 9090,
+				Workload: provider.Worker, Execution: provider.Container, Scale: tt.scale}
+			job := azureJob(t, cfg)
+			out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.URL != "" {
+				t.Fatalf("a worker has the address %q", out.URL)
+			}
+			conf, ingress := azureIngress(t, f, AzureName(job))
+			if _, has := conf["ingress"]; has || ingress != nil {
+				t.Fatalf("a worker has ingress: %v", conf["ingress"])
+			}
+			f.Lock()
+			defer f.Unlock()
+			scale := f.Apps[AzureName(job)]["properties"].(map[string]any)["template"].(map[string]any)["scale"].(map[string]any)
+			if scale["minReplicas"] != tt.min || scale["maxReplicas"] != tt.max {
+				t.Fatalf("scale %v", scale)
+			}
+		})
+	}
+}
+
+func TestAzure_aStaticSiteIsAPublicContainerApp(t *testing.T) {
+	f := azuretest.New(t)
+	cfg := &planning.ServiceConfig{Source: "services/api", Image: "services/api/Dockerfile",
+		Workload: provider.StaticSite, Execution: provider.Container}
+	job := azureJob(t, cfg)
+	out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.URL == "" {
+		t.Fatal("a static site has no address")
+	}
+	_, ingress := azureIngress(t, f, AzureName(job))
+	if ingress["external"] != true || ingress["targetPort"] != float64(80) {
+		t.Fatalf("ingress %v", ingress)
 	}
 }
 
@@ -220,5 +319,273 @@ func TestAzureSecretName(t *testing.T) {
 	a, b := azureSecretName("API_KEY"), azureSecretName("API-KEY")
 	if a == b || !strings.HasPrefix(a, "env-api-key-") || strings.ContainsAny(a, "_ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
 		t.Fatalf("%q %q", a, b)
+	}
+}
+
+// shortPullWaits makes a test wait out a role's propagation in
+// milliseconds.
+func shortPullWaits(t *testing.T, wait time.Duration) {
+	t.Helper()
+	oldWait, oldRetry := azurePullWait, azurePullRetry
+	azurePullWait, azurePullRetry = wait, 10*time.Millisecond
+	t.Cleanup(func() { azurePullWait, azurePullRetry = oldWait, oldRetry })
+}
+
+// azurePullConf is the registry entry, secrets and identity of the app
+// Loomplane PUT last.
+func azurePullConf(t *testing.T, f *azuretest.Fake, name string) (reg map[string]any, secrets []string, identity map[string]any) {
+	t.Helper()
+	f.Lock()
+	defer f.Unlock()
+	app := f.Apps[name]
+	conf := app["properties"].(map[string]any)["configuration"].(map[string]any)
+	reg = conf["registries"].([]any)[0].(map[string]any)
+	for _, s := range conf["secrets"].([]any) {
+		secrets = append(secrets, s.(map[string]any)["name"].(string))
+	}
+	identity, _ = app["identity"].(map[string]any)
+	return reg, secrets, identity
+}
+
+func TestAzure_pullsWithTheIdentityWhenItMay(t *testing.T) {
+	f := azuretest.New(t)
+	f.NotActions = nil
+	job := azureJob(t, apiConfig())
+	if _, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	id := "/subscriptions/" + azuretest.Subscription + "/resourceGroups/loomplane/providers/Microsoft.ManagedIdentity/userAssignedIdentities/" + azure.PullIdentity
+	reg, secrets, identity := azurePullConf(t, f, AzureName(job))
+	if reg["identity"] != id || reg["server"] != azure.RegistryName(azuretest.Subscription, "loomplane")+".azurecr.io" {
+		t.Fatalf("registry %v", reg)
+	}
+	if _, has := reg["passwordSecretRef"]; has {
+		t.Fatalf("the registry has a password: %v", reg)
+	}
+	if _, has := reg["username"]; has {
+		t.Fatalf("the registry has a user: %v", reg)
+	}
+	if slices.Contains(secrets, azureRegistrySecret) || len(secrets) != 1 {
+		t.Fatalf("secrets %v", secrets)
+	}
+	users, _ := identity["userAssignedIdentities"].(map[string]any)
+	if _, has := users[id]; identity["type"] != "UserAssigned" || !has || len(users) != 1 {
+		t.Fatalf("identity %v", identity)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if f.IdentityPuts != 1 || len(f.RoleAssignments) != 1 || f.RoleAssignments[0].PrincipalID != azuretest.PullPrincipal {
+		t.Fatalf("identity puts %d, role assignments %+v", f.IdentityPuts, f.RoleAssignments)
+	}
+}
+
+func TestAzure_grantsThePullBeforeTheBuild(t *testing.T) {
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.FailBuild = true
+	if _, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig())); err == nil {
+		t.Fatal("a failed build deployed")
+	}
+	f.Lock()
+	defer f.Unlock()
+	// The role propagates while the build runs.
+	if f.IdentityPuts != 1 || len(f.RoleAssignments) != 1 || len(f.Tasks) != 1 {
+		t.Fatalf("identity puts %d, role assignments %+v, tasks %d", f.IdentityPuts, f.RoleAssignments, len(f.Tasks))
+	}
+}
+
+func TestAzure_fallsBackToTheAdminUser(t *testing.T) {
+	f := azuretest.New(t)
+	job := azureJob(t, apiConfig())
+	if _, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	reg, secrets, identity := azurePullConf(t, f, AzureName(job))
+	if reg["passwordSecretRef"] != azureRegistrySecret || reg["username"] == "" || reg["username"] == nil {
+		t.Fatalf("registry %v", reg)
+	}
+	if _, has := reg["identity"]; has || identity != nil {
+		t.Fatalf("registry %v, identity %v", reg, identity)
+	}
+	if !slices.Contains(secrets, azureRegistrySecret) {
+		t.Fatalf("secrets %v", secrets)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if f.IdentityPuts != 0 || len(f.RoleAssignments) != 0 {
+		t.Fatalf("identity puts %d, role assignments %+v", f.IdentityPuts, f.RoleAssignments)
+	}
+}
+
+func TestAzure_waitsForTheRoleToPropagate(t *testing.T) {
+	shortPullWaits(t, time.Minute)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PullDeniedFor = 2
+	exec := &Azure{Client: azure.New(f.URL())}
+	job := azureJob(t, apiConfig())
+	out, err := exec.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The third revision is the one that pulled, and it's ready.
+	s, err := azureSession(t.Context(), exec.Client, job.Connection, job.Credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := s.GetApp(t.Context(), out.ExternalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Container Apps makes a revision only when the template changes, so
+	// each retry names a new one.
+	f.Lock()
+	suffixes := make([]string, 0, len(f.AppPuts))
+	for _, put := range f.AppPuts {
+		suffix, _ := put["properties"].(map[string]any)["template"].(map[string]any)["revisionSuffix"].(string)
+		suffixes = append(suffixes, suffix)
+	}
+	f.Unlock()
+	if len(suffixes) != 3 || suffixes[0] != "" || suffixes[1] == "" || suffixes[2] == "" || suffixes[1] == suffixes[2] {
+		t.Fatalf("revision suffixes %q", suffixes)
+	}
+	third := AzureName(job) + "--" + suffixes[2]
+	if p := live.Properties; p.LatestRevisionName != third || p.LatestReadyRevision != third {
+		t.Fatalf("latest %q, ready %q, want %q", p.LatestRevisionName, p.LatestReadyRevision, third)
+	}
+}
+
+func TestAzure_oneWaitCoversTheGrantAndThePull(t *testing.T) {
+	// The build, the environment and the first revision each take at
+	// least one 100ms poll of the fake, so a 250ms wait that started
+	// before the grant has run out when the first pull fails.
+	shortPullWaits(t, 250*time.Millisecond)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PullDeniedFor = 1
+	_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+	if err == nil || !strings.Contains(err.Error(), "retry the deployment") {
+		t.Fatalf("err %v", err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.AppPuts) != 1 {
+		t.Fatalf("app puts %d", len(f.AppPuts))
+	}
+}
+
+func TestAzure_givesUpWhenThePullNeverWorks(t *testing.T) {
+	shortPullWaits(t, 600*time.Millisecond)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PullDeniedFor = 1000
+	_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+	if err == nil || !strings.Contains(err.Error(), "identity") || !strings.Contains(err.Error(), "retry the deployment") {
+		t.Fatalf("err %v", err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.AppPuts) < 2 {
+		t.Fatalf("gave up after %d app puts", len(f.AppPuts))
+	}
+}
+
+func TestAzure_waitsForEntraToKnowTheIdentity(t *testing.T) {
+	shortPullWaits(t, time.Minute)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PrincipalMissingFor = 2
+	if _, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig())); err != nil {
+		t.Fatal(err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.RoleAssignments) != 1 {
+		t.Fatalf("role assignments %+v", f.RoleAssignments)
+	}
+}
+
+func TestAzure_givesUpWhenEntraNeverKnowsTheIdentity(t *testing.T) {
+	shortPullWaits(t, 50*time.Millisecond)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PrincipalMissingFor = 1000
+	_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+	var ae *azure.APIError
+	if !errors.As(err, &ae) || ae.Code != "PrincipalNotFound" || !strings.Contains(err.Error(), "retry the deployment") {
+		t.Fatalf("err %v", err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.Tasks) != 0 || len(f.Apps) != 0 {
+		t.Fatalf("built %d, apps %v", len(f.Tasks), f.Apps)
+	}
+}
+
+// azurePullShapes are the ways Container Apps says an app couldn't pull
+// its image besides a failed revision: the app's own provisioning
+// failing, and the PUT refused outright.
+var azurePullShapes = map[string]func(f *azuretest.Fake, n int){
+	"the app failed":      func(f *azuretest.Fake, n int) { f.AppPullFailedFor = n },
+	"the PUT was refused": func(f *azuretest.Fake, n int) { f.PutPullRefusedFor = n },
+}
+
+func TestAzure_waitsThroughEveryShapeOfAFailedPull(t *testing.T) {
+	shortPullWaits(t, time.Minute)
+	for shape, fail := range azurePullShapes {
+		t.Run(shape, func(t *testing.T) {
+			f := azuretest.New(t)
+			f.NotActions = nil
+			fail(f, 2)
+			job := azureJob(t, apiConfig())
+			out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Lock()
+			defer f.Unlock()
+			if len(f.AppPuts) != 3 || !strings.HasSuffix(out.ExternalID, "/containerApps/"+AzureName(job)) {
+				t.Fatalf("app puts %d, outcome %+v", len(f.AppPuts), out)
+			}
+		})
+	}
+}
+
+func TestAzure_givesUpOnEveryShapeOfAFailedPull(t *testing.T) {
+	shortPullWaits(t, 600*time.Millisecond)
+	for shape, fail := range azurePullShapes {
+		t.Run(shape, func(t *testing.T) {
+			f := azuretest.New(t)
+			f.NotActions = nil
+			fail(f, 1000)
+			_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+			if err == nil || !strings.Contains(err.Error(), "Managed identity") || !strings.Contains(err.Error(), "retry the deployment") {
+				t.Fatalf("err %v", err)
+			}
+			f.Lock()
+			defer f.Unlock()
+			if len(f.AppPuts) < 2 {
+				t.Fatalf("gave up after %d app puts", len(f.AppPuts))
+			}
+		})
+	}
+}
+
+func TestAzure_theAdminUserNeverRetriesAPull(t *testing.T) {
+	shortPullWaits(t, time.Minute)
+	for shape, fail := range azurePullShapes {
+		t.Run(shape, func(t *testing.T) {
+			f := azuretest.New(t)
+			fail(f, 1)
+			_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+			if err == nil || strings.Contains(err.Error(), "retry the deployment") {
+				t.Fatalf("err %v", err)
+			}
+			f.Lock()
+			defer f.Unlock()
+			if len(f.AppPuts) != 1 {
+				t.Fatalf("app puts %d", len(f.AppPuts))
+			}
+		})
 	}
 }

@@ -26,9 +26,22 @@ func TestAzureChecker(t *testing.T) {
 	if err != nil || got.Account != "Acme production" || len(got.Missing) != 0 {
 		t.Fatalf("contributor: %+v, %v", got, err)
 	}
-	want := map[string]string{"tenant_id": azuretest.Tenant, "client_id": azuretest.Client, "subscription_id": azuretest.Subscription, "resource_group": "loomplane"}
+	want := map[string]string{"tenant_id": azuretest.Tenant, "client_id": azuretest.Client, "subscription_id": azuretest.Subscription, "resource_group": "loomplane", "registry_pull": "admin"}
 	if !maps.Equal(got.Details, want) {
 		t.Fatalf("details %v", got.Details)
+	}
+
+	// A principal that may assign roles pulls with an identity, and the
+	// connection is the same one.
+	f.Lock()
+	f.NotActions = nil
+	f.Unlock()
+	owner, err := c.Check(t.Context(), []byte(azuretest.Secret), settings)
+	if err != nil || len(owner.Missing) != 0 || owner.Details["registry_pull"] != "identity" {
+		t.Fatalf("owner: %+v, %v", owner, err)
+	}
+	if AccountIdentity(Azure, owner.Account, owner.Details) != AccountIdentity(Azure, got.Account, got.Details) {
+		t.Fatal("the pull mode changed the identity")
 	}
 
 	// A reader's check lists exactly what it may not do.

@@ -1,16 +1,20 @@
 package deployments
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	neturl "net/url"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/progress"
@@ -37,6 +41,12 @@ import (
 // nothing approved ever ran there.
 type DigitalOcean struct {
 	Client *digitalocean.Client
+	// Resolve looks a host up in public DNS, past this machine's own
+	// cache. Nil asks Cloudflare's and Google's resolvers.
+	Resolve func(ctx context.Context, host string) error
+	// DNSWait is how long a new app's address may take to appear in DNS,
+	// and DNSPoll how often it's looked up. Zero means the defaults.
+	DNSWait, DNSPoll time.Duration
 }
 
 var _ Executor = (*DigitalOcean)(nil)
@@ -201,7 +211,77 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Outcome{ExternalID: app.ID, URL: doAddress(cfg, app), Revision: dep.ID}, nil
+	url := doAddress(cfg, app)
+	if err := d.waitForDNS(ctx, job, url); err != nil {
+		return nil, err
+	}
+	return &Outcome{ExternalID: app.ID, URL: url, Revision: dep.ID}, nil
+}
+
+// doPublicResolvers are asked directly, so a name looked up too early
+// isn't remembered as missing by this machine's resolver.
+var doPublicResolvers = []string{"1.1.1.1:53", "8.8.8.8:53"}
+
+const (
+	doDNSWait = 10 * time.Minute
+	doDNSPoll = 5 * time.Second
+)
+
+// waitForDNS waits until a new app's address is in public DNS. App
+// Platform reports a deployment live a few minutes before its
+// ondigitalocean.app name resolves, and looking it up in that gap makes
+// this machine cache "no such host", so the runner's check that the
+// service answers fails while the app is up. Only a name that public DNS
+// says doesn't exist yet is waited for: when public DNS can't be reached,
+// the runner's own check decides.
+func (d *DigitalOcean) waitForDNS(ctx context.Context, job *Job, rawURL string) error {
+	u, err := neturl.Parse(rawURL)
+	if rawURL == "" || err != nil || u.Hostname() == "" || u.Hostname() == "localhost" || net.ParseIP(u.Hostname()) != nil {
+		return nil
+	}
+	host := u.Hostname()
+	resolve, wait, poll := d.Resolve, cmp.Or(d.DNSWait, doDNSWait), cmp.Or(d.DNSPoll, doDNSPoll)
+	if resolve == nil {
+		resolve = resolvePublicly
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err := resolve(ctx, host)
+		var dnsErr *net.DNSError
+		if err == nil || !errors.As(err, &dnsErr) || !dnsErr.IsNotFound {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the app is deployed, but %s isn't in DNS after %s. Retry this step once it resolves", host, wait)
+		}
+		job.Progress(StepDeploying, "Waiting for DigitalOcean to publish "+host)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+// resolvePublicly looks host up through the first public resolver that
+// answers.
+func resolvePublicly(ctx context.Context, host string) error {
+	r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+		var last error
+		for _, server := range doPublicResolvers {
+			conn, err := dialer.DialContext(ctx, network, server)
+			if err == nil {
+				return conn, nil
+			}
+			last = err
+		}
+		return nil, last
+	}}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := r.LookupHost(ctx, host)
+	return err
 }
 
 // ensureApp creates the app, or updates the one already called spec.Name

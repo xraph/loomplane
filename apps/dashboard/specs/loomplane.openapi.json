@@ -8040,6 +8040,9 @@
           "connection_id": {
             "type": "string"
           },
+          "default": {
+            "type": "boolean"
+          },
           "environment_id": {
             "type": "string"
           },
@@ -8075,6 +8078,9 @@
           },
           "connection_id": {
             "type": "string"
+          },
+          "default": {
+            "type": "boolean"
           },
           "environment_id": {
             "type": "string"
@@ -11559,11 +11565,17 @@
           "after_assignment": {
             "$ref": "#/components/schemas/Assignment"
           },
+          "after_default": {
+            "$ref": "#/components/schemas/DefaultPlacement"
+          },
           "before": {
             "$ref": "#/components/schemas/Target"
           },
           "before_assignment": {
             "$ref": "#/components/schemas/Assignment"
+          },
+          "before_default": {
+            "$ref": "#/components/schemas/DefaultPlacement"
           },
           "blockers": {
             "type": "array",
@@ -14620,11 +14632,17 @@
           "after": {
             "$ref": "#/components/schemas/Target"
           },
+          "after_default": {
+            "$ref": "#/components/schemas/DefaultPlacement"
+          },
           "attempt": {
             "type": "integer"
           },
           "before": {
             "$ref": "#/components/schemas/Target"
+          },
+          "before_default": {
+            "$ref": "#/components/schemas/DefaultPlacement"
           },
           "cloud_id": {
             "type": "string"
@@ -14635,6 +14653,9 @@
           },
           "created_by": {
             "type": "string"
+          },
+          "default": {
+            "type": "boolean"
           },
           "environments": {
             "type": "array",

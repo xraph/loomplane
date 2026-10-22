@@ -73,7 +73,23 @@ A service uses the default when it has no placement of its own: no `cloud_target
 
 The default reaches a project only when its grant covers the whole Cloud. If an organization admin granted your project a chosen set of targets, your services can use those targets but not the default.
 
-You can set a first default at any time, because the services it places had nowhere to go before. Once an environment uses the Cloud, Loomplane refuses to replace or clear the default (HTTP 409), because that would move serving services without a reviewed sync. You'd unassign the Cloud from those environments first. Renaming the Cloud keeps its default. A Cloud reassignment does go through review: services placed by the old Cloud's default move to the new Cloud's default, and the review blocks if the new Cloud has none your project can use.
+You can set a first default at any time with `default-placement`, because the services it places had nowhere to go before. Renaming the Cloud keeps its default. Once an environment uses the Cloud, `default-placement` refuses to replace or clear it (HTTP 409). Change it through a review instead:
+
+```sh
+loomctl clouds switch-default my-project cloud_... \
+  --provider vercel --connection conn_new --revision 3
+loomctl clouds switch-default my-project cloud_... \
+  --provider vercel --connection conn_new --revision 3 \
+  --yes --request-id move-default --wait --timeout 30m
+```
+
+Over HTTP, that's `POST /clouds/changes/preview` with `{"cloud_id": "cloud_...", "default": true, "provider": "vercel", "connection_id": "conn_new", "revision": 3}`, where `revision` is the Cloud's. Leave out the provider and connection (or pass `--clear`) to remove the default. You accept the preview with `/clouds/changes/apply`, exactly like a target switch, and you need organization Cloud management to do either.
+
+The review covers every environment that uses the Cloud, across projects, and moves only the services the old default placed. Services on a target, or with their own `provider`, keep their placement, though one that depends on a moved service is redeployed so it picks up the new address. The preview shows `before_default` and `after_default`, and the sync records them. Acceptance writes the new default and advances the Cloud's revision in the same transaction that records the work, so plans approved against the old default have to be planned again. Clearing a default that serving services still use is blocked in the review, because they'd have nowhere to go.
+
+One default switch runs per Cloud at a time, and no environment can be assigned to or from the Cloud until it settles. Follow it, complete external routing and retry it with the `cloud-syncs` commands below. `cloud-syncs revert` reviews the old default back, as long as the Cloud still holds the one this sync set.
+
+A Cloud reassignment works the same way for default-placed services: they move to the new Cloud's default, and the review blocks if the new Cloud has none your project can use.
 
 ## Adopt an existing service
 

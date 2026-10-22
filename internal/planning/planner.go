@@ -1601,7 +1601,7 @@ func (p *planner) link(name string, a *Action) {
 					Message: fmt.Sprintf("%s needs private service %s on another server or cluster namespace. Choose the same target or configure an externally reachable address through variables.", name, need)})
 				continue
 			}
-		case !dep.Service.Public && !OwnedCloud(p.cloud(dep.Provider)) && p.cloud(dep.Provider) == p.cloud(a.Provider) && (a.Service.CloudPlacement != nil || dep.Service.CloudPlacement != nil) && (!p.sameDeploymentAccount(a, dep) || a.Region != dep.Region && dep.Provider == ecsFargate):
+		case !dep.Service.Public && !OwnedCloud(p.cloud(dep.Provider)) && p.cloud(dep.Provider) == p.cloud(a.Provider) && (a.Service.CloudPlacement != nil || dep.Service.CloudPlacement != nil) && (!p.sameDeploymentAccount(a, dep) || a.Region != dep.Region && (dep.Provider == ecsFargate || dep.Provider == azureApps)):
 			p.problem(Finding{Code: "private-across-accounts", Subject: ServiceSubject, Name: name, Path: base, Message: fmt.Sprintf("%s needs private service %s in another deployment account or network. Choose the same account and region, or expose a reachable endpoint.", name, need)})
 			continue
 		case dep.Provider == ecsFargate && a.Provider == ecsFargate && ((a.Service.CloudPlacement == nil && dep.Service.CloudPlacement == nil) || p.sameDeploymentAccount(a, dep) && a.Region == dep.Region):
@@ -1622,6 +1622,11 @@ func (p *planner) link(name string, a *Action) {
 			// Render's private network: the dependency's address is its
 			// name there, which Render gives it when it's made, so the
 			// runner takes it from the dependency's binding.
+		case !dep.Service.Public && dep.Provider == azureApps && a.Provider == azureApps && p.sameDeploymentAccount(a, dep) && a.Region == dep.Region:
+			// Internal ingress reaches the apps in the same Container Apps
+			// environment, which is one per connection and region. The
+			// dependency's address is its internal FQDN, which Azure gives
+			// it when it's made, so the runner takes it from the binding.
 		case !dep.Service.Public && dep.Provider == cloudRun:
 			p.warn(Finding{
 				Code: "authenticated-call", Subject: ServiceSubject, Name: name, Path: base,
@@ -1652,18 +1657,6 @@ const (
 	azureApps    = "azure-container-apps"
 )
 
-// checkAzure reports what Container Apps can't build: Loomplane builds
-// for it with ACR Tasks, from a Dockerfile.
-func (p *planner) checkAzure(name, base string, cfg *ServiceConfig) {
-	if cfg.Provider != azureApps || cfg.Image != "" {
-		return
-	}
-	p.problem(Finding{
-		Code: "azure-needs-dockerfile", Subject: ServiceSubject, Name: name, Path: base + ".provider",
-		Message: fmt.Sprintf("Loomplane builds for Azure Container Apps from a Dockerfile, and %s has none. Add one, or run %s somewhere else.", name, name),
-	})
-}
-
 // renderNative are the ecosystems Render builds without a Dockerfile.
 var renderNative = map[discovery.Ecosystem]bool{discovery.Go: true, discovery.Node: true, discovery.Python: true}
 
@@ -1685,6 +1678,19 @@ func (p *planner) checkRender(name, base string, cfg *ServiceConfig) {
 			Message: fmt.Sprintf("Render starts a Node service with npm start, and %s's package.json has no start script. Add one, or a Dockerfile.", name),
 		})
 	}
+}
+
+// checkAzure reports what Azure can't build: Container Apps runs a static
+// site as a container, and buildpacks don't produce a static file server,
+// so it needs a Dockerfile that serves the built files.
+func (p *planner) checkAzure(name, base string, cfg *ServiceConfig) {
+	if cfg.Provider != azureApps || cfg.Workload != provider.StaticSite || cfg.Image != "" {
+		return
+	}
+	p.problem(Finding{
+		Code: "azure-static-needs-dockerfile", Subject: ServiceSubject, Name: name, Path: base + ".source",
+		Message: fmt.Sprintf("Azure runs a static site as a container, and buildpacks don't make a file server, so %s needs a Dockerfile that serves the built files. Add one, or run %s somewhere else.", name, name),
+	})
 }
 
 func ecosystemTitle(e discovery.Ecosystem) string {

@@ -310,6 +310,11 @@ func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map
 	if c.Missing, err = s.Missing(ctx); err != nil {
 		return Check{}, err
 	}
+	// Pulling with an identity takes more than Contributor, so it's
+	// reported, never required.
+	if c.Details["registry_pull"], err = s.PullMode(ctx); err != nil {
+		return Check{}, err
+	}
 	return c, nil
 }
 
