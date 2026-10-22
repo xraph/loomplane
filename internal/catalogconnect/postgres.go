@@ -2,9 +2,13 @@ package catalogconnect
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
+	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/jackc/pgx/v5"
@@ -36,6 +40,9 @@ func (p PostgresProber) Probe(ctx context.Context, dial DialFunc, dsn string, re
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	cfg, err := pgx.ParseConfig(dsn)
+	if err == nil {
+		err = pinConfig(cfg, dsn)
+	}
 	if err != nil {
 		// pgx's message quotes the DSN, password masked; say less.
 		return nil, errors.New("the stored DSN can't be read as a postgres URL")
@@ -90,6 +97,56 @@ func (p PostgresProber) Probe(ctx context.Context, dial DialFunc, dsn string, re
 		}
 	}
 	return report, nil
+}
+
+// pinConfig sets every connection setting from the DSN alone.
+// pgx.ParseConfig fills what a DSN leaves out from Loomplane's own PG*
+// environment variables, ~/.pgpass, a service file and the certificates
+// under ~/.postgresql. None of that may reach a server someone registered:
+// a DSN without a password sends none, and only the DSN's TLS mode applies.
+func pinConfig(cfg *pgx.ConnConfig, dsn string) error {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return err
+	}
+	if u.User == nil || u.User.Username() == "" || u.Hostname() == "" {
+		return errors.New("the DSN needs a user and a host")
+	}
+	port := uint64(5432)
+	if p := u.Port(); p != "" {
+		if port, err = strconv.ParseUint(p, 10, 16); err != nil || port == 0 {
+			return errors.New("the DSN's port is out of range")
+		}
+	}
+	q := u.Query()
+	cfg.Host, cfg.Port = u.Hostname(), uint16(port)
+	cfg.Database = strings.TrimPrefix(u.Path, "/")
+	cfg.User = u.User.Username()
+	cfg.Password, _ = u.User.Password()
+	cfg.Fallbacks = nil
+	cfg.SSLNegotiation = ""
+	cfg.KerberosSrvName, cfg.KerberosSpn = "", ""
+	cfg.ValidateConnect = nil
+	cfg.MinProtocolVersion, cfg.MaxProtocolVersion = "3.0", "3.0"
+	cfg.ChannelBinding, cfg.RequireAuth = "prefer", ""
+	cfg.RuntimeParams = map[string]string{}
+	for _, name := range []string{"application_name", "options", "search_path"} {
+		if q.Has(name) {
+			cfg.RuntimeParams[name] = q.Get(name)
+		}
+	}
+	switch q.Get("sslmode") {
+	case TLSDisable:
+		cfg.TLSConfig = nil
+	case TLSRequire:
+		// Encrypted, certificate unchecked: what sslmode=require means.
+		cfg.TLSConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // sslmode=require doesn't verify, as in libpq
+	case TLSVerifyFull:
+		cfg.TLSConfig = &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}
+	default:
+		return errors.New("the DSN's sslmode isn't disable, require or verify-full")
+	}
+	return nil
 }
 
 // pgFailure words a failed connection or query from pieces that can't

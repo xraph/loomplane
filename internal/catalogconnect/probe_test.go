@@ -3,15 +3,25 @@ package catalogconnect
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -243,5 +253,91 @@ func TestCheckerUsesTheGivenDialer(t *testing.T) {
 	}
 	if _, err = checker.Check(t.Context(), "org", "endpoint_missing", recipes.Requirement{}, redisDial); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing endpoint: %v", err)
+	}
+}
+
+// writeKeyPair writes a self-signed certificate and its key as PEM files.
+func writeKeyPair(t *testing.T, certPath, keyPath string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "loomplane"}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresProberSendsOnlyTheDSNsCredentials(t *testing.T) {
+	// Loomplane's own libpq environment, ~/.pgpass and ~/.postgresql
+	// client certificate and root CA.
+	home := t.TempDir()
+	certs := filepath.Join(home, ".postgresql")
+	if err := os.MkdirAll(certs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cert, key, root := filepath.Join(certs, "postgresql.crt"), filepath.Join(certs, "postgresql.key"), filepath.Join(certs, "root.crt")
+	writeKeyPair(t, cert, key)
+	writeKeyPair(t, root, filepath.Join(home, "root.key"))
+	if err := os.WriteFile(filepath.Join(home, ".pgpass"), []byte("*:*:*:*:from-pgpass\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PGPASSWORD", "from-env")
+	t.Setenv("PGSSLCERT", cert)
+	t.Setenv("PGSSLKEY", key)
+	t.Setenv("PGSSLROOTCERT", root)
+	t.Setenv("PGAPPNAME", "from-env")
+	t.Setenv("PGTARGETSESSIONATTRS", "read-write")
+	t.Setenv("PGCHANNELBINDING", "require")
+
+	for _, tc := range []struct{ dsn, password, tls string }{
+		{"postgres://u@db.example/app?sslmode=require", "", TLSRequire},
+		{"postgres://u:p@db.example:6432/app?sslmode=verify-full&application_name=fabriq", "p", TLSVerifyFull},
+		{"postgres://u@db.example/app?sslmode=disable", "", TLSDisable},
+	} {
+		var cfg *pgx.ConnConfig
+		prober := PostgresProber{connect: func(_ context.Context, c *pgx.ConnConfig) (pgConn, error) {
+			cfg = c
+			return &fakePg{version: "17.2"}, nil
+		}}
+		if _, err := prober.Probe(t.Context(), refuse, tc.dsn, recipes.Requirement{}); err != nil {
+			t.Fatalf("%s: %v", tc.dsn, err)
+		}
+		if cfg.Password != tc.password || cfg.User != "u" || cfg.Database != "app" || cfg.Host != "db.example" || len(cfg.Fallbacks) != 0 {
+			t.Fatalf("%s: user %q password %q database %q host %q fallbacks %d", tc.dsn, cfg.User, cfg.Password, cfg.Database, cfg.Host, len(cfg.Fallbacks))
+		}
+		if cfg.ValidateConnect != nil || cfg.ChannelBinding != "prefer" || cfg.RuntimeParams["application_name"] == "from-env" {
+			t.Fatalf("%s: environment settings applied: %+v %q", tc.dsn, cfg.RuntimeParams, cfg.ChannelBinding)
+		}
+		switch tc.tls {
+		case TLSDisable:
+			if cfg.TLSConfig != nil {
+				t.Fatalf("%s: TLS on", tc.dsn)
+			}
+		default:
+			c := cfg.TLSConfig
+			if c == nil || len(c.Certificates) != 0 || c.GetClientCertificate != nil || c.RootCAs != nil {
+				t.Fatalf("%s: TLS config carries Loomplane's certificates: %+v", tc.dsn, c)
+			}
+			if tc.tls == TLSRequire && !c.InsecureSkipVerify {
+				t.Fatalf("%s: require verifies", tc.dsn)
+			}
+			if tc.tls == TLSVerifyFull && (c.InsecureSkipVerify || c.VerifyPeerCertificate != nil || c.ServerName != "db.example") {
+				t.Fatalf("%s: verify-full doesn't verify the host: %+v", tc.dsn, c)
+			}
+		}
 	}
 }

@@ -209,6 +209,8 @@ func TestCreateRejectsBadDSN(t *testing.T) {
 		{"redis database", "redis", "redis://cache.example/zero"},
 		{"redis query", "redis", "redis://cache.example?protocol=3"},
 		{"no name", "", "postgres://u:p@db.example/app?sslmode=require"},
+		{"no user", "postgres", "postgres://db.example/app?sslmode=require"},
+		{"empty user", "postgres", "postgres://:p@db.example/app?sslmode=require"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			secrets := memSecrets{}

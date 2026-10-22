@@ -59,9 +59,9 @@ type CreateInput struct {
 	Name string `json:"name"`
 	// Engine is postgres or redis.
 	Engine string `json:"engine"`
-	// DSN is a postgres:// or postgresql:// URL with sslmode disable,
-	// require or verify-full, or a redis:// or rediss:// URL. It's stored
-	// in Vault and never returned.
+	// DSN is a postgres:// or postgresql:// URL with a user and sslmode
+	// disable, require or verify-full, or a redis:// or rediss:// URL.
+	// It's stored in Vault and never returned.
 	DSN string `json:"dsn"`
 }
 
@@ -130,6 +130,9 @@ func parseDSN(e *Endpoint, dsn string) error {
 			e.TLS = TLSVerifyFull
 		}
 		return nil
+	}
+	if e.Username == "" {
+		return fmt.Errorf("%w: a postgres DSN must name its user, such as %s", ErrInvalid, example(e.Engine))
 	}
 	for name := range q {
 		if !postgresParams[name] {
