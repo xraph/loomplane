@@ -80,6 +80,24 @@ func paramColumn(q string) (pgproto3.FieldDescription, int, bool) {
 	return fd, n, true
 }
 
+var seriesSelect = regexp.MustCompile(`^SELECT (?:([0-9]+) NULLS AS ([a-z]+) )?FROM generate_series\(1,([0-9]+)\)$`)
+
+// seriesRows describes SELECT [k NULLS AS name] FROM generate_series(1,n):
+// n rows of k NULL text columns called name, or of no columns at all.
+func seriesRows(q string) (fields []pgproto3.FieldDescription, rows int, ok bool) {
+	m := seriesSelect.FindStringSubmatch(q)
+	if m == nil {
+		return nil, 0, false
+	}
+	cols, _ := strconv.Atoi(m[1])
+	rows, _ = strconv.Atoi(m[3])
+	fields = []pgproto3.FieldDescription{}
+	for range cols {
+		fields = append(fields, pgproto3.FieldDescription{Name: []byte(m[2]), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1})
+	}
+	return fields, rows, true
+}
+
 func (f *fakePG) record(msg pgproto3.FrontendMessage) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -205,6 +223,8 @@ func (f *fakePG) serve(conn net.Conn) {
 			}
 			if fd, _, ok := paramColumn(q); ok {
 				b.Send(&pgproto3.RowDescription{Fields: []pgproto3.FieldDescription{fd}})
+			} else if fields, _, ok := seriesRows(q); ok {
+				b.Send(&pgproto3.RowDescription{Fields: fields})
 			} else if isSelect(q) {
 				b.Send(rowDescription())
 			} else {
@@ -224,6 +244,14 @@ func (f *fakePG) serve(conn net.Conn) {
 				}
 				b.Send(&pgproto3.DataRow{Values: [][]byte{params[n-1]}})
 				b.Send(&pgproto3.CommandComplete{CommandTag: []byte("SELECT 1")})
+				continue
+			}
+			if fields, rows, ok := seriesRows(q); ok && st.status != 'E' {
+				row := &pgproto3.DataRow{Values: make([][]byte, len(fields))}
+				for range rows {
+					b.Send(row)
+				}
+				b.Send(&pgproto3.CommandComplete{CommandTag: []byte(fmt.Sprintf("SELECT %d", rows))})
 				continue
 			}
 			if !f.run(b, st, q, false) {

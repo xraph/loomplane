@@ -17,7 +17,9 @@ const (
 	httpRequestLimit = 60 * time.Second
 	// httpMaxBody is the largest request body the gateway reads.
 	httpMaxBody = 10 << 20
-	// httpMaxResult is how much row data one request may return.
+	// httpMaxResult is what one request's results may cost, as rowCost and
+	// the other charges in httpresponse.go count it: a bound on what they
+	// hold in memory and on the encoded response.
 	httpMaxResult = MaxMessageLen
 	// resultSlack is what one backend message may carry on top of its row
 	// data: a DataRow spends 2 bytes on its column count and 4 on each
@@ -111,23 +113,14 @@ func (q *httpQuery) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			state LeaseState
 			err   error
 		)
-		results, state, err = q.run(ctx, l.Conn(), stmts)
+		results, state, err = q.run(ctx, l.Conn(), stmts, arrayMode)
 		return state, err
 	})
 	if err != nil {
 		q.fail(w, err)
 		return
 	}
-	for _, res := range results {
-		res.asArray = arrayMode
-	}
-	if batch {
-		writeHTTPJSON(w, http.StatusOK, struct {
-			Results []*queryResult `json:"results"`
-		}{results})
-		return
-	}
-	writeHTTPJSON(w, http.StatusOK, results[0])
+	writeResults(w, batch, results)
 }
 
 // run sends every statement in one pipeline, Parse, Bind, Describe and
@@ -138,7 +131,7 @@ func (q *httpQuery) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // state, so DISCARD ALL clears it. A transaction still open at the end, from
 // a failed batch or a client's own BEGIN, is rolled back. Any I/O failure, a
 // result over the cap and a COPY FROM STDIN break the lease.
-func (q *httpQuery) run(ctx context.Context, c *BackendConn, stmts []statement) ([]*queryResult, LeaseState, error) {
+func (q *httpQuery) run(ctx context.Context, c *BackendConn, stmts []statement, arrayMode bool) ([]*queryResult, LeaseState, error) {
 	session := false
 	for _, s := range stmts {
 		switch s.class.Effect {
@@ -173,7 +166,7 @@ func (q *httpQuery) run(ctx context.Context, c *BackendConn, stmts []statement) 
 		wrote <- err
 	}()
 
-	results, status, pgErr, err := q.read(c, stmts)
+	results, status, pgErr, err := q.read(c, stmts, arrayMode)
 	if err != nil {
 		// The writer may be stuck behind a backend that is still sending.
 		_ = c.Conn.SetDeadline(time.Unix(1, 0))
@@ -230,12 +223,12 @@ func (q *httpQuery) run(ctx context.Context, c *BackendConn, stmts []statement) 
 // read reads the replies to stmts up to ReadyForQuery. pgErr is the first
 // error the backend reported; after one, Postgres skips the rest until Sync.
 // err is anything that leaves the connection unusable.
-func (q *httpQuery) read(c *BackendConn, stmts []statement) (results []*queryResult, status byte, pgErr *pgconn.PgError, err error) {
+func (q *httpQuery) read(c *BackendConn, stmts []statement, arrayMode bool) (results []*queryResult, status byte, pgErr *pgconn.PgError, err error) {
 	results = make([]*queryResult, len(stmts))
 	for i := range results {
-		results[i] = &queryResult{}
+		results[i] = &queryResult{asArray: arrayMode}
 	}
-	cur, size := 0, 0
+	cur, size := 0, resultCost*len(stmts)
 	for {
 		msg, err := c.Frontend.Receive()
 		if err != nil {
@@ -289,18 +282,23 @@ func (q *httpQuery) read(c *BackendConn, stmts []statement) (results []*queryRes
 					Name: string(f.Name), TableID: f.TableOID, ColumnID: f.TableAttributeNumber,
 					DataTypeID: f.DataTypeOID, DataTypeSize: f.DataTypeSize, DataTypeModifier: f.TypeModifier, Format: format,
 				}
+				size += fieldCost + jsonStringLen(f.Name)
+			}
+			if size > q.maxResult {
+				return nil, 0, nil, errResultTooLarge
 			}
 		case *pgproto3.DataRow:
+			// Charged before anything is copied, at no less than what the
+			// row costs on the wire, in memory and once encoded.
+			if size += rowCost(m.Values, res.fields, arrayMode); size > q.maxResult {
+				return nil, 0, nil, errResultTooLarge
+			}
 			row := make([]*string, len(m.Values))
 			for i, v := range m.Values {
-				if v == nil {
-					continue
+				if v != nil {
+					s := string(v)
+					row[i] = &s
 				}
-				if size += len(v); size > q.maxResult {
-					return nil, 0, nil, errResultTooLarge
-				}
-				s := string(v)
-				row[i] = &s
 			}
 			res.rows = append(res.rows, row)
 		case *pgproto3.CommandComplete:

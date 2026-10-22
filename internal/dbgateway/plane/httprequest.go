@@ -24,14 +24,77 @@ var (
 	deferrableModes = map[string]string{"true": "DEFERRABLE", "false": "NOT DEFERRABLE"}
 )
 
-// httpRequest is a request body: {query, params} or {queries: [...]}.
+const (
+	// maxBatchQueries is how many queries one batch may hold.
+	maxBatchQueries = 1000
+	// maxRequestParams is how many parameters one request may carry in all,
+	// the most one Bind can.
+	maxRequestParams = math.MaxUint16
+)
+
+// httpRequest is a request body: {query, params} or {queries: [...]}. The
+// arrays stay raw until requestLimits walks them, so a body of a million
+// tiny parameters is refused at the limit instead of decoded whole.
 type httpRequest struct {
-	Query   *string           `json:"query"`
-	Params  []json.RawMessage `json:"params"`
-	Queries *[]struct {
-		Query  string            `json:"query"`
-		Params []json.RawMessage `json:"params"`
-	} `json:"queries"`
+	Query   *string         `json:"query"`
+	Params  json.RawMessage `json:"params"`
+	Queries json.RawMessage `json:"queries"`
+}
+
+// batchQuery is one entry of a batch.
+type batchQuery struct {
+	Query  string          `json:"query"`
+	Params json.RawMessage `json:"params"`
+}
+
+// requestLimits counts a request's parameters against maxRequestParams.
+type requestLimits struct {
+	params int
+}
+
+func tooMuch(message string) *GatewayError { return gatewayError("54000", message) }
+
+// isNull reports whether a raw member was absent or null.
+func isNull(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	return len(raw) == 0 || bytes.Equal(raw, []byte("null"))
+}
+
+// eachElement calls fn with each element of the JSON array raw, in order,
+// stopping at fn's first error. Absent and null are empty arrays.
+func eachElement(raw json.RawMessage, what string, fn func(json.RawMessage) error) error {
+	if isNull(raw) {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+		return badRequest(what + " must be an array")
+	}
+	for dec.More() {
+		var elem json.RawMessage
+		if err := dec.Decode(&elem); err != nil {
+			return badRequest(what + " must be an array")
+		}
+		if err := fn(elem); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// textParams turns one query's parameters into text, counting them against
+// the request's limit as it goes.
+func (lim *requestLimits) textParams(raw json.RawMessage) ([][]byte, error) {
+	var params [][]byte
+	err := eachElement(raw, "params", func(elem json.RawMessage) error {
+		if lim.params++; lim.params > maxRequestParams {
+			return tooMuch("a request takes at most 65535 parameters in all")
+		}
+		p, err := textParam(elem)
+		params = append(params, p)
+		return err
+	})
+	return params, err
 }
 
 // statement is one statement a request sends: the client's, or the BEGIN
@@ -68,26 +131,34 @@ func (q *httpQuery) readStatements(w http.ResponseWriter, req *http.Request) ([]
 		return nil, false, badRequest("the request body must be JSON: {\"query\": ..., \"params\": [...]} or {\"queries\": [...]}")
 	}
 
-	switch {
-	case body.Query != nil && body.Queries == nil:
-		s, err := clientStatement(*body.Query, body.Params)
+	var lim requestLimits
+	switch single, batch := body.Query != nil, !isNull(body.Queries); {
+	case single && !batch:
+		s, err := lim.clientStatement(*body.Query, body.Params)
 		if err != nil {
 			return nil, false, err
 		}
 		return []statement{s}, false, nil
-	case body.Query == nil && body.Queries != nil:
+	case batch && !single:
 		begin, err := beginStatement(req.Header)
 		if err != nil {
 			return nil, false, err
 		}
-		stmts := make([]statement, 0, len(*body.Queries)+2)
-		stmts = append(stmts, statement{sql: begin})
-		for _, in := range *body.Queries {
-			s, err := clientStatement(in.Query, in.Params)
-			if err != nil {
-				return nil, false, err
+		stmts := []statement{{sql: begin}}
+		err = eachElement(body.Queries, "queries", func(elem json.RawMessage) error {
+			if len(stmts) > maxBatchQueries {
+				return tooMuch("a batch takes at most 1000 queries")
 			}
+			var in batchQuery
+			if err := json.Unmarshal(elem, &in); err != nil {
+				return badRequest("each batch entry must be {\"query\": ..., \"params\": [...]}")
+			}
+			s, err := lim.clientStatement(in.Query, in.Params)
 			stmts = append(stmts, s)
+			return err
+		})
+		if err != nil {
+			return nil, false, err
 		}
 		return append(stmts, statement{sql: "COMMIT"}), true, nil
 	default:
@@ -99,20 +170,13 @@ func badRequest(message string) *GatewayError { return gatewayError("08P01", mes
 
 // clientStatement checks one of the client's queries and turns its
 // parameters into text.
-func clientStatement(sql string, raw []json.RawMessage) (statement, error) {
+func (lim *requestLimits) clientStatement(sql string, raw json.RawMessage) (statement, error) {
 	if strings.IndexByte(sql, 0) >= 0 {
 		return statement{}, badRequest("a query must not contain a NUL byte")
 	}
-	if len(raw) > math.MaxUint16 {
-		return statement{}, badRequest("a query takes at most 65535 parameters")
-	}
-	params := make([][]byte, len(raw))
-	for i, r := range raw {
-		p, err := textParam(r)
-		if err != nil {
-			return statement{}, err
-		}
-		params[i] = p
+	params, err := lim.textParams(raw)
+	if err != nil {
+		return statement{}, err
 	}
 	return statement{sql: sql, params: params, class: classifyStatement(sql), client: true}, nil
 }

@@ -1,14 +1,17 @@
 package plane
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -61,57 +64,204 @@ func (r *queryResult) setTag(tag string) {
 	}
 }
 
-// MarshalJSON writes the result as the driver reads it. Rows are arrays in
-// array mode and otherwise objects keyed by field name, in field order.
-func (r *queryResult) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.WriteString(`{"command":`)
-	writeJSONValue(&buf, r.command)
-	buf.WriteString(`,"rowCount":`)
-	writeJSONValue(&buf, r.rowCount)
-	buf.WriteString(`,"rowAsArray":`)
-	writeJSONValue(&buf, r.asArray)
-	buf.WriteString(`,"fields":`)
-	fields := r.fields
-	if fields == nil {
-		fields = []fieldJSON{}
+// What a result costs against the request's cap. The charge for each part
+// is at least what it holds in memory until the response is written, and at
+// least what it adds to the encoded response, which streams out and is
+// never held whole. So the cap bounds both.
+const (
+	// resultCost is one statement's result apart from its fields and rows:
+	// the struct, and its command, rowCount and rowAsArray keys.
+	resultCost = 128
+	// fieldCost is one field apart from its name: the struct, and its keys
+	// with the widest values they can have.
+	fieldCost = 160
+	// rowCost's parts. A DataRow on the wire is 6 bytes, 4 more per value and
+	// the value bytes. In memory a row is a slice header, and each value a
+	// pointer to a string header and its bytes. Encoded, a row adds two
+	// brackets and a comma, and each value a comma, besides the value's own
+	// JSON.
+	dataRowHeader = 6
+	rowOverhead   = 24
+	valueWire     = 4
+	valueOverhead = 24
+)
+
+// rowCost is what one DataRow costs: never less than its wire size plus 24
+// bytes a row and 8 a value, so empty and all-NULL rows count. In object
+// mode every value also repeats its field's name.
+func rowCost(values [][]byte, fields []fieldJSON, arrayMode bool) int {
+	cost := dataRowHeader + rowOverhead
+	for i, v := range values {
+		cost += valueWire + valueOverhead
+		if v == nil {
+			cost += len("null")
+		} else {
+			cost += jsonStringLen(v)
+		}
+		if !arrayMode {
+			name := ""
+			if i < len(fields) {
+				name = fields[i].Name
+			}
+			// The name, quoted, and the colon, with a byte to spare.
+			cost += jsonStringLen([]byte(name)) + 2
+		}
 	}
-	writeJSONValue(&buf, fields)
-	buf.WriteString(`,"rows":[`)
-	open, end := byte('{'), byte('}')
+	return cost
+}
+
+// jsonStringLen is no less than the length of b encoded as a JSON string by
+// an Encoder with HTML escaping off, quotes included. It is never less than
+// len(b)+2. Quote, backslash, newline, return and tab take two bytes; other
+// control bytes may take six (\u00XX); an invalid UTF-8 byte becomes �,
+// six; U+2028 and U+2029 become   and  , six for three.
+func jsonStringLen(b []byte) int {
+	n := 2
+	for i := 0; i < len(b); {
+		c := b[i]
+		if c < utf8.RuneSelf {
+			switch {
+			case c == '"', c == '\\', c == '\n', c == '\r', c == '\t':
+				n += 2
+			case c < 0x20:
+				n += 6
+			default:
+				n++
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRune(b[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			n += 6
+		case r == ' ', r == ' ':
+			n += 6
+		default:
+			n += size
+		}
+		i += size
+	}
+	return n
+}
+
+// jsonStream writes JSON straight to the response through a small buffer,
+// with HTML escaping off. Each value is encoded into scratch, which holds one
+// value at a time and is reused, and copied out without the Encoder's
+// newline. After the first write error it writes nothing more.
+type jsonStream struct {
+	w       *bufio.Writer
+	scratch bytes.Buffer
+	enc     *json.Encoder
+	err     error
+}
+
+func newJSONStream(w io.Writer) *jsonStream {
+	s := &jsonStream{w: bufio.NewWriterSize(w, 32<<10)}
+	s.enc = json.NewEncoder(&s.scratch)
+	s.enc.SetEscapeHTML(false)
+	return s
+}
+
+// raw writes JSON text as it is.
+func (s *jsonStream) raw(text string) {
+	if s.err == nil {
+		_, s.err = s.w.WriteString(text)
+	}
+}
+
+// value writes v's JSON.
+func (s *jsonStream) value(v any) {
+	if s.err != nil {
+		return
+	}
+	s.scratch.Reset()
+	if s.err = s.enc.Encode(v); s.err == nil {
+		_, s.err = s.w.Write(bytes.TrimSuffix(s.scratch.Bytes(), []byte("\n")))
+	}
+}
+
+func (s *jsonStream) flush() {
+	if s.err == nil {
+		s.err = s.w.Flush()
+	}
+}
+
+// encode writes the result as the driver reads it. Rows are arrays in array
+// mode and otherwise objects keyed by field name, in field order.
+func (r *queryResult) encode(s *jsonStream) {
+	s.raw(`{"command":`)
+	if r.command != nil {
+		s.value(*r.command)
+	} else {
+		s.raw("null")
+	}
+	s.raw(`,"rowCount":`)
+	if r.rowCount != nil {
+		s.raw(strconv.FormatInt(*r.rowCount, 10))
+	} else {
+		s.raw("null")
+	}
+	s.raw(`,"rowAsArray":` + strconv.FormatBool(r.asArray) + `,"fields":`)
+	if r.fields == nil {
+		s.raw("[]")
+	} else {
+		s.value(r.fields)
+	}
+	s.raw(`,"rows":[`)
+	open, end := "{", "}"
 	if r.asArray {
-		open, end = '[', ']'
+		open, end = "[", "]"
 	}
 	for i, row := range r.rows {
 		if i > 0 {
-			buf.WriteByte(',')
+			s.raw(",")
 		}
-		buf.WriteByte(open)
+		s.raw(open)
 		for j, v := range row {
 			if j > 0 {
-				buf.WriteByte(',')
+				s.raw(",")
 			}
 			if !r.asArray {
 				name := ""
 				if j < len(r.fields) {
 					name = r.fields[j].Name
 				}
-				writeJSONValue(&buf, name)
-				buf.WriteByte(':')
+				s.value(name)
+				s.raw(":")
 			}
-			writeJSONValue(&buf, v)
+			if v == nil {
+				s.raw("null")
+			} else {
+				s.value(*v)
+			}
 		}
-		buf.WriteByte(end)
+		s.raw(end)
 	}
-	buf.WriteString("]}")
-	return buf.Bytes(), nil
+	s.raw("]}")
 }
 
-// writeJSONValue appends v's JSON. The values written here (strings,
-// numbers, booleans, fields) always encode.
-func writeJSONValue(buf *bytes.Buffer, v any) {
-	b, _ := json.Marshal(v)
-	buf.Write(b)
+// writeResults streams a 200 response: one result, or a batch's under
+// "results".
+func writeResults(w http.ResponseWriter, batch bool, results []*queryResult) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	s := newJSONStream(w)
+	if batch {
+		s.raw(`{"results":[`)
+	}
+	for i, r := range results {
+		if i > 0 {
+			s.raw(",")
+		}
+		r.encode(s)
+	}
+	if batch {
+		s.raw("]}")
+	}
+	s.raw("\n")
+	// A client that went away can't be told anything.
+	s.flush()
 }
 
 // errorBody is the error JSON: the fields the driver copies onto its
@@ -189,7 +339,9 @@ func writeHTTPError(w http.ResponseWriter, status int, body errorBody) {
 func writeHTTPJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
 }
 
 // setCORS lets any origin call /sql. The credentials travel in a header,

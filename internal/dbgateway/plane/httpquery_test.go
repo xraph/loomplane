@@ -545,6 +545,113 @@ func TestHTTPQueryResultCap(t *testing.T) {
 	}
 }
 
+// wantCapped checks that rec is the result-cap refusal and the lease was
+// broken.
+func (h *httpHarness) wantCapped(what string, rec *httptest.ResponseRecorder) {
+	h.t.Helper()
+	if code, _ := errorOf(h.t, rec, http.StatusBadRequest); code != "54000" {
+		h.t.Fatalf("%s: code = %s, want 54000", what, code)
+	}
+	if s := h.handle("r1").pool.Stats(); s.Open != 0 {
+		h.t.Fatalf("%s: pool = %+v, want the connection closed", what, s)
+	}
+}
+
+// Rows with no value bytes still cost memory and output: zero-column rows
+// and all-NULL rows count against the cap.
+func TestHTTPQueryResultCapCountsEmptyRows(t *testing.T) {
+	h := newHTTPHarness(t, nil)
+	h.q.maxResult = 10000
+
+	rec := h.post(`{"query":"SELECT FROM generate_series(1,3)"}`, nil)
+	jsonEq(t, `{"command":"SELECT","rowCount":3,"rowAsArray":true,"rows":[[],[],[]],"fields":[]}`, rec.Body.String())
+	h.wantCapped("zero-column rows", h.post(`{"query":"SELECT FROM generate_series(1,5000)"}`, nil))
+
+	rec = h.post(`{"query":"SELECT 2 NULLS AS c FROM generate_series(1,2)"}`, nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rows":[[null,null],[null,null]]`) {
+		t.Fatalf("NULL rows: %d %s", rec.Code, rec.Body)
+	}
+	h.wantCapped("all-NULL rows", h.post(`{"query":"SELECT 20 NULLS AS c FROM generate_series(1,500)"}`, nil))
+}
+
+// In object mode every value repeats its field's name, and that counts too.
+func TestHTTPQueryResultCapCountsFieldNames(t *testing.T) {
+	h := newHTTPHarness(t, nil)
+	h.q.maxResult = 10000
+	q := `{"query":"SELECT 2 NULLS AS ` + strings.Repeat("n", 200) + ` FROM generate_series(1,20)"}`
+	if rec := h.post(q, nil); rec.Code != http.StatusOK {
+		t.Fatalf("array mode: %d %s", rec.Code, rec.Body)
+	}
+	h.wantCapped("object mode", h.post(q, map[string]string{"Neon-Array-Mode": ""}))
+}
+
+// A value is charged what it costs once escaped, not its raw length.
+func TestHTTPQueryResultCapCountsEscaping(t *testing.T) {
+	h := newHTTPHarness(t, nil)
+	h.q.maxResult = 1000
+	if rec := h.post(`{"query":"SELECT $1 AS a","params":["`+strings.Repeat("x", 300)+`"]}`, nil); rec.Code != http.StatusOK {
+		t.Fatalf("plain value: %d %s", rec.Code, rec.Body)
+	}
+	h.wantCapped("escaped value", h.post(`{"query":"SELECT $1 AS a","params":["`+strings.Repeat(`\u0001`, 300)+`"]}`, nil))
+}
+
+func TestJSONStringLenBoundsEncoding(t *testing.T) {
+	for _, s := range []string{"", "plain", `quote " and \ slash`, "\n\r\t\b\f\x00\x1f", "<a&b>", "naïve 日本 🙂",
+		"line sep ", "bad \xff\xfe utf8", strings.Repeat("\x01", 50)} {
+		var buf strings.Builder
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(s); err != nil {
+			t.Fatal(err)
+		}
+		encoded := len(buf.String()) - 1 // the newline
+		if got := jsonStringLen([]byte(s)); got < encoded || got < len(s)+2 {
+			t.Errorf("jsonStringLen(%q) = %d, encoded %d bytes", s, got, encoded)
+		}
+	}
+}
+
+func TestHTTPQueryDoesNotEscapeHTML(t *testing.T) {
+	h := newHTTPHarness(t, nil)
+	rec := h.post(`{"query":"SELECT $1 AS a","params":["<a&b>"]}`, nil)
+	if !strings.Contains(rec.Body.String(), `["<a&b>"]`) {
+		t.Fatalf("body = %s, want the value unescaped", rec.Body)
+	}
+}
+
+func TestHTTPQueryRequestLimits(t *testing.T) {
+	h := newHTTPHarness(t, nil)
+	batch := func(n int) string {
+		qs := make([]string, n)
+		for i := range qs {
+			qs[i] = `{"query":"SELECT 1"}`
+		}
+		return `{"queries":[` + strings.Join(qs, ",") + `]}`
+	}
+	params := func(n int) string { return strings.TrimSuffix(strings.Repeat(`"1",`, n), ",") }
+
+	if rec := h.post(batch(maxBatchQueries), nil); rec.Code != http.StatusOK {
+		t.Fatalf("a batch of 1000: %d %s", rec.Code, rec.Body)
+	}
+	if rec := h.post(`{"query":"SELECT 1","params":[`+params(maxRequestParams)+`]}`, nil); rec.Code != http.StatusOK {
+		t.Fatalf("65535 parameters: %d %s", rec.Code, rec.Body)
+	}
+	dials := h.dialer.dials()
+	for name, body := range map[string]string{
+		"1001 queries":                  batch(maxBatchQueries + 1),
+		"65536 parameters":              `{"query":"SELECT 1","params":[` + params(maxRequestParams+1) + `]}`,
+		"65536 parameters over a batch": `{"queries":[{"query":"SELECT 1","params":[` + params(40000) + `]},{"query":"SELECT 2","params":[` + params(25536) + `]}]}`,
+	} {
+		code, msg := errorOf(t, h.post(body, nil), http.StatusBadRequest)
+		if code != "54000" || !strings.Contains(msg, "at most") {
+			t.Fatalf("%s: error = %s %q, want 54000 naming the limit", name, code, msg)
+		}
+	}
+	if h.dialer.dials() != dials || h.dialer.server(0).saw("Parse  SELECT 2") {
+		t.Fatal("a request over a limit reached the backend")
+	}
+}
+
 func TestHTTPQueryUnknownRoute(t *testing.T) {
 	h := newHTTPHarness(t, nil)
 	rec := h.post(`{"query":"SELECT 1"}`, map[string]string{
