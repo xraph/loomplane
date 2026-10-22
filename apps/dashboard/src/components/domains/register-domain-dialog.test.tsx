@@ -636,6 +636,14 @@ it("follows each preview's sandbox answer in the consent line", async () => {
     screen.getByText("USD 10.11 for the first year, not charged in the sandbox")
   ).toBeTruthy()
   expect(screen.queryByRole("checkbox", { name: consent })).toBeNull()
+  expect(
+    screen.getByText("Sandbox registrations don't create a DNS zone.")
+  ).toBeTruthy()
+  expect(
+    screen.queryByText(
+      "Loomplane creates the DNS zone, so you can attach hostnames to any project."
+    )
+  ).toBeNull()
   await userEvent.click(sandboxConsent)
 
   // The next preview answers from the production registrar.
@@ -648,6 +656,14 @@ it("follows each preview's sandbox answer in the consent line", async () => {
   expect(
     screen.getByText("USD 10.11 for the first year, charged now")
   ).toBeTruthy()
+  expect(
+    screen.getByText(
+      "Loomplane creates the DNS zone, so you can attach hostnames to any project."
+    )
+  ).toBeTruthy()
+  expect(
+    screen.queryByText("Sandbox registrations don't create a DNS zone.")
+  ).toBeNull()
   expect(screen.queryByText("Sandbox")).toBeNull()
   expect(screen.queryByText(/Nothing is charged/)).toBeNull()
 })

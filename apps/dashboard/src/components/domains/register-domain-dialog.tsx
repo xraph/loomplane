@@ -341,7 +341,10 @@ function Flow({ onClose }: { onClose: () => void }) {
       ["Contacts", "The default contact on this Cloudflare account"],
       [
         "After purchase",
-        "Loomplane creates the DNS zone, so you can attach hostnames to any project.",
+        // Not in the mock: a sandbox purchase leaves the real account alone.
+        quoted?.sandbox
+          ? "Sandbox registrations don't create a DNS zone."
+          : "Loomplane creates the DNS zone, so you can attach hostnames to any project.",
       ],
     ]
     const box = "mt-[3px] size-4 flex-none accent-[var(--primary)]"
