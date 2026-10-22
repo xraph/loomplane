@@ -111,6 +111,29 @@ func TestKubernetesRouteBindingQuery(t *testing.T) {
 	exec(`UPDATE loomplane_cloud_project_grants SET target_ids='{target_k8s}',revision=revision+1 WHERE org_id='org' AND cloud_id='cloud_1' AND project_id='shop'`)
 	check("under a grant naming its target", gateway, placed)
 
+	// A placement left over from another Cloud, whose targets run on a
+	// different connection, doesn't route through this binding's connection.
+	if err := connections.NewPgStore(pg).CreateConnection(ctx, &connections.Connection{ID: "conn_other", OrgID: "org", Cloud: "kubernetes", Name: "Other", Status: connections.StatusReady, Details: details, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.CreateProfile(ctx, &cloudprofiles.Profile{ID: "cloud_2", OrgID: "org", ProjectID: "shop", Name: "cloud_2", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.CreateTarget(ctx, &cloudprofiles.Target{ID: "target_other", OrgID: "org", ProjectID: "shop", CloudID: "cloud_2", Name: "other", DisplayName: "Other", Provider: "kubernetes", ConnectionID: "conn_other", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	staleTarget, staleDefault := id.New(id.PrefixInstance), id.New(id.PrefixInstance)
+	for _, instance := range []id.ID{staleTarget, staleDefault} {
+		exec(`INSERT INTO cp_instances VALUES($1,'org',NULL,'{}',jsonb_build_array(jsonb_build_object('name','gateway','ports','[{"container":8080}]'::jsonb)),'{}','running')`, instance.String())
+	}
+	binding("stale--gateway", staleTarget, `{"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_2","target_id":"target_other"}}`)
+	binding("staledefault--gateway", staleDefault, `{"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_2","default":true}}`)
+	for _, service := range []string{"stale--gateway", "staledefault--gateway"} {
+		if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", RouteInput{EnvironmentID: "prod", Service: service, CloudID: "cloud_2", Port: 8080}); !errors.Is(resolveErr, ErrNotFound) {
+			t.Fatalf("%s resolved through another Cloud's connection: %+v %v", service, b, resolveErr)
+		}
+	}
+
 	// Preview and apply recheck the same binding. Apply stores the backend and
 	// the empty Cloud of an environment-connection route.
 	exec(`INSERT INTO loomplane_dns_zones(id,org_id,name,connection_id,revision,body) VALUES('zone','org','example.com','',1,$1)`, `{"id":"zone","org_id":"org","name":"example.com","mode":"external","project_ids":["shop"],"verified_at":"2026-11-05T12:00:00Z","revision":1}`)

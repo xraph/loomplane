@@ -120,7 +120,8 @@ func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 }
 
 // A Kubernetes binding routes to its connection's ingress. With a Cloud ID it
-// needs a live grant covering its placement, a target or the Cloud's default.
+// needs a live grant covering its placement, a target or the Cloud's default,
+// and that target, or one of the Cloud's for the default, on its connection.
 // Without one it must have no placement at all: it runs on the environment's
 // own connection, and the project's infrastructure permission authorizes it.
 const kubernetesRouteBindingQuery = `SELECT b.id,c.id,c.generation,b.external_id,coalesce(b.config->'cloud_placement'->>'target_id',''),coalesce(c.details->>'namespace_uid',''),coalesce(c.details->>'namespace',''),coalesce(c.details->>'ingress_class',''),coalesce(c.details->>'ingress_address','')
@@ -133,8 +134,9 @@ const kubernetesRouteBindingQuery = `SELECT b.id,c.id,c.generation,b.external_id
  AND CASE WHEN $5='' THEN coalesce(b.config->'cloud_placement','null'::jsonb)='null'::jsonb
  ELSE b.config->'cloud_placement'->>'cloud_id'=$5 AND EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=b.org_id AND g.cloud_id=$5 AND g.project_id=b.project_id AND NOT g.revoked
  AND CASE WHEN coalesce(b.config->'cloud_placement'->>'target_id','')='' THEN coalesce((b.config->'cloud_placement'->>'default')::boolean,false) AND cardinality(g.target_ids)=0
+ AND EXISTS(SELECT 1 FROM loomplane_cloud_targets t WHERE t.org_id=b.org_id AND t.cloud_id=$5 AND t.connection_id=c.id)
  ELSE (cardinality(g.target_ids)=0 OR b.config->'cloud_placement'->>'target_id'=ANY(g.target_ids))
- AND EXISTS(SELECT 1 FROM loomplane_cloud_targets t WHERE t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id') END) END
+ AND EXISTS(SELECT 1 FROM loomplane_cloud_targets t WHERE t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id' AND t.connection_id=c.id) END) END
  ORDER BY b.subject='service' DESC`
 
 // scanKubernetesRouteBinding leaves the config digest, release and container
