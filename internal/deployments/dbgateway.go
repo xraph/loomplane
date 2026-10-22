@@ -53,6 +53,12 @@ const dbGatewayPort = "5432"
 // a deploy never mints them for a gateway that exists.
 var errDBGatewayKeysMissing = errors.New("the database gateway's keys are missing; remove the gateway and deploy again")
 
+// errDBGatewayTrustChanged is a deploy whose plan recorded other trust keys
+// than the ones Loomplane has now, as when a signing key was added or
+// expired in between. Deploying would leave the gateway's recorded
+// configuration naming keys it wasn't given.
+var errDBGatewayTrustChanged = errors.New("the database gateway signing keys changed after this deployment was planned; plan it again so the gateway gets the keys Loomplane has now")
+
 // DatabaseGatewayStore records each environment's database gateway and its
 // routes. *dbgateway.Store is the real one.
 type DatabaseGatewayStore interface {
@@ -102,6 +108,10 @@ func (r *Runner) ensureDatabaseGateway(ctx context.Context, d *Deployment, a *pl
 	}
 	if len(trust) == 0 {
 		return nil, nil, dbgateway.ErrNotConfigured
+	}
+	// A plan from before plans recorded the keys has no Trust to check.
+	if cfg.Trust != "" && plane.TrustDigest(trust) != cfg.Trust {
+		return nil, nil, errDBGatewayTrustChanged
 	}
 	control, err := dbGatewayControlURL(r.publicURL)
 	if err != nil {

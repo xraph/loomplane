@@ -189,7 +189,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
-		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
+		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics, DatabaseGatewayTrust: databaseGatewayTrust(c),
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})
 	deployStore := deployments.NewPgStore(pg)
@@ -335,7 +335,7 @@ func (e *Extension) Register(fapp forge.App) error {
 }
 
 // databaseGatewayTrust returns the trust keys of the database gateway
-// service, looked up when a gateway deploys: the database gateway extension
+// service, looked up when a gateway is planned or deploys: the database gateway extension
 // registers after this one and provides the service then. A service that
 // isn't there is a wiring error, which it reports; one with no signing key
 // gives no keys, which the deploy reports as that. A key outside its window

@@ -115,23 +115,29 @@ func (l *recordingLogger) Error(msg string, _ ...forge.Field) {
 	l.lines = append(l.lines, "error: "+msg)
 }
 
-// Loomplane starts with a key outside its window and says so loudly, and
-// warns a month before one expires.
+// Loomplane starts with no key it can sign with and says so loudly, and
+// warns a month before the last key expires. A key that takes over later
+// puts the warning off.
 func TestWarnAboutKeyWindow(t *testing.T) {
 	now := time.Now()
+	window := func(from, until time.Duration) dbgateway.SigningKey {
+		return dbgateway.SigningKey{Trust: plane.TrustKey{NotBefore: now.Add(from), NotAfter: now.Add(until)}}
+	}
+	month := 30 * 24 * time.Hour
 	for _, tc := range []struct {
 		name  string
 		ready error
-		after time.Duration
+		keys  []dbgateway.SigningKey
 		want  string
 	}{
-		{"expired", dbgateway.ErrSigningKeyExpired, -time.Hour, "error: the database gateway signing key in dbgateway.signing_key_file has expired"},
-		{"not yet valid", dbgateway.ErrSigningKeyNotYetValid, 48 * time.Hour, "error: the database gateway signing key in dbgateway.signing_key_file isn't valid yet"},
-		{"expires within 30 days", nil, 29 * 24 * time.Hour, "warn: the database gateway signing key in dbgateway.signing_key_file expires within 30 days"},
-		{"a long way off", nil, 31 * 24 * time.Hour, ""},
+		{"expired", dbgateway.ErrSigningKeyExpired, []dbgateway.SigningKey{window(-2*time.Hour, -time.Hour)}, "error: every database gateway signing key in dbgateway.signing_key_file has expired"},
+		{"not yet valid", dbgateway.ErrSigningKeyNotYetValid, []dbgateway.SigningKey{window(48*time.Hour, month)}, "error: no database gateway signing key in dbgateway.signing_key_file is valid yet"},
+		{"expires within 30 days", nil, []dbgateway.SigningKey{window(-time.Hour, month-24*time.Hour)}, "warn: the last database gateway signing key in dbgateway.signing_key_file expires within 30 days"},
+		{"a long way off", nil, []dbgateway.SigningKey{window(-time.Hour, month+24*time.Hour)}, ""},
+		{"replaced in time", nil, []dbgateway.SigningKey{window(-time.Hour, 24*time.Hour), window(12*time.Hour, 3*month)}, ""},
 	} {
 		log := &recordingLogger{Logger: forge.NewNoopLogger()}
-		warnAboutKeyWindow(log, tc.ready, plane.TrustKey{NotBefore: now.Add(-time.Hour), NotAfter: now.Add(tc.after)}, now)
+		warnAboutKeyWindow(log, tc.ready, tc.keys, now)
 		switch {
 		case tc.want == "" && len(log.lines) != 0:
 			t.Errorf("%s: logged %q", tc.name, log.lines)

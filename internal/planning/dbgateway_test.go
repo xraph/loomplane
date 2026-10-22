@@ -1,14 +1,18 @@
 package planning
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/dbgateway"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/providers"
 )
 
@@ -197,6 +201,62 @@ func TestPlanDatabaseGatewayFollowsAnUpgrade(t *testing.T) {
 	for _, name := range []string{"api", "web"} {
 		if a := action(t, r, "service:"+name); a.Op != Keep {
 			t.Fatalf("%s is %s (%s) when only the gateway's code changed", name, a.Op, a.Reason)
+		}
+	}
+}
+
+// The gateway's configuration records the keys it trusts, so a signing
+// key added, renewed or expired redeploys it with the keys it needs, and
+// the apps behind it stay as they are.
+func TestPlanDatabaseGatewayFollowsItsTrustKeys(t *testing.T) {
+	plan := func(trust string, bindings ...*Binding) *Result {
+		t.Helper()
+		in := dbgwInput(t, dbgwManifest, exampleZone, bindings...)
+		in.DatabaseGatewayTrust = trust
+		r := Compute(in)
+		if len(r.Problems) > 0 {
+			t.Fatalf("problems: %+v", r.Problems)
+		}
+		return r
+	}
+	first := plan("tkaaaaaaaaaaaaaaaa")
+	if got := action(t, first, "service:db-gateway").Service.DatabaseGateway.Trust; got != "tkaaaaaaaaaaaaaaaa" {
+		t.Fatalf("trust %q", got)
+	}
+	live := deployed(t, first)
+	if gw := action(t, plan("tkaaaaaaaaaaaaaaaa", live...), "service:db-gateway"); gw.Op != Keep {
+		t.Fatalf("the same keys planned %s (%s)", gw.Op, gw.Reason)
+	}
+	r := plan("tkbbbbbbbbbbbbbbbb", live...)
+	if gw := action(t, r, "service:db-gateway"); gw.Op != Update || gw.Service.DatabaseGateway.Trust != "tkbbbbbbbbbbbbbbbb" {
+		t.Fatalf("new keys planned db-gateway as %s (%s)", gw.Op, gw.Reason)
+	}
+	for _, name := range []string{"api", "web"} {
+		if a := action(t, r, "service:"+name); a.Op != Keep {
+			t.Fatalf("%s is %s (%s) when only the gateway's trust keys changed", name, a.Op, a.Reason)
+		}
+	}
+}
+
+// A plan records the digest of the keys the gateway would trust, and none
+// when they can't be had, which the deploy then explains.
+func TestServiceDatabaseGatewayTrust(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := plane.TrustKey{PublicKey: pub, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	for name, tc := range map[string]struct {
+		trust func() ([]plane.TrustKey, error)
+		want  string
+	}{
+		"no lookup": {nil, ""},
+		"a failure": {func() ([]plane.TrustKey, error) { return nil, dbgateway.ErrSigningKeyExpired }, ""},
+		"no keys":   {func() ([]plane.TrustKey, error) { return []plane.TrustKey{}, nil }, ""},
+		"a key":     {func() ([]plane.TrustKey, error) { return []plane.TrustKey{key}, nil }, plane.TrustDigest([]plane.TrustKey{key})},
+	} {
+		if got := NewService(Deps{DatabaseGatewayTrust: tc.trust}).databaseGatewayTrust(); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
 		}
 	}
 }

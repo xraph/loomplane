@@ -14,6 +14,7 @@ import (
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
@@ -97,6 +98,7 @@ type Service struct {
 	now               func() time.Time
 	warn              func(msg string, err error)
 	telemetry         *telemetry.Recorder
+	dbTrust           func() ([]plane.TrustKey, error)
 }
 
 // Deps are what a Service needs.
@@ -122,6 +124,10 @@ type Deps struct {
 	Warn func(msg string, err error)
 	// Telemetry counts plans and decisions. It may be nil.
 	Telemetry *telemetry.Recorder
+	// DatabaseGatewayTrust returns the keys a database gateway deployed
+	// now would trust, which a plan records so a change to them redeploys
+	// the gateway. Nil, or an error, records none, and the deploy says why.
+	DatabaseGatewayTrust func() ([]plane.TrustKey, error)
 }
 
 // NewService returns a Service.
@@ -134,7 +140,7 @@ func NewService(d Deps) *Service {
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
 		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
-		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry,
+		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 	}
 }
 
@@ -574,10 +580,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", routeErr
 	}
 	var zones []cloudinfra.ProjectZone
+	var trust string
 	if len(dbGatewayResources(rev.Manifest, plan.Environment)) > 0 {
 		if zones, err = s.projectZones(ctx, plan); err != nil {
 			return nil, "", err
 		}
+		trust = s.databaseGatewayTrust()
 	}
 	var result *Result
 	if resolutionErr != nil {
@@ -592,7 +600,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result = &Result{Problems: []Finding{finding}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
 		result = Compute(Input{
-			Catalog: plan.Catalog, Routes: routes, Zones: zones,
+			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
 			Federation: federation, CloudPlacements: placements,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
@@ -620,6 +628,21 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", err
 	}
 	return result, revision, nil
+}
+
+// databaseGatewayTrust is plane.TrustDigest of the keys a database gateway
+// deployed now would trust, or "" when they can't be had. A plan that
+// records "" for a gateway that runs with keys redeploys it, and that
+// deploy fails saying what's wrong with the keys.
+func (s *Service) databaseGatewayTrust() string {
+	if s.dbTrust == nil {
+		return ""
+	}
+	keys, err := s.dbTrust()
+	if err != nil {
+		return ""
+	}
+	return plane.TrustDigest(keys)
 }
 
 func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]ConnectionOption, error) {

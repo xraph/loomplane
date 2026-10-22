@@ -2,6 +2,7 @@ package dbgateway
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -26,11 +27,12 @@ var (
 	// ErrNotConfigured means no signing key is configured, so the service
 	// can't sign snapshots.
 	ErrNotConfigured = errors.New("the database gateway signing key is not configured")
-	// ErrSigningKeyExpired means the signing key's not_after has passed, so
-	// the service signs nothing until a new key is configured.
+	// ErrSigningKeyExpired means every signing key's not_after has passed,
+	// so the service signs nothing until a new key is configured.
 	ErrSigningKeyExpired = errors.New("the database gateway signing key has expired; put a key with an open window in dbgateway.signing_key_file and restart Loomplane")
-	// ErrSigningKeyNotYetValid means the signing key's not_before is still
-	// to come. The service starts signing once it passes.
+	// ErrSigningKeyNotYetValid means no signing key's window is open and
+	// one's not_before is still to come. The service starts signing once
+	// it passes.
 	ErrSigningKeyNotYetValid = errors.New("the database gateway signing key isn't valid yet; its not_before is still to come")
 	// ErrNoHoldHandler is every hold in Phase 1: nothing brings a route up
 	// on demand yet.
@@ -90,8 +92,7 @@ type Auditor interface {
 type Service struct {
 	store storage
 	urls  ResourceURLs
-	key   ed25519.PrivateKey
-	trust plane.TrustKey
+	keys  []SigningKey
 	now   func() time.Time
 	// verifiers caches route verifiers between compiles, so a poll that
 	// finds nothing changed derives no key.
@@ -107,47 +108,101 @@ type Service struct {
 	Audit Auditor
 }
 
-// NewService returns the service. A nil key leaves it unconfigured: it signs
-// nothing, and Configured reports false.
-func NewService(store *Store, urls ResourceURLs, key ed25519.PrivateKey, trust plane.TrustKey, now func() time.Time) *Service {
-	return newService(store, urls, key, trust, now)
+// NewService returns the service, signing with keys as LoadSigningKeys
+// returns them. No keys leave it unconfigured: it signs nothing, and
+// Configured reports false.
+func NewService(store *Store, urls ResourceURLs, keys []SigningKey, now func() time.Time) *Service {
+	return newService(store, urls, keys, now)
 }
 
-func newService(store storage, urls ResourceURLs, key ed25519.PrivateKey, trust plane.TrustKey, now func() time.Time) *Service {
+func newService(store storage, urls ResourceURLs, keys []SigningKey, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: store, urls: urls, key: key, trust: trust, now: now, verifiers: newVerifierCache()}
+	keys = slices.DeleteFunc(slices.Clone(keys), func(k SigningKey) bool { return len(k.Private) != ed25519.PrivateKeySize })
+	return &Service{store: store, urls: urls, keys: keys, now: now, verifiers: newVerifierCache()}
 }
 
 // Configured reports whether the service has a key to sign snapshots with,
 // whether or not its window is open.
-func (s *Service) Configured() bool { return len(s.key) == ed25519.PrivateKeySize }
+func (s *Service) Configured() bool { return len(s.keys) > 0 }
+
+// signingKey returns the key to sign with at now: of the keys whose window
+// is open, the one that opened last, so a new key takes over from the old
+// at its not_before. Two that opened together go by the later not_after,
+// then by ID. Outside every window it returns Ready's error.
+func (s *Service) signingKey(now time.Time) (SigningKey, error) {
+	if !s.Configured() {
+		return SigningKey{}, ErrNotConfigured
+	}
+	var best *SigningKey
+	upcoming := false
+	for i := range s.keys {
+		k := &s.keys[i]
+		switch {
+		case now.Before(k.Trust.NotBefore):
+			upcoming = true
+		case !now.Before(k.Trust.NotAfter):
+		case best == nil || newerKey(k.Trust, best.Trust):
+			best = k
+		}
+	}
+	switch {
+	case best != nil:
+		return *best, nil
+	case upcoming:
+		return SigningKey{}, ErrSigningKeyNotYetValid
+	}
+	return SigningKey{}, ErrSigningKeyExpired
+}
+
+// newerKey reports whether a opened after b, by the order signingKey uses.
+func newerKey(a, b plane.TrustKey) bool {
+	if c := a.NotBefore.Compare(b.NotBefore); c != 0 {
+		return c > 0
+	}
+	if c := a.NotAfter.Compare(b.NotAfter); c != 0 {
+		return c > 0
+	}
+	return a.ID() < b.ID()
+}
 
 // Ready says whether the service can sign a snapshot now: ErrNotConfigured
-// without a key, ErrSigningKeyNotYetValid or ErrSigningKeyExpired outside
-// the key's window, and nil inside it. A key that expires while Loomplane
-// runs stops being used then.
+// without a key, ErrSigningKeyNotYetValid or ErrSigningKeyExpired when no
+// key's window is open, and nil when one is. A key that expires while
+// Loomplane runs stops being used then, and one whose window opens takes
+// over then.
 func (s *Service) Ready() error {
-	now := s.now()
-	switch {
-	case !s.Configured():
-		return ErrNotConfigured
-	case now.Before(s.trust.NotBefore):
-		return ErrSigningKeyNotYetValid
-	case !now.Before(s.trust.NotAfter):
-		return ErrSigningKeyExpired
-	}
-	return nil
+	_, err := s.signingKey(s.now())
+	return err
 }
 
 // TrustKeys returns the keys a gateway should trust for this control plane's
-// snapshots, or none when no signing key is configured.
+// snapshots: every key that hasn't expired, the ones still to open among
+// them, so a gateway deployed now takes snapshots from the key in use and
+// from the one that will replace it. It returns none when no signing key is
+// configured or every one has expired. The order is by window, and a key
+// renewed with another window is there once per window.
 func (s *Service) TrustKeys() []plane.TrustKey {
-	if !s.Configured() {
-		return []plane.TrustKey{}
+	now := s.now()
+	trust := []plane.TrustKey{}
+	for _, k := range s.keys {
+		if now.Before(k.Trust.NotAfter) {
+			trust = append(trust, k.Trust)
+		}
 	}
-	return []plane.TrustKey{s.trust}
+	slices.SortStableFunc(trust, func(a, b plane.TrustKey) int {
+		if newerKey(a, b) {
+			return 1
+		}
+		if newerKey(b, a) {
+			return -1
+		}
+		return 0
+	})
+	return slices.CompactFunc(trust, func(a, b plane.TrustKey) bool {
+		return a.ID() == b.ID() && a.NotBefore.Equal(b.NotBefore) && a.NotAfter.Equal(b.NotAfter)
+	})
 }
 
 // Snapshot returns gw's signed snapshot, or nil when its version is not newer
@@ -155,7 +210,7 @@ func (s *Service) TrustKeys() []plane.TrustKey {
 // decides leaves out the sealed credentials, which are sealed afresh each
 // time, and covers them through the route verifiers, which are derived from
 // the same user and password. Waiting for something new is the caller's job.
-// Outside the signing key's window it returns Ready's error and signs
+// Outside every signing key's window it returns Ready's error and signs
 // nothing.
 func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*plane.SignedSnapshot, error) {
 	if err := s.Ready(); err != nil {
@@ -233,16 +288,23 @@ func (s *Service) compile(ctx context.Context, gw *Gateway) (plane.Snapshot, []S
 	if err != nil {
 		return plane.Snapshot{}, nil, "", err
 	}
-	digest, err := snapshotDigest(snap)
+	digest, err := snapshotDigest(snap, gw.SealingPublicKey)
 	if err != nil {
 		return plane.Snapshot{}, nil, "", err
 	}
 	return snap, skipped, digest, nil
 }
 
-// snapshotDigest is the hex SHA-256 of the snapshot's signed payload with no
-// version, issue time or key, and with the sealed credentials cleared.
-func snapshotDigest(snap plane.Snapshot) (string, error) {
+// snapshotDigest is the hex SHA-256 of the gateway's sealing public key and
+// the snapshot's signed payload with no version, issue time or key, and with
+// the sealed credentials cleared. The sealed credentials change on every
+// compile, so the digest covers what they're sealed to instead: a gateway
+// recorded with a new sealing key gets a new version, sealed to that key,
+// rather than keeping one it can't open.
+func snapshotDigest(snap plane.Snapshot, sealing *ecdh.PublicKey) (string, error) {
+	if sealing == nil {
+		return "", fmt.Errorf("%w: the gateway has no sealing key", ErrInvalid)
+	}
 	snap.Version, snap.IssuedAt, snap.KeyID = 0, time.Time{}, ""
 	snap.Routes = append([]plane.Route(nil), snap.Routes...)
 	for i := range snap.Routes {
@@ -252,17 +314,24 @@ func snapshotDigest(snap plane.Snapshot) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode the snapshot: %w", err)
 	}
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:]), nil
+	h := sha256.New()
+	h.Write(sealing.Bytes()) // always 32 bytes, so nothing runs into the payload
+	h.Write(payload)
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (s *Service) sign(snap plane.Snapshot, version, after uint64) (*plane.SignedSnapshot, error) {
 	if version <= after {
 		return nil, nil
 	}
+	now := s.now()
+	key, err := s.signingKey(now)
+	if err != nil {
+		return nil, err
+	}
 	snap.Version = version
-	snap.IssuedAt = s.now().UTC()
-	signed, err := plane.SignSnapshot(snap, s.key, s.trust.ID())
+	snap.IssuedAt = now.UTC()
+	signed, err := plane.SignSnapshot(snap, key.Private, key.Trust.ID())
 	if err != nil {
 		return nil, err
 	}
