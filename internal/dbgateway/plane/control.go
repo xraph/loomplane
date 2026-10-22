@@ -135,8 +135,9 @@ func (c *ControlClient) do(ctx context.Context, method, leaf, query string, body
 
 // Poll waits for a snapshot newer than after. The control plane holds the
 // request for up to 25s; a nil snapshot and a nil error mean it had nothing
-// new. Poll doesn't verify what it returns.
-func (c *ControlClient) Poll(ctx context.Context, after uint64) (*Snapshot, error) {
+// new. Poll doesn't verify what it returns: VerifySnapshot does, over the
+// payload bytes exactly as they arrived.
+func (c *ControlClient) Poll(ctx context.Context, after uint64) (*SignedSnapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, pollTimeout)
 	defer cancel()
 	status, reply, err := c.do(ctx, http.MethodGet, "snapshot", "after="+strconv.FormatUint(after, 10), nil, maxSnapshotBody)
@@ -147,9 +148,9 @@ func (c *ControlClient) Poll(ctx context.Context, after uint64) (*Snapshot, erro
 	case http.StatusNoContent:
 		return nil, nil
 	case http.StatusOK:
-		var s Snapshot
+		var s SignedSnapshot
 		if err := json.Unmarshal(reply, &s); err != nil {
-			return nil, errors.New("control plane snapshot: reply is not a snapshot")
+			return nil, errors.New("control plane snapshot: reply is not a signed snapshot")
 		}
 		return &s, nil
 	}

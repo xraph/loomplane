@@ -130,7 +130,7 @@ func (s *Service) TrustKeys() []plane.TrustKey {
 // decides leaves out the sealed credentials, which are sealed afresh each
 // time, and covers them through the route verifiers, which are derived from
 // the same user and password. Waiting for something new is the caller's job.
-func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*plane.Snapshot, error) {
+func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*plane.SignedSnapshot, error) {
 	if !s.Configured() {
 		return nil, ErrNotConfigured
 	}
@@ -229,7 +229,7 @@ func snapshotDigest(snap plane.Snapshot) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (s *Service) sign(snap plane.Snapshot, version, after uint64) (*plane.Snapshot, error) {
+func (s *Service) sign(snap plane.Snapshot, version, after uint64) (*plane.SignedSnapshot, error) {
 	if version <= after {
 		return nil, nil
 	}

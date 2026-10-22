@@ -111,7 +111,7 @@ type fakeControl struct {
 	holds   []string
 	live    int
 	// snapshot answers a poll after version N; nil answers 204.
-	snapshot func(after uint64) *Snapshot
+	snapshot func(after uint64) *SignedSnapshot
 	// holdStatus is the status Hold gets; 0 means 204.
 	holdStatus int
 }
@@ -218,7 +218,7 @@ func newClient(t *testing.T) (*ControlClient, *fakeControl) {
 func TestControlClientPoll(t *testing.T) {
 	c, ctrl := newClient(t)
 	want := signed(t, sampleSnapshot(7), ctrl.trust, ctrl.priv)
-	ctrl.snapshot = func(after uint64) *Snapshot {
+	ctrl.snapshot = func(after uint64) *SignedSnapshot {
 		if after >= 7 {
 			return nil
 		}

@@ -51,7 +51,7 @@ func (f *fakeGateways) VerifyRequest(r *http.Request, body []byte, _ time.Time) 
 	return &dbgateway.Gateway{OrgID: "org_1", ID: "dbgw_1"}, nil
 }
 
-func (f *fakeGateways) Snapshot(_ context.Context, gw *dbgateway.Gateway, after uint64) (*plane.Snapshot, error) {
+func (f *fakeGateways) Snapshot(_ context.Context, gw *dbgateway.Gateway, after uint64) (*plane.SignedSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.polls++
@@ -61,7 +61,11 @@ func (f *fakeGateways) Snapshot(_ context.Context, gw *dbgateway.Gateway, after 
 	if f.version <= after {
 		return nil, nil
 	}
-	return &plane.Snapshot{GatewayID: gw.ID, Version: f.version, Routes: []plane.Route{}, Signature: []byte("sig")}, nil
+	payload, err := json.Marshal(plane.Snapshot{GatewayID: gw.ID, Version: f.version, Routes: []plane.Route{}, KeyID: "key-1"})
+	if err != nil {
+		return nil, err
+	}
+	return &plane.SignedSnapshot{Payload: payload, KeyID: "key-1", Signature: []byte("sig")}, nil
 }
 
 func (f *fakeGateways) setVersion(v uint64) {
@@ -161,8 +165,13 @@ func TestSnapshotLongPoll(t *testing.T) {
 	if time.Since(start) > 2*time.Second {
 		t.Fatal("the change didn't end the wait")
 	}
+	var env plane.SignedSnapshot
+	if err := json.Unmarshal(out.Body.Bytes(), &env); err != nil || env.KeyID != "key-1" || string(env.Signature) != "sig" {
+		t.Fatalf("signed snapshot %+v: %v", env, err)
+	}
+	// The payload is served as it was signed, inside the envelope.
 	var s plane.Snapshot
-	if err := json.Unmarshal(out.Body.Bytes(), &s); err != nil || s.Version != 4 || s.GatewayID != "dbgw_1" || string(s.Signature) != "sig" {
+	if err := json.Unmarshal(env.Payload, &s); err != nil || s.Version != 4 || s.GatewayID != "dbgw_1" {
 		t.Fatalf("snapshot %+v: %v", s, err)
 	}
 	if ct := out.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {

@@ -2,6 +2,7 @@ package plane
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -34,7 +35,7 @@ func TestLastGoodRoundTrip(t *testing.T) {
 		t.Fatalf("round trip changed the snapshot:\n got %+v\nwant %+v", got, want)
 	}
 	// A snapshot that came back from disk still verifies.
-	if err := VerifySnapshot(got, []TrustKey{trust}, "gw-1", snapshotNow); err != nil {
+	if _, err := VerifySnapshot(got, []TrustKey{trust}, "gw-1", snapshotNow); err != nil {
 		t.Fatalf("VerifySnapshot after load: %v", err)
 	}
 }
@@ -42,7 +43,7 @@ func TestLastGoodRoundTrip(t *testing.T) {
 func TestLastGoodIsNotPlaintext(t *testing.T) {
 	key := newSealKey(t)
 	path := filepath.Join(t.TempDir(), "last-good")
-	if err := SaveLastGood(path, key, sampleSnapshot(1)); err != nil {
+	if err := SaveLastGood(path, key, signedSample(t, 1)); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -58,7 +59,7 @@ func TestLastGoodIsNotPlaintext(t *testing.T) {
 
 func TestLastGoodWrongKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "last-good")
-	if err := SaveLastGood(path, newSealKey(t), sampleSnapshot(1)); err != nil {
+	if err := SaveLastGood(path, newSealKey(t), signedSample(t, 1)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadLastGood(path, newSealKey(t)); !errors.Is(err, ErrSealed) {
@@ -88,7 +89,7 @@ func TestLastGoodOverwriteLeavesOneFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "last-good")
 	for v := uint64(1); v <= 3; v++ {
-		if err := SaveLastGood(path, key, sampleSnapshot(v)); err != nil {
+		if err := SaveLastGood(path, key, signedSample(t, v)); err != nil {
 			t.Fatalf("SaveLastGood v%d: %v", v, err)
 		}
 	}
@@ -96,8 +97,8 @@ func TestLastGoodOverwriteLeavesOneFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != 3 {
-		t.Fatalf("Version = %d, want 3", got.Version)
+	if versionOf(t, got) != 3 {
+		t.Fatalf("Version = %d, want 3", versionOf(t, got))
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -112,16 +113,19 @@ func TestLastGoodFailedSaveLeavesOldFile(t *testing.T) {
 	key := newSealKey(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "last-good")
-	if err := SaveLastGood(path, key, sampleSnapshot(1)); err != nil {
+	if err := SaveLastGood(path, key, signedSample(t, 1)); err != nil {
 		t.Fatal(err)
 	}
 	// A nil key fails before anything is written.
-	if err := SaveLastGood(path, nil, sampleSnapshot(2)); err == nil {
+	if err := SaveLastGood(path, nil, signedSample(t, 2)); err == nil {
 		t.Fatal("SaveLastGood accepted a nil key")
 	}
 	got, err := LoadLastGood(path, key)
-	if err != nil || got.Version != 1 {
-		t.Fatalf("old file not intact: v%d, %v", got.Version, err)
+	if err != nil {
+		t.Fatalf("old file not readable: %v", err)
+	}
+	if v := versionOf(t, got); v != 1 {
+		t.Fatalf("old file not intact: v%d", v)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -130,4 +134,21 @@ func TestLastGoodFailedSaveLeavesOldFile(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("directory has %d entries after a failed save, want 1", len(entries))
 	}
+}
+
+// signedSample is sampleSnapshot(version) signed by a fresh key.
+func signedSample(t *testing.T, version uint64) SignedSnapshot {
+	t.Helper()
+	trust, priv := newTrustKey(t)
+	return signed(t, sampleSnapshot(version), trust, priv)
+}
+
+// versionOf decodes env's payload without verifying it.
+func versionOf(t *testing.T, env SignedSnapshot) uint64 {
+	t.Helper()
+	var s Snapshot
+	if err := json.Unmarshal(env.Payload, &s); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	return s.Version
 }

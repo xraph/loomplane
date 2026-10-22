@@ -132,12 +132,9 @@ func TestControlClientAgainstTheRoutes(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := plane.NewControlClient(srv.URL, gw.ID, signPriv)
-	s, err := client.Poll(ctx, 0)
+	s, err := pollVerified(t, client, 0, svc.TrustKeys(), gw.ID)
 	if err != nil || s == nil {
 		t.Fatalf("Poll: %+v %v", s, err)
-	}
-	if err = plane.VerifySnapshot(*s, svc.TrustKeys(), gw.ID, time.Now()); err != nil {
-		t.Fatalf("VerifySnapshot: %v", err)
 	}
 	router := plane.NewRouter(&plane.Store{}, sealing, gw.ID, plane.PgDialer{}, nil, plane.Suffix(gw.Suffix))
 	t.Cleanup(func() {
@@ -153,14 +150,14 @@ func TestControlClientAgainstTheRoutes(t *testing.T) {
 	}
 
 	// Nothing changed: the poll waits and comes back empty.
-	again, err := client.Poll(ctx, s.Version)
+	again, err := pollVerified(t, client, s.Version, svc.TrustKeys(), gw.ID)
 	if err != nil || again != nil {
 		t.Fatalf("second poll: %+v %v", again, err)
 	}
 	if err = store.SetRouteState(ctx, "org_1", gw.ID, route.ID, "paused"); err != nil {
 		t.Fatal(err)
 	}
-	next, err := client.Poll(ctx, s.Version)
+	next, err := pollVerified(t, client, s.Version, svc.TrustKeys(), gw.ID)
 	if err != nil || next == nil || next.Version != s.Version+1 || next.Routes[0].State != plane.RouteStatePaused {
 		t.Fatalf("after pausing: %+v %v", next, err)
 	}
@@ -175,7 +172,7 @@ func TestControlClientAgainstTheRoutes(t *testing.T) {
 
 	// A gateway ahead of the store, as after a restore, gets a version past
 	// its own straight away.
-	ahead, err := client.Poll(ctx, 100)
+	ahead, err := pollVerified(t, client, 100, svc.TrustKeys(), gw.ID)
 	if err != nil || ahead == nil || ahead.Version != 101 {
 		t.Fatalf("a poll after 100: %+v %v, want version 101", ahead, err)
 	}
@@ -251,7 +248,7 @@ func TestManagementRoutesAgainstTheStore(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := plane.NewControlClient(srv.URL, gw.ID, signPriv)
-	s, err := client.Poll(ctx, 0)
+	s, err := pollVerified(t, client, 0, svc.TrustKeys(), gw.ID)
 	if err != nil || s == nil {
 		t.Fatalf("Poll: %+v %v", s, err)
 	}
@@ -312,7 +309,7 @@ func TestManagementRoutesAgainstTheStore(t *testing.T) {
 	if out = callAs(t, r, http.MethodPost, pause, "usr_admin"); out.Code != http.StatusOK {
 		t.Fatalf("an admin's pause: %d %q", out.Code, out.Body.String())
 	}
-	next, err := client.Poll(ctx, s.Version)
+	next, err := pollVerified(t, client, s.Version, svc.TrustKeys(), gw.ID)
 	if err != nil || next == nil || next.Routes[0].State != plane.RouteStatePaused {
 		t.Fatalf("after pausing: %+v %v", next, err)
 	}
@@ -326,4 +323,19 @@ func TestManagementRoutesAgainstTheStore(t *testing.T) {
 	if got := auditedRouteChanges(t, events); !slices.Equal(got, want) {
 		t.Fatalf("audited %v, want %v", got, want)
 	}
+}
+
+// pollVerified polls the control plane like a gateway and returns the
+// snapshot verified against trust. Nothing new is nil.
+func pollVerified(t *testing.T, client *plane.ControlClient, after uint64, trust []plane.TrustKey, gatewayID string) (*plane.Snapshot, error) {
+	t.Helper()
+	env, err := client.Poll(t.Context(), after)
+	if err != nil || env == nil {
+		return nil, err
+	}
+	s, err := plane.VerifySnapshot(*env, trust, gatewayID, time.Now())
+	if err != nil {
+		t.Fatalf("VerifySnapshot: %v", err)
+	}
+	return &s, nil
 }

@@ -31,7 +31,7 @@ const (
 type gateways interface {
 	Configured() bool
 	VerifyRequest(r *http.Request, body []byte, now time.Time) (*dbgateway.Gateway, error)
-	Snapshot(ctx context.Context, gw *dbgateway.Gateway, after uint64) (*plane.Snapshot, error)
+	Snapshot(ctx context.Context, gw *dbgateway.Gateway, after uint64) (*plane.SignedSnapshot, error)
 	Report(ctx context.Context, gw *dbgateway.Gateway, r plane.Report) (plane.ReportResponse, error)
 	Hold(ctx context.Context, gw *dbgateway.Gateway, l plane.Label) error
 }

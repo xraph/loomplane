@@ -33,7 +33,7 @@ func TestSnapshotRecoversAfterARestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := NewService(s, urls, priv, plane.TrustKey{PublicKey: pub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}, time.Now)
-	if first, ferr := svc.Snapshot(ctx, &gw, 0); ferr != nil || first.Version != 1 {
+	if first, ferr := snapshotOf(t, svc, &gw, 0, time.Now()); ferr != nil || first.Version != 1 {
 		t.Fatalf("first: %+v %v", first, ferr)
 	}
 
@@ -42,12 +42,9 @@ func TestSnapshotRecoversAfterARestore(t *testing.T) {
 	if err = held.Swap(plane.Snapshot{GatewayID: gw.ID, Version: 41}); err != nil {
 		t.Fatal(err)
 	}
-	next, err := svc.Snapshot(ctx, &gw, 41)
+	next, err := snapshotOf(t, svc, &gw, 41, time.Now())
 	if err != nil || next == nil || next.Version != 42 {
 		t.Fatalf("a gateway at 41 got %+v %v, want version 42", next, err)
-	}
-	if err = plane.VerifySnapshot(*next, svc.TrustKeys(), gw.ID, time.Now()); err != nil {
-		t.Fatal(err)
 	}
 	if err = held.Swap(*next); err != nil {
 		t.Fatalf("the gateway refuses the snapshot: %v", err)
@@ -55,13 +52,13 @@ func TestSnapshotRecoversAfterARestore(t *testing.T) {
 	if v, _, lerr := s.LatestSnapshot(ctx, "org_1", gw.ID); lerr != nil || v != 42 {
 		t.Fatalf("stored version %d %v, want 42", v, lerr)
 	}
-	if none, nerr := svc.Snapshot(ctx, &gw, 42); nerr != nil || none != nil {
+	if none, nerr := snapshotOf(t, svc, &gw, 42, time.Now()); nerr != nil || none != nil {
 		t.Fatalf("at 42 with nothing new: %+v %v", none, nerr)
 	}
 	if err = s.SetRouteState(ctx, "org_1", gw.ID, route.ID, "paused"); err != nil {
 		t.Fatal(err)
 	}
-	if paused, perr := svc.Snapshot(ctx, &gw, 42); perr != nil || paused == nil || paused.Version != 43 {
+	if paused, perr := snapshotOf(t, svc, &gw, 42, time.Now()); perr != nil || paused == nil || paused.Version != 43 {
 		t.Fatalf("a change after the raise: %+v %v, want 43", paused, perr)
 	}
 }
@@ -92,17 +89,14 @@ func TestServiceOverTheStore(t *testing.T) {
 	}
 	svc := NewService(s, urls, priv, plane.TrustKey{PublicKey: pub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}, time.Now)
 
-	first, err := svc.Snapshot(ctx, &gw, 0)
+	first, err := snapshotOf(t, svc, &gw, 0, time.Now())
 	if err != nil || first == nil || first.Version != 1 || len(first.Routes) != 1 || first.Routes[0].ID != route.ID {
 		t.Fatalf("first snapshot %+v %v", first, err)
-	}
-	if err = plane.VerifySnapshot(*first, svc.TrustKeys(), gw.ID, time.Now()); err != nil {
-		t.Fatal(err)
 	}
 	if user, password := openCredential(t, keys.sealing, first.Routes[0]); user != "app" || password != "pw" {
 		t.Fatalf("credential %q/%q", user, password)
 	}
-	again, err := svc.Snapshot(ctx, &gw, 1)
+	again, err := snapshotOf(t, svc, &gw, 1, time.Now())
 	if err != nil || again != nil {
 		t.Fatalf("an unchanged state gave %+v %v", again, err)
 	}
@@ -110,7 +104,7 @@ func TestServiceOverTheStore(t *testing.T) {
 	if err = s.SetRouteState(ctx, "org_1", gw.ID, route.ID, "paused"); err != nil {
 		t.Fatal(err)
 	}
-	paused, err := svc.Snapshot(ctx, &gw, 1)
+	paused, err := snapshotOf(t, svc, &gw, 1, time.Now())
 	if err != nil || paused == nil || paused.Version != 2 || paused.Routes[0].State != plane.RouteStatePaused {
 		t.Fatalf("after pausing %+v %v", paused, err)
 	}

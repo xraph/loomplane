@@ -212,27 +212,50 @@ func newServiceHarness(t *testing.T) *serviceHarness {
 	return h
 }
 
+// snapshot asks the service for the gateway's snapshot after a version and
+// returns it verified, the way a gateway reads it. Nothing newer is nil.
+func (h *serviceHarness) snapshot(t *testing.T, after uint64) (*plane.Snapshot, error) {
+	t.Helper()
+	return snapshotOf(t, h.svc, &h.gw, after, h.now)
+}
+
+// snapshotOf asks svc for gw's snapshot after a version and returns it
+// verified against svc's trust keys at now. Nothing newer is nil.
+func snapshotOf(t *testing.T, svc *Service, gw *Gateway, after uint64, now time.Time) (*plane.Snapshot, error) {
+	t.Helper()
+	env, err := svc.Snapshot(t.Context(), gw, after)
+	if err != nil || env == nil {
+		return nil, err
+	}
+	s, err := plane.VerifySnapshot(*env, svc.TrustKeys(), gw.ID, now)
+	if err != nil {
+		t.Fatalf("VerifySnapshot: %v", err)
+	}
+	return &s, nil
+}
+
 // The snapshot this control plane serves verifies and applies in the real
 // plane code, after the trip through JSON a gateway makes it take.
 func TestSnapshotVerifiesAndAppliesInThePlane(t *testing.T) {
 	h := newServiceHarness(t)
-	s, err := h.svc.Snapshot(t.Context(), &h.gw, 0)
-	if err != nil || s == nil {
-		t.Fatalf("Snapshot: %v %v", s, err)
+	env, err := h.svc.Snapshot(t.Context(), &h.gw, 0)
+	if err != nil || env == nil {
+		t.Fatalf("Snapshot: %v %v", env, err)
 	}
-	if s.Version != 1 || !s.IssuedAt.Equal(h.now) || s.GatewayID != h.gw.ID {
-		t.Fatalf("snapshot %d at %s for %s", s.Version, s.IssuedAt, s.GatewayID)
-	}
-	raw, err := json.Marshal(s)
+	raw, err := json.Marshal(env)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got plane.Snapshot
-	if err := json.Unmarshal(raw, &got); err != nil {
+	var back plane.SignedSnapshot
+	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatal(err)
 	}
-	if err := plane.VerifySnapshot(got, h.svc.TrustKeys(), h.gw.ID, h.now); err != nil {
+	got, err := plane.VerifySnapshot(back, h.svc.TrustKeys(), h.gw.ID, h.now)
+	if err != nil {
 		t.Fatalf("VerifySnapshot: %v", err)
+	}
+	if got.Version != 1 || !got.IssuedAt.Equal(h.now) || got.GatewayID != h.gw.ID {
+		t.Fatalf("snapshot %d at %s for %s", got.Version, got.IssuedAt, got.GatewayID)
 	}
 	if got.Routes[0].ID != "dbgr_1" {
 		t.Fatalf("routes %+v", got.Routes)
@@ -263,11 +286,11 @@ func TestSnapshotVerifiesAndAppliesInThePlane(t *testing.T) {
 
 	// A snapshot signed for this gateway isn't trusted for another, or
 	// under a key the gateway doesn't hold.
-	if err := plane.VerifySnapshot(got, h.svc.TrustKeys(), "dbgw_other", h.now); err == nil {
+	if _, err := plane.VerifySnapshot(back, h.svc.TrustKeys(), "dbgw_other", h.now); err == nil {
 		t.Fatal("verified for another gateway")
 	}
 	other, _, _ := ed25519.GenerateKey(rand.Reader)
-	if err := plane.VerifySnapshot(got, []plane.TrustKey{{PublicKey: other, NotBefore: h.now.Add(-time.Hour), NotAfter: h.now.Add(time.Hour)}}, h.gw.ID, h.now); err == nil {
+	if _, err := plane.VerifySnapshot(back, []plane.TrustKey{{PublicKey: other, NotBefore: h.now.Add(-time.Hour), NotAfter: h.now.Add(time.Hour)}}, h.gw.ID, h.now); err == nil {
 		t.Fatal("verified under another key")
 	}
 }
@@ -276,23 +299,22 @@ func TestSnapshotVerifiesAndAppliesInThePlane(t *testing.T) {
 // same state again keeps the version.
 func TestSnapshotVersionMovesOnlyOnChange(t *testing.T) {
 	h := newServiceHarness(t)
-	ctx := t.Context()
-	first, err := h.svc.Snapshot(ctx, &h.gw, 0)
+	first, err := h.snapshot(t, 0)
 	if err != nil || first.Version != 1 {
 		t.Fatalf("first: %+v %v", first, err)
 	}
-	again, err := h.svc.Snapshot(ctx, &h.gw, 0)
+	again, err := h.snapshot(t, 0)
 	if err != nil || again.Version != 1 {
 		t.Fatalf("same state: %+v %v", again, err)
 	}
-	none, err := h.svc.Snapshot(ctx, &h.gw, 1)
+	none, err := h.snapshot(t, 1)
 	if err != nil || none != nil {
 		t.Fatalf("nothing newer than 1: %+v %v", none, err)
 	}
 	h.urls.mu.Lock()
 	h.urls.urls["orders"] = "postgres://app:rotated@db.do.example:25060/orders?sslmode=require"
 	h.urls.mu.Unlock()
-	s, err := h.svc.Snapshot(ctx, &h.gw, 1)
+	s, err := h.snapshot(t, 1)
 	if err != nil || s == nil || s.Version != 2 {
 		t.Fatalf("after a password change: %+v %v", s, err)
 	}
@@ -303,12 +325,11 @@ func TestSnapshotVersionMovesOnlyOnChange(t *testing.T) {
 
 func TestPausedRouteInSnapshot(t *testing.T) {
 	h := newServiceHarness(t)
-	ctx := t.Context()
-	if _, err := h.svc.Snapshot(ctx, &h.gw, 0); err != nil {
+	if _, err := h.snapshot(t, 0); err != nil {
 		t.Fatal(err)
 	}
 	h.store.setState(h.gw.ID, "dbgr_1", "paused")
-	s, err := h.svc.Snapshot(ctx, &h.gw, 1)
+	s, err := h.snapshot(t, 1)
 	if err != nil || s == nil || s.Version != 2 {
 		t.Fatalf("after pausing: %+v %v", s, err)
 	}
@@ -321,9 +342,6 @@ func TestPausedRouteInSnapshot(t *testing.T) {
 			t.Fatalf("route %s is %q, want %q", rt.ID, rt.State, want)
 		}
 	}
-	if err := plane.VerifySnapshot(*s, h.svc.TrustKeys(), h.gw.ID, h.now); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // R71: when another writer's digest is stored, the service compiles again
@@ -331,20 +349,17 @@ func TestPausedRouteInSnapshot(t *testing.T) {
 func TestSnapshotRecompilesWhenAnotherWriterWins(t *testing.T) {
 	h := newServiceHarness(t)
 	h.store.interfere = 1
-	s, err := h.svc.Snapshot(t.Context(), &h.gw, 0)
+	s, err := h.snapshot(t, 0)
 	if err != nil || s == nil {
 		t.Fatalf("Snapshot: %+v %v", s, err)
 	}
 	if s.Version != h.store.version || h.store.digest == "another-writer" || h.store.bumps != 2 {
 		t.Fatalf("signed version %d; stored %d %q after %d bumps", s.Version, h.store.version, h.store.digest, h.store.bumps)
 	}
-	if err := plane.VerifySnapshot(*s, h.svc.TrustKeys(), h.gw.ID, h.now); err != nil {
-		t.Fatal(err)
-	}
 
 	// A writer that keeps winning gets an error, never a mismatched pair.
 	h.store.interfere = 100
-	if s, err := h.svc.Snapshot(t.Context(), &h.gw, 0); err == nil {
+	if s, err := h.snapshot(t, 0); err == nil {
 		t.Fatalf("signed %+v while the stored digest never matched", s)
 	}
 }
@@ -353,7 +368,7 @@ func TestSnapshotRecompilesWhenAnotherWriterWins(t *testing.T) {
 func TestSnapshotFailsWhenAnAddressCantBeRead(t *testing.T) {
 	h := newServiceHarness(t)
 	h.urls.err = errors.New("vault is down")
-	if s, err := h.svc.Snapshot(t.Context(), &h.gw, 0); err == nil {
+	if s, err := h.snapshot(t, 0); err == nil {
 		t.Fatalf("served %+v without the addresses", s)
 	}
 	if h.store.bumps != 0 {
@@ -371,7 +386,7 @@ func TestSnapshotReportsSkippedRoutes(t *testing.T) {
 		}
 		got = append(got, s...)
 	}
-	s, err := h.svc.Snapshot(t.Context(), &h.gw, 0)
+	s, err := h.snapshot(t, 0)
 	if err != nil || len(s.Routes) != 1 {
 		t.Fatalf("%+v %v", s, err)
 	}
@@ -379,7 +394,7 @@ func TestSnapshotReportsSkippedRoutes(t *testing.T) {
 		t.Fatalf("skipped %+v", got)
 	}
 	// Reported when the snapshot changes, not on every poll.
-	if _, err := h.svc.Snapshot(t.Context(), &h.gw, 0); err != nil || len(got) != 1 {
+	if _, err := h.snapshot(t, 0); err != nil || len(got) != 1 {
 		t.Fatalf("reported again on an unchanged snapshot: %+v %v", got, err)
 	}
 }
@@ -507,13 +522,12 @@ func countDerivations(svc *Service) *int {
 // password does.
 func TestSnapshotCachesVerifiers(t *testing.T) {
 	h := newServiceHarness(t)
-	ctx := t.Context()
 	derived := countDerivations(h.svc)
-	first, err := h.svc.Snapshot(ctx, &h.gw, 0)
+	first, err := h.snapshot(t, 0)
 	if err != nil || *derived != 2 {
 		t.Fatalf("first snapshot derived %d verifiers: %v", *derived, err)
 	}
-	again, err := h.svc.Snapshot(ctx, &h.gw, 0)
+	again, err := h.snapshot(t, 0)
 	if err != nil || *derived != 2 {
 		t.Fatalf("an unchanged snapshot derived %d verifiers, want still 2: %v", *derived, err)
 	}
@@ -527,7 +541,7 @@ func TestSnapshotCachesVerifiers(t *testing.T) {
 	h.urls.mu.Lock()
 	h.urls.urls["orders"] = "postgres://app:rotated@db.do.example:25060/orders?sslmode=require"
 	h.urls.mu.Unlock()
-	rotated, err := h.svc.Snapshot(ctx, &h.gw, first.Version)
+	rotated, err := h.snapshot(t, first.Version)
 	if err != nil || rotated == nil || *derived != 3 {
 		t.Fatalf("a new password derived %d verifiers, want 3: %+v %v", *derived, rotated, err)
 	}
@@ -542,7 +556,7 @@ func TestSnapshotCachesVerifiers(t *testing.T) {
 	h.store.mu.Lock()
 	h.store.routes[h.gw.ID] = h.store.routes[h.gw.ID][:1]
 	h.store.mu.Unlock()
-	if _, err := h.svc.Snapshot(ctx, &h.gw, 0); err != nil {
+	if _, err := h.snapshot(t, 0); err != nil {
 		t.Fatal(err)
 	}
 	if n := h.svc.verifiers.size(); n != 1 {
@@ -579,24 +593,20 @@ func TestVerifierCacheIsBounded(t *testing.T) {
 // R75: a gateway ahead of the stored version gets a snapshot past it.
 func TestSnapshotRaisesAStaleStoredVersion(t *testing.T) {
 	h := newServiceHarness(t)
-	ctx := t.Context()
-	if s, err := h.svc.Snapshot(ctx, &h.gw, 0); err != nil || s.Version != 1 {
+	if s, err := h.snapshot(t, 0); err != nil || s.Version != 1 {
 		t.Fatalf("first: %+v %v", s, err)
 	}
-	s, err := h.svc.Snapshot(ctx, &h.gw, 7)
+	s, err := h.snapshot(t, 7)
 	if err != nil || s == nil || s.Version != 8 {
 		t.Fatalf("a gateway at 7 got %+v %v, want version 8", s, err)
-	}
-	if err := plane.VerifySnapshot(*s, h.svc.TrustKeys(), h.gw.ID, h.now); err != nil {
-		t.Fatal(err)
 	}
 	if h.store.version != 8 {
 		t.Fatalf("stored version %d, want 8", h.store.version)
 	}
-	if s, err := h.svc.Snapshot(ctx, &h.gw, 8); err != nil || s != nil {
+	if s, err := h.snapshot(t, 8); err != nil || s != nil {
 		t.Fatalf("at 8 with nothing new: %+v %v", s, err)
 	}
-	if _, err := h.svc.Snapshot(ctx, &h.gw, math.MaxInt64); !errors.Is(err, ErrInvalid) {
+	if _, err := h.snapshot(t, math.MaxInt64); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("after past the version range: %v, want ErrInvalid", err)
 	}
 }
@@ -818,7 +828,7 @@ func TestPauseRequiresAdmin(t *testing.T) {
 func TestPauseAudits(t *testing.T) {
 	h, _, audit := managedHarness(t)
 	ctx := t.Context()
-	if _, err := h.svc.Snapshot(ctx, &h.gw, 0); err != nil {
+	if _, err := h.snapshot(t, 0); err != nil {
 		t.Fatal(err)
 	}
 	got, err := h.svc.SetRouteState(ctx, member("usr_admin"), "proj_1", h.gw.ID, "dbgr_1", "paused")
@@ -828,7 +838,7 @@ func TestPauseAudits(t *testing.T) {
 	if *got != (RouteSummary{ID: "dbgr_1", GatewayID: h.gw.ID, Resource: "orders", State: "paused"}) {
 		t.Fatalf("pause answered %+v", got)
 	}
-	s, err := h.svc.Snapshot(ctx, &h.gw, 1)
+	s, err := h.snapshot(t, 1)
 	if err != nil || s == nil {
 		t.Fatalf("snapshot after the pause: %v %v", s, err)
 	}

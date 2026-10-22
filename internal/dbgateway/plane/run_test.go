@@ -1,6 +1,7 @@
 package plane
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -225,7 +226,17 @@ func newRunSetup(t *testing.T, controlURL string) runSetup {
 }
 
 // snapshot is a signed snapshot with one route whose credential opens.
-func (s runSetup) snapshot(t *testing.T, version uint64) Snapshot {
+func (s runSetup) snapshot(t *testing.T, version uint64) SignedSnapshot {
+	t.Helper()
+	out, err := SignSnapshot(s.unsigned(t, version), s.priv, s.trust.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// unsigned is the snapshot that snapshot signs.
+func (s runSetup) unsigned(t *testing.T, version uint64) Snapshot {
 	t.Helper()
 	cred, err := Seal(s.cfg.SealingKey.PublicKey(), []byte(`{"user":"gateway","password":"backend-pw"}`), []byte("backend-credential:route-a"))
 	if err != nil {
@@ -238,11 +249,7 @@ func (s runSetup) snapshot(t *testing.T, version uint64) Snapshot {
 			Backend: Backend{Kind: "postgres", Host: "127.0.0.1", Port: 1, Database: "orders", SSLMode: "disable", Credential: cred},
 		}},
 	}
-	out, err := SignSnapshot(snap, s.priv, s.trust.ID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return snap
 }
 
 // httpGet is a GET that carries a context.
@@ -366,7 +373,7 @@ func TestRunIgnoresUntrustedLastGood(t *testing.T) {
 	s := newRunSetup(t, "http://127.0.0.1:1")
 	// Sealed to the right key, but signed by a key nobody trusts.
 	otherTrust, otherPriv := newCurrentTrustKey(t)
-	bad, err := SignSnapshot(s.snapshot(t, 5), otherPriv, otherTrust.ID())
+	bad, err := SignSnapshot(s.unsigned(t, 5), otherPriv, otherTrust.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,26 +394,26 @@ func TestRunIgnoresUntrustedLastGood(t *testing.T) {
 func TestRunRejectsBadSnapshot(t *testing.T) {
 	otherTrust, otherPriv := newCurrentTrustKey(t)
 	// Each case is a refusable version 2, served after version 1 was applied.
-	for name, mk := range map[string]func(s runSetup, t *testing.T) Snapshot{
-		"unsigned": func(s runSetup, t *testing.T) Snapshot {
+	for name, mk := range map[string]func(s runSetup, t *testing.T) SignedSnapshot{
+		"unsigned": func(s runSetup, t *testing.T) SignedSnapshot {
 			snap := s.snapshot(t, 2)
 			snap.Signature, snap.KeyID = nil, ""
 			return snap
 		},
-		"signed by an untrusted key": func(s runSetup, t *testing.T) Snapshot {
-			snap, err := SignSnapshot(s.snapshot(t, 2), otherPriv, otherTrust.ID())
+		"signed by an untrusted key": func(s runSetup, t *testing.T) SignedSnapshot {
+			snap, err := SignSnapshot(s.unsigned(t, 2), otherPriv, otherTrust.ID())
 			if err != nil {
 				t.Fatal(err)
 			}
 			return snap
 		},
-		"tampered": func(s runSetup, t *testing.T) Snapshot {
+		"tampered": func(s runSetup, t *testing.T) SignedSnapshot {
 			snap := s.snapshot(t, 2)
-			snap.Routes[0].Backend.Host = "10.9.9.9"
+			snap.Payload = bytes.Replace(snap.Payload, []byte(`"127.0.0.1"`), []byte(`"10.9.9.9"`), 1)
 			return snap
 		},
-		"for another gateway": func(s runSetup, t *testing.T) Snapshot {
-			other := s.snapshot(t, 2)
+		"for another gateway": func(s runSetup, t *testing.T) SignedSnapshot {
+			other := s.unsigned(t, 2)
 			other.GatewayID = "gw-2"
 			snap, err := SignSnapshot(other, s.priv, s.trust.ID())
 			if err != nil {
@@ -422,7 +429,7 @@ func TestRunRejectsBadSnapshot(t *testing.T) {
 			ctrl := newFakeControl(t, s.pub)
 			s.cfg.ControlURL = ctrl.srv.URL
 			good, bad := s.snapshot(t, 1), mk(s, t)
-			ctrl.snapshot = func(after uint64) *Snapshot {
+			ctrl.snapshot = func(after uint64) *SignedSnapshot {
 				if after < 1 {
 					return &good
 				}
@@ -433,7 +440,7 @@ func TestRunRejectsBadSnapshot(t *testing.T) {
 			// Version 1 is applied and saved; version 2 is then refused.
 			waitUntil(t, "version 1 to be saved", func() bool {
 				saved, err := LoadLastGood(filepath.Join(r.dir, "last-good"), s.cfg.SealingKey)
-				return err == nil && saved.Version == 1
+				return err == nil && versionOf(t, saved) == 1
 			})
 			waitUntil(t, "version 2 to be polled for", func() bool { return ctrl.pollCount() >= 3 })
 
@@ -458,8 +465,11 @@ func TestRunRejectsBadSnapshot(t *testing.T) {
 				t.Errorf("healthz = %d, want 200 (version 1 is still served)", got)
 			}
 			saved, err := LoadLastGood(filepath.Join(r.dir, "last-good"), s.cfg.SealingKey)
-			if err != nil || saved.Version != 1 {
-				t.Errorf("last-good = version %d, %v; want version 1", saved.Version, err)
+			if err != nil {
+				t.Fatalf("last-good: %v", err)
+			}
+			if v := versionOf(t, saved); v != 1 {
+				t.Errorf("last-good = version %d, want version 1", v)
 			}
 		})
 	}
@@ -471,7 +481,7 @@ func TestRunRefusesBadFirstSnapshot(t *testing.T) {
 	s.cfg.ControlURL = ctrl.srv.URL
 	bad := s.snapshot(t, 3)
 	bad.Signature, bad.KeyID = nil, ""
-	ctrl.snapshot = func(uint64) *Snapshot { return &bad }
+	ctrl.snapshot = func(uint64) *SignedSnapshot { return &bad }
 	r := s.start(t)
 
 	waitUntil(t, "three polls", func() bool { return ctrl.pollCount() >= 3 })
@@ -492,7 +502,7 @@ func TestRunAppliesSnapshotAndReports(t *testing.T) {
 	s.cfg.ControlURL = ctrl.srv.URL
 	ctrl.live = 3
 	snap := s.snapshot(t, 1)
-	ctrl.snapshot = func(after uint64) *Snapshot {
+	ctrl.snapshot = func(after uint64) *SignedSnapshot {
 		if after >= 1 {
 			return nil
 		}
@@ -545,7 +555,7 @@ func TestRunAppliesSnapshotAndReports(t *testing.T) {
 	// A newer snapshot replaces it.
 	next := s.snapshot(t, 2)
 	ctrl.mu.Lock()
-	ctrl.snapshot = func(after uint64) *Snapshot {
+	ctrl.snapshot = func(after uint64) *SignedSnapshot {
 		if after >= 2 {
 			return nil
 		}
@@ -555,7 +565,52 @@ func TestRunAppliesSnapshotAndReports(t *testing.T) {
 	waitUntil(t, "version 2", func() bool { cur := r.store.Current(); return cur != nil && cur.Version == 2 })
 	waitUntil(t, "version 2 to be saved", func() bool {
 		saved, err := LoadLastGood(filepath.Join(r.dir, "last-good"), s.cfg.SealingKey)
-		return err == nil && saved.Version == 2
+		return err == nil && versionOf(t, saved) == 2
+	})
+}
+
+// A newer control plane can add snapshot fields this gateway doesn't know:
+// the snapshot still verifies, applies and is kept as last-good byte for
+// byte.
+func TestRunAppliesSnapshotWithUnknownFields(t *testing.T) {
+	s := newRunSetup(t, "")
+	ctrl := newFakeControl(t, s.pub)
+	s.cfg.ControlURL = ctrl.srv.URL
+
+	snap := s.unsigned(t, 4)
+	snap.KeyID = s.trust.ID()
+	base, err := SnapshotPayload(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err = json.Unmarshal(base, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["replicas"] = []map[string]any{{"region": "eu-west-1", "lag_ms": 12}}
+	payload, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := SignedSnapshot{
+		Payload: payload, KeyID: s.trust.ID(),
+		Signature: ed25519.Sign(s.priv, append([]byte(snapshotContext), payload...)),
+	}
+	ctrl.snapshot = func(after uint64) *SignedSnapshot {
+		if after >= 4 {
+			return nil
+		}
+		return &env
+	}
+	r := s.start(t)
+
+	waitUntil(t, "healthz to return 200", func() bool { return r.healthz() == http.StatusOK })
+	if cur := r.store.Current(); cur == nil || cur.Version != 4 || len(cur.Routes) != 1 || cur.Routes[0].ID != "route-a" {
+		t.Fatalf("Current() = %+v, want version 4 with route-a", cur)
+	}
+	waitUntil(t, "the snapshot to be saved", func() bool {
+		saved, err := LoadLastGood(filepath.Join(r.dir, "last-good"), s.cfg.SealingKey)
+		return err == nil && bytes.Equal(saved.Payload, payload)
 	})
 }
 
@@ -583,7 +638,7 @@ func TestRunDrainsOnCancel(t *testing.T) {
 	ctrl := newFakeControl(t, s.pub)
 	s.cfg.ControlURL = ctrl.srv.URL
 	snap := s.snapshot(t, 1)
-	ctrl.snapshot = func(after uint64) *Snapshot {
+	ctrl.snapshot = func(after uint64) *SignedSnapshot {
 		if after >= 1 {
 			return nil
 		}

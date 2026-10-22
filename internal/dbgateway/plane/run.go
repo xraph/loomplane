@@ -365,7 +365,7 @@ func removeStaleTemps(dir string) {
 // loadLastGood serves the snapshot saved by an earlier run, so the gateway
 // can answer while the control plane is away. It is verified like any other.
 func (g *gateway) loadLastGood() {
-	s, err := LoadLastGood(g.path, g.cfg.SealingKey)
+	env, err := LoadLastGood(g.path, g.cfg.SealingKey)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return
@@ -373,7 +373,8 @@ func (g *gateway) loadLastGood() {
 		slog.Warn("database gateway ignored an unreadable last-good snapshot")
 		return
 	}
-	if err := VerifySnapshot(s, g.cfg.TrustKeys, g.cfg.GatewayID, time.Now()); err != nil {
+	s, err := VerifySnapshot(env, g.cfg.TrustKeys, g.cfg.GatewayID, time.Now())
+	if err != nil {
 		slog.Warn("database gateway ignored an untrusted last-good snapshot")
 		return
 	}
@@ -385,11 +386,12 @@ func (g *gateway) loadLastGood() {
 	slog.Info("database gateway applied the last-good snapshot", "version", s.Version)
 }
 
-// apply verifies s, hands it to the router, which swaps the store, and then
-// saves it as the new last-good. A failure to save is logged and does not
-// stop the gateway serving what it applied.
-func (g *gateway) apply(s Snapshot) error {
-	if err := VerifySnapshot(s, g.cfg.TrustKeys, g.cfg.GatewayID, time.Now()); err != nil {
+// apply verifies env, hands the snapshot to the router, which swaps the
+// store, and then saves env as the new last-good. A failure to save is
+// logged and does not stop the gateway serving what it applied.
+func (g *gateway) apply(env SignedSnapshot) error {
+	s, err := VerifySnapshot(env, g.cfg.TrustKeys, g.cfg.GatewayID, time.Now())
+	if err != nil {
 		return err
 	}
 	if err := g.router.Apply(s); err != nil {
@@ -397,7 +399,7 @@ func (g *gateway) apply(s Snapshot) error {
 	}
 	g.ready.Store(true)
 	slog.Info("database gateway applied a snapshot", "version", s.Version)
-	if err := SaveLastGood(g.path, g.cfg.SealingKey, s); err != nil {
+	if err := SaveLastGood(g.path, g.cfg.SealingKey, env); err != nil {
 		slog.Warn("database gateway could not save the last-good snapshot", "err", err)
 	}
 	return nil
@@ -421,7 +423,7 @@ func (g *gateway) pollLoop(ctx context.Context) {
 			slog.Warn("database gateway could not poll the control plane", "err", err)
 		} else if snap != nil {
 			if err = g.apply(*snap); err != nil {
-				slog.Warn("database gateway refused a snapshot", "version", snap.Version, "err", err)
+				slog.Warn("database gateway refused a snapshot", "err", err)
 			}
 		}
 		switch {

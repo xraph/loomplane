@@ -82,14 +82,27 @@ type Route struct {
 }
 
 // Snapshot is the control plane's routing table for one gateway. The control
-// plane signs it; the gateway verifies it before serving from it.
+// plane signs it into a SignedSnapshot; the gateway verifies that before
+// serving from it. KeyID names the signing key inside the signed bytes, so
+// the signature covers which key made it.
 type Snapshot struct {
 	GatewayID string    `json:"gateway_id"`
 	Version   uint64    `json:"version"`
 	IssuedAt  time.Time `json:"issued_at"`
 	Routes    []Route   `json:"routes"`
 	KeyID     string    `json:"key_id"`
-	Signature []byte    `json:"signature"`
+}
+
+// SignedSnapshot is what the control plane serves and what the gateway keeps
+// as its last-good copy. Payload is the snapshot's JSON exactly as it was
+// signed, and the gateway verifies those bytes before it decodes them, so a
+// newer control plane can add fields an older gateway doesn't know without
+// breaking its signature check. Payload and Signature encode as standard
+// base64, the encoding/json default for []byte.
+type SignedSnapshot struct {
+	Payload   []byte `json:"payload"`
+	KeyID     string `json:"key_id"`
+	Signature []byte `json:"signature"`
 }
 
 // TrustKey is a control-plane signing key the gateway accepts, and the window
@@ -107,13 +120,11 @@ func (k TrustKey) ID() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// SnapshotPayload returns the bytes that are signed: the snapshot as JSON with
-// the signature cleared and the routes sorted by ID. The key ID stays in, so
-// the signature covers which key made it. encoding/json writes struct fields
-// in declaration order and sorts map keys, which makes the output canonical.
+// SnapshotPayload returns the bytes that are signed: the snapshot as JSON
+// with the routes sorted by ID. encoding/json writes struct fields in
+// declaration order and sorts map keys, which makes the output canonical.
 // The input is not changed.
 func SnapshotPayload(s Snapshot) ([]byte, error) {
-	s.Signature = nil
 	s.Routes = slices.Clone(s.Routes)
 	slices.SortStableFunc(s.Routes, func(a, b Route) int {
 		switch {
@@ -127,49 +138,54 @@ func SnapshotPayload(s Snapshot) ([]byte, error) {
 	return json.Marshal(s)
 }
 
-// SignSnapshot returns a copy of s with its key ID set to keyID and its
-// signature made with private. The input is not changed.
-func SignSnapshot(s Snapshot, private ed25519.PrivateKey, keyID string) (Snapshot, error) {
+// SignSnapshot sets s's key ID to keyID, encodes it with SnapshotPayload and
+// signs those bytes with private. The input is not changed.
+func SignSnapshot(s Snapshot, private ed25519.PrivateKey, keyID string) (SignedSnapshot, error) {
 	if len(private) != ed25519.PrivateKeySize {
-		return Snapshot{}, errors.New("sign snapshot: bad private key")
+		return SignedSnapshot{}, errors.New("sign snapshot: bad private key")
 	}
 	s.KeyID = keyID
 	payload, err := SnapshotPayload(s)
 	if err != nil {
-		return Snapshot{}, err
+		return SignedSnapshot{}, err
 	}
-	s.Signature = ed25519.Sign(private, append([]byte(snapshotContext), payload...))
-	return s, nil
+	return SignedSnapshot{
+		Payload:   payload,
+		KeyID:     keyID,
+		Signature: ed25519.Sign(private, append([]byte(snapshotContext), payload...)),
+	}, nil
 }
 
-// VerifySnapshot checks that s was signed by the key it names, that the key is
-// among keys and valid at now, that s is for gatewayID, and that every route
-// is in a known state. Every failure returns ErrSnapshot.
-func VerifySnapshot(s Snapshot, keys []TrustKey, gatewayID string, now time.Time) error {
-	i := slices.IndexFunc(keys, func(k TrustKey) bool { return k.ID() == s.KeyID })
+// VerifySnapshot checks that env was signed by the key it names and that the
+// key is among keys and valid at now, and only then decodes the payload. The
+// snapshot must name the same key, be for gatewayID and have every route in a
+// known state. Fields in the payload that Snapshot doesn't have are ignored.
+// Every failure returns ErrSnapshot.
+func VerifySnapshot(env SignedSnapshot, keys []TrustKey, gatewayID string, now time.Time) (Snapshot, error) {
+	i := slices.IndexFunc(keys, func(k TrustKey) bool { return k.ID() == env.KeyID })
 	if i < 0 {
-		return ErrSnapshot
+		return Snapshot{}, ErrSnapshot
 	}
 	key := keys[i]
 	if len(key.PublicKey) != ed25519.PublicKeySize || now.Before(key.NotBefore) || !now.Before(key.NotAfter) {
-		return ErrSnapshot
+		return Snapshot{}, ErrSnapshot
 	}
-	if s.GatewayID != gatewayID {
-		return ErrSnapshot
+	if !ed25519.Verify(key.PublicKey, append([]byte(snapshotContext), env.Payload...), env.Signature) {
+		return Snapshot{}, ErrSnapshot
 	}
-	payload, err := SnapshotPayload(s)
-	if err != nil {
-		return ErrSnapshot
+	var s Snapshot
+	if err := json.Unmarshal(env.Payload, &s); err != nil {
+		return Snapshot{}, ErrSnapshot
 	}
-	if !ed25519.Verify(key.PublicKey, append([]byte(snapshotContext), payload...), s.Signature) {
-		return ErrSnapshot
+	if s.KeyID != env.KeyID || s.GatewayID != gatewayID {
+		return Snapshot{}, ErrSnapshot
 	}
 	for _, r := range s.Routes {
 		if !r.State.valid() {
-			return ErrSnapshot
+			return Snapshot{}, ErrSnapshot
 		}
 	}
-	return nil
+	return s, nil
 }
 
 // Store holds the snapshot the gateway is serving. The zero value is empty and
