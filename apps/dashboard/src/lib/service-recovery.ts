@@ -36,6 +36,12 @@ function view(protection: Protection): ProtectionView {
   return { protection, label: protectionLabels[protection] }
 }
 
+/** A stateful engine on a cluster whose backups aren't qualified there yet. */
+const kubernetesNotYet: ProtectionView = {
+  protection: "",
+  label: "Backups on Kubernetes aren’t available yet.",
+}
+
 /** isRecord reports whether a value is a JSON object: not null, not an array. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -60,7 +66,9 @@ export function bindingConfig(
  * protectionOf says what recovery keeps of a binding. It follows the API's
  * recovery.Protection (a component keeps nothing unless it's rebuilt, a
  * composed resource's parent keeps nothing, a database is native where
- * recovery supports it on that target), with these differences:
+ * recovery supports it on that target, and a stateful engine on Kubernetes
+ * without an adapter says backups aren't available there yet), with these
+ * differences:
  *
  *   - native is decided for the five built-in engine kinds only. The API
  *     also maps engine families, such as an engine registered as postgres
@@ -94,6 +102,8 @@ export function protectionOf(
       (binding.provider === "kubernetes" && config.kind === "postgres"))
   )
     return view("native")
+  if (binding.provider === "kubernetes" && isRecord(config.catalog))
+    return kubernetesNotYet
   return view("")
 }
 

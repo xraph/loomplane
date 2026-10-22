@@ -38,13 +38,26 @@ func TestRecoveryProfilesRequireMatchingEngineAndSupportedTarget(t *testing.T) {
 // registry of its own so Default stays untouched.
 func pgFamilyRegistry(t *testing.T) *recipes.Registry {
 	t.Helper()
+	return engineRegistry(t, "pgtest", "PG Test")
+}
+
+// timescaleRegistry registers a TimescaleDB engine of the postgres family.
+func timescaleRegistry(t *testing.T) *recipes.Registry {
+	t.Helper()
+	return engineRegistry(t, "timescaledb", "PostgreSQL 16 with TimescaleDB")
+}
+
+// engineRegistry registers one postgres-family engine on a registry of its
+// own and points the package's registry seams at it.
+func engineRegistry(t *testing.T, kind, title string) *recipes.Registry {
+	t.Helper()
 	r := recipes.NewRegistry()
 	err := r.RegisterEngine(recipes.Engine{
-		Kind: "pgtest", Family: "postgres", Title: "PG Test", EnvKey: "DATABASE_URL",
+		Kind: kind, Family: "postgres", Title: title, EnvKey: "DATABASE_URL",
 		Targets: []string{"server", "kubernetes"},
 		Releases: []recipes.EngineRelease{{
 			Version: "16", Product: "16.4", Revision: "1",
-			Image: recipes.Image{Repository: "registry.example/pgtest", Digests: map[string]string{
+			Image: recipes.Image{Repository: "registry.example/" + kind, Digests: map[string]string{
 				"amd64": "sha256:11538f20d0d489fad2dc7d30eeaafd731bd8405e25b1696d86571282ab6cdf25",
 				"arm64": "sha256:61581a49b789716d4da7a45ce7fd3c944b60150492ccece97b11b0b497f49aa8",
 			}},
@@ -54,9 +67,9 @@ func pgFamilyRegistry(t *testing.T) *recipes.Registry {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := familyOf
-	familyOf = r.FamilyOf
-	t.Cleanup(func() { familyOf = old })
+	oldFamily, oldTitle := familyOf, titleOf
+	familyOf, titleOf = r.FamilyOf, func(kind string) string { return engineTitle(r, kind) }
+	t.Cleanup(func() { familyOf, titleOf = oldFamily, oldTitle })
 	return r
 }
 
@@ -121,8 +134,8 @@ func TestRegisteredPostgresFamilyEngineGetsRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg = planning.ResourceConfig{Provider: "kubernetes", Kind: "pgtest", Target: "connection", Catalog: cluster}
-	if !supportsRecovery(&cfg) {
-		t.Fatal("a postgres-family engine kind is refused recovery on Kubernetes")
+	if supportsRecovery(&cfg) {
+		t.Fatal("a registered postgres-family engine kind has no qualified Kubernetes adapter yet")
 	}
 	// The recipe has to be the family's, not another engine's.
 	mysql := engineConfig(t, "server", "mysql")
@@ -243,5 +256,86 @@ func TestCreateBackupForStatelessReportsNothingToRestore(t *testing.T) {
 	}
 	if err = policy("ext"); !errors.Is(err, ErrNotManaged) {
 		t.Fatalf("policy for an external dependency: %v", err)
+	}
+}
+
+func TestProtectionOnKubernetesForNewEngines(t *testing.T) {
+	r := timescaleRegistry(t)
+	onServer, err := r.LookupEngine("timescaledb", "16", "arm64", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	onCluster, err := r.LookupEngine("timescaledb", "16", "arm64", "kubernetes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := planning.ResourceConfig{Provider: "server", Kind: "timescaledb", Target: "connection", Catalog: onServer}
+	if got := Protection(&ts); got != recipes.ProtectionNative {
+		t.Fatalf("timescaledb on a server: %q", got)
+	}
+	ts = planning.ResourceConfig{Provider: "kubernetes", Kind: "timescaledb", Target: "connection", Catalog: onCluster}
+	if got := Protection(&ts); got != "" {
+		t.Fatalf("timescaledb on kubernetes: %q", got)
+	}
+	redis := engineConfig(t, "kubernetes", "redis")
+	if got := Protection(&redis); got != "" {
+		t.Fatalf("redis on kubernetes: %q", got)
+	}
+	pg := engineConfig(t, "kubernetes", "postgres")
+	if got := Protection(&pg); got != recipes.ProtectionNative {
+		t.Fatalf("postgres on kubernetes: %q", got)
+	}
+}
+
+func TestCreateBackupOnKubernetesSaysNotYet(t *testing.T) {
+	r := timescaleRegistry(t)
+	onCluster, err := r.LookupEngine("timescaledb", "16", "arm64", "kubernetes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	redis := engineConfig(t, "kubernetes", "redis")
+	redis.Target = "connection"
+	service := Service{Authz: allowAll{}, Projects: fixedProjects{}, Bindings: fixedBindings{
+		bindingFor(t, "metrics", planning.ResourceConfig{Provider: "kubernetes", Kind: "timescaledb", Target: "connection", Catalog: onCluster}),
+		bindingFor(t, "cache", redis),
+	}}
+	p := security.Principal{OrgID: "org", UserID: "user"}
+
+	_, err = service.Create(t.Context(), p, "project", BackupCreateInput{Environment: "production", Resource: "metrics", RequestID: "request-123"})
+	if !errors.Is(err, ErrNotOnKubernetes) || !errors.Is(err, ErrInvalid) {
+		t.Fatalf("timescaledb on kubernetes: %v", err)
+	}
+	if want := "Backups for PostgreSQL 16 with TimescaleDB aren't available on Kubernetes yet."; err.Error() != want {
+		t.Fatalf("message %q, want %q", err, want)
+	}
+	_, err = service.SetPolicy(t.Context(), p, "project", PolicyInput{Environment: "production", Resource: "metrics", EveryHours: 24, Enabled: true})
+	if !errors.Is(err, ErrNotOnKubernetes) || err.Error() != "Backups for PostgreSQL 16 with TimescaleDB aren't available on Kubernetes yet." {
+		t.Fatalf("policy for timescaledb on kubernetes: %v", err)
+	}
+
+	// A built-in that reaches the same path is named by its own title.
+	titleOf = func(kind string) string { return engineTitle(recipes.Default(), kind) }
+	_, err = service.Create(t.Context(), p, "project", BackupCreateInput{Environment: "production", Resource: "cache", RequestID: "request-123"})
+	if !errors.Is(err, ErrNotOnKubernetes) || err.Error() != "Backups for Redis aren't available on Kubernetes yet." {
+		t.Fatalf("redis on kubernetes: %v", err)
+	}
+}
+
+// A combination that is not a Kubernetes gap keeps the plain refusal, on
+// both the backup and the schedule path.
+func TestUnsupportedRecoveryKeepsItsPlainRefusal(t *testing.T) {
+	mysql := engineConfig(t, "server", "mysql")
+	mysql.Kind = "unreviewed-engine"
+	service := Service{Authz: allowAll{}, Projects: fixedProjects{}, Bindings: fixedBindings{bindingFor(t, "data", mysql)}}
+	p := security.Principal{OrgID: "org", UserID: "user"}
+	const want = "invalid service backup request: the resource has no supported database backup adapter"
+
+	_, err := service.Create(t.Context(), p, "project", BackupCreateInput{Environment: "production", Resource: "data", RequestID: "request-123"})
+	if !errors.Is(err, ErrInvalid) || errors.Is(err, ErrNotOnKubernetes) || err.Error() != want {
+		t.Fatalf("backup: %v", err)
+	}
+	_, err = service.SetPolicy(t.Context(), p, "project", PolicyInput{Environment: "production", Resource: "data", EveryHours: 24, Enabled: true})
+	if !errors.Is(err, ErrInvalid) || errors.Is(err, ErrNotOnKubernetes) || err.Error() != want {
+		t.Fatalf("policy: %v", err)
 	}
 }

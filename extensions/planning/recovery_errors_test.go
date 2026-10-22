@@ -9,7 +9,7 @@ import (
 )
 
 func TestRecoveryRefusalsAreUnprocessableWithTheirMessage(t *testing.T) {
-	for _, err := range []error{recovery.ErrNothingToRestore, recovery.ErrRebuildable, recovery.ErrNotManaged} {
+	for _, err := range []error{recovery.ErrNothingToRestore, recovery.ErrRebuildable, recovery.ErrNotManaged, recovery.ErrNotOnKubernetes} {
 		var httpErr interface {
 			error
 			StatusCode() int

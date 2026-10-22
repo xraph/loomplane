@@ -83,3 +83,32 @@ it("says what each kind of binding keeps", () => {
   })
   expect(protectionOf(cache)?.protection).toBe("")
 })
+
+it("protection copy on Kubernetes", () => {
+  const binding = (kind: string) =>
+    ({
+      subject: "resource",
+      provider: "kubernetes",
+      config: {
+        kind,
+        provider: "kubernetes",
+        catalog: { id: `${kind}-kubernetes` },
+      },
+    }) as unknown as Binding
+  expect(protectionOf(binding("postgres"))?.protection).toBe("native")
+  expect(protectionOf(binding("timescaledb"))).toEqual({
+    protection: "",
+    label: "Backups on Kubernetes aren’t available yet.",
+  })
+  expect(protectionOf(binding("redis"))?.label).toBe(
+    "Backups on Kubernetes aren’t available yet."
+  )
+  const server = {
+    subject: "resource",
+    provider: "server",
+    config: { kind: "sample", provider: "server" },
+  } as unknown as Binding
+  expect(protectionOf(server)?.label).toBe(
+    "No Loomplane backups on this target"
+  )
+})

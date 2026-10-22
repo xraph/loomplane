@@ -34,11 +34,23 @@ var (
 	ErrRebuildable error = &refusalError{"rebuilt from its source, not backed up"}
 	// ErrNotManaged is for external dependencies.
 	ErrNotManaged error = &refusalError{"Not managed by Loomplane: no backups or restores"}
+	// ErrNotOnKubernetes is for stateful engines whose backups aren't
+	// qualified on a cluster yet.
+	ErrNotOnKubernetes error = &refusalError{"Backups aren't available on Kubernetes yet."}
 )
 
 // familyOf is how a kind finds the engine family whose recovery it shares.
 // Tests swap it to register kinds without touching the default registry.
 var familyOf = recipes.FamilyOf
+
+// titleOf is how a kind finds the title its engine is shown under. Tests
+// swap it with familyOf.
+var titleOf = func(kind string) string { return engineTitle(recipes.Default(), kind) }
+
+func engineTitle(r *recipes.Registry, kind string) string {
+	engine, _ := r.Engine(kind)
+	return engine.Title
+}
 
 // Protection is what recovery does for a resource's data. A database with
 // an adapter on its target is native, and a database without one is "".
@@ -58,7 +70,7 @@ func Protection(cfg *planning.ResourceConfig) recipes.Protection {
 		return recipes.ProtectionNone
 	}
 	family := familyOf(cfg.Kind)
-	if cfg.Catalog != nil && family != "" && cfg.Catalog.Engine() == family && (cfg.Provider == "server" || cfg.Provider == "kubernetes" && family == "postgres") {
+	if cfg.Catalog != nil && family != "" && cfg.Catalog.Engine() == family && (cfg.Provider == "server" || cfg.Provider == "kubernetes" && recipes.KubernetesRecovery(cfg.Kind)) {
 		return recipes.ProtectionNative
 	}
 	return ""
@@ -80,6 +92,9 @@ func refuseRecovery(name string, cfg *planning.ResourceConfig) error {
 		return &namedRefusalError{name + " is rebuilt from its source, not backed up", ErrRebuildable}
 	case recipes.ProtectionExternal:
 		return ErrNotManaged
+	}
+	if cfg.Provider == "kubernetes" && cfg.Catalog != nil && familyOf(cfg.Kind) != "" {
+		return &namedRefusalError{"Backups for " + titleOf(cfg.Kind) + " aren't available on Kubernetes yet.", ErrNotOnKubernetes}
 	}
 	return fmt.Errorf("%w: the resource has no supported database backup adapter", ErrInvalid)
 }
