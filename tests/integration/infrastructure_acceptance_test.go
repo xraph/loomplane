@@ -49,7 +49,8 @@ type infrastructureState struct {
 }
 
 // fixtureSSH forwards authenticated SSH channels to the disposable real Docker
-// daemon. Neither its Engine API nor its build/rollout responses are mocked.
+// daemon and runs exec requests in its builder. Neither its Engine API nor its
+// build/rollout responses are mocked.
 func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]string) {
 	t.Helper()
 	_, userKey, err := ed25519.GenerateKey(rand.Reader)
@@ -114,6 +115,15 @@ func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]str
 				for request := range channels {
 					address := ""
 					switch request.ChannelType() {
+					case "session":
+						// A deployment runs its effect-fence helper on the
+						// server with exec. Here the server is the builder.
+						channel, requests, channelErr := request.Accept()
+						if channelErr != nil {
+							continue
+						}
+						go fixtureExec(t, state, channel, requests)
+						continue
 					case "direct-streamlocal@openssh.com":
 						var payload struct {
 							Path, Reserved string
@@ -174,6 +184,37 @@ func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]str
 		t.Fatal(err)
 	}
 	return private, map[string]string{"host": address, "port": port, "user": "deploy", "host_key": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(host.PublicKey()))), "docker_socket": "/var/run/docker.sock", "advertise_host": "127.0.0.1"}
+}
+
+// fixtureExec runs one exec request of an SSH session inside the
+// disposable builder, which stands in for the server, and reports its exit
+// status. Shells and other session requests are refused.
+func fixtureExec(t *testing.T, state infrastructureState, channel ssh.Channel, requests <-chan *ssh.Request) {
+	defer channel.Close()
+	for request := range requests {
+		if request.Type != "exec" {
+			_ = request.Reply(false, nil)
+			continue
+		}
+		var payload struct{ Command string }
+		if ssh.Unmarshal(request.Payload, &payload) != nil {
+			_ = request.Reply(false, nil)
+			return
+		}
+		_ = request.Reply(true, nil)
+		command := exec.CommandContext(t.Context(), "docker", "exec", "-i", state.Builder, "sh", "-c", payload.Command)
+		command.Stdin, command.Stdout, command.Stderr = channel, channel, channel.Stderr()
+		status := uint32(0)
+		if err := command.Run(); err != nil {
+			status = 255
+			var exit *exec.ExitError
+			if errors.As(err, &exit) && exit.ExitCode() >= 0 {
+				status = uint32(exit.ExitCode())
+			}
+		}
+		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
+		return
+	}
 }
 
 func infrastructureSource(t *testing.T, buildGate string) []byte {

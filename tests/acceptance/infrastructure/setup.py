@@ -136,6 +136,11 @@ def setup():
                 "for i in $(seq 1 120); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1",
             ]
         )
+        # Deployments run their effect-fence helper with python3 over SSH
+        # exec, which the fixture runs in this builder.
+        command(
+            ["docker", "exec", state["builder"], "apk", "add", "--no-cache", "python3"]
+        )
         # Resolve the host once outside nested BuildKit's DNS namespace.
         # Docker Desktop exposes the Mac through this address.
         state["host_address"] = command(
