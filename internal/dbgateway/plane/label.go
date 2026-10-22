@@ -67,6 +67,21 @@ func (l Label) String() string {
 	return l.DB + labelSep + l.Branch
 }
 
+// MarshalText writes the label in its String form, so a Label is a JSON string.
+func (l Label) MarshalText() ([]byte, error) {
+	return []byte(l.String()), nil
+}
+
+// UnmarshalText reads a label through ParseLabel.
+func (l *Label) UnmarshalText(text []byte) error {
+	parsed, err := ParseLabel(string(text))
+	if err != nil {
+		return err
+	}
+	*l = parsed
+	return nil
+}
+
 // Suffix is the DNS zone below which the gateway's logical hosts live, for
 // example "us-east-1.db.example.com".
 type Suffix string
