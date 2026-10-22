@@ -328,14 +328,15 @@ func TestUnsupportedRecoveryKeepsItsPlainRefusal(t *testing.T) {
 	mysql.Kind = "unreviewed-engine"
 	service := Service{Authz: allowAll{}, Projects: fixedProjects{}, Bindings: fixedBindings{bindingFor(t, "data", mysql)}}
 	p := security.Principal{OrgID: "org", UserID: "user"}
-	const want = "invalid service backup request: the resource has no supported database backup adapter"
 
+	// Both say what they said before catalog kinds: a backup names the
+	// missing adapter, and a policy is a bare invalid request.
 	_, err := service.Create(t.Context(), p, "project", BackupCreateInput{Environment: "production", Resource: "data", RequestID: "request-123"})
-	if !errors.Is(err, ErrInvalid) || errors.Is(err, ErrNotOnKubernetes) || err.Error() != want {
+	if !errors.Is(err, ErrInvalid) || errors.Is(err, ErrNotOnKubernetes) || err.Error() != "invalid service backup request: the resource has no supported database backup adapter" {
 		t.Fatalf("backup: %v", err)
 	}
 	_, err = service.SetPolicy(t.Context(), p, "project", PolicyInput{Environment: "production", Resource: "data", EveryHours: 24, Enabled: true})
-	if !errors.Is(err, ErrInvalid) || errors.Is(err, ErrNotOnKubernetes) || err.Error() != want {
+	if err != ErrInvalid { //nolint:errorlint // the bare sentinel, exactly as before
 		t.Fatalf("policy: %v", err)
 	}
 }

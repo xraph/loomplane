@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/xraph/loomplane/internal/planning"
@@ -74,6 +75,18 @@ func Protection(cfg *planning.ResourceConfig) recipes.Protection {
 		return recipes.ProtectionNative
 	}
 	return ""
+}
+
+// named reports whether err is one of the refusals a resource without
+// recovery is told in its own words. Any other refusal stays the plain one
+// each caller gave before catalog kinds.
+func named(err error) bool {
+	for _, refusal := range []error{ErrNothingToRestore, ErrRebuildable, ErrNotManaged, ErrNotOnKubernetes} {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
 }
 
 func supportsRecovery(cfg *planning.ResourceConfig) bool {

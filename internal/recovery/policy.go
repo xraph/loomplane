@@ -82,7 +82,7 @@ func (s *Service) SetPolicy(ctx context.Context, p security.Principal, project s
 		}
 	}
 	if !found {
-		if refused != nil {
+		if named(refused) {
 			return nil, refused
 		}
 		return nil, ErrInvalid
