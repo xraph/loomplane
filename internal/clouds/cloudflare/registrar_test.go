@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -386,6 +387,11 @@ func TestRegisterDefiniteRefusalsAreNotAmbiguous(t *testing.T) {
 		noLeak(t, err)
 		if code == 403 && !errors.Is(err, provider.ErrInfrastructureScope) {
 			t.Fatalf("403: %v", err)
+		}
+		// The status and Cloudflare's numeric codes survive; its message doesn't.
+		var detail *provider.InfrastructureAPIError
+		if !errors.As(err, &detail) || detail.Status != code || !slices.Equal(detail.Codes, []int{10000}) {
+			t.Fatalf("%d: detail %+v", code, detail)
 		}
 	}
 }

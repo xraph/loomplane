@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,9 @@ type fakeRegistrar struct {
 	expires            time.Time
 	errorCode, message string
 	failAfterPost      bool
-	refuseAfterPost    bool
+	postErr            error
+	noContext          bool
+	getErr             error
 	posts              int
 	reconcileOnlyCalls int
 	specs              []provider.DomainRegistrationSpec
@@ -74,8 +77,8 @@ func (r *fakeRegistrar) RegisterDomain(_ context.Context, _ provider.Infrastruct
 	switch {
 	case r.failAfterPost:
 		return provider.DomainRegistrationResult{}, fmt.Errorf("%w: response lost", provider.ErrInfrastructureAmbiguous)
-	case r.refuseAfterPost:
-		return provider.DomainRegistrationResult{}, provider.ErrInfrastructureScope
+	case r.postErr != nil:
+		return provider.DomainRegistrationResult{}, r.postErr
 	}
 	return r.result(spec.Name, false), nil
 }
@@ -86,12 +89,19 @@ func (r *fakeRegistrar) result(name string, reconciled bool) provider.DomainRegi
 		state = provider.RegistrationSucceeded
 	}
 	res := provider.DomainRegistrationResult{Name: name, State: state, Completed: state != provider.RegistrationInProgress, ErrorCode: r.errorCode, ErrorMessage: r.message, Reconciled: reconciled}
-	if state == provider.RegistrationSucceeded {
+	if state == provider.RegistrationSucceeded && !r.noContext {
 		res.ExpiresAt = r.expires
 		res.AutoRenew = len(r.specs) > 0 && r.specs[len(r.specs)-1].AutoRenew
 		res.PrivacyMode = "redaction"
 	}
 	return res
+}
+
+func (r *fakeRegistrar) GetRegisteredDomain(_ context.Context, _ provider.InfrastructureCredential, name string) (provider.RegisteredDomain, error) {
+	if r.getErr != nil {
+		return provider.RegisteredDomain{}, r.getErr
+	}
+	return provider.RegisteredDomain{Name: name, Status: "active", ExpiresAt: r.expires, AutoRenew: len(r.specs) > 0 && r.specs[len(r.specs)-1].AutoRenew}, nil
 }
 
 func (r *fakeRegistrar) SetAutoRenew(_ context.Context, _ provider.InfrastructureCredential, name string, enabled bool) (provider.RegisteredDomain, error) {
@@ -313,21 +323,109 @@ func TestRegistrationLostResponseNeverPostsTwice(t *testing.T) {
 	}
 }
 
-func TestRegistrationNeverPostsAgainAfterAnyPostError(t *testing.T) {
+func TestRegistrationPostRefusalEndsFailedAndAmbiguityReconciles(t *testing.T) {
+	refused := errors.Join(&provider.InfrastructureScopeError{Provider: "cloudflare", Permission: "Registrar:Edit"}, &provider.InfrastructureAPIError{Provider: "cloudflare", Status: 402, Codes: []int{1234}})
+	for _, tc := range []struct {
+		name    string
+		err     error
+		message string
+	}{
+		{"declined", refused, "Cloudflare refused to register acme.dev (HTTP 402, Cloudflare code 1234). Nothing was bought."},
+		{"not sent", provider.ErrInfrastructureInvalid, "Cloudflare refused to register acme.dev. Nothing was bought."},
+	} {
+		env := newRegistrationEnv(t)
+		env.registrar.postErr = tc.err
+		op := approvedRegistration(t, env.svc)
+		if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+			t.Fatal(tc.name, err)
+		}
+		got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID)
+		if got.Status != RegistrationFailedStatus || !got.Attempted || !got.FirstUnconfirmedAt.IsZero() || got.Message != tc.message {
+			t.Fatalf("%s: %+v", tc.name, got)
+		}
+		env.registrar.postErr = nil
+		_ = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil)
+		if env.registrar.posts != 1 || env.registrar.reconcileOnlyCalls != 0 {
+			t.Fatalf("%s: posts=%d reconcile=%d", tc.name, env.registrar.posts, env.registrar.reconcileOnlyCalls)
+		}
+	}
+
+	// An uncertain answer keeps waiting and is only read back.
 	env := newRegistrationEnv(t)
-	env.registrar.refuseAfterPost = true // a plain refusal, not marked ambiguous
+	env.registrar.postErr = errors.Join(provider.ErrInfrastructureAmbiguous, &provider.InfrastructureAPIError{Provider: "cloudflare", Status: 409})
 	op := approvedRegistration(t, env.svc)
 	if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); !errors.Is(err, ErrPending) {
-		t.Fatal("first attempt", err)
+		t.Fatal("ambiguous", err)
 	}
-	got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID)
-	if got.Status != RegistrationRegistering || !got.Attempted {
-		t.Fatalf("after a refused POST: %+v", got)
+	if got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID); got.Status != RegistrationRegistering || !got.Attempted || got.FirstUnconfirmedAt.IsZero() {
+		t.Fatalf("ambiguous: %+v", got)
 	}
-	env.registrar.refuseAfterPost = false
+	env.registrar.postErr = nil
 	_ = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil)
 	if env.registrar.posts != 1 || env.registrar.reconcileOnlyCalls != 1 {
 		t.Fatalf("posts=%d reconcile=%d", env.registrar.posts, env.registrar.reconcileOnlyCalls)
+	}
+}
+
+func TestRegistrationReadsTheDomainWhenTheAnswerHasNoExpiry(t *testing.T) {
+	env := newRegistrationEnv(t)
+	env.registrar.noContext, env.registrar.getErr = true, errors.New("read failed")
+	op := approvedRegistration(t, env.svc)
+	if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err == nil {
+		t.Fatal("stored a succeeded registration without its expiry", err)
+	}
+	if got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID); got.Status != RegistrationRegistering || !got.DomainExpiresAt.IsZero() {
+		t.Fatalf("after a failed read: %+v", got)
+	}
+	env.registrar.getErr = nil
+	if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); !errors.Is(err, ErrPending) {
+		t.Fatal(err)
+	}
+	got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID)
+	if got.Status != RegistrationZonePending || !got.DomainExpiresAt.Equal(env.registrar.expires) || !got.AutoRenew || env.registrar.posts != 1 || len(env.registrar.autoRenew) != 0 {
+		t.Fatalf("%+v posts=%d", got, env.registrar.posts)
+	}
+}
+
+// flakyDomains fails project lookups until err is cleared.
+type flakyDomains struct {
+	*overviewStore
+	err error
+}
+
+func (d *flakyDomains) DomainProject(ctx context.Context, org, project string) error {
+	if d.err != nil {
+		return d.err
+	}
+	return d.overviewStore.DomainProject(ctx, org, project)
+}
+
+func TestRegistrationKeepsGrantsThroughATransientProjectError(t *testing.T) {
+	env := newRegistrationEnv(t)
+	env.dns.zone = &provider.DNSZone{ID: "cf_zone", Name: "acme.dev", AccountID: "account", Verified: true}
+	op, err := env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.dev", ProjectIDs: []string{"shop", "docs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.svc.ApproveRegistration(t.Context(), admin, op.ID, RegistrationApproval{Review: op.Review, Currency: "USD", RegistrationCost: "10.11"}); err != nil {
+		t.Fatal(err)
+	}
+	flaky := &flakyDomains{overviewStore: env.domains, err: errors.New("connection reset")}
+	env.svc.Domains = flaky
+	if err = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err == nil {
+		t.Fatal("a transient error was taken as a deleted project")
+	}
+	if got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID); got.Status != RegistrationZonePending || len(env.domains.zones) != 0 {
+		t.Fatalf("after a transient error: %+v", got)
+	}
+	// Docs was deleted meanwhile; only it loses the grant.
+	flaky.err = nil
+	delete(env.domains.projects["org"], "docs")
+	if err = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.domains.zones) != 1 || !slices.Equal(env.domains.zones[0].ProjectIDs, []string{"shop"}) {
+		t.Fatalf("zones: %+v", env.domains.zones)
 	}
 }
 

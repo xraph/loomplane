@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -40,7 +41,7 @@ func infrastructureError(err error, permission string) error {
 		case http.StatusNotFound:
 			return provider.ErrInfrastructureNotFound
 		default:
-			return &provider.InfrastructureAPIError{Provider: "cloudflare", Status: api.Status}
+			return &provider.InfrastructureAPIError{Provider: "cloudflare", Status: api.Status, Codes: slices.Clone(api.Codes)}
 		}
 	}
 	return &provider.InfrastructureAPIError{Provider: "cloudflare"}

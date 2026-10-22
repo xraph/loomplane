@@ -386,7 +386,13 @@ func registerFailure(err error) error {
 		return provider.ErrInfrastructureInvalid
 	case errors.As(err, &api):
 		if api.Status >= 400 && api.Status < 500 && api.Status != http.StatusConflict {
-			return infrastructureError(err, registrarWriteScope)
+			// The status and Cloudflare's codes say why, without its message.
+			refused := infrastructureError(err, registrarWriteScope)
+			var detail *provider.InfrastructureAPIError
+			if !errors.As(refused, &detail) {
+				refused = errors.Join(refused, &provider.InfrastructureAPIError{Provider: "cloudflare", Status: api.Status, Codes: slices.Clone(api.Codes)})
+			}
+			return refused
 		}
 		return errors.Join(provider.ErrInfrastructureAmbiguous, infrastructureError(err, registrarWriteScope))
 	}

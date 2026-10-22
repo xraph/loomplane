@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -538,8 +539,9 @@ func (s *Service) ReconcileRegistration(ctx context.Context, org, id string, hea
 }
 
 // register buys the domain at most once. Before the purchase is sent any
-// failure ends the registration with nothing bought. After it, every
-// answer is read through ReconcileOnly.
+// failure ends the registration with nothing bought, and so does a definite
+// refusal of the purchase itself. An uncertain answer is only ever read back
+// through ReconcileOnly.
 func (s *Service) register(ctx context.Context, st RegistrationStore, reg *Registration) error {
 	if !reg.Attempted {
 		adapter, cred, spec, stop, err := s.prepareRegistration(ctx, reg)
@@ -558,14 +560,42 @@ func (s *Service) register(ctx context.Context, st RegistrationStore, reg *Regis
 			return saveErr
 		}
 		result, err := adapter.RegisterDomain(ctx, cred, spec)
-		return s.recordResult(ctx, st, reg, result, err)
+		if err != nil && ctx.Err() == nil && !errors.Is(err, provider.ErrInfrastructureAmbiguous) {
+			// Cloudflare refused the purchase, or it was never sent.
+			reg.Status, reg.FirstUnconfirmedAt = RegistrationFailedStatus, time.Time{}
+			reg.Message = "Cloudflare refused to register " + reg.Name + refusalDetail(err) + ". Nothing was bought."
+			return s.finishRegistration(ctx, st, reg)
+		}
+		return s.recordResult(ctx, st, reg, adapter, cred, result, err)
 	}
 	adapter, cred, err := s.registrationCredential(ctx, reg)
 	if err != nil {
 		return s.unconfirmed(ctx, st, reg)
 	}
 	result, err := adapter.RegisterDomain(ctx, cred, provider.DomainRegistrationSpec{OperationID: reg.ID, Name: reg.Name, AutoRenew: reg.AutoRenew, PrivacyMode: reg.PrivacyMode, ReconcileOnly: true})
-	return s.recordResult(ctx, st, reg, result, err)
+	return s.recordResult(ctx, st, reg, adapter, cred, result, err)
+}
+
+// refusalDetail names the HTTP status and Cloudflare's error codes, never
+// its message.
+func refusalDetail(err error) string {
+	var api *provider.InfrastructureAPIError
+	if !errors.As(err, &api) || api.Status == 0 {
+		return ""
+	}
+	detail := fmt.Sprintf(" (HTTP %d", api.Status)
+	if len(api.Codes) > 0 {
+		codes := make([]string, 0, len(api.Codes))
+		for _, code := range api.Codes {
+			codes = append(codes, strconv.Itoa(code))
+		}
+		label := "code"
+		if len(codes) > 1 {
+			label = "codes"
+		}
+		detail += ", Cloudflare " + label + " " + strings.Join(codes, ", ")
+	}
+	return detail + ")"
 }
 
 func (s *Service) registrationCredential(ctx context.Context, reg *Registration) (provider.DomainRegistrar, provider.InfrastructureCredential, error) {
@@ -626,9 +656,9 @@ func (s *Service) registrant(ctx context.Context, reg *Registration) (*provider.
 	return &contact, nil
 }
 
-// recordResult saves what the registrar answered. An error of any kind,
-// once the purchase may have been sent, leaves the outcome unknown.
-func (s *Service) recordResult(ctx context.Context, st RegistrationStore, reg *Registration, result provider.DomainRegistrationResult, err error) error {
+// recordResult saves what the registrar answered. An error here means the
+// purchase may have been sent, so the outcome is unknown.
+func (s *Service) recordResult(ctx context.Context, st RegistrationStore, reg *Registration, adapter provider.DomainRegistrar, cred provider.InfrastructureCredential, result provider.DomainRegistrationResult, err error) error {
 	if err != nil || result.Name != reg.Name {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -640,8 +670,20 @@ func (s *Service) recordResult(ctx context.Context, st RegistrationStore, reg *R
 	case provider.RegistrationInProgress:
 		return s.keepRegistering(ctx, st, reg, "Cloudflare is still registering "+reg.Name+".", time.Time{})
 	case provider.RegistrationSucceeded:
+		expires, autoRenew := result.ExpiresAt, result.AutoRenew
+		if expires.IsZero() {
+			// The workflow answer can omit the registration; read the domain.
+			domain, readErr := adapter.GetRegisteredDomain(ctx, cred, reg.Name)
+			if readErr != nil {
+				return readErr
+			}
+			if domain.Name != reg.Name {
+				return provider.ErrInfrastructureIdentity
+			}
+			expires, autoRenew = domain.ExpiresAt, domain.AutoRenew
+		}
 		reg.Status, reg.Message = RegistrationZonePending, reg.Name+" is registered. Waiting for its Cloudflare zone to become active."
-		reg.DomainExpiresAt, reg.AutoRenew, reg.FirstUnconfirmedAt = result.ExpiresAt, result.AutoRenew, time.Time{}
+		reg.DomainExpiresAt, reg.AutoRenew, reg.FirstUnconfirmedAt = expires, autoRenew, time.Time{}
 		return s.saveRegistration(ctx, st, reg)
 	case provider.RegistrationFailed:
 		reg.Status = RegistrationFailedStatus
@@ -744,8 +786,11 @@ func (s *Service) handOffZone(ctx context.Context, st RegistrationStore, reg *Re
 	projectIDs := []string{}
 	for _, project := range reg.ProjectIDs {
 		// A project deleted since the preview loses its grant.
-		if domains.DomainProject(ctx, reg.OrgID, project) == nil {
+		switch checkErr := domains.DomainProject(ctx, reg.OrgID, project); {
+		case checkErr == nil:
 			projectIDs = append(projectIDs, project)
+		case !errors.Is(checkErr, ErrNotFound):
+			return checkErr
 		}
 	}
 	zone, err := s.createManagedZone(ctx, reg.Principal, reg.Name, reg.ConnectionID, projectIDs)
