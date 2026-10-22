@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -79,6 +80,11 @@ func (s *PgStore) PendingRegistrations(ctx context.Context) ([]*Registration, er
 
 func (s *PgStore) SucceededRegistrations(ctx context.Context) ([]*Registration, error) {
 	return s.registrations(ctx, `SELECT body FROM loomplane_domain_registrations WHERE status='succeeded' ORDER BY created_at,id`)
+}
+
+func (s *PgStore) UnnotifiedRegistrations(ctx context.Context, since time.Time) ([]*Registration, error) {
+	return s.registrations(ctx, `SELECT body FROM loomplane_domain_registrations WHERE status IN ('succeeded','failed','action_required','blocked','price_changed','unconfirmed')
+ AND COALESCE(body->>'result_notified_for','')<>status AND (body->>'updated_at')::timestamptz>=$1 ORDER BY created_at,id`, since)
 }
 
 // SaveRegistration writes reg if nobody saved it since it was read, and

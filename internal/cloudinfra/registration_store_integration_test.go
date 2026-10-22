@@ -178,6 +178,25 @@ func TestRegistrationStore(t *testing.T) {
 	if done, listErr := st.SucceededRegistrations(ctx); listErr != nil || len(done) != 1 || done[0].ID != "reg_x" {
 		t.Fatal("succeeded", done, listErr)
 	}
+	// reg_1 failed and reg_x succeeded, neither notified yet; only rows
+	// saved since the cutoff count.
+	got.UpdatedAt, other.UpdatedAt = time.Now().Add(-8*24*time.Hour), time.Now()
+	for _, reg := range []*Registration{got, other} {
+		if err = st.SaveRegistration(ctx, reg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unnotified, err := st.UnnotifiedRegistrations(ctx, time.Now().Add(-7*24*time.Hour))
+	if err != nil || len(unnotified) != 1 || unnotified[0].ID != "reg_x" {
+		t.Fatal("unnotified", unnotified, err)
+	}
+	other.ResultNotifiedFor = RegistrationSucceededStatus
+	if err = st.SaveRegistration(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if unnotified, err = st.UnnotifiedRegistrations(ctx, time.Now().Add(-7*24*time.Hour)); err != nil || len(unnotified) != 0 {
+		t.Fatal("notified row listed", unnotified, err)
+	}
 	if _, err = pg.Exec(ctx, `DELETE FROM loomplane_cloud_connections WHERE org_id='org' AND id='cf'`); err == nil {
 		t.Fatal("an approved registration lost its connection")
 	}

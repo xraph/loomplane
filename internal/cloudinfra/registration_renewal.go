@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -25,14 +26,19 @@ type RenewalNotifier interface {
 	EnqueueRegistrationResult(context.Context, notifications.RegistrationResultNotice) error
 }
 
+// registrationRenotifyWindow bounds how far back recovery looks for a
+// result notice that failed to queue.
+const registrationRenotifyWindow = 7 * 24 * time.Hour
+
 // notifiedStatuses are the final statuses a person hears about.
 var notifiedStatuses = []string{RegistrationSucceededStatus, RegistrationFailedStatus, RegistrationActionRequiredStatus, RegistrationBlockedStatus, RegistrationPriceChanged, RegistrationUnconfirmed}
 
-// notifyResult tells the organization a registration ended. The status is
-// already saved, so a failure here is recorded rather than returned.
-func (s *Service) notifyResult(ctx context.Context, reg *Registration) {
-	if s.Notices == nil || !slices.Contains(notifiedStatuses, reg.Status) {
-		return
+// notifyResult queues the notice that a registration ended, once per final
+// status, and records that it did. Until it does, ResultNotifiedFor trails
+// the status and RecoverRegistrations tries again.
+func (s *Service) notifyResult(ctx context.Context, st RegistrationStore, reg *Registration) error {
+	if s.Notices == nil || !slices.Contains(notifiedStatuses, reg.Status) || reg.ResultNotifiedFor == reg.Status {
+		return nil
 	}
 	message := reg.Message
 	if reg.Status == RegistrationActionRequiredStatus || reg.Status == RegistrationBlockedStatus {
@@ -40,8 +46,34 @@ func (s *Service) notifyResult(ctx context.Context, reg *Registration) {
 	}
 	notice := notifications.RegistrationResultNotice{OrgID: reg.OrgID, RegistrationID: reg.ID, Domain: reg.Name, Status: reg.Status, Message: message}
 	if err := s.Notices.EnqueueRegistrationResult(ctx, notice); err != nil {
-		s.registrationAudit(ctx, reg.Principal, "domain.registration.notice_pending", reg)
+		return fmt.Errorf("queue the %s notice for %s: %w", reg.Status, reg.Name, err)
 	}
+	reg.ResultNotifiedFor = reg.Status
+	// Losing this save only means recovery queues the same notice again,
+	// which its outbox id turns into a no-op.
+	if err := s.saveRegistration(ctx, st, reg); err != nil && !errors.Is(err, ErrConflict) {
+		return err
+	}
+	return nil
+}
+
+// renotifyResults queues the result notices that failed to queue when their
+// registration ended.
+func (s *Service) renotifyResults(ctx context.Context, st RegistrationStore) error {
+	if s.Notices == nil {
+		return nil
+	}
+	regs, err := st.UnnotifiedRegistrations(ctx, s.now().Add(-registrationRenotifyWindow))
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, reg := range regs {
+		if notifyErr := s.notifyResult(ctx, st, reg); notifyErr != nil {
+			errs = append(errs, notifyErr)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // SweepRegistrations keeps succeeded registrations current with the

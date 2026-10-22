@@ -11,6 +11,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/notifications"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -216,6 +217,16 @@ func (s *memoryRegistrations) PendingRegistrations(context.Context) ([]*Registra
 }
 func (s *memoryRegistrations) SucceededRegistrations(context.Context) ([]*Registration, error) {
 	return s.withStatus(RegistrationSucceededStatus)
+}
+func (s *memoryRegistrations) UnnotifiedRegistrations(_ context.Context, since time.Time) ([]*Registration, error) {
+	regs, err := s.withStatus(notifiedStatuses...)
+	out := []*Registration{}
+	for _, reg := range regs {
+		if reg.ResultNotifiedFor != reg.Status && !reg.UpdatedAt.Before(since) {
+			out = append(out, reg)
+		}
+	}
+	return out, err
 }
 func (s *memoryRegistrations) withStatus(statuses ...string) ([]*Registration, error) {
 	out := []*Registration{}
@@ -790,10 +801,11 @@ func TestRegistrationZoneAddedByHand(t *testing.T) {
 // outboxNotices records every call, and keeps one row per outbox id the way
 // the outbox's primary key does.
 type outboxNotices struct {
-	sent    []notifications.RenewalNotice
-	rows    map[string]notifications.RenewalNotice
-	results []notifications.RegistrationResultNotice
-	err     error
+	sent      []notifications.RenewalNotice
+	rows      map[string]notifications.RenewalNotice
+	results   []notifications.RegistrationResultNotice
+	err       error
+	resultErr error
 }
 
 func (n *outboxNotices) EnqueueRenewalNotice(_ context.Context, notice notifications.RenewalNotice) error {
@@ -809,6 +821,9 @@ func (n *outboxNotices) EnqueueRenewalNotice(_ context.Context, notice notificat
 }
 
 func (n *outboxNotices) EnqueueRegistrationResult(_ context.Context, notice notifications.RegistrationResultNotice) error {
+	if n.resultErr != nil {
+		return n.resultErr
+	}
 	n.results = append(n.results, notice)
 	return nil
 }
@@ -972,8 +987,11 @@ func TestRegistrationResultNotifiesOnce(t *testing.T) {
 	if err := env.svc.ReconcileRegistration(t.Context(), "org", reg.ID, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(notices.results) != 1 || notices.results[0] != (notifications.RegistrationResultNotice{OrgID: "org", RegistrationID: reg.ID, Domain: "acme.dev", Status: RegistrationSucceededStatus}) {
-		t.Fatalf("succeeded: %+v", notices.results)
+	if len(notices.results) != 1 || notices.results[0] != (notifications.RegistrationResultNotice{OrgID: "org", RegistrationID: reg.ID, Domain: "acme.dev", Status: RegistrationSucceededStatus}) || reg.ResultNotifiedFor != RegistrationSucceededStatus {
+		t.Fatalf("succeeded: %+v %+v", notices.results, reg)
+	}
+	if err := env.svc.RecoverRegistrations(t.Context()); err != nil || len(notices.results) != 1 {
+		t.Fatal("recovery notified a recorded result again", err, notices.results)
 	}
 
 	env = newRegistrationEnv(t)
@@ -1005,5 +1023,65 @@ func TestRegistrationResultNotifiesOnce(t *testing.T) {
 	env.now = env.now.Add(time.Hour)
 	if err := env.svc.RecoverRegistrations(t.Context()); err != nil || len(notices.results) != 1 {
 		t.Fatal("expired preview", err, notices.results)
+	}
+}
+
+// recordingAudit keeps every audit event.
+type recordingAudit struct{ events []projects.AuditEvent }
+
+func (a *recordingAudit) Record(_ context.Context, e projects.AuditEvent) {
+	a.events = append(a.events, e)
+}
+
+func TestRegistrationResultRetriesAfterAFailedEnqueue(t *testing.T) {
+	env := newRegistrationEnv(t)
+	audit := &recordingAudit{}
+	notices := &outboxNotices{rows: map[string]notifications.RenewalNotice{}, resultErr: errors.New("outbox unavailable")}
+	env.svc.Notices, env.svc.Audit = notices, audit
+	env.dns.zone = &provider.DNSZone{ID: "cf_zone", Name: "acme.dev", AccountID: "account", Verified: true}
+	op := approvedRegistration(t, env.svc)
+	if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+		t.Fatal("a failed notice failed the registration", err)
+	}
+	got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID)
+	if got.Status != RegistrationSucceededStatus || got.ResultNotifiedFor != "" || len(notices.results) != 0 {
+		t.Fatalf("after the failed enqueue: %+v", got)
+	}
+	pending := audit.events[len(audit.events)-1]
+	if pending.Action != "domain.registration.notice_pending" || pending.Attributes["error"] != "queue the succeeded notice for acme.dev: outbox unavailable" {
+		t.Fatalf("audit: %+v", pending)
+	}
+	// Recovery keeps failing loudly while the outbox is down.
+	if err := env.svc.RecoverRegistrations(t.Context()); err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatal("recovery hid the failure", err)
+	}
+	notices.resultErr = nil
+	env.now = env.now.Add(30 * time.Second)
+	if err := env.svc.RecoverRegistrations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(notices.results) != 1 || notices.results[0].Status != RegistrationSucceededStatus || notices.results[0].RegistrationID != op.ID {
+		t.Fatalf("retried notice: %+v", notices.results)
+	}
+	got, _ = env.svc.GetRegistration(t.Context(), admin, op.ID)
+	if got.ResultNotifiedFor != RegistrationSucceededStatus {
+		t.Fatalf("not recorded: %+v", got)
+	}
+	env.now = env.now.Add(30 * time.Second)
+	if err := env.svc.RecoverRegistrations(t.Context()); err != nil || len(notices.results) != 1 {
+		t.Fatal("notified again", err, notices.results)
+	}
+
+	// A registration that ended more than a week ago is left alone.
+	other := newRegistrationEnv(t)
+	late := &outboxNotices{rows: map[string]notifications.RenewalNotice{}, resultErr: errors.New("outbox unavailable")}
+	other.svc.Notices = late
+	other.registrar.state = provider.RegistrationFailed
+	failed := approvedRegistration(t, other.svc)
+	_ = other.svc.ReconcileRegistration(t.Context(), "org", failed.ID, nil)
+	late.resultErr = nil
+	other.now = other.now.Add(8 * 24 * time.Hour)
+	if err := other.svc.RecoverRegistrations(t.Context()); err != nil || len(late.results) != 0 {
+		t.Fatal("an old registration was notified", err, late.results)
 	}
 }

@@ -70,6 +70,7 @@ type Registration struct {
 	DomainExpiresAt    time.Time            `json:"domain_expires_at"`
 	RefreshedAt        time.Time            `json:"refreshed_at"`
 	NoticeSentFor      time.Time            `json:"notice_sent_for"`
+	ResultNotifiedFor  string               `json:"result_notified_for"`
 	Sandbox            bool                 `json:"sandbox"`
 	Revision           int64                `json:"revision"`
 	CreatedAt          time.Time            `json:"created_at"`
@@ -135,7 +136,8 @@ type RegistrationWorkflow interface {
 // RegistrationStore saves registrations with a revision check.
 // PendingRegistrations lists every organization's preview, approved,
 // registering and zone_pending rows, SucceededRegistrations its succeeded
-// ones.
+// ones. UnnotifiedRegistrations lists rows saved since the given time whose
+// final status has no result notice queued yet.
 type RegistrationStore interface {
 	CreateRegistration(context.Context, *Registration) error
 	Registration(ctx context.Context, org, id string) (*Registration, error)
@@ -143,6 +145,7 @@ type RegistrationStore interface {
 	SaveRegistration(context.Context, *Registration) error
 	PendingRegistrations(context.Context) ([]*Registration, error)
 	SucceededRegistrations(context.Context) ([]*Registration, error)
+	UnnotifiedRegistrations(ctx context.Context, since time.Time) ([]*Registration, error)
 }
 
 func (s *Service) registrationStore() (RegistrationStore, error) {
@@ -482,8 +485,8 @@ func (s *Service) SetRegistrationAutoRenew(ctx context.Context, p security.Princ
 	return shown(reg), nil
 }
 
-// RecoverRegistrations restarts registrations in flight and expires
-// previews nobody approved in time.
+// RecoverRegistrations restarts registrations in flight, expires previews
+// nobody approved in time and queues result notices that failed to queue.
 func (s *Service) RecoverRegistrations(ctx context.Context) error {
 	st, err := s.registrationStore()
 	if err != nil {
@@ -506,6 +509,9 @@ func (s *Service) RecoverRegistrations(ctx context.Context) error {
 		if finishErr := s.finishRegistration(ctx, st, reg); finishErr != nil && !errors.Is(finishErr, ErrConflict) {
 			errs = append(errs, finishErr)
 		}
+	}
+	if notifyErr := s.renotifyResults(ctx, st); notifyErr != nil {
+		errs = append(errs, notifyErr)
 	}
 	return errors.Join(errs...)
 }
@@ -833,9 +839,8 @@ func registrationDashboard(accountID string) string {
 }
 
 // finishRegistration saves a final status. The registrant contact is
-// deleted first, so no final registration leaves one in Vault. Only the
-// call that saves the status notifies, and the outbox keeps one notice per
-// status, so a retried step can't send it twice.
+// deleted first, so no final registration leaves one in Vault. The outbox
+// keeps one notice per status, so a retry can't send it twice.
 func (s *Service) finishRegistration(ctx context.Context, st RegistrationStore, reg *Registration) error {
 	if reg.CustomRegistrant {
 		if err := s.Secrets.Delete(ctx, reg.OrgID, registrantKey(reg.ID)); err != nil {
@@ -846,7 +851,11 @@ func (s *Service) finishRegistration(ctx context.Context, st RegistrationStore, 
 		return err
 	}
 	s.registrationAudit(ctx, reg.Principal, "domain.registration."+reg.Status, reg)
-	s.notifyResult(ctx, reg)
+	// The status is saved, so a notice that fails to queue is recorded and
+	// left to RecoverRegistrations rather than failing the step.
+	if err := s.notifyResult(ctx, st, reg); err != nil {
+		s.registrationAuditError(ctx, reg.Principal, "domain.registration.notice_pending", reg, err)
+	}
 	return nil
 }
 
@@ -917,7 +926,19 @@ func replaceFold(s, old, replacement string) string {
 }
 
 func (s *Service) registrationAudit(ctx context.Context, p security.Principal, action string, reg *Registration) {
-	if s.Audit != nil {
-		s.Audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", Principal: p, Attributes: map[string]any{"registration_id": reg.ID, "domain": reg.Name, "status": reg.Status}})
+	s.registrationAuditError(ctx, p, action, reg, nil)
+}
+
+// registrationAuditError records err's text with the event. Callers pass
+// only errors that carry no secrets, such as outbox failures.
+func (s *Service) registrationAuditError(ctx context.Context, p security.Principal, action string, reg *Registration, err error) {
+	if s.Audit == nil {
+		return
 	}
+	attributes := map[string]any{"registration_id": reg.ID, "domain": reg.Name, "status": reg.Status}
+	severity, outcome := "info", ""
+	if err != nil {
+		attributes["error"], severity, outcome = err.Error(), "warning", "failure"
+	}
+	s.Audit.Record(ctx, projects.AuditEvent{Action: action, Severity: severity, Outcome: outcome, Principal: p, Attributes: attributes})
 }
