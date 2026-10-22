@@ -31,6 +31,9 @@ var (
 const (
 	// liveWindow is how long after its last report an instance counts as live.
 	liveWindow = 30 * time.Second
+	// instanceRetention is how long an instance's last report is kept after
+	// it stops reporting.
+	instanceRetention = time.Hour
 	// saltSize is the SCRAM salt length.
 	saltSize = 16
 
@@ -174,6 +177,22 @@ func (s *Store) Gateway(ctx context.Context, org, id string) (*Gateway, error) {
 	return &g, nil
 }
 
+// GatewayByID returns the gateway with id in whatever organization holds it,
+// or ErrNotFound. Gateway ids are generated type ids, unique across
+// organizations, which is what lets a gateway's signed request name itself
+// without naming its organization.
+func (s *Store) GatewayByID(ctx context.Context, id string) (*Gateway, error) {
+	g, err := scanGateway(s.db.QueryRow(ctx, `SELECT `+gatewayColumns+` FROM loomplane_db_gateways
+		WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read database gateway: %w", err)
+	}
+	return &g, nil
+}
+
 // Gateways lists an organization's gateways, oldest first. A non-empty
 // environmentID narrows the list to that environment.
 func (s *Store) Gateways(ctx context.Context, org, environmentID string) ([]Gateway, error) {
@@ -295,11 +314,28 @@ func (s *Store) BumpSnapshot(ctx context.Context, org, gatewayID, digest string)
 	return uint64(v), false, nil
 }
 
+// LatestSnapshot returns the gateway's stored snapshot version and digest,
+// read together. A gateway with no snapshot yet gives ErrNotFound.
+func (s *Store) LatestSnapshot(ctx context.Context, org, gatewayID string) (version uint64, digest string, err error) {
+	var v int64
+	err = s.db.QueryRow(ctx, `SELECT version, digest FROM loomplane_db_gateway_snapshots
+		WHERE org_id = $1 AND gateway_id = $2`, org, gatewayID).Scan(&v, &digest)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, "", fmt.Errorf("%w: no snapshot for gateway %s", ErrNotFound, gatewayID)
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("read database gateway snapshot: %w", err)
+	}
+	return uint64(v), digest, nil //nolint:gosec // G115: the column is checked positive
+}
+
 // Report stores an instance's report, replacing its last one, and returns how
 // many of the gateway's instances reported in the 30 seconds up to now. now is
 // the report's time and the clock the window is measured against, so a caller
 // that passes its own gets the same answer whatever the database's clock says.
-// A report older than the stored one for the same instance is ignored.
+// A report older than the stored one for the same instance is ignored. The
+// gateway's instances that last reported over an hour before now are deleted,
+// so instances that went away don't pile up.
 func (s *Store) Report(ctx context.Context, org, gatewayID string, r plane.Report, now time.Time) (live int, err error) {
 	if r.InstanceID == "" {
 		return 0, fmt.Errorf("%w: a report needs an instance id", ErrInvalid)
@@ -325,6 +361,10 @@ func (s *Store) Report(ctx context.Context, org, gatewayID string, r plane.Repor
 			WHERE i.last_seen_at <= EXCLUDED.last_seen_at`,
 		org, gatewayID, r.InstanceID, int64(r.SnapshotVersion), r.Draining, metrics, now); err != nil {
 		return 0, fmt.Errorf("store instance report: %w", missingGateway(err, gatewayID))
+	}
+	if _, err = s.db.Exec(ctx, `DELETE FROM loomplane_db_gateway_instances
+		WHERE org_id = $1 AND gateway_id = $2 AND last_seen_at < $3`, org, gatewayID, now.Add(-instanceRetention)); err != nil {
+		return 0, fmt.Errorf("prune instance reports: %w", err)
 	}
 	if err = s.db.QueryRow(ctx, `SELECT count(*) FROM loomplane_db_gateway_instances
 		WHERE org_id = $1 AND gateway_id = $2 AND last_seen_at > $3`, org, gatewayID, now.Add(-liveWindow)).Scan(&live); err != nil {

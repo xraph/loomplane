@@ -257,6 +257,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	resourceSecrets := deployments.NewVaultResourceSecrets(
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
+	// The database gateway reads resource addresses through the same one.
+	if err = forge.ProvideValue(c, resourceSecrets); err != nil {
+		return fmt.Errorf("provide the resource secrets: %w", err)
+	}
 	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
 	routeService, err := forge.InjectType[*cloudinfra.Service](c)
 	if err != nil {

@@ -154,3 +154,19 @@ func TestFromSource_fallsBackToThePlatformsDatabaseURL(t *testing.T) {
 		t.Fatalf("got %q, %v", c.Database.URL, err)
 	}
 }
+
+func TestFromSource_dbGatewaySigningKeyFile(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN, "dbgateway.signing_key_file": "/run/secrets/dbgateway.json"})
+	if err != nil || c.DBGateway.SigningKeyFile != "/run/secrets/dbgateway.json" {
+		t.Fatalf("signing key file %q: %v", c.DBGateway.SigningKeyFile, err)
+	}
+	if c, err = FromSource(mapGetter{"database.url": testDSN}); err != nil || c.DBGateway.SigningKeyFile != "" {
+		t.Fatalf("unset signing key file %q: %v", c.DBGateway.SigningKeyFile, err)
+	}
+	for _, path := range []string{"keys/dbgateway.json", "/run/secrets/../dbgateway.json"} {
+		_, err := FromSource(mapGetter{"database.url": testDSN, "dbgateway.signing_key_file": path})
+		if err == nil || !strings.Contains(err.Error(), "dbgateway.signing_key_file") {
+			t.Fatalf("%q: error %v, want it to name dbgateway.signing_key_file", path, err)
+		}
+	}
+}

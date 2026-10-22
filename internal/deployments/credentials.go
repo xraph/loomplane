@@ -34,6 +34,12 @@ func resourceKey(orgID, environmentID, resource, field string) string {
 	return orgID + "/" + environmentID + "/" + resource + "/" + field
 }
 
+// ResourceURLKey is the key a resource's address is kept under, so code
+// outside this package reads it without copying the key format.
+func ResourceURLKey(orgID, environmentID, resource string) string {
+	return resourceKey(orgID, environmentID, resource, ResourceURL)
+}
+
 // VaultResourceSecrets keeps resource credentials in Vault, encrypted and
 // versioned.
 type VaultResourceSecrets struct{ svc *secret.Service }

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -290,6 +291,87 @@ func TestBumpSnapshotOnlyOnChange(t *testing.T) {
 	}
 	if _, _, err = s.BumpSnapshot(ctx, "org_1", "missing", "aaa"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("snapshot of a missing gateway: %v", err)
+	}
+}
+
+func TestLatestSnapshot(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	gw, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.LatestSnapshot(ctx, "org_1", gw.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("before the first snapshot: %v", err)
+	}
+	for _, d := range []string{"aaa", "bbb"} {
+		if _, _, err = s.BumpSnapshot(ctx, "org_1", gw.ID, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, d, err := s.LatestSnapshot(ctx, "org_1", gw.ID)
+	if err != nil || v != 2 || d != "bbb" {
+		t.Fatalf("latest: %d %q %v, want 2 bbb", v, d, err)
+	}
+	if _, _, err = s.LatestSnapshot(ctx, "org_2", gw.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another organization's: %v", err)
+	}
+}
+
+func TestGatewayByID(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	gw, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GatewayByID(ctx, gw.ID)
+	if err != nil || got.OrgID != "org_1" || got.ID != gw.ID || !bytes.Equal(got.SigningPublicKey, gw.SigningPublicKey) ||
+		!bytes.Equal(got.SealingPublicKey.Bytes(), gw.SealingPublicKey.Bytes()) {
+		t.Fatalf("GatewayByID: %+v %v", got, err)
+	}
+	if _, err = s.GatewayByID(ctx, "dbgw_missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a missing gateway: %v", err)
+	}
+}
+
+func TestReportPrunesOldInstances(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	gw, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	for id, age := range map[string]time.Duration{"inst-gone": time.Hour + time.Second, "inst-hour": time.Hour, "inst-idle": 10 * time.Minute} {
+		if _, err = s.Report(ctx, "org_1", gw.ID, plane.Report{InstanceID: id}, now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = s.Report(ctx, "org_1", other.ID, plane.Report{InstanceID: "inst-elsewhere"}, now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Report(ctx, "org_1", gw.ID, plane.Report{InstanceID: "inst-now"}, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Instances(ctx, "org_1", gw.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(got))
+	for _, in := range got {
+		ids = append(ids, in.InstanceID)
+	}
+	if want := []string{"inst-hour", "inst-idle", "inst-now"}; !slices.Equal(ids, want) {
+		t.Fatalf("instances after a report %v, want %v", ids, want)
+	}
+	// Another gateway's instances wait for that gateway's own reports.
+	if kept, err := s.Instances(ctx, "org_1", other.ID); err != nil || len(kept) != 1 {
+		t.Fatalf("other gateway's instances %+v %v", kept, err)
 	}
 }
 
