@@ -52,6 +52,7 @@ var (
 	errUnknownRoute    = errors.New("no database route for the label")
 	errUnreachable     = errors.New("the database route's backend is unreachable")
 	errReplicationBusy = errors.New("too many replication connections")
+	errNoConn          = errors.New("plane: Serve needs the client connection")
 )
 
 // Holder asks the control plane to bring up the route for a label the
@@ -94,6 +95,7 @@ type Router struct {
 	idle     chan struct{} // closed while no session is live
 	draining chan struct{} // closed when Drain starts
 	replicas int
+	holds    map[string]*holdCall // Holder calls in flight, by label
 
 	drainOnce sync.Once
 }
@@ -129,6 +131,7 @@ func NewRouter(store *Store, key *ecdh.PrivateKey, gatewayID string, d Dialer, h
 		sessions:    map[*liveSession]struct{}{},
 		idle:        closedChan(),
 		draining:    make(chan struct{}),
+		holds:       map[string]*holdCall{},
 	}
 	// crypto/rand.Read never returns an error on supported platforms.
 	_, _ = rand.Read(r.mockStored)
@@ -212,6 +215,9 @@ func (r *Router) sameBackend(h *routeHandle, rt Route) bool {
 	if !reflect.DeepEqual(a, b) || !maps.Equal(h.route.Params, rt.Params) || h.route.IdleTimeout != rt.IdleTimeout {
 		return false
 	}
+	if reflect.DeepEqual(h.route.Backend.Credential, rt.Backend.Credential) {
+		return true
+	}
 	secret, err := r.openCredential(rt)
 	if opened := err == nil; opened != (h.pool != nil) {
 		return false
@@ -220,17 +226,19 @@ func (r *Router) sameBackend(h *routeHandle, rt Route) bool {
 }
 
 // retire ends a route handle: its sessions are told at their next idle
-// point, its hub closes now, and its pool once nobody uses it, or after the
-// retire limit, when the sessions still running are cancelled.
+// point, its hub closes, and its pool closes once nobody uses it, or after
+// the retire limit, when the sessions still running are cancelled. Only
+// closing Removed happens before it returns: Apply never waits for a hub
+// or a pool to wind down.
 func (r *Router) retire(h *routeHandle) {
 	h.remove()
-	if h.hub != nil {
-		h.hub.Close()
-	}
 	r.mu.Lock()
 	done := h.noSessions
 	r.mu.Unlock()
 	go func() {
+		if h.hub != nil {
+			h.hub.Close()
+		}
 		t := time.NewTimer(r.retireLimit)
 		defer t.Stop()
 		select {
@@ -366,6 +374,11 @@ func (r *Router) Stats() []RouteStats {
 // gateway drains, 08006 when the backend can't be reached and 53300 when
 // replication connections are at their limit.
 func (r *Router) Serve(ctx context.Context, be *pgproto3.Backend, conn io.Closer, host string, startup map[string]string, pipelined *pgproto3.PasswordMessage) error {
+	if conn == nil {
+		// Without it a cancelled session, or a replication relay, could
+		// block on the client for good.
+		return errNoConn
+	}
 	deadline := time.Now().Add(r.holdLimit)
 	if r.Draining() {
 		SendError(be, "57P01", msgShuttingDown)
@@ -373,7 +386,7 @@ func (r *Router) Serve(ctx context.Context, be *pgproto3.Backend, conn io.Closer
 	}
 	label, role, err := RouteKey(r.suffix, host, startup)
 	if err != nil {
-		SendError(be, "08004", r.noRouteMessage())
+		SendError(be, "08004", r.noRouteMessage("the database gateway could not tell which database to connect to"))
 		return err
 	}
 	h, err := r.lookup(ctx, label, deadline)
@@ -382,7 +395,7 @@ func (r *Router) Serve(ctx context.Context, be *pgproto3.Backend, conn io.Closer
 		SendError(be, "57P01", msgShuttingDown)
 		return err
 	case errors.Is(err, errUnknownRoute):
-		SendError(be, "08004", "the database gateway has no route for "+label.String())
+		SendError(be, "08004", r.noRouteMessage("the database gateway has no route for "+label.String()))
 		return err
 	case err != nil:
 		return err
@@ -449,14 +462,18 @@ func (r *Router) serveRoute(ctx context.Context, be *pgproto3.Backend, conn io.C
 	return ServeSession(ctx, be, h, startup)
 }
 
-func (r *Router) noRouteMessage() string {
-	return "the database gateway could not tell which database to connect to: connect to <label>." + string(r.suffix) +
+// noRouteMessage is the 08004 text: what went wrong, then the ways a
+// connection can name its route.
+func (r *Router) noRouteMessage(lead string) string {
+	return lead + ": connect to <label>." + string(r.suffix) +
 		", set options=endpoint=<label>, or connect as user=<role>@<label>"
 }
 
-// lookup finds the route for label. An unknown or holding branch label is
-// held: the Holder is asked for it, and the connection waits until deadline
-// for an Apply that brings it up. Anything else unknown fails at once.
+// lookup finds the route for label. An unknown or holding branch label
+// whose parent database has a route is held: the Holder is asked for it,
+// and the connection waits until deadline for an Apply that brings it up.
+// Anything else unknown fails at once, so a client can't make the gateway
+// ask the control plane about labels that can't exist.
 func (r *Router) lookup(ctx context.Context, label Label, deadline time.Time) (*routeHandle, error) {
 	key := label.String()
 	asked := false
@@ -468,7 +485,7 @@ func (r *Router) lookup(ctx context.Context, label Label, deadline time.Time) (*
 	}()
 	for {
 		r.mu.Lock()
-		h, changed := r.labels[key], r.changed
+		h, parent, changed := r.labels[key], r.labels[label.DB], r.changed
 		r.mu.Unlock()
 		if r.Draining() {
 			return nil, errShuttingDown
@@ -476,16 +493,16 @@ func (r *Router) lookup(ctx context.Context, label Label, deadline time.Time) (*
 		if h != nil && h.State() != RouteStateHolding {
 			return h, nil
 		}
-		if label.Branch == "" || r.holder == nil {
+		if label.Branch == "" || r.holder == nil || parent == nil {
 			return nil, errUnknownRoute
 		}
 		if !asked {
 			asked = true
-			hctx, cancel := context.WithDeadline(ctx, deadline)
-			err := r.holder.Hold(hctx, label)
-			cancel()
-			if err != nil {
-				if ctx.Err() != nil {
+			if err := r.hold(ctx, label, deadline); err != nil {
+				switch {
+				case errors.Is(err, errShuttingDown):
+					return nil, err
+				case ctx.Err() != nil:
 					return nil, ctx.Err()
 				}
 				return nil, errUnknownRoute
@@ -501,6 +518,53 @@ func (r *Router) lookup(ctx context.Context, label Label, deadline time.Time) (*
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+}
+
+// holdCall is one Holder.Hold in flight for a label. Connections that want
+// the label while it runs share its result instead of asking again.
+type holdCall struct {
+	done    chan struct{}
+	err     error // set before done closes
+	waiters int   // connections sharing the call, guarded by Router.mu
+}
+
+// hold asks the Holder for label, or joins the request already in flight
+// for it, and waits for the answer until deadline.
+func (r *Router) hold(ctx context.Context, label Label, deadline time.Time) error {
+	key := label.String()
+	r.mu.Lock()
+	c := r.holds[key]
+	if c == nil {
+		c = &holdCall{done: make(chan struct{})}
+		r.holds[key] = c
+		// The call outlives the connection that started it, which may
+		// leave, but not that connection's hold limit.
+		hctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		go func() {
+			defer cancel()
+			err := r.holder.Hold(hctx, label)
+			r.mu.Lock()
+			c.err = err
+			delete(r.holds, key)
+			r.mu.Unlock()
+			close(c.done)
+		}()
+	}
+	c.waiters++
+	r.mu.Unlock()
+
+	t := time.NewTimer(time.Until(deadline))
+	defer t.Stop()
+	select {
+	case <-c.done:
+		return c.err
+	case <-t.C:
+		return context.DeadlineExceeded
+	case <-r.draining:
+		return errShuttingDown
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -559,9 +623,6 @@ func (r *Router) cancelSessions(h *routeHandle, cause error) {
 // the connection is for one blocked writing to a client that stopped
 // reading.
 func closeOnDone(ctx context.Context, conn io.Closer, grace time.Duration) (stop func()) {
-	if conn == nil {
-		return func() {}
-	}
 	var (
 		mu      sync.Mutex
 		stopped bool

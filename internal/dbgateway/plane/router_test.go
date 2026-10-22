@@ -183,8 +183,14 @@ func TestRouterUnknownRoute08004(t *testing.T) {
 
 	// A well-formed label with no route is 08004 too.
 	c = h.start(hostFor("billing"), nil, testPass)
-	if got := c.recv(); !strings.HasPrefix(got, "ErrorResponse FATAL 08004 ") || !strings.Contains(got, "billing") {
+	got = c.recv()
+	if !strings.HasPrefix(got, "ErrorResponse FATAL 08004 ") || !strings.Contains(got, "billing") {
 		t.Fatalf("unknown label = %q, want FATAL 08004 naming it", got)
+	}
+	for _, form := range []string{"<label>." + string(testSuffix), "options=endpoint=<label>", "user=<role>@<label>"} {
+		if !strings.Contains(got, form) {
+			t.Errorf("unknown-label message %q does not name %q", got, form)
+		}
 	}
 	if h.dialer.dials() != 0 {
 		t.Fatal("an unknown route dialed a backend")
@@ -218,7 +224,6 @@ func TestRouterHoldsBranchLabel(t *testing.T) {
 	if got := holder.called()[0]; got != (Label{DB: "orders", Branch: "feat-x"}) {
 		t.Fatalf("Hold label = %+v", got)
 	}
-	time.Sleep(50 * time.Millisecond)
 	h.apply(h.route("r1", "orders"), h.route("r2", "orders--feat-x"))
 	if got := c.recv(); got != "AuthenticationOk" {
 		t.Fatalf("held connection got %q, want AuthenticationOk", got)
@@ -563,9 +568,10 @@ func TestPoolLimit(t *testing.T) {
 		want           int
 	}{
 		{100, 0, false, 2},
-		{100, 0, true, 2},
+		{100, 0, true, 1},
 		{6, 0, false, 1},
 		{6, 0, true, 1},
+		{20, 0, true, 1},
 		{100, 4, false, 22},
 		{100, 4, true, 21},
 		{6, 10, true, 1},
@@ -833,5 +839,230 @@ func TestRouterApplyRejects(t *testing.T) {
 	}
 	if h.r.store.Current().Version != h.version {
 		t.Fatal("Apply did not make the snapshot current in the store")
+	}
+}
+
+// R51: only a branch of a database the gateway routes is held, so a client
+// can't make it ask the control plane about any label it likes.
+func TestRouterHoldNeedsParentRoute(t *testing.T) {
+	holder := &fakeHolder{}
+	h := newRouterHarness(t, nil, holder)
+	h.apply(h.route("r1", "orders"))
+	start := time.Now()
+	c := h.start(hostFor("billing--feat-x"), nil, testPass)
+	if got := c.recv(); !strings.HasPrefix(got, "ErrorResponse FATAL 08004") {
+		t.Fatalf("branch without a parent = %q, want 08004", got)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("a branch without a parent route waited")
+	}
+	if n := len(holder.called()); n != 0 {
+		t.Fatalf("Hold calls = %d, want none", n)
+	}
+}
+
+// blockingHolder answers every Hold with what is sent on answer.
+type blockingHolder struct {
+	calls  atomic.Int32
+	answer chan error
+}
+
+func (b *blockingHolder) Hold(ctx context.Context, _ Label) error {
+	b.calls.Add(1)
+	select {
+	case err := <-b.answer:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *routerHarness) holdWaiters(label string) int {
+	h.r.mu.Lock()
+	defer h.r.mu.Unlock()
+	if c := h.r.holds[label]; c != nil {
+		return c.waiters
+	}
+	return 0
+}
+
+func TestRouterHoldCoalesces(t *testing.T) {
+	holder := &blockingHolder{answer: make(chan error)}
+	h := newRouterHarness(t, nil, holder)
+	h.apply(h.route("r1", "orders"))
+
+	// Three connections for one branch share one Hold, and its answer.
+	var cs []*testClient
+	for range 3 {
+		cs = append(cs, h.start(hostFor("orders--feat-x"), nil, testPass))
+	}
+	waitFor(t, "three connections on one hold", func() bool { return h.holdWaiters("orders--feat-x") == 3 })
+	holder.answer <- nil
+	h.apply(h.route("r1", "orders"), h.route("r2", "orders--feat-x"))
+	for i, c := range cs {
+		if got := c.recv(); got != "AuthenticationOk" {
+			t.Fatalf("connection %d got %q, want AuthenticationOk", i, got)
+		}
+	}
+	if n := holder.calls.Load(); n != 1 {
+		t.Fatalf("Hold calls = %d, want 1", n)
+	}
+
+	// A refusal is shared too.
+	cs = cs[:0]
+	for range 3 {
+		cs = append(cs, h.start(hostFor("orders--feat-y"), nil, testPass))
+	}
+	waitFor(t, "three connections on one hold", func() bool { return h.holdWaiters("orders--feat-y") == 3 })
+	holder.answer <- errors.New("no such branch")
+	for i, c := range cs {
+		if got := c.recv(); !strings.HasPrefix(got, "ErrorResponse FATAL 08004") {
+			t.Fatalf("connection %d got %q, want 08004", i, got)
+		}
+	}
+	if n := holder.calls.Load(); n != 2 {
+		t.Fatalf("Hold calls = %d, want one per branch", n)
+	}
+}
+
+// stallDialer blocks every Dial until its context ends.
+type stallDialer struct{ dials atomic.Int32 }
+
+func (d *stallDialer) Dial(ctx context.Context, _ Backend, _ BackendSecret, _ map[string]string) (*BackendConn, error) {
+	d.dials.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// Important 1: sessions queued behind a probe whose dial hangs give up at
+// the end of their own hold, not one hold after another.
+func TestRouterProbeBoundedByHold(t *testing.T) {
+	const hold = 400 * time.Millisecond
+	d := &stallDialer{}
+	h := newRouterHarness(t, d, nil)
+	h.dialer = &fakeDialer{}
+	h.r.holdLimit = hold
+	h.apply(h.route("r1", "orders"))
+
+	type result struct {
+		msg string
+		in  time.Duration
+	}
+	results := make(chan result, 3)
+	for range 3 {
+		start := time.Now()
+		c := h.start(hostFor("orders"), nil, testPass)
+		go func() {
+			_ = c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			var msgs []string
+			for range 2 {
+				msg, err := c.fe.Receive()
+				if err != nil {
+					break
+				}
+				msgs = append(msgs, showBackend(msg))
+				if e, ok := msg.(*pgproto3.ErrorResponse); ok {
+					msgs[len(msgs)-1] += " " + e.Message
+				}
+			}
+			results <- result{strings.Join(msgs, " | "), time.Since(start)}
+		}()
+	}
+	for range 3 {
+		r := <-results
+		if r.msg != "AuthenticationOk | ErrorResponse FATAL 08006 the database gateway could not connect to the database" {
+			t.Fatalf("session got %q, want 08006 after auth", r.msg)
+		}
+		if r.in > hold+hold/2 {
+			t.Fatalf("a session gave up after %v, want about the %v hold", r.in, hold)
+		}
+	}
+}
+
+func TestRouterReplicationDialBoundedByHold(t *testing.T) {
+	const hold = 300 * time.Millisecond
+	d := &stallDialer{}
+	h := newRouterHarness(t, d, nil)
+	h.dialer = &fakeDialer{}
+	h.r.holdLimit = hold
+	h.apply(h.route("r1", "orders"))
+	start := time.Now()
+	c := h.start(hostFor("orders"), map[string]string{"user": testRole, "database": "orders", "replication": "database"}, testPass)
+	c.recv() // AuthenticationOk
+	if got := c.recv(); got != "ErrorResponse FATAL 08006 the database gateway could not connect to the database" {
+		t.Fatalf("message = %q, want 08006", got)
+	}
+	if el := time.Since(start); el > hold+hold/2 {
+		t.Fatalf("the replication dial gave up after %v, want about the %v hold", el, hold)
+	}
+}
+
+// countWriter counts what is written to it.
+type countWriter struct{ n atomic.Int64 }
+
+func (w *countWriter) Write(p []byte) (int, error) {
+	w.n.Add(int64(len(p)))
+	return len(p), nil
+}
+
+func TestRouterServeNeedsConn(t *testing.T) {
+	h := newRouterHarness(t, nil, nil)
+	h.apply(h.route("r1", "orders"))
+	w := &countWriter{}
+	be := pgproto3.NewBackend(strings.NewReader(""), w)
+	err := h.r.Serve(context.Background(), be, nil, hostFor("orders"), map[string]string{"user": testRole}, &pgproto3.PasswordMessage{Password: testPass})
+	if !errors.Is(err, errNoConn) {
+		t.Fatalf("Serve with no conn = %v, want errNoConn", err)
+	}
+	if w.n.Load() != 0 {
+		t.Fatal("Serve wrote to a client it had no conn for")
+	}
+}
+
+// gatedDialer passes dials to a fakeDialer until stall is set; from then on
+// each Dial blocks, ignoring its context, until release closes.
+type gatedDialer struct {
+	*fakeDialer
+	stall   atomic.Bool
+	stalled atomic.Int32
+	release chan struct{}
+}
+
+func (d *gatedDialer) Dial(ctx context.Context, b Backend, s BackendSecret, params map[string]string) (*BackendConn, error) {
+	if d.stall.Load() {
+		d.stalled.Add(1)
+		<-d.release
+		return nil, errors.New("released")
+	}
+	return d.fakeDialer.Dial(ctx, b, s, params)
+}
+
+// R52.4: retiring a route doesn't make Apply wait for its hub to wind down.
+func TestRouterApplyDoesNotWaitForHubClose(t *testing.T) {
+	d := &gatedDialer{fakeDialer: &fakeDialer{}, release: make(chan struct{})}
+	h := newRouterHarness(t, d, nil)
+	h.dialer = d.fakeDialer
+	h.apply(h.route("r1", "orders"))
+	c := h.connect("orders")
+	d.stall.Store(true)
+	// The hub's listener dial now hangs, so Hub.Close waits for it.
+	c.send(&pgproto3.Query{String: "LISTEN jobs"})
+	waitFor(t, "the hub to dial", func() bool { return d.stalled.Load() == 1 })
+	start := time.Now()
+	h.apply()
+	if el := time.Since(start); el > 500*time.Millisecond {
+		t.Fatalf("Apply took %v, want it not to wait for the hub", el)
+	}
+	close(d.release)
+}
+
+func TestRouterSameSealedCredentialKeepsPool(t *testing.T) {
+	h := newRouterHarness(t, nil, nil)
+	rt := h.route("r1", "orders")
+	h.apply(rt)
+	old := h.handle("r1")
+	h.apply(rt)
+	if h.handle("r1") != old {
+		t.Fatal("an unchanged route replaced its pool")
 	}
 }

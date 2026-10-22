@@ -35,7 +35,6 @@ type routeHandle struct {
 
 	removed    chan struct{}
 	removeOnce sync.Once
-	probeSem   chan struct{} // one probe at a time
 	pinned     atomic.Int64
 
 	// Guarded by r.mu.
@@ -47,6 +46,7 @@ type routeHandle struct {
 	stateChanged chan struct{} // closed and replaced when state changes
 	verifiers    []Verifier
 	probed       bool
+	flight       *probeFlight // the probe in progress, if any
 	serverParams map[string]string
 	maxConns     int
 	reachable    bool
@@ -69,7 +69,6 @@ func (r *Router) build(rt Route) *routeHandle {
 		r:            r,
 		route:        rt,
 		removed:      make(chan struct{}),
-		probeSem:     make(chan struct{}, 1),
 		noSessions:   closedChan(),
 		state:        rt.State,
 		stateChanged: make(chan struct{}),
@@ -208,38 +207,65 @@ func (h *routeHandle) verifier(role string) Verifier {
 	return Verifier{Role: role, Salt: sum[:16], Iterations: 4096, StoredKey: h.r.mockStored, ServerKey: h.r.mockServer}
 }
 
+// probeFlight is a probe in progress. Sessions that arrive while it runs
+// wait for it and share its result; one that arrives after it ends probes
+// again.
+type probeFlight struct {
+	done chan struct{}
+	err  error // set before done closes
+}
+
 // probe learns the backend's parameters and max_connections from one
 // pooled connection, the first time a session needs them. A failure isn't
-// remembered: the next session probes again. A backend that is waking is
-// retried until deadline.
+// remembered past the sessions waiting on it: the next session probes
+// again. Everything, waiting for another session's probe included, ends at
+// deadline, the end of the session's hold, and a backend that is waking is
+// retried until then.
 func (h *routeHandle) probe(ctx context.Context, deadline time.Time) error {
-	select {
-	case h.probeSem <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
+	pctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	for {
+		h.mu.Lock()
+		if h.probed {
+			h.mu.Unlock()
+			return nil
+		}
+		f := h.flight
+		if f == nil {
+			f = &probeFlight{done: make(chan struct{})}
+			h.flight = f
+			h.mu.Unlock()
+			return h.runProbe(pctx, f)
+		}
+		h.mu.Unlock()
+		select {
+		case <-f.done:
+		case <-pctx.Done():
+			return pctx.Err()
+		}
+		// A probe cut short because its own client left says nothing about
+		// the backend: try again.
+		if !errors.Is(f.err, context.Canceled) {
+			return f.err
+		}
 	}
-	defer func() { <-h.probeSem }()
-	h.mu.Lock()
-	probed := h.probed
-	h.mu.Unlock()
-	if probed {
-		return nil
-	}
+}
 
+// runProbe runs the probe f stands for and publishes its result.
+func (h *routeHandle) runProbe(ctx context.Context, f *probeFlight) error {
 	var (
 		params   map[string]string
 		maxConns int
 	)
+	deadline, _ := ctx.Deadline()
 	err := h.r.untilAwake(ctx, deadline, func() error {
-		actx, cancel := context.WithTimeout(ctx, h.r.holdLimit)
-		defer cancel()
-		l, err := h.pool.Acquire(actx, nil)
+		l, err := h.pool.Acquire(ctx, nil)
 		if err != nil {
 			return err
 		}
 		c := l.Conn()
 		params = maps.Clone(c.Params)
-		maxConns, err = MaxConnections(actx, c)
+		maxConns, err = MaxConnections(ctx, c)
 		state := LeaseClean
 		if c.Broken {
 			state = LeaseBroken
@@ -249,16 +275,18 @@ func (h *routeHandle) probe(ctx context.Context, deadline time.Time) error {
 	})
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if err != nil {
-		if ctx.Err() == nil {
-			h.reachable = false
-		}
-		return err
+	h.flight = nil
+	f.err = err
+	switch {
+	case err == nil:
+		h.probed, h.serverParams, h.maxConns, h.reachable = true, params, maxConns, true
+		h.setLimitLocked()
+	case !errors.Is(err, context.Canceled):
+		h.reachable = false
 	}
-	h.probed, h.serverParams, h.maxConns, h.reachable = true, params, maxConns, true
-	h.setLimitLocked()
-	return nil
+	h.mu.Unlock()
+	close(f.done)
+	return err
 }
 
 // dialListener opens the hub's listener connection. The first one takes a
@@ -295,16 +323,16 @@ func (h *routeHandle) setLimitLocked() {
 }
 
 // poolLimit is one instance's pool size for a backend allowing maxConns
-// connections: its Budget share, less one for the hub's listener when there
-// is one, never below one. Until the instance count is known (instances is
-// 0) it is also at most 2.
+// connections: its Budget share, capped at 2 until the instance count is
+// known (instances is 0), less one for the hub's listener when there is
+// one, never below one.
 func poolLimit(maxConns, instances int, hubListener bool) int {
 	n := Budget(maxConns, instances)
-	if hubListener {
-		n--
-	}
 	if instances < 1 {
 		n = min(n, 2)
+	}
+	if hubListener {
+		n--
 	}
 	return max(n, 1)
 }
@@ -401,9 +429,12 @@ func (r *Router) replicate(ctx context.Context, be *pgproto3.Backend, client io.
 			params[k] = v
 		}
 	}
+	// The dial, retries for a waking backend included, ends with the hold.
+	dctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	var c *BackendConn
-	err := r.untilAwake(ctx, deadline, func() (err error) {
-		c, err = r.dialer.Dial(ctx, h.route.Backend, h.secret, params)
+	err := r.untilAwake(dctx, deadline, func() (err error) {
+		c, err = r.dialer.Dial(dctx, h.route.Backend, h.secret, params)
 		return err
 	})
 	if err != nil {
