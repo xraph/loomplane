@@ -289,6 +289,14 @@ func TestRegistryChecksIndividualOperations(t *testing.T) {
 		t.Fatal("discovery-only metadata contains writes")
 	}
 	builtins := cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{})
+	if _, err := builtins.Registrar("cloudflare"); err != nil {
+		t.Fatalf("cloudflare registrar missing: %v", err)
+	}
+	for _, name := range []string{"vercel", "digitalocean"} {
+		if _, err := builtins.Registrar(name); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+			t.Fatalf("%s registrar: %v", name, err)
+		}
+	}
 	for _, operation := range []provider.InfrastructureCapability{provider.DNSZoneDiscovery, provider.DNSZoneCreation, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSRecordDeletion} {
 		for _, name := range []string{"vercel", "cloudflare"} {
 			if _, err := builtins.DNS(name, operation); err != nil {

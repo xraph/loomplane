@@ -41,6 +41,7 @@ type Client struct {
 	endpoint         string
 	registrarSandbox bool
 	http             *http.Client
+	pollInterval     time.Duration
 }
 
 // New returns a Client. An empty endpoint means Cloudflare's own.
@@ -112,8 +113,9 @@ type envelope struct {
 	} `json:"errors"`
 	Result     json.RawMessage `json:"result"`
 	ResultInfo struct {
-		Page       int `json:"page"`
-		TotalPages int `json:"total_pages"`
+		Page       int    `json:"page"`
+		TotalPages int    `json:"total_pages"`
+		Cursor     string `json:"cursor"`
 	} `json:"result_info"`
 }
 
@@ -123,8 +125,17 @@ func (c *Client) do(ctx context.Context, token, method, path string, query url.V
 	return err
 }
 
-// pageInfo is where a page sits among a list's pages.
-type pageInfo struct{ Page, TotalPages int }
+// pageInfo is where a page sits among a list's pages, the cursor to the
+// next one (empty at the end) and the HTTP status of the answer.
+type pageInfo struct {
+	Page, TotalPages int
+	Cursor           string
+	Status           int
+}
+
+// errNotSent marks an error from before the request left the client, so a
+// caller of a mutation can tell it from one that may have reached Cloudflare.
+var errNotSent = errors.New("request not sent")
 
 // send is do, and also reports the page the answer was for.
 func (c *Client) send(ctx context.Context, token, method, path string, query url.Values, body io.Reader, out any) (pageInfo, error) {
@@ -134,7 +145,7 @@ func (c *Client) send(ctx context.Context, token, method, path string, query url
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
-		return pageInfo{}, err
+		return pageInfo{}, fmt.Errorf("%w: %w", errNotSent, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	if body != nil {
@@ -166,7 +177,7 @@ func (c *Client) send(ctx context.Context, token, method, path string, query url
 		}
 		return pageInfo{}, ae
 	}
-	info := pageInfo{Page: env.ResultInfo.Page, TotalPages: env.ResultInfo.TotalPages}
+	info := pageInfo{Page: env.ResultInfo.Page, TotalPages: env.ResultInfo.TotalPages, Cursor: env.ResultInfo.Cursor, Status: res.StatusCode}
 	if out == nil || !decoded || len(env.Result) == 0 || string(env.Result) == "null" {
 		return info, nil
 	}

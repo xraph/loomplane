@@ -416,9 +416,10 @@ func (c *Client) DeleteRecord(ctx context.Context, credential provider.Infrastru
 	return nil
 }
 
-// InfrastructureCapabilities lists the implemented account APIs.
+// InfrastructureCapabilities lists the implemented account APIs, DNS and
+// the registrar.
 func InfrastructureCapabilities() []provider.InfrastructureCapability {
-	return []provider.InfrastructureCapability{provider.DNSRecordDeletion, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSZoneCreation, provider.DNSZoneDiscovery}
+	return []provider.InfrastructureCapability{provider.DNSRecordDeletion, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSZoneCreation, provider.DNSZoneDiscovery, provider.DomainRegistration}
 }
 
 // SupportsDNSRecordOwnership says records carry the owner token in their comment.

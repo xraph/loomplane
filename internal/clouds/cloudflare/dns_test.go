@@ -400,7 +400,7 @@ func TestCloudflareDNSCapabilities(t *testing.T) {
 	if o, ok := adapter.(provider.DNSRecordOwnership); !ok || !o.SupportsDNSRecordOwnership() {
 		t.Fatal("ownership not declared")
 	}
-	want := []provider.InfrastructureCapability{provider.DNSRecordDeletion, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSZoneCreation, provider.DNSZoneDiscovery}
+	want := []provider.InfrastructureCapability{provider.DNSRecordDeletion, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSZoneCreation, provider.DNSZoneDiscovery, provider.DomainRegistration}
 	got := cloudflare.InfrastructureCapabilities()
 	if len(got) != len(want) {
 		t.Fatal(got)

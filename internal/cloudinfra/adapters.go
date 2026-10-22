@@ -41,7 +41,9 @@ func BuiltinAdapters(e Endpoints) *Adapters {
 	r.servers["digitalocean"] = d
 	r.dns["digitalocean"] = d
 	r.dns["vercel"] = vercel.New(e.Vercel)
-	r.dns["cloudflare"] = cloudflare.New(e.Cloudflare, e.CloudflareRegistrarSandbox)
+	cf := cloudflare.New(e.Cloudflare, e.CloudflareRegistrarSandbox)
+	r.dns["cloudflare"] = cf
+	r.registrars["cloudflare"] = cf
 	r.capabilities["digitalocean"] = digitalocean.InfrastructureCapabilities()
 	r.capabilities["vercel"] = vercel.InfrastructureCapabilities()
 	r.capabilities["cloudflare"] = cloudflare.InfrastructureCapabilities()
