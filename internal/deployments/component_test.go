@@ -208,6 +208,10 @@ func TestLoomplaneDialsOnlyOutsideItsOwnHost(t *testing.T) {
 		"0.1.2.3": false, "0.255.255.255": false, "::ffff:0.1.2.3": false,
 		"64:ff9b::7f00:1": false, "64:ff9b::a9fe:a9fe": false, "64:ff9b::": false, "64:ff9b::7:1": false,
 		"64:ff9b::a00:5": true, "64:ff9b::cb00:7107": true,
+		// AWS's IPv6 metadata service, and local-use NAT64 (RFC 8215).
+		"fd00:ec2::254": false, "fd00:ec2::253": true,
+		"64:ff9b:1::7f00:1": false, "64:ff9b:1:ab::a9fe:a9fe": false, "64:ff9b:1::": false,
+		"64:ff9b:1::a00:5": true, "64:ff9b:2::7f00:1": true,
 	} {
 		if got := loomplaneDials(netip.MustParseAddr(addr)); got != want {
 			t.Fatalf("%s: got %t, want %t", addr, got, want)

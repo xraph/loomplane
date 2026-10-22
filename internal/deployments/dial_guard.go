@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -23,9 +24,15 @@ const dialGuardTTL = time.Minute
 // dialGuardLookupTimeout bounds looking up one service's host.
 const dialGuardLookupTimeout = 2 * time.Second
 
-// nat64 is the NAT64 well-known prefix (RFC 6052): 64:ff9b::a.b.c.d
-// reaches the IPv4 address a.b.c.d through a NAT64 gateway.
-var nat64 = netip.MustParsePrefix("64:ff9b::/96")
+// nat64 are the NAT64 prefixes whose addresses reach the IPv4 address in
+// their last 32 bits through a NAT64 gateway: the well-known prefix
+// (RFC 6052), where 64:ff9b::a.b.c.d reaches a.b.c.d, and the local-use
+// prefix (RFC 8215), read the same way.
+var nat64 = []netip.Prefix{netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("64:ff9b:1::/48")}
+
+// awsMetadata is AWS's instance metadata service over IPv6. Its IPv4
+// address, 169.254.169.254, is link-local; this one isn't.
+var awsMetadata = netip.MustParseAddr("fd00:ec2::254")
 
 // DialGuard decides what an endpoint check dialed from Loomplane's own
 // network may connect to. Its own host is always refused (see
@@ -108,7 +115,7 @@ func (g *DialGuard) permits(services map[netip.AddrPort]bool, ap netip.AddrPort)
 func dialForms(ip netip.Addr) []netip.Addr {
 	ip = ip.Unmap()
 	forms := []netip.Addr{ip}
-	if nat64.Contains(ip) {
+	if slices.ContainsFunc(nat64, func(p netip.Prefix) bool { return p.Contains(ip) }) {
 		b := ip.As16()
 		forms = append(forms, netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}))
 	}
@@ -117,11 +124,12 @@ func dialForms(ip netip.Addr) []netip.Addr {
 
 // loomplaneDials reports whether a check from Loomplane's own network may
 // connect to ip: never its loopback, an unspecified address or "this
-// network" (0.0.0.0/8), or a link-local one such as a cloud metadata
-// service, in IPv4, IPv4-mapped or NAT64 form.
+// network" (0.0.0.0/8), a link-local one such as a cloud metadata
+// service, or AWS's IPv6 metadata service, in IPv4, IPv4-mapped or NAT64
+// form.
 func loomplaneDials(ip netip.Addr) bool {
 	for _, ip := range dialForms(ip) {
-		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (ip.Is4() && ip.As4()[0] == 0) {
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (ip.Is4() && ip.As4()[0] == 0) || ip == awsMetadata {
 			return false
 		}
 	}

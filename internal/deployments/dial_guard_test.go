@@ -48,7 +48,7 @@ func TestDialGuardRefusesLoomplanesOwnServices(t *testing.T) {
 	g := f.guard()
 	for addr, want := range map[string]bool{
 		// Its database, at its port, in every form.
-		"10.1.2.3:5432": false, "[::ffff:10.1.2.3]:5432": false, "[64:ff9b::a01:203]:5432": false, "[fd00::5]:5432": false,
+		"10.1.2.3:5432": false, "[::ffff:10.1.2.3]:5432": false, "[64:ff9b::a01:203]:5432": false, "[64:ff9b:1::a01:203]:5432": false, "[fd00::5]:5432": false,
 		// The same hosts at other ports are someone's endpoints.
 		"10.1.2.3:5433": true, "[fd00::5]:6379": true,
 		// The API listens on every address of this host.
