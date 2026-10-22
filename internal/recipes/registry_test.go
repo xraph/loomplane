@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -249,7 +250,7 @@ func TestEngineRegistrationReusesFamily(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := recipes.Recipe{ID: "pgtest-16", Revision: "1", ProductVersion: "16.4", Image: "registry.example/pgtest@sha256:61581a49b789716d4da7a45ce7fd3c944b60150492ccece97b11b0b497f49aa8", Architecture: "arm64", MountPath: "/var/lib/postgresql/data", BackupFormat: "pg-dump-custom-v1", Family: "postgres"}
-	if *recipe != want {
+	if !reflect.DeepEqual(*recipe, want) {
 		t.Fatalf("got %+v", recipe)
 	}
 	if recipe.Engine() != "postgres" || recipe.Port() != 5432 {
@@ -465,5 +466,347 @@ func TestFilesRejectNestedAndRepeatedPaths(t *testing.T) {
 	k.Components[1].Files = []recipes.File{{Path: "/etc/a"}, {Path: "/etc/ab/c"}}
 	if err := recipes.NewRegistry().Register(k); err != nil {
 		t.Fatalf("siblings that share a prefix: %v", err)
+	}
+}
+
+// oneFinding registers k and wants exactly one finding that mentions want.
+func oneFinding(t *testing.T, r *recipes.Registry, k recipes.Kind, want string) {
+	t.Helper()
+	err := r.Register(k)
+	if err == nil {
+		t.Fatal("invalid kind accepted")
+	}
+	if strings.Count(err.Error(), "\n") != 0 {
+		t.Fatalf("want one finding, got:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %q does not mention %q", err, want)
+	}
+}
+
+func TestRegisterRejectsUnsafeKubernetesRules(t *testing.T) {
+	safe := func() recipes.KubernetesRule {
+		return recipes.KubernetesRule{
+			APIGroups: []string{"", "discovery.k8s.io"},
+			Resources: []string{"services", "endpoints", "endpointslices"},
+			Verbs:     []string{"get", "list", "watch"},
+		}
+	}
+	k := recipestest.Sample()
+	k.Components[1].KubernetesRules = []recipes.KubernetesRule{safe()}
+	if err := recipes.NewRegistry().Register(k); err != nil {
+		t.Fatalf("read-only discovery rules refused: %v", err)
+	}
+	for _, test := range []struct {
+		name, want string
+		change     func(k *recipes.Kind)
+	}{
+		{"verb create", `"create"`, func(k *recipes.Kind) {
+			rule := safe()
+			rule.Verbs = append(rule.Verbs, "create")
+			k.Components[1].KubernetesRules = []recipes.KubernetesRule{rule}
+		}},
+		{"resource secrets", `"secrets"`, func(k *recipes.Kind) {
+			rule := safe()
+			rule.Resources = []string{"secrets"}
+			k.Components[1].KubernetesRules = []recipes.KubernetesRule{rule}
+		}},
+		{"group rbac", `"rbac.authorization.k8s.io"`, func(k *recipes.Kind) {
+			rule := safe()
+			rule.APIGroups = []string{"rbac.authorization.k8s.io"}
+			k.Components[1].KubernetesRules = []recipes.KubernetesRule{rule}
+		}},
+		{"rules on a job", "only processes", func(k *recipes.Kind) {
+			k.Components[0].KubernetesRules = []recipes.KubernetesRule{safe()}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			k := recipestest.Sample()
+			test.change(&k)
+			oneFinding(t, recipes.NewRegistry(), k, test.want)
+		})
+	}
+}
+
+func TestRegisterValidatesFabriqAdditions(t *testing.T) {
+	graph := recipestest.Graph()
+	if err := recipes.NewRegistry().Register(graph); err != nil {
+		t.Fatalf("dependency-only kind refused: %v", err)
+	}
+	withGraph := func(t *testing.T) *recipes.Registry {
+		r := recipes.NewRegistry()
+		if err := r.Register(recipestest.Graph()); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	plain := func(*testing.T) *recipes.Registry { return recipes.NewRegistry() }
+	process := func(name string) recipes.Component {
+		return recipes.Component{
+			Name: name, Role: recipes.RoleProcess,
+			Ports:     []recipes.Port{{Name: "resp", Container: 6380, Protocol: "redis"}},
+			Readiness: &recipes.HTTPProbe{Port: "resp"},
+		}
+	}
+	for _, test := range []struct {
+		name, want string
+		base       func() recipes.Kind
+		registry   func(t *testing.T) *recipes.Registry
+		change     func(k *recipes.Kind)
+	}{
+		{"dependency-only kind with two processes", "exactly one process", recipestest.Graph, plain, func(k *recipes.Kind) {
+			k.Components = append(k.Components, process("replica"))
+			k.Releases[0].Images["replica"] = k.Releases[0].Images["server"]
+		}},
+		{"dependency-only kind with dependencies", "no dependencies", recipestest.Graph, plain, func(k *recipes.Kind) {
+			k.Dependencies = []recipes.Dependency{{Name: "postgres", Title: "PostgreSQL", Kinds: []string{"postgres"}}}
+		}},
+		{"dependency-only kind with a per consumer output", "per consumer", recipestest.Graph, plain, func(k *recipes.Kind) {
+			k.Outputs = append(k.Outputs, recipes.Output{Name: "tenant", EnvKey: "GRAPH_TENANT", PerConsumer: true})
+		}},
+		{"secret prefix in upper case", `"FQ_"`, recipestest.Sample, plain, func(k *recipes.Kind) { k.Secrets[0].Prefix = "FQ_" }},
+		{"env with template and value", "exactly one of value, secret, from and template", recipestest.Sample, plain, func(k *recipes.Kind) {
+			k.Components[1].Env = append(k.Components[1].Env, recipes.EnvVar{Name: "BOTH", Value: "x", Template: "${secret:admin-password}"})
+		}},
+		{"unknown placeholder", `"${env:X}"`, recipestest.Sample, plain, func(k *recipes.Kind) {
+			k.Components[1].Env = append(k.Components[1].Env, recipes.EnvVar{Name: "X", Template: "a-${env:X}"})
+		}},
+		{"optional dependency without requires", `optional dependency "cache"`, recipestest.Sample, plain, func(k *recipes.Kind) {
+			k.Components[1].Env[1].Requires = ""
+		}},
+		{"requires a required dependency", "isn't optional", recipestest.Sample, plain, func(k *recipes.Kind) {
+			k.Components[2].Requires = "postgres"
+		}},
+		{"kinds mixing a dependency-only kind", "dependency-only", recipestest.Sample, withGraph, func(k *recipes.Kind) {
+			k.Dependencies[1].Kinds = []string{"graph", "redis"}
+		}},
+		{"dependency-only kind with external", "external", recipestest.Sample, withGraph, func(k *recipes.Kind) {
+			k.Dependencies = append(k.Dependencies, recipes.Dependency{Name: "graph", Title: "Graph", Kinds: []string{"graph"}, Optional: true, External: &recipes.Requirement{Engine: "redis"}})
+		}},
+		{"routable redis port", "routable", recipestest.Sample, plain, func(k *recipes.Kind) {
+			k.Components[1].Ports = append(k.Components[1].Ports, recipes.Port{Name: "resp", Container: 6379, Protocol: "redis", Routable: true})
+		}},
+		{"redis readiness with a path", "path", recipestest.Graph, plain, func(k *recipes.Kind) {
+			k.Components[0].Readiness.Path = "/ping"
+		}},
+		{"consumer option name in upper case", `"Tenant"`, recipestest.Sample, plain, func(k *recipes.Kind) {
+			k.ConsumerOptions = []recipes.ConsumerOption{{Name: "Tenant", Title: "Tenant"}}
+		}},
+		{"consumer option pattern that doesn't compile", "pattern", recipestest.Sample, plain, func(k *recipes.Kind) {
+			k.ConsumerOptions = []recipes.ConsumerOption{{Name: "tenant", Title: "Tenant", Pattern: "("}}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			k := test.base()
+			test.change(&k)
+			oneFinding(t, test.registry(t), k, test.want)
+		})
+	}
+}
+
+func TestRegisterChecksDependencyFields(t *testing.T) {
+	r := recipes.NewRegistry()
+	if err := r.Register(recipestest.Graph()); err != nil {
+		t.Fatal(err)
+	}
+	graphDependency := recipes.Dependency{Name: "graph", Title: "Graph", Kinds: []string{"graph"}, Optional: true}
+	reads := func(dependency recipes.Dependency, template string) recipes.Kind {
+		k := recipestest.Sample()
+		if dependency.Name != "postgres" {
+			k.Dependencies = append(k.Dependencies, dependency)
+		}
+		v := recipes.EnvVar{Name: "READS", Template: template}
+		if dependency.Optional {
+			v.Requires = dependency.Name
+		}
+		k.Components[1].Env = append(k.Components[1].Env, v)
+		return k
+	}
+	for _, ok := range []struct {
+		dependency recipes.Dependency
+		template   string
+	}{
+		{graphDependency, "${dep:graph:url}"},
+		{graphDependency, "${dep:graph:output:url}"},
+		{graphDependency, "${dep:graph:secret:password}"},
+		{recipestest.Sample().Dependencies[0], "${dep:postgres:admin-url}"},
+		{recipestest.Sample().Dependencies[0], "${dep:postgres:hostport}/${dep:postgres:database}?${dep:postgres:query}"},
+	} {
+		if err := r.Register(reads(ok.dependency, ok.template)); err != nil {
+			t.Fatalf("%s refused: %v", ok.template, err)
+		}
+		r = recipes.NewRegistry()
+		if err := r.Register(recipestest.Graph()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, bad := range []struct {
+		dependency recipes.Dependency
+		template   string
+		want       string
+	}{
+		{graphDependency, "${dep:graph:host}", `"host"`},
+		{graphDependency, "${dep:graph:output:nope}", `"output:nope"`},
+		{graphDependency, "${dep:graph:secret:nope}", `"secret:nope"`},
+		{recipes.Dependency{Name: "cache2", Title: "Cache", Kinds: []string{"redis"}}, "${dep:cache2:admin-url}", "postgres"},
+		{recipes.Dependency{Name: "cache2", Title: "Cache", Kinds: []string{"redis"}}, "${dep:cache2:output:x}", "dependency-only"},
+		{recipestest.Sample().Dependencies[0], "${dep:postgres:url", "unterminated"},
+		{recipestest.Sample().Dependencies[0], "${secret:nope}", `"nope"`},
+		{recipestest.Sample().Dependencies[0], "${component:api:url:nope}", `"nope"`},
+	} {
+		oneFinding(t, r, reads(bad.dependency, bad.template), bad.want)
+	}
+
+	// Whichever registers first, the later one is refused.
+	mixed := recipestest.Sample()
+	mixed.Dependencies[1].Kinds = []string{"graph", "redis"}
+	late := recipes.NewRegistry()
+	if err := late.Register(mixed); err != nil {
+		t.Fatalf("a kind accepting an unregistered kind: %v", err)
+	}
+	if err := late.Register(recipestest.Graph()); err == nil || !strings.Contains(err.Error(), "sample") {
+		t.Fatalf("dependency-only kind registered under a mixed dependency: %v", err)
+	}
+	admin := reads(recipes.Dependency{Name: "store", Title: "Store", Kinds: []string{"pgtest"}}, "${dep:store:admin-url}")
+	late = recipes.NewRegistry()
+	if err := late.Register(admin); err != nil {
+		t.Fatalf("a kind accepting an unregistered engine: %v", err)
+	}
+	notPostgres := pgtest()
+	notPostgres.Family, notPostgres.Targets = "mysql", []string{"server"}
+	notPostgres.Releases[0].BackupFormat = "mysqldump-sql-v1"
+	if err := late.RegisterEngine(notPostgres); err == nil || !strings.Contains(err.Error(), "admin-url") {
+		t.Fatalf("a mysql engine registered under an admin-url read: %v", err)
+	}
+	if err := late.RegisterEngine(pgtest()); err != nil {
+		t.Fatalf("a postgres-family engine refused: %v", err)
+	}
+}
+
+func TestOutputsMayReadDependenciesAndTemplates(t *testing.T) {
+	k := recipestest.Sample()
+	k.Outputs = append(k.Outputs,
+		recipes.Output{Name: "database", EnvKey: "SAMPLE_DATABASE_URL", Secret: true, From: &recipes.Ref{Dependency: "postgres", Field: recipes.FieldURL}},
+		recipes.Output{Name: "api", EnvKey: "SAMPLE_API", Template: "${component:api:url:http}/v1"},
+		recipes.Output{Name: "cache", EnvKey: "SAMPLE_CACHE", Template: "${dep:cache:url}", Requires: "cache"},
+	)
+	if err := recipes.NewRegistry().Register(k); err != nil {
+		t.Fatalf("outputs refused: %v", err)
+	}
+	k.Outputs[len(k.Outputs)-1].Requires = ""
+	oneFinding(t, recipes.NewRegistry(), k, `optional dependency "cache"`)
+	k = recipestest.Sample()
+	k.Outputs[1] = recipes.Output{Name: "admin", EnvKey: "SAMPLE_ADMIN_URL", Template: "x", From: &recipes.Ref{Component: "api", Field: "url:admin"}}
+	oneFinding(t, recipes.NewRegistry(), k, "exactly one of from, template and per consumer")
+}
+
+func TestEnvVarNamesAllowDots(t *testing.T) {
+	register := func(name string) error {
+		k := recipestest.Sample()
+		k.Components[1].Env = append(k.Components[1].Env, recipes.EnvVar{Name: name, Value: "x"})
+		return recipes.NewRegistry().Register(k)
+	}
+	if err := register("FABRIQ_ES.ADDRS"); err != nil {
+		t.Fatalf("dotted name refused: %v", err)
+	}
+	for _, name := range []string{"1X", "A-B"} {
+		if err := register(name); err == nil {
+			t.Fatalf("env name %q accepted", name)
+		}
+	}
+}
+
+func TestEngineReleaseCarriesExtensionsAndFSGroup(t *testing.T) {
+	r := recipes.NewRegistry()
+	e := pgtest()
+	e.Releases[0].Extensions = []string{"timescaledb", "vector", "postgis"}
+	e.Releases[0].FSGroup = 1000
+	if err := r.RegisterEngine(e); err != nil {
+		t.Fatal(err)
+	}
+	e.Releases[0].Extensions[0] = "changed"
+	for _, target := range []string{"server", "kubernetes"} {
+		recipe, err := r.LookupEngine("pgtest", "16", "amd64", target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(recipe.Extensions, ",") != "timescaledb,vector,postgis" || recipe.FSGroup != 1000 {
+			t.Fatalf("%s recipe: %+v", target, recipe)
+		}
+		b, err := json.Marshal(recipe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), `"extensions":["timescaledb","vector","postgis"]`) || !strings.Contains(string(b), `"fs_group":1000`) {
+			t.Fatalf("%s recipe JSON: %s", target, b)
+		}
+	}
+	for _, kind := range []string{"postgres", "mysql", "mariadb", "redis", "valkey"} {
+		targets := []string{"server"}
+		if kind == "postgres" {
+			targets = append(targets, "kubernetes")
+		}
+		for _, target := range targets {
+			recipe, err := recipes.LookupForTarget(kind, recipes.DefaultVersion(kind), "arm64", target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := json.Marshal(recipe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), `"extensions"`) || strings.Contains(string(b), `"fs_group"`) {
+				t.Fatalf("built-in %s on %s: %s", kind, target, b)
+			}
+		}
+	}
+	bad := pgtest()
+	bad.Releases[0].FSGroup = -1
+	if err := recipes.NewRegistry().RegisterEngine(bad); err == nil || !strings.Contains(err.Error(), "fs group") {
+		t.Fatalf("negative fs group: %v", err)
+	}
+	bad = pgtest()
+	bad.Releases[0].Extensions = []string{"vector", "vector"}
+	if err := recipes.NewRegistry().RegisterEngine(bad); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("repeated extension: %v", err)
+	}
+}
+
+func TestKindInfoListsConsumerOptions(t *testing.T) {
+	k := recipestest.Sample()
+	k.ConsumerOptions = []recipes.ConsumerOption{{Name: "tenant", Title: "Tenant", Pattern: "^[a-z0-9-]{1,63}$", Required: true}}
+	r := recipes.NewRegistry()
+	if err := r.Register(k); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(recipestest.Graph()); err != nil {
+		t.Fatal(err)
+	}
+	var sample, graph recipes.KindInfo
+	for _, info := range r.Kinds() {
+		switch info.Name {
+		case "sample":
+			sample = info
+		case "graph":
+			graph = info
+		}
+	}
+	want := []recipes.ConsumerOption{{Name: "tenant", Title: "Tenant", Pattern: "^[a-z0-9-]{1,63}$", Required: true}}
+	if !reflect.DeepEqual(sample.ConsumerOptions, want) {
+		t.Fatalf("consumer options: %+v", sample.ConsumerOptions)
+	}
+	sample.ConsumerOptions[0].Name = "changed"
+	if got, _ := r.Kind("sample"); got.ConsumerOptions[0].Name != "tenant" {
+		t.Fatal("KindInfo shares memory with the registry")
+	}
+	if graph.Placement != recipes.PlacementDependency {
+		t.Fatalf("dependency-only kind info: %+v", graph)
+	}
+	b, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "consumer_options") {
+		t.Fatalf("empty consumer options are listed: %s", b)
 	}
 }

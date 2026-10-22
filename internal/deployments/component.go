@@ -685,11 +685,12 @@ func generateSecret(s recipes.GeneratedSecret) ([]byte, error) {
 	if _, err := rand.Read(raw); err != nil {
 		return nil, err
 	}
+	// The prefix is prepended verbatim, so a value names what it is.
 	switch s.Encoding {
 	case "", "base64url":
-		return []byte(base64.RawURLEncoding.EncodeToString(raw)), nil
+		return []byte(s.Prefix + base64.RawURLEncoding.EncodeToString(raw)), nil
 	case "hex":
-		return []byte(hex.EncodeToString(raw)), nil
+		return []byte(s.Prefix + hex.EncodeToString(raw)), nil
 	}
 	return nil, fmt.Errorf("the generated secret %s has an unknown encoding %q", s.Name, s.Encoding)
 }

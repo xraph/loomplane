@@ -262,11 +262,12 @@ func catalogWith(kinds *recipes.Registry) []provider.Provider {
 }
 
 // registeredProvisions describes the registered kinds, other than the five
-// built-in engines, that run on the cloud.
+// built-in engines, that run on the cloud. A dependency-only kind is only
+// provisioned for another kind, so it isn't offered on its own.
 func registeredProvisions(kinds *recipes.Registry, cloud string) []provider.Provisions {
 	var out []provider.Provisions
 	for _, info := range kinds.Kinds() {
-		if slices.Contains(builtinKinds, info.Name) || !slices.Contains(info.Targets, cloud) {
+		if slices.Contains(builtinKinds, info.Name) || !slices.Contains(info.Targets, cloud) || info.Placement == recipes.PlacementDependency {
 			continue
 		}
 		out = append(out, provider.Provisions{

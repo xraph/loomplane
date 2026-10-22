@@ -56,14 +56,19 @@ func builtinEngine(kind, version, title, envKey string, targets ...string) Engin
 }
 
 // builtinLookup is LookupForTarget as it was before the registry, for the
-// five built-in engines.
+// five built-in engines, plus the Kubernetes cache recipe a composition's
+// dependency runs on. The built-in redis and valkey still list only server
+// targets, so providers don't offer a standalone cache on Kubernetes.
 func builtinLookup(kind, version, architecture, target string) (*Recipe, error) {
 	switch target {
 	case "server":
 		return Lookup(kind, version, architecture)
 	case "kubernetes":
-		if kind == "postgres" {
+		switch kind {
+		case "postgres":
 			return KubernetesPostgres(version, architecture)
+		case "redis", "valkey":
+			return KubernetesCache(kind, version, architecture)
 		}
 	}
 	return nil, fmt.Errorf("%s has no qualified %s database recipe", target, kind)

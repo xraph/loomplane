@@ -1155,3 +1155,17 @@ func TestComponentJobOutputRedactsSecretsOnlyInFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratedSecretStartsWithItsPrefix(t *testing.T) {
+	value, err := generateSecret(recipes.GeneratedSecret{Name: "app-key", Bytes: 16, Encoding: "hex", Prefix: "fq_"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value) != len("fq_")+32 || !strings.HasPrefix(string(value), "fq_") {
+		t.Fatalf("got %q", value)
+	}
+	plain, err := generateSecret(recipes.GeneratedSecret{Name: "app-key", Bytes: 16, Encoding: "hex"})
+	if err != nil || len(plain) != 32 {
+		t.Fatalf("got %q %v", plain, err)
+	}
+}

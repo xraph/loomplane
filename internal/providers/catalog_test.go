@@ -217,3 +217,20 @@ func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestServerProvisionsSkipDependencyOnlyKinds(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Graph()); err != nil {
+		t.Fatal(err)
+	}
+	all := catalogWith(kinds)
+	for _, name := range []string{"server", "kubernetes"} {
+		got := provisionsOf(t, all, name)
+		if !slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "sample" }) {
+			t.Fatalf("%s lost the sample kind: %+v", name, got)
+		}
+		if slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "graph" }) {
+			t.Fatalf("%s offers a dependency-only kind: %+v", name, got)
+		}
+	}
+}

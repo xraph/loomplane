@@ -13,6 +13,10 @@ type Placement string
 const (
 	PlacementServiceProject Placement = "service-project" // standalone project, as databases are today
 	PlacementAppProject     Placement = "app-project"     // added into an existing project and environment
+	// PlacementDependency kinds are provisioned only as another kind's
+	// dependency: one process, no dependencies of their own and no
+	// per-consumer outputs. Providers don't offer them on their own.
+	PlacementDependency Placement = "dependency"
 )
 
 // Role says how a component runs.
@@ -47,6 +51,18 @@ type Kind struct {
 	Secrets      []GeneratedSecret `json:"secrets,omitempty"`
 	Components   []Component       `json:"components"`
 	Outputs      []Output          `json:"outputs,omitempty"` // Outputs[0] is the primary, kept under the resource's "url"
+	// ConsumerOptions are the values a consuming service chooses when it
+	// links, such as a tenant, passed to the kind's ConsumerBinder.
+	ConsumerOptions []ConsumerOption `json:"consumer_options,omitempty"`
+}
+
+// ConsumerOption is a value a consuming service sets for its link, under
+// services.<name>.need_options.<need>.<Name>.
+type ConsumerOption struct {
+	Name     string `json:"name"` // ^[a-z][a-z0-9_]{0,31}$
+	Title    string `json:"title"`
+	Pattern  string `json:"pattern,omitempty"` // a Go regexp the value must match
+	Required bool   `json:"required,omitempty"`
 }
 
 // Release pins every component's image for one manifest version.
@@ -78,21 +94,36 @@ type Component struct {
 	After      []string      `json:"after,omitempty"` // components that must be ready or have succeeded first
 	Resources  Resources     `json:"resources"`
 	Timeout    time.Duration `json:"timeout,omitempty"` // jobs only
+	// KubernetesRules is the read-only discovery access a process gets
+	// through its own ServiceAccount on Kubernetes.
+	KubernetesRules []KubernetesRule `json:"kubernetes_rules,omitempty"`
+	// Requires names an optional dependency the component runs only with.
+	Requires string `json:"requires,omitempty"`
+}
+
+// KubernetesRule is one rule of a process's Kubernetes Role. Only
+// discovery is allowed: groups "" and "discovery.k8s.io", resources
+// services, endpoints and endpointslices, verbs get, list and watch.
+type KubernetesRule struct {
+	APIGroups []string `json:"api_groups"`
+	Resources []string `json:"resources"`
+	Verbs     []string `json:"verbs"`
 }
 
 // Port is a container port a process listens on.
 type Port struct {
 	Name      string `json:"name"` // DNS label: "http", "admin"
 	Container int    `json:"container"`
-	Protocol  string `json:"protocol"`           // "http" or "tcp"
+	Protocol  string `json:"protocol"`           // "http", "tcp" or "redis" (RESP)
 	Control   bool   `json:"control,omitempty"`  // reached only by Loomplane over the private channel; never routed publicly
 	Routable  bool   `json:"routable,omitempty"` // may receive a public HTTP route; requires Protocol "http"; never with Control
 }
 
-// HTTPProbe is the readiness check of a process.
+// HTTPProbe is the readiness check of a process: an HTTP GET, or a RESP
+// PING on a "redis" port, which has no path.
 type HTTPProbe struct {
-	Port string `json:"port"` // a Port.Name with Protocol "http"
-	Path string `json:"path"` // "/readyz"
+	Port string `json:"port"` // a Port.Name with Protocol "http" or "redis"
+	Path string `json:"path"` // "/readyz"; "" on a redis port
 }
 
 // Volume is a component's data directory. Its data is rebuilt, never
@@ -100,6 +131,7 @@ type HTTPProbe struct {
 type Volume struct {
 	MountPath        string `json:"mount_path"`
 	KubernetesSizeMB int    `json:"kubernetes_size_mb,omitempty"` // PVC request on Kubernetes; servers ignore it
+	FSGroup          int    `json:"fs_group,omitempty"`           // group that owns the volume on Kubernetes; 0 leaves it alone
 }
 
 // Resources is a component's CPU and memory request.
@@ -108,19 +140,29 @@ type Resources struct {
 	MemoryMB  int `json:"memory_mb"`
 }
 
-// EnvVar sets exactly one of Value, Secret and From.
+// EnvVar sets exactly one of Value, Secret, From and Template.
 type EnvVar struct {
 	Name   string `json:"name"`
 	Value  string `json:"value,omitempty"`
 	Secret string `json:"secret,omitempty"` // a GeneratedSecret.Name
 	From   *Ref   `json:"from,omitempty"`
+	// Template is text with ${dep:<dependency>:<field>}, ${secret:<name>}
+	// and ${component:<name>:<field>} placeholders.
+	Template string `json:"template,omitempty"`
+	// Requires names an optional dependency the variable is set only with.
+	// A variable reading an optional dependency must require it, unless its
+	// component does.
+	Requires string `json:"requires,omitempty"`
 }
 
 // Ref names exactly one of a dependency or a sibling component.
 type Ref struct {
 	Dependency string `json:"dependency,omitempty"` // a Dependency.Name
 	Component  string `json:"component,omitempty"`  // a sibling Component.Name
-	Field      string `json:"field"`                // for dependencies a Field constant; for components "url:<port name>" or "address:<port name>"
+	// Field is, for dependencies, a Field constant, or on a dependency-only
+	// kind "url", "output:<name>" or "secret:<name>"; for components
+	// "url:<port name>" or "address:<port name>".
+	Field string `json:"field"`
 }
 
 // Fields a Ref can read from a dependency.
@@ -132,6 +174,8 @@ const (
 	FieldUsername = "username"
 	FieldPassword = "password"
 	FieldDatabase = "database"
+	FieldAdminURL = "admin-url" // the superuser URL; postgres-family dependencies only
+	FieldQuery    = "query"     // raw query string of the dependency URL
 )
 
 // File is a file CatalogHooks.Files renders into a component.
@@ -165,15 +209,19 @@ type GeneratedSecret struct {
 	Name     string `json:"name"`               // "admin-password"
 	Bytes    int    `json:"bytes,omitempty"`    // random bytes, default 32
 	Encoding string `json:"encoding,omitempty"` // "base64url" (default) or "hex"
+	Prefix   string `json:"prefix,omitempty"`   // ^[a-z]{1,8}_$ or "", prepended verbatim
 }
 
-// Output is a value a consuming service gets.
+// Output is a value a consuming service gets. It sets exactly one of From,
+// Template and PerConsumer.
 type Output struct {
 	Name        string `json:"name"`    // DNS label; Outputs[0] conventionally "url"
 	EnvKey      string `json:"env_key"` // "OCTOPUS_URL"
 	From        *Ref   `json:"from,omitempty"`
 	PerConsumer bool   `json:"per_consumer,omitempty"` // issued per consuming service by the kind's ConsumerBinder
 	Secret      bool   `json:"secret,omitempty"`
+	Template    string `json:"template,omitempty"` // placeholders as in EnvVar.Template
+	Requires    string `json:"requires,omitempty"` // an optional dependency the output is set only with
 }
 
 // Engine is a stateful engine that reuses a native adapter family: its
@@ -200,6 +248,10 @@ type EngineRelease struct {
 	MountPath          string `json:"mount_path"`
 	BackupFormat       string `json:"backup_format"` // must equal the family's full-backup format
 	KubernetesVolumeMB int    `json:"kubernetes_volume_mb,omitempty"`
+	// Extensions the image ships, postgres family only. They are recorded
+	// in the recipe; nothing creates them.
+	Extensions []string `json:"extensions,omitempty"`
+	FSGroup    int      `json:"fs_group,omitempty"` // group that owns the data volume on Kubernetes
 }
 
 // Composition is a kind resolved for one release, architecture and target.
@@ -232,6 +284,8 @@ type KindInfo struct {
 	Dependencies []DependencyInfo `json:"dependencies,omitempty"`
 	Components   []ComponentInfo  `json:"components,omitempty"`
 	Outputs      []OutputInfo     `json:"outputs,omitempty"`
+	// ConsumerOptions are what a consuming service chooses when it links.
+	ConsumerOptions []ConsumerOption `json:"consumer_options,omitempty"`
 }
 
 // DependencyInfo is the public part of a Dependency.
@@ -290,6 +344,7 @@ func (k Kind) clone() Kind {
 	for i := range k.Outputs {
 		k.Outputs[i].From = k.Outputs[i].From.clone()
 	}
+	k.ConsumerOptions = slices.Clone(k.ConsumerOptions)
 	return k
 }
 
@@ -311,6 +366,13 @@ func (c Component) clone() Component {
 		c.Volume = &volume
 	}
 	c.After = slices.Clone(c.After)
+	c.KubernetesRules = slices.Clone(c.KubernetesRules)
+	for i := range c.KubernetesRules {
+		rule := &c.KubernetesRules[i]
+		rule.APIGroups = slices.Clone(rule.APIGroups)
+		rule.Resources = slices.Clone(rule.Resources)
+		rule.Verbs = slices.Clone(rule.Verbs)
+	}
 	return c
 }
 
@@ -332,6 +394,7 @@ func (e Engine) clone() Engine {
 	e.Releases = slices.Clone(e.Releases)
 	for i := range e.Releases {
 		e.Releases[i].Image = e.Releases[i].Image.clone()
+		e.Releases[i].Extensions = slices.Clone(e.Releases[i].Extensions)
 	}
 	return e
 }

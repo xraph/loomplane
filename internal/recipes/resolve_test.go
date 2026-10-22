@@ -1,6 +1,9 @@
 package recipes_test
 
 import (
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/recipes"
@@ -99,5 +102,59 @@ func TestResolveReturnsCopies(t *testing.T) {
 	}
 	if again.Components[1].Ports[0].Container != 8080 {
 		t.Fatal("a resolved composition shares memory with the registry")
+	}
+}
+
+func TestWithoutDropsRequiredComponentsAndReranks(t *testing.T) {
+	k := recipestest.Sample()
+	k.Dependencies = append(k.Dependencies, recipes.Dependency{Name: "falkordb", Title: "FalkorDB", Kinds: []string{"redis"}, Optional: true})
+	k.Components = append(k.Components, recipes.Component{
+		Name: "rebuild-graph", Role: recipes.RoleJob, Requires: "falkordb", After: []string{"migrate"},
+		Env: []recipes.EnvVar{{Name: "GRAPH_URL", From: &recipes.Ref{Dependency: "falkordb", Field: recipes.FieldURL}}},
+	})
+	k.Components[1].After = []string{"migrate", "rebuild-graph"}
+	k.Releases[0].Images["rebuild-graph"] = k.Releases[0].Images["migrate"]
+	r := recipes.NewRegistry()
+	if err := r.Register(k); err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.Resolve("sample", "1", "arm64", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := func(c *recipes.Composition) string {
+		out := make([]string, 0, len(c.Components))
+		for _, rc := range c.Components {
+			out = append(out, fmt.Sprintf("%s:%d", rc.Name, rc.Step))
+		}
+		return strings.Join(out, " ")
+	}
+	if got := steps(c); got != "migrate:0 rebuild-graph:1 api:2 worker:3" {
+		t.Fatalf("resolved: %s", got)
+	}
+
+	without := c.Without(map[string]bool{"falkordb": true})
+	if got := steps(without); got != "migrate:0 api:1 worker:2" {
+		t.Fatalf("without falkordb: %s", got)
+	}
+	for _, rc := range without.Components {
+		if slices.Contains(rc.After, "rebuild-graph") {
+			t.Fatalf("%s still starts after rebuild-graph: %v", rc.Name, rc.After)
+		}
+	}
+	if without.Kind != c.Kind || without.Revision != c.Revision || without.Architecture != c.Architecture {
+		t.Fatalf("header changed: %+v", without)
+	}
+	if got := steps(c); got != "migrate:0 rebuild-graph:1 api:2 worker:3" || strings.Join(c.Components[2].After, ",") != "migrate,rebuild-graph" {
+		t.Fatalf("Without changed the receiver: %s %v", got, c.Components[2].After)
+	}
+	without.Components[0].Command[0] = "changed"
+	if c.Components[0].Command[0] != "sample" {
+		t.Fatal("Without shares memory with the receiver")
+	}
+
+	same := c.Without(map[string]bool{"cache": true})
+	if got := steps(same); got != steps(c) || same == c {
+		t.Fatalf("an off dependency no component requires changed the composition: %s", got)
 	}
 }

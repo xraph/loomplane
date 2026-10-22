@@ -20,6 +20,10 @@ type Recipe struct {
 	// Family is the native adapter family of a registered engine. It is
 	// empty for the five built-in engines, whose ID names the family.
 	Family string `json:"family,omitempty"`
+	// Extensions and FSGroup come from a registered engine's release; the
+	// five built-in engines have neither.
+	Extensions []string `json:"extensions,omitempty"`
+	FSGroup    int      `json:"fs_group,omitempty"`
 }
 
 func DefaultVersion(kind string) string {

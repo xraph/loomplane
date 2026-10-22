@@ -53,7 +53,7 @@ func Sample() recipes.Kind {
 				},
 				Env: []recipes.EnvVar{
 					database,
-					{Name: "REDIS_URL", From: &recipes.Ref{Dependency: "cache", Field: recipes.FieldURL}},
+					{Name: "REDIS_URL", From: &recipes.Ref{Dependency: "cache", Field: recipes.FieldURL}, Requires: "cache"},
 					{Name: "ADMIN_PASSWORD", Secret: "admin-password"},
 				},
 				Readiness: &recipes.HTTPProbe{Port: "http", Path: "/readyz"},
@@ -72,6 +72,38 @@ func Sample() recipes.Kind {
 		Outputs: []recipes.Output{
 			{Name: "url", EnvKey: "SAMPLE_URL", From: &recipes.Ref{Component: "api", Field: "url:http"}},
 			{Name: "admin", EnvKey: "SAMPLE_ADMIN_URL", From: &recipes.Ref{Component: "api", Field: "url:admin"}},
+		},
+	}
+}
+
+// Graph is kind "graph", a dependency-only kind like a graph database: one
+// process speaking RESP with a volume and a generated password, whose
+// primary output is a redis URL built from a template.
+func Graph() recipes.Kind {
+	server := recipes.Image{Repository: "registry.example/graph", Digests: map[string]string{
+		"amd64": "sha256:3f1c6a1d0b9e0f3c7d2a8e4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d",
+		"arm64": "sha256:4a2d7b2e1c0f1a4d8e3b9f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e",
+	}}
+	return recipes.Kind{
+		Name:      "graph",
+		Title:     "Graph",
+		Placement: recipes.PlacementDependency,
+		Targets:   []string{"server", "kubernetes"},
+		Releases: []recipes.Release{{
+			Version: "1", Product: "1.0.0", Revision: "1",
+			Images: map[string]recipes.Image{"server": server},
+		}},
+		Secrets: []recipes.GeneratedSecret{{Name: "password", Prefix: "graph_"}},
+		Components: []recipes.Component{{
+			Name:      "server",
+			Role:      recipes.RoleProcess,
+			Ports:     []recipes.Port{{Name: "resp", Container: 6379, Protocol: "redis"}},
+			Env:       []recipes.EnvVar{{Name: "GRAPH_ARGS", Template: "--requirepass ${secret:password}"}},
+			Readiness: &recipes.HTTPProbe{Port: "resp"},
+			Volume:    &recipes.Volume{MountPath: "/data", KubernetesSizeMB: 1024, FSGroup: 1000},
+		}},
+		Outputs: []recipes.Output{
+			{Name: "url", EnvKey: "GRAPH_URL", Secret: true, Template: "redis://:${secret:password}@${component:server:address:resp}"},
 		},
 	}
 }

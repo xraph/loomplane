@@ -26,9 +26,58 @@ func (r *Registry) Resolve(kind, version, architecture, target string) (*Composi
 		return nil, fmt.Errorf("%s recipe requires a checked amd64 or arm64 target, got %q", kind, architecture)
 	}
 
+	c := &Composition{Kind: k.Name, Version: release.Version, Product: release.Product, Revision: release.Revision, Architecture: architecture, Target: target}
+	for _, component := range k.Components {
+		image := release.Images[component.Name]
+		c.Components = append(c.Components, ResolvedComponent{
+			Component: component,
+			Image:     image.Repository + "@" + image.Digests[architecture],
+		})
+	}
+	c.rank()
+	return c, nil
+}
+
+// Without is the composition with every component that requires an off
+// dependency dropped, dropped from every After, and the rest ranked again
+// from step 0. The receiver is unchanged.
+func (c *Composition) Without(off map[string]bool) *Composition {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Components = nil
+	dropped := map[string]bool{}
+	for _, rc := range c.Components {
+		if rc.Requires != "" && off[rc.Requires] {
+			dropped[rc.Name] = true
+		}
+	}
+	for _, rc := range c.Components {
+		if dropped[rc.Name] {
+			continue
+		}
+		rc.Component = rc.clone()
+		if slices.ContainsFunc(rc.After, func(name string) bool { return dropped[name] }) {
+			rc.After = slices.DeleteFunc(rc.After, func(name string) bool { return dropped[name] })
+			if len(rc.After) == 0 {
+				rc.After = nil
+			}
+		}
+		out.Components = append(out.Components, rc)
+	}
+	out.rank()
+	return &out
+}
+
+// rank sets each component's Step and puts the components in start order:
+// a component's Step is 0 when it names nothing in After, otherwise one
+// more than the deepest component it names; within a step, jobs come
+// before processes.
+func (c *Composition) rank() {
 	byName := map[string]Component{}
-	for _, c := range k.Components {
-		byName[c.Name] = c
+	for _, rc := range c.Components {
+		byName[rc.Name] = rc.Component
 	}
 	steps := map[string]int{}
 	var step func(name string) int
@@ -43,15 +92,8 @@ func (r *Registry) Resolve(kind, version, architecture, target string) (*Composi
 		steps[name] = s
 		return s
 	}
-
-	c := &Composition{Kind: k.Name, Version: release.Version, Product: release.Product, Revision: release.Revision, Architecture: architecture, Target: target}
-	for _, component := range k.Components {
-		image := release.Images[component.Name]
-		c.Components = append(c.Components, ResolvedComponent{
-			Component: component,
-			Image:     image.Repository + "@" + image.Digests[architecture],
-			Step:      step(component.Name),
-		})
+	for i := range c.Components {
+		c.Components[i].Step = step(c.Components[i].Name)
 	}
 	sort.SliceStable(c.Components, func(i, j int) bool {
 		a, b := c.Components[i], c.Components[j]
@@ -60,7 +102,6 @@ func (r *Registry) Resolve(kind, version, architecture, target string) (*Composi
 		}
 		return a.Role == RoleJob && b.Role != RoleJob
 	})
-	return c, nil
 }
 
 // release finds a release by version; "" is the newest.
@@ -106,6 +147,10 @@ func (r *Registry) LookupEngine(kind, version, architecture, target string) (*Re
 		ID: kind + "-" + release.Version, Revision: release.Revision, ProductVersion: release.Product,
 		Image: release.Image.Repository + "@" + digest, Architecture: architecture,
 		MountPath: release.MountPath, BackupFormat: release.BackupFormat, Family: e.Family,
+		FSGroup: release.FSGroup,
+	}
+	if len(release.Extensions) > 0 {
+		recipe.Extensions = slices.Clone(release.Extensions)
 	}
 	if target == "kubernetes" {
 		recipe.ID += "-kubernetes"
