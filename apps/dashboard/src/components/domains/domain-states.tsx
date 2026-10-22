@@ -20,6 +20,7 @@ export const pillTones: Record<PillTone, string> = {
   warn: "bg-[#FBF1DD] text-[#7A5200] dark:bg-weld-tint dark:text-weld-ink",
   idle: "bg-[#F3F1EF] text-[#4A433E] dark:bg-muted dark:text-muted-foreground",
   failed: "bg-failed-tint text-destructive",
+  own: "bg-[#E3EEF4] text-[#2F5C78] dark:bg-flight-tint dark:text-flight-ink",
 }
 
 export function DomainStatePill({

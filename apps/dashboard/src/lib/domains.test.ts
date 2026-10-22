@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type {
+  DomainOffer,
   HostnameUse,
   Registration,
   RouteStatus,
@@ -14,6 +15,10 @@ import {
   formatPrice,
   hostnameInZone,
   isWildcardHostname,
+  offerLabel,
+  offerStatus,
+  offerTone,
+  ownedNames,
   registrationLine,
   registrationStatusLine,
   routeLabel,
@@ -277,5 +282,113 @@ describe("formatting", () => {
     expect(formatPrice("USD", "10.11")).toBe("USD 10.11")
     expect(formatPrice("USD", "")).toBe("")
     expect(formatDay("2026-11-19T10:00:00Z")).toBe("Nov 19, 2026")
+  })
+})
+
+describe("offers", () => {
+  const extensions = ["com", "app", "dev", "shop", "ai", "co.uk"]
+  const offer = (over: Partial<DomainOffer> = {}): DomainOffer => ({
+    name: "acmeshop.app",
+    registrable: true,
+    price: { currency: "USD", registrationCost: "10.11", renewalCost: "10.11" },
+    ...over,
+  })
+
+  it("labels each offer like the mock", () => {
+    const owned = new Set(["acmeshop.shop"])
+    const cases: [DomainOffer, string][] = [
+      [offer(), "available"],
+      [
+        offer({
+          name: "acmeshop.dev",
+          registrable: false,
+          reason: "domain_unavailable",
+          price: undefined,
+        }),
+        "taken",
+      ],
+      [
+        offer({
+          name: "acmeshop.shop",
+          registrable: false,
+          reason: "domain_unavailable",
+        }),
+        "owned",
+      ],
+      [
+        offer({
+          name: "acmeshop.ai",
+          registrable: false,
+          reason: "extension_not_supported_via_api",
+        }),
+        "unsupported",
+      ],
+      [
+        offer({
+          name: "acmeshop.ai",
+          registrable: false,
+          reason: "extension_not_supported",
+        }),
+        "unsupported",
+      ],
+      [
+        offer({
+          name: "acmeshop.ai",
+          registrable: false,
+          reason: "extension_disallows_registration",
+        }),
+        "unsupported",
+      ],
+      [offer({ name: "acmeshop.co.uk" }), "available"],
+    ]
+    for (const [o, want] of cases)
+      expect([o.name, o.reason, offerStatus(o, owned, extensions)]).toEqual([
+        o.name,
+        o.reason,
+        want,
+      ])
+    expect(offerLabel("available")).toBe("Available")
+    expect(offerLabel("taken")).toBe("Taken")
+    expect(offerLabel("owned")).toBe("You own this")
+    expect(offerLabel("unsupported")).toBe("Not offered through the API yet")
+    expect(offerTone("available")).toBe("ok")
+    expect(offerTone("owned")).toBe("own")
+    expect(offerTone("taken")).toBe("idle")
+    expect(offerTone("unsupported")).toBe("idle")
+  })
+
+  it("takes the extensions from the API, not a list of its own", () => {
+    const none = new Set<string>()
+    expect(offerStatus(offer({ name: "acmeshop.io" }), none, extensions)).toBe(
+      "unsupported"
+    )
+    expect(offerStatus(offer({ name: "acmeshop.io" }), none, ["io"])).toBe(
+      "available"
+    )
+    expect(offerStatus(offer({ name: "ACMESHOP.APP" }), none, [".app"])).toBe(
+      "available"
+    )
+  })
+
+  it("owns the names that are zones or registrations still held", () => {
+    const reg = (name: string, status: string) =>
+      ({ name, status }) as Registration
+    const owned = ownedNames(
+      [zone({}), zone({ zone: undefined })],
+      [
+        reg("Bought.app", "succeeded"),
+        reg("buying.app", "registering"),
+        reg("unsure.app", "unconfirmed"),
+        reg("looked.app", "preview"),
+        reg("declined.app", "failed"),
+        reg("moved.app", "price_changed"),
+      ]
+    )
+    expect([...owned].sort()).toEqual([
+      "acme.dev",
+      "bought.app",
+      "buying.app",
+      "unsure.app",
+    ])
   })
 })

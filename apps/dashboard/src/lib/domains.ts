@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react"
 
 import type {
+  DomainOffer,
   HostnameUse,
   Registration,
   RouteStatus,
@@ -20,7 +21,7 @@ export type DomainState =
   | "cleanup_pending"
 
 /** The pill colors from the mock. None of them follow the accent. */
-export type PillTone = "ok" | "warn" | "idle" | "failed"
+export type PillTone = "ok" | "warn" | "idle" | "failed" | "own"
 
 export function stateTone(state: DomainState): PillTone {
   switch (state) {
@@ -213,6 +214,68 @@ export function hostnameInZone(h: string, zone: string): boolean {
   const name = h.toLowerCase()
   const z = zone.toLowerCase()
   return name === z || name.endsWith(`.${z}`)
+}
+
+export type OfferStatus = "available" | "taken" | "owned" | "unsupported"
+
+// Reasons Cloudflare gives for a name its API can't register.
+const notOffered = [
+  "extension_not_supported_via_api",
+  "extension_not_supported",
+  "extension_disallows_registration",
+]
+
+/**
+ * offerStatus is what a search result reads as. The extensions are the
+ * ones the registrar's API lists; a name under any other is not offered,
+ * whatever the search said about it.
+ */
+export function offerStatus(
+  offer: DomainOffer,
+  ownedNames: Set<string>,
+  extensions: string[]
+): OfferStatus {
+  const name = offer.name.toLowerCase()
+  if (ownedNames.has(name)) return "owned"
+  const listed = extensions.some((e) =>
+    name.endsWith(`.${e.toLowerCase().replace(/^\./, "")}`)
+  )
+  if (!listed || notOffered.includes(offer.reason ?? "")) return "unsupported"
+  return offer.registrable ? "available" : "taken"
+}
+
+export function offerLabel(s: OfferStatus): string {
+  switch (s) {
+    case "available":
+      return "Available"
+    case "owned":
+      return "You own this"
+    case "unsupported":
+      return "Not offered through the API yet"
+  }
+  return "Taken"
+}
+
+export function offerTone(s: OfferStatus): PillTone {
+  return s === "available" ? "ok" : s === "owned" ? "own" : "idle"
+}
+
+// Registrations that ended without buying anything, or never started.
+const notHeld = ["preview", "failed", "price_changed"]
+
+/**
+ * ownedNames is every name already a zone of the organization or a
+ * registration that may hold it, lowercased.
+ */
+export function ownedNames(
+  zones: ZoneOverview[],
+  registrations: Registration[]
+): Set<string> {
+  const names = new Set<string>()
+  for (const z of zones) if (z.zone?.name) names.add(z.zone.name.toLowerCase())
+  for (const r of registrations)
+    if (!notHeld.includes(r.status)) names.add(r.name.toLowerCase())
+  return names
 }
 
 /** formatPrice is "USD 10.11", or empty when the provider gave no price. */

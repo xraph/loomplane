@@ -1,7 +1,7 @@
 // Domains: every zone the organization owns, the hostnames its projects
 // point at each, and the domains registered through Loomplane with their
 // renewals. Built to the redesign's Domains artboard.
-import { GlobeIcon, LockIcon } from "lucide-react"
+import { GlobeIcon, LockIcon, PlusIcon } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
 import { statusOf } from "@/client/errors"
@@ -17,6 +17,7 @@ import type {
 import { useQuery } from "@/client/hooks"
 import { BringDomainPanel } from "@/components/domains/bring-domain-panel"
 import { DomainCard, RegistrationCard } from "@/components/domains/domain-card"
+import { RegisterDomainDialog } from "@/components/domains/register-domain-dialog"
 import { RenewalBanner } from "@/components/domains/renewal-banner"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
@@ -132,6 +133,7 @@ function DomainsList({
   const registrationList = useQuery(useDomainRegistrationsList)
   const now = useClock()
   const [bringing, setBringing] = useState(false)
+  const [registering, setRegistering] = useState(false)
   const [localShow, setLocalShow] = useState<DomainsShow>("all")
   const show = onSearch ? (search.show ?? "all") : localShow
   // Cards opened or closed by hand; the rest follow the search params.
@@ -231,19 +233,28 @@ function DomainsList({
           description={description}
           actions={
             !denied && (
-              // "Register a domain" joins this once its dialog exists.
-              <Button
-                variant="outline"
-                aria-expanded={bringing}
-                onClick={() => setBringing((b) => !b)}
-              >
-                Bring a domain
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  aria-expanded={bringing}
+                  onClick={() => setBringing((b) => !b)}
+                >
+                  Bring a domain
+                </Button>
+                <Button onClick={() => setRegistering(true)}>
+                  <PlusIcon className="size-3.5" />
+                  Register a domain
+                </Button>
+              </>
             )
           }
         />
 
         {bringing && !denied && <BringDomainPanel onAdded={added} />}
+        <RegisterDomainDialog
+          open={registering && !denied}
+          onOpenChange={setRegistering}
+        />
 
         {banners.map((r) => (
           <RenewalBanner
