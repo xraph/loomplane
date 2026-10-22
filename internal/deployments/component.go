@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"net/url"
@@ -220,10 +221,15 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 	if err != nil {
 		return nil, err
 	}
+	files, err := e.renderFiles(ctx, kind, run)
+	if err != nil {
+		return nil, err
+	}
 	copyJob := *job
 	copyJob.Action.Resource = nil
 	copyJob.Action.Service = componentService(cfg)
 	copyJob.Env, copyJob.Secrets = maps.Clone(run.Env), secret
+	copyJob.files = files
 	out, err := e.Apply(ctx, &copyJob)
 	if err != nil {
 		return nil, err
@@ -296,6 +302,10 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 	if err != nil {
 		return nil, err
 	}
+	files, err := e.renderFiles(ctx, kind, run)
+	if err != nil {
+		return nil, err
+	}
 	ref, err := typeid.Generate("runtime")
 	if err != nil {
 		return nil, err
@@ -312,19 +322,24 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 	if putErr := e.Secrets.Put(ctx, state.RuntimeRef, raw); putErr != nil {
 		return nil, putErr
 	}
+	copyJob := *job
+	copyJob.Action.Resource = nil
+	copyJob.Action.Service = componentService(cfg)
+	copyJob.Env, copyJob.Secrets = maps.Clone(run.Env), secret
+	copyJob.files = files
+	sp, labels := ownedSpec(&copyJob, component.Image, state)
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
+		err = errors.Join(err, e.deleteRuntimeFiles(cleanup, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, labels))
 		err = errors.Join(err, e.deleteRuntime(cleanup, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef))
 		if err != nil {
 			out = nil
 		}
 	}()
-	copyJob := *job
-	copyJob.Action.Resource = nil
-	copyJob.Action.Service = componentService(cfg)
-	copyJob.Env, copyJob.Secrets = maps.Clone(run.Env), secret
-	sp, labels := ownedSpec(&copyJob, component.Image, state)
+	if putErr := e.keepRuntimeFiles(ctx, state.RuntimeRef, files); putErr != nil {
+		return nil, putErr
+	}
 	// The recipe pinned the image for the target's architecture.
 	labels[owned.LabelArchitecture] = cfg.TargetSettings["architecture"]
 	save := func(s string) error {
@@ -350,6 +365,112 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 		return nil, saveErr
 	}
 	return done, nil
+}
+
+// runtimeFilesSuffix is where a component's rendered files are kept in
+// Vault: under its runtime values' reference, with "/files" after it.
+const runtimeFilesSuffix = "/files"
+
+// runtimeFile is one rendered file as it's kept in Vault.
+type runtimeFile struct {
+	Path string      `json:"path"`
+	Mode fs.FileMode `json:"mode"`
+	Data []byte      `json:"data"`
+}
+
+// renderFiles asks a component's kind for the files it declares, on each
+// apply, before it starts. A declared file the hooks leave out, or one
+// they add, stops it. What comes back is in path order.
+func (e *OwnedTarget) renderFiles(ctx context.Context, kind recipes.Kind, run ComponentRun) ([]runtimeFile, error) {
+	declared := run.Component.Files
+	if len(declared) == 0 {
+		return nil, nil
+	}
+	rendered, err := e.hooks(kind.Name).Files(ctx, run)
+	if err != nil {
+		return nil, fmt.Errorf("%s couldn't render %s's files: %w", kind.Name, run.Component.Name, err)
+	}
+	files := make([]runtimeFile, 0, len(declared))
+	for _, f := range declared {
+		data, ok := rendered[f.Path]
+		if !ok {
+			return nil, fmt.Errorf("%s did not render %s", kind.Name, f.Path)
+		}
+		files = append(files, runtimeFile{Path: f.Path, Mode: cmp.Or(f.Mode.Perm(), owned.DefaultFileMode), Data: data})
+	}
+	for _, p := range slices.Sorted(maps.Keys(rendered)) {
+		if !slices.ContainsFunc(declared, func(f recipes.File) bool { return f.Path == p }) {
+			return nil, fmt.Errorf("%s rendered %s, which %s doesn't declare", kind.Name, p, run.Component.Name)
+		}
+	}
+	slices.SortFunc(files, func(a, b runtimeFile) int { return strings.Compare(a.Path, b.Path) })
+	return files, nil
+}
+
+// filesRevision is a digest of rendered files: each one's path, mode and
+// bytes, in path order.
+func filesRevision(files []runtimeFile) string {
+	sum := sha256.New()
+	for _, f := range files {
+		// Writing to a hash never fails.
+		_, _ = fmt.Fprintf(sum, "%s\x00%o\x00%d\x00", f.Path, f.Mode, len(f.Data))
+		_, _ = sum.Write(f.Data)
+	}
+	return hex.EncodeToString(sum.Sum(nil))[:16]
+}
+
+// keepRuntimeFiles keeps a component's rendered files beside its runtime
+// values. A component without files keeps nothing.
+func (e *OwnedTarget) keepRuntimeFiles(ctx context.Context, ref string, files []runtimeFile) error {
+	if len(files) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(files)
+	if err != nil {
+		return err
+	}
+	return e.Secrets.Put(ctx, ref+runtimeFilesSuffix, raw)
+}
+
+// runtimeFiles reads the rendered files kept beside the runtime values at
+// ref into values.
+func (e *OwnedTarget) runtimeFiles(ctx context.Context, ref string, values *owned.RuntimeValues) error {
+	raw, err := e.Secrets.Get(ctx, ref+runtimeFilesSuffix)
+	if err != nil {
+		return fmt.Errorf("read the rendered files: %w", err)
+	}
+	var files []runtimeFile
+	if decodeErr := json.Unmarshal(raw, &files); decodeErr != nil {
+		return errors.New("the kept rendered files can't be read")
+	}
+	values.Files, values.FileModes = map[string][]byte{}, map[string]fs.FileMode{}
+	for _, f := range files {
+		values.Files[f.Path], values.FileModes[f.Path] = f.Data, f.Mode
+	}
+	return nil
+}
+
+// deleteRuntimeFiles deletes the rendered files kept beside the runtime
+// values labels name, when they have any.
+func (e *OwnedTarget) deleteRuntimeFiles(ctx context.Context, org, environment, service string, labels map[string]string) error {
+	ref := labels[owned.LabelRuntime]
+	if ref == "" || labels[owned.LabelRuntimeFiles] != "true" {
+		return nil
+	}
+	if err := validateRuntimeRef(org, environment, service, ref); err != nil {
+		return err
+	}
+	if e.Secrets == nil {
+		return ErrNoCredential
+	}
+	return e.Secrets.Delete(ctx, ref+runtimeFilesSuffix)
+}
+
+// declaresFiles reports whether a binding is a catalog component with
+// rendered files.
+func declaresFiles(b *planning.Binding) bool {
+	resource := boundResource(b)
+	return resource != nil && resource.Component != nil && len(resource.Component.Component.Files) > 0
 }
 
 // componentEnv resolves what a component gets: every derived or generated

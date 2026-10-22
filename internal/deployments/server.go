@@ -146,6 +146,11 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 		if checkErr := json.Unmarshal(raw, &values.Env); checkErr != nil {
 			return values, checkErr
 		}
+		if labels[owned.LabelRuntimeFiles] == "true" {
+			if filesErr := e.runtimeFiles(ctx, ref, &values); filesErr != nil {
+				return values, filesErr
+			}
+		}
 	}
 	connection := labels[labelRegistry]
 	if connection == "" {
@@ -313,6 +318,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		}
 
 		if state.PriorLabels != nil && state.PriorLabels[owned.LabelRuntime] != "" && state.PriorLabels[owned.LabelRuntime] != state.RuntimeRef {
+			if deleteErr := e.deleteRuntimeFiles(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.PriorLabels); deleteErr != nil {
+				return nil, deleteErr
+			}
 			if deleteErr := e.deleteRuntime(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.PriorLabels[owned.LabelRuntime]); deleteErr != nil {
 				return nil, deleteErr
 			}
@@ -378,6 +386,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	if checkErr := e.Secrets.Put(ctx, state.RuntimeRef, raw); checkErr != nil {
 		return nil, checkErr
 	}
+	if checkErr := e.keepRuntimeFiles(ctx, state.RuntimeRef, job.files); checkErr != nil {
+		return nil, checkErr
+	}
 	sp, labels := ownedSpec(job, image, state)
 	// Resolve and validate credentials before persisting any changed instance spec.
 	if _, err = e.values(ctx, labels); err != nil {
@@ -438,7 +449,8 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 			}
 			_, restoreErr := e.Ctrl.Instances.Update(restore, inst.ID, instance.UpdateRequest{Services: previousServices, Labels: previousLabels})
 			if backendErr == nil && restoreErr == nil && state.RuntimeRef != previousLabels[owned.LabelRuntime] {
-				cleanupErr := e.deleteRuntime(restore, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef)
+				cleanupErr := e.deleteRuntimeFiles(restore, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, labels)
+				cleanupErr = errors.Join(cleanupErr, e.deleteRuntime(restore, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef))
 				return nil, errors.Join(err, cleanupErr)
 			}
 			return nil, errors.Join(err, backendErr, restoreErr)
@@ -453,6 +465,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		return nil, saveErr
 	}
 	if previousLabels != nil && previousLabels[owned.LabelRuntime] != "" && previousLabels[owned.LabelRuntime] != state.RuntimeRef {
+		if checkErr := e.deleteRuntimeFiles(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, previousLabels); checkErr != nil {
+			return nil, checkErr
+		}
 		if checkErr := e.deleteRuntime(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, previousLabels[owned.LabelRuntime]); checkErr != nil {
 			return nil, checkErr
 		}
@@ -536,6 +551,12 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[labelRegistry] = cfg.BuildTarget.Registry
 		registrySettings, _ := json.Marshal(cfg.BuildTarget.RegistrySettings) //nolint:errcheck // string maps always encode
 		labels[labelRegistrySettings] = string(registrySettings)
+	}
+	if len(job.files) > 0 {
+		// The rendered bytes are part of the revision, so a changed file
+		// starts another container. Only their digest is a label.
+		labels[owned.LabelRuntimeFiles] = "true"
+		labels[owned.LabelRevision] += "/" + filesRevision(job.files)
 	}
 	return sp, labels
 }
@@ -634,7 +655,11 @@ func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.
 	if refErr := validateRuntimeRef(b.OrgID, b.EnvironmentID, b.Name, ref); refErr != nil {
 		return refErr
 	}
+	// A component's files go with its runtime values, whether its instance
+	// says so or, once it's gone, its binding.
+	files := declaresFiles(b)
 	if inst != nil {
+		files = files || inst.Labels[owned.LabelRuntimeFiles] == "true"
 		if inst.ProviderName != key || inst.TenantID != b.OrgID || inst.Labels[owned.LabelProject] != b.ProjectID || inst.Labels[owned.LabelEnvironment] != b.EnvironmentID {
 			return errors.New("the binding does not own this infrastructure instance")
 		}
@@ -658,6 +683,11 @@ func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.
 	if ref != "" {
 		if e.Secrets == nil {
 			return ErrNoCredential
+		}
+		if files {
+			if deleteErr := e.deleteRuntimeFiles(ctx, b.OrgID, b.EnvironmentID, b.Name, map[string]string{owned.LabelRuntime: ref, owned.LabelRuntimeFiles: "true"}); deleteErr != nil {
+				return deleteErr
+			}
 		}
 		if deleteErr := e.deleteRuntime(ctx, b.OrgID, b.EnvironmentID, b.Name, ref); deleteErr != nil {
 			return deleteErr

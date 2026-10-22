@@ -117,6 +117,10 @@ type Job struct {
 	// Attach are the resources a service needs, which some providers have
 	// to wire to it: a Cloud SQL instance Cloud Run mounts.
 	Attach []*planning.Binding
+
+	// files are a catalog component's rendered files, which an owned
+	// target keeps in Vault beside its runtime values.
+	files []runtimeFile
 }
 
 // ResourceURL is the field a resource executor keeps its address under,

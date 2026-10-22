@@ -103,6 +103,9 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 			err = errors.Join(err, fmt.Errorf("remove the %s job's container: %w", component, removeErr))
 		}
 	}()
+	if uploadErr := uploadFiles(ctx, c, created.ID, values); uploadErr != nil {
+		return result, uploadErr
+	}
 	if startErr := dockerJSON(ctx, c, http.MethodPost, container+"/start", nil, nil); startErr != nil {
 		return result, startErr
 	}

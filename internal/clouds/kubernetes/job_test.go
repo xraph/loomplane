@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -281,5 +282,27 @@ func TestKubernetesRunJobMapsCommandToEntrypoint(t *testing.T) {
 	}
 	if container = cluster.created.Spec.Template.Spec.Containers[0]; container.Command != nil || container.Args != nil {
 		t.Fatalf("command %v, args %v", container.Command, container.Args)
+	}
+}
+
+func TestKubernetesRunJobMountsFilesFromItsRuntimeSecret(t *testing.T) {
+	cluster, runtime := newJobCluster(t, 0, func(job *batchv1.Job) { job.Status.Succeeded = 1 })
+	runtime.Values = func(context.Context, map[string]string) (owned.RuntimeValues, error) {
+		return owned.RuntimeValues{Files: map[string][]byte{"/etc/sample/config.yaml": []byte("migrate: true\n")}}, nil
+	}
+	spec, labels := kubernetesJobFixture()
+	if _, err := runtime.RunJob(t.Context(), jobFixtureName, spec, labels, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if cluster.secret == nil || string(cluster.secret.Data["file-0"]) != "migrate: true\n" {
+		t.Fatalf("runtime secret: %+v", cluster.secret)
+	}
+	pod := cluster.created.Spec.Template.Spec
+	mounts := pod.Containers[0].VolumeMounts
+	if want := []corev1.VolumeMount{{Name: "runtime-files", MountPath: "/etc/sample/config.yaml", SubPath: "file-0", ReadOnly: true}}; !reflect.DeepEqual(mounts, want) {
+		t.Fatalf("mounts: %+v", mounts)
+	}
+	if len(pod.Volumes) != 1 || pod.Volumes[0].Secret == nil || pod.Volumes[0].Secret.SecretName != cluster.secret.Name {
+		t.Fatalf("volumes: %+v", pod.Volumes)
 	}
 }

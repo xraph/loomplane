@@ -3,7 +3,9 @@ package kubernetes
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -219,5 +221,56 @@ func TestKubernetesStatelessComponentIsADeployment(t *testing.T) {
 	}
 	if _, err := runtime.Apply(t.Context(), id.New(id.PrefixInstance), spec, component("7070")); err == nil {
 		t.Fatal("readiness on a port the workload doesn't declare")
+	}
+}
+
+func TestKubernetesMountsFilesFromTheRuntimeSecret(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	kube := fake.NewClientset()
+	client := &Client{Config: &Config{Namespace: "selected"}, Kube: kube}
+	runtime := &Runtime{WaitReady: func(context.Context, *Client, string) error { return nil }, Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }, Values: func(context.Context, map[string]string) (owned.RuntimeValues, error) {
+		return owned.RuntimeValues{
+			Env:       map[string]string{"TOKEN": "runtime-private-value"},
+			Files:     map[string][]byte{"/etc/sample/config.yaml": []byte("listen: 8080\n"), "/etc/sample/rules.json": []byte("{}")},
+			FileModes: map[string]fs.FileMode{"/etc/sample/rules.json": 0o440},
+		}, nil
+	}}
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelRuntimeFiles: "true"}
+	if _, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "registry.example.com/sample@sha256:fixture", Ports: []cpprovider.PortSpec{{Container: 8080}}}, labels); err != nil {
+		t.Fatal(err)
+	}
+	name := WorkloadName(iid)
+	secret, err := kube.CoreV1().Secrets("selected").Get(t.Context(), name+"-runtime", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(secret.Data["file-0"]) != "listen: 8080\n" || string(secret.Data["file-1"]) != "{}" || string(secret.Data["TOKEN"]) != "runtime-private-value" || len(secret.Data) != 3 {
+		t.Fatalf("runtime secret data: %q", secret.Data)
+	}
+	deployment, err := kube.AppsV1().Deployments("selected").Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := deployment.Spec.Template.Spec
+	container := pod.Containers[0]
+	wantMounts := []corev1.VolumeMount{
+		{Name: "runtime-files", MountPath: "/etc/sample/config.yaml", SubPath: "file-0", ReadOnly: true},
+		{Name: "runtime-files", MountPath: "/etc/sample/rules.json", SubPath: "file-1", ReadOnly: true},
+	}
+	if !reflect.DeepEqual(container.VolumeMounts, wantMounts) {
+		t.Fatalf("volume mounts: %+v", container.VolumeMounts)
+	}
+	readable, restricted, fallback := int32(0o444), int32(0o440), int32(0o444)
+	wantVolumes := []corev1.Volume{{Name: "runtime-files", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+		SecretName: secret.Name, DefaultMode: &fallback,
+		Items: []corev1.KeyToPath{{Key: "file-0", Path: "file-0", Mode: &readable}, {Key: "file-1", Path: "file-1", Mode: &restricted}},
+	}}}}
+	if !reflect.DeepEqual(pod.Volumes, wantVolumes) {
+		t.Fatalf("volumes: %+v", pod.Volumes)
+	}
+	for _, env := range container.Env {
+		if strings.HasPrefix(env.Name, "file-") {
+			t.Fatalf("a file became an environment variable: %+v", env)
+		}
 	}
 }

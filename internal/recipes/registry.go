@@ -536,6 +536,8 @@ func validateComponent(f *findings, c *Component, components map[string]*Compone
 		switch {
 		case !path.IsAbs(p) || path.Clean(p) != p || strings.Contains(p, ".."):
 			f.add("%s file %q must be a clean absolute path", what, p)
+		case p == "/":
+			f.add("%s file %q names no file", what, p)
 		case underSystem(p):
 			f.add("%s file %q is under /proc, /sys or /dev", what, p)
 		}

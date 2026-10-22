@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"reflect"
@@ -923,4 +924,183 @@ func TestKubernetesComponentAddressIsItsServiceHost(t *testing.T) {
 	if _, err = componentAddress(cfg, iid); err == nil {
 		t.Fatal("address in an invalid namespace")
 	}
+}
+
+// fileHooks render what files says, and record each run they render for.
+type fileHooks struct {
+	recordedHooks
+	files    map[string][]byte
+	rendered []ComponentRun
+}
+
+func (h *fileHooks) Files(_ context.Context, run ComponentRun) (map[string][]byte, error) {
+	h.rendered = append(h.rendered, run)
+	return maps.Clone(h.files), nil
+}
+
+const sampleConfig = "/etc/sample/config.yaml"
+
+// sampleWithFiles is the sample kind whose api and migrate declare a
+// rendered config file.
+func sampleWithFiles(t *testing.T) *recipes.Registry {
+	t.Helper()
+	return sampleKinds(t, func(k *recipes.Kind) {
+		for i := range k.Components {
+			if k.Components[i].Name == "api" || k.Components[i].Name == "migrate" {
+				k.Components[i].Files = []recipes.File{{Path: sampleConfig}}
+			}
+		}
+	})
+}
+
+func TestComponentFilesComeFromHooksAndStayInVault(t *testing.T) {
+	const content = "listen: 8080\nadmin_password: file-Secret-1\n"
+	f := newComponentFixture(t, sampleWithFiles(t))
+	hooks := &fileHooks{files: map[string][]byte{sampleConfig: []byte(content)}}
+	f.target.Hooks["sample"] = hooks
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+
+	api := f.componentJob(t, "api", newPostgres)
+	out, err := f.target.Apply(t.Context(), api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hooks.rendered) != 1 || hooks.rendered[0].Component.Name != "api" || hooks.rendered[0].Env["DATABASE_URL"] != postgresURL {
+		t.Fatalf("files rendered for %+v", hooks.rendered)
+	}
+	spec, labels, _ := f.started(t, out)
+	if labels[owned.LabelRuntimeFiles] != "true" {
+		t.Fatalf("label %s = %q", owned.LabelRuntimeFiles, labels[owned.LabelRuntimeFiles])
+	}
+	kept, ok := f.secrets.m[labels[owned.LabelRuntime]+"/files"]
+	if !ok || !strings.Contains(string(kept), sampleConfig) {
+		t.Fatalf("Vault keeps no files at %s/files: %q", labels[owned.LabelRuntime], kept)
+	}
+	values, err := f.target.values(t.Context(), labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(values.Files[sampleConfig]) != content || values.FileModes[sampleConfig] != 0o444 || len(values.Files) != 1 {
+		t.Fatalf("runtime files: %q, modes %v", values.Files, values.FileModes)
+	}
+	if len(spec.ConfigFiles) != 0 {
+		t.Fatalf("the Ctrl Plane spec has config files: %+v", spec.ConfigFiles)
+	}
+	rawSpec, _ := json.Marshal(spec)
+	rawLabels, _ := json.Marshal(labels)
+	for _, raw := range [][]byte{rawSpec, rawLabels} {
+		if strings.Contains(string(raw), "file-Secret-1") || strings.Contains(string(raw), "listen: 8080") {
+			t.Fatalf("file bytes entered Ctrl Plane: %s", raw)
+		}
+	}
+
+	// The rendered bytes are part of the revision: the same deployment
+	// rendering another file starts another container.
+	first := labels[owned.LabelRevision]
+	if !strings.HasPrefix(first, "dep/resource:app--api/") {
+		t.Fatalf("revision %q", first)
+	}
+	revision := func(mode fs.FileMode, data string) string {
+		copyJob := *api
+		copyJob.Action.Resource, copyJob.Action.Service = nil, componentService(api.Action.Resource)
+		copyJob.files = []runtimeFile{{Path: sampleConfig, Mode: mode, Data: []byte(data)}}
+		_, l := ownedSpec(&copyJob, "", ownedState{})
+		return l[owned.LabelRevision]
+	}
+	if revision(0o444, content) != first || revision(0o444, content+" ") == first || revision(0o440, content) == first {
+		t.Fatal("the revision doesn't follow the rendered bytes and modes")
+	}
+	hooks.files[sampleConfig] = []byte(content + "debug: true\n")
+	changed := f.componentJob(t, "api", newPostgres)
+	changed.Binding = bound(api, out)
+	out2, err := f.target.Apply(t.Context(), changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, labels2, _ := f.started(t, out2); labels2[owned.LabelRevision] == first || labels2[owned.LabelRuntime] == labels[owned.LabelRuntime] {
+		t.Fatalf("a changed file kept revision %q", labels2[owned.LabelRevision])
+	}
+	if _, ok := f.secrets.m[labels[owned.LabelRuntime]+"/files"]; ok {
+		t.Fatal("the replaced runtime's files outlived it")
+	}
+
+	// A component without files keeps its revision, and nothing of it is
+	// kept as files.
+	worker, err := f.target.Apply(t.Context(), f.componentJob(t, "worker", newPostgres))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, workerLabels, _ := f.started(t, worker)
+	if workerLabels[owned.LabelRevision] != "dep/resource:app--worker" {
+		t.Fatalf("worker revision %q", workerLabels[owned.LabelRevision])
+	}
+	if _, ok := workerLabels[owned.LabelRuntimeFiles]; ok {
+		t.Fatal("a component without files is labelled with them")
+	}
+	if _, ok := f.secrets.m[workerLabels[owned.LabelRuntime]+"/files"]; ok || len(hooks.rendered) != 2 {
+		t.Fatalf("files rendered for a component without any: %d renders", len(hooks.rendered))
+	}
+
+	// What the hook leaves out, or adds, stops the component before it
+	// starts.
+	creates := f.instances.creates
+	hooks.files = map[string][]byte{}
+	fresh := newComponentFixture(t, f.kinds)
+	fresh.target.Hooks["sample"] = hooks
+	fresh.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	if _, err = fresh.target.Apply(t.Context(), fresh.componentJob(t, "api", newPostgres)); err == nil || err.Error() != "sample did not render /etc/sample/config.yaml" {
+		t.Fatalf("missing file: %v", err)
+	}
+	hooks.files = map[string][]byte{sampleConfig: []byte(content), "/etc/sample/extra.yaml": []byte("x")}
+	if _, err = fresh.target.Apply(t.Context(), fresh.componentJob(t, "api", newPostgres)); err == nil || err.Error() != "sample rendered /etc/sample/extra.yaml, which api doesn't declare" {
+		t.Fatalf("undeclared file: %v", err)
+	}
+	if fresh.instances.creates != 0 || f.instances.creates != creates {
+		t.Fatal("a component started without its files")
+	}
+
+	// Removing the component forgets its files with its runtime values.
+	final := f.componentJob(t, "api", newPostgres)
+	_, finalLabels, _ := f.started(t, out2)
+	if err = f.target.Remove(t.Context(), final, bound(final, out2)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.secrets.m[finalLabels[owned.LabelRuntime]+"/files"]; ok {
+		t.Fatal("a removed component's files survived")
+	}
+}
+
+func TestComponentJobFilesAreKeptWhileItRuns(t *testing.T) {
+	f := newComponentFixture(t, sampleWithFiles(t))
+	hooks := &fileHooks{files: map[string][]byte{sampleConfig: []byte("migrate: true\n")}}
+	f.target.Hooks["sample"] = hooks
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	var seen owned.RuntimeValues
+	jobs := &filesJobBackend{componentBackend: f.backend, run: func(ctx context.Context, labels map[string]string) error {
+		var err error
+		seen, err = f.target.values(ctx, labels)
+		return err
+	}}
+	f.target.Backend = func(string, string) owned.Backend { return jobs }
+	if _, err := f.target.Apply(t.Context(), f.componentJob(t, "migrate", newPostgres)); err != nil {
+		t.Fatal(err)
+	}
+	if string(seen.Files[sampleConfig]) != "migrate: true\n" || jobs.labels[owned.LabelRuntimeFiles] != "true" || !strings.HasPrefix(jobs.labels[owned.LabelRevision], "dep/resource:app--migrate/") {
+		t.Fatalf("job files %q, labels %v", seen.Files, jobs.labels)
+	}
+	if _, ok := f.secrets.m[jobs.labels[owned.LabelRuntime]+"/files"]; ok {
+		t.Fatal("the job's files outlived it")
+	}
+}
+
+// filesJobBackend runs a job by calling run with its labels.
+type filesJobBackend struct {
+	*componentBackend
+	run    func(context.Context, map[string]string) error
+	labels map[string]string
+}
+
+func (b *filesJobBackend) RunJob(ctx context.Context, _ string, _ cpprovider.ServiceSpec, labels map[string]string, _ time.Duration) (owned.JobResult, error) {
+	b.labels = labels
+	return owned.JobResult{}, b.run(ctx, labels)
 }

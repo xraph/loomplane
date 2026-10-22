@@ -63,6 +63,8 @@ func (d *jobDocker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d.mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, `{"Id":"job_one"}`)
+	case r.Method == http.MethodPut && r.URL.Path == "/containers/job_one/archive":
+		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodPost && r.URL.Path == "/containers/job_one/start":
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && r.URL.Path == "/containers/job_one/wait":
@@ -201,5 +203,22 @@ func TestServerRunJobMapsCommandToEntrypoint(t *testing.T) {
 	}
 	if _, set := docker.create["Cmd"]; set {
 		t.Fatalf("cmd set: %v", docker.create["Cmd"])
+	}
+}
+
+func TestServerRunJobUploadsFilesBeforeStart(t *testing.T) {
+	d := &jobDocker{t: t}
+	r := d.runtime(t)
+	r.Values = func(context.Context, map[string]string) (owned.RuntimeValues, error) {
+		return owned.RuntimeValues{Files: map[string][]byte{"/etc/sample/config.yaml": []byte("migrate: true\n")}}, nil
+	}
+	spec, labels := jobFixture()
+	if _, err := r.RunJob(t.Context(), jobFixtureName, spec, labels, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	upload := slices.Index(d.requests, "PUT /containers/job_one/archive?path=%2Fetc%2Fsample")
+	start := slices.Index(d.requests, "POST /containers/job_one/start")
+	if upload < 0 || start < 0 || upload > start {
+		t.Fatalf("requests: %q", d.requests)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"strings"
 	"time"
@@ -47,11 +48,14 @@ const (
 // A composed catalog resource's component carries its kind, its resource's
 // manifest name and its own name. LabelHealthPort is the container port
 // its readiness probe answers on, when it publishes more than one.
+// LabelRuntimeFiles is "true" on a component whose runtime values include
+// rendered files.
 const (
 	LabelCatalogKind      = "loomplane.catalog.kind"
 	LabelCatalogResource  = "loomplane.catalog.resource"
 	LabelCatalogComponent = "loomplane.catalog.component"
 	LabelHealthPort       = "loomplane.health.port"
+	LabelRuntimeFiles     = "loomplane.runtime.files"
 )
 
 type Instances interface {
@@ -65,7 +69,24 @@ type instanceUpdater interface {
 type RuntimeValues struct {
 	Env      map[string]string
 	PullAuth string
+	// Files are rendered files by absolute path, and FileModes their
+	// modes; a file without one is 0o444. They're written into the
+	// container before it starts.
+	Files     map[string][]byte
+	FileModes map[string]fs.FileMode
 }
+
+// DefaultFileMode is a rendered file's mode when it has none.
+const DefaultFileMode fs.FileMode = 0o444
+
+// FileMode is the mode a rendered file is written with.
+func (v RuntimeValues) FileMode(path string) fs.FileMode {
+	if mode := v.FileModes[path].Perm(); mode != 0 {
+		return mode
+	}
+	return DefaultFileMode
+}
+
 type Values func(context.Context, map[string]string) (RuntimeValues, error)
 
 // Backend uses an explicitly selected connection for every operation. Its

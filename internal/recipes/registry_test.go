@@ -413,3 +413,34 @@ func TestDefaultRegistryServesRegisteredEngines(t *testing.T) {
 		t.Fatal("unknown kind accepted")
 	}
 }
+
+func TestFilesRejectUnsafePaths(t *testing.T) {
+	register := func(p string) error {
+		k := recipestest.Sample()
+		k.Components[1].Files = []recipes.File{{Path: p}}
+		return recipes.NewRegistry().Register(k)
+	}
+	for p, want := range map[string]string{
+		"etc/x":     "clean absolute path",
+		"/etc/../x": "clean absolute path",
+		"/etc/x/":   "clean absolute path",
+		"/":         "names no file",
+		"/proc/x":   "/proc",
+		"/sys/x":    "/proc, /sys or /dev",
+		"/dev":      "/proc, /sys or /dev",
+	} {
+		err := register(p)
+		if err == nil {
+			t.Fatalf("file %q accepted", p)
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("file %q: error %q does not mention %q", p, err, want)
+		}
+	}
+	if err := register("/etc/sample/config.yaml"); err != nil {
+		t.Fatalf("a safe file path: %v", err)
+	}
+	if err := register("/processes/config.yaml"); err != nil {
+		t.Fatalf("a path that only starts like /proc: %v", err)
+	}
+}

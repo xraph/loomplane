@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -55,11 +56,48 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		}
 		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}
 	}
-	template := &corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{owned.LabelRevision: labels[owned.LabelRevision]}}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}, ImagePullSecrets: pulls}}
+	var volumes []corev1.Volume
+	if len(values.Files) > 0 {
+		fallback := int32(owned.DefaultFileMode)
+		source := &corev1.SecretVolumeSource{SecretName: runtimeSecret.Name, DefaultMode: &fallback}
+		for i, p := range slices.Sorted(maps.Keys(values.Files)) {
+			if _, clash := values.Env[fileKey(i)]; clash {
+				return nil, nil, fmt.Errorf("the variable %s clashes with a rendered file's key", fileKey(i))
+			}
+			mode := int32(values.FileMode(p)) //nolint:gosec // permission bits, at most 0o777
+			source.Items = append(source.Items, corev1.KeyToPath{Key: fileKey(i), Path: fileKey(i), Mode: &mode})
+			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: runtimeFilesVolume, MountPath: p, SubPath: fileKey(i), ReadOnly: true})
+		}
+		volumes = []corev1.Volume{{Name: runtimeFilesVolume, VolumeSource: corev1.VolumeSource{Secret: source}}}
+	}
+	template := &corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{owned.LabelRevision: labels[owned.LabelRevision]}}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}, ImagePullSecrets: pulls, Volumes: volumes}}
 	if architecture := labels[owned.LabelArchitecture]; architecture != "" {
 		template.Spec.NodeSelector = map[string]string{"kubernetes.io/arch": architecture}
 	}
 	return template, servicePorts, nil
+}
+
+// runtimeFilesVolume is the volume a workload's rendered files are
+// mounted from, one subPath each.
+const runtimeFilesVolume = "runtime-files"
+
+// fileKey is the runtime Secret key of the i-th rendered file in path
+// order.
+func fileKey(i int) string { return "file-" + strconv.Itoa(i) }
+
+// runtimeSecretData is what a workload's runtime Secret holds: its secret
+// variables by name, and its rendered files as file-0, file-1 and on in
+// path order. A catalog component's variable names have no "-", and
+// runtimePod refuses one that clashes anyway.
+func runtimeSecretData(values owned.RuntimeValues) map[string][]byte {
+	data := map[string][]byte{}
+	for key, value := range values.Env {
+		data[key] = []byte(value)
+	}
+	for i, p := range slices.Sorted(maps.Keys(values.Files)) {
+		data[fileKey(i)] = values.Files[p]
+	}
+	return data
 }
 
 // healthPort is the container port readiness probes: the one LabelHealthPort

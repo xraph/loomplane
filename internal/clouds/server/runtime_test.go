@@ -1,11 +1,13 @@
 package server
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -381,5 +383,104 @@ func TestServerWaitProbesDeclaredHealthPort(t *testing.T) {
 	status, err := (&Runtime{Probe: runtime.Probe, Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }}).Status(t.Context(), iid, labels)
 	if err != nil || !status.Ready || !slices.Equal(probed, []int{32001, 32001}) {
 		t.Fatalf("status: %+v probed %v, %v", status, probed, err)
+	}
+}
+
+func TestServerUploadsFilesBeforeStart(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	type entry struct {
+		dir, name string
+		mode      int64
+		uid, gid  int
+		data      string
+	}
+	var (
+		requests []string
+		entries  []entry
+		created  bool
+	)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/json"):
+			if !created {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}})
+		case r.URL.Path == "/networks/"+NetworkName("org_fixture", "env_fixture"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "network_one", "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+			created = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"Id":"container_one"}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/containers/container_one/archive":
+			dir := r.URL.Query().Get("path")
+			requests[len(requests)-1] += "?path=" + dir
+			// The image has /etc/sample but no /opt/sample.
+			if dir != "/etc/sample" && dir != "/" {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = io.WriteString(w, `{"message":"Could not find the file in container"}`)
+				return
+			}
+			if r.Header.Get("Content-Type") != "application/x-tar" {
+				t.Errorf("archive content type %q", r.Header.Get("Content-Type"))
+			}
+			archive := tar.NewReader(r.Body)
+			for {
+				header, err := archive.Next()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Error(err)
+					break
+				}
+				data, _ := io.ReadAll(archive)
+				entries = append(entries, entry{dir, header.Name, header.Mode, header.Uid, header.Gid, string(data)})
+			}
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected runtime request: %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	u, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{Session: func(context.Context, map[string]string) (*Client, error) {
+		return &Client{Config: &Config{Details: map[string]string{"docker_id": "daemon_fixture"}}, HTTP: &http.Client{Transport: runtimeTransport(func(r *http.Request) (*http.Response, error) {
+			r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
+			return http.DefaultTransport.RoundTrip(r)
+		})}}, nil
+	}, Values: func(context.Context, map[string]string) (owned.RuntimeValues, error) {
+		return owned.RuntimeValues{
+			Files:     map[string][]byte{"/etc/sample/config.yaml": []byte("listen: 8080\n"), "/opt/sample/rules.json": []byte("{}")},
+			FileModes: map[string]fs.FileMode{"/opt/sample/rules.json": 0o440},
+		}, nil
+	}}
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelProject: "proj_fixture", owned.LabelConnection: "conn_fixture", owned.LabelRuntime: "vault_reference", owned.LabelRuntimeFiles: "true", owned.LabelPublic: "false"}
+	if _, err = runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:" + strings.Repeat("a", 64)}, labels); err != nil {
+		t.Fatal(err)
+	}
+	upload := slices.Index(requests, "PUT /containers/container_one/archive?path=/etc/sample")
+	start := slices.Index(requests, "POST /containers/container_one/start")
+	if upload < 0 || start < upload {
+		t.Fatalf("requests: %q", requests)
+	}
+	// A directory the image lacks is created from the root, before start.
+	if fallback := slices.Index(requests, "PUT /containers/container_one/archive?path=/"); fallback < 0 || start < fallback {
+		t.Fatalf("requests: %q", requests)
+	}
+	want := []entry{
+		{"/etc/sample", "config.yaml", 0o444, 0, 0, "listen: 8080\n"},
+		{"/", "opt/sample/rules.json", 0o440, 0, 0, "{}"},
+	}
+	if !slices.Equal(entries, want) {
+		t.Fatalf("archive entries: %+v", entries)
 	}
 }

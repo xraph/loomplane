@@ -343,6 +343,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/create?name="+name, body, &result); checkErr != nil {
 		return nil, checkErr
 	}
+	if checkErr := uploadFiles(ctx, c, result.ID, values); checkErr != nil {
+		return nil, checkErr
+	}
 	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(result.ID)+"/start", nil, nil); checkErr != nil {
 		return nil, checkErr
 	}
@@ -636,6 +639,11 @@ func dockerJSON(ctx context.Context, c *Client, method, path string, body, out a
 	if err != nil {
 		return err
 	}
+	return dockerResult(res, out)
+}
+
+// dockerResult reads a Docker response into out, or the error it reports.
+func dockerResult(res *http.Response, out any) error {
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
 		return ErrMissing
