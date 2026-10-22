@@ -43,6 +43,14 @@ func gatewayError(code, message string) *GatewayError {
 // request off, which is 57P01. When ctx ends first, WithLease returns its
 // error.
 func (r *Router) WithLease(ctx context.Context, host, role, password string, fn func(l *Lease) (LeaseState, error)) error {
+	return r.withLease(ctx, host, role, password, nil, fn)
+}
+
+// withLease is WithLease with one more step: authed, when set, runs once the
+// password has been checked and before anything touches the backend, and an
+// error from it comes back unchanged. The HTTP handler reads the request body
+// there, so a client that fails to log in never has its body read.
+func (r *Router) withLease(ctx context.Context, host, role, password string, authed func() error, fn func(l *Lease) (LeaseState, error)) error {
 	deadline := time.Now().Add(r.holdLimit)
 	if r.Draining() {
 		return gatewayError("57P01", msgShuttingDown)
@@ -75,6 +83,11 @@ func (r *Router) WithLease(ctx context.Context, host, role, password string, fn 
 
 	if VerifyPassword(h.verifier(role), password) != nil {
 		return gatewayError("28P01", `password authentication failed for user "`+role+`"`)
+	}
+	if authed != nil {
+		if err := authed(); err != nil {
+			return err
+		}
 	}
 	if h.pool == nil {
 		return gatewayError("08006", msgNoBackend)

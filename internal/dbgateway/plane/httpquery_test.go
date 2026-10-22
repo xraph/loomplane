@@ -3,6 +3,7 @@ package plane
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -309,7 +311,7 @@ func TestHTTPQueryBadAuth(t *testing.T) {
 		"postgres://" + testRole + "@orders." + string(testSuffix) + "/orders",
 	} {
 		rec := h.post(`{"query":"SELECT 1","params":[]}`, map[string]string{"Neon-Connection-String": dsn})
-		code, msg := errorOf(t, rec, http.StatusUnauthorized)
+		code, msg := errorOf(t, rec, http.StatusBadRequest)
 		if code != "28P01" || !strings.HasPrefix(msg, "password authentication failed") {
 			t.Fatalf("dsn %s: error = %s %q, want 28P01", dsn, code, msg)
 		}
@@ -319,6 +321,86 @@ func TestHTTPQueryBadAuth(t *testing.T) {
 	}
 	if h.dialer.dials() != 0 {
 		t.Fatal("a failed login dialed the backend")
+	}
+}
+
+// driverErrorKeys are the keys the driver copies from an error body onto its
+// NeonDbError (index.js:1274), besides message.
+var driverErrorKeys = []string{"severity", "code", "detail", "hint", "position", "internalPosition",
+	"internalQuery", "where", "schema", "table", "column", "dataType", "constraint", "file", "line", "routine"}
+
+// The driver parses an error's JSON only on a 400, so a failed login has to
+// be one for the caller's err.code to say 28P01.
+func TestHTTPQueryAuthErrorParsesLikeTheDriver(t *testing.T) {
+	h := newHTTPHarness(t, nil)
+	rec := h.post(`{"query":"SELECT 1"}`, map[string]string{
+		"Neon-Connection-String": "postgresql://" + testRole + ":wrong@orders." + string(testSuffix) + "/orders",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, the only status the driver parses", rec.Code)
+	}
+	// What the driver does with it: new NeonDbError(body.message), then
+	// err[key] = body[key] for each key it knows.
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error body is not JSON: %v: %s", err, rec.Body)
+	}
+	if msg, _ := body["message"].(string); msg != `password authentication failed for user "`+testRole+`"` {
+		t.Fatalf("message = %v", body["message"])
+	}
+	if code, _ := body["code"].(string); code != "28P01" {
+		t.Fatalf("code = %v, want the string 28P01", body["code"])
+	}
+	for k, v := range body {
+		if _, ok := v.(string); !ok {
+			t.Errorf("%s = %v, want a string as node-postgres has it", k, v)
+		}
+		if k != "message" && !slices.Contains(driverErrorKeys, k) {
+			t.Errorf("error body has %q, which the driver ignores", k)
+		}
+	}
+}
+
+// countingReader counts what is read from it.
+type countingReader struct {
+	r io.Reader
+	n atomic.Int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+func TestHTTPQueryBodyReadOnlyAfterAuth(t *testing.T) {
+	h := newHTTPHarness(t, nil)
+	send := func(dsn string, body *countingReader) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/sql", body)
+		req.Header.Set("Neon-Connection-String", dsn)
+		rec := httptest.NewRecorder()
+		h.q.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, dsn := range []string{
+		"postgres://" + testRole + ":wrong@orders." + string(testSuffix) + "/orders",
+		"postgres://" + testRole + ":" + testPass + "@billing." + string(testSuffix) + "/billing",
+	} {
+		big := &countingReader{r: strings.NewReader(`{"query":"SELECT '` + strings.Repeat("x", 8<<20) + `'"}`)}
+		rec := send(dsn, big)
+		if code, _ := errorOf(t, rec, http.StatusBadRequest); code != "28P01" && code != "08004" {
+			t.Fatalf("dsn %s: code = %s, want a refusal", dsn, code)
+		}
+		if n := big.n.Load(); n != 0 {
+			t.Fatalf("dsn %s: a refused request read %d bytes of its body", dsn, n)
+		}
+	}
+	small := &countingReader{r: strings.NewReader(`{"query":"SELECT 1"}`)}
+	if rec := send(testDSN, small); rec.Code != http.StatusOK {
+		t.Fatalf("logged-in request: %d %s", rec.Code, rec.Body)
+	}
+	if small.n.Load() == 0 {
+		t.Fatal("a logged-in request did not read its body")
 	}
 }
 
@@ -337,7 +419,7 @@ func TestHTTPQueryBadRequests(t *testing.T) {
 		"no query":               {`{"params":[]}`, nil, 400},
 		"NUL in query":           {`{"query":"SELECT 1\u0000"}`, nil, 400},
 		"trailing data":          {`{"query":"SELECT 1"} {}`, nil, 400},
-		"body over 10 MiB":       {`{"query":"` + strings.Repeat("x", 10<<20) + `"}`, nil, 413},
+		"body over 10 MiB":       {`{"query":"` + strings.Repeat("x", 10<<20) + `"}`, nil, 400},
 		"query and queries both": {`{"query":"SELECT 1","queries":[]}`, nil, 400},
 	} {
 		rec := h.post(tc.body, tc.header)
@@ -468,7 +550,7 @@ func TestHTTPQueryUnknownRoute(t *testing.T) {
 	rec := h.post(`{"query":"SELECT 1"}`, map[string]string{
 		"Neon-Connection-String": "postgres://" + testRole + ":" + testPass + "@billing." + string(testSuffix) + "/billing",
 	})
-	code, msg := errorOf(t, rec, http.StatusNotFound)
+	code, msg := errorOf(t, rec, http.StatusBadRequest)
 	if code != "08004" || !strings.Contains(msg, "billing") {
 		t.Fatalf("error = %s %q, want 08004 naming the label", code, msg)
 	}
@@ -477,7 +559,7 @@ func TestHTTPQueryUnknownRoute(t *testing.T) {
 func TestHTTPQueryDraining(t *testing.T) {
 	h := newHTTPHarness(t, nil)
 	h.r.Drain(t.Context())
-	code, _ := errorOf(t, h.post(`{"query":"SELECT 1"}`, nil), http.StatusServiceUnavailable)
+	code, _ := errorOf(t, h.post(`{"query":"SELECT 1"}`, nil), http.StatusBadRequest)
 	if code != "57P01" {
 		t.Fatalf("code = %s, want 57P01", code)
 	}
@@ -495,7 +577,7 @@ func TestHTTPQueryPoolBusy(t *testing.T) {
 	defer cancel()
 	rec := h.postCtx(ctx, `{"query":"SELECT 1"}`, nil)
 	close(h.dialer.hold)
-	if code, _ := errorOf(t, rec, http.StatusServiceUnavailable); code != "53300" {
+	if code, _ := errorOf(t, rec, http.StatusBadRequest); code != "53300" {
 		t.Fatalf("code = %s, want 53300", code)
 	}
 	if rec := <-held; rec.Code != http.StatusOK {
@@ -522,7 +604,7 @@ func TestHTTPQueryDeadlineBreaksLease(t *testing.T) {
 
 func TestHTTPQueryBackendLost(t *testing.T) {
 	h := newHTTPHarness(t, nil)
-	code, msg := errorOf(t, h.post(`{"query":"SELECT die","params":[]}`, nil), http.StatusBadGateway)
+	code, msg := errorOf(t, h.post(`{"query":"SELECT die","params":[]}`, nil), http.StatusBadRequest)
 	if code != "08006" || strings.Contains(msg, "10.0.0.1") {
 		t.Fatalf("error = %s %q, want 08006 without the backend address", code, msg)
 	}
