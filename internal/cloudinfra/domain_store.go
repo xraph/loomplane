@@ -83,17 +83,26 @@ func (s *PgStore) SaveZone(ctx context.Context, zone *Zone) error {
 const routeRuntimeJoin = ` LEFT JOIN LATERAL (SELECT d.id,d.release_id,d.state FROM cp_deployments d WHERE d.tenant_id=i.tenant_id AND d.instance_id=i.id ORDER BY d.created_at DESC,d.id DESC LIMIT 1) deployment ON true`
 const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id ELSE '' END`
 const routeRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>'main' ELSE i.labels->>'` + owned.LabelReceiptServicePrefix + `main' END`
+const routedRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>routed.name ELSE i.labels->>('` + owned.LabelReceiptServicePrefix + `'||routed.name) END`
 
-const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routeRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+// A service binding routes a port on its main service. A catalog component
+// routes only a port its recipe listed in routable_ports, on the service that
+// declares it, so a database or private admin port never takes a public route.
+const routedService = ` JOIN LATERAL (SELECT svc->>'name' AS name FROM jsonb_array_elements(i.services) svc
+ WHERE (b.subject='resource' OR svc->>'name'='main') AND EXISTS(SELECT 1 FROM jsonb_array_elements(svc->'ports') p WHERE (p->>'container')::int=$6)
+ ORDER BY svc->>'name' LIMIT 1) routed ON true`
+
+const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
  JOIN loomplane_cloud_targets t ON t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id'
  JOIN loomplane_cloud_project_grants g ON g.org_id=b.org_id AND g.cloud_id=t.cloud_id AND g.project_id=b.project_id AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids))
  JOIN loomplane_cloud_servers s ON s.org_id=b.org_id AND s.cloud_id=t.cloud_id AND s.id=b.config->'cloud_placement'->>'server_id' AND s.status='ready'
  JOIN loomplane_cloud_connections c ON c.org_id=s.org_id AND c.id=s.runtime_connection_id AND c.id=b.connection_id AND c.status='ready'
- JOIN cp_instances i ON i.tenant_id=b.org_id AND i.id=b.external_id` + routeRuntimeJoin + `
- WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.subject='service' AND b.provider='server'
- AND EXISTS(SELECT 1 FROM jsonb_array_elements(i.services) svc,jsonb_array_elements(svc->'ports') p WHERE svc->>'name'='main' AND (p->>'container')::int=$6)`
+ JOIN cp_instances i ON i.tenant_id=b.org_id AND i.id=b.external_id` + routeRuntimeJoin + routedService + `
+ WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.provider='server'
+ AND (b.subject='service' OR (b.subject='resource' AND b.config->'routable_ports' @> jsonb_build_array($6::int)))
+ ORDER BY b.subject='service' DESC`
 
 func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	var out RouteBinding
@@ -111,6 +120,15 @@ func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 
 func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, in RouteInput) (RouteBinding, error) {
 	return scanRouteBinding(s.db.QueryRow(ctx, routeBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+}
+
+// A service and a catalog component may share a name. The service wins here
+// and in routeBindingQuery.
+func (s *PgStore) RouteBindingCloud(ctx context.Context, org, project, environment, service string) (string, error) {
+	var cloud string
+	err := s.db.QueryRow(ctx, `SELECT coalesce(config->'cloud_placement'->>'cloud_id','') FROM loomplane_bindings
+ WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND name=$4 AND subject IN ('service','resource') ORDER BY subject='service' DESC LIMIT 1`, org, project, environment, service).Scan(&cloud)
+	return cloud, storeError(err)
 }
 
 type routeCheckpoint struct {

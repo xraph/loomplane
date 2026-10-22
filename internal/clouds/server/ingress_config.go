@@ -33,6 +33,8 @@ type IngressRoute struct {
 	// ChallengeAddress is a verified destination server's port 80. Normal
 	// requests continue to use Backend until the accepted DNS cutover.
 	ChallengeAddress string `json:"challenge_address,omitempty"`
+	// BlockedPathPrefixes answer 404 on this hostname before the proxy sees them.
+	BlockedPathPrefixes []string `json:"blocked_path_prefixes,omitempty"`
 }
 
 type IngressConfig struct {
@@ -54,6 +56,28 @@ func IngressName(org, server string) string {
 func IngressNetwork(b IngressBackend) string {
 	h := sha256.Sum256([]byte(b.OrgID + "/" + b.ProjectID + "/" + b.EnvironmentID + "/" + b.Service + "/" + b.ContainerID))
 	return fmt.Sprintf("lp-route-%x", h[:12])
+}
+
+// ValidBlockedPathPrefixes accepts at most 8 literal path prefixes of at most
+// 128 bytes. Caddy reads *, ? and # in a path matcher, so none may appear.
+func ValidBlockedPathPrefixes(prefixes []string) bool {
+	if len(prefixes) > 8 {
+		return false
+	}
+	for _, p := range prefixes {
+		if !strings.HasPrefix(p, "/") || len(p) > 128 || strings.ContainsAny(p, "*?#") {
+			return false
+		}
+	}
+	return true
+}
+
+func blockedPathRoute(r IngressRoute) map[string]any {
+	paths := make([]string, 0, 2*len(r.BlockedPathPrefixes))
+	for _, p := range r.BlockedPathPrefixes {
+		paths = append(paths, p, p+"/*")
+	}
+	return map[string]any{"match": []any{map[string]any{"host": []string{r.Hostname}, "path": paths}}, "handle": []any{map[string]any{"handler": "static_response", "status_code": 404}}, "terminal": true}
 }
 
 func validIngressHost(host string) bool {
@@ -86,11 +110,15 @@ func (v IngressConfig) JSON() ([]byte, error) {
 	seen := map[string]bool{}
 	for _, r := range routes {
 		b := r.Backend
-		if !validIngressHost(r.Hostname) || seen[r.Hostname] || r.ID == "" || b.OrgID != v.OrgID || b.ProjectID == "" || b.EnvironmentID == "" || b.Service == "" || b.InstanceID == "" || b.ReleaseID == "" || b.ContainerID == "" || net.ParseIP(b.Address) == nil || b.Port < 1 || b.Port > 65535 {
+		if !validIngressHost(r.Hostname) || seen[r.Hostname] || r.ID == "" || b.OrgID != v.OrgID || b.ProjectID == "" || b.EnvironmentID == "" || b.Service == "" || b.InstanceID == "" || b.ReleaseID == "" || b.ContainerID == "" || net.ParseIP(b.Address) == nil || b.Port < 1 || b.Port > 65535 || !ValidBlockedPathPrefixes(r.BlockedPathPrefixes) {
 			return nil, ErrInvalid
 		}
 		seen[r.Hostname] = true
 		hosts = append(hosts, r.Hostname)
+		if len(r.BlockedPathPrefixes) > 0 {
+			httpsRoutes = append(httpsRoutes, blockedPathRoute(r))
+			probeRoutes = append(probeRoutes, blockedPathRoute(r))
+		}
 		httpsRoutes = append(httpsRoutes, map[string]any{"match": []any{map[string]any{"host": []string{r.Hostname}}}, "handle": []any{map[string]any{"handler": "reverse_proxy", "upstreams": []any{map[string]any{"dial": net.JoinHostPort(b.Address, strconv.Itoa(b.Port))}}}}, "terminal": true})
 		if r.PreparedBackend != nil {
 			candidate := *r.PreparedBackend

@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"reflect"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
@@ -483,7 +484,7 @@ func TestIngressAbandonedSameServerPreparation(t *testing.T) {
 			if clearErr := svc.clearInactivePreparation(ctx, st, c, &retry, &restarted); clearErr != nil {
 				t.Fatal("cleanup receipt recovery failed", clearErr)
 			}
-			if len(restarted.Config.Routes) != 2 || restarted.Config.Routes[0].PreparedBackend != nil || restarted.Config.Routes[0].Backend != base.Routes[0].Backend || restarted.Config.Routes[1] != base.Routes[1] {
+			if len(restarted.Config.Routes) != 2 || restarted.Config.Routes[0].PreparedBackend != nil || restarted.Config.Routes[0].Backend != base.Routes[0].Backend || !reflect.DeepEqual(restarted.Config.Routes[1], base.Routes[1]) {
 				t.Fatal("cleanup changed public or unrelated route")
 			}
 			if probeErr := server.ProbeIngressBackend(ctx, c, restarted.Config, restarted.Current, "route"); probeErr != nil {

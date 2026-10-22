@@ -280,7 +280,7 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 			if err != nil {
 				return err
 			}
-			next := server.IngressRoute{ID: route.ID, Hostname: route.Input.Hostname, Backend: backend}
+			next := server.IngressRoute{ID: route.ID, Hostname: route.Input.Hostname, Backend: backend, BlockedPathPrefixes: slices.Clone(route.Input.BlockedPathPrefixes)}
 			if op.Kind == "prepare" && op.Source != nil && op.Source.Binding.ServerID == route.Binding.ServerID {
 				index := slices.IndexFunc(desired.Routes, func(r server.IngressRoute) bool { return r.ID == route.ID })
 				if index < 0 || desired.Routes[index].Backend.ContainerID != op.Source.Binding.ContainerID || desired.Routes[index].Backend.ReleaseID != op.Source.Binding.ReleaseID {
@@ -397,14 +397,19 @@ func (s *Service) recoverCancelledIngress(ctx context.Context, st DomainStore, c
 
 func routeConfigMatches(route Route, config server.IngressConfig, preparation bool) bool {
 	for _, r := range config.Routes {
-		if r.ID == route.ID && r.Hostname == route.Input.Hostname {
-			backend := r.Backend
-			if preparation && r.PreparedBackend != nil {
-				backend = *r.PreparedBackend
-			}
-			backend.Address = ""
-			return reflect.DeepEqual(backend, routeBackend(route))
+		if r.ID != route.ID || r.Hostname != route.Input.Hostname {
+			continue
 		}
+		// A hand-edited block list is drift like a changed upstream.
+		if !slices.Equal(r.BlockedPathPrefixes, route.Input.BlockedPathPrefixes) {
+			return false
+		}
+		backend := r.Backend
+		if preparation && r.PreparedBackend != nil {
+			backend = *r.PreparedBackend
+		}
+		backend.Address = ""
+		return reflect.DeepEqual(backend, routeBackend(route))
 	}
 	return false
 }

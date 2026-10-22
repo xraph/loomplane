@@ -2,6 +2,7 @@ package cloudinfra
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"slices"
 	"time"
@@ -20,6 +21,21 @@ type RouteInput struct {
 	Service            string `json:"service"`
 	Hostname           string `json:"hostname"`
 	Port               int    `json:"port"`
+	// BlockedPathPrefixes never reach the service on this hostname.
+	BlockedPathPrefixes []string `json:"blocked_path_prefixes,omitempty"`
+}
+
+// Servers always belong to a Cloud, so this only guards bad binding data.
+const noCloudPlacement = "This service isn't placed through a Cloud, so Loomplane can't route to its server."
+
+// ValidateBlockedPathPrefixes takes prefixes the caller already sorted and
+// de-duplicated: at most 8, each starting with / and at most 128 bytes, with
+// no *, ? or #.
+func ValidateBlockedPathPrefixes(prefixes []string) error {
+	if !server.ValidBlockedPathPrefixes(prefixes) {
+		return ErrInvalid
+	}
+	return nil
 }
 
 type RouteBinding struct {
@@ -98,6 +114,8 @@ type DomainStore interface {
 	SaveZone(context.Context, *Zone) error
 	RemoveZone(context.Context, string, string, int64) error
 	ResolveRouteBinding(context.Context, string, string, RouteInput) (RouteBinding, error)
+	// RouteBindingCloud is the binding's Cloud placement, "" when it has none.
+	RouteBindingCloud(ctx context.Context, org, project, environment, service string) (string, error)
 	PreviewRoute(context.Context, *RouteOperation) error
 	AcceptRoute(context.Context, *RouteOperation) error
 	RouteOperation(context.Context, string, string) (*RouteOperation, error)
@@ -140,6 +158,10 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if err != nil || in.Port < 1 || in.Port > 65535 || (in.ExternalTTLSeconds != 0 && (in.ExternalTTLSeconds < 60 || in.ExternalTTLSeconds > 86400)) {
 		return nil, ErrInvalid
 	}
+	in.BlockedPathPrefixes = slices.Compact(slices.Sorted(slices.Values(in.BlockedPathPrefixes)))
+	if checkErr := ValidateBlockedPathPrefixes(in.BlockedPathPrefixes); checkErr != nil {
+		return nil, checkErr
+	}
 	zone, err := st.Zone(ctx, p.OrgID, in.ZoneID)
 	if err != nil {
 		return nil, err
@@ -149,6 +171,15 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	}
 	if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {
 		return nil, checkErr
+	}
+	// The stored intent records the Cloud the binding resolved under.
+	if in.CloudID == "" {
+		if in.CloudID, err = st.RouteBindingCloud(ctx, p.OrgID, project, in.EnvironmentID, in.Service); err != nil {
+			return nil, err
+		}
+		if in.CloudID == "" {
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
+		}
 	}
 	binding, err := st.ResolveRouteBinding(ctx, p.OrgID, project, in)
 	if err != nil {
