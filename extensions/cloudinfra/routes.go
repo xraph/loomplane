@@ -40,6 +40,9 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	if err := e.domainRoutes(r, guard); err != nil {
 		return err
 	}
+	if err := e.registrationRoutes(r, guard); err != nil {
+		return err
+	}
 	g := r.Group("/api/v1/clouds/:cloudId", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud infrastructure"))
 	routes := []route{
 		{http.MethodGet, "/servers/:serverId/usage", "cloudServers.usage", e.serverUsage, nil, infra.ServerUsage{}, http.StatusOK},

@@ -103,6 +103,9 @@ func (e *Extension) Start(context.Context) error {
 			if err := e.svc.RecoverInfrastructure(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Recover infrastructure operations", forge.F("error", err.Error()))
 			}
+			if err := e.svc.RecoverRegistrations(ctx); err != nil && ctx.Err() == nil {
+				e.Logger().Warn("Recover domain registrations", forge.F("error", err.Error()))
+			}
 			select {
 			case <-ctx.Done():
 				return

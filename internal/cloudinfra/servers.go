@@ -108,6 +108,8 @@ type ApplyInput struct {
 	Review string `json:"review"`
 }
 
+// Workflow starts durable server operations. The same value may also be a
+// RouteWorkflow and a RegistrationWorkflow; the service checks for each.
 type Workflow interface {
 	StartInfrastructure(context.Context, string, string, int) error
 }
@@ -123,6 +125,7 @@ type Runtime interface {
 
 type Deps struct {
 	Domains              DomainStore
+	Registrations        RegistrationStore
 	Resolver             DomainResolver
 	PoolCleanup          PoolCleanup
 	Store                Store

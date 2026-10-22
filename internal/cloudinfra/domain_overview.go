@@ -120,7 +120,17 @@ func (s *Service) DomainOverview(ctx context.Context, p security.Principal) (*Do
 	}
 	out := &DomainOverview{Zones: make([]ZoneOverview, 0, len(zones)), Registrations: []*Registration{}}
 	for _, zone := range zones {
-		out.Zones = append(out.Zones, ZoneOverview{Zone: zone, State: zoneState(zone), Wildcards: zone.Wildcards(), Hostnames: append([]HostnameUse{}, uses[zone.ID]...)})
+		out.Zones = append(out.Zones, ZoneOverview{Zone: zone, State: zoneState(zone), Wildcards: zone.Wildcards(), RegistrationID: zone.RegistrationID, Hostnames: append([]HostnameUse{}, uses[zone.ID]...)})
+	}
+	// Without a registration store nothing can have been registered.
+	if registrations, storeErr := s.registrationStore(); storeErr == nil {
+		regs, listErr := registrations.Registrations(ctx, p.OrgID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		for _, reg := range regs {
+			out.Registrations = append(out.Registrations, shown(reg))
+		}
 	}
 	return out, nil
 }

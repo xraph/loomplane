@@ -205,10 +205,10 @@ func (d *Deployments) Options(owner string, concurrency int) drt.Options {
 	return drt.Options{
 		Namespace: DurableNamespace, Queue: DurableQueue, BuildID: DeploymentBuild, Owner: owner,
 		Concurrency: concurrency,
-		Workflows:   map[string]drt.WorkflowFunc{WorkflowDeployment: d.workflow, WorkflowRetry: d.retry, cloudSyncWorkflow: d.syncWorkflow, infrastructureWorkflow: d.infrastructureRun, resumeReleaseWorkflow: d.resumeRelease, routeWorkflow: d.routeRun},
+		Workflows:   map[string]drt.WorkflowFunc{WorkflowDeployment: d.workflow, WorkflowRetry: d.retry, cloudSyncWorkflow: d.syncWorkflow, infrastructureWorkflow: d.infrastructureRun, resumeReleaseWorkflow: d.resumeRelease, routeWorkflow: d.routeRun, registrationWorkflow: d.registrationRun},
 		Activities: map[string]drt.ActivityFunc{
 			ActivityPlan:      d.plan,
-			cloudSyncActivity: d.syncActivity, infrastructureActivity: d.infrastructureReconcile, releaseAvailableActivity: d.releaseAvailable, routeActivity: d.routeReconcile,
+			cloudSyncActivity: d.syncActivity, infrastructureActivity: d.infrastructureReconcile, releaseAvailableActivity: d.releaseAvailable, routeActivity: d.routeReconcile, registrationActivity: d.registrationReconcile,
 			ActivityDecide: d.decide,
 			ActivityExpire: d.expire,
 			ActivityFail:   d.fail,
