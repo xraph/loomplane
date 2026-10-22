@@ -346,11 +346,11 @@ func TestCompositionRecipeDriftNeedsReplan(t *testing.T) {
 
 const clusterApp = "version: 1\nresources:\n  app: {kind: sample, provider: kubernetes, target: " + targetA + "}\n"
 
-// clusterWorkloadConnection is a checked cluster namespace with no
-// storage class and no database recovery permissions.
+// clusterWorkloadConnection is a checked cluster namespace with the
+// service proxy, no storage class and no database recovery permissions.
 func clusterWorkloadConnection(t *testing.T) ConnectionOption {
 	t.Helper()
-	return infrastructureConnection(t, targetA, "kubernetes", map[string]string{"endpoint": "https://cluster.example", "cluster_ca": "checked-ca", "namespace": "apps", "namespace_uid": "namespace-identity", "architecture": "arm64"})
+	return infrastructureConnection(t, targetA, "kubernetes", map[string]string{"endpoint": "https://cluster.example", "cluster_ca": "checked-ca", "namespace": "apps", "namespace_uid": "namespace-identity", "architecture": "arm64", "service_proxy": "ready"})
 }
 
 func clusterComposedPlan(t *testing.T, kinds *recipes.Registry, c ConnectionOption) *Result {
@@ -418,6 +418,7 @@ func TestCompositionOnKubernetesWithVolumeNeedsRetainedStorage(t *testing.T) {
 	}
 	c := clusterCatalogConnection(t)
 	delete(c.Details, "postgres_recovery_permissions")
+	c.Details["service_proxy"] = "ready"
 	if r := clusterComposedPlan(t, registryOf(t, kind), c); !r.Executable {
 		t.Fatalf("volume on retained storage blocked: %+v", r.Problems)
 	}
@@ -425,6 +426,7 @@ func TestCompositionOnKubernetesWithVolumeNeedsRetainedStorage(t *testing.T) {
 
 func TestCompositionOnKubernetesWithJobNeedsJobPermission(t *testing.T) {
 	c := clusterCatalogConnection(t)
+	c.Details["service_proxy"] = "ready"
 	r := clusterComposedPlan(t, recipestest.Registry(t), c)
 	if r.Executable || !hasCode(r.Problems, "catalog-jobs-unavailable") {
 		t.Fatalf("job accepted without job permission: %+v", r.Problems)
@@ -624,5 +626,30 @@ func TestExternalChecksLandOnTheirTarget(t *testing.T) {
 	})
 	if len(r.Problems) != 1 || r.Problems[0].Code != "catalog-endpoint-unavailable" || r.Problems[0].Name != "far" {
 		t.Fatalf("problems: %+v", r.Problems)
+	}
+}
+
+func TestCompositionWithControlPortNeedsServiceProxy(t *testing.T) {
+	c := clusterWorkloadConnection(t)
+	delete(c.Details, "service_proxy")
+	r := clusterComposedPlan(t, registryOf(t, statelessSample(t)), c)
+	if r.Executable || !hasCode(r.Problems, "catalog-channel-unavailable") {
+		t.Fatalf("control port accepted without the service proxy: %+v", r.Problems)
+	}
+	i := slices.IndexFunc(r.Problems, func(f Finding) bool { return f.Code == "catalog-channel-unavailable" })
+	if f := r.Problems[i]; f.Subject != ResourceSubject || f.Name != "app" || f.Path != "resources.app.target" || !strings.Contains(f.Message, "admin") {
+		t.Fatalf("finding: %+v", f)
+	}
+	c.Details["service_proxy"] = "ready"
+	if r := clusterComposedPlan(t, registryOf(t, statelessSample(t)), c); !r.Executable {
+		t.Fatalf("control port with the service proxy blocked: %+v", r.Problems)
+	}
+	// Without a control port, nothing needs the proxy.
+	kind := statelessSample(t)
+	kind.Components[0].Ports = kind.Components[0].Ports[:1]
+	kind.Outputs = kind.Outputs[:1]
+	delete(c.Details, "service_proxy")
+	if r := clusterComposedPlan(t, registryOf(t, kind), c); hasCode(r.Problems, "catalog-channel-unavailable") {
+		t.Fatalf("service proxy required without a control port: %+v", r.Problems)
 	}
 }

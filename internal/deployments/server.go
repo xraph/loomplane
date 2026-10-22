@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
+	"net/http"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -23,6 +25,7 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -30,6 +33,7 @@ import (
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -65,13 +69,22 @@ type OwnedTarget struct {
 	Endpoints EndpointResolver
 	Checker   EndpointChecker
 
+	// Bindings lists what runs in an environment, for reaching the
+	// components of a composition from its hooks. Nil leaves a component
+	// only itself to reach.
+	Bindings func(ctx context.Context, orgID, environmentID string) ([]*planning.Binding, error)
+
 	// endpointDial dials from a target for an endpoint check. Nil is
 	// TargetDial.
 	endpointDial func(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
+	// componentDial reaches a component's port for its composition's
+	// hooks. Nil is ComponentTransport.
+	componentDial func(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error)
 }
 
 var _ Executor = (*OwnedTarget)(nil)
 var _ Locator = (*OwnedTarget)(nil)
+var _ ComponentDialer = (*OwnedTarget)(nil)
 
 func (e *OwnedTarget) connection(ctx context.Context, org, connection string, labels map[string]string) (*connections.Connection, []byte, error) {
 	if labels[owned.LabelOrg] != org || labels[owned.LabelConnection] != connection {
@@ -132,6 +145,68 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 		return client, nil
 	}
 }
+
+// ComponentTransport reaches one port of a running catalog component over
+// the target's own connection, opened with every check a deployment makes:
+// the instance must be the binding's, and the connection, its trust and
+// identity must still be the reviewed ones. A server reaches the port
+// Docker publishes on its loopback interface, through its pinned SSH
+// connection; a cluster reaches the component's Service through the API
+// server's service proxy. Closing the io.Closer ends the connection.
+func (e *OwnedTarget) ComponentTransport(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error) {
+	if b == nil || b.Provider != e.Cloud || !planning.OwnedCloud(e.Cloud) || port < 1 || port > 65535 {
+		return nil, nil, errors.New("the component doesn't run on this target")
+	}
+	iid, err := id.Parse(b.ExternalID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the component isn't running: %w", err)
+	}
+	if cpauth.ClaimsFrom(ctx) == nil {
+		ctx = infrastructure.WithPrincipal(ctx, security.Principal{OrgID: b.OrgID})
+	}
+	key := e.Register(b.OrgID, b.ConnectionID)
+	inst, err := e.Ctrl.Instances.Get(ctx, iid)
+	if err != nil {
+		return nil, nil, err
+	}
+	if inst.ProviderName != key || inst.TenantID != b.OrgID || inst.Labels[owned.LabelOrg] != b.OrgID || inst.Labels[owned.LabelConnection] != b.ConnectionID || inst.Labels[owned.LabelProject] != b.ProjectID || inst.Labels[owned.LabelEnvironment] != b.EnvironmentID {
+		return nil, nil, errors.New("the binding does not own this infrastructure instance")
+	}
+	labels := owned.ForOperation(inst.Labels, "read")
+	switch e.Cloud {
+	case connections.Server:
+		client, sessionErr := e.serverSession(b.OrgID, b.ConnectionID)(ctx, labels)
+		if sessionErr != nil {
+			return nil, nil, sessionErr
+		}
+		container := server.ContainerName(iid)
+		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return client.DialContainerPort(ctx, container, port)
+		}, MaxIdleConnsPerHost: 4}
+		return transport, closerFunc(func() error {
+			transport.CloseIdleConnections()
+			return client.Close()
+		}), nil
+	default:
+		client, sessionErr := e.kubernetesSession(b.OrgID, b.ConnectionID)(ctx, labels)
+		if sessionErr != nil {
+			return nil, nil, sessionErr
+		}
+		if client.Config.Details["service_proxy"] != "ready" {
+			return nil, nil, errors.New("reaching this component needs namespace service proxy permissions; check the connection after granting get and create on services/proxy")
+		}
+		transport, proxyErr := client.ServiceProxyTransport(client.Config.Namespace, kubernetes.WorkloadName(iid), port)
+		if proxyErr != nil {
+			return nil, nil, proxyErr
+		}
+		return transport, noClose{}, nil
+	}
+}
+
+// closerFunc is an io.Closer from a function.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
 
 func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (owned.RuntimeValues, error) {
 	values := owned.RuntimeValues{Env: map[string]string{}}

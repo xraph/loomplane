@@ -141,6 +141,9 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	if err := c.checkJobPermissions(ctx, out); err != nil {
 		return nil, err
 	}
+	if err := c.checkServiceProxyPermissions(ctx, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

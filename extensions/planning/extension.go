@@ -268,7 +268,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	catalogHooks := map[string]deployments.CatalogHooks{}
 	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
 	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
+	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
+	// A kind's own API reaches its running components and generated
+	// secrets through CatalogAccess, which it resolves from the container.
+	catalogAccess := deployments.NewCatalogAccess(deployments.CatalogAccessDeps{Authz: authz, Bindings: planStore.ListBindings, Executors: executors, Secrets: resourceSecrets})
+	if err := forge.ProvideValue(c, catalogAccess); err != nil {
+		return err
+	}
 	e.plans = planning.NewService(planning.Deps{
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
@@ -407,7 +414,7 @@ func (d ownedDialer) TargetDial(ctx context.Context, orgID, connectionID string)
 func fail(err error) error {
 	switch {
 	case errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, recovery.ErrNotFound), errors.Is(err, catalogconnect.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
-		errors.Is(err, deployments.ErrNotFound),
+		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
@@ -418,7 +425,7 @@ func fail(err error) error {
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
 	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid),
-		errors.Is(err, catalogconnect.ErrInvalid):
+		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

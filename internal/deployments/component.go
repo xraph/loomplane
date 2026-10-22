@@ -245,6 +245,12 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 	if keepErr := job.Keep(ctx, componentAddressField, address); keepErr != nil {
 		return nil, keepErr
 	}
+	// Once it runs, its hooks can reach it too.
+	self, err := selfBinding(job, out.ExternalID)
+	if err != nil {
+		return nil, err
+	}
+	run.Channel = e.runChannel(job, self)
 	if readyErr := e.hooks(kind.Name).Ready(ctx, run); readyErr != nil {
 		return nil, fmt.Errorf("%s is ready, and setting it up failed: %w", job.Action.Name, readyErr)
 	}
@@ -495,6 +501,7 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 		OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Environment: d.Environment, PlanID: d.PlanID, DeploymentID: d.ID,
 		Resource: cfg.Component.Resource, Kind: kind.Name, Provider: e.Cloud, Component: cfg.Component.Component,
 		Env: map[string]string{}, Secrets: map[string][]byte{},
+		Channel: e.runChannel(job, nil),
 	}
 	secret := map[string]bool{}
 	external := map[string]string{}

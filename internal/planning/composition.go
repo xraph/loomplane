@@ -207,9 +207,10 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 }
 
 // clusterRuns reports, as problems, what a cluster connection lacks to run
-// a composition: retained storage when a component keeps a volume, and Job
-// permissions when one is a job. A composition never needs the database
-// recovery permissions; a dependency it provisions checks its own.
+// a composition: retained storage when a component keeps a volume, Job
+// permissions when one is a job, and the service proxy when one has a
+// control port. A composition never needs the database recovery
+// permissions; a dependency it provisions checks its own.
 func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition *recipes.Composition, connection *ConnectionOption) bool {
 	ok := true
 	if i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Volume != nil }); i >= 0 && ValidateKubernetesDatabaseSettings(connection.Details) != nil {
@@ -225,6 +226,18 @@ func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition 
 			Message: fmt.Sprintf("This connection needs namespace Job and pod log permissions to run %s's %s job. Check the connection after granting them.", kind.Title, composition.Components[i].Name),
 		})
 		ok = false
+	}
+	for _, c := range composition.Components {
+		i := slices.IndexFunc(c.Ports, func(port recipes.Port) bool { return port.Control })
+		if i < 0 || connection.Details["service_proxy"] == "ready" {
+			continue
+		}
+		p.problem(Finding{
+			Code: "catalog-channel-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target",
+			Message: fmt.Sprintf("Loomplane reaches %s's %s %s port through the cluster's service proxy. Grant this connection get and create on services/proxy in its namespace, then check it.", kind.Title, c.Name, c.Ports[i].Name),
+		})
+		ok = false
+		break
 	}
 	return ok
 }
