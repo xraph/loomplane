@@ -88,15 +88,16 @@ func within(values, allowed []string) bool {
 
 // applyAccess gives a workload whose labels carry LabelKubernetesRules its
 // own ServiceAccount, Role and RoleBinding, all named after the workload,
-// and returns the account's name. Without rules it returns "" and deletes
-// the objects an earlier revision left.
+// and returns the account's name. Without rules it returns "" and changes
+// nothing: what an earlier revision left goes in dropAccess, once the
+// workload no longer names the account.
 func (r *Runtime) applyAccess(ctx context.Context, c *Client, iid id.ID, labels map[string]string) (serviceAccount string, err error) {
 	rules, err := accessRules(labels)
 	if err != nil {
 		return "", err
 	}
 	if rules == nil {
-		return "", r.removeAccess(ctx, c, iid, labels)
+		return "", nil
 	}
 	ns, name := c.Config.Namespace, WorkloadName(iid)
 	identity := objectLabels(iid, labels)
@@ -155,6 +156,16 @@ func (r *Runtime) applyAccess(ctx context.Context, c *Client, iid id.ID, labels 
 		return "", err
 	}
 	return name, nil
+}
+
+// dropAccess deletes the access objects of a workload whose revision has
+// no rules. Apply calls it after the workload is written and ready, so a
+// rollback before then restores a template whose account still exists.
+func (r *Runtime) dropAccess(ctx context.Context, c *Client, iid id.ID, labels map[string]string) error {
+	if labels[owned.LabelKubernetesRules] != "" {
+		return nil
+	}
+	return r.removeAccess(ctx, c, iid, labels)
 }
 
 // removeAccess deletes a catalog component's RoleBinding, Role and

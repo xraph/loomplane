@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -87,8 +88,10 @@ func TestKubernetesDatabaseSessionRechecksRecoveryPermission(t *testing.T) {
 	}
 }
 
-func TestKubernetesSessionChecksExecForCaches(t *testing.T) {
-	var revoked atomic.Bool
+// kubernetesSessionFixture is a checked cluster whose access reviews
+// allow what allowed says, and a target whose session opens it.
+func kubernetesSessionFixture(t *testing.T, allowed func(*authv1.ResourceAttributes) bool) (*OwnedTarget, map[string]string) {
+	t.Helper()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -105,15 +108,14 @@ func TestKubernetesSessionChecksExecForCaches(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			attrs := review.Spec.ResourceAttributes
-			review.Status.Allowed = !revoked.Load() || attrs.Resource != "pods" || attrs.Subresource != "exec"
+			review.Status.Allowed = allowed(review.Spec.ResourceAttributes)
 			review.Kind, review.APIVersion = "SelfSubjectAccessReview", "authorization.k8s.io/v1"
 			_ = json.NewEncoder(w).Encode(review)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	raw, err := clientcmd.Write(clientapi.Config{CurrentContext: "fixture", Clusters: map[string]*clientapi.Cluster{"fixture": {Server: server.URL, CertificateAuthorityData: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})}}, AuthInfos: map[string]*clientapi.AuthInfo{"fixture": {Token: "fixture-only-token"}}, Contexts: map[string]*clientapi.Context{"fixture": {Cluster: "fixture", AuthInfo: "fixture", Namespace: "databases"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -135,20 +137,57 @@ func TestKubernetesSessionChecksExecForCaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	labels := map[string]string{owned.LabelOrg: "org", owned.LabelConnection: "selected", owned.LabelSettings: string(reviewed), owned.LabelArchitecture: "arm64", owned.LabelOperation: "read", nativecache.LabelEngine: "valkey"}
+	labels := map[string]string{owned.LabelOrg: "org", owned.LabelConnection: "selected", owned.LabelSettings: string(reviewed), owned.LabelArchitecture: "arm64"}
 	target := &OwnedTarget{Cloud: connections.Kubernetes, Credentials: buildCredentialFunc(func(context.Context, string, string) (*connections.Connection, []byte, error) {
 		return connection, raw, nil
 	})}
-	if _, err = target.kubernetesSession("org", "selected")(t.Context(), labels); err != nil {
+	return target, labels
+}
+
+func TestKubernetesSessionChecksExecForCaches(t *testing.T) {
+	var revoked atomic.Bool
+	target, labels := kubernetesSessionFixture(t, func(attrs *authv1.ResourceAttributes) bool {
+		return !revoked.Load() || attrs.Resource != "pods" || attrs.Subresource != "exec"
+	})
+	labels[owned.LabelOperation] = "read"
+	labels[nativecache.LabelEngine] = "valkey"
+	if _, err := target.kubernetesSession("org", "selected")(t.Context(), labels); err != nil {
 		t.Fatal(err)
 	}
 	revoked.Store(true)
-	if _, err = target.kubernetesSession("org", "selected")(t.Context(), labels); err == nil {
+	if _, err := target.kubernetesSession("org", "selected")(t.Context(), labels); err == nil {
 		t.Fatal("a cache session ran without pod exec")
 	}
 	delete(labels, nativecache.LabelEngine)
-	if _, err = target.kubernetesSession("org", "selected")(t.Context(), labels); err != nil {
+	if _, err := target.kubernetesSession("org", "selected")(t.Context(), labels); err != nil {
 		t.Fatalf("an ordinary workload needed pod exec: %v", err)
+	}
+}
+
+func TestKubernetesSessionChecksRBACForComponentAccess(t *testing.T) {
+	var revoked atomic.Bool
+	target, labels := kubernetesSessionFixture(t, func(attrs *authv1.ResourceAttributes) bool {
+		return !revoked.Load() || attrs.Resource != "rolebindings" || attrs.Verb != "create"
+	})
+	labels[owned.LabelOperation] = "apply"
+	labels[owned.LabelKubernetesRules] = `[{"api_groups":[""],"resources":["services"],"verbs":["get","list","watch"]}]`
+	if _, err := target.kubernetesSession("org", "selected")(t.Context(), labels); err != nil {
+		t.Fatal(err)
+	}
+	revoked.Store(true)
+	_, err := target.kubernetesSession("org", "selected")(t.Context(), labels)
+	if err == nil || !strings.Contains(err.Error(), "needs a Role to discover Services") {
+		t.Fatalf("apply without rbac: %v", err)
+	}
+	// Reading or removing the component doesn't need it.
+	labels[owned.LabelOperation] = "remove"
+	if _, err = target.kubernetesSession("org", "selected")(t.Context(), labels); err != nil {
+		t.Fatalf("remove needed rbac: %v", err)
+	}
+	labels[owned.LabelOperation] = "apply"
+	delete(labels, owned.LabelKubernetesRules)
+	if _, err = target.kubernetesSession("org", "selected")(t.Context(), labels); err != nil {
+		t.Fatalf("a workload without rules needed rbac: %v", err)
 	}
 }
 

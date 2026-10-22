@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"context"
 	"encoding/pem"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -288,4 +289,79 @@ func TestKubernetesCheckReportsRBAC(t *testing.T) {
 			t.Fatalf("without %s the connection is incomplete: %v", denied, result.Missing)
 		}
 	}
+}
+
+func TestKubernetesDroppedRulesRemoveAccessAfterTheWorkload(t *testing.T) {
+	accessWrites := func(kube *fake.Clientset) []string {
+		var out []string
+		for _, action := range kube.Actions() {
+			resource := action.GetResource().Resource
+			if action.GetVerb() != "get" && action.GetVerb() != "list" && slices.Contains([]string{"serviceaccounts", "roles", "rolebindings", "deployments", "statefulsets"}, resource) {
+				out = append(out, action.GetVerb()+" "+resource)
+			}
+		}
+		return out
+	}
+	t.Run("deployment", func(t *testing.T) {
+		runtime, kube, spec := accessFixture()
+		iid := id.New(id.PrefixInstance)
+		if _, err := runtime.Apply(t.Context(), iid, spec, accessLabels(discoveryRules)); err != nil {
+			t.Fatal(err)
+		}
+		// A rollout that fails keeps the account the restored template names.
+		ready := runtime.WaitReady
+		runtime.WaitReady = func(context.Context, *Client, string) error { return errors.New("not ready") }
+		if _, err := runtime.Apply(t.Context(), iid, spec, accessLabels("")); err == nil {
+			t.Fatal("a failed rollout succeeded")
+		}
+		if account, role, binding := accessObjects(t, kube, WorkloadName(iid)); account == nil || role == nil || binding == nil {
+			t.Fatalf("a failed rollout dropped access: %v %v %v", account, role, binding)
+		}
+		deployment, err := kube.AppsV1().Deployments("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+		if err != nil || deployment.Spec.Template.Spec.ServiceAccountName != WorkloadName(iid) {
+			t.Fatalf("restored template: %v", err)
+		}
+		runtime.WaitReady = ready
+		kube.ClearActions()
+		if _, err = runtime.Apply(t.Context(), iid, spec, accessLabels("")); err != nil {
+			t.Fatal(err)
+		}
+		if got := accessWrites(kube); !slices.Equal(got, []string{"update deployments", "delete rolebindings", "delete roles", "delete serviceaccounts"}) {
+			t.Fatalf("writes: %v", got)
+		}
+	})
+	t.Run("statefulset", func(t *testing.T) {
+		r, c, labels, sp := persistentFixture()
+		for key, value := range accessLabels(discoveryRules) {
+			labels[key] = value
+		}
+		sp.Name, sp.Image = "index", "registry.example/sample-index@sha256:fixture"
+		iid := id.New(id.PrefixInstance)
+		if _, err := r.Apply(t.Context(), iid, sp, labels); err != nil {
+			t.Fatal(err)
+		}
+		kube := c.Kube.(*fake.Clientset)
+		set, err := kube.AppsV1().StatefulSets("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pod := set.Spec.Template.Spec; pod.ServiceAccountName != WorkloadName(iid) || pod.AutomountServiceAccountToken == nil || !*pod.AutomountServiceAccountToken {
+			t.Fatalf("stateful account %q automount %v", pod.ServiceAccountName, pod.AutomountServiceAccountToken)
+		}
+		delete(labels, owned.LabelKubernetesRules)
+		kube.ClearActions()
+		if _, err = r.Apply(t.Context(), iid, sp, labels); err != nil {
+			t.Fatal(err)
+		}
+		if got := accessWrites(kube); !slices.Equal(got, []string{"update statefulsets", "delete rolebindings", "delete roles", "delete serviceaccounts"}) {
+			t.Fatalf("writes: %v", got)
+		}
+		set, err = kube.AppsV1().StatefulSets("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pod := set.Spec.Template.Spec; pod.ServiceAccountName != "" || pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+			t.Fatalf("stateful kept account %q automount %v", pod.ServiceAccountName, pod.AutomountServiceAccountToken)
+		}
+	})
 }

@@ -57,6 +57,9 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		if activate && labels[owned.LabelScaleMin] != labels[owned.LabelScaleMax] && result.Details["hpa"] != "ready" {
 			return nil, errors.New("this workload needs HPA permissions and the metrics API")
 		}
+		if activate && labels[owned.LabelKubernetesRules] != "" && result.Details["rbac"] != "ready" {
+			return nil, errors.New("this component needs a Role to discover Services; let Loomplane create serviceaccounts, roles and rolebindings in the namespace, and get, list and watch services, endpoints and endpointslices, then check the connection and plan again")
+		}
 		client.Config.Details = result.Details
 		return client, nil
 	}

@@ -311,6 +311,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
 		return nil, recordErr
 	}
+	if dropErr := r.dropAccess(ctx, c, iid, labels); dropErr != nil {
+		return nil, dropErr
+	}
 	endpoints := []cpprovider.Endpoint{}
 	for _, port := range servicePorts {
 		public := labels[owned.LabelPublic] == "true"

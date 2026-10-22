@@ -22,7 +22,7 @@ var ErrCacheBackupsUnavailable = errors.New("backups for Redis and Valkey aren't
 
 // cacheExec runs one command in a checked cache pod. Tests replace it,
 // since a fake clientset has no exec.
-var cacheExec = execPod
+var cacheExec = execPodAs
 
 // cachePod binds every exec to one checked pod, as postgresPod does.
 type cachePod struct {
@@ -63,14 +63,23 @@ func (r *Runtime) cachePod(ctx context.Context, iid id.ID, labels map[string]str
 	return &cachePod{client: c, pod: pod, engine: engine}, nil
 }
 
+// cacheTitle is how errors name a cache engine.
+func cacheTitle(engine string) string {
+	if engine == "valkey" {
+		return "Valkey"
+	}
+	return "Redis"
+}
+
 func (s *cachePod) database() nativecache.Database {
+	title := cacheTitle(s.engine)
 	run := func(ctx context.Context, args []string, input io.Reader, out io.Writer) error {
-		return cacheExec(ctx, s.client, s.pod, args, input, out)
+		return cacheExec(ctx, s.client, s.pod, args, input, out, title)
 	}
 	return nativecache.Database{Engine: s.engine, Run: func(ctx context.Context, args []string, out io.Writer) error {
 		return run(ctx, args, nil, out)
 	}, Upload: func(ctx context.Context, name string, size int64, write func(io.Writer) error) error {
-		return uploadTemporary(ctx, run, name, size, write)
+		return uploadTemporary(ctx, title, run, name, size, write)
 	}}
 }
 

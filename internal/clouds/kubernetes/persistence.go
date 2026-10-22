@@ -367,6 +367,9 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 			return nil, checkErr
 		}
 	}
+	if dropErr := r.dropAccess(ctx, c, iid, labels); dropErr != nil {
+		return nil, dropErr
+	}
 	endpoints := make([]cpprovider.Endpoint, 0, len(spec.Ports))
 	for _, p := range spec.Ports {
 		if labels[nativepg.LabelRecovery] != "" {

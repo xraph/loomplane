@@ -3,8 +3,11 @@ package kubernetes
 import (
 	"archive/tar"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +16,8 @@ import (
 	cpprovider "github.com/xraph/ctrlplane/provider"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kubeclient "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/clouds/owned"
@@ -86,8 +91,8 @@ func TestKubernetesConfigureCacheDispatchesByEngine(t *testing.T) {
 	uploaded := map[string]string{}
 	exec := cacheExec
 	t.Cleanup(func() { cacheExec = exec })
-	cacheExec = func(_ context.Context, _ *Client, pod *corev1.Pod, args []string, input io.Reader, out io.Writer) error {
-		if pod.Name != WorkloadName(iid)+"-0" || pod.UID != "pod-identity" {
+	cacheExec = func(_ context.Context, _ *Client, pod *corev1.Pod, args []string, input io.Reader, out io.Writer, title string) error {
+		if pod.Name != WorkloadName(iid)+"-0" || pod.UID != "pod-identity" || title != "Redis" {
 			t.Errorf("exec in pod %s %s", pod.Name, pod.UID)
 		}
 		commands = append(commands, args)
@@ -183,5 +188,41 @@ func TestKubernetesCacheBackupsUnavailable(t *testing.T) {
 	}
 	if err := r.DatabaseProbe(t.Context(), iid, labels); !errors.Is(err, ErrCacheBackupsUnavailable) {
 		t.Fatalf("probe: %v", err)
+	}
+}
+
+func TestKubernetesPostgresExecErrorsNameTheEngine(t *testing.T) {
+	pod := &corev1.Pod{TypeMeta: metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: "fixture-0", Namespace: "selected", UID: "pod-identity"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "database", Image: "postgres@sha256:reviewed", Env: []corev1.EnvVar{podIdentityEnv()}}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/selected/pods/fixture-0":
+			_ = json.NewEncoder(w).Encode(pod)
+		case r.URL.Path == "/api/v1/namespaces/selected/pods/fixture-0/exec":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	cfg := &rest.Config{Host: api.URL}
+	kube, err := kubeclient.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &postgresPod{client: &Client{Config: &Config{Namespace: "selected", REST: cfg}, Kube: kube}, pod: pod}
+	if err = s.run(t.Context(), []string{"true"}, io.Discard); err == nil || !strings.HasPrefix(err.Error(), "native PostgreSQL command failed: ") {
+		t.Fatalf("run: %v", err)
+	}
+	if err = s.upload(t.Context(), "nested/name", 0, nil); err == nil || err.Error() != "invalid PostgreSQL temporary file" {
+		t.Fatalf("upload: %v", err)
+	}
+	cache := (&cachePod{client: s.client, pod: pod, engine: "valkey"}).database()
+	if err = cache.Run(t.Context(), []string{"true"}, io.Discard); err == nil || !strings.HasPrefix(err.Error(), "native Valkey command failed: ") {
+		t.Fatalf("cache run: %v", err)
+	}
+	if err = cache.Upload(t.Context(), "nested/name", 0, nil); err == nil || err.Error() != "invalid Valkey temporary file" {
+		t.Fatalf("cache upload: %v", err)
 	}
 }
