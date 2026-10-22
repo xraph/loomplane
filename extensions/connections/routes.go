@@ -64,7 +64,7 @@ func (e *Extension) clouds() (CloudList, error) {
 		},
 		{
 			Cloud: connections.Cloudflare, Title: "Cloudflare", Credential: "API token",
-			Help:     "Create an API token in Cloudflare under My Profile, API Tokens, scoped to this account, with Zone Read and DNS Edit for the zones Loomplane manages. Add Registrar edit only if you want to register domains from Loomplane. Loomplane checks each permission without changing anything and says which are missing.",
+			Help:     "Create an API token in Cloudflare under My Profile, API Tokens, scoped to this account, with Zone Read and DNS Edit for the zones Loomplane manages. Add Registrar edit only if you want to register domains from Loomplane. Loomplane checks each permission without changing anything and says which are missing. If the token can read account settings, the connection shows the account's name; otherwise Loomplane shows the account ID.",
 			Settings: []sdk.Setting{{Key: "account_id", Label: "Account ID", Required: true}},
 		},
 		{
