@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 
@@ -33,6 +34,13 @@ func TestPreparePoolEffectsArmsTheFenceForResourceActions(t *testing.T) {
 		return nil, refused
 	}}
 	ctx := server.WithEffectFence(t.Context(), server.EffectFence{Operation: "org/plan/app--api", Generation: 1})
+	job := func(resource *planning.ResourceConfig) *Job {
+		return &Job{
+			Deployment: &Deployment{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", PlanID: "plan", ID: "dep"},
+			Connection: creds["conn_server"],
+			Action:     planning.Action{ID: "resource:app--api", Name: "app--api", Provider: "server", ConnectionID: "conn_server", Resource: resource},
+		}
+	}
 	for name, resource := range map[string]*planning.ResourceConfig{
 		"component": {Kind: "sample", Provider: "server", Target: "conn_server", TargetSettings: reviewed, Component: &planning.ComponentConfig{
 			Kind: "sample", Resource: "app", Component: recipes.ResolvedComponent{Component: recipes.Component{Name: "api", Role: recipes.RoleProcess}},
@@ -42,12 +50,7 @@ func TestPreparePoolEffectsArmsTheFenceForResourceActions(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dialed = nil
-			job := &Job{
-				Deployment: &Deployment{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", PlanID: "plan", ID: "dep"},
-				Connection: creds["conn_server"],
-				Action:     planning.Action{ID: "resource:app--api", Name: "app--api", Provider: "server", ConnectionID: "conn_server", Resource: resource},
-			}
-			if err := target.PreparePoolEffects(ctx, job); !errors.Is(err, refused) {
+			if err := target.PreparePoolEffects(ctx, job(resource)); !errors.Is(err, refused) {
 				t.Fatalf("prepare effects: %v", err)
 			}
 			if dialed == nil || dialed.Address != "server.example:22" {
@@ -55,4 +58,16 @@ func TestPreparePoolEffectsArmsTheFenceForResourceActions(t *testing.T) {
 			}
 		})
 	}
+
+	// The settings come from the resource's own reviewed placement, so a
+	// server that changed since the plan is refused before anything dials.
+	t.Run("changed settings", func(t *testing.T) {
+		dialed = nil
+		stale := maps.Clone(reviewed)
+		stale["docker_id"] = "another-daemon"
+		err := target.PreparePoolEffects(ctx, job(&planning.ResourceConfig{Kind: "postgres", Provider: "server", Target: "conn_server", TargetSettings: stale}))
+		if err == nil || !strings.Contains(err.Error(), "target settings changed since review") || dialed != nil {
+			t.Fatalf("stale settings: %v, dialed %+v", err, dialed)
+		}
+	})
 }
