@@ -58,15 +58,23 @@ func IngressNetwork(b IngressBackend) string {
 	return fmt.Sprintf("lp-route-%x", h[:12])
 }
 
-// ValidBlockedPathPrefixes accepts at most 8 literal path prefixes of at most
-// 128 bytes. Caddy reads *, ? and # in a path matcher, so none may appear.
+// ValidBlockedPathPrefixes accepts at most 8 literal prefixes of at most 128
+// bytes that look like /admin. Caddy reads *, ? and # in a path matcher, stops
+// merging slashes for a pattern with //, and matches the raw escaped path for
+// one with %, so none of those may appear. A trailing / would block only the
+// paths below it, and a dot segment never matches a cleaned request path.
 func ValidBlockedPathPrefixes(prefixes []string) bool {
 	if len(prefixes) > 8 {
 		return false
 	}
 	for _, p := range prefixes {
-		if !strings.HasPrefix(p, "/") || len(p) > 128 || strings.ContainsAny(p, "*?#") {
+		if !strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") || len(p) > 128 || strings.Contains(p, "//") || strings.ContainsAny(p, "*?#%") {
 			return false
+		}
+		for _, segment := range strings.Split(p[1:], "/") {
+			if segment == "." || segment == ".." {
+				return false
+			}
 		}
 	}
 	return true

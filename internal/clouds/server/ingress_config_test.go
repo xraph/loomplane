@@ -83,7 +83,7 @@ func TestIngressConfigBlocksPrefixesBeforeProxy(t *testing.T) {
 }
 
 func TestIngressConfigRefusesUnsafeBlockedPrefixes(t *testing.T) {
-	for _, bad := range [][]string{{"admin"}, {"/a*"}, {"/a?b"}, {"/a#b"}, {""}} {
+	for _, bad := range [][]string{{"admin"}, {"/a*"}, {"/a?b"}, {"/a#b"}, {""}, {"/"}, {"/admin/"}, {"//admin"}, {"/%61dmin"}, {"/api/../admin"}} {
 		_, err := IngressConfig{OrgID: "org", ServerID: "s", Version: "v", Routes: []IngressRoute{{ID: "r", Hostname: "api.acme.dev", BlockedPathPrefixes: bad, Backend: testBackend()}}}.JSON()
 		if !errors.Is(err, ErrInvalid) {
 			t.Fatalf("%q: %v", bad, err)

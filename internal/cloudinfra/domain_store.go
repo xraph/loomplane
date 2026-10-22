@@ -82,7 +82,6 @@ func (s *PgStore) SaveZone(ctx context.Context, zone *Zone) error {
 // the ready runtime receipt and the latest exact controller deployment success.
 const routeRuntimeJoin = ` LEFT JOIN LATERAL (SELECT d.id,d.release_id,d.state FROM cp_deployments d WHERE d.tenant_id=i.tenant_id AND d.instance_id=i.id ORDER BY d.created_at DESC,d.id DESC LIMIT 1) deployment ON true`
 const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id ELSE '' END`
-const routeRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>'main' ELSE i.labels->>'` + owned.LabelReceiptServicePrefix + `main' END`
 const routedRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>routed.name ELSE i.labels->>('` + owned.LabelReceiptServicePrefix + `'||routed.name) END`
 
 // A service binding routes a port on its main service. A catalog component
@@ -453,14 +452,25 @@ func (s *PgStore) ValidateRetainedRoute(ctx context.Context, r Route) error {
 func (s *PgStore) ValidateRouteCleanup(ctx context.Context, r Route) error {
 	return s.validateRetainedRoute(ctx, r, true)
 }
+
+// A route accepted on a catalog component checks the container of the service
+// that declares its port, as routeBindingQuery chose it. Anything else, including
+// a binding that no longer exists, checks main as before. Cleanup skips the
+// routable_ports test so a port that stopped being routable can still be removed.
+const retainedRoutedService = ` LEFT JOIN loomplane_bindings b ON b.org_id=i.tenant_id AND b.project_id=$7 AND b.environment_id=$14 AND b.name=$15 AND b.id=$13 AND b.subject='resource' AND b.provider='server'
+ CROSS JOIN LATERAL (SELECT CASE WHEN b.id IS NULL THEN 'main' ELSE (SELECT svc->>'name' FROM jsonb_array_elements(i.services) svc
+ WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(svc->'ports') p WHERE (p->>'container')::int=$16) ORDER BY svc->>'name' LIMIT 1) END AS name) routed`
+
 func (s *PgStore) validateRetainedRoute(ctx context.Context, r Route, cleanup bool) error {
 	var id string
-	return storeError(s.db.QueryRow(ctx, `SELECT i.id FROM cp_instances i`+routeRuntimeJoin+`
+	return storeError(s.db.QueryRow(ctx, `SELECT i.id FROM cp_instances i`+routeRuntimeJoin+retainedRoutedService+`
  JOIN loomplane_cloud_servers s ON s.org_id=i.tenant_id AND s.id=$3 AND s.cloud_id=$4 AND s.runtime_connection_id=$5 AND s.status='ready'
  JOIN loomplane_cloud_connections c ON c.org_id=s.org_id AND c.id=s.runtime_connection_id AND ($11 OR c.generation=$6) AND c.status='ready'
- WHERE i.tenant_id=$1 AND i.id=$2 AND `+routeRuntimeRevision+`=$9 AND `+routeRuntimeContainer+`=$10
+ WHERE i.tenant_id=$1 AND i.id=$2 AND `+routeRuntimeRevision+`=$9 AND `+routedRuntimeContainer+`=$10
+ AND (b.id IS NULL OR $11 OR b.config->'routable_ports' @> jsonb_build_array($16::int))
  AND ($11 OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=s.org_id AND g.cloud_id=s.cloud_id AND g.project_id=$7 AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR $8=ANY(g.target_ids))))
- AND $12<>'' AND c.details->>'docker_id'=$12`, r.OrgID, r.Binding.InstanceID, r.Binding.ServerID, r.Input.CloudID, r.Binding.ConnectionID, r.Binding.ConnectionGeneration, r.ProjectID, r.Binding.TargetID, r.Binding.ReleaseID, r.Binding.ContainerID, cleanup, r.Binding.RuntimeID).Scan(&id))
+ AND $12<>'' AND c.details->>'docker_id'=$12`, r.OrgID, r.Binding.InstanceID, r.Binding.ServerID, r.Input.CloudID, r.Binding.ConnectionID, r.Binding.ConnectionGeneration, r.ProjectID, r.Binding.TargetID, r.Binding.ReleaseID, r.Binding.ContainerID, cleanup, r.Binding.RuntimeID,
+		r.Binding.BindingID, r.Input.EnvironmentID, r.Input.Service, r.Input.Port).Scan(&id))
 }
 
 func (s *PgStore) PendingRoutes(ctx context.Context) ([]*RouteOperation, error) {

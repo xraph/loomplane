@@ -28,12 +28,13 @@ type RouteInput struct {
 // Servers always belong to a Cloud, so this only guards bad binding data.
 const noCloudPlacement = "This service isn't placed through a Cloud, so Loomplane can't route to its server."
 
+const blockedPathRule = "Blocked path prefixes must look like /admin: start with /, no trailing slash, no //, %, *, ?, # or dot segments, at most 8 of at most 128 bytes."
+
 // ValidateBlockedPathPrefixes takes prefixes the caller already sorted and
-// de-duplicated: at most 8, each starting with / and at most 128 bytes, with
-// no *, ? or #.
+// de-duplicated.
 func ValidateBlockedPathPrefixes(prefixes []string) error {
 	if !server.ValidBlockedPathPrefixes(prefixes) {
-		return ErrInvalid
+		return fmt.Errorf("%w: %s", ErrInvalid, blockedPathRule)
 	}
 	return nil
 }

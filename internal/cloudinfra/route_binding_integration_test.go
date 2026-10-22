@@ -133,6 +133,41 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 		}
 	}
 
+	// Rollback, handoff and release check the accepted container of the same
+	// routed service. A service binding still checks only main.
+	gateway := Route{ID: "route_gw", OrgID: "org", ProjectID: "shop", Input: in, Binding: got}
+	if checkErr := st.ValidateRetainedRoute(ctx, gateway); checkErr != nil {
+		t.Fatal("retained gateway route", checkErr)
+	}
+	if checkErr := st.ValidateRouteCleanup(ctx, gateway); checkErr != nil {
+		t.Fatal("gateway route cleanup", checkErr)
+	}
+	webRoute := Route{ID: "route_web", OrgID: "org", ProjectID: "shop", Input: RouteInput{EnvironmentID: "prod", Service: "web", CloudID: "cloud_1", Port: 8080}, Binding: web}
+	if checkErr := st.ValidateRetainedRoute(ctx, webRoute); checkErr != nil {
+		t.Fatal("retained service route", checkErr)
+	}
+	side := gateway
+	side.Input.Service, side.Binding.BindingID, side.Binding.InstanceID, side.Binding.ContainerID, side.Binding.ReleaseID = "side", "b_side", "side", "side-container", "side/release"
+	wrongContainer := gateway
+	wrongContainer.Binding.ContainerID = "web-container"
+	notRoutable, missingPort := gateway, gateway
+	notRoutable.Input.Port, missingPort.Input.Port = 9090, 7070
+	for name, refused := range map[string]Route{"a service container outside main": side, "another container": wrongContainer, "a port missing from routable_ports": notRoutable, "a port no service declares": missingPort} {
+		if checkErr := st.ValidateRetainedRoute(ctx, refused); !errors.Is(checkErr, ErrNotFound) {
+			t.Fatalf("retained %s: %v", name, checkErr)
+		}
+	}
+	// A port that stops being routable can't be rolled back to, but its route
+	// can still be cleaned up.
+	exec(`UPDATE loomplane_bindings SET config=config-'routable_ports' WHERE id='b_gw'`)
+	if checkErr := st.ValidateRetainedRoute(ctx, gateway); !errors.Is(checkErr, ErrNotFound) {
+		t.Fatal("retained route on a port that is no longer routable", checkErr)
+	}
+	if checkErr := st.ValidateRouteCleanup(ctx, gateway); checkErr != nil {
+		t.Fatal("cleanup after the port stopped being routable", checkErr)
+	}
+	exec(`UPDATE loomplane_bindings SET config=config||'{"routable_ports":[8080]}' WHERE id='b_gw'`)
+
 	for name, want := range map[string]string{"octo--gateway": "cloud_1", "postgres": "cloud_1", "web": "cloud_1", "loose": ""} {
 		if cloud, cloudErr := st.RouteBindingCloud(ctx, "org", "shop", "prod", name); cloudErr != nil || cloud != want {
 			t.Fatalf("%s Cloud: %q %v", name, cloud, cloudErr)

@@ -88,21 +88,28 @@ func make9Prefixes() []string {
 }
 
 func TestPreviewRouteRejectsUnsafeBlockedPrefixes(t *testing.T) {
-	for _, bad := range [][]string{{"admin"}, {""}, {"/a*"}, {"/a?b"}, {"/a#b"}, {"/" + strings.Repeat("a", 128)}, make9Prefixes()} {
-		if err := ValidateBlockedPathPrefixes(bad); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("%v: %v", bad, err)
+	for _, bad := range [][]string{
+		{"admin"}, {""}, {"/"}, {"/admin/"}, {"/api/admin/"}, {"//admin"}, {"/api//admin"}, {"/%61dmin"}, {"/admin%2F"},
+		{"/a*"}, {"/a?b"}, {"/a#b"}, {"/."}, {"/.."}, {"/api/../admin"}, {"/api/./admin"}, {"/admin/.."},
+		{"/" + strings.Repeat("a", 128)}, make9Prefixes(), {"/_farp", "/admin/"},
+	} {
+		err := ValidateBlockedPathPrefixes(bad)
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "Blocked path prefixes must look like /admin") {
+			t.Fatalf("%q: %v", bad, err)
 		}
 	}
-	for _, good := range [][]string{nil, {}, {"/__farp", "/_farp", "/admin"}, {"/" + strings.Repeat("a", 127)}, make9Prefixes()[:8]} {
+	for _, good := range [][]string{nil, {}, {"/__farp", "/_farp", "/admin"}, {"/api/v1/admin"}, {"/.well-known"}, {"/a..b"}, {"/" + strings.Repeat("a", 127)}, make9Prefixes()[:8]} {
 		if err := ValidateBlockedPathPrefixes(good); err != nil {
 			t.Fatalf("%v: %v", good, err)
 		}
 	}
 	svc, st := gatewayFixture()
 	in := gatewayInput()
-	in.BlockedPathPrefixes = []string{"/admin", "admin"}
-	if _, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in); !errors.Is(err, ErrInvalid) {
-		t.Fatal("preview accepted an unsafe prefix", err)
+	for _, unsafe := range [][]string{{"/admin", "admin"}, {"/admin/"}} {
+		in.BlockedPathPrefixes = unsafe
+		if _, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("preview accepted %q: %v", unsafe, err)
+		}
 	}
 	// Duplicates collapse before the count, so this is within the limit.
 	in.BlockedPathPrefixes = append([]string{"/admin", "/_farp", "/admin", "/__farp"}, make9Prefixes()[:5]...)
