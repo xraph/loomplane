@@ -38,11 +38,15 @@ const (
 
 // Classification is what ClassifySQL found. Param and Value are set for
 // EffectSet and EffectReset, Param alone for EffectDeallocate, and Channel for EffectListen and EffectUnlisten.
+// All marks an unquoted UNLISTEN *, which drops every channel. Its Channel is
+// "*" too, but a quoted UNLISTEN "*" names a channel called * and leaves All
+// unset.
 type Classification struct {
 	Effect  Effect
 	Param   string
 	Value   string
 	Channel string
+	All     bool
 }
 
 // KnownParams are the session parameters the gateway tracks and replays
@@ -261,8 +265,9 @@ func pinsAnywhere(w, prev []byte) bool {
 func classifyChannel(sql string, buf []byte, p int, effect Effect) Classification {
 	p = skipSpace(buf, p)
 	var name string
+	all := false
 	if p < len(buf) && buf[p] == '*' && effect == EffectUnlisten {
-		name, p = "*", p+1
+		name, p, all = "*", p+1, true
 	} else {
 		var ok bool
 		if name, p, ok = identAt(sql, buf, p); !ok {
@@ -272,7 +277,7 @@ func classifyChannel(sql string, buf []byte, p int, effect Effect) Classificatio
 	if !atEnd(buf, p) {
 		return Classification{Effect: EffectPinSession}
 	}
-	return Classification{Effect: effect, Channel: name}
+	return Classification{Effect: effect, Channel: name, All: all}
 }
 
 // classifyReset reads the parameter of a RESET whose keyword ends at p.

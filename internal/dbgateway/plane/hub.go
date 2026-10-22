@@ -24,6 +24,11 @@ import (
 // to 5s, and listens again on every channel that has subscribers. Whatever
 // was notified while it was down is lost, as it would be for a client whose
 // own connection dropped.
+//
+// A listener that stops answering is treated as failed. Every LISTEN or
+// UNLISTEN gets 5s to complete, and after 30s with nothing read or sent the
+// hub sends an empty query under the same limit, so a half-open connection
+// is replaced within seconds rather than when TCP keepalive notices.
 
 const (
 	// subscriberBuffer is how many notifications a subscriber can fall behind
@@ -31,6 +36,9 @@ const (
 	subscriberBuffer = 64
 	hubBackoffMin    = 100 * time.Millisecond
 	hubBackoffMax    = 5 * time.Second
+	// hubProbeEvery is how long the listener may be quiet before the hub
+	// checks it is still alive.
+	hubProbeEvery = 30 * time.Second
 	// maxIdentLen is the longest identifier Postgres keeps (NAMEDATALEN-1).
 	maxIdentLen = 63
 )
@@ -67,6 +75,12 @@ type Hub struct {
 	kick   chan struct{} // the subscriptions changed
 	done   chan struct{} // closed when the listener goroutine exits
 
+	// roundTrip bounds each command on the listener connection, and
+	// probeEvery is the quiet time before a liveness probe. Tests shorten
+	// them before the first Subscribe.
+	roundTrip  time.Duration
+	probeEvery time.Duration
+
 	mu       sync.Mutex
 	subs     map[string]map[*Subscriber]struct{}
 	owned    map[*Subscriber]map[string]struct{}
@@ -93,6 +107,9 @@ func NewHub(dial func(ctx context.Context) (*BackendConn, error)) *Hub {
 		listened: map[string]bool{},
 		failed:   map[string]error{},
 		changed:  make(chan struct{}),
+
+		roundTrip:  listenWait,
+		probeEvery: hubProbeEvery,
 	}
 }
 
@@ -273,9 +290,10 @@ type hubReply struct {
 	ready bool
 }
 
-// serve runs one listener connection until it fails or the hub closes. It
-// issues one LISTEN or UNLISTEN at a time, whichever brings the connection
-// closer to the subscriptions, and waits for its ReadyForQuery.
+// serve runs one listener connection until it fails, stops answering, or the
+// hub closes. It issues one LISTEN or UNLISTEN at a time, whichever brings
+// the connection closer to the subscriptions, and probes it when it has been
+// quiet for probeEvery.
 func (h *Hub) serve(c *BackendConn) {
 	h.mu.Lock()
 	if h.closed {
@@ -288,9 +306,10 @@ func (h *Hub) serve(c *BackendConn) {
 	replies := make(chan hubReply)
 	stop := make(chan struct{})
 	readerDone := make(chan struct{})
+	var lastRead atomic.Int64 // UnixNano of the last message read
 	go func() {
 		defer close(readerDone)
-		h.read(c, replies, stop)
+		h.read(c, replies, stop, &lastRead)
 	}()
 	defer func() {
 		close(stop)
@@ -298,48 +317,92 @@ func (h *Hub) serve(c *BackendConn) {
 		<-readerDone
 	}()
 
+	lastSent := time.Now()
 	for {
 		verb, channel, ok := h.next()
 		if !ok {
-			select {
-			case <-h.kick:
-				continue
-			case <-readerDone:
-				return
-			case <-h.ctx.Done():
-				return
+			last := lastSent
+			if r := time.Unix(0, lastRead.Load()); r.After(last) {
+				last = r
 			}
-		}
-		c.Frontend.Send(&pgproto3.Query{String: verb + " " + quoteIdent(channel)})
-		if c.Frontend.Flush() != nil {
-			return
-		}
-		var cmdErr error
-		for ready := false; !ready; {
-			select {
-			case r := <-replies:
-				if r.err != nil {
-					cmdErr = r.err
+			if quiet := time.Since(last); quiet < h.probeEvery {
+				t := time.NewTimer(h.probeEvery - quiet)
+				select {
+				case <-h.kick:
+				case <-t.C:
+				case <-readerDone:
+				case <-h.ctx.Done():
 				}
-				ready = r.ready
-			case <-readerDone:
-				return
-			case <-h.ctx.Done():
+				t.Stop()
+				select {
+				case <-readerDone:
+					return
+				case <-h.ctx.Done():
+					return
+				default:
+				}
+				continue
+			}
+			// An empty query answers with EmptyQueryResponse and
+			// ReadyForQuery, and changes nothing.
+			lastSent = time.Now()
+			if _, ok := h.exchange(c, "", replies, readerDone); !ok {
 				return
 			}
+			continue
+		}
+		lastSent = time.Now()
+		cmdErr, ok := h.exchange(c, verb+" "+quoteIdent(channel), replies, readerDone)
+		if !ok {
+			return
 		}
 		h.finish(verb, channel, cmdErr)
 	}
 }
 
+// exchange sends one simple Query on the listener connection and waits for
+// its ReadyForQuery, for at most roundTrip. It returns the backend's error,
+// if any, and ok false when the connection failed, didn't answer in time or
+// the hub closed; serve then drops the connection.
+func (h *Hub) exchange(c *BackendConn, sql string, replies <-chan hubReply, readerDone <-chan struct{}) (cmdErr error, ok bool) {
+	// A peer that has stopped reading would block the write forever.
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(h.roundTrip))
+	c.Frontend.Send(&pgproto3.Query{String: sql})
+	if c.Frontend.Flush() != nil {
+		return nil, false
+	}
+	_ = c.Conn.SetWriteDeadline(time.Time{})
+	t := time.NewTimer(h.roundTrip)
+	defer t.Stop()
+	for {
+		select {
+		case r := <-replies:
+			if r.err != nil {
+				cmdErr = r.err
+			}
+			if r.ready {
+				return cmdErr, true
+			}
+		case <-t.C:
+			return nil, false
+		case <-readerDone:
+			return nil, false
+		case <-h.ctx.Done():
+			return nil, false
+		}
+	}
+}
+
 // read reads the listener connection, delivering notifications and handing
-// command replies to serve, until the connection fails or stop is closed.
-func (h *Hub) read(c *BackendConn, replies chan<- hubReply, stop <-chan struct{}) {
+// command replies to serve, until the connection fails or stop is closed. It
+// records when it last read anything in lastRead.
+func (h *Hub) read(c *BackendConn, replies chan<- hubReply, stop <-chan struct{}, lastRead *atomic.Int64) {
 	for {
 		msg, err := c.Frontend.Receive()
 		if err != nil {
 			return
 		}
+		lastRead.Store(time.Now().UnixNano())
 		var r hubReply
 		switch m := msg.(type) {
 		case *pgproto3.NotificationResponse:
@@ -369,6 +432,11 @@ func (h *Hub) read(c *BackendConn, replies chan<- hubReply, stop <-chan struct{}
 // subscriptions: LISTEN on a channel with subscribers, or UNLISTEN on one
 // without. A channel the backend refused isn't tried again on this
 // connection.
+//
+// A channel stops counting as listened the moment its UNLISTEN is chosen,
+// not when it completes. A client subscribing while the UNLISTEN is in
+// flight then waits in Listening for the LISTEN that follows, instead of
+// being told it listens on a channel the backend is about to drop.
 func (h *Hub) next() (verb, channel string, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -379,6 +447,7 @@ func (h *Hub) next() (verb, channel string, ok bool) {
 	}
 	for ch := range h.listened {
 		if _, wanted := h.subs[ch]; !wanted {
+			delete(h.listened, ch)
 			return "UNLISTEN", ch, true
 		}
 	}

@@ -19,13 +19,19 @@ import (
 // CommandComplete and ReadyForQuery, tracks which channels each connection
 // listens on, and sends a notification when the test asks, but only on a
 // channel the connection listens on, as Postgres would. A LISTEN of the
-// channel named by refuse fails.
+// channel named by refuse fails. An empty query gets EmptyQueryResponse. The
+// first deafDials connections, and any marked with setDeaf, record queries
+// but never answer, like a half-open connection. A query matching holdQuery
+// waits for hold to close before it takes effect and is answered.
 type listenPG struct {
-	mu      sync.Mutex
-	conns   []*listenConn
-	dials   int
-	dialErr error
-	refuse  string
+	mu        sync.Mutex
+	conns     []*listenConn
+	dials     int
+	dialErr   error
+	refuse    string
+	deafDials int
+	holdQuery string
+	hold      chan struct{}
 }
 
 type listenConn struct {
@@ -35,6 +41,7 @@ type listenConn struct {
 	pid       uint32
 	queries   []string // guarded by listenPG.mu
 	listening map[string]bool
+	deaf      bool // guarded by listenPG.mu
 	closed    chan struct{}
 }
 
@@ -51,6 +58,7 @@ func (p *listenPG) dial(context.Context) (*BackendConn, error) {
 		conn:      server,
 		pid:       uint32(100 + len(p.conns)),
 		listening: map[string]bool{},
+		deaf:      len(p.conns) < p.deafDials,
 		closed:    make(chan struct{}),
 	}
 	p.conns = append(p.conns, lc)
@@ -76,21 +84,37 @@ func (p *listenPG) serve(lc *listenConn) {
 		if !ok {
 			continue
 		}
-		verb, quoted, _ := strings.Cut(q.String, " ")
-		channel := strings.ReplaceAll(quoted[1:len(quoted)-1], `""`, `"`)
 		p.mu.Lock()
 		lc.queries = append(lc.queries, q.String)
-		refused := p.refuse != "" && verb == "LISTEN" && channel == p.refuse
-		if !refused {
-			lc.listening[channel] = verb == "LISTEN"
+		deaf := lc.deaf
+		var hold chan struct{}
+		if q.String == p.holdQuery {
+			hold = p.hold
 		}
 		p.mu.Unlock()
-		lc.mu.Lock()
-		if refused {
-			lc.be.Send(&pgproto3.ErrorResponse{Severity: "ERROR", Code: "55000", Message: "cannot listen"})
-		} else {
-			lc.be.Send(&pgproto3.CommandComplete{CommandTag: []byte(verb)})
+		if deaf {
+			continue
 		}
+		if hold != nil {
+			<-hold
+		}
+		var reply pgproto3.BackendMessage = &pgproto3.EmptyQueryResponse{}
+		if q.String != "" {
+			verb, quoted, _ := strings.Cut(q.String, " ")
+			channel := strings.ReplaceAll(quoted[1:len(quoted)-1], `""`, `"`)
+			p.mu.Lock()
+			refused := p.refuse != "" && verb == "LISTEN" && channel == p.refuse
+			if !refused {
+				lc.listening[channel] = verb == "LISTEN"
+			}
+			p.mu.Unlock()
+			reply = &pgproto3.CommandComplete{CommandTag: []byte(verb)}
+			if refused {
+				reply = &pgproto3.ErrorResponse{Severity: "ERROR", Code: "55000", Message: "cannot listen"}
+			}
+		}
+		lc.mu.Lock()
+		lc.be.Send(reply)
 		lc.be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 		err = lc.be.Flush()
 		lc.mu.Unlock()
@@ -140,6 +164,23 @@ func (p *listenPG) notify(t *testing.T, channel, payload string) bool {
 		t.Fatalf("notify: %v", err)
 	}
 	return true
+}
+
+// setDeaf makes connection i stop answering, as if it had gone half-open.
+func (p *listenPG) setDeaf(i int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.conns[i].deaf = true
+}
+
+// holdReply makes the next query equal to q wait until the returned channel
+// is closed. The test must close it.
+func (p *listenPG) holdReply(t *testing.T, q string) chan struct{} {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.holdQuery, p.hold = q, make(chan struct{})
+	return p.hold
 }
 
 func (p *listenPG) setRefuse(channel string) {
@@ -384,6 +425,110 @@ func TestHubListenRefused(t *testing.T) {
 	h.Unsubscribe("bad", s)
 }
 
+// TestHubResubscribeDuringUnlisten subscribes again while the listener's
+// UNLISTEN of the channel is still in flight. Listening must wait for the
+// LISTEN that follows, or the client would be told it listens while the
+// backend is dropping the channel.
+func TestHubResubscribeDuringUnlisten(t *testing.T) {
+	p := &listenPG{}
+	h := newTestHub(t, p)
+	a := NewSubscriber()
+	h.Subscribe("jobs", a)
+	waitListening(t, h, "jobs")
+
+	release := p.holdReply(t, `UNLISTEN "jobs"`)
+	h.Unsubscribe("jobs", a)
+	waitFor(t, "the UNLISTEN to reach the backend", func() bool { return len(p.queries(0)) == 2 })
+	b := NewSubscriber()
+	h.Subscribe("jobs", b)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	got := make(chan error, 1)
+	go func() { got <- h.Listening(ctx, "jobs") }()
+	select {
+	case err := <-got:
+		close(release)
+		t.Fatalf("Listening returned %v with the UNLISTEN still in flight", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	if err := <-got; err != nil {
+		t.Fatalf("Listening = %v", err)
+	}
+	// Listening returned only once the backend acknowledged the LISTEN.
+	want(t, "listener queries", p.queries(0), []string{`LISTEN "jobs"`, `UNLISTEN "jobs"`, `LISTEN "jobs"`})
+	if !p.notify(t, "jobs", "back") {
+		t.Fatal("the backend is not listening on jobs")
+	}
+	if n := recvNote(t, b); n.Payload != "back" {
+		t.Fatalf("payload = %q", n.Payload)
+	}
+}
+
+func TestHubRoundTripTimeoutRedials(t *testing.T) {
+	p := &listenPG{deafDials: 1}
+	h := NewHub(p.dial)
+	h.roundTrip = 50 * time.Millisecond
+	t.Cleanup(h.Close)
+	h.Subscribe("jobs", NewSubscriber())
+	waitListening(t, h, "jobs")
+	if n := p.dialCount(); n != 2 {
+		t.Fatalf("dials = %d, want a redial after the first listener never answered", n)
+	}
+	want(t, "first connection", p.queries(0), []string{`LISTEN "jobs"`})
+	want(t, "second connection", p.queries(1), []string{`LISTEN "jobs"`})
+	waitFor(t, "the silent connection to close", func() bool {
+		select {
+		case <-p.conn(0).closed:
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func TestHubProbeReplacesDeadListener(t *testing.T) {
+	p := &listenPG{}
+	h := NewHub(p.dial)
+	h.roundTrip = 50 * time.Millisecond
+	h.probeEvery = 30 * time.Millisecond
+	t.Cleanup(h.Close)
+	s := NewSubscriber()
+	h.Subscribe("jobs", s)
+	waitListening(t, h, "jobs")
+	p.setDeaf(0)
+	waitFor(t, "a new listener", func() bool { return slices.Contains(p.queries(1), `LISTEN "jobs"`) })
+	if !slices.Contains(p.queries(0), "") {
+		t.Fatalf("first connection's queries = %q, want an empty probe", p.queries(0))
+	}
+	waitListening(t, h, "jobs")
+	p.notify(t, "jobs", "alive")
+	if n := recvNote(t, s); n.Payload != "alive" || n.PID != 101 {
+		t.Fatalf("notification = %+v", *n)
+	}
+}
+
+func TestHubProbeKeepsLiveListener(t *testing.T) {
+	p := &listenPG{}
+	h := NewHub(p.dial)
+	h.probeEvery = 20 * time.Millisecond
+	t.Cleanup(h.Close)
+	h.Subscribe("jobs", NewSubscriber())
+	waitListening(t, h, "jobs")
+	waitFor(t, "two probes", func() bool {
+		n := 0
+		for _, q := range p.queries(0) {
+			if q == "" {
+				n++
+			}
+		}
+		return n >= 2
+	})
+	if n := p.dialCount(); n != 1 {
+		t.Fatalf("dials = %d, want the answering listener kept", n)
+	}
+}
+
 // newHubHarness is a session harness whose route has a hub.
 func newHubHarness(t *testing.T, limit int) (*harness, *listenPG, *Hub) {
 	t.Helper()
@@ -517,5 +662,69 @@ func TestSessionListenRefused(t *testing.T) {
 	want(t, "LISTEN bad", c.query("LISTEN bad"), []string{"ErrorResponse ERROR 55000 cannot listen", "ReadyForQuery I"})
 	want(t, "SELECT", c.query("SELECT 1"), selectOne)
 	want(t, "LISTEN good", c.query("LISTEN good"), []string{"CommandComplete LISTEN", "ReadyForQuery I"})
+	c.terminate()
+}
+
+func TestSessionUnlistenQuotedStarIsAChannel(t *testing.T) {
+	h, p, _ := newHubHarness(t, 1)
+	c := h.connect(nil)
+	c.query(`LISTEN "*"`)
+	c.query("LISTEN a")
+	want(t, "listener queries", p.queries(0), []string{`LISTEN "*"`, `LISTEN "a"`})
+	want(t, `UNLISTEN "*"`, c.query(`UNLISTEN "*"`), []string{"CommandComplete UNLISTEN", "ReadyForQuery I"})
+	waitFor(t, `UNLISTEN "*"`, func() bool { return slices.Contains(p.queries(0), `UNLISTEN "*"`) })
+	// The client still listens on a.
+	if !p.notify(t, "a", "kept") {
+		t.Fatal("the listener dropped a")
+	}
+	want(t, "notification", c.read(1), []string{"NotificationResponse a kept 100"})
+	c.query("UNLISTEN *")
+	waitFor(t, "UNLISTEN a", func() bool { return slices.Contains(p.queries(0), `UNLISTEN "a"`) })
+	c.terminate()
+}
+
+// TestSessionHoldsNotifyInExtendedBatch: with no lease held, a notification
+// that arrives between extended-protocol messages waits for the Sync's
+// ReadyForQuery.
+func TestSessionHoldsNotifyInExtendedBatch(t *testing.T) {
+	h, p, hub := newHubHarness(t, 1)
+	c := h.connect(nil)
+	c.query("LISTEN jobs")
+	watch := NewSubscriber()
+	hub.Subscribe("jobs", watch)
+	waitListening(t, hub, "jobs")
+
+	// A Close of a named statement is answered without a lease.
+	c.send(&pgproto3.Close{ObjectType: 'S', Name: "nope"}, &pgproto3.Flush{})
+	want(t, "Close", c.read(1), []string{"CloseComplete"})
+	p.notify(t, "jobs", "batch")
+	recvNote(t, watch)
+	time.Sleep(20 * time.Millisecond) // a session that forwards at once would do it now
+	c.send(&pgproto3.Sync{})
+	want(t, "Sync", c.read(2), []string{"ReadyForQuery I", "NotificationResponse jobs batch 100"})
+	if n := h.dialer.dials(); n != 0 {
+		t.Fatalf("pool dials = %d, want none", n)
+	}
+	c.terminate()
+}
+
+// TestSessionHoldsNotifyDuringHubListen: a notification that arrives while
+// the hub answers a LISTEN goes out after that LISTEN's reply.
+func TestSessionHoldsNotifyDuringHubListen(t *testing.T) {
+	h, p, hub := newHubHarness(t, 1)
+	c := h.connect(nil)
+	c.query("LISTEN a")
+	watch := NewSubscriber()
+	hub.Subscribe("a", watch)
+	waitListening(t, hub, "a")
+
+	release := p.holdReply(t, `LISTEN "b"`)
+	c.send(&pgproto3.Query{String: "LISTEN b"})
+	waitFor(t, "LISTEN b at the listener", func() bool { return slices.Contains(p.queries(0), `LISTEN "b"`) })
+	p.notify(t, "a", "during")
+	recvNote(t, watch)
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	want(t, "LISTEN b", c.read(3), []string{"CommandComplete LISTEN", "ReadyForQuery I", "NotificationResponse a during 100"})
 	c.terminate()
 }

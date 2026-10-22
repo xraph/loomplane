@@ -198,12 +198,12 @@ func (s *session) completed(l *Lease, e *entry, cc *pgproto3.CommandComplete) {
 		s.dropStatements(e.upTo)
 		s.resetBackendStatements(l.Conn())
 		// DISCARD ALL includes UNLISTEN *.
-		s.unlistenLocked("*")
+		s.unlistenLocked("", true)
 	case EffectUnlisten:
 		// An UNLISTEN that went to the client's own connection also ends what
 		// the client had on the hub. Inside a transaction that rolls back,
 		// Postgres would keep the subscription; the gateway drops it anyway.
-		s.unlistenLocked(e.effect.Channel)
+		s.unlistenLocked(e.effect.Channel, e.effect.All)
 	case EffectDeallocate:
 		// Prepared statements are not transactional either.
 		if e.effect.Param == "*" {
