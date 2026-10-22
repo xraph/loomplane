@@ -165,6 +165,40 @@ func (p *planner) checkDatabaseGatewayHTTPS(a *Action, connection string) {
 	p.problem(Finding{Code: "db-gateway-needs-https", Subject: ServiceSubject, Name: dbGatewayName, Path: "database_gateway.provider", Message: msg})
 }
 
+// heldGatewayUser reports each resource a held user was deployed to reach
+// through the database gateway that this plan takes off it, by removing
+// the gateway or dropping the resource from it. The user keeps the
+// gateway's address, so it would lose its database. heldAddresses calls
+// it with the user's deployed links. A gateway this plan wants and can't
+// plan isn't removed, and a problem says why already.
+func (p *planner) heldGatewayUser(name, who, scope string, env []EnvLink) {
+	gw := p.services[dbGatewayName]
+	if gw != nil && (gw.Service == nil || gw.Service.DatabaseGateway == nil) {
+		gw = nil
+	}
+	if gw == nil && p.dbGatewayOn() {
+		return
+	}
+	var seen []string
+	for _, e := range env {
+		if !e.Gateway || e.Subject != ResourceSubject || slices.Contains(seen, e.From) {
+			continue
+		}
+		seen = append(seen, e.From)
+		fate := "this plan removes the database gateway"
+		if gw != nil {
+			if slices.Contains(gw.Service.DatabaseGateway.Resources, e.From) {
+				continue
+			}
+			fate = "this plan takes " + e.From + " off the database gateway"
+		}
+		p.problem(Finding{
+			Code: "db-gateway-held-user", Subject: ServiceSubject, Name: name, Path: "services." + name,
+			Message: fmt.Sprintf("%s, reaches %s through the database gateway, and %s, so %s would lose its database. %s", who, e.From, fate, name, scope),
+		})
+	}
+}
+
 // linkTargets are the actions whose addresses a link hands a service:
 // what it names, and for a resource behind the database gateway, the
 // gateway too.
@@ -243,6 +277,9 @@ func (p *planner) dependOnDatabaseGateway(gw *Action, resources []string) {
 		// The links are part of the configuration, so the comparison with
 		// what's deployed has to happen again.
 		if marked {
+			// diff only sets an adoption on a Keep, so one the first
+			// comparison set mustn't outlive an Update.
+			a.AdoptCloudPlacement, a.CloudAdoption = false, nil
 			p.diff(a, a.Service, a.Provider, a.Region)
 		}
 	}

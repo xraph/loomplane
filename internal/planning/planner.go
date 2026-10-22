@@ -811,6 +811,7 @@ func (p *planner) heldAddresses() {
 				p.heldAddress(u.name, u.provider, who, scope, e, dep, &seen)
 			}
 		}
+		p.heldGatewayUser(u.name, who, scope, u.env)
 	}
 }
 

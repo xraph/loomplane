@@ -571,3 +571,74 @@ func TestDatabaseGatewayInCloudSync(t *testing.T) {
 		t.Fatalf("a Cloud switch moved the gateway: %+v", r.Problems)
 	}
 }
+
+// heldUsers are the held-user problems, by the held service and the
+// resource each names.
+func heldUsers(r *Result) []string {
+	var out []string
+	for _, f := range r.Problems {
+		if f.Code == "db-gateway-held-user" {
+			out = append(out, f.Name)
+		}
+	}
+	return out
+}
+
+// A held app keeps the gateway address it was deployed with, so a plan
+// that removes the gateway takes its database away.
+func TestDatabaseGatewayHeldUserWhenTheGatewayGoes(t *testing.T) {
+	live := deployed(t, dbgwCompute(t, dbgwManifest, exampleZone))
+	in := dbgwInput(t, strings.Replace(dbgwManifest, ", gateway: true", "", 1), exampleZone, live...)
+	in.Held = map[string]bool{"other": true}
+	r := Compute(in)
+	if gw := action(t, r, "service:db-gateway"); gw.Op != Delete {
+		t.Fatalf("db-gateway is %s", gw.Op)
+	}
+	if got := heldUsers(r); !slices.Equal(got, []string{"api", "web"}) || r.Executable {
+		t.Fatalf("held users %v, executable %v, problems %+v", got, r.Executable, r.Problems)
+	}
+	f := finding(t, r.Problems, "db-gateway-held-user")
+	if f.Path != "services.api" || !strings.Contains(f.Message, "reaches db through the database gateway") || !strings.Contains(f.Message, "removes the database gateway") || strings.Contains(f.Message, "—") {
+		t.Fatalf("finding = %+v", f)
+	}
+
+	// Nothing held, nothing to report: the apps are deployed again.
+	in.Held = nil
+	if got := heldUsers(Compute(in)); len(got) != 0 {
+		t.Fatalf("held users %v with nothing held", got)
+	}
+}
+
+func TestDatabaseGatewayHeldUserWhenItsResourceLeaves(t *testing.T) {
+	both := strings.Replace(dbgwManifest, "resources:\n", "resources:\n  orders: {kind: postgres, provider: digitalocean, gateway: true}\n", 1)
+	live := deployed(t, dbgwCompute(t, both, exampleZone))
+	in := dbgwInput(t, strings.Replace(both, "provider: digitalocean, gateway: true}\ndatabase_gateway", "provider: digitalocean}\ndatabase_gateway", 1), exampleZone, live...)
+	in.Held = map[string]bool{"other": true}
+	r := Compute(in)
+	if gw := action(t, r, "service:db-gateway"); gw.Op != Update || !slices.Equal(gw.Service.DatabaseGateway.Resources, []string{"orders"}) {
+		t.Fatalf("db-gateway is %s with %+v", gw.Op, gw.Service.DatabaseGateway)
+	}
+	if got := heldUsers(r); !slices.Equal(got, []string{"api", "web"}) {
+		t.Fatalf("held users %v, problems %+v", got, r.Problems)
+	}
+	if f := finding(t, r.Problems, "db-gateway-held-user"); !strings.Contains(f.Message, "takes db off the database gateway") {
+		t.Fatalf("finding = %+v", f)
+	}
+}
+
+// An app the gateway marking turns from a Keep into an Update is deployed,
+// not adopted, so it carries no adoption.
+func TestDatabaseGatewayMarkingClearsAdoption(t *testing.T) {
+	live := deployed(t, dbgwCompute(t, dbgwSameCloud, exampleZone))
+	in := dbgwInput(t, strings.Replace(dbgwSameCloud, "provider: digitalocean}", "provider: digitalocean, gateway: true}", 1), exampleZone, live...)
+	in.CloudPlacements = map[string]CloudPlacement{"api": {CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "apps", Provider: "digitalocean", ConnectionID: "conn_do", AccountIdentity: "digitalocean:team"}}
+	api := action(t, Compute(in), "service:api")
+	if api.Op != Update || api.AdoptCloudPlacement || api.CloudAdoption != nil {
+		t.Fatalf("api is %s, adopt %v %+v", api.Op, api.AdoptCloudPlacement, api.CloudAdoption)
+	}
+	// Without the marking, the same placement is adopted.
+	in.Manifest = parse(t, dbgwSameCloud)
+	if api := action(t, Compute(in), "service:api"); api.Op != Keep || !api.AdoptCloudPlacement {
+		t.Fatalf("control: api is %s, adopt %v", api.Op, api.AdoptCloudPlacement)
+	}
+}
