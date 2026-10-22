@@ -27,6 +27,11 @@ const protectionLabels: Record<Protection, string> = {
   "": "No Loomplane backups on this target",
 }
 
+/** protectionLabel says, in a sentence, what recovery keeps under a protection. */
+export function protectionLabel(protection: Protection): string {
+  return protectionLabels[protection]
+}
+
 function view(protection: Protection): ProtectionView {
   return { protection, label: protectionLabels[protection] }
 }
