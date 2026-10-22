@@ -69,6 +69,9 @@ func (s *session) fromBackend(l *Lease, msg pgproto3.BackendMessage) bool {
 	if ready && s.seq.empty() {
 		s.idleAtSync = true
 	}
+	// Hub notifications that waited for the transaction to end go out
+	// right behind its ReadyForQuery.
+	out = append(out, s.takeNotesLocked()...)
 	// Bytes still buffered after ReadyForQuery are an asynchronous message,
 	// such as a notice, that belongs to this client. The lease stays until
 	// they have been read and forwarded, or the next holder's reader would
@@ -194,6 +197,13 @@ func (s *session) completed(l *Lease, e *entry, cc *pgproto3.CommandComplete) {
 		l.SetOverrides(s.connParams)
 		s.dropStatements(e.upTo)
 		s.resetBackendStatements(l.Conn())
+		// DISCARD ALL includes UNLISTEN *.
+		s.unlistenLocked("*")
+	case EffectUnlisten:
+		// An UNLISTEN that went to the client's own connection also ends what
+		// the client had on the hub. Inside a transaction that rolls back,
+		// Postgres would keep the subscription; the gateway drops it anyway.
+		s.unlistenLocked(e.effect.Channel)
 	case EffectDeallocate:
 		// Prepared statements are not transactional either.
 		if e.effect.Param == "*" {

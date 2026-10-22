@@ -33,6 +33,7 @@ type fakePG struct {
 	mu     sync.Mutex
 	log    []string
 	closed chan struct{}
+	hold   chan struct{} // a statement containing "hold" waits on it mid-result
 }
 
 type fakeState struct {
@@ -238,6 +239,16 @@ func (f *fakePG) run(b *pgproto3.Backend, st *fakeState, sql string, simple bool
 		fail("25P02", "current transaction is aborted")
 	case strings.Contains(sql, "fail"):
 		fail("42000", "scripted failure")
+	case strings.Contains(sql, "hold"):
+		if simple {
+			b.Send(rowDescription())
+		}
+		b.Send(&pgproto3.DataRow{Values: [][]byte{[]byte("hold")}})
+		if b.Flush() != nil {
+			return false
+		}
+		<-f.hold
+		tag("SELECT 1")
 	case strings.HasPrefix(upper, "BEGIN"):
 		st.status = 'T'
 		tag("BEGIN")
@@ -332,6 +343,8 @@ func showBackend(msg pgproto3.BackendMessage) string {
 		return "ErrorResponse " + m.Severity + " " + m.Code
 	case *pgproto3.ParameterStatus:
 		return "ParameterStatus " + m.Name + "=" + m.Value
+	case *pgproto3.NotificationResponse:
+		return fmt.Sprintf("NotificationResponse %s %s %d", m.Channel, m.Payload, m.PID)
 	default:
 		return strings.TrimPrefix(reflect.TypeOf(msg).String(), "*pgproto3.")
 	}
@@ -345,6 +358,7 @@ type fakeDialer struct {
 	servers    []*fakePG
 	err        error
 	failWrites atomic.Bool
+	hold       chan struct{} // set before the first dial; see fakePG.hold
 }
 
 func (d *fakeDialer) Dial(_ context.Context, _ Backend, _ BackendSecret, _ map[string]string) (*BackendConn, error) {
@@ -354,7 +368,7 @@ func (d *fakeDialer) Dial(_ context.Context, _ Backend, _ BackendSecret, _ map[s
 		return nil, d.err
 	}
 	client, server := net.Pipe()
-	f := &fakePG{closed: make(chan struct{})}
+	f := &fakePG{closed: make(chan struct{}), hold: d.hold}
 	go f.serve(server)
 	d.servers = append(d.servers, f)
 	conn := &flakyConn{Conn: client, fail: &d.failWrites}
@@ -398,12 +412,13 @@ func (d *fakeDialer) dials() int {
 	return len(d.servers)
 }
 
-// fakeRoute is a SessionRoute over one pool. gateErr and params are set
-// before the session starts; removed may be swapped while it runs.
+// fakeRoute is a SessionRoute over one pool. gateErr, params and hub are
+// set before the session starts; removed may be swapped while it runs.
 type fakeRoute struct {
 	pool    *Pool
 	gateErr error
 	params  map[string]string
+	hub     *Hub
 
 	mu      sync.Mutex
 	removed chan struct{}
@@ -412,6 +427,7 @@ type fakeRoute struct {
 func (r *fakeRoute) Pool() *Pool                     { return r.pool }
 func (r *fakeRoute) Gate(context.Context) error      { return r.gateErr }
 func (r *fakeRoute) ServerParams() map[string]string { return r.params }
+func (r *fakeRoute) Hub() *Hub                       { return r.hub }
 
 func (r *fakeRoute) Removed() <-chan struct{} {
 	r.mu.Lock()

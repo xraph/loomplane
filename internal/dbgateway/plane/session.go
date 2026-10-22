@@ -19,12 +19,14 @@ import (
 // SessionRoute is what a session needs from its route. Gate blocks while the
 // route is paused. Removed is closed once the route is gone. ServerParams are
 // the ParameterStatus values of a real backend connection, which the session
-// reports to its client when it starts.
+// reports to its client when it starts. Hub is the route's shared listener;
+// without one, LISTEN pins the session.
 type SessionRoute interface {
 	Pool() *Pool
 	Gate(ctx context.Context) error
 	Removed() <-chan struct{}
 	ServerParams() map[string]string
+	Hub() *Hub
 }
 
 const (
@@ -35,6 +37,10 @@ const (
 	msgEncoding     = "the database gateway only supports UTF8 client_encoding"
 	msgAborted      = "current transaction is aborted, commands ignored until end of transaction block"
 )
+
+// listenWait is how long a LISTEN waits for the route's listener connection
+// to listen on its channel. It matches the pool's wait limit.
+const listenWait = 5 * time.Second
 
 var (
 	errBackendLost  = errors.New("lost the connection to the backend")
@@ -79,6 +85,7 @@ type session struct {
 	be    *pgproto3.Backend
 	route SessionRoute
 	pool  *Pool
+	hub   *Hub
 
 	in      chan clientMsg
 	ack     chan struct{}
@@ -108,6 +115,7 @@ type session struct {
 	status byte // transaction status from the last ReadyForQuery
 	pinned bool
 	skip   bool // an extended-protocol error: drop client messages until Sync
+	batch  bool // extended-protocol messages since the last Sync
 
 	startup   map[string]string // overrides from the startup packet, the reset values
 	overrides map[string]string // the overrides the client's session should have
@@ -117,6 +125,16 @@ type session struct {
 	unnamed        *prepared
 	unnamedOnLease bool
 	portals        map[string]Classification // read and written by the session goroutine only
+
+	// The client's subscriptions on the route's hub. sub is created at the
+	// first LISTEN the hub answers. Hub notifications wait in notes until the
+	// client is between transactions, where Postgres would send them, and
+	// holdNotes keeps them back while the gateway answers a LISTEN itself.
+	sub        *Subscriber
+	channels   map[string]bool
+	notes      []*pgproto3.NotificationResponse
+	holdNotes  bool
+	notesTaken chan struct{} // signalled when notes are taken
 }
 
 // ServeSession proxies one authenticated client in transaction-pooling mode.
@@ -148,6 +166,7 @@ func ServeSession(ctx context.Context, be *pgproto3.Backend, r SessionRoute, sta
 		be:        be,
 		route:     r,
 		pool:      r.Pool(),
+		hub:       r.Hub(),
 		in:        make(chan clientMsg),
 		ack:       make(chan struct{}),
 		quit:      make(chan struct{}),
@@ -157,6 +176,9 @@ func ServeSession(ctx context.Context, be *pgproto3.Backend, r SessionRoute, sta
 		overrides: copyParams(overrides),
 		stmts:     map[string]*prepared{},
 		portals:   map[string]Classification{},
+		channels:  map[string]bool{},
+
+		notesTaken: make(chan struct{}, 1),
 	}
 	s.cond = sync.NewCond(&s.mu)
 	if err := s.greet(shown); err != nil {
@@ -164,6 +186,9 @@ func ServeSession(ctx context.Context, be *pgproto3.Backend, r SessionRoute, sta
 	}
 	go s.readClient()
 	defer func() {
+		if s.sub != nil {
+			s.hub.UnsubscribeAll(s.sub)
+		}
 		close(s.quit)
 		s.readers.Wait()
 	}()
@@ -273,6 +298,12 @@ func (s *session) handle(msg pgproto3.FrontendMessage) (end bool, err error) {
 	case *pgproto3.Sync:
 		return s.sync()
 	}
+	switch msg.(type) {
+	case *pgproto3.Parse, *pgproto3.Bind, *pgproto3.Describe, *pgproto3.Execute, *pgproto3.Close:
+		s.mu.Lock()
+		s.batch = true
+		s.mu.Unlock()
+	}
 	if s.skipping() {
 		return false, nil
 	}
@@ -306,8 +337,8 @@ func (s *session) skipping() bool {
 	return s.skip
 }
 
-// query forwards a simple Query, unless it is a DEALLOCATE the gateway
-// answers itself.
+// query forwards a simple Query, unless it is a DEALLOCATE, LISTEN or
+// UNLISTEN the gateway answers itself.
 func (s *session) query(m *pgproto3.Query) (bool, error) {
 	class := classifyStatement(m.String)
 	s.mu.Lock()
@@ -317,10 +348,17 @@ func (s *session) query(m *pgproto3.Query) (bool, error) {
 		s.mu.Unlock()
 		return false, nil
 	}
-	// A simple Query destroys the unnamed statement.
+	// A simple Query destroys the unnamed statement, and its ReadyForQuery
+	// ends any extended-protocol batch the client left without a Sync.
 	s.unnamed = nil
+	s.batch = false
 	if class.Effect == EffectDeallocate && s.deallocateLocked(class) {
 		return false, nil
+	}
+	if s.viaHubLocked(class) {
+		s.holdNotes = true
+		s.mu.Unlock()
+		return s.hubQuery(class)
 	}
 	s.mu.Unlock()
 
@@ -344,12 +382,14 @@ func (s *session) query(m *pgproto3.Query) (bool, error) {
 func (s *session) sync() (bool, error) {
 	s.mu.Lock()
 	s.skip = false
+	s.batch = false
 	if l := s.lease; l != nil {
 		return s.forwardLocked(l, true, &entry{kind: entrySync}, &pgproto3.Sync{})
 	}
+	out := append([]pgproto3.BackendMessage{&pgproto3.ReadyForQuery{TxStatus: 'I'}}, s.takeNotesLocked()...)
 	s.writeMu.Lock()
 	s.mu.Unlock()
-	s.sendLocked(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	s.sendLocked(out...)
 	s.flushLocked()
 	s.writeMu.Unlock()
 	return false, nil
@@ -469,15 +509,16 @@ func (s *session) acquireFailed(err error, extended bool) (bool, error) {
 // protocol everything up to Sync is skipped, as Postgres does after an error.
 func (s *session) refuse(extended bool, e *pgproto3.ErrorResponse) {
 	s.mu.Lock()
+	out := []pgproto3.BackendMessage{e}
 	if extended {
 		s.skip = true
+	} else {
+		out = append(out, &pgproto3.ReadyForQuery{TxStatus: 'I'})
+		out = append(out, s.takeNotesLocked()...)
 	}
 	s.writeMu.Lock()
 	s.mu.Unlock()
-	s.sendLocked(e)
-	if !extended {
-		s.sendLocked(&pgproto3.ReadyForQuery{TxStatus: 'I'})
-	}
+	s.sendLocked(out...)
 	s.flushLocked()
 	s.writeMu.Unlock()
 }
@@ -589,7 +630,7 @@ func (s *session) answerLocked(e entry) {
 		s.mu.Unlock()
 		return
 	}
-	out := s.reply(e)
+	out := append(s.reply(e), s.takeNotesLocked()...)
 	s.writeMu.Lock()
 	s.mu.Unlock()
 	s.sendLocked(out...)
@@ -637,6 +678,177 @@ func (s *session) signal() {
 	}
 }
 
+// idleLocked reports whether the client is between transactions, where
+// Postgres would send it notifications: no lease, or a lease idle at
+// ReadyForQuery 'I' with nothing outstanding, and no extended-protocol batch
+// open.
+func (s *session) idleLocked() bool {
+	if s.batch || s.skip || s.lost {
+		return false
+	}
+	return s.lease == nil || (s.status == 'I' && s.seq.empty() && s.idleAtSync)
+}
+
+// viaHubLocked reports whether the route's hub answers a simple Query: a
+// lone LISTEN or UNLISTEN from an unpinned client between transactions.
+// Anywhere else it pins and goes to the client's own connection. Inside a
+// transaction that is what keeps it transactional; a pinned session already
+// has a connection of its own.
+func (s *session) viaHubLocked(c Classification) bool {
+	if s.hub == nil || (c.Effect != EffectListen && c.Effect != EffectUnlisten) {
+		return false
+	}
+	return !s.pinned && s.idleLocked()
+}
+
+// hubQuery answers a LISTEN or UNLISTEN through the route's hub, with
+// CommandComplete and ReadyForQuery as Postgres would. It is called with
+// holdNotes set, so no notification goes out ahead of the reply.
+func (s *session) hubQuery(c Classification) (bool, error) {
+	var reply []pgproto3.BackendMessage
+	if c.Effect == EffectListen {
+		if e := s.listen(c.Channel); e != nil {
+			reply = append(reply, e)
+		} else {
+			reply = append(reply, &pgproto3.CommandComplete{CommandTag: []byte("LISTEN")})
+		}
+	} else {
+		s.mu.Lock()
+		s.unlistenLocked(c.Channel)
+		s.mu.Unlock()
+		reply = append(reply, &pgproto3.CommandComplete{CommandTag: []byte("UNLISTEN")})
+	}
+	s.mu.Lock()
+	s.holdNotes = false
+	reply = append(reply, &pgproto3.ReadyForQuery{TxStatus: s.status})
+	reply = append(reply, s.takeNotesLocked()...)
+	s.writeMu.Lock()
+	s.mu.Unlock()
+	s.sendLocked(reply...)
+	s.flushLocked()
+	s.writeMu.Unlock()
+	return false, nil
+}
+
+// listen subscribes the client to channel and waits until the listener
+// connection listens on it, so a NOTIFY sent after the client sees LISTEN
+// complete reaches it. It returns the error to answer with when that fails.
+func (s *session) listen(channel string) *pgproto3.ErrorResponse {
+	channel = channelKey(channel)
+	s.mu.Lock()
+	if s.channels[channel] {
+		s.mu.Unlock()
+		return nil
+	}
+	sub := s.subscriberLocked()
+	s.channels[channel] = true
+	s.mu.Unlock()
+
+	s.hub.Subscribe(channel, sub)
+	ctx, cancel := context.WithTimeout(s.ctx, listenWait)
+	err := s.hub.Listening(ctx, channel)
+	cancel()
+	if err == nil {
+		return nil
+	}
+	s.mu.Lock()
+	delete(s.channels, channel)
+	s.mu.Unlock()
+	s.hub.Unsubscribe(channel, sub)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return softError(pgErr.Code, pgErr.Message)
+	}
+	return softError("08006", msgNoBackend)
+}
+
+// unlistenLocked drops the client's hub subscription to channel, or to every
+// channel for "*". Called with s.mu held.
+func (s *session) unlistenLocked(channel string) {
+	if s.sub == nil {
+		return
+	}
+	if channel == "*" {
+		s.hub.UnsubscribeAll(s.sub)
+		clear(s.channels)
+		return
+	}
+	channel = channelKey(channel)
+	s.hub.Unsubscribe(channel, s.sub)
+	delete(s.channels, channel)
+}
+
+// subscriberLocked returns the client's hub subscriber, creating it and the
+// goroutine that delivers its notifications on first use. Called with s.mu
+// held.
+func (s *session) subscriberLocked() *Subscriber {
+	if s.sub == nil {
+		s.sub = NewSubscriber()
+		s.readers.Add(1)
+		go s.pumpNotes(s.sub.C)
+	}
+	return s.sub
+}
+
+// pumpNotes moves hub notifications into notes and sends them while the
+// client is between transactions. Otherwise they wait for whoever next
+// sends the client a ReadyForQuery 'I'. At most a subscriber's buffer of
+// them waits in the session; beyond that the subscriber's channel fills and
+// the hub drops them.
+func (s *session) pumpNotes(c <-chan *pgproto3.NotificationResponse) {
+	defer s.readers.Done()
+	for {
+		s.mu.Lock()
+		full := len(s.notes) >= subscriberBuffer
+		s.mu.Unlock()
+		if full {
+			select {
+			case <-s.notesTaken:
+			case <-s.quit:
+				return
+			}
+			continue
+		}
+		select {
+		case n := <-c:
+			s.mu.Lock()
+			s.notes = append(s.notes, n)
+			out := s.takeNotesLocked()
+			if len(out) == 0 {
+				s.mu.Unlock()
+				continue
+			}
+			s.writeMu.Lock()
+			s.mu.Unlock()
+			s.sendLocked(out...)
+			s.flushLocked()
+			s.writeMu.Unlock()
+		case <-s.quit:
+			return
+		}
+	}
+}
+
+// takeNotesLocked returns the waiting notifications if the client is between
+// transactions, for the caller to send after whatever it is sending. Called
+// with s.mu held.
+func (s *session) takeNotesLocked() []pgproto3.BackendMessage {
+	if len(s.notes) == 0 || s.holdNotes || !s.idleLocked() {
+		return nil
+	}
+	out := make([]pgproto3.BackendMessage, len(s.notes))
+	for i, n := range s.notes {
+		out[i] = n
+	}
+	clear(s.notes)
+	s.notes = s.notes[:0]
+	select {
+	case s.notesTaken <- struct{}{}:
+	default:
+	}
+	return out
+}
+
 // classifyStatement is ClassifySQL with one correction: DISCARD PLANS drops
 // cached plans, not prepared statements, so it needs no tracking.
 func classifyStatement(sql string) Classification {
@@ -659,7 +871,7 @@ func leadingWord(sql string) string {
 }
 
 // pins reports whether a statement pins the session. LISTEN and UNLISTEN pin
-// until the gateway has a shared listener.
+// when the route's hub can't answer them: see viaHubLocked.
 func pins(c Classification) bool {
 	switch c.Effect {
 	case EffectPinSession, EffectListen, EffectUnlisten:

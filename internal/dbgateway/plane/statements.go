@@ -332,7 +332,7 @@ func (s *session) parsePending(name string) bool {
 // tracked reports whether a statement's effect has to follow it to Execute.
 func tracked(c Classification) bool {
 	switch c.Effect {
-	case EffectSet, EffectReset, EffectDiscardAll, EffectDeallocate:
+	case EffectSet, EffectReset, EffectDiscardAll, EffectDeallocate, EffectUnlisten:
 		return true
 	}
 	return false
