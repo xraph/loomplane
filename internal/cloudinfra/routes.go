@@ -258,8 +258,8 @@ const unpublishedProxyImage = wildcardRefusal("Wildcard routes on servers need L
 // still on the stock image restarts on the DNS-capable one.
 func (s *Service) wildcardNotices(ctx context.Context, st DomainStore, route Route) ([]string, error) {
 	if route.Binding.BackendName() == RouteBackendKubernetes {
-		// Kubernetes wildcards need a DNS-01 issuer, which routes don't make yet.
-		return nil, ErrWildcardUnsupported
+		// The cluster's DNS-01 Issuer is added on apply; nothing restarts.
+		return nil, nil
 	}
 	if !s.ingressImagePinned() {
 		return nil, unpublishedProxyImage

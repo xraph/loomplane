@@ -1,9 +1,11 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -33,11 +35,14 @@ const (
 	LabelRoute = "loomplane.route"
 	// LabelRouteShared marks the namespace objects every route shares.
 	LabelRouteShared = "loomplane.route.shared"
+	// LabelZone names the zone whose DNS-01 Issuer and token Secret an object is.
+	LabelZone = "loomplane.zone"
 	// RouteDenyService answers blocked path prefixes. It has no endpoints.
 	RouteDenyService = "lp-route-deny"
 	HTTPIssuerName   = "lp-acme-http01"
 
 	acmeAccountSecret    = "lp-acme-account"
+	dnsTokenKey          = "api-token"
 	defaultACMEDirectory = "https://acme-v02.api.letsencrypt.org/directory"
 	sharedDeny           = "deny"
 	sharedIssuer         = "issuer"
@@ -96,9 +101,11 @@ func RouteObjectName(routeID string) string {
 	return "lp-route-" + hex.EncodeToString(sum[:])[:24]
 }
 
+const dnsIssuerPrefix = "lp-acme-dns01-"
+
 func DNSIssuerName(zoneID string) string {
 	sum := sha256.Sum256([]byte(zoneID))
-	return "lp-acme-dns01-" + hex.EncodeToString(sum[:])[:16]
+	return dnsIssuerPrefix + hex.EncodeToString(sum[:])[:16]
 }
 
 // CheckRoutePrerequisites names what the cluster lacks before routes can use it.
@@ -139,11 +146,9 @@ func (c *Client) EnsureHTTPIssuer(ctx context.Context, ingressClass, acmeDirecto
 	if ingressClass != "" && len(validation.IsDNS1123Subdomain(ingressClass)) != 0 {
 		return "", fmt.Errorf("%w: invalid ingress class", ErrInvalid)
 	}
-	if acmeDirectory == "" {
-		acmeDirectory = defaultACMEDirectory
-	}
-	if u, err := url.Parse(acmeDirectory); err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
-		return "", fmt.Errorf("%w: the ACME directory must be an https URL", ErrInvalid)
+	acmeDirectory, err := validACMEDirectory(acmeDirectory)
+	if err != nil {
+		return "", err
 	}
 	// http01.ingress.ingressClassName needs cert-manager 1.12 or later.
 	ingress := map[string]any{}
@@ -175,6 +180,146 @@ func (c *Client) EnsureHTTPIssuer(ctx context.Context, ingressClass, acmeDirecto
 		return "", fmt.Errorf("apply the ACME Issuer: %w", err)
 	}
 	return HTTPIssuerName, nil
+}
+
+func validACMEDirectory(acmeDirectory string) (string, error) {
+	if acmeDirectory == "" {
+		acmeDirectory = defaultACMEDirectory
+	}
+	if u, err := url.Parse(acmeDirectory); err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+		return "", fmt.Errorf("%w: the ACME directory must be an https URL", ErrInvalid)
+	}
+	return acmeDirectory, nil
+}
+
+// EnsureDNSIssuer keeps the zone's DNS-01 Issuer and the Secret holding its
+// Cloudflare token. The token lives only in that Secret: the Issuer names
+// it, and no error repeats it. Both are read before either is written, so a
+// same-named object Loomplane didn't create leaves the namespace untouched.
+func (c *Client) EnsureDNSIssuer(ctx context.Context, zoneID, zoneName string, token []byte, acmeDirectory string) (string, error) {
+	if zoneID == "" || len(validation.IsValidLabelValue(zoneID)) != 0 || len(validation.IsDNS1123Subdomain(zoneName)) != 0 || !strings.Contains(zoneName, ".") {
+		return "", fmt.Errorf("%w: invalid DNS challenge zone", ErrInvalid)
+	}
+	if len(token) == 0 || len(token) > 256 || slices.ContainsFunc(token, func(b byte) bool { return b <= ' ' || b > '~' }) {
+		return "", fmt.Errorf("%w: invalid DNS challenge token", ErrInvalid)
+	}
+	acmeDirectory, err := validACMEDirectory(acmeDirectory)
+	if err != nil {
+		return "", err
+	}
+	ns, name := c.Config.Namespace, DNSIssuerName(zoneID)
+	owner := map[string]string{LabelZone: zoneID}
+	secrets := c.Kube.CoreV1().Secrets(ns)
+	issuers := c.Dynamic.Resource(issuerGVR).Namespace(ns)
+	oldSecret, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		oldSecret = nil
+	case err != nil:
+		return "", fmt.Errorf("read the DNS challenge Secret: %w", err)
+	case oldSecret.Labels[LabelZone] != zoneID:
+		return "", fmt.Errorf("%w: Secret %s", ErrOwned, name)
+	}
+	oldIssuer, err := issuers.Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		oldIssuer = nil
+	case err != nil:
+		return "", fmt.Errorf("read the DNS challenge Issuer: %w", err)
+	case oldIssuer.GetLabels()[LabelZone] != zoneID:
+		return "", fmt.Errorf("%w: Issuer %s", ErrOwned, name)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: maps.Clone(owner)},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{dnsTokenKey: slices.Clone(token)},
+	}
+	switch {
+	case oldSecret == nil:
+		_, err = secrets.Create(ctx, secret, metav1.CreateOptions{})
+	case oldSecret.Type != secret.Type || len(oldSecret.Data) != 1 || !bytes.Equal(oldSecret.Data[dnsTokenKey], token):
+		// A rotated token replaces the old one; an unchanged one isn't rewritten.
+		secret.ResourceVersion = oldSecret.ResourceVersion
+		_, err = secrets.Update(ctx, secret, metav1.UpdateOptions{})
+	}
+	if err != nil {
+		return "", fmt.Errorf("apply the DNS challenge Secret: %w", apiReason(err))
+	}
+
+	// The selector keeps this Issuer to names in its zone.
+	issuer := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1", "kind": "Issuer",
+		"metadata": map[string]any{"name": name, "namespace": ns, "labels": map[string]any{LabelZone: zoneID}},
+		"spec": map[string]any{"acme": map[string]any{
+			"server":              acmeDirectory,
+			"privateKeySecretRef": map[string]any{"name": acmeAccountSecret},
+			"solvers": []any{map[string]any{
+				"dns01":    map[string]any{"cloudflare": map[string]any{"apiTokenSecretRef": map[string]any{"name": name, "key": dnsTokenKey}}},
+				"selector": map[string]any{"dnsZones": []any{zoneName}},
+			}},
+		}},
+	}}
+	if oldIssuer == nil {
+		_, err = issuers.Create(ctx, issuer, metav1.CreateOptions{})
+	} else {
+		issuer.SetResourceVersion(oldIssuer.GetResourceVersion())
+		_, err = issuers.Update(ctx, issuer, metav1.UpdateOptions{})
+	}
+	if err != nil {
+		return "", fmt.Errorf("apply the DNS challenge Issuer: %w", err)
+	}
+	return name, nil
+}
+
+// apiReason keeps an API error's status and drops its message, which can
+// quote the object that was sent.
+func apiReason(err error) error {
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return fmt.Errorf("%s (%d)", status.Status().Reason, status.Status().Code)
+	}
+	return err
+}
+
+// RemoveUnusedDNSIssuer deletes the zone's DNS-01 Issuer and token Secret
+// once no route Certificate in the namespace names that Issuer.
+func (c *Client) RemoveUnusedDNSIssuer(ctx context.Context, zoneID string) error {
+	if zoneID == "" || len(validation.IsValidLabelValue(zoneID)) != 0 {
+		return fmt.Errorf("%w: invalid DNS challenge zone", ErrInvalid)
+	}
+	ns, name := c.Config.Namespace, DNSIssuerName(zoneID)
+	certificates, err := c.Dynamic.Resource(certificateGVR).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: LabelRoute})
+	if err != nil {
+		return fmt.Errorf("read the route Certificates: %w", err)
+	}
+	for _, certificate := range certificates.Items {
+		if certificate.GetLabels()[LabelRoute] != "" && certificate.GetDeletionTimestamp() == nil && field(certificate.Object, "spec", "issuerRef", "name") == name {
+			return nil
+		}
+	}
+	issuers := c.Dynamic.Resource(issuerGVR).Namespace(ns)
+	issuer, err := issuers.Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+	case err != nil:
+		return err
+	case issuer.GetLabels()[LabelZone] == zoneID:
+		if err = issuers.Delete(ctx, name, deleteOwnedOptions(issuer)); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete the DNS challenge Issuer: %w", err)
+		}
+	}
+	secret, err := c.Kube.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+	case err != nil:
+		return err
+	case secret.Labels[LabelZone] == zoneID:
+		if err = c.Kube.CoreV1().Secrets(ns).Delete(ctx, name, deleteOwnedOptions(secret)); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete the DNS challenge Secret: %w", err)
+		}
+	}
+	return nil
 }
 
 // ApplyRouteIngress reads every object it will write before changing any, so
@@ -500,9 +645,13 @@ func validRouteIngress(in RouteIngress) error {
 			return fmt.Errorf("%w: a route needs its route, organization, project and environment", ErrInvalid)
 		}
 	}
-	host := strings.TrimPrefix(in.Hostname, "*.")
+	host, wildcard := strings.CutPrefix(in.Hostname, "*.")
 	if len(validation.IsDNS1123Subdomain(host)) != 0 || !strings.Contains(host, ".") {
 		return fmt.Errorf("%w: invalid route hostname", ErrInvalid)
+	}
+	// HTTP-01 can't prove a wildcard; only a zone's DNS-01 Issuer can.
+	if wildcard && !strings.HasPrefix(in.Issuer, dnsIssuerPrefix) {
+		return fmt.Errorf("%w: a wildcard route needs its zone's DNS challenge Issuer", ErrInvalid)
 	}
 	switch {
 	case len(validation.IsDNS1035Label(in.ServiceName)) != 0 || in.ServiceName == RouteDenyService:

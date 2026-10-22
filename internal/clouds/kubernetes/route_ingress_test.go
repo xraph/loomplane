@@ -1,6 +1,8 @@
 package kubernetes
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"slices"
@@ -547,6 +549,198 @@ func TestDeleteRouteIngressLeavesOtherRoutes(t *testing.T) {
 	}
 	getIngress(t, c, gone)
 	if _, err := c.Kube.CoreV1().Secrets("selected").Get(t.Context(), gone+"-tls", metav1.GetOptions{}); err != nil {
+		t.Fatal("foreign Secret was deleted")
+	}
+}
+
+func host(ing *networkingv1.Ingress) string { return ing.Spec.Rules[0].Host }
+
+// Review Focus 5: api.acme.dev (project Shop) under *.acme.dev (project Docs).
+func TestRouteIngressExactWinsOverWildcard(t *testing.T) {
+	c := fakeRouteClient(t)
+	wildcard := RouteIngress{RouteID: "w", OrgID: "org", ProjectID: "docs", EnvironmentID: "prod", Hostname: "*.acme.dev", ServiceName: "docs", ServicePort: 80, Issuer: DNSIssuerName("zone_1")}
+	exact := RouteIngress{RouteID: "e", OrgID: "org", ProjectID: "shop", EnvironmentID: "prod", Hostname: "api.acme.dev", ServiceName: "shop", ServicePort: 80, Issuer: HTTPIssuerName}
+	for _, in := range []RouteIngress{wildcard, exact} {
+		if err := c.ApplyRouteIngress(t.Context(), in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two separate Ingresses; the exact one names host api.acme.dev and service shop, so controllers apply the spec's exact-before-wildcard host rule.
+	e, w := getIngress(t, c, RouteObjectName("e")), getIngress(t, c, RouteObjectName("w"))
+	if host(e) != "api.acme.dev" || host(w) != "*.acme.dev" {
+		t.Fatal("hosts", host(e), host(w))
+	}
+	for ing, want := range map[*networkingv1.Ingress][2]string{e: {"shop", "api.acme.dev"}, w: {"docs", "*.acme.dev"}} {
+		if len(ing.Spec.Rules) != 1 || len(ing.Spec.TLS) != 1 || !slices.Equal(ing.Spec.TLS[0].Hosts, []string{want[1]}) || ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name != want[0] || ing.Labels[owned.LabelProject] != want[0] {
+			t.Fatalf("%s: %+v", want[1], ing)
+		}
+	}
+	if cert := getCertificate(t, c, RouteObjectName("e")); cert.issuer != HTTPIssuerName || !slices.Equal(cert.dnsNames, []string{"api.acme.dev"}) {
+		t.Fatalf("exact certificate %+v", cert)
+	}
+	if cert := getCertificate(t, c, RouteObjectName("w")); cert.issuer != DNSIssuerName("zone_1") || !slices.Equal(cert.dnsNames, []string{"*.acme.dev"}) {
+		t.Fatalf("wildcard certificate %+v", cert)
+	}
+
+	// HTTP-01 can't prove a wildcard.
+	wildcard.Issuer = HTTPIssuerName
+	if err := fakeRouteClient(t).ApplyRouteIngress(t.Context(), wildcard); !errors.Is(err, ErrInvalid) {
+		t.Fatal("a wildcard on the HTTP-01 issuer", err)
+	}
+}
+
+func getDNSIssuer(t *testing.T, c *Client, name string) (*unstructured.Unstructured, *corev1.Secret) {
+	t.Helper()
+	issuer, err := c.Dynamic.Resource(issuerGVR).Namespace("selected").Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := c.Kube.CoreV1().Secrets("selected").Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuer, secret
+}
+
+func TestEnsureDNSIssuerKeepsTokenInSecretOnly(t *testing.T) {
+	// the Issuer object JSON has no token; the Secret holds it under api-token; a second call with a rotated token updates the Secret.
+	c := fakeRouteClient(t)
+	const token = "tok-first-0123456789abcdefghijklmnopq"
+	for range 2 {
+		name, err := c.EnsureDNSIssuer(t.Context(), "zone_1", "acme.dev", []byte(token), "")
+		if err != nil || name != DNSIssuerName("zone_1") {
+			t.Fatalf("%q %v", name, err)
+		}
+	}
+	name := DNSIssuerName("zone_1")
+	issuer, secret := getDNSIssuer(t, c, name)
+	raw, err := json.Marshal(issuer.Object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), token) || strings.Contains(string(raw), base64.StdEncoding.EncodeToString([]byte(token))) {
+		t.Fatalf("the Issuer holds the token: %s", raw)
+	}
+	server, _, _ := unstructured.NestedString(issuer.Object, "spec", "acme", "server")
+	_, hasEmail, _ := unstructured.NestedString(issuer.Object, "spec", "acme", "email")
+	solvers, _, _ := unstructured.NestedSlice(issuer.Object, "spec", "acme", "solvers")
+	if len(solvers) != 1 {
+		t.Fatalf("solvers %+v", solvers)
+	}
+	solver := solvers[0].(map[string]any)
+	ref, _, _ := unstructured.NestedStringMap(solver, "dns01", "cloudflare", "apiTokenSecretRef")
+	zones, _, _ := unstructured.NestedStringSlice(solver, "selector", "dnsZones")
+	if server != "https://acme-v02.api.letsencrypt.org/directory" || hasEmail || ref["name"] != name || ref["key"] != "api-token" || len(ref) != 2 || !slices.Equal(zones, []string{"acme.dev"}) || issuer.GetLabels()[LabelZone] != "zone_1" {
+		t.Fatalf("issuer %+v", issuer.Object)
+	}
+	if string(secret.Data["api-token"]) != token || len(secret.Data) != 1 || secret.Labels[LabelZone] != "zone_1" || secret.Type != corev1.SecretTypeOpaque {
+		t.Fatalf("secret %+v", secret.ObjectMeta)
+	}
+	writes := func() int {
+		n := 0
+		for _, action := range c.Kube.(*fake.Clientset).Actions() {
+			if action.GetResource().Resource == "secrets" && action.GetVerb() != "get" {
+				n++
+			}
+		}
+		return n
+	}
+	if writes() != 1 {
+		t.Fatal("an unchanged token was written again", writes())
+	}
+
+	const rotated = "tok-second-0123456789abcdefghijklmno"
+	if _, err = c.EnsureDNSIssuer(t.Context(), "zone_1", "acme.dev", []byte(rotated), "https://acme-staging-v02.api.letsencrypt.org/directory"); err != nil {
+		t.Fatal(err)
+	}
+	issuer, secret = getDNSIssuer(t, c, name)
+	server, _, _ = unstructured.NestedString(issuer.Object, "spec", "acme", "server")
+	if string(secret.Data["api-token"]) != rotated || writes() != 2 || server != "https://acme-staging-v02.api.letsencrypt.org/directory" {
+		t.Fatalf("rotation: %q writes=%d %s", secret.Data["api-token"], writes(), server)
+	}
+
+	for label, in := range map[string]struct {
+		zoneID, zoneName, token, directory string
+	}{
+		"plain HTTP directory": {"zone_1", "acme.dev", token, "http://acme.example.net/directory"},
+		"no token":             {"zone_1", "acme.dev", "", ""},
+		"token with a newline": {"zone_1", "acme.dev", token + "\nx", ""},
+		"bad zone name":        {"zone_1", "*.acme.dev", token, ""},
+		"no zone":              {"", "acme.dev", token, ""},
+	} {
+		_, refused := c.EnsureDNSIssuer(t.Context(), in.zoneID, in.zoneName, []byte(in.token), in.directory)
+		if !errors.Is(refused, ErrInvalid) || strings.Contains(refused.Error(), "tok-") {
+			t.Fatalf("%s: %v", label, refused)
+		}
+	}
+	if _, secret = getDNSIssuer(t, c, name); string(secret.Data["api-token"]) != rotated {
+		t.Fatal("a refused call changed the Secret")
+	}
+
+	// Same-named objects Loomplane didn't create are never adopted, and
+	// a refusal leaves the namespace untouched.
+	foreignSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "selected"}, Data: map[string][]byte{"api-token": []byte("theirs")}}
+	c = fakeRouteClient(t, foreignSecret)
+	if _, err = c.EnsureDNSIssuer(t.Context(), "zone_1", "acme.dev", []byte(token), ""); !errors.Is(err, ErrOwned) || strings.Contains(err.Error(), token) {
+		t.Fatal("foreign Secret was adopted", err)
+	}
+	if s, _ := c.Kube.CoreV1().Secrets("selected").Get(t.Context(), name, metav1.GetOptions{}); string(s.Data["api-token"]) != "theirs" {
+		t.Fatal("foreign Secret changed")
+	}
+	if _, err = c.Dynamic.Resource(issuerGVR).Namespace("selected").Get(t.Context(), name, metav1.GetOptions{}); err == nil {
+		t.Fatal("an Issuer was created next to a foreign Secret")
+	}
+	otherZone := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "selected", Labels: map[string]string{LabelZone: "zone_2"}}}
+	if _, err = fakeRouteClient(t, otherZone).EnsureDNSIssuer(t.Context(), "zone_1", "acme.dev", []byte(token), ""); !errors.Is(err, ErrOwned) {
+		t.Fatal("another zone's Secret was adopted", err)
+	}
+	foreignIssuer := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "cert-manager.io/v1", "kind": "Issuer", "metadata": map[string]any{"name": name, "namespace": "selected"}, "spec": map[string]any{"selfSigned": map[string]any{}}}}
+	c = fakeRouteClient(t, foreignIssuer)
+	if _, err = c.EnsureDNSIssuer(t.Context(), "zone_1", "acme.dev", []byte(token), ""); !errors.Is(err, ErrOwned) {
+		t.Fatal("foreign Issuer was adopted", err)
+	}
+	if _, err = c.Kube.CoreV1().Secrets("selected").Get(t.Context(), name, metav1.GetOptions{}); err == nil {
+		t.Fatal("the token was written next to a foreign Issuer")
+	}
+}
+
+func TestRemoveUnusedDNSIssuerWaitsForTheLastWildcard(t *testing.T) {
+	c := fakeRouteClient(t)
+	name := DNSIssuerName("zone_1")
+	if _, err := c.EnsureDNSIssuer(t.Context(), "zone_1", "acme.dev", []byte("tok-0123456789abcdefghijklmnopqrstuvw"), ""); err != nil {
+		t.Fatal(err)
+	}
+	first, second, exact := routeInput("w1", "*.acme.dev"), routeInput("w2", "*.eu.acme.dev"), routeInput("e", "api.acme.dev")
+	first.Issuer, second.Issuer = name, name
+	for _, in := range []RouteIngress{first, second, exact} {
+		if err := c.ApplyRouteIngress(t.Context(), in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, routeID := range []string{"w1", "w2"} {
+		if err := c.DeleteRouteIngress(t.Context(), routeID); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.RemoveUnusedDNSIssuer(t.Context(), "zone_1"); err != nil {
+			t.Fatal(err)
+		}
+		_, issuerErr := c.Dynamic.Resource(issuerGVR).Namespace("selected").Get(t.Context(), name, metav1.GetOptions{})
+		_, secretErr := c.Kube.CoreV1().Secrets("selected").Get(t.Context(), name, metav1.GetOptions{})
+		if gone := issuerErr != nil && secretErr != nil; gone != (routeID == "w2") {
+			t.Fatalf("after removing %s: issuer %v, secret %v", routeID, issuerErr, secretErr)
+		}
+	}
+	if err := c.RemoveUnusedDNSIssuer(t.Context(), "zone_1"); err != nil {
+		t.Fatal("a second cleanup", err)
+	}
+
+	// A same-named Secret Loomplane didn't create stays.
+	foreign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "selected"}}
+	c = fakeRouteClient(t, foreign)
+	if err := c.RemoveUnusedDNSIssuer(t.Context(), "zone_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Kube.CoreV1().Secrets("selected").Get(t.Context(), name, metav1.GetOptions{}); err != nil {
 		t.Fatal("foreign Secret was deleted")
 	}
 }

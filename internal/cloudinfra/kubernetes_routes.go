@@ -23,6 +23,8 @@ import (
 type kubernetesRouteClient interface {
 	CheckRoutePrerequisites(ctx context.Context) (kubernetes.RoutePrerequisites, error)
 	EnsureHTTPIssuer(ctx context.Context, ingressClass, acmeDirectory string) (string, error)
+	EnsureDNSIssuer(ctx context.Context, zoneID, zoneName string, token []byte, acmeDirectory string) (string, error)
+	RemoveUnusedDNSIssuer(ctx context.Context, zoneID string) error
 	ApplyRouteIngress(ctx context.Context, in kubernetes.RouteIngress) error
 	RouteIngressStatus(ctx context.Context, routeID, serviceName string) (kubernetes.RouteIngressStatus, error)
 	DeleteRouteIngress(ctx context.Context, routeID string) error
@@ -52,6 +54,11 @@ func (s *Service) executeKubernetesRoute(ctx context.Context, st DomainStore, op
 		if checkErr := c.DeleteRouteIngress(ctx, route.ID); checkErr != nil {
 			return checkErr
 		}
+		if isWildcard(route.Input.Hostname) {
+			if checkErr := c.RemoveUnusedDNSIssuer(ctx, route.Input.ZoneID); checkErr != nil {
+				return checkErr
+			}
+		}
 		if checkErr := s.applyRouteDNS(ctx, st, op, zone); checkErr != nil {
 			return checkErr
 		}
@@ -70,7 +77,7 @@ func (s *Service) executeKubernetesRoute(ctx context.Context, st DomainStore, op
 		if route.Input.Port < 1 || route.Input.Port > 65535 {
 			return ErrInvalid
 		}
-		issuer, checkErr := c.EnsureHTTPIssuer(ctx, route.Binding.IngressClass, s.ACMEDirectory)
+		issuer, checkErr := s.kubernetesRouteIssuer(ctx, c, *route, zone)
 		if checkErr != nil {
 			return checkErr
 		}
@@ -78,6 +85,12 @@ func (s *Service) executeKubernetesRoute(ctx context.Context, st DomainStore, op
 			ServiceName: route.Binding.ServiceName, ServicePort: int32(route.Input.Port), IngressClass: route.Binding.IngressClass, Issuer: issuer, BlockedPathPrefixes: slices.Clone(route.Input.BlockedPathPrefixes)}
 		if applyErr := c.ApplyRouteIngress(ctx, ingress); applyErr != nil {
 			return applyErr
+		}
+	}
+	if op.Kind == "verify" && isWildcard(route.Input.Hostname) {
+		// A check moves a replaced challenge token to the cluster.
+		if _, checkErr := s.kubernetesRouteIssuer(ctx, c, *route, zone); checkErr != nil {
+			return checkErr
 		}
 	}
 	status, err := c.RouteIngressStatus(ctx, route.ID, route.Binding.ServiceName)
@@ -107,6 +120,21 @@ func (s *Service) executeKubernetesRoute(ctx context.Context, st DomainStore, op
 	return nil
 }
 
+// kubernetesRouteIssuer keeps the Issuer a route's Certificate names. A
+// wildcard uses its zone's DNS-01 Issuer, whose token passes the challenge
+// checks again before every write; the cluster rewrites its Secret only
+// when the token changed.
+func (s *Service) kubernetesRouteIssuer(ctx context.Context, c kubernetesRouteClient, route Route, zone *Zone) (string, error) {
+	if !isWildcard(route.Input.Hostname) {
+		return c.EnsureHTTPIssuer(ctx, route.Binding.IngressClass, s.ACMEDirectory)
+	}
+	token, _, err := s.zoneChallengeCredential(ctx, zone)
+	if err != nil {
+		return "", &routeNoticeError{err: err, message: "The DNS challenge connection for " + zone.Name + " failed its checks, so Loomplane didn't put its token on the cluster: " + err.Error()}
+	}
+	return c.EnsureDNSIssuer(ctx, zone.ID, zone.Name, token, s.ACMEDirectory)
+}
+
 // ingressAddressMismatch says why DNS can't point at the declared address yet.
 func ingressAddressMismatch(status kubernetes.RouteIngressStatus, address string) string {
 	if len(status.Addresses) == 0 {
@@ -129,19 +157,21 @@ func sameAddress(a, b string) bool {
 func (s *Service) verifyKubernetesRoute(ctx context.Context, route Route, status kubernetes.RouteIngressStatus) RouteVerification {
 	out := RouteVerification{CheckedAt: s.now().UTC(), CertState: kubernetesCertState(status.Certificate)}
 	address := route.Binding.Address
+	// A wildcard is checked through one name under it.
+	hostname := routeProbeHostname(route)
 	if net.ParseIP(address) != nil {
-		addresses, err := s.domainResolver().LookupIPAddr(ctx, route.Input.Hostname)
+		addresses, err := s.domainResolver().LookupIPAddr(ctx, hostname)
 		out.DNS = err == nil && len(addresses) > 0
 		for _, resolved := range addresses {
 			out.DNS = out.DNS && resolved.IP.Equal(net.ParseIP(address))
 		}
 	} else {
-		out.DNS = s.cnameReaches(ctx, route.Input.Hostname, address)
+		out.DNS = s.cnameReaches(ctx, hostname, address)
 	}
 	if !out.DNS {
 		out.DNSError = "DNS does not resolve exclusively to the connection's ingress address."
 	}
-	notAfter, code, err := s.routeHTTPS(ctx, route.Input.Hostname)
+	notAfter, code, err := s.routeHTTPS(ctx, hostname)
 	if err == nil {
 		out.CertExpires = notAfter
 		out.TLS = notAfter.After(s.now().Add(24 * time.Hour))

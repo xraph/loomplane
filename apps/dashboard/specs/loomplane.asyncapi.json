@@ -1887,7 +1887,13 @@
           "container_id": {
             "type": "string"
           },
+          "ingress_class": {
+            "type": "string"
+          },
           "instance_id": {
+            "type": "string"
+          },
+          "namespace": {
             "type": "string"
           },
           "release_id": {
@@ -1897,6 +1903,9 @@
             "type": "string"
           },
           "server_id": {
+            "type": "string"
+          },
+          "service_name": {
             "type": "string"
           },
           "target_id": {

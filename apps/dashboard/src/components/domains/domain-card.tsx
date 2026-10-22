@@ -1,7 +1,7 @@
 // One domain on the Domains page: a header that opens to the hostnames
 // every project points at it, or to the TXT record it still needs.
 import { ChevronRightIcon } from "lucide-react"
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 
 import { useEnvironmentsList } from "@/client/forge/loomplane/hooks"
 import type {
@@ -10,12 +10,14 @@ import type {
   ZoneOverview,
 } from "@/client/forge/loomplane/types"
 import { useQueries } from "@/client/queries"
+import { ChallengeCredentialDialog } from "@/components/domains/challenge-credential-dialog"
 import {
   DomainStatePill,
   RouteStates,
 } from "@/components/domains/domain-states"
 import { TxtInstructions } from "@/components/domains/txt-instructions"
 import { ZoneGrants } from "@/components/domains/zone-grants"
+import { Button } from "@/components/ui/button"
 import {
   cloudflareRegistrations,
   type PillTone,
@@ -47,6 +49,13 @@ export function DomainCard({
   const z = zone.zone
   const name = z?.name ?? ""
   const verifying = zone.state !== "ready" && z?.mode === "external"
+  const [settingUp, setSettingUp] = useState(false)
+  // Wildcards need a second, zone-scoped token on a Cloudflare zone.
+  const needsChallenge =
+    zone.state === "ready" &&
+    z?.mode === "managed" &&
+    z.provider === "cloudflare" &&
+    !z.challengeConnectionId
   return (
     <section
       aria-label={name}
@@ -95,7 +104,26 @@ export function DomainCard({
               a hostname from that project.
             </p>
           )}
+          {needsChallenge && (
+            // Not in the mock: the mock's *.acme.dev row assumes this is done.
+            <div className="border-t border-border/70 px-2.5 py-1.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSettingUp(true)}
+              >
+                Set up wildcard certificates
+              </Button>
+            </div>
+          )}
         </div>
+      )}
+      {z && needsChallenge && (
+        <ChallengeCredentialDialog
+          zone={z}
+          open={settingUp}
+          onOpenChange={setSettingUp}
+        />
       )}
     </section>
   )

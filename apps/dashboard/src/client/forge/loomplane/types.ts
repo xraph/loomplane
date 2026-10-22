@@ -213,6 +213,11 @@ export interface BuildTarget {
   registrySettings?: Record<string, any>;
 }
 
+export interface ChallengeCredentialInputBody {
+  connectionId: string;
+  revision: number;
+}
+
 export interface Change {
   field: string;
   from: string;
@@ -1707,10 +1712,13 @@ export interface RouteBinding {
   connectionGeneration: number;
   connectionId: string;
   containerId: string;
+  ingressClass?: string;
   instanceId: string;
+  namespace?: string;
   releaseId: string;
   runtimeId: string;
   serverId: string;
+  serviceName?: string;
   targetId: string;
 }
 
@@ -1748,6 +1756,7 @@ export interface RouteOperation {
   kind: string;
   message: string;
   notBefore: string;
+  notices?: string[];
   previousReceipt?: DNSRecord;
   receipt?: DNSRecord;
   review: string;
@@ -2224,6 +2233,7 @@ export interface Workspace {
 
 export interface Zone {
   accountId?: string;
+  challengeConnectionId?: string;
   connectionGeneration?: number;
   connectionId?: string;
   id: string;

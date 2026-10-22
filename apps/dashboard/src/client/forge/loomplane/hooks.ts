@@ -74,6 +74,7 @@ export const useDeploymentsRetry = mutation<Deployment, Deployment>(ops['deploym
 export const useDnsZonesList = query<ZoneList>(ops['dnsZones.list']);
 export const useDnsZonesCreate = mutation<Zone, Zone>(ops['dnsZones.create']);
 export const useDnsZonesDiscover = query<ProviderZoneList>(ops['dnsZones.discover']);
+export const useDnsZonesSetChallengeCredential = mutation<Zone, Zone>(ops['dnsZones.setChallengeCredential']);
 export const useDnsZonesRemove = mutation(ops['dnsZones.remove']);
 export const useDnsZonesUpdate = mutation<Zone, Zone>(ops['dnsZones.update']);
 export const useDnsZonesVerify = mutation<Zone, Zone>(ops['dnsZones.verify']);

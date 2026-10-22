@@ -2216,6 +2216,49 @@
         }
       }
     },
+    "/api/v1/dns-zones/{zoneId}/challenge-credential": {
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "dnsZones.setChallengeCredential",
+        "operationId": "dnsZones.setChallengeCredential",
+        "parameters": [
+          {
+            "name": "zoneId",
+            "in": "path",
+            "description": "Path parameter: zoneId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengeCredentialInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Zone"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dns-zones/{zoneId}/remove": {
       "post": {
         "tags": [
@@ -7950,6 +7993,21 @@
           }
         }
       },
+      "ChallengeCredentialInputBody": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "revision"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
       "Change": {
         "type": "object",
         "required": [
@@ -13121,7 +13179,13 @@
           "container_id": {
             "type": "string"
           },
+          "ingress_class": {
+            "type": "string"
+          },
           "instance_id": {
+            "type": "string"
+          },
+          "namespace": {
             "type": "string"
           },
           "release_id": {
@@ -13131,6 +13195,9 @@
             "type": "string"
           },
           "server_id": {
+            "type": "string"
+          },
+          "service_name": {
             "type": "string"
           },
           "target_id": {
@@ -13273,6 +13340,12 @@
           "not_before": {
             "type": "string",
             "format": "date-time"
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "previous_receipt": {
             "$ref": "#/components/schemas/DNSRecord"
@@ -14950,6 +15023,9 @@
         ],
         "properties": {
           "account_id": {
+            "type": "string"
+          },
+          "challenge_connection_id": {
             "type": "string"
           },
           "connection_generation": {

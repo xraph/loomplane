@@ -1177,6 +1177,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * dnsZones.setChallengeCredential
+     */
+    setChallengeCredential: async (zoneId: string, body: types.ChallengeCredentialInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}/challenge-credential`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ChallengeCredentialInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Zone"],
+      };
+
+      return this.request<types.Zone>(config);
+    },
+
+    /**
      * dnsZones.update
      */
     update: async (zoneId: string, body: types.ZoneUpdateBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {

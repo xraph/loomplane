@@ -610,6 +610,16 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['ProviderZoneList'],
   },
+  'dnsZones.setChallengeCredential': {
+    method: 'POST',
+    path: '/api/v1/dns-zones/{zoneId}/challenge-credential',
+    entity: 'Zone',
+    rootType: 'Zone',
+    provides: ['Zone:{id}'],
+    invalidates: ['Zone[]'],
+    bodyCodec: CODECS['ChallengeCredentialInputBody'],
+    responseCodec: CODECS['Zone'],
+  },
   'dnsZones.remove': {
     method: 'POST',
     path: '/api/v1/dns-zones/{zoneId}/remove',

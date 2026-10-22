@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -23,6 +25,7 @@ type fakeRouteCluster struct {
 	applied       []kubernetes.RouteIngress
 	issuerClass   string
 	directory     string
+	dnsTokens     []string
 }
 
 func (c *fakeRouteCluster) CheckRoutePrerequisites(context.Context) (kubernetes.RoutePrerequisites, error) {
@@ -33,6 +36,15 @@ func (c *fakeRouteCluster) EnsureHTTPIssuer(_ context.Context, ingressClass, dir
 	*c.log = append(*c.log, "issuer")
 	c.issuerClass, c.directory = ingressClass, directory
 	return kubernetes.HTTPIssuerName, nil
+}
+func (c *fakeRouteCluster) EnsureDNSIssuer(_ context.Context, zoneID, zoneName string, token []byte, directory string) (string, error) {
+	*c.log = append(*c.log, "dns issuer "+zoneID+" "+zoneName)
+	c.dnsTokens, c.directory = append(c.dnsTokens, string(token)), directory
+	return kubernetes.DNSIssuerName(zoneID), nil
+}
+func (c *fakeRouteCluster) RemoveUnusedDNSIssuer(_ context.Context, zoneID string) error {
+	*c.log = append(*c.log, "remove dns issuer "+zoneID)
+	return nil
 }
 func (c *fakeRouteCluster) ApplyRouteIngress(_ context.Context, in kubernetes.RouteIngress) error {
 	*c.log = append(*c.log, "ingress")
@@ -471,5 +483,134 @@ func TestIngressAddressMismatchComparesAddresses(t *testing.T) {
 		if got := ingressAddressMismatch(kubernetes.RouteIngressStatus{Addresses: tc.reported}, tc.declared) == ""; got != tc.matches {
 			t.Fatalf("%v against %s: %v", tc.reported, tc.declared, got)
 		}
+	}
+}
+
+// challengeRouteDNS is a Cloudflare zone's records plus what each
+// challenge token reaches.
+type challengeRouteDNS struct {
+	orderedDNS
+	scopes map[string]cloudflare.ChallengeScope
+}
+
+func (d challengeRouteDNS) ChallengeScope(_ context.Context, c provider.InfrastructureCredential, _ string) (cloudflare.ChallengeScope, error) {
+	scope, ok := d.scopes[c.Token]
+	if !ok {
+		return cloudflare.ChallengeScope{}, cloudflare.ErrRejected
+	}
+	return scope, nil
+}
+
+// namedResolver records the names it is asked for.
+type namedResolver struct {
+	addressResolver
+	names *[]string
+}
+
+func (r namedResolver) LookupIPAddr(ctx context.Context, name string) ([]net.IPAddr, error) {
+	*r.names = append(*r.names, name)
+	return r.addressResolver.LookupIPAddr(ctx, name)
+}
+
+func TestKubernetesWildcardUsesDNSIssuer(t *testing.T) {
+	svc, st, kube, dns := kubernetesRouteFixture(t)
+	log := kube.log
+	zone := st.zone
+	zone.Provider, zone.ConnectionID, zone.ChallengeConnectionID = "cloudflare", "dns", "cf-dns"
+	cf := func(id string) *connections.Connection {
+		return &connections.Connection{ID: id, OrgID: "org", Cloud: connections.Cloudflare, Generation: 1, Status: "ready", Details: map[string]string{"account_id": "account"}}
+	}
+	conns := challengeConnections{"dns": cf("dns"), "cf-dns": cf("cf-dns")}
+	scopes := map[string]cloudflare.ChallengeScope{"cf-dns-token": zoneScoped("zone")}
+	registry := NewAdapters()
+	if err := registry.RegisterDNS("cloudflare", challengeRouteDNS{orderedDNS{dns, log}, scopes}); err != nil {
+		t.Fatal(err)
+	}
+	svc.Connections, svc.Adapters = conns, registry
+	names := []string{}
+	svc.Resolver = namedResolver{addressResolver{[]string{"203.0.113.10"}}, &names}
+	probed := []string{}
+	svc.routeHTTPS = func(_ context.Context, host string) (time.Time, int, error) {
+		probed = append(probed, host)
+		return svc.now().AddDate(0, 3, 0), 200, nil
+	}
+	kube.status = kubernetes.RouteIngressStatus{Addresses: []string{"203.0.113.10"}, Certificate: kubernetes.CertificateStatus{Ready: true}, BackendReady: true}
+
+	// A Kubernetes binding previews a wildcard with nothing to announce.
+	in := RouteInput{ZoneID: "zone", EnvironmentID: "prod", Service: "octo--gateway", Hostname: "*.example.com", Port: 8080}
+	preview, err := svc.PreviewRoute(t.Context(), kubeRouteManager, "shop", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Notices != nil || preview.Route.Input.Hostname != "*.example.com" || preview.DesiredRecord.Name != "*" || preview.DesiredRecord.Type != "A" {
+		t.Fatalf("preview: %q %+v", preview.Notices, preview.DesiredRecord)
+	}
+
+	op := st.op
+	op.ID, op.Kind, op.Status, op.Route.OperationID = "routeop_w", "apply", "pending", "routeop_w"
+	op.Route.ID, op.Route.Input, op.DesiredRecord, op.Notices = "route_w", preview.Route.Input, preview.DesiredRecord, nil
+	op.DesiredRecord.Owner = "loomplane:route:route_w"
+	st.op = op
+	*log = (*log)[:0]
+	if err = svc.ReconcileRoute(t.Context(), "org", "routeop_w", nil); err != nil {
+		t.Fatal(err, st.op.Message)
+	}
+	if !slices.Equal(*log, []string{"prerequisites", "dns issuer zone example.com", "ingress", "status route_w lp-inst-gw"}) {
+		t.Fatal("apply order", *log)
+	}
+	if !slices.Equal(kube.dnsTokens, []string{"cf-dns-token"}) || kube.directory != "https://acme-staging-v02.api.letsencrypt.org/directory" {
+		t.Fatal("token", kube.dnsTokens, kube.directory)
+	}
+	if applied := kube.applied[len(kube.applied)-1]; applied.Hostname != "*.example.com" || applied.Issuer != kubernetes.DNSIssuerName("zone") {
+		t.Fatalf("ingress %+v", applied)
+	}
+	// The wildcard is checked through one name under it.
+	probe := routeProbeHostname(st.op.Route)
+	if !strings.HasPrefix(probe, "lp-probe-") || !strings.HasSuffix(probe, ".example.com") || !slices.Equal(probed, []string{probe}) || !slices.Equal(names, []string{probe}) {
+		t.Fatal("probed", probe, probed, names)
+	}
+	if st.route.Status != "ready" || dns.records[len(dns.records)-1].Name != "*" {
+		t.Fatalf("route %+v", st.route)
+	}
+
+	// A check after the challenge connection was replaced moves the new
+	// token to the cluster once it passes the scope checks again.
+	verify := func() {
+		t.Helper()
+		*log = (*log)[:0]
+		st.op.ID, st.op.Kind, st.op.Status = "routeop_v", "verify", "pending"
+		_ = svc.ReconcileRoute(t.Context(), "org", "routeop_v", nil)
+	}
+	conns["cf-dns"].Generation = 2
+	scopes["cf-dns-token-g2"] = zoneScoped("zone")
+	verify()
+	if st.op.Status != "succeeded" || kube.dnsTokens[len(kube.dnsTokens)-1] != "cf-dns-token-g2" || !slices.Contains(*log, "dns issuer zone example.com") {
+		t.Fatal("rotated token", st.op.Status, st.op.Message, kube.dnsTokens, *log)
+	}
+
+	// Widened at Cloudflare: the token stays off the cluster.
+	widened := zoneScoped("zone", "zone_2")
+	scopes["cf-dns-token-g2"] = widened
+	before := len(kube.dnsTokens)
+	verify()
+	if st.op.Status != "failed" || len(kube.dnsTokens) != before || !strings.Contains(st.op.Message, "didn't put its token on the cluster") || strings.Contains(st.op.Message, "cf-dns-token") {
+		t.Fatal("widened token", st.op.Status, st.op.Message, kube.dnsTokens)
+	}
+
+	// Removing the wildcard drops the zone's issuer once no route uses it.
+	scopes["cf-dns-token-g2"] = zoneScoped("zone")
+	route := st.op.Route
+	route.Status, route.Revision = "ready", 3
+	st.route = &route
+	removal, err := svc.RemoveRoute(t.Context(), kubeRouteManager, "shop", "route_w", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*log = (*log)[:0]
+	if err = svc.ReconcileRoute(t.Context(), "org", removal.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(*log) != 3 || (*log)[0] != "delete ingress route_w" || (*log)[1] != "remove dns issuer zone" || !strings.HasPrefix((*log)[2], "delete dns ") {
+		t.Fatal("removal order", *log)
 	}
 }
