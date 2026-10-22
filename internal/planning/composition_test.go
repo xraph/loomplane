@@ -14,6 +14,7 @@ import (
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // composedConnections are the server targets, both checked as arm64.
@@ -165,7 +166,7 @@ func TestServiceNeedingCompositionRunsAfterIt(t *testing.T) {
 		{Key: "SAMPLE_URL", From: "app", Subject: ResourceSubject, Field: "url"},
 	}
 	if !reflect.DeepEqual(web.Service.Env, want) {
-		t.Fatalf("env: %+v", web.Service.Env)
+		t.Fatalf("env: %+v %+v", web.Service.Env, r.Problems)
 	}
 }
 
@@ -1137,5 +1138,100 @@ func TestCompositionWithKubernetesRulesNeedsRBAC(t *testing.T) {
 	}
 	if r := clusterComposedPlan(t, registryOf(t, statelessSample(t)), clusterWorkloadConnection(t)); hasCode(r.Problems, "catalog-rbac-unavailable") {
 		t.Fatalf("RBAC required without rules: %+v", r.Problems)
+	}
+}
+
+// front is a composed kind that connects a sample resource as its backend,
+// the way one composed catalog service uses another.
+func front() recipes.Kind {
+	image := recipes.Image{Repository: "registry.example/front", Digests: map[string]string{
+		"amd64": "sha256:5b3e8c3f2d1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c",
+		"arm64": "sha256:6c4f9d4a3e2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d",
+	}}
+	return recipes.Kind{
+		Name:      "front",
+		Title:     "Front",
+		Placement: recipes.PlacementAppProject,
+		Targets:   []string{"server", "kubernetes"},
+		Releases: []recipes.Release{{
+			Version: "1", Product: "1.0.0", Revision: "1",
+			Images: map[string]recipes.Image{"web": image},
+		}},
+		Dependencies: []recipes.Dependency{{Name: "backend", Title: "Sample", Kinds: []string{"sample"}}},
+		Components: []recipes.Component{{
+			Name:      "web",
+			Role:      recipes.RoleProcess,
+			Ports:     []recipes.Port{{Name: "http", Container: 8080, Protocol: "http", Routable: true}},
+			Env:       []recipes.EnvVar{{Name: "BACKEND_URL", From: &recipes.Ref{Dependency: "backend", Field: recipes.FieldURL}}},
+			Readiness: &recipes.HTTPProbe{Port: "http", Path: "/readyz"},
+		}},
+		Outputs: []recipes.Output{{Name: "url", EnvKey: "FRONT_URL", From: &recipes.Ref{Component: "web", Field: "url:http"}}},
+	}
+}
+
+func TestComposedDependencyStartsAfterTheCompositionItConnects(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(front()); err != nil {
+		t.Fatal(err)
+	}
+	doc := sampleApp + "  site: {kind: front, provider: server, target: " + targetA + ", uses: {backend: {resource: app}}}\n" +
+		"services:\n  web: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [site]}\n"
+	r := composedPlan(t, kinds, doc)
+	if !r.Executable {
+		t.Fatalf("plan blocked: %+v", r.Problems)
+	}
+	steps := map[string]int{}
+	for _, a := range r.Actions {
+		steps[a.Name] = a.Step
+	}
+	want := map[string]int{"app--postgres": 1, "app--migrate": 2, "app--api": 3, "app--worker": 4, "app": 5, "site--web": 6, "site": 7, "web": 8}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("steps: %v, want %v", steps, want)
+	}
+	if web := findAction(r, "resource:site--web"); !slices.Equal(web.DependsOn, []string{"resource:app"}) {
+		t.Fatalf("site--web depends on %v", web.DependsOn)
+	}
+}
+
+func TestServiceVariableComesFromThePlansOwnEngines(t *testing.T) {
+	kinds := recipes.NewRegistry()
+	err := kinds.RegisterEngine(recipes.Engine{
+		Kind: "timescaledb", Family: "postgres", Title: "PostgreSQL 16 with TimescaleDB", EnvKey: "DATABASE_URL",
+		Targets: []string{"server"},
+		Releases: []recipes.EngineRelease{{
+			Version: "16", Product: "16.4", Revision: "1",
+			Image: recipes.Image{Repository: "registry.example/timescaledb", Digests: map[string]string{
+				"amd64": "sha256:11538f20d0d489fad2dc7d30eeaafd731bd8405e25b1696d86571282ab6cdf25",
+				"arm64": "sha256:61581a49b789716d4da7a45ce7fd3c944b60150492ccece97b11b0b497f49aa8",
+			}},
+			MountPath: "/var/lib/postgresql/data", BackupFormat: "pg-dump-custom-v1",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := "version: 1\nresources:\n  tsdb: {kind: timescaledb, provider: server, target: " + targetA + "}\n" +
+		"services:\n  web: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [tsdb]}\n"
+	// The server offers it the way the catalog offers a registered engine.
+	all := providers.Catalog()
+	for i := range all {
+		if all[i].Name == "server" {
+			all[i].Provisions = append(all[i].Provisions, provider.Provisions{Kind: "timescaledb", Creates: "PostgreSQL 16 with TimescaleDB container", Versions: []string{"16"}})
+		}
+	}
+	offered, err := provider.NewRegistry(all...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Compute(Input{
+		Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: offered,
+		Connections: composedConnections(t), Kinds: kinds,
+	})
+	web := findAction(r, "service:web")
+	if web == nil || web.Service == nil {
+		t.Fatalf("web: %+v %+v", web, r.Problems)
+	}
+	if want := []EnvLink{{Key: "DATABASE_URL", From: "tsdb", Subject: ResourceSubject}}; !reflect.DeepEqual(web.Service.Env, want) {
+		t.Fatalf("env: %+v %+v", web.Service.Env, r.Problems)
 	}
 }

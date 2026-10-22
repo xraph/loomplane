@@ -570,6 +570,14 @@ func TestRegisterValidatesFabriqAdditions(t *testing.T) {
 			k.Components = append(k.Components, process("replica"))
 			k.Releases[0].Images["replica"] = k.Releases[0].Images["server"]
 		}},
+		{"dependency-only kind with a job", "exactly one process and no other components", recipestest.Graph, plain, func(k *recipes.Kind) {
+			k.Components = append([]recipes.Component{{Name: "seed", Role: recipes.RoleJob}}, k.Components...)
+			k.Releases[0].Images["seed"] = k.Releases[0].Images["server"]
+		}},
+		{"dependency-only kind with only a job", "exactly one process and no other components", recipestest.Graph, plain, func(k *recipes.Kind) {
+			k.Components = []recipes.Component{{Name: "server", Role: recipes.RoleJob, Env: k.Components[0].Env}}
+			k.Outputs[0].Template = "redis://:${secret:password}@graph"
+		}},
 		{"dependency-only kind with dependencies", "no dependencies", recipestest.Graph, plain, func(k *recipes.Kind) {
 			k.Dependencies = []recipes.Dependency{{Name: "postgres", Title: "PostgreSQL", Kinds: []string{"postgres"}}}
 		}},

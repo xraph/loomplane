@@ -649,8 +649,11 @@ func count(set ...bool) int {
 
 // validateDependencyOnly checks what a dependency-only kind can't have.
 func validateDependencyOnly(f *findings, k Kind) {
-	if n := len(slices.DeleteFunc(slices.Clone(k.Components), func(c Component) bool { return c.Role != RoleProcess })); n != 1 {
-		f.add("a dependency-only kind runs exactly one process, not %d", n)
+	// The planner runs that one component as the dependency, so a job
+	// beside it would never run, and a job alone would run in its place.
+	processes := len(slices.DeleteFunc(slices.Clone(k.Components), func(c Component) bool { return c.Role != RoleProcess }))
+	if processes != 1 || len(k.Components) != 1 {
+		f.add("a dependency-only kind runs exactly one process and no other components, not %d processes and %d other components", processes, len(k.Components)-processes)
 	}
 	if len(k.Dependencies) > 0 {
 		f.add("a dependency-only kind has no dependencies of its own")

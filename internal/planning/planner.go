@@ -1529,10 +1529,10 @@ func (p *planner) buildContext(name, base string, b *manifest.Build, gs *graph.S
 }
 
 // resourceEnvKey is the conventional variable name for a resource kind, or
-// "" when the kind has none. The recipe registry names the kinds Loomplane
-// runs itself, and envKeys the rest.
-func resourceEnvKey(kind string) string {
-	if key := recipes.EnvKey(kind); key != "" {
+// "" when the kind has none. The plan's recipe registry names the kinds
+// Loomplane runs itself, and envKeys the rest.
+func (p *planner) resourceEnvKey(kind string) string {
+	if key := p.kinds().EnvKey(kind); key != "" {
 		return key
 	}
 	return envKeys[kind]
@@ -1590,7 +1590,7 @@ func (p *planner) link(name string, a *Action) {
 				}
 				continue
 			}
-			keys[i] = resourceEnvKey(r.Kind)
+			keys[i] = p.resourceEnvKey(r.Kind)
 		}
 		if keys[i] == "" {
 			keys[i] = envName(need) + "_URL"

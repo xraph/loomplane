@@ -125,8 +125,9 @@ func (p *planner) planComposed(name string) {
 
 // planComposition expands a composed catalog resource into ordinary
 // resource actions: one for each dependency it provisions (step 1), one for
-// each component (step 2 plus its start rank), and one for the resource
-// itself, after its last component, which publishes its outputs.
+// each component (step 2, or one after the deepest dependency action, plus
+// its start rank), and one for the resource itself, after its last
+// component, which publishes its outputs.
 func (p *planner) planComposition(name, base string, r manifest.Resource, kind recipes.Kind, prov *provider.Provider, set manifest.ResourceSettings) {
 	if !OwnedCloud(prov.Cloud) || !slices.Contains(kind.Targets, prov.Cloud) {
 		p.problem(Finding{Code: "catalog-target-unsupported", Subject: ResourceSubject, Name: name, Path: base + ".provider", Message: fmt.Sprintf("%s can't run %s. Choose an existing server.", prov.Title, kind.Title)})
@@ -187,8 +188,17 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 
 	choices, uses := p.dependencies(name, base, r, kind, prov, set, connection, region)
 
+	// Components start after the deepest action they use: step 2 after a
+	// database, later after a composed resource's parent, which publishes
+	// its outputs only once its own components are up.
+	first := 2
+	for _, id := range uses {
+		if used, ok := strings.CutPrefix(id, string(ResourceSubject)+":"); ok && p.resources[used] != nil {
+			first = max(first, p.resources[used].Step+1)
+		}
+	}
 	var parts []string
-	last := 1
+	last := first - 1
 	for _, c := range composition.Components {
 		id := actionID(ResourceSubject, ComponentActionName(name, c.Name))
 		if p.componentNameTaken(name, c.Name) {
@@ -216,7 +226,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		a := &Action{
 			ID: id, Subject: ResourceSubject, Name: ComponentActionName(name, c.Name),
 			Provider: prov.Name, ConnectionID: connection.ID, Region: region, Engine: provider.ResourceEngine, Creates: creates,
-			Resource: cfg, DependsOn: dependsOn, Step: 2 + c.Step,
+			Resource: cfg, DependsOn: dependsOn, Step: first + c.Step,
 		}
 		last = max(last, a.Step)
 		p.diff(a, cfg, cfg.Provider, cfg.Region)
@@ -592,7 +602,14 @@ func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, 
 	if prov.Cloud == "kubernetes" && !p.clusterRuns(name, base, kind, composition, connection) {
 		return nil
 	}
-	c := composition.Components[0]
+	// The registry gives a dependency-only kind exactly one component, a
+	// process; never run anything else as the dependency.
+	i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Role == recipes.RoleProcess })
+	if i < 0 {
+		p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: path, Message: fmt.Sprintf("%s has no process to run for %s.", kind.Title, dep.Name)})
+		return nil
+	}
+	c := composition.Components[i]
 	cfg := &ResourceConfig{
 		Provider: prov.Name, Region: region, Target: connection.ID, TargetSettings: ReviewedConnectionSettings(connection.Cloud, connection.Details),
 		Kind: kind.Name, Version: composition.Version,
