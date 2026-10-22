@@ -393,12 +393,14 @@ State the gateway can't replay pins the session instead. A pinned session keeps 
 - Temporary tables and objects, and anything that names `pg_temp`.
 - Cursors declared `WITH HOLD`, and SQL-level `PREPARE`, including `PREPARE TRANSACTION`.
 - `SET` of any parameter not in the list above, `set_config()`, and a `SET` that runs inside an open transaction, where a rollback would undo it.
-- `DO`, `LOAD`, `setseed` and `dblink_connect`.
+- `DO`, `LOAD`, `setseed`, `dblink_connect` and `dblink_connect_u`.
 - `query_to_xml`, `query_to_xmlschema`, `query_to_xml_and_xmlschema` and `ts_stat`, which run SQL held in a string that the gateway doesn't read.
 - The protocol's fast-path function call.
 - A text with several statements that includes `SET`, `RESET`, `LISTEN` or `UNLISTEN`, since the gateway can't tell which one you meant to keep.
 
 `COPY` holds a connection only until the statement finishes. The classifier errs towards pinning, so now and then something pins that didn't need to.
+
+The gateway only sees the SQL you send. A function you wrote yourself that takes an advisory lock, creates a temporary table or calls `set_config` inside its body looks like any other function call, so the session doesn't pin, and that state stays on a connection the next transaction may not get. Keep session state out of your own functions, or take it with one of the statements above in the same session.
 
 ### Limits
 

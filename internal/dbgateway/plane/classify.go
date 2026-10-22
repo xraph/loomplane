@@ -243,9 +243,9 @@ func pinsAnywhere(w, prev []byte) bool {
 	case "pg_advisory_lock", "pg_advisory_lock_shared", "pg_try_advisory_lock", "pg_try_advisory_lock_shared", "set_config",
 		// setseed seeds the session's random() sequence. The query_to_xml
 		// family and ts_stat run SQL held in a string, which is masked.
-		// dblink_connect opens a named connection that lives as long as the
-		// session.
-		"setseed", "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema", "ts_stat", "dblink_connect":
+		// dblink_connect and dblink_connect_u open a named connection that
+		// lives as long as the session.
+		"setseed", "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema", "ts_stat", "dblink_connect", "dblink_connect_u":
 		return true
 	case "temp", "temporary":
 		switch string(prev) {

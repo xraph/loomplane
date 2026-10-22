@@ -186,6 +186,7 @@ func TestClassifySQL(t *testing.T) {
 		{"ts_stat", "SELECT * FROM ts_stat('select tsv from t')", pin},
 		{"setseed", "SELECT setseed(0.5)", pin},
 		{"dblink_connect", "SELECT dblink_connect('c', 'dbname=x')", pin},
+		{"dblink_connect_u", "SELECT dblink_connect_u('c', 'dbname=x')", pin},
 		{"set local.foo", "SET local.foo = 1", pin},
 		{"set transaction.foo", "SET transaction.foo = 1", pin},
 		{"set session.foo", "SET session.foo = 1", pin},
