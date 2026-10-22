@@ -1264,13 +1264,7 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 	if e.Secrets == nil {
 		return ErrNoCredential
 	}
-	if e.CompositionRemoved != nil {
-		// A session left open only warns: nothing it reaches is there any
-		// more, and it expires on its own.
-		if err := e.CompositionRemoved(ctx, b.OrgID, b.EnvironmentID, b.Name); err != nil {
-			job.Warn(fmt.Errorf("the admin sessions open on %s couldn't be ended, and expire on their own once idle: %w", b.Name, err))
-		}
-	}
+	e.endSessions(ctx, job, b)
 	if err := e.hooks(c.Kind).Removed(ctx, ComposedResource{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID, Resource: b.Name, Kind: c.Kind}); err != nil {
 		return err
 	}
@@ -1287,6 +1281,32 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 		}
 	}
 	return nil
+}
+
+// endSessions ends the admin sessions open on a composed resource being
+// deleted (CompositionRemoved). A session left open only warns: nothing it
+// reaches is there any more, and it expires on its own.
+func (e *OwnedTarget) endSessions(ctx context.Context, job *Job, b *planning.Binding) {
+	if e.CompositionRemoved == nil {
+		return
+	}
+	if err := e.CompositionRemoved(ctx, b.OrgID, b.EnvironmentID, b.Name); err != nil {
+		job.Warn(fmt.Errorf("the admin sessions open on %s couldn't be ended, and expire on their own once idle: %w", b.Name, err))
+	}
+}
+
+var _ unreachableRemover = (*OwnedTarget)(nil)
+
+// removedUnreachable ends the admin sessions open on a composed resource
+// whose connection is gone, which nothing else of it can be reached
+// through. Anything else, and a removal that forgets nothing (see
+// forgetsKept), has nothing to end.
+func (e *OwnedTarget) removedUnreachable(ctx context.Context, job *Job, b *planning.Binding) {
+	resource := boundResource(b)
+	if resource == nil || resource.Composition == nil || job.Deployment == nil || job.Deployment.OrgID != b.OrgID || !forgetsKept(job) {
+		return
+	}
+	e.endSessions(ctx, job, b)
 }
 
 // forgetsKept reports whether removing what a job's action names forgets
