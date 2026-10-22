@@ -13,69 +13,103 @@ import (
 )
 
 // Endpoint checks through the API are limited to checksPerMinute for each
-// person in each organization: a check dials wherever its DSN says, from
-// the target's network or Loomplane's. Plans and releases check the
-// endpoints they connect without a limit.
-const checksPerMinute = 10
+// person in each organization, and checksPerUserPerMinute for each person
+// across all of them: a check dials wherever its DSN says, from the
+// target's network or Loomplane's. Plans and releases check the endpoints
+// they connect without a limit.
+const (
+	checksPerMinute        = 10
+	checksPerUserPerMinute = 30
+)
 
-// checkLimiter is a token bucket for each principal, in memory.
+// checkLimiter keeps token buckets in memory: one for each principal in
+// each organization, and a larger one for each person across them. A
+// check takes from both, and only when both have one.
 type checkLimiter struct {
-	burst float64
-	every time.Duration // one token comes back each every
-	now   func() time.Time
+	now func() time.Time
 
 	mu      sync.Mutex
-	buckets map[checkKey]*checkBucket
+	perOrg  *buckets
+	perUser *buckets
+	refused map[checkKey]bool // the principal's last request was refused
 }
 
 type checkKey struct{ org, user string }
 
-type checkBucket struct {
-	tokens  float64
-	at      time.Time
-	refused bool // the last request was refused
+// buckets are token buckets of one size, by key.
+type buckets struct {
+	burst float64
+	every time.Duration // one token comes back each every
+	by    map[checkKey]*checkBucket
 }
 
-// newCheckLimiter allows n checks per window, coming back evenly.
-func newCheckLimiter(n int, window time.Duration) *checkLimiter {
-	return &checkLimiter{burst: float64(n), every: window / time.Duration(n), now: time.Now, buckets: map[checkKey]*checkBucket{}}
+type checkBucket struct {
+	tokens float64
+	at     time.Time
+}
+
+// newCheckLimiter allows perOrg checks a minute for each principal in an
+// organization, and perUser for each person across organizations, coming
+// back evenly.
+func newCheckLimiter(perOrg, perUser int) *checkLimiter {
+	return &checkLimiter{
+		now:     time.Now,
+		perOrg:  newBuckets(perOrg, time.Minute),
+		perUser: newBuckets(perUser, time.Minute),
+		refused: map[checkKey]bool{},
+	}
+}
+
+func newBuckets(n int, window time.Duration) *buckets {
+	return &buckets{burst: float64(n), every: window / time.Duration(n), by: map[checkKey]*checkBucket{}}
 }
 
 // maxIdleBuckets is how many buckets are kept before full ones go.
 const maxIdleBuckets = 4096
 
-// allow takes a check from p's bucket. first reports a refusal that
+// allow takes a check from p's buckets. first reports a refusal that
 // follows an allowed check, so a run of refusals is audited once.
 func (l *checkLimiter) allow(p security.Principal) (ok, first bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
 	key := checkKey{p.OrgID, p.UserID}
-	b, found := l.buckets[key]
-	if !found {
-		if len(l.buckets) >= maxIdleBuckets {
-			l.prune(now)
+	org, user := l.perOrg.get(key, now), l.perUser.get(checkKey{user: p.UserID}, now)
+	if org.tokens < 1 || user.tokens < 1 {
+		first = !l.refused[key]
+		if len(l.refused) >= maxIdleBuckets {
+			// Forgetting costs at most one more audited refusal each.
+			clear(l.refused)
 		}
-		b = &checkBucket{tokens: l.burst, at: now}
-		l.buckets[key] = b
-	}
-	b.tokens = min(l.burst, b.tokens+float64(now.Sub(b.at))/float64(l.every))
-	b.at = now
-	if b.tokens < 1 {
-		first = !b.refused
-		b.refused = true
+		l.refused[key] = true
 		return false, first
 	}
-	b.tokens--
-	b.refused = false
+	org.tokens--
+	user.tokens--
+	delete(l.refused, key)
 	return true, false
 }
 
+// get is key's bucket, refilled to now.
+func (b *buckets) get(key checkKey, now time.Time) *checkBucket {
+	bucket, found := b.by[key]
+	if !found {
+		if len(b.by) >= maxIdleBuckets {
+			b.prune(now)
+		}
+		bucket = &checkBucket{tokens: b.burst, at: now}
+		b.by[key] = bucket
+	}
+	bucket.tokens = min(b.burst, bucket.tokens+float64(now.Sub(bucket.at))/float64(b.every))
+	bucket.at = now
+	return bucket
+}
+
 // prune forgets the buckets that have filled up again.
-func (l *checkLimiter) prune(now time.Time) {
-	for key, b := range l.buckets {
-		if b.tokens+float64(now.Sub(b.at))/float64(l.every) >= l.burst {
-			delete(l.buckets, key)
+func (b *buckets) prune(now time.Time) {
+	for key, bucket := range b.by {
+		if bucket.tokens+float64(now.Sub(bucket.at))/float64(b.every) >= b.burst {
+			delete(b.by, key)
 		}
 	}
 }
@@ -84,7 +118,7 @@ func (l *checkLimiter) prune(now time.Time) {
 func (e *Extension) checks() *checkLimiter {
 	e.checkLimitOnce.Do(func() {
 		if e.checkLimit == nil {
-			e.checkLimit = newCheckLimiter(checksPerMinute, time.Minute)
+			e.checkLimit = newCheckLimiter(checksPerMinute, checksPerUserPerMinute)
 		}
 	})
 	return e.checkLimit

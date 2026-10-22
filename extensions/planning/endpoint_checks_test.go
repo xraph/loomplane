@@ -26,7 +26,7 @@ func (a *endpointAudit) Record(_ context.Context, e catalogconnect.AuditEvent) {
 
 func TestCheckLimiterKeepsTenAMinutePerUserAndOrg(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	l := newCheckLimiter(10, time.Minute)
+	l := newCheckLimiter(10, 30)
 	l.now = func() time.Time { return now }
 	alice := security.Principal{OrgID: "org", UserID: "alice"}
 	for i := range 10 {
@@ -60,6 +60,39 @@ func TestCheckLimiterKeepsTenAMinutePerUserAndOrg(t *testing.T) {
 		if ok, _ := l.allow(alice); !ok {
 			t.Fatalf("after an hour, check %d refused", i+1)
 		}
+	}
+}
+
+func TestCheckLimiterKeepsThirtyAMinutePerUserAcrossOrgs(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	l := newCheckLimiter(checksPerMinute, checksPerUserPerMinute)
+	l.now = func() time.Time { return now }
+	if checksPerUserPerMinute != 30 {
+		t.Fatalf("a person checks %d a minute across organizations", checksPerUserPerMinute)
+	}
+	for _, org := range []string{"a", "b", "c"} {
+		for i := range 10 {
+			if ok, _ := l.allow(security.Principal{OrgID: org, UserID: "alice"}); !ok {
+				t.Fatalf("%s: check %d refused", org, i+1)
+			}
+		}
+	}
+	// A fourth organization has a full bucket of its own, but alice has
+	// used her thirty.
+	d := security.Principal{OrgID: "d", UserID: "alice"}
+	if ok, first := l.allow(d); ok || !first {
+		t.Fatalf("the 31st check: allowed %t, first refusal %t", ok, first)
+	}
+	if ok, _ := l.allow(security.Principal{OrgID: "d", UserID: "bob"}); !ok {
+		t.Fatal("bob was refused for alice's checks")
+	}
+	// One comes back every two seconds, and a refusal took nothing.
+	now = now.Add(2 * time.Second)
+	if ok, _ := l.allow(d); !ok {
+		t.Fatal("a refilled check was refused")
+	}
+	if ok, _ := l.allow(d); ok {
+		t.Fatal("refilled more than one check")
 	}
 }
 
