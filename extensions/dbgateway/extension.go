@@ -149,11 +149,11 @@ type auditor struct {
 
 var _ dbgateway.Auditor = auditor{}
 
-func (a auditor) Record(ctx context.Context, action string, p security.Principal, gw *dbgateway.Gateway, route *dbgateway.RouteRecord) {
+func (a auditor) Record(ctx context.Context, action string, p security.Principal, gw *dbgateway.Gateway, route *dbgateway.RouteRecord, version uint64) {
 	err := a.chronicle.Info(ctx, action, "db_gateway_route", route.ID).
 		Category("database_gateways").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
 		Meta("project_id", gw.ProjectID).Meta("environment_id", gw.EnvironmentID).Meta("gateway_id", gw.ID).
-		Meta("resource", route.Resource).Meta("state", route.State).Record()
+		Meta("resource", route.Resource).Meta("state", route.State).Meta("snapshot_version", version).Record()
 	if err != nil {
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
 	}

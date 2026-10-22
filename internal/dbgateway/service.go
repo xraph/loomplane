@@ -78,10 +78,12 @@ type Authorizer interface {
 }
 
 // Auditor records route pauses and resumes, with the gateway the route is
-// on. The gateway carries its public keys and the route its salt, neither
-// of which may be recorded, and recording must not fail the change.
+// on and the snapshot version that carries the change, 0 when that snapshot
+// couldn't be compiled yet. The gateway carries its public keys and the
+// route its salt, neither of which may be recorded, and recording must not
+// fail the change.
 type Auditor interface {
-	Record(ctx context.Context, action string, p security.Principal, gw *Gateway, route *RouteRecord)
+	Record(ctx context.Context, action string, p security.Principal, gw *Gateway, route *RouteRecord, version uint64)
 }
 
 // Service is the control plane's side of the gateway protocol: it compiles
@@ -281,6 +283,25 @@ func (s *Service) sign(snap plane.Snapshot, version, after uint64) (*plane.Signe
 	return &signed, nil
 }
 
+// publish compiles gw's snapshot and stores its version now, rather than at
+// the next poll, so a change just made has a version to be recorded under.
+// It returns 0 when the snapshot can't be compiled, as while Vault is down;
+// the next poll that can stores it then.
+func (s *Service) publish(ctx context.Context, gw *Gateway) uint64 {
+	_, skipped, digest, err := s.compile(ctx, gw)
+	if err != nil {
+		return 0
+	}
+	version, changed, err := s.store.BumpSnapshot(ctx, gw.OrgID, gw.ID, digest)
+	if err != nil {
+		return 0
+	}
+	if changed && len(skipped) > 0 && s.OnSkip != nil {
+		s.OnSkip(gw.ID, skipped)
+	}
+	return version
+}
+
 // Report stores one instance's report and says how many of gw's instances
 // are live.
 func (s *Service) Report(ctx context.Context, gw *Gateway, r plane.Report) (plane.ReportResponse, error) {
@@ -454,8 +475,8 @@ func (s *Service) gatewayStatus(ctx context.Context, gw *Gateway, now time.Time)
 
 // SetRouteState pauses (state "paused") or resumes (state "active") one of
 // the project's gateway routes, for anyone who may modify its
-// infrastructure, and records it through Audit. The gateway's next snapshot
-// carries the new state. A gateway outside the project, or a route outside
+// infrastructure, and records it through Audit with the version of the
+// snapshot that carries the new state, which it stores at once. A gateway outside the project, or a route outside
 // the gateway, gives ErrNotFound.
 func (s *Service) SetRouteState(ctx context.Context, p security.Principal, project, gatewayID, routeID, state string) (*RouteSummary, error) {
 	action := AuditRoutePause
@@ -489,8 +510,9 @@ func (s *Service) SetRouteState(ctx context.Context, p security.Principal, proje
 	}
 	route := routes[i]
 	route.State = state
+	version := s.publish(ctx, gw)
 	if s.Audit != nil {
-		s.Audit.Record(ctx, action, p, gw, &route)
+		s.Audit.Record(ctx, action, p, gw, &route, version)
 	}
 	return &RouteSummary{ID: route.ID, GatewayID: gw.ID, Resource: route.Resource, State: state}, nil
 }

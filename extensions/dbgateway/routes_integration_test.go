@@ -316,9 +316,10 @@ func TestManagementRoutesAgainstTheStore(t *testing.T) {
 	if out = callAs(t, r, http.MethodPost, "/api/v1/projects/proj_1/db-gateways/"+gw.ID+"/routes/"+route.ID+"/resume", "usr_admin"); out.Code != http.StatusOK {
 		t.Fatalf("an admin's resume: %d %q", out.Code, out.Body.String())
 	}
+	// Each event names the snapshot version that carries its change.
 	want := []string{
-		"dbGateway.route.pause usr_admin proj_1 env_1 " + gw.ID + " " + route.ID + " orders paused",
-		"dbGateway.route.resume usr_admin proj_1 env_1 " + gw.ID + " " + route.ID + " orders active",
+		fmt.Sprintf("dbGateway.route.pause usr_admin proj_1 env_1 %s %s orders paused v%d", gw.ID, route.ID, next.Version),
+		fmt.Sprintf("dbGateway.route.resume usr_admin proj_1 env_1 %s %s orders active v%d", gw.ID, route.ID, next.Version+1),
 	}
 	if got := auditedRouteChanges(t, events); !slices.Equal(got, want) {
 		t.Fatalf("audited %v, want %v", got, want)

@@ -722,11 +722,11 @@ type memAudit struct {
 	events []string
 }
 
-func (a *memAudit) Record(_ context.Context, action string, p security.Principal, gw *Gateway, r *RouteRecord) {
+func (a *memAudit) Record(_ context.Context, action string, p security.Principal, gw *Gateway, r *RouteRecord, version uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.events = append(a.events, strings.Join([]string{
-		action, p.UserID, gw.ProjectID, gw.EnvironmentID, gw.ID, r.ID, r.Resource, r.State,
+		action, p.UserID, gw.ProjectID, gw.EnvironmentID, gw.ID, r.ID, r.Resource, r.State, fmt.Sprintf("v%d", version),
 	}, " "))
 }
 
@@ -915,8 +915,8 @@ func TestPauseAudits(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"dbGateway.route.pause usr_admin proj_1 env_1 dbgw_01test dbgr_1 orders paused",
-		"dbGateway.route.resume usr_admin proj_1 env_1 dbgw_01test dbgr_1 orders active",
+		"dbGateway.route.pause usr_admin proj_1 env_1 dbgw_01test dbgr_1 orders paused v2",
+		"dbGateway.route.resume usr_admin proj_1 env_1 dbgw_01test dbgr_1 orders active v3",
 	}
 	if ev := audit.list(); !slices.Equal(ev, want) {
 		t.Fatalf("audited %v, want %v", ev, want)
@@ -989,5 +989,39 @@ func TestManagementWithoutAnAuthorizer(t *testing.T) {
 	}
 	if _, err := h.svc.SetRouteState(t.Context(), member("usr_admin"), "proj_1", h.gw.ID, "dbgr_1", "paused"); !errors.Is(err, security.ErrForbidden) {
 		t.Fatalf("pause: %v", err)
+	}
+}
+
+// A pause that can't be compiled yet, while Vault is down, still pauses and
+// is recorded, with no version; the next poll that can compile stores it.
+// Pausing a paused route records the version it is already in.
+func TestPauseAuditsWithoutAVersionWhileVaultIsDown(t *testing.T) {
+	h, _, audit := managedHarness(t)
+	ctx := t.Context()
+	if _, err := h.snapshot(t, 0); err != nil {
+		t.Fatal(err)
+	}
+	h.urls.mu.Lock()
+	h.urls.err = errors.New("vault is down")
+	h.urls.mu.Unlock()
+	if _, err := h.svc.SetRouteState(ctx, member("usr_admin"), "proj_1", h.gw.ID, "dbgr_1", "paused"); err != nil {
+		t.Fatal(err)
+	}
+	h.urls.mu.Lock()
+	h.urls.err = nil
+	h.urls.mu.Unlock()
+	s, err := h.snapshot(t, 1)
+	if err != nil || s == nil || s.Version != 2 || s.Routes[0].State != plane.RouteStatePaused {
+		t.Fatalf("snapshot once Vault is back: %+v %v", s, err)
+	}
+	if _, err := h.svc.SetRouteState(ctx, member("usr_admin"), "proj_1", h.gw.ID, "dbgr_1", "paused"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"dbGateway.route.pause usr_admin proj_1 env_1 dbgw_01test dbgr_1 orders paused v0",
+		"dbGateway.route.pause usr_admin proj_1 env_1 dbgw_01test dbgr_1 orders paused v2",
+	}
+	if ev := audit.list(); !slices.Equal(ev, want) {
+		t.Fatalf("audited %v, want %v", ev, want)
 	}
 }

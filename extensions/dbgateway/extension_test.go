@@ -35,7 +35,8 @@ func memChronicle(t *testing.T) (*chronicle.Chronicle, *memory.Store) {
 }
 
 // auditedRouteChanges lists the route changes in mem, oldest first, as
-// "action user project environment gateway route resource state".
+// "action user project environment gateway route resource state vN", N
+// being the snapshot version.
 func auditedRouteChanges(t *testing.T, mem *memory.Store) []string {
 	t.Helper()
 	res, err := mem.Query(t.Context(), &audit.Query{AppID: "app_1", Order: "asc"})
@@ -50,6 +51,7 @@ func auditedRouteChanges(t *testing.T, mem *memory.Store) []string {
 		out = append(out, strings.Join([]string{
 			e.Action, e.UserID, fmt.Sprint(e.Metadata["project_id"]), fmt.Sprint(e.Metadata["environment_id"]),
 			fmt.Sprint(e.Metadata["gateway_id"]), e.ResourceID, fmt.Sprint(e.Metadata["resource"]), fmt.Sprint(e.Metadata["state"]),
+			"v" + fmt.Sprint(e.Metadata["snapshot_version"]),
 		}, " "))
 	}
 	return out
@@ -76,9 +78,9 @@ func TestAuditorRecordsTheGatewayAndProject(t *testing.T) {
 	salt := []byte("0123456789abcdef")
 	route := &dbgateway.RouteRecord{ID: "dbgr_1", Resource: "orders", State: "paused", Salt: salt}
 	a := auditor{chronicle: trail, appID: "app_1", log: forge.NewNoopLogger()}
-	a.Record(t.Context(), dbgateway.AuditRoutePause, security.Principal{OrgID: "org_1", UserID: "usr_admin"}, gw, route)
+	a.Record(t.Context(), dbgateway.AuditRoutePause, security.Principal{OrgID: "org_1", UserID: "usr_admin"}, gw, route, 7)
 
-	want := []string{"dbGateway.route.pause usr_admin proj_1 env_1 dbgw_1 dbgr_1 orders paused"}
+	want := []string{"dbGateway.route.pause usr_admin proj_1 env_1 dbgw_1 dbgr_1 orders paused v7"}
 	if got := auditedRouteChanges(t, mem); !slices.Equal(got, want) {
 		t.Fatalf("audited %v, want %v", got, want)
 	}
