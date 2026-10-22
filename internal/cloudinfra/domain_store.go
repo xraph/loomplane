@@ -499,3 +499,78 @@ func (s *PgStore) RouteOperations(ctx context.Context, org, project, route strin
 	}
 	return out, rows.Err()
 }
+
+func (s *PgStore) scanRoutes(ctx context.Context, query string, args ...any) ([]*Route, error) {
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Route{}
+	for rows.Next() {
+		var raw []byte
+		var route Route
+		if checkErr := rows.Scan(&raw); checkErr != nil {
+			return nil, checkErr
+		}
+		if checkErr := json.Unmarshal(raw, &route); checkErr != nil {
+			return nil, checkErr
+		}
+		out = append(out, &route)
+	}
+	return out, rows.Err()
+}
+
+func (s *PgStore) OrgRoutes(ctx context.Context, org string) ([]*Route, error) {
+	return s.scanRoutes(ctx, `SELECT body FROM loomplane_domain_routes WHERE org_id=$1 AND status<>'removed' ORDER BY hostname,id`, org)
+}
+
+func (s *PgStore) ServiceRoutes(ctx context.Context, org, project, environment, service string) ([]*Route, error) {
+	return s.scanRoutes(ctx, `SELECT body FROM loomplane_domain_routes WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND body->'input'->>'service'=$4 AND status<>'removed' ORDER BY hostname,id`, org, project, environment, service)
+}
+
+func (s *PgStore) LatestRouteOperations(ctx context.Context, org string, routeIDs []string) (map[string]*RouteOperation, error) {
+	out := map[string]*RouteOperation{}
+	if len(routeIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT ON (route_id) body,principal,checkpoint FROM loomplane_route_operations WHERE org_id=$1 AND route_id=ANY($2) ORDER BY route_id,(body->>'created_at')::timestamptz DESC,id DESC`, org, routeIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		op, scanErr := scanRouteOperation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out[op.Route.ID] = op
+	}
+	return out, rows.Err()
+}
+
+func (s *PgStore) names(ctx context.Context, query, org string) (map[string]string, error) {
+	rows, err := s.db.Query(ctx, query, org)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, name string
+		if checkErr := rows.Scan(&id, &name); checkErr != nil {
+			return nil, checkErr
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
+}
+
+func (s *PgStore) ProjectNames(ctx context.Context, org string) (map[string]string, error) {
+	return s.names(ctx, `SELECT id,name FROM loomplane_projects WHERE org_id=$1`, org)
+}
+
+func (s *PgStore) RuntimeNames(ctx context.Context, org string) (map[string]string, error) {
+	return s.names(ctx, `SELECT id,coalesce(body->>'name','') FROM loomplane_cloud_servers WHERE org_id=$1
+ UNION ALL SELECT id,name FROM loomplane_cloud_connections WHERE org_id=$1`, org)
+}

@@ -30,9 +30,14 @@ type Zone struct {
 	ProofName            string           `json:"proof_name,omitempty"`
 	ProofValue           string           `json:"proof_value,omitempty"`
 	ProofExpiresAt       time.Time        `json:"proof_expires_at"`
+	ProofCheckedAt       time.Time        `json:"proof_checked_at"`
 	VerifiedAt           time.Time        `json:"verified_at"`
 	Revision             int64            `json:"revision"`
 }
+
+// Wildcards reports whether routes under the zone may use wildcard
+// hostnames. That needs a DNS-01 challenge connection, which no zone has yet.
+func (z Zone) Wildcards() bool { return false }
 
 type ZoneInput struct {
 	Name         string   `json:"name"`
@@ -116,7 +121,8 @@ func (s *Service) CreateZone(ctx context.Context, p security.Principal, in ZoneI
 		return nil, err
 	}
 	name, err := NormalizeHostname(in.Name)
-	if err != nil || (in.Mode != "managed" && in.Mode != "external") || len(in.ProjectIDs) == 0 {
+	// A zone without grants is usable by no project until granted.
+	if err != nil || (in.Mode != "managed" && in.Mode != "external") {
 		return nil, ErrInvalid
 	}
 	st, err := s.domainStore()
@@ -135,7 +141,7 @@ func (s *Service) CreateZone(ctx context.Context, p security.Principal, in ZoneI
 	if err != nil {
 		return nil, err
 	}
-	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: in.Mode, ConnectionID: in.ConnectionID, ProjectIDs: slices.Clone(in.ProjectIDs), Revision: 1}
+	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: in.Mode, ConnectionID: in.ConnectionID, ProjectIDs: append([]string{}, in.ProjectIDs...), Revision: 1}
 	if in.Mode == "managed" {
 		conn, raw, credErr := s.Connections.Credential(ctx, p.OrgID, in.ConnectionID)
 		if credErr != nil {
@@ -191,12 +197,18 @@ func (s *Service) VerifyZone(ctx context.Context, p security.Principal, id strin
 	if err != nil {
 		return nil, err
 	}
-	if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {
+	// Every check is saved, so the page can say when the record was last looked for.
+	checkErr := s.verifyZoneControl(ctx, zone)
+	zone.ProofCheckedAt = s.now().UTC()
+	if checkErr == nil {
+		zone.VerifiedAt = zone.ProofCheckedAt
+	}
+	saveErr := st.SaveZone(ctx, zone)
+	if checkErr != nil {
 		return nil, checkErr
 	}
-	zone.VerifiedAt = s.now().UTC()
-	if checkErr := st.SaveZone(ctx, zone); checkErr != nil {
-		return nil, checkErr
+	if saveErr != nil {
+		return nil, saveErr
 	}
 	s.domainAudit(ctx, p, "domain.zone.write", zone.ID, "")
 	return zone, nil
@@ -270,7 +282,7 @@ func (s *Service) UpdateZone(ctx context.Context, p security.Principal, id strin
 			return nil, checkErr
 		}
 	}
-	zone.ProjectIDs = slices.Clone(in.ProjectIDs)
+	zone.ProjectIDs = append([]string{}, in.ProjectIDs...)
 	if in.RenewProof {
 		if zone.Mode != "external" || !zone.VerifiedAt.IsZero() {
 			return nil, ErrConflict

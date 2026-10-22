@@ -39,6 +39,10 @@ type RemoveRouteInput struct {
 	Revision int64 `json:"revision"`
 }
 
+type DiscoverZonesQuery struct {
+	ConnectionID string `query:"connection_id"`
+}
+
 func (e *Extension) domainRoutes(r forge.Router, guard identity.Guard) error {
 	group := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Domains"))
 	routes := []route{
@@ -77,7 +81,19 @@ func (e *Extension) domainRoutes(r forge.Router, guard identity.Guard) error {
 			return err
 		}
 	}
-	return nil
+	if err := group.GET("/dns-zones/discover", e.discoverDomainZones, forge.WithName("dnsZones.discover"), forge.WithSummary("dnsZones.discover"), forge.WithQuerySchema(DiscoverZonesQuery{}), forge.WithResponseSchema(http.StatusOK, "Result", infra.ProviderZoneList{})); err != nil {
+		return err
+	}
+	return e.overviewRoutes(group)
+}
+
+func (e *Extension) discoverDomainZones(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	v, err := e.svc.DiscoverProviderZones(c.Request().Context(), p, c.Query("connection_id"))
+	return result(c, http.StatusOK, v, err)
 }
 
 func (e *Extension) domainZones(c forge.Context) error {

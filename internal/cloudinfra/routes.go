@@ -34,6 +34,7 @@ type RouteBinding struct {
 	ReleaseID            string `json:"release_id"`
 	ContainerID          string `json:"container_id"`
 	Address              string `json:"address"`
+	Backend              string `json:"backend,omitempty"` // empty reads as server
 }
 
 type Route struct {
@@ -113,6 +114,15 @@ type DomainStore interface {
 	CompleteHandoff(context.Context, *RouteOperation) error
 	SaveIngress(context.Context, *RouteOperation, *IngressState) error
 	PendingRoutes(context.Context) ([]*RouteOperation, error)
+	// OrgRoutes lists every route of an organization that isn't removed.
+	OrgRoutes(ctx context.Context, org string) ([]*Route, error)
+	// ServiceRoutes lists one service's routes that aren't removed.
+	ServiceRoutes(ctx context.Context, org, project, environment, service string) ([]*Route, error)
+	// LatestRouteOperations maps each route ID to its newest operation.
+	LatestRouteOperations(ctx context.Context, org string, routeIDs []string) (map[string]*RouteOperation, error)
+	ProjectNames(ctx context.Context, org string) (map[string]string, error)
+	// RuntimeNames maps server IDs and connection IDs to display names.
+	RuntimeNames(ctx context.Context, org string) (map[string]string, error)
 }
 
 func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, project string, in RouteInput) (*RouteOperation, error) {

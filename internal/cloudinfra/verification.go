@@ -22,6 +22,7 @@ type RouteVerification struct {
 	DNSError     string    `json:"dns_error,omitempty"`
 	TLSError     string    `json:"tls_error,omitempty"`
 	BackendError string    `json:"backend_error,omitempty"`
+	CertState    string    `json:"cert_state,omitempty"` // issuing, ready or failed
 }
 
 // VerifyRoute queues a fresh durable check, including certificate renewal state.
