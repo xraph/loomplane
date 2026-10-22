@@ -67,7 +67,7 @@ func TestConfigFromEnv(t *testing.T) {
 		t.Error("SealingKey is not the given X25519 key")
 	}
 	var want []TrustKey
-	if err := json.Unmarshal([]byte(env["LOOMPLANE_DBGW_TRUST_KEYS"]), &want); err != nil {
+	if err = json.Unmarshal([]byte(env["LOOMPLANE_DBGW_TRUST_KEYS"]), &want); err != nil {
 		t.Fatal(err)
 	}
 	if len(cfg.TrustKeys) != 1 || cfg.TrustKeys[0].ID() != want[0].ID() || !cfg.TrustKeys[0].NotAfter.Equal(want[0].NotAfter) {
@@ -245,11 +245,20 @@ func (s runSetup) snapshot(t *testing.T, version uint64) Snapshot {
 	return out
 }
 
+// httpGet is a GET that carries a context.
+func httpGet(ctx context.Context, url string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
+}
+
 // start runs the gateway with short timings and returns once the server is
 // accepting connections.
 func (s runSetup) start(t *testing.T) *startedRun {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +288,7 @@ func (s runSetup) start(t *testing.T) *startedRun {
 		}
 	})
 	waitUntil(t, "the server to accept connections", func() bool {
-		resp, err := http.Get(r.base + "/healthz")
+		resp, err := httpGet(t.Context(), r.base+"/healthz")
 		if err != nil {
 			return false
 		}
@@ -290,7 +299,7 @@ func (s runSetup) start(t *testing.T) *startedRun {
 }
 
 func (r *startedRun) healthz() int {
-	resp, err := http.Get(r.base + "/healthz")
+	resp, err := httpGet(r.t.Context(), r.base+"/healthz")
 	if err != nil {
 		return 0
 	}
@@ -326,7 +335,7 @@ func TestRunServesLastGoodWhenControlDown(t *testing.T) {
 
 	// The transports are mounted: /v2 wants an address, /sql answers a
 	// preflight, and anything else is not found.
-	resp, err := http.Get(r.base + "/v2")
+	resp, err := httpGet(t.Context(), r.base+"/v2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +343,7 @@ func TestRunServesLastGoodWhenControlDown(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("GET /v2 = %d, want 400", resp.StatusCode)
 	}
-	req, _ := http.NewRequest(http.MethodOptions, r.base+"/sql", nil)
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodOptions, r.base+"/sql", nil)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +352,7 @@ func TestRunServesLastGoodWhenControlDown(t *testing.T) {
 	if resp.StatusCode >= 300 {
 		t.Errorf("OPTIONS /sql = %d, want 2xx", resp.StatusCode)
 	}
-	resp, err = http.Get(r.base + "/nope")
+	resp, err = httpGet(t.Context(), r.base+"/nope")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +419,7 @@ func TestRunRejectsBadSnapshot(t *testing.T) {
 			s := newRunSetup(t, "")
 			// Long enough that a tight loop is easy to tell from a backoff.
 			s.minBackoff, s.maxBackoff = 20*time.Millisecond, 40*time.Millisecond
-			ctrl := newFakeControl(t, "gw-1", s.pub)
+			ctrl := newFakeControl(t, s.pub)
 			s.cfg.ControlURL = ctrl.srv.URL
 			good, bad := s.snapshot(t, 1), mk(s, t)
 			ctrl.snapshot = func(after uint64) *Snapshot {
@@ -458,7 +467,7 @@ func TestRunRejectsBadSnapshot(t *testing.T) {
 
 func TestRunRefusesBadFirstSnapshot(t *testing.T) {
 	s := newRunSetup(t, "")
-	ctrl := newFakeControl(t, "gw-1", s.pub)
+	ctrl := newFakeControl(t, s.pub)
 	s.cfg.ControlURL = ctrl.srv.URL
 	bad := s.snapshot(t, 3)
 	bad.Signature, bad.KeyID = nil, ""
@@ -479,7 +488,7 @@ func TestRunRefusesBadFirstSnapshot(t *testing.T) {
 
 func TestRunAppliesSnapshotAndReports(t *testing.T) {
 	s := newRunSetup(t, "")
-	ctrl := newFakeControl(t, "gw-1", s.pub)
+	ctrl := newFakeControl(t, s.pub)
 	s.cfg.ControlURL = ctrl.srv.URL
 	ctrl.live = 3
 	snap := s.snapshot(t, 1)
@@ -571,7 +580,7 @@ func TestRunRemovesStaleTempFiles(t *testing.T) {
 
 func TestRunDrainsOnCancel(t *testing.T) {
 	s := newRunSetup(t, "")
-	ctrl := newFakeControl(t, "gw-1", s.pub)
+	ctrl := newFakeControl(t, s.pub)
 	s.cfg.ControlURL = ctrl.srv.URL
 	snap := s.snapshot(t, 1)
 	ctrl.snapshot = func(after uint64) *Snapshot {
@@ -605,7 +614,7 @@ func TestRunDrainsOnCancel(t *testing.T) {
 		t.Errorf("last report = %+v, want one with draining set", rep)
 	}
 	// The listener is closed.
-	if conn, err := net.DialTimeout("tcp", strings.TrimPrefix(r.base, "http://"), time.Second); err == nil {
+	if conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(t.Context(), "tcp", strings.TrimPrefix(r.base, "http://")); err == nil {
 		conn.Close()
 		t.Error("the server still accepts connections")
 	}
@@ -613,7 +622,7 @@ func TestRunDrainsOnCancel(t *testing.T) {
 
 func TestRunFailsWhenItCannotListen(t *testing.T) {
 	// Hold the wildcard address, which is what Run listens on.
-	ln, err := net.Listen("tcp", ":0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", ":0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +641,7 @@ func TestHealthzFollowsReadinessAndDrain(t *testing.T) {
 	g := &gateway{router: h.r}
 	status := func() int {
 		rec := httptest.NewRecorder()
-		g.healthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		g.healthz(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil))
 		return rec.Code
 	}
 	if got := status(); got != http.StatusServiceUnavailable {

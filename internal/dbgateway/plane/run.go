@@ -266,7 +266,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) error {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
-	cfg.ControlURL, _ = parseControlURL(cfg.ControlURL) // validated above
+	cfg.ControlURL, _ = parseControlURL(cfg.ControlURL) //nolint:errcheck // validated above
 	opts = opts.withDefaults()
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		return fmt.Errorf("run: state directory: %w", err)
@@ -276,7 +276,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) error {
 	ln := opts.listener
 	if ln == nil {
 		var err error
-		if ln, err = net.Listen("tcp", ":"+strconv.Itoa(cfg.Port)); err != nil {
+		var lc net.ListenConfig
+		if ln, err = lc.Listen(ctx, "tcp", ":"+strconv.Itoa(cfg.Port)); err != nil {
 			return fmt.Errorf("run: listen: %w", err)
 		}
 	}
@@ -486,7 +487,7 @@ func (g *gateway) healthz(w http.ResponseWriter, _ *http.Request) {
 	case !g.ready.Load():
 		http.Error(w, "no snapshot yet", http.StatusServiceUnavailable)
 	default:
-		_, _ = w.Write([]byte("ok\n"))
+		_, _ = w.Write([]byte("ok\n")) //nolint:errcheck // a client that hung up has nobody to tell
 	}
 }
 

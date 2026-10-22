@@ -143,13 +143,13 @@ func backendConfig(b Backend, s BackendSecret, params map[string]string) (*pgcon
 // error, the returned error unwraps to a *pgconn.PgError carrying the SQLSTATE.
 func MaxConnections(ctx context.Context, c *BackendConn) (int, error) {
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.Conn.SetDeadline(dl)
+		_ = c.Conn.SetDeadline(dl) //nolint:errcheck // a dead connection fails the read below
 	}
 	// Cancelling ctx must unblock a read that is waiting on the backend.
-	stop := context.AfterFunc(ctx, func() { _ = c.Conn.SetDeadline(time.Unix(1, 0)) })
+	stop := context.AfterFunc(ctx, func() { _ = c.Conn.SetDeadline(time.Unix(1, 0)) }) //nolint:errcheck // a dead connection is already failing the read
 	defer func() {
 		if stop() {
-			_ = c.Conn.SetDeadline(time.Time{})
+			_ = c.Conn.SetDeadline(time.Time{}) //nolint:errcheck // a dead connection is dropped by its owner
 		}
 	}()
 
@@ -207,8 +207,8 @@ func ctxOr(ctx context.Context, err error) error {
 
 // Reserve is how many of a backend's max connections the gateway leaves for
 // everything else: max(5, ceil(10% of max)).
-func Reserve(max int) int {
-	r := (max + 9) / 10
+func Reserve(maxConns int) int {
+	r := (maxConns + 9) / 10
 	if r < 5 {
 		return 5
 	}
@@ -218,11 +218,11 @@ func Reserve(max int) int {
 // Budget is one gateway instance's share of the connections a backend can
 // take once the reserve is set aside. It is never below 1, and fewer than one
 // instance counts as one.
-func Budget(max, instances int) int {
+func Budget(maxConns, instances int) int {
 	if instances < 1 {
 		instances = 1
 	}
-	b := (max - Reserve(max)) / instances
+	b := (maxConns - Reserve(maxConns)) / instances
 	if b < 1 {
 		return 1
 	}

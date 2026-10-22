@@ -87,7 +87,8 @@ func eachElement(raw json.RawMessage, what string, fn func(json.RawMessage) erro
 func (lim *requestLimits) textParams(raw json.RawMessage) ([][]byte, error) {
 	var params [][]byte
 	err := eachElement(raw, "params", func(elem json.RawMessage) error {
-		if lim.params++; lim.params > maxRequestParams {
+		lim.params++
+		if lim.params > maxRequestParams {
 			return tooMuch("a request takes at most 65535 parameters in all")
 		}
 		p, err := textParam(elem)
@@ -150,12 +151,12 @@ func (q *httpQuery) readStatements(w http.ResponseWriter, req *http.Request) ([]
 				return tooMuch("a batch takes at most 1000 queries")
 			}
 			var in batchQuery
-			if err := json.Unmarshal(elem, &in); err != nil {
+			if uerr := json.Unmarshal(elem, &in); uerr != nil {
 				return badRequest("each batch entry must be {\"query\": ..., \"params\": [...]}")
 			}
-			s, err := lim.clientStatement(in.Query, in.Params)
+			s, serr := lim.clientStatement(in.Query, in.Params)
 			stmts = append(stmts, s)
-			return err
+			return serr
 		})
 		if err != nil {
 			return nil, false, err

@@ -137,7 +137,7 @@ func TestSCRAMRFC7677Vector(t *testing.T) {
 		AuthMechanism: "SCRAM-SHA-256",
 		Data:          []byte("n,,n=user,r=rOprNGfwEbeRWgbNEkqO"),
 	})
-	if err := fe.Flush(); err != nil {
+	if err = fe.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	msg, err = fe.Receive()
@@ -155,7 +155,7 @@ func TestSCRAMRFC7677Vector(t *testing.T) {
 
 	fe.Send(&pgproto3.SASLResponse{Data: []byte(
 		"c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=")})
-	if err := fe.Flush(); err != nil {
+	if err = fe.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	msg, err = fe.Receive()
@@ -260,12 +260,12 @@ func TestSCRAMRejects(t *testing.T) {
 				withoutProof := "c=biws,r=" + nonce
 				proof := scramProof("pw", authSalt, 4096, bare+","+serverFirst+","+withoutProof)
 				fe.Send(&pgproto3.SASLResponse{Data: []byte(tc.final(nonce, proof))})
-				if err := fe.Flush(); err != nil {
+				if err = fe.Flush(); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			if err := <-done; err != ErrAuth {
+			if err := <-done; err != ErrAuth { //nolint:errorlint // the test pins the unwrapped sentinel
 				t.Fatalf("got %v, want exactly ErrAuth", err)
 			}
 			// Nothing may have followed the rejection.
@@ -379,7 +379,7 @@ func TestCleartextWrong(t *testing.T) {
 	be, fe := bufferBackend()
 
 	err := AuthenticateCleartext(be, v, &pgproto3.PasswordMessage{Password: "nope"})
-	if err != ErrAuth {
+	if err != ErrAuth { //nolint:errorlint // the test pins the unwrapped sentinel
 		t.Fatalf("got %v, want exactly ErrAuth", err)
 	}
 	if msg, err := fe.Receive(); err == nil {
@@ -409,7 +409,7 @@ func TestCleartextAsksWhenNotPipelined(t *testing.T) {
 				t.Fatalf("got %T, want AuthenticationCleartextPassword", msg)
 			}
 			fe.Send(&pgproto3.PasswordMessage{Password: tc.password})
-			if err := fe.Flush(); err != nil {
+			if err = fe.Flush(); err != nil {
 				t.Fatal(err)
 			}
 			if tc.want == nil {
@@ -419,7 +419,7 @@ func TestCleartextAsksWhenNotPipelined(t *testing.T) {
 					t.Fatalf("got %T, want AuthenticationOk", msg)
 				}
 			}
-			if got := <-done; got != tc.want {
+			if got := <-done; got != tc.want { //nolint:errorlint // the test pins the unwrapped sentinel
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
@@ -432,7 +432,7 @@ func TestVerifyPassword(t *testing.T) {
 		t.Fatalf("right password: %v", err)
 	}
 	for _, pw := range []string{"", "p", "pw ", "PW", strings.Repeat("pw", 100)} {
-		if err := VerifyPassword(v, pw); err != ErrAuth {
+		if err := VerifyPassword(v, pw); err != ErrAuth { //nolint:errorlint // the test pins the unwrapped sentinel
 			t.Errorf("password %q: got %v, want exactly ErrAuth", pw, err)
 		}
 	}
@@ -444,7 +444,7 @@ func TestVerifyPassword(t *testing.T) {
 		{Role: "app", Salt: authSalt, Iterations: 0, StoredKey: v.StoredKey},
 		NewVerifier("app", "pw", authSalt, -1),
 	} {
-		if err := VerifyPassword(bad, "pw"); err != ErrAuth {
+		if err := VerifyPassword(bad, "pw"); err != ErrAuth { //nolint:errorlint // the test pins the unwrapped sentinel
 			t.Errorf("verifier %+v: got %v, want ErrAuth", bad, err)
 		}
 	}

@@ -202,8 +202,8 @@ func TestSnapshotWireFormat(t *testing.T) {
 	fields := func(raw []byte) map[string]json.RawMessage {
 		t.Helper()
 		var m map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &m); err != nil {
-			t.Fatalf("unmarshal %s: %v", raw, err)
+		if uerr := json.Unmarshal(raw, &m); uerr != nil {
+			t.Fatalf("unmarshal %s: %v", raw, uerr)
 		}
 		return m
 	}
@@ -219,7 +219,7 @@ func TestSnapshotWireFormat(t *testing.T) {
 	top := fields(raw)
 	wantKeys("snapshot", top, "gateway_id", "version", "issued_at", "routes", "key_id", "signature")
 	var routes []json.RawMessage
-	if err := json.Unmarshal(top["routes"], &routes); err != nil {
+	if err = json.Unmarshal(top["routes"], &routes); err != nil {
 		t.Fatal(err)
 	}
 	route := fields(routes[0])
@@ -232,7 +232,7 @@ func TestSnapshotWireFormat(t *testing.T) {
 	}
 	wantKeys("backend", fields(route["backend"]), "kind", "host", "port", "database", "sni", "ssl_mode", "credential")
 	var verifiers []json.RawMessage
-	if err := json.Unmarshal(route["verifiers"], &verifiers); err != nil {
+	if err = json.Unmarshal(route["verifiers"], &verifiers); err != nil {
 		t.Fatal(err)
 	}
 	wantKeys("verifier", fields(verifiers[0]), "role", "salt", "iterations", "stored_key", "server_key")

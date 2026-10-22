@@ -86,8 +86,8 @@ func (q *httpQuery) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// an error here, and the request is still bounded by ctx once it reaches
 	// the backend.
 	rc := http.NewResponseController(w)
-	_ = rc.SetReadDeadline(time.Now().Add(q.timeout))
-	_ = rc.SetWriteDeadline(time.Now().Add(q.timeout))
+	_ = rc.SetReadDeadline(time.Now().Add(q.timeout))  //nolint:errcheck // unsupported by some writers, see above
+	_ = rc.SetWriteDeadline(time.Now().Add(q.timeout)) //nolint:errcheck // unsupported by some writers, see above
 
 	target, ok := parseConnString(req.Header.Get("Neon-Connection-String"))
 	if !ok {
@@ -161,7 +161,7 @@ func (q *httpQuery) run(ctx context.Context, c *BackendConn, stmts []statement, 
 		err := c.Frontend.Flush()
 		if err != nil {
 			// The reader would otherwise wait for replies that won't come.
-			_ = c.Conn.SetDeadline(time.Unix(1, 0))
+			_ = c.Conn.SetDeadline(time.Unix(1, 0)) //nolint:errcheck // a dead connection ends the reader on its own
 		}
 		wrote <- err
 	}()
@@ -169,7 +169,7 @@ func (q *httpQuery) run(ctx context.Context, c *BackendConn, stmts []statement, 
 	results, status, pgErr, err := q.read(c, stmts, arrayMode)
 	if err != nil {
 		// The writer may be stuck behind a backend that is still sending.
-		_ = c.Conn.SetDeadline(time.Unix(1, 0))
+		_ = c.Conn.SetDeadline(time.Unix(1, 0)) //nolint:errcheck // a dead connection ends the writer on its own
 	}
 	if werr := <-wrote; err == nil && werr != nil {
 		err = werr

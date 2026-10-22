@@ -437,15 +437,28 @@ func closeAll(conns []*pooled) {
 	}
 }
 
+// popWaiterLocked removes and returns the oldest waiter, or nil when none
+// waits. The list holds only waiters.
+func (p *Pool) popWaiterLocked() *waiter {
+	front := p.waiters.Front()
+	if front == nil {
+		return nil
+	}
+	w, ok := p.waiters.Remove(front).(*waiter)
+	if !ok {
+		return nil
+	}
+	return w
+}
+
 // dispatchLocked offers free slots to waiters, oldest first. A waiter given a
 // slot dials on its own goroutine, outside the lock.
 func (p *Pool) dispatchLocked() {
 	for !p.closed && p.open < p.limit {
-		front := p.waiters.Front()
-		if front == nil {
+		w := p.popWaiterLocked()
+		if w == nil {
 			return
 		}
-		w := p.waiters.Remove(front).(*waiter)
 		p.open++
 		w.slot = true
 		close(w.ready)
@@ -487,8 +500,7 @@ func (p *Pool) release(pc *pooled, state LeaseState) {
 
 	p.mu.Lock()
 	if keep && !p.closed && p.open <= p.limit {
-		if front := p.waiters.Front(); front != nil {
-			w := p.waiters.Remove(front).(*waiter)
+		if w := p.popWaiterLocked(); w != nil {
 			w.conn = pc
 			close(w.ready)
 		} else {
@@ -523,10 +535,12 @@ var roundTripDone func()
 // connection broken: its deadline may already be in the past.
 func roundTrip(ctx context.Context, c *BackendConn, sql string) (byte, error) {
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.Conn.SetDeadline(dl)
+		_ = c.Conn.SetDeadline(dl) //nolint:errcheck // a dead connection fails the exchange below
 	}
 	// Cancelling ctx must unblock a read that is waiting on the backend.
-	stop := context.AfterFunc(ctx, func() { _ = c.Conn.SetDeadline(time.Unix(1, 0)) })
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.Conn.SetDeadline(time.Unix(1, 0)) //nolint:errcheck // a dead connection is already failing the exchange
+	})
 
 	status, err := exchange(ctx, c, sql)
 	if roundTripDone != nil {
@@ -538,7 +552,7 @@ func roundTrip(ctx context.Context, c *BackendConn, sql string) (byte, error) {
 		c.Broken = true
 		return 0, ctx.Err()
 	}
-	_ = c.Conn.SetDeadline(time.Time{})
+	_ = c.Conn.SetDeadline(time.Time{}) //nolint:errcheck // a dead connection is dropped by its owner
 	return status, err
 }
 
@@ -622,7 +636,10 @@ func (p *Pool) Close() {
 	p.idle = nil
 	p.open -= len(drop)
 	for e := p.waiters.Front(); e != nil; e = e.Next() {
-		w := e.Value.(*waiter)
+		w, ok := e.Value.(*waiter)
+		if !ok {
+			continue // the list holds only waiters
+		}
 		w.err = ErrPoolClosed
 		close(w.ready)
 	}

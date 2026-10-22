@@ -106,7 +106,7 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	go ws.ping(h.pingInterval, done)
 
 	be := pgproto3.NewBackend(ws, ws)
-	_ = c.SetReadDeadline(time.Now().Add(h.startupTimeout))
+	_ = c.SetReadDeadline(time.Now().Add(h.startupTimeout)) //nolint:errcheck // a dead socket fails the startup read
 	startup, err := readWSStartup(be, ws)
 	if err != nil {
 		var ne net.Error
@@ -124,13 +124,12 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// (Neon's driver pipelines it), but the usual cleartext request goes out
 	// anyway: it is what a client that waits for it needs, and one that
 	// pipelined just has the answer read from its buffer.
-	_ = h.router.Serve(ctx, be, ws, host, startup, nil)
+	_ = h.router.Serve(ctx, be, ws, host, startup, nil) //nolint:errcheck // Serve has told the client; the socket closes on return
 }
 
 // wsRouteHost turns the address query parameter, host or host:port, into the
 // route host. ok is false when there is no host.
 func wsRouteHost(address string) (host string, ok bool) {
-	host = address
 	if h, _, err := net.SplitHostPort(address); err == nil {
 		host = h
 	} else {
@@ -186,7 +185,7 @@ func newWSConn(c *websocket.Conn) *wsConn { return &wsConn{conn: c, writeWait: w
 // has set one.
 func (c *wsConn) extendRead() {
 	if d := time.Duration(c.readWait.Load()); d > 0 {
-		_ = c.conn.SetReadDeadline(time.Now().Add(d))
+		_ = c.conn.SetReadDeadline(time.Now().Add(d)) //nolint:errcheck // a dead socket fails the next read
 	}
 }
 
@@ -207,7 +206,7 @@ func (c *wsConn) Read(p []byte) (int, error) {
 				return 0, wsReadError(err)
 			}
 			if kind != websocket.BinaryMessage {
-				c.closeWith(websocket.CloseUnsupportedData, "binary messages only")
+				_ = c.closeWith(websocket.CloseUnsupportedData, "binary messages only") //nolint:errcheck // the read error below ends the session
 				return 0, errWSText
 			}
 			c.cur = r
@@ -239,7 +238,7 @@ func wsReadError(err error) error {
 func (c *wsConn) Write(p []byte) (int, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeWait))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeWait)) //nolint:errcheck // a dead socket fails the write below
 	if err := c.conn.WriteMessage(websocket.BinaryMessage, p); err != nil {
 		// No close frame: the stream is broken mid-message.
 		c.closeOnce.Do(func() { _ = c.conn.Close() })
@@ -258,7 +257,7 @@ func (c *wsConn) Close() error {
 func (c *wsConn) closeWith(code int, text string) error {
 	var err error
 	c.closeOnce.Do(func() {
-		_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, text), time.Now().Add(wsCloseWait))
+		_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, text), time.Now().Add(wsCloseWait)) //nolint:errcheck // the client may be gone; Close below reports
 		err = c.conn.Close()
 	})
 	return err

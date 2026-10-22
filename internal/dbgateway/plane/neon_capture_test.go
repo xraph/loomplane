@@ -127,17 +127,6 @@ func (r *recorder) snapshot() (wsCapture, httpCapture, bool) {
 	return w, *r.http, true
 }
 
-// decodeFirstFrontend reads the first frontend message off the captured
-// WebSocket stream the way the gateway will: as a startup-phase message.
-func decodeFirstFrontend(t *testing.T, frames [][]byte) pgproto3.FrontendMessage {
-	t.Helper()
-	msg, err := pgproto3.NewBackend(bytes.NewReader(bytes.Join(frames, nil)), io.Discard).ReceiveStartupMessage()
-	if err != nil {
-		t.Fatalf("decode first frontend message: %v", err)
-	}
-	return msg
-}
-
 // decodePipelined decodes the whole captured stream: the startup-phase
 // message first, then every regular frontend message behind it.
 func decodePipelined(t *testing.T, frames [][]byte) (pgproto3.FrontendMessage, []pgproto3.FrontendMessage) {
@@ -174,15 +163,6 @@ func copyFrontend(t *testing.T, msg pgproto3.FrontendMessage) pgproto3.FrontendM
 		t.Fatalf("unexpected pipelined message %T", msg)
 		return nil
 	}
-}
-
-func toJSON(t *testing.T, v any) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	return string(b)
 }
 
 // TestNeonDriverCapture runs @neondatabase/serverless against a recorder

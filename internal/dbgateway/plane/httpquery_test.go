@@ -141,7 +141,7 @@ func TestHTTPQueryFixture(t *testing.T) {
 	q := newHTTPQuery(h.r)
 
 	serve := func(header http.Header) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(fx.Method, fx.Path, strings.NewReader(fx.Body))
+		req := httptest.NewRequestWithContext(t.Context(), fx.Method, fx.Path, strings.NewReader(fx.Body))
 		req.Header = header
 		rec := httptest.NewRecorder()
 		q.ServeHTTP(rec, req)
@@ -250,8 +250,8 @@ func TestHTTPQueryBatchTxn(t *testing.T) {
 		t.Fatalf("pool = %+v, want the connection back after the rollback", s)
 	}
 	// The connection is clean: the next request works on it.
-	if rec := h.post(`{"query":"SELECT 4","params":[]}`, nil); rec.Code != http.StatusOK {
-		t.Fatalf("request after the rollback: %d %s", rec.Code, rec.Body)
+	if again := h.post(`{"query":"SELECT 4","params":[]}`, nil); again.Code != http.StatusOK {
+		t.Fatalf("request after the rollback: %d %s", again.Code, again.Body)
 	}
 	if h.dialer.dials() != 1 {
 		t.Fatalf("dials = %d, want the one connection reused", h.dialer.dials())
@@ -376,7 +376,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 func TestHTTPQueryBodyReadOnlyAfterAuth(t *testing.T) {
 	h := newHTTPHarness(t, nil)
 	send := func(dsn string, body *countingReader) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/sql", body)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/sql", body)
 		req.Header.Set("Neon-Connection-String", dsn)
 		rec := httptest.NewRecorder()
 		h.q.ServeHTTP(rec, req)
@@ -435,7 +435,7 @@ func TestHTTPQueryBadRequests(t *testing.T) {
 		t.Fatalf("postgres:// with query parameters: %d %s", rec.Code, rec.Body)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/sql", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/sql", nil)
 	rec := httptest.NewRecorder()
 	h.q.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") == "" {
@@ -445,7 +445,7 @@ func TestHTTPQueryBadRequests(t *testing.T) {
 
 func TestHTTPQueryCORSPreflight(t *testing.T) {
 	h := newHTTPHarness(t, nil)
-	req := httptest.NewRequest(http.MethodOptions, "/sql", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/sql", nil)
 	req.Header.Set("Origin", "https://app.example.com")
 	req.Header.Set("Access-Control-Request-Method", "POST")
 	req.Header.Set("Access-Control-Request-Headers", "neon-connection-string,neon-array-mode,neon-raw-text-output,content-type")

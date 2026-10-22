@@ -75,7 +75,7 @@ func TestSealWrongContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
-	if _, err := Open(key, s, []byte("two")); err != ErrSealed {
+	if _, err := Open(key, s, []byte("two")); err != ErrSealed { //nolint:errorlint // Open returns the unwrapped sentinel, and the test pins that
 		t.Fatalf("Open with another context = %v, want ErrSealed", err)
 	}
 }
@@ -85,7 +85,7 @@ func TestSealWrongKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
-	if _, err := Open(newSealKey(t), s, []byte("ctx")); err != ErrSealed {
+	if _, err := Open(newSealKey(t), s, []byte("ctx")); err != ErrSealed { //nolint:errorlint // Open returns the unwrapped sentinel, and the test pins that
 		t.Fatalf("Open with another key = %v, want ErrSealed", err)
 	}
 }
@@ -113,7 +113,7 @@ func TestSealTamper(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := fresh()
 			tt.mutate(&s)
-			if _, err := Open(key, s, ctx); err != ErrSealed {
+			if _, err := Open(key, s, ctx); err != ErrSealed { //nolint:errorlint // Open returns the unwrapped sentinel, and the test pins that
 				t.Fatalf("Open = %v, want ErrSealed", err)
 			}
 		})
@@ -143,7 +143,7 @@ func TestOpenBadSizes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Open(key, tt.s, ctx); err != ErrSealed {
+			if _, err := Open(key, tt.s, ctx); err != ErrSealed { //nolint:errorlint // Open returns the unwrapped sentinel, and the test pins that
 				t.Fatalf("Open = %v, want exactly ErrSealed", err)
 			}
 		})
@@ -156,7 +156,7 @@ func TestOpenNilKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
-	if _, err := Open(nil, s, nil); err != ErrSealed {
+	if _, err := Open(nil, s, nil); err != ErrSealed { //nolint:errorlint // Open returns the unwrapped sentinel, and the test pins that
 		t.Fatalf("Open(nil key) = %v, want ErrSealed", err)
 	}
 }
@@ -189,7 +189,7 @@ func TestSealedJSON(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 	var fields map[string]string
-	if err := json.Unmarshal(raw, &fields); err != nil {
+	if err = json.Unmarshal(raw, &fields); err != nil {
 		t.Fatalf("Unmarshal into map: %v", err)
 	}
 	for _, name := range []string{"ephemeral", "nonce", "ciphertext"} {
@@ -198,7 +198,7 @@ func TestSealedJSON(t *testing.T) {
 		}
 	}
 	var back Sealed
-	if err := json.Unmarshal(raw, &back); err != nil {
+	if err = json.Unmarshal(raw, &back); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	got, err := Open(key, back, []byte("ctx"))

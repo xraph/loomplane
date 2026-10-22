@@ -58,7 +58,7 @@ func TestSignRequestVerifies(t *testing.T) {
 	}
 	now := time.Date(2026, 10, 22, 9, 30, 0, 0, time.UTC)
 	body := []byte(`{"label":"orders--dev"}`)
-	req, err := http.NewRequest(http.MethodPost, "https://control.example.com/api/v1/db-gateways/gw-1/hold?x=1", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://control.example.com/api/v1/db-gateways/gw-1/hold?x=1", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,10 +116,10 @@ type fakeControl struct {
 	holdStatus int
 }
 
-func newFakeControl(t *testing.T, gwID string, gwPub ed25519.PublicKey) *fakeControl {
+func newFakeControl(t *testing.T, gwPub ed25519.PublicKey) *fakeControl {
 	t.Helper()
 	trust, priv := newCurrentTrustKey(t)
-	c := &fakeControl{t: t, pub: gwPub, gwID: gwID, trust: trust, priv: priv, live: 1}
+	c := &fakeControl{t: t, pub: gwPub, gwID: "gw-1", trust: trust, priv: priv, live: 1}
 	c.srv = httptest.NewServer(http.HandlerFunc(c.serve))
 	t.Cleanup(c.srv.Close)
 	return c
@@ -211,7 +211,7 @@ func newClient(t *testing.T) (*ControlClient, *fakeControl) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctrl := newFakeControl(t, "gw-1", pub)
+	ctrl := newFakeControl(t, pub)
 	return NewControlClient(ctrl.srv.URL+"/", "gw-1", priv), ctrl
 }
 

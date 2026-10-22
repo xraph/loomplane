@@ -134,12 +134,12 @@ func authenticateSCRAM(be *pgproto3.Backend, v Verifier, serverNonce func() stri
 		",s=" + base64.StdEncoding.EncodeToString(v.Salt) +
 		",i=" + strconv.Itoa(v.Iterations)
 
-	if err := be.SetAuthType(pgproto3.AuthTypeSASLContinue); err != nil {
-		return err
+	if serr := be.SetAuthType(pgproto3.AuthTypeSASLContinue); serr != nil {
+		return serr
 	}
 	be.Send(&pgproto3.AuthenticationSASLContinue{Data: []byte(serverFirst)})
-	if err := be.Flush(); err != nil {
-		return err
+	if ferr := be.Flush(); ferr != nil {
+		return ferr
 	}
 
 	msg, err = be.Receive()

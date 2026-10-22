@@ -64,12 +64,12 @@ func TestPgDialer(t *testing.T) {
 		t.Errorf("application_name = %q, want the runtime param we sent", got)
 	}
 
-	max, err := MaxConnections(ctx, c)
+	maxConns, err := MaxConnections(ctx, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if max <= 0 {
-		t.Fatalf("MaxConnections = %d, want more than 0", max)
+	if maxConns <= 0 {
+		t.Fatalf("MaxConnections = %d, want more than 0", maxConns)
 	}
 
 	c.Frontend.Send(&pgproto3.Query{String: "SELECT 1"})

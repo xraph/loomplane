@@ -426,7 +426,7 @@ func identAt(sql string, buf []byte, p int) (name string, end int, ok bool) {
 }
 
 // wordAt returns the word that starts at p, and where it ends.
-func wordAt(buf []byte, p int) ([]byte, int) {
+func wordAt(buf []byte, p int) (word []byte, end int) {
 	e := p
 	for e < len(buf) && isWordByte(buf[e]) {
 		e++
@@ -629,16 +629,18 @@ func stringEnd(src string, i int, allEscapes bool) (end int, plainBackslash bool
 func stringContinuation(src string, p int) (int, bool) {
 	n := len(src)
 	// Whitespace and comments on the line of the closing quote.
+scanLine:
 	for p < n {
-		if src[p] == ' ' || src[p] == '\t' || src[p] == '\f' {
+		switch {
+		case src[p] == ' ' || src[p] == '\t' || src[p] == '\f':
 			p++
-		} else if src[p] == '-' && p+1 < n && src[p+1] == '-' {
+		case src[p] == '-' && p+1 < n && src[p+1] == '-':
 			p += 2
 			for p < n && src[p] != '\n' && src[p] != '\r' {
 				p++
 			}
-		} else {
-			break
+		default:
+			break scanLine
 		}
 	}
 	if p >= n || src[p] != '\n' && src[p] != '\r' {
@@ -646,11 +648,13 @@ func stringContinuation(src string, p int) (int, bool) {
 	}
 	p++
 	// More whitespace, and comments that end with a newline.
+scanBlank:
 	for p < n {
 		c := src[p]
-		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' {
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f':
 			p++
-		} else if c == '-' && p+1 < n && src[p+1] == '-' {
+		case c == '-' && p+1 < n && src[p+1] == '-':
 			p += 2
 			for p < n && src[p] != '\n' && src[p] != '\r' {
 				p++
@@ -659,8 +663,8 @@ func stringContinuation(src string, p int) (int, bool) {
 				return 0, false
 			}
 			p++
-		} else {
-			break
+		default:
+			break scanBlank
 		}
 	}
 	if p < n && src[p] == '\'' {

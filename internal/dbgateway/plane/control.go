@@ -101,7 +101,7 @@ func NewControlClient(baseURL, id string, key ed25519.PrivateKey) *ControlClient
 
 // do sends one signed request to /api/v1/db-gateways/{id}/<leaf> and returns
 // the status and the body, read up to limit bytes.
-func (c *ControlClient) do(ctx context.Context, method, leaf, query string, body []byte, limit int64) (int, []byte, error) {
+func (c *ControlClient) do(ctx context.Context, method, leaf, query string, body []byte, limit int64) (status int, payload []byte, err error) {
 	u := c.base + "/api/v1/db-gateways/" + url.PathEscape(c.id) + "/" + leaf
 	if query != "" {
 		u += "?" + query

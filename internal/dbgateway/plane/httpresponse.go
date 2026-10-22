@@ -341,7 +341,7 @@ func writeHTTPJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
+	_ = enc.Encode(v) //nolint:errcheck // a client that hung up has nobody to tell
 }
 
 // setCORS lets any origin call /sql. The credentials travel in a header,

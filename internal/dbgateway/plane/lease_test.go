@@ -81,7 +81,7 @@ func TestWithLeasePanicBreaksLease(t *testing.T) {
 func TestWithLeaseErrors(t *testing.T) {
 	never := func(*Lease) (LeaseState, error) {
 		t.Error("fn ran")
-		return LeaseClean, nil
+		return LeaseClean, errors.New("fn ran")
 	}
 	ctx := context.Background()
 
@@ -176,7 +176,7 @@ func TestWithLeaseErrors(t *testing.T) {
 		err := h.r.WithLease(ctx, hostFor("orders"), testRole, testPass, func(*Lease) (LeaseState, error) {
 			return LeaseClean, pgErr
 		})
-		if err != pgErr {
+		if err != pgErr { //nolint:errorlint // the test pins the error as unwrapped
 			t.Fatalf("err = %v, want the backend's error unchanged", err)
 		}
 	})

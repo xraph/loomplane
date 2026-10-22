@@ -34,8 +34,8 @@ const (
 	// subscriberBuffer is how many notifications a subscriber can fall behind
 	// before the hub drops them for it.
 	subscriberBuffer = 64
-	hubBackoffMin    = 100 * time.Millisecond
-	hubBackoffMax    = 5 * time.Second
+	hubBackoffFloor  = 100 * time.Millisecond
+	hubBackoffCeil   = 5 * time.Second
 	// hubProbeEvery is how long the listener may be quiet before the hub
 	// checks it is still alive.
 	hubProbeEvery = 30 * time.Second
@@ -250,7 +250,7 @@ func (h *Hub) broadcastLocked() {
 // run keeps a listener connection open until the hub closes.
 func (h *Hub) run() {
 	defer close(h.done)
-	backoff := hubBackoffMin
+	backoff := hubBackoffFloor
 	for {
 		c, err := h.dial(h.ctx)
 		if err == nil {
@@ -266,8 +266,8 @@ func (h *Hub) run() {
 			// A connection that lasted resets the backoff; one that failed
 			// straight away doesn't, or a backend that accepts and then drops
 			// the gateway would be dialled ten times a second.
-			if time.Since(began) >= hubBackoffMax {
-				backoff = hubBackoffMin
+			if time.Since(began) >= hubBackoffCeil {
+				backoff = hubBackoffFloor
 			}
 		}
 		if h.ctx.Err() != nil {
@@ -280,7 +280,7 @@ func (h *Hub) run() {
 			t.Stop()
 			return
 		}
-		backoff = min(2*backoff, hubBackoffMax)
+		backoff = min(2*backoff, hubBackoffCeil)
 	}
 }
 
@@ -346,13 +346,13 @@ func (h *Hub) serve(c *BackendConn) {
 			// An empty query answers with EmptyQueryResponse and
 			// ReadyForQuery, and changes nothing.
 			lastSent = time.Now()
-			if _, ok := h.exchange(c, "", replies, readerDone); !ok {
+			if answered, _ := h.exchange(c, "", replies, readerDone); !answered { //nolint:errcheck // an empty query draws no backend error
 				return
 			}
 			continue
 		}
 		lastSent = time.Now()
-		cmdErr, ok := h.exchange(c, verb+" "+quoteIdent(channel), replies, readerDone)
+		ok, cmdErr := h.exchange(c, verb+" "+quoteIdent(channel), replies, readerDone)
 		if !ok {
 			return
 		}
@@ -361,17 +361,17 @@ func (h *Hub) serve(c *BackendConn) {
 }
 
 // exchange sends one simple Query on the listener connection and waits for
-// its ReadyForQuery, for at most roundTrip. It returns the backend's error,
-// if any, and ok false when the connection failed, didn't answer in time or
-// the hub closed; serve then drops the connection.
-func (h *Hub) exchange(c *BackendConn, sql string, replies <-chan hubReply, readerDone <-chan struct{}) (cmdErr error, ok bool) {
+// its ReadyForQuery, for at most roundTrip. It returns ok false when the
+// connection failed, didn't answer in time or the hub closed; serve then drops
+// the connection. Otherwise it returns the backend's error, if any.
+func (h *Hub) exchange(c *BackendConn, sql string, replies <-chan hubReply, readerDone <-chan struct{}) (ok bool, cmdErr error) {
 	// A peer that has stopped reading would block the write forever.
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(h.roundTrip))
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(h.roundTrip)) //nolint:errcheck // a dead connection fails the flush below
 	c.Frontend.Send(&pgproto3.Query{String: sql})
 	if c.Frontend.Flush() != nil {
-		return nil, false
+		return false, nil
 	}
-	_ = c.Conn.SetWriteDeadline(time.Time{})
+	_ = c.Conn.SetWriteDeadline(time.Time{}) //nolint:errcheck // a dead connection ends the wait below
 	t := time.NewTimer(h.roundTrip)
 	defer t.Stop()
 	for {
@@ -381,14 +381,14 @@ func (h *Hub) exchange(c *BackendConn, sql string, replies <-chan hubReply, read
 				cmdErr = r.err
 			}
 			if r.ready {
-				return cmdErr, true
+				return true, cmdErr
 			}
 		case <-t.C:
-			return nil, false
+			return false, nil
 		case <-readerDone:
-			return nil, false
+			return false, nil
 		case <-h.ctx.Done():
-			return nil, false
+			return false, nil
 		}
 	}
 }

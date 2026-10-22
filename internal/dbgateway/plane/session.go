@@ -617,9 +617,9 @@ func (s *session) endLease() {
 	s.mu.Unlock()
 
 	c := l.Conn()
-	_ = c.Conn.SetReadDeadline(time.Unix(1, 0))
+	_ = c.Conn.SetReadDeadline(time.Unix(1, 0)) //nolint:errcheck // on a dead connection the reader has already stopped
 	<-done
-	_ = c.Conn.SetReadDeadline(time.Time{})
+	_ = c.Conn.SetReadDeadline(time.Time{}) //nolint:errcheck // on a dead connection the lease is dropped anyway
 
 	s.mu.Lock()
 	var state LeaseState

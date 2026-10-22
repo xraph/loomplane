@@ -47,10 +47,14 @@ func SaveLastGood(path string, key *ecdh.PrivateKey, s Snapshot) (err error) {
 	if _, err = f.Write(data); err != nil {
 		return err
 	}
-	if err = f.Sync(); err != nil {
+	// The deferred cleanup above reads err, so these assign to it rather
+	// than declare their own.
+	err = f.Sync()
+	if err != nil {
 		return err
 	}
-	if err = f.Close(); err != nil {
+	err = f.Close()
+	if err != nil {
 		return err
 	}
 	return os.Rename(f.Name(), path)
@@ -66,16 +70,16 @@ func LoadLastGood(path string, key *ecdh.PrivateKey) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	var sealed Sealed
-	if err := json.Unmarshal(data, &sealed); err != nil {
-		return Snapshot{}, err
+	if uerr := json.Unmarshal(data, &sealed); uerr != nil {
+		return Snapshot{}, uerr
 	}
 	plain, err := Open(key, sealed, lastGoodContext)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	var s Snapshot
-	if err := json.Unmarshal(plain, &s); err != nil {
-		return Snapshot{}, err
+	if uerr := json.Unmarshal(plain, &s); uerr != nil {
+		return Snapshot{}, uerr
 	}
 	return s, nil
 }

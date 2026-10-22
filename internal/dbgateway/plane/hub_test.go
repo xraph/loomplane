@@ -530,9 +530,9 @@ func TestHubProbeKeepsLiveListener(t *testing.T) {
 }
 
 // newHubHarness is a session harness whose route has a hub.
-func newHubHarness(t *testing.T, limit int) (*harness, *listenPG, *Hub) {
+func newHubHarness(t *testing.T) (*harness, *listenPG, *Hub) {
 	t.Helper()
-	h := newHarness(t, limit, time.Second)
+	h := newHarness(t, 1, time.Second)
 	p := &listenPG{}
 	hub := newTestHub(t, p)
 	h.route.hub = hub
@@ -540,7 +540,7 @@ func newHubHarness(t *testing.T, limit int) (*harness, *listenPG, *Hub) {
 }
 
 func TestSessionListenUsesHub(t *testing.T) {
-	h, p, _ := newHubHarness(t, 1)
+	h, p, _ := newHubHarness(t)
 	c := h.connect(nil)
 	want(t, "LISTEN", c.query("LISTEN Jobs"), []string{"CommandComplete LISTEN", "ReadyForQuery I"})
 	want(t, "LISTEN quoted", c.query(`LISTEN "Mixed"`), []string{"CommandComplete LISTEN", "ReadyForQuery I"})
@@ -561,7 +561,7 @@ func TestSessionListenUsesHub(t *testing.T) {
 }
 
 func TestSessionDeliversNotifyWhenIdle(t *testing.T) {
-	h, p, hub := newHubHarness(t, 1)
+	h, p, hub := newHubHarness(t)
 	h.dialer.hold = make(chan struct{})
 	c := h.connect(nil)
 	c.query("LISTEN jobs")
@@ -590,7 +590,7 @@ func TestSessionDeliversNotifyWhenIdle(t *testing.T) {
 }
 
 func TestSessionListenInTransactionPins(t *testing.T) {
-	h, p, _ := newHubHarness(t, 1)
+	h, p, _ := newHubHarness(t)
 	c := h.connect(nil)
 	c.query("BEGIN")
 	want(t, "LISTEN", c.query("LISTEN jobs"), []string{"CommandComplete LISTEN", "ReadyForQuery T"})
@@ -613,7 +613,7 @@ func TestSessionListenInTransactionPins(t *testing.T) {
 }
 
 func TestSessionExtendedListenPins(t *testing.T) {
-	h, p, _ := newHubHarness(t, 1)
+	h, p, _ := newHubHarness(t)
 	c := h.connect(nil)
 	c.send(&pgproto3.Parse{Query: "LISTEN jobs"}, &pgproto3.Bind{}, &pgproto3.Execute{}, &pgproto3.Sync{})
 	want(t, "extended LISTEN", c.read(4), []string{"ParseComplete", "BindComplete", "CommandComplete LISTEN", "ReadyForQuery I"})
@@ -627,7 +627,7 @@ func TestSessionExtendedListenPins(t *testing.T) {
 }
 
 func TestSessionUnlistenAll(t *testing.T) {
-	h, p, _ := newHubHarness(t, 1)
+	h, p, _ := newHubHarness(t)
 	c := h.connect(nil)
 	c.query("LISTEN a")
 	c.query(`LISTEN "B"`)
@@ -647,7 +647,7 @@ func TestSessionUnlistenAll(t *testing.T) {
 }
 
 func TestSessionDiscardAllUnlistens(t *testing.T) {
-	h, p, _ := newHubHarness(t, 1)
+	h, p, _ := newHubHarness(t)
 	c := h.connect(nil)
 	c.query("LISTEN jobs")
 	want(t, "DISCARD ALL", c.query("DISCARD ALL"), []string{"CommandComplete DISCARD ALL", "ReadyForQuery I"})
@@ -656,7 +656,7 @@ func TestSessionDiscardAllUnlistens(t *testing.T) {
 }
 
 func TestSessionListenRefused(t *testing.T) {
-	h, p, _ := newHubHarness(t, 1)
+	h, p, _ := newHubHarness(t)
 	p.setRefuse("bad")
 	c := h.connect(nil)
 	want(t, "LISTEN bad", c.query("LISTEN bad"), []string{"ErrorResponse ERROR 55000 cannot listen", "ReadyForQuery I"})
@@ -666,7 +666,7 @@ func TestSessionListenRefused(t *testing.T) {
 }
 
 func TestSessionUnlistenQuotedStarIsAChannel(t *testing.T) {
-	h, p, _ := newHubHarness(t, 1)
+	h, p, _ := newHubHarness(t)
 	c := h.connect(nil)
 	c.query(`LISTEN "*"`)
 	c.query("LISTEN a")
@@ -687,7 +687,7 @@ func TestSessionUnlistenQuotedStarIsAChannel(t *testing.T) {
 // that arrives between extended-protocol messages waits for the Sync's
 // ReadyForQuery.
 func TestSessionHoldsNotifyInExtendedBatch(t *testing.T) {
-	h, p, hub := newHubHarness(t, 1)
+	h, p, hub := newHubHarness(t)
 	c := h.connect(nil)
 	c.query("LISTEN jobs")
 	watch := NewSubscriber()
@@ -711,7 +711,7 @@ func TestSessionHoldsNotifyInExtendedBatch(t *testing.T) {
 // TestSessionHoldsNotifyDuringHubListen: a notification that arrives while
 // the hub answers a LISTEN goes out after that LISTEN's reply.
 func TestSessionHoldsNotifyDuringHubListen(t *testing.T) {
-	h, p, hub := newHubHarness(t, 1)
+	h, p, hub := newHubHarness(t)
 	c := h.connect(nil)
 	c.query("LISTEN a")
 	watch := NewSubscriber()

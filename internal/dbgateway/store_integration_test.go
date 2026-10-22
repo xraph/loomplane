@@ -308,9 +308,9 @@ func TestBumpSnapshotOnlyOnChange(t *testing.T) {
 		{"aaa", 3, true},
 	}
 	for i, st := range steps {
-		v, changed, err := s.BumpSnapshot(ctx, "org_1", gw.ID, st.digest)
-		if err != nil || v != st.version || changed != st.changed {
-			t.Fatalf("step %d (%s): version=%d changed=%v err=%v, want %d %v", i, st.digest, v, changed, err, st.version, st.changed)
+		v, changed, berr := s.BumpSnapshot(ctx, "org_1", gw.ID, st.digest)
+		if berr != nil || v != st.version || changed != st.changed {
+			t.Fatalf("step %d (%s): version=%d changed=%v err=%v, want %d %v", i, st.digest, v, changed, berr, st.version, st.changed)
 		}
 	}
 	if _, _, err = s.BumpSnapshot(ctx, "org_1", "missing", "aaa"); !errors.Is(err, ErrNotFound) {
@@ -529,9 +529,9 @@ func TestReportCountsLive(t *testing.T) {
 	}
 	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	stale := plane.Report{InstanceID: "inst-old", SnapshotVersion: 3}
-	if live, err := s.Report(ctx, "org_1", gw.ID, stale, now.Add(-31*time.Second)); err != nil || live != 1 {
+	if live, rerr := s.Report(ctx, "org_1", gw.ID, stale, now.Add(-31*time.Second)); rerr != nil || live != 1 {
 		// Seen at its own report time, an instance is live for itself.
-		t.Fatalf("first report: live=%d err=%v", live, err)
+		t.Fatalf("first report: live=%d err=%v", live, rerr)
 	}
 	fresh := plane.Report{
 		InstanceID: "inst-new", SnapshotVersion: 4, Draining: true,

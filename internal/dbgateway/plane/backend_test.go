@@ -91,7 +91,7 @@ func TestMaxConnectionsReturnsSQLState(t *testing.T) {
 }
 
 func TestMaxConnectionsMarksBrokenOnIOError(t *testing.T) {
-	c := fakeBackend(t, func(b *pgproto3.Backend) {})
+	c := fakeBackend(t, func(_ *pgproto3.Backend) {})
 	_ = c.Conn.Close()
 	if _, err := MaxConnections(t.Context(), c); err == nil {
 		t.Fatal("expected an error from a closed connection")
@@ -102,7 +102,7 @@ func TestMaxConnectionsMarksBrokenOnIOError(t *testing.T) {
 }
 
 func TestBackendConnCloseIsIdempotent(t *testing.T) {
-	c := fakeBackend(t, func(b *pgproto3.Backend) {})
+	c := fakeBackend(t, func(_ *pgproto3.Backend) {})
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}

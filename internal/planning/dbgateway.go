@@ -315,7 +315,7 @@ func (p *planner) dependOnDatabaseGateway(gw *Action, resources []string) {
 // deploying with gatewayConnection in gatewayRegion, can reach the backend
 // b, and if it can't, why. b's connection is its managed profile's, or
 // else its Target.
-func gatewayReaches(gatewayProvider, gatewayConnection, gatewayRegion string, b *ResourceConfig) (bool, string) {
+func gatewayReaches(gatewayProvider, gatewayConnection, gatewayRegion string, b *ResourceConfig) (reaches bool, reason string) {
 	switch b.Provider {
 	case "digitalocean":
 		// Managed PostgreSQL on DigitalOcean has a public address with

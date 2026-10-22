@@ -85,14 +85,14 @@ func (r *Router) withLease(ctx context.Context, host, role, password string, aut
 		return gatewayError("28P01", `password authentication failed for user "`+role+`"`)
 	}
 	if authed != nil {
-		if err := authed(); err != nil {
-			return err
+		if aerr := authed(); aerr != nil {
+			return aerr
 		}
 	}
 	if h.pool == nil {
 		return gatewayError("08006", msgNoBackend)
 	}
-	if err := h.probe(sctx, deadline); err != nil {
+	if perr := h.probe(sctx, deadline); perr != nil {
 		if sctx.Err() != nil {
 			return r.cutOff(ctx, sctx)
 		}
@@ -104,11 +104,11 @@ func (r *Router) withLease(ctx context.Context, host, role, password string, aut
 		return gatewayError("57P01", msgRouteRemoved)
 	default:
 	}
-	if err := h.Gate(sctx); err != nil {
+	if gerr := h.Gate(sctx); gerr != nil {
 		if sctx.Err() != nil {
 			return r.cutOff(ctx, sctx)
 		}
-		return gatewayError("57P01", err.Error())
+		return gatewayError("57P01", gerr.Error())
 	}
 	l, err := h.pool.Acquire(sctx, nil)
 	if err != nil {
@@ -132,7 +132,9 @@ func (r *Router) withLease(ctx context.Context, host, role, password string, aut
 // runLease runs fn on l and releases it.
 func (r *Router) runLease(ctx, sctx context.Context, l *Lease, fn func(l *Lease) (LeaseState, error)) (err error) {
 	c := l.Conn()
-	stopIO := context.AfterFunc(sctx, func() { _ = c.Conn.SetDeadline(time.Unix(1, 0)) })
+	stopIO := context.AfterFunc(sctx, func() {
+		_ = c.Conn.SetDeadline(time.Unix(1, 0)) //nolint:errcheck // a dead connection is already failing the work
+	})
 	state := LeaseBroken // what a panic in fn leaves
 	defer func() {
 		if !stopIO() || c.Broken {

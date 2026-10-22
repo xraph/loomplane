@@ -116,6 +116,15 @@ func newID(prefix string) (string, error) {
 // it before the gateway itself is recorded.
 func NewGatewayID() (string, error) { return newID(gatewayPrefix) }
 
+// versionFromColumn reads a BIGINT version column as a uint64. The columns
+// are checked non-negative, so a negative value means the row is damaged.
+func versionFromColumn(v int64) (uint64, error) {
+	if v < 0 {
+		return 0, fmt.Errorf("database gateway snapshot version %d is negative", v)
+	}
+	return uint64(v), nil
+}
+
 // missingGateway turns the foreign key failure of a write against a gateway
 // that isn't there into ErrNotFound.
 func missingGateway(err error, id string) error {
@@ -370,7 +379,10 @@ func (s *Store) BumpSnapshot(ctx context.Context, org, gatewayID, digest string)
 		RETURNING version`, org, gatewayID, digest).Scan(&v)
 	switch {
 	case err == nil:
-		return uint64(v), true, nil
+		if version, err = versionFromColumn(v); err != nil {
+			return 0, false, err
+		}
+		return version, true, nil
 	case errors.Is(err, pgx.ErrNoRows):
 		// The stored digest already matches, so nothing was written.
 	default:
@@ -380,7 +392,10 @@ func (s *Store) BumpSnapshot(ctx context.Context, org, gatewayID, digest string)
 		WHERE org_id = $1 AND gateway_id = $2`, org, gatewayID).Scan(&v); err != nil {
 		return 0, false, fmt.Errorf("read database gateway snapshot: %w", err)
 	}
-	return uint64(v), false, nil
+	if version, err = versionFromColumn(v); err != nil {
+		return 0, false, err
+	}
+	return version, false, nil
 }
 
 // LatestSnapshot returns the gateway's stored snapshot version and digest,
@@ -483,7 +498,10 @@ func (s *Store) Instances(ctx context.Context, org, gatewayID string) ([]Instanc
 		if err := rows.Scan(&in.InstanceID, &version, &in.Draining, &metrics, &in.LastSeenAt); err != nil {
 			return nil, fmt.Errorf("scan database gateway instance: %w", err)
 		}
-		in.SnapshotVersion = uint64(version)
+		var verr error
+		if in.SnapshotVersion, verr = versionFromColumn(version); verr != nil {
+			return nil, verr
+		}
 		in.Metrics = []plane.RouteStats{}
 		if err := json.Unmarshal(metrics, &in.Metrics); err != nil {
 			return nil, fmt.Errorf("decode metrics of instance %s: %w", in.InstanceID, err)

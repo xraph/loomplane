@@ -85,15 +85,18 @@ func (g *wsRig) url(query string) string {
 }
 
 // dial opens a WebSocket for the route address.
-func (g *wsRig) dial(address string) *wsClient {
+func (g *wsRig) dial() *wsClient {
 	g.t.Helper()
-	q := url.Values{"address": {address}}
+	q := url.Values{"address": {wsTestAddress}}
 	return g.dialQuery(q.Encode())
 }
 
 func (g *wsRig) dialQuery(query string) *wsClient {
 	g.t.Helper()
 	c, resp, err := smallDialer.Dial(g.url(query), nil)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		g.t.Fatalf("dial: %v (response %v)", err, resp)
 	}
@@ -205,7 +208,7 @@ var appStartup = map[string]string{"user": testRole, "database": "orders"}
 
 // login sends the startup packet, waits for the cleartext request, answers
 // it, and reads the greeting up to ReadyForQuery.
-func (c *wsClient) login(g *wsRig) {
+func (c *wsClient) login(_ *wsRig) {
 	c.t.Helper()
 	c.frame(startupBytes(c.t, appStartup))
 	if got := c.recv(); got != "AuthenticationCleartextPassword" {
@@ -272,7 +275,7 @@ func TestWSReplaysNeonOpen(t *testing.T) {
 
 func TestWSFrameSplitting(t *testing.T) {
 	g := newWSRig(t)
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.login(g)
 
 	// One Query cut across three frames: inside its 5-byte header, then
@@ -347,7 +350,7 @@ func TestWSDraining(t *testing.T) {
 func TestWSStartupTimeout(t *testing.T) {
 	g := newWSRig(t)
 	g.hd.startupTimeout = 200 * time.Millisecond
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 
 	start := time.Now()
 	if got := c.recv(); got != "ErrorResponse FATAL 08P01 the database gateway got no startup message in time" {
@@ -364,7 +367,7 @@ func TestWSStartupTimeoutIsNotExtendedByPongs(t *testing.T) {
 	g.hd.startupTimeout = 300 * time.Millisecond
 	g.hd.pingInterval = 20 * time.Millisecond
 	g.hd.readWait = 10 * time.Second
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	// The client answers every ping, and still runs out of startup time.
 	if got := c.recv(); !strings.HasPrefix(got, "ErrorResponse FATAL 08P01") {
 		t.Fatalf("message = %q, want FATAL 08P01", got)
@@ -378,7 +381,7 @@ func TestWSSSLRequestGetsN(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := newWSRig(t)
-			c := g.dial(wsTestAddress)
+			c := g.dial()
 			c.frame(frontendBytes(t, req))
 			_ = c.c.SetReadDeadline(time.Now().Add(3 * time.Second))
 			kind, data, err := c.c.ReadMessage()
@@ -395,7 +398,7 @@ func TestWSSSLRequestGetsN(t *testing.T) {
 
 func TestWSCancelRequestCloses(t *testing.T) {
 	g := newWSRig(t)
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.frame(frontendBytes(t, &pgproto3.CancelRequest{ProcessID: 1, SecretKey: []byte{0, 0, 0, 2}}))
 	c.expectClosed()
 	if n := g.h.dialer.dials(); n != 0 {
@@ -405,7 +408,7 @@ func TestWSCancelRequestCloses(t *testing.T) {
 
 func TestWSTextMessageCloses(t *testing.T) {
 	g := newWSRig(t)
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.login(g)
 
 	if err := c.c.WriteMessage(websocket.TextMessage, []byte("SELECT 1")); err != nil {
@@ -422,7 +425,7 @@ func TestWSPingKeepsLiveClientOpen(t *testing.T) {
 	g := newWSRig(t)
 	g.hd.pingInterval = 50 * time.Millisecond
 	g.hd.readWait = 300 * time.Millisecond
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.login(g)
 
 	// Idle for well past the read timeout. The client is reading, so it
@@ -437,7 +440,7 @@ func TestWSDeadClientTimesOut(t *testing.T) {
 	g := newWSRig(t)
 	g.hd.pingInterval = 50 * time.Millisecond
 	g.hd.readWait = 300 * time.Millisecond
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 
 	// Log in and then stop reading: the pings go unanswered.
 	c.frame(startupBytes(t, appStartup))
@@ -459,7 +462,7 @@ func TestWSDeadClientTimesOut(t *testing.T) {
 
 func TestWSBaseContextClosesConnections(t *testing.T) {
 	g := newWSRig(t)
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.login(g)
 	g.cancel()
 	c.expectClosed()
@@ -479,7 +482,10 @@ func wsPair(t *testing.T) (*wsConn, *websocket.Conn) {
 		got <- newWSConn(c)
 	}))
 	t.Cleanup(srv.Close)
-	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	client, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,7 +564,7 @@ func TestWSOversizedMessageBodyCloses(t *testing.T) {
 	// Before the password, which is when the gateway is reading for it.
 	t.Run("before login", func(t *testing.T) {
 		g := newWSRig(t)
-		c := g.dial(wsTestAddress)
+		c := g.dial()
 		c.frame(startupBytes(t, appStartup))
 		if got := c.recv(); got != "AuthenticationCleartextPassword" {
 			t.Fatalf("first message = %q, want AuthenticationCleartextPassword", got)
@@ -571,7 +577,7 @@ func TestWSOversizedMessageBodyCloses(t *testing.T) {
 	})
 	t.Run("after login", func(t *testing.T) {
 		g := newWSRig(t)
-		c := g.dial(wsTestAddress)
+		c := g.dial()
 		c.login(g)
 		c.frame(oversizedHeader('Q'))
 		c.expectClosed()
@@ -580,7 +586,7 @@ func TestWSOversizedMessageBodyCloses(t *testing.T) {
 	// any password.
 	t.Run("1 MiB before login", func(t *testing.T) {
 		g := newWSRig(t)
-		c := g.dial(wsTestAddress)
+		c := g.dial()
 		c.frame(startupBytes(t, appStartup))
 		if got := c.recv(); got != "AuthenticationCleartextPassword" {
 			t.Fatalf("first message = %q, want AuthenticationCleartextPassword", got)
@@ -592,7 +598,7 @@ func TestWSOversizedMessageBodyCloses(t *testing.T) {
 
 func TestWSLargeQueryAfterLogin(t *testing.T) {
 	g := newWSRig(t)
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.login(g)
 	// The pre-login cap is gone once the client is in.
 	c.frame(frontendBytes(t, &pgproto3.Query{String: "SELECT " + strings.Repeat("x", 1<<20)}))
@@ -615,7 +621,7 @@ func checkBigSelect(t *testing.T, got []string) {
 func TestWSMessageOverReadLimitCloses1009(t *testing.T) {
 	g := newWSRig(t)
 	g.hd.readLimit = 1024
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.login(g)
 
 	// One WebSocket message larger than the limit, though it holds nothing
@@ -637,7 +643,7 @@ func TestWSBusySessionDoesNotCostTheConnection(t *testing.T) {
 	g.hd.pingInterval = 50 * time.Millisecond
 	g.hd.readWait = 300 * time.Millisecond
 	g.h.r.pauseLimit = 5 * time.Second
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.login(g)
 
 	// The route pauses, and the next query waits for it to resume. While it
@@ -659,7 +665,7 @@ func TestWSBusySessionDoesNotCostTheConnection(t *testing.T) {
 func TestWSStalledClientWriteTimesOut(t *testing.T) {
 	g := newWSRig(t)
 	g.hd.writeWait = 300 * time.Millisecond
-	c := g.dial(wsTestAddress)
+	c := g.dial()
 	c.login(g)
 
 	// Ask for far more result than the socket buffers hold, and never read

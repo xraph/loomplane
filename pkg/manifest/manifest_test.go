@@ -545,7 +545,7 @@ func compileSchema(t *testing.T) *jsonschema.Schema {
 	}
 	c := jsonschema.NewCompiler()
 	c.UseRegexpEngine(goOrAnyRegexp)
-	if err := c.AddResource(SchemaID, doc); err != nil {
+	if err = c.AddResource(SchemaID, doc); err != nil {
 		t.Fatal(err)
 	}
 	s, err := c.Compile(SchemaID)

@@ -334,7 +334,8 @@ func TestPoolReplaysParams(t *testing.T) {
 	// Overrides are SET in sorted key order, before Acquire returns. Unknown
 	// keys are ignored.
 	l = mustAcquire(t, p, map[string]string{"search_path": "app, public", "application_name": "'b'", "bogus": "x"})
-	want := []string{"SET application_name TO 'b'; SET search_path TO app, public"}
+	setReplay := "SET application_name TO 'b'; SET search_path TO app, public"
+	want := []string{setReplay}
 	if q := d.server(0).recorded(); !reflect.DeepEqual(q, want) {
 		t.Fatalf("replay = %q, want %q", q, want)
 	}
@@ -342,7 +343,7 @@ func TestPoolReplaysParams(t *testing.T) {
 
 	// Overrides that are no longer wanted are RESET.
 	l = mustAcquire(t, p, nil)
-	want = append(want, "RESET application_name; RESET search_path")
+	want = []string{setReplay, "RESET application_name; RESET search_path"}
 	if q := d.server(0).recorded(); !reflect.DeepEqual(q, want) {
 		t.Fatalf("replay = %q, want %q", q, want)
 	}

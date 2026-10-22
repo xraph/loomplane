@@ -123,13 +123,13 @@ func RouteKey(suffix Suffix, host string, startup map[string]string) (Label, str
 	case err == nil:
 		return label, stripLabel(user, label), nil
 	case !errors.Is(err, ErrNoRoute):
-		return Label{}, "", fmt.Errorf("%w: host: %v", ErrNoRoute, err)
+		return Label{}, "", fmt.Errorf("%w: host: %w", ErrNoRoute, err)
 	}
 
 	if raw, ok := endpointOption(startup["options"]); ok {
 		label, err := ParseLabel(raw)
 		if err != nil {
-			return Label{}, "", fmt.Errorf("%w: endpoint option: %v", ErrNoRoute, err)
+			return Label{}, "", fmt.Errorf("%w: endpoint option: %w", ErrNoRoute, err)
 		}
 		return label, stripLabel(user, label), nil
 	}
@@ -137,7 +137,7 @@ func RouteKey(suffix Suffix, host string, startup map[string]string) (Label, str
 	if i := strings.LastIndex(user, "@"); i > 0 && i < len(user)-1 {
 		label, err := ParseLabel(user[i+1:])
 		if err != nil {
-			return Label{}, "", fmt.Errorf("%w: user: %v", ErrNoRoute, err)
+			return Label{}, "", fmt.Errorf("%w: user: %w", ErrNoRoute, err)
 		}
 		return label, user[:i], nil
 	}
