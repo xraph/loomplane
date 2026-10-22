@@ -55,29 +55,90 @@ func JobOutput(output []byte, secrets map[string]string) string {
 	return text
 }
 
-// sensitiveParts is what of a secret value must never be shown: an
-// address's password, or the whole of anything else. A value of several
-// lines is covered line by line too, since its pieces include each
-// line's.
+// sensitiveParts is what of a secret value must never be shown. Of an
+// address (a URL with a scheme and a host) it's what's secret in it: its
+// password, its user when that looks like a token (urlTokenUser), and
+// its query values that look secret (secretQueryValue), each as decoded
+// and as the address spells it. Its host, path and an ordinary user, such
+// as postgres, are left, so output naming them stays readable. An address
+// with nothing secret in it, and anything else, is secret whole. A value
+// of several lines is covered line by line too, since its pieces include
+// each line's.
 func sensitiveParts(value string) []string {
 	u, err := url.Parse(value)
-	if err != nil || u.User == nil {
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return []string{value}
 	}
-	password, ok := u.User.Password()
-	if !ok || password == "" {
-		return []string{value}
-	}
-	parts := []string{password}
-	// As the address spells it, which may escape it.
-	if _, rest, found := strings.Cut(value, "://"); found {
-		if at := strings.LastIndex(rest, "@"); at >= 0 {
-			if _, raw, found := strings.Cut(rest[:at], ":"); found && raw != password {
-				parts = append(parts, raw)
+	var parts []string
+	add := func(decoded, raw string) {
+		for _, part := range []string{decoded, raw} {
+			if part != "" && !slices.Contains(parts, part) {
+				parts = append(parts, part)
 			}
 		}
 	}
+	if u.User != nil {
+		// As the address spells them, which may escape them.
+		rawUser, rawPassword := "", ""
+		if _, rest, found := strings.Cut(value, "://"); found {
+			if at := strings.LastIndex(rest, "@"); at >= 0 {
+				rawUser, rawPassword, _ = strings.Cut(rest[:at], ":")
+			}
+		}
+		if password, ok := u.User.Password(); ok && password != "" {
+			add(password, rawPassword)
+		}
+		if user := u.User.Username(); len(user) >= urlTokenUser {
+			add(user, rawUser)
+		}
+	}
+	for _, pair := range strings.Split(u.RawQuery, "&") {
+		rawKey, rawValue, _ := strings.Cut(pair, "=")
+		key, kerr := url.QueryUnescape(rawKey)
+		v, verr := url.QueryUnescape(rawValue)
+		if kerr != nil || verr != nil {
+			key, v = rawKey, rawValue
+		}
+		if secretQueryValue(key, v) {
+			add(v, rawValue)
+		}
+	}
+	if len(parts) == 0 {
+		return []string{value}
+	}
 	return parts
+}
+
+// urlTokenUser is the shortest user of an address that is a secret
+// itself, such as a token a Git host takes as the user. Shorter ones are
+// names, such as postgres.
+const urlTokenUser = 16
+
+// secretQueryKeys are words in a query parameter's name that make its
+// value a secret.
+var secretQueryKeys = []string{"token", "key", "secret", "password", "passwd", "pwd", "auth", "signature", "sig", "credential"}
+
+// secretQueryValue reports whether a query value is a secret: any value
+// of a parameter whose name says so, such as api_key or access_token, and
+// any other of eight bytes or more that looks like a token rather than a
+// word. A word, such as verify-full or a service's name, is only lower
+// case letters and - _ . and a value with a space in it isn't a token.
+func secretQueryValue(key, value string) bool {
+	if value == "" {
+		return false
+	}
+	key = strings.ToLower(key)
+	for _, word := range secretQueryKeys {
+		if strings.Contains(key, word) {
+			return true
+		}
+	}
+	if len(value) < 8 || strings.ContainsAny(value, " \t\r\n") {
+		return false
+	}
+	return strings.ContainsFunc(value, func(r rune) bool {
+		return ('0' <= r && r <= '9') || ('A' <= r && r <= 'Z')
+	})
 }
 
 // redactPieces replaces each run of text covered by pieces with
