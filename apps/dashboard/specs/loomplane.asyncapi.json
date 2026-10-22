@@ -1918,6 +1918,9 @@
           "environment_id": {
             "type": "string"
           },
+          "external_ttl_seconds": {
+            "type": "integer"
+          },
           "hostname": {
             "type": "string"
           },

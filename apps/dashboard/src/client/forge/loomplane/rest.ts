@@ -1378,6 +1378,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * domainRoutes.updateTTL
+     */
+    updateTTL: async (projectId: string, routeId: string, body: types.RouteTTLInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudinfraRoute> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/ttl`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RouteTTLInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudinfraRoute"],
+      };
+
+      return this.request<types.CloudinfraRoute>(config);
+    },
+
+    /**
      * domainRoutes.verify
      */
     verify: async (projectId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteOperation> => {
