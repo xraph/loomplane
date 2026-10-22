@@ -26,6 +26,12 @@ var (
 	// ErrNotConfigured means no signing key is configured, so the service
 	// can't sign snapshots.
 	ErrNotConfigured = errors.New("the database gateway signing key is not configured")
+	// ErrSigningKeyExpired means the signing key's not_after has passed, so
+	// the service signs nothing until a new key is configured.
+	ErrSigningKeyExpired = errors.New("the database gateway signing key has expired; put a key with an open window in dbgateway.signing_key_file and restart Loomplane")
+	// ErrSigningKeyNotYetValid means the signing key's not_before is still
+	// to come. The service starts signing once it passes.
+	ErrSigningKeyNotYetValid = errors.New("the database gateway signing key isn't valid yet; its not_before is still to come")
 	// ErrNoHoldHandler is every hold in Phase 1: nothing brings a route up
 	// on demand yet.
 	ErrNoHoldHandler = errors.New("no hold handler")
@@ -113,8 +119,26 @@ func newService(store storage, urls ResourceURLs, key ed25519.PrivateKey, trust 
 	return &Service{store: store, urls: urls, key: key, trust: trust, now: now, verifiers: newVerifierCache()}
 }
 
-// Configured reports whether the service has a key to sign snapshots with.
+// Configured reports whether the service has a key to sign snapshots with,
+// whether or not its window is open.
 func (s *Service) Configured() bool { return len(s.key) == ed25519.PrivateKeySize }
+
+// Ready says whether the service can sign a snapshot now: ErrNotConfigured
+// without a key, ErrSigningKeyNotYetValid or ErrSigningKeyExpired outside
+// the key's window, and nil inside it. A key that expires while Loomplane
+// runs stops being used then.
+func (s *Service) Ready() error {
+	now := s.now()
+	switch {
+	case !s.Configured():
+		return ErrNotConfigured
+	case now.Before(s.trust.NotBefore):
+		return ErrSigningKeyNotYetValid
+	case !now.Before(s.trust.NotAfter):
+		return ErrSigningKeyExpired
+	}
+	return nil
+}
 
 // TrustKeys returns the keys a gateway should trust for this control plane's
 // snapshots, or none when no signing key is configured.
@@ -130,9 +154,11 @@ func (s *Service) TrustKeys() []plane.TrustKey {
 // decides leaves out the sealed credentials, which are sealed afresh each
 // time, and covers them through the route verifiers, which are derived from
 // the same user and password. Waiting for something new is the caller's job.
+// Outside the signing key's window it returns Ready's error and signs
+// nothing.
 func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*plane.SignedSnapshot, error) {
-	if !s.Configured() {
-		return nil, ErrNotConfigured
+	if err := s.Ready(); err != nil {
+		return nil, err
 	}
 	if after >= math.MaxInt64 {
 		return nil, fmt.Errorf("%w: snapshot version %d", ErrInvalid, after)

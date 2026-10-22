@@ -29,7 +29,7 @@ const (
 
 // gateways is what the routes need from *dbgateway.Service.
 type gateways interface {
-	Configured() bool
+	Ready() error
 	VerifyRequest(r *http.Request, body []byte, now time.Time) (*dbgateway.Gateway, error)
 	Snapshot(ctx context.Context, gw *dbgateway.Gateway, after uint64) (*plane.SignedSnapshot, error)
 	Report(ctx context.Context, gw *dbgateway.Gateway, r plane.Report) (plane.ReportResponse, error)
@@ -157,8 +157,10 @@ func reply(c forge.Context, status int, msg string) error {
 // authenticate reads the body, at most 1 MiB, and returns the gateway that
 // signed the request. When it returns a nil gateway the response is written.
 func (h *handlers) authenticate(c forge.Context) (*dbgateway.Gateway, []byte, error) {
-	if !h.svc.Configured() {
-		return nil, nil, reply(c, http.StatusServiceUnavailable, dbgateway.ErrNotConfigured.Error())
+	// Without a signing key whose window is open there's nothing to serve,
+	// and the answer says which it is: none, expired or not yet valid.
+	if err := h.svc.Ready(); err != nil {
+		return nil, nil, reply(c, http.StatusServiceUnavailable, err.Error())
 	}
 	req := c.Request()
 	body, err := io.ReadAll(http.MaxBytesReader(c.Response(), req.Body, maxBody))
@@ -207,6 +209,10 @@ func (h *handlers) snapshot(c forge.Context) error {
 			if errors.Is(err, dbgateway.ErrInvalid) {
 				return reply(c, http.StatusBadRequest, "after must be a snapshot version")
 			}
+			// The key can expire during the wait.
+			if notReady(err) {
+				return reply(c, http.StatusServiceUnavailable, err.Error())
+			}
 			h.warn("compile a database gateway snapshot", err)
 			return reply(c, http.StatusInternalServerError, "the snapshot couldn't be compiled")
 		}
@@ -231,6 +237,11 @@ func (h *handlers) snapshot(c forge.Context) error {
 		case <-t.C:
 		}
 	}
+}
+
+// notReady reports whether err is one of the service's Ready errors.
+func notReady(err error) bool {
+	return errors.Is(err, dbgateway.ErrNotConfigured) || errors.Is(err, dbgateway.ErrSigningKeyExpired) || errors.Is(err, dbgateway.ErrSigningKeyNotYetValid)
 }
 
 // report answers POST /api/v1/db-gateways/:id/report with how many of the

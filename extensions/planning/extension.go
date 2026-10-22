@@ -338,12 +338,16 @@ func (e *Extension) Register(fapp forge.App) error {
 // service, looked up when a gateway deploys: the database gateway extension
 // registers after this one and provides the service then. A service that
 // isn't there is a wiring error, which it reports; one with no signing key
-// gives no keys, which the deploy reports as that.
+// gives no keys, which the deploy reports as that. A key outside its window
+// gives the service's reason, so the deploy fails saying the key expired.
 func databaseGatewayTrust(c forge.Container) func() ([]plane.TrustKey, error) {
 	return func() ([]plane.TrustKey, error) {
 		svc, err := forge.InjectType[*dbgateway.Service](c)
 		if err != nil {
 			return nil, fmt.Errorf("the database gateway extension isn't registered: %w", err)
+		}
+		if err = svc.Ready(); err != nil && !errors.Is(err, dbgateway.ErrNotConfigured) {
+			return nil, err
 		}
 		return svc.TrustKeys(), nil
 	}

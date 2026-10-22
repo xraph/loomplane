@@ -27,6 +27,8 @@ import (
 type fakeGateways struct {
 	mu         sync.Mutex
 	configured bool
+	readyErr   error  // what Ready says when configured; nil is ready
+	snapErr    error  // what Snapshot returns, when set
 	version    uint64 // the latest snapshot version; 0 is none
 	polls      int
 	verifyErr  error
@@ -36,7 +38,12 @@ type fakeGateways struct {
 	bodies     [][]byte
 }
 
-func (f *fakeGateways) Configured() bool { return f.configured }
+func (f *fakeGateways) Ready() error {
+	if !f.configured {
+		return dbgateway.ErrNotConfigured
+	}
+	return f.readyErr
+}
 
 func (f *fakeGateways) VerifyRequest(r *http.Request, body []byte, _ time.Time) (*dbgateway.Gateway, error) {
 	f.mu.Lock()
@@ -55,6 +62,9 @@ func (f *fakeGateways) Snapshot(_ context.Context, gw *dbgateway.Gateway, after 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.polls++
+	if f.snapErr != nil {
+		return nil, f.snapErr
+	}
 	if after >= math.MaxInt64 {
 		return nil, dbgateway.ErrInvalid
 	}
@@ -274,6 +284,37 @@ func TestGatewayRoutesWithoutASigningKey(t *testing.T) {
 		if out.Code != http.StatusServiceUnavailable || errorOf(t, out) != "the database gateway signing key is not configured" {
 			t.Fatalf("%s %s: %d %q, want 503", tc.method, tc.path, out.Code, out.Body.String())
 		}
+	}
+}
+
+// A key outside its window is like no key: every endpoint answers 503, and
+// says why.
+func TestGatewayRoutesWithAnExpiredSigningKey(t *testing.T) {
+	for _, why := range []error{dbgateway.ErrSigningKeyExpired, dbgateway.ErrSigningKeyNotYetValid} {
+		f := &fakeGateways{configured: true, readyErr: why, version: 2}
+		r, _ := gatewayRouter(t, f, time.Second)
+		for _, tc := range []struct{ method, path string }{
+			{http.MethodGet, "/api/v1/db-gateways/dbgw_1/snapshot"},
+			{http.MethodPost, "/api/v1/db-gateways/dbgw_1/report"},
+			{http.MethodPost, "/api/v1/db-gateways/dbgw_1/hold"},
+		} {
+			out := call(t, r, tc.method, tc.path, "dbgw_1", []byte(`{}`))
+			if out.Code != http.StatusServiceUnavailable || errorOf(t, out) != why.Error() {
+				t.Fatalf("%s %s: %d %q, want 503 %q", tc.method, tc.path, out.Code, out.Body.String(), why)
+			}
+		}
+	}
+	if !strings.Contains(dbgateway.ErrSigningKeyExpired.Error(), "has expired") {
+		t.Fatalf("the expired message doesn't say so: %q", dbgateway.ErrSigningKeyExpired)
+	}
+
+	// A key that expires during a poll's wait ends it with 503, not a
+	// snapshot signed with it.
+	f := &fakeGateways{configured: true, snapErr: dbgateway.ErrSigningKeyExpired}
+	r, logged := gatewayRouter(t, f, time.Second)
+	out := call(t, r, http.MethodGet, "/api/v1/db-gateways/dbgw_1/snapshot?after=0", "dbgw_1", nil)
+	if out.Code != http.StatusServiceUnavailable || errorOf(t, out) != dbgateway.ErrSigningKeyExpired.Error() || len(*logged) != 0 {
+		t.Fatalf("expired mid-poll: %d %q, logged %q", out.Code, out.Body.String(), *logged)
 	}
 }
 

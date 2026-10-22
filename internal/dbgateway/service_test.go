@@ -427,6 +427,42 @@ func TestServiceWithoutASigningKey(t *testing.T) {
 	if _, err := svc.Snapshot(t.Context(), &g, 0); !errors.Is(err, ErrNotConfigured) {
 		t.Fatalf("Snapshot: %v, want ErrNotConfigured", err)
 	}
+	if err := svc.Ready(); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("Ready: %v, want ErrNotConfigured", err)
+	}
+}
+
+// A key is used only inside its window, so one that expires while
+// Loomplane runs stops signing then, and one not valid yet starts later.
+func TestServiceSignsOnlyInsideTheKeysWindow(t *testing.T) {
+	h := newServiceHarness(t)
+	if err := h.svc.Ready(); err != nil {
+		t.Fatalf("Ready inside the window: %v", err)
+	}
+	if s, err := h.snapshot(t, 0); err != nil || s == nil {
+		t.Fatalf("Snapshot inside the window: %+v %v", s, err)
+	}
+	until := h.svc.trust.NotAfter
+	for _, tc := range []struct {
+		at   time.Time
+		want error
+	}{
+		{until, ErrSigningKeyExpired},
+		{until.Add(time.Hour), ErrSigningKeyExpired},
+		{h.svc.trust.NotBefore.Add(-time.Second), ErrSigningKeyNotYetValid},
+	} {
+		h.now = tc.at
+		if err := h.svc.Ready(); !errors.Is(err, tc.want) {
+			t.Fatalf("Ready at %s: %v, want %v", tc.at, err, tc.want)
+		}
+		if s, err := h.svc.Snapshot(t.Context(), &h.gw, 0); !errors.Is(err, tc.want) || s != nil {
+			t.Fatalf("Snapshot at %s: %+v %v, want %v", tc.at, s, err, tc.want)
+		}
+	}
+	h.now = until.Add(-time.Second)
+	if err := h.svc.Ready(); err != nil {
+		t.Fatalf("Ready back inside the window: %v", err)
+	}
 }
 
 // signed returns a request signed by key as gateway id at signedAt. The

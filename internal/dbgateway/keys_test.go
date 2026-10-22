@@ -60,6 +60,25 @@ func TestLoadSigningKey(t *testing.T) {
 	}
 }
 
+// A key outside its window still loads, with its window, so Loomplane can
+// start and say the key has expired rather than refuse to start at all.
+func TestLoadSigningKeyOutsideItsWindow(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for name, window := range map[string][2]time.Time{
+		"expired":       {now.Add(-2 * time.Hour), now.Add(-time.Hour)},
+		"not yet valid": {now.Add(time.Hour), now.Add(2 * time.Hour)},
+	} {
+		_, trust, err := LoadSigningKey(writeKeyFile(t, keyFile(seed, window[0], window[1]), 0o600))
+		if err != nil || !trust.NotBefore.Equal(window[0]) || !trust.NotAfter.Equal(window[1]) {
+			t.Errorf("%s: %+v %v", name, trust, err)
+		}
+	}
+}
+
 func TestLoadSigningKeyRefuses(t *testing.T) {
 	seed := make([]byte, ed25519.SeedSize)
 	if _, err := rand.Read(seed); err != nil {
@@ -82,9 +101,8 @@ func TestLoadSigningKeyRefuses(t *testing.T) {
 		{"a short seed", with("private_key", base64.StdEncoding.EncodeToString(seed[:16])), 0o600},
 		{"a whole private key, not a seed", with("private_key", base64.StdEncoding.EncodeToString(ed25519.NewKeyFromSeed(seed))), 0o600},
 		{"not base64", with("private_key", "%%%"+encoded), 0o600},
-		{"expired", keyFile(seed, now.Add(-2*time.Hour), now.Add(-time.Hour)), 0o600},
-		{"not yet valid", keyFile(seed, now.Add(time.Hour), now.Add(2*time.Hour)), 0o600},
 		{"an empty window", keyFile(seed, now.Add(-time.Hour), now.Add(-time.Hour)), 0o600},
+		{"a window that closes before it opens", keyFile(seed, now.Add(time.Hour), now.Add(-time.Hour)), 0o600},
 		{"no window", map[string]any{"version": 1, "private_key": encoded}, 0o600},
 		{"an unknown field", with("comment", "x"), 0o600},
 		{"readable by others", valid(), 0o644},

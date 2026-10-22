@@ -336,6 +336,23 @@ func TestEnsureDatabaseGatewayTellsAMissingServiceFromAMissingKey(t *testing.T) 
 	}
 }
 
+// A signing key that has expired fails the deploy, and says that's why.
+func TestEnsureDatabaseGatewayWithAnExpiredSigningKey(t *testing.T) {
+	store, secrets := &fakeDBGateways{}, snapshotSecrets{}
+	r := NewRunner(RunnerDeps{
+		Resources: secrets, DatabaseGateways: store, PublicURL: "https://loomplane.example.com",
+		DatabaseGatewayTrust: func() ([]plane.TrustKey, error) { return nil, dbgateway.ErrSigningKeyExpired },
+	})
+	a := dbGatewayAction()
+	_, _, err := r.ensureDatabaseGateway(t.Context(), gatewayDeployment, &a)
+	if !errors.Is(err, dbgateway.ErrSigningKeyExpired) || !strings.Contains(err.Error(), "has expired") {
+		t.Fatalf("err %v", err)
+	}
+	if store.ensures != 0 || len(secrets) != 0 {
+		t.Fatal("minted with an expired key")
+	}
+}
+
 func TestEnsureDatabaseGatewayNeedsAnHTTPSPublicURL(t *testing.T) {
 	for public, ok := range map[string]bool{
 		"https://loomplane.example.com":        true,

@@ -87,6 +87,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		e.Logger().Warn("dbgateway.signing_key_file isn't set: the database gateway endpoints answer 503")
 	}
 	e.svc = dbgateway.NewService(dbgateway.NewStore(pgdriver.Unwrap(db)), resourceURLs{secrets: secrets}, key, trust, time.Now)
+	if key != nil {
+		warnAboutKeyWindow(e.Logger(), e.svc.Ready(), trust, time.Now())
+	}
 	e.svc.Authz = authz
 	e.svc.Audit = auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}
 	e.svc.OnSkip = func(gatewayID string, skipped []dbgateway.Skipped) {
@@ -106,6 +109,27 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	return mountManagement(fapp.Router(), guard, e.svc)
+}
+
+// keyExpiryWarning is how soon before the signing key expires Loomplane
+// starts warning about it.
+const keyExpiryWarning = 30 * 24 * time.Hour
+
+// warnAboutKeyWindow logs, at startup, a signing key that can't sign now,
+// which leaves the gateway endpoints answering 503 and gateway deploys
+// failing, or one that expires within 30 days. ready is the service's Ready.
+func warnAboutKeyWindow(log forge.Logger, ready error, trust plane.TrustKey, now time.Time) {
+	switch {
+	case errors.Is(ready, dbgateway.ErrSigningKeyExpired):
+		log.Error("the database gateway signing key in dbgateway.signing_key_file has expired: the database gateway endpoints answer 503 and deployments with a gateway fail until you replace it and restart",
+			forge.F("not_after", trust.NotAfter.UTC().Format(time.RFC3339)))
+	case errors.Is(ready, dbgateway.ErrSigningKeyNotYetValid):
+		log.Error("the database gateway signing key in dbgateway.signing_key_file isn't valid yet: the database gateway endpoints answer 503 and deployments with a gateway fail until its not_before",
+			forge.F("not_before", trust.NotBefore.UTC().Format(time.RFC3339)))
+	case ready == nil && trust.NotAfter.Sub(now) < keyExpiryWarning:
+		log.Warn("the database gateway signing key in dbgateway.signing_key_file expires within 30 days: after that the gateway endpoints answer 503 and deployed gateways keep the routes they have. A new key also needs each gateway redeployed, as docs/postgres-services.md describes",
+			forge.F("not_after", trust.NotAfter.UTC().Format(time.RFC3339)))
+	}
 }
 
 // Start has nothing to start.

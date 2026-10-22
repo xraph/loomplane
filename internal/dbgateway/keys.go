@@ -32,7 +32,10 @@ type signingKeyFile struct {
 //
 // It returns the private key and the TrustKey gateways are given for it. It
 // refuses any other version, a seed that isn't 32 bytes and a window that
-// isn't open now. Reloading takes a restart.
+// closes before it opens. A window that isn't open now is the caller's to
+// handle: the Service holds such a key without signing with it, so an
+// expired key stops the gateway endpoints and not Loomplane. Reloading
+// takes a restart.
 func LoadSigningKey(path string) (ed25519.PrivateKey, plane.TrustKey, error) {
 	var f signingKeyFile
 	if secureconfig.ReadJSON(path, maxSigningKeyFile, true, &f) != nil || f.Version != 1 {
@@ -43,8 +46,7 @@ func LoadSigningKey(path string) (ed25519.PrivateKey, plane.TrustKey, error) {
 	if err != nil || len(seed) != ed25519.SeedSize {
 		return nil, plane.TrustKey{}, ErrSigningKey
 	}
-	now := time.Now()
-	if !f.NotBefore.Before(f.NotAfter) || now.Before(f.NotBefore) || !now.Before(f.NotAfter) {
+	if !f.NotBefore.Before(f.NotAfter) {
 		return nil, plane.TrustKey{}, ErrSigningKey
 	}
 	private := ed25519.NewKeyFromSeed(seed)

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/chronicle/audit"
@@ -18,6 +19,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/dbgateway"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -98,6 +100,43 @@ func TestAuditorRecordsTheGatewayAndProject(t *testing.T) {
 	} {
 		if strings.Contains(strings.ToLower(string(raw)), strings.ToLower(secret)) {
 			t.Fatalf("the event carries %q: %s", secret, raw)
+		}
+	}
+}
+
+// recordingLogger keeps what was logged at warn and error level.
+type recordingLogger struct {
+	forge.Logger
+	lines []string
+}
+
+func (l *recordingLogger) Warn(msg string, _ ...forge.Field) { l.lines = append(l.lines, "warn: "+msg) }
+func (l *recordingLogger) Error(msg string, _ ...forge.Field) {
+	l.lines = append(l.lines, "error: "+msg)
+}
+
+// Loomplane starts with a key outside its window and says so loudly, and
+// warns a month before one expires.
+func TestWarnAboutKeyWindow(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name  string
+		ready error
+		after time.Duration
+		want  string
+	}{
+		{"expired", dbgateway.ErrSigningKeyExpired, -time.Hour, "error: the database gateway signing key in dbgateway.signing_key_file has expired"},
+		{"not yet valid", dbgateway.ErrSigningKeyNotYetValid, 48 * time.Hour, "error: the database gateway signing key in dbgateway.signing_key_file isn't valid yet"},
+		{"expires within 30 days", nil, 29 * 24 * time.Hour, "warn: the database gateway signing key in dbgateway.signing_key_file expires within 30 days"},
+		{"a long way off", nil, 31 * 24 * time.Hour, ""},
+	} {
+		log := &recordingLogger{Logger: forge.NewNoopLogger()}
+		warnAboutKeyWindow(log, tc.ready, plane.TrustKey{NotBefore: now.Add(-time.Hour), NotAfter: now.Add(tc.after)}, now)
+		switch {
+		case tc.want == "" && len(log.lines) != 0:
+			t.Errorf("%s: logged %q", tc.name, log.lines)
+		case tc.want != "" && (len(log.lines) != 1 || !strings.HasPrefix(log.lines[0], tc.want)):
+			t.Errorf("%s: logged %q, want %q", tc.name, log.lines, tc.want)
 		}
 	}
 }

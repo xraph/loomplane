@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -41,5 +42,15 @@ func TestDatabaseGatewayTrust(t *testing.T) {
 	keys, err := databaseGatewayTrust(configured)()
 	if err != nil || len(keys) != 1 || !bytes.Equal(keys[0].PublicKey, pub) {
 		t.Fatalf("configured: %v %v", keys, err)
+	}
+
+	// An expired key fails the deploy with that reason.
+	expired := forge.NewContainer()
+	old := plane.TrustKey{PublicKey: pub, NotBefore: time.Now().Add(-2 * time.Hour), NotAfter: time.Now().Add(-time.Hour)}
+	if err = forge.ProvideValue(expired, dbgateway.NewService(nil, nil, key, old, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if keys, err = databaseGatewayTrust(expired)(); !errors.Is(err, dbgateway.ErrSigningKeyExpired) || keys != nil {
+		t.Fatalf("expired: %v %v", keys, err)
 	}
 }
