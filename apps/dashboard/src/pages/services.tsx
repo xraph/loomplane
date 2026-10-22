@@ -2,15 +2,7 @@
 // opening its own page to deploy it and recover it, above the service
 // projects already deployed. Kinds registered with the API after the five
 // databases follow them, each opening a page that adds it to a project.
-import {
-  BoxesIcon,
-  BoxIcon,
-  ChevronRightIcon,
-  PlugIcon,
-  SearchIcon,
-  ZapIcon,
-  type LucideIcon,
-} from "lucide-react"
+import { ChevronRightIcon, SearchIcon } from "lucide-react"
 import { useState } from "react"
 
 import { statusOf } from "@/client/errors"
@@ -33,7 +25,14 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { catalogKind, type CatalogKindModule } from "@/lib/catalog-kinds"
+import {
+  catalogKind,
+  groupIcons,
+  inCatalog,
+  kindIcon,
+  targetLabels,
+  type CatalogKindModule,
+} from "@/lib/catalog-kinds"
 import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
@@ -117,18 +116,6 @@ const groupLabels: Record<Group, string> = {
   data: "Data",
 }
 
-const groupIcons: Record<Group, LucideIcon> = {
-  database: ZapIcon,
-  cache: ZapIcon,
-  gateway: PlugIcon,
-  data: BoxesIcon,
-}
-
-const targetLabels: Record<string, string> = {
-  server: "Docker",
-  kubernetes: "Kubernetes",
-}
-
 /** A kind the API registered beyond the five databases. */
 type Registered = {
   kind: string
@@ -142,12 +129,16 @@ type Registered = {
 }
 
 // Kinds added to an existing project. The five databases keep their own
-// cards above, and a kind provisioned only as another's dependency never
-// shows. Read when rendering: kind modules import this page.
+// cards above, and neither a kind provisioned only as another's
+// dependency nor one whose module is hidden shows. Read when rendering:
+// kind modules import this page.
 function registeredKinds(kinds: KindInfo[]): Registered[] {
   const builtIn = new Set<string>(catalog.map((e) => e.kind))
   return kinds
-    .filter((k) => !builtIn.has(k.name) && k.placement === "app-project")
+    .filter(
+      (k) =>
+        !builtIn.has(k.name) && k.placement === "app-project" && inCatalog(k)
+    )
     .map((k) => {
       const module = catalogKind(k.name)
       return {
@@ -331,7 +322,7 @@ export function Services() {
                       <div className="flex items-center gap-3">
                         <ProductIcon
                           product={e.product}
-                          fallback={ZapIcon}
+                          fallback={groupIcons[e.group]}
                           label={r.title}
                           size="lg"
                         />
@@ -426,7 +417,7 @@ function RegisteredCard({ entry: e }: { entry: Registered }) {
         <div className="flex items-center gap-3">
           <ProductIcon
             product={e.module?.logo}
-            fallback={e.group ? groupIcons[e.group] : BoxIcon}
+            fallback={kindIcon(e.module)}
             label={e.title}
             size="lg"
           />

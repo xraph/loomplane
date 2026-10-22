@@ -15,6 +15,7 @@ import {
   type ManifestResource,
 } from "@/components/catalog-dependency-picker"
 import { initialDependencyPicks, type DependencyPicks } from "@/lib/catalog-add"
+import { defineCatalogKind } from "@/lib/catalog-kinds"
 import { CatalogKind } from "@/pages/catalog-kind"
 import { Services } from "@/pages/services"
 import { createDashboardRouter } from "@/router"
@@ -96,6 +97,48 @@ const sample: KindInfo = {
   ],
 }
 
+// A kind with its own add dialog, and one kept out of the catalog, the
+// way their own modules would register them.
+defineCatalogKind({
+  kind: "dialoged",
+  title: "Dialoged",
+  group: "gateway",
+  blurb: "A kind that brings its own add dialog.",
+  features: [],
+  panels: [],
+  addDialog: ({ projectId, projectName, onClose, onPlanned }) => (
+    <div role="dialog" aria-label="Add Dialoged">
+      <p>
+        Adding to {projectName} ({projectId})
+      </p>
+      <button type="button" onClick={onClose}>
+        Cancel
+      </button>
+      <button type="button" onClick={() => onPlanned("plan_9")}>
+        Review plan
+      </button>
+    </div>
+  ),
+})
+defineCatalogKind({
+  kind: "unlisted",
+  title: "Unlisted",
+  group: "gateway",
+  blurb: "A kind that never gets a card.",
+  features: [],
+  panels: [],
+  hidden: true,
+})
+
+const appKind = (name: string, title: string): KindInfo => ({
+  name,
+  title,
+  placement: "app-project",
+  targets: ["server"],
+  versions: ["1"],
+  engine: false,
+})
+
 const postgresKind: KindInfo = {
   name: "postgres",
   title: "PostgreSQL",
@@ -147,6 +190,7 @@ type Write = { method: string; path: string; body: unknown }
 function serve(
   options: {
     kinds?: () => Response
+    projects?: { id: string; name: string; icon?: string }[]
     edit?: () => Response
     created?: CatalogconnectEndpoint
   } = {}
@@ -186,7 +230,9 @@ function serve(
       if (path.endsWith("/catalog/endpoints"))
         return json({ endpoints: endpoints })
       if (path.endsWith("/projects"))
-        return json({ projects: [{ id: "p", name: "Shop" }] })
+        return json({
+          projects: options.projects ?? [{ id: "p", name: "Shop" }],
+        })
       if (path.endsWith("/projects/p/environments"))
         return json({
           environments: [
@@ -347,6 +393,8 @@ test("adding an external endpoint stores it and selects it", async () => {
   const dialog = await screen.findByRole("dialog")
   const dsn = within(dialog).getByLabelText("Connection string")
   expect(dsn).toHaveAttribute("type", "password")
+  // Browsers don't fill in a saved password here.
+  expect(dsn).toHaveAttribute("autocomplete", "new-password")
   await userEvent.type(within(dialog).getByLabelText("Name"), "new-pg")
   await userEvent.type(dsn, "postgres://app:secret@db.example.com/app")
   await userEvent.click(
@@ -597,4 +645,94 @@ test("registered kinds follow the five built-ins", async () => {
     "Add Sample",
   ])
   expect(within(catalog).queryByText(/Helper/)).not.toBeInTheDocument()
+})
+
+test("hidden modules and dependency-only kinds stay out of the catalog", async () => {
+  serve({
+    kinds: () =>
+      json({
+        kinds: [
+          postgresKind,
+          sample,
+          appKind("unlisted", "Unlisted"),
+          {
+            ...appKind("helper", "Helper"),
+            placement: "dependency",
+          },
+        ],
+      }),
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <Services />
+    </ClientProvider>
+  )
+  const catalog = screen.getByRole("region", { name: "Catalog" })
+  await within(catalog).findByRole("button", { name: "Add Sample" })
+  expect(within(catalog).queryByText(/Unlisted/)).not.toBeInTheDocument()
+  expect(within(catalog).queryByText(/Helper/)).not.toBeInTheDocument()
+  // The hidden kind's group doesn't show for it either.
+  expect(
+    within(catalog).queryByRole("radio", { name: /Gateways/ })
+  ).not.toBeInTheDocument()
+})
+
+test("a module's add dialog replaces the generic flow", async () => {
+  const writes = serve({
+    kinds: () => json({ kinds: [appKind("dialoged", "Dialoged")] }),
+    projects: [
+      { id: "p", name: "Shop" },
+      { id: "p2", name: "Billing" },
+    ],
+  })
+  mountKind("dialoged")
+  const project = await screen.findByRole("combobox", { name: "Project" })
+  // The generic steps after the project aren't there.
+  expect(screen.queryByLabelText("Resource name")).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("radiogroup", { name: "Environment" })
+  ).not.toBeInTheDocument()
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+
+  await userEvent.click(project)
+  await userEvent.click(await screen.findByRole("option", { name: "Billing" }))
+  await userEvent.click(
+    screen.getByRole("button", { name: "Add Dialoged to Billing" })
+  )
+  const dialog = await screen.findByRole("dialog", { name: "Add Dialoged" })
+  expect(dialog).toHaveTextContent("Adding to Billing (p2)")
+
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  expect(navigate).not.toHaveBeenCalled()
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Add Dialoged to Billing" })
+  )
+  await userEvent.click(
+    within(await screen.findByRole("dialog")).getByRole("button", {
+      name: "Review plan",
+    })
+  )
+  expect(navigate).toHaveBeenCalledWith({
+    to: "/deployments/$id",
+    params: { id: "plan_9" },
+  })
+  expect(writes).toEqual([])
+})
+
+test("database service projects aren't offered for an app-project kind", async () => {
+  serve({
+    projects: [
+      { id: "db", name: "PostgreSQL", icon: "database" },
+      { id: "p", name: "Shop" },
+    ],
+  })
+  mountKind()
+  const project = await screen.findByRole("combobox", { name: "Project" })
+  expect(project).toHaveTextContent("Shop")
+  await userEvent.click(project)
+  expect(
+    (await screen.findAllByRole("option")).map((o) => o.textContent)
+  ).toEqual(["Shop"])
 })

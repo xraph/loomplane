@@ -1,3 +1,4 @@
+import { BoxIcon, DatabaseIcon, PlugIcon } from "lucide-react"
 import { expect, test } from "vitest"
 
 import type { Binding } from "@/client/forge/loomplane/types"
@@ -5,6 +6,8 @@ import {
   catalogKind,
   catalogKinds,
   defineCatalogKind,
+  inCatalog,
+  kindIcon,
   parseResourceConfig,
 } from "@/lib/catalog-kinds"
 
@@ -63,4 +66,43 @@ test("reads a binding's config whether it arrives as text or JSON", () => {
   expect(parseResourceConfig(binding(JSON.stringify(config)))).toEqual(config)
   expect(parseResourceConfig(binding("not json"))).toBeUndefined()
   expect(parseResourceConfig(binding({ provider: "server" }))).toBeUndefined()
+})
+
+test("hidden modules and dependency-only kinds stay out of the catalog", () => {
+  defineCatalogKind({
+    kind: "tucked",
+    title: "Tucked",
+    group: "data",
+    blurb: "Never in the catalog.",
+    features: [],
+    panels: [],
+    hidden: true,
+  })
+  expect(inCatalog({ name: "tucked", placement: "app-project" })).toBe(false)
+  expect(inCatalog({ name: "graph", placement: "dependency" })).toBe(false)
+  expect(inCatalog({ name: "gateway", placement: "app-project" })).toBe(true)
+  expect(inCatalog({ name: "postgres", placement: "service-project" })).toBe(
+    true
+  )
+})
+
+test("icon is used when there is no product logo", () => {
+  const Layers = () => null
+  const module = defineCatalogKind({
+    kind: "layered",
+    title: "Layered",
+    group: "data",
+    blurb: "Brings its own icon.",
+    features: [],
+    panels: [],
+    icon: Layers,
+  })
+  expect(kindIcon(module)).toBe(Layers)
+  // Without one, the group's icon; one icon for databases everywhere.
+  expect(kindIcon(catalogKind("valkey"))).not.toBe(Layers)
+  expect(kindIcon(catalogKind("postgres"))).toBe(DatabaseIcon)
+  expect(kindIcon({ ...module, icon: undefined, group: "gateway" })).toBe(
+    PlugIcon
+  )
+  expect(kindIcon(undefined)).toBe(BoxIcon)
 })

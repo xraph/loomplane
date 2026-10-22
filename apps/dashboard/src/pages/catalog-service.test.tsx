@@ -1,6 +1,7 @@
 import { ClientProvider } from "@forge-go/client-react"
 import { cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { useState } from "react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
@@ -67,6 +68,63 @@ defineCatalogKind({
       component: () => null,
     },
   ],
+})
+
+// A kind with everything a module can add: counts, actions, a subtitle
+// and its own icon.
+defineCatalogKind({
+  kind: "counted",
+  title: "Counted",
+  group: "gateway",
+  blurb: "The kind's catalog blurb.",
+  features: [],
+  icon: (props) => <svg data-testid="counted-icon" {...props} />,
+  actions: (props) => (
+    <button type="button">Open {props.resource} admin</button>
+  ),
+  subtitle: (props) => `Hosted gateway · ${props.config.provider}`,
+  panels: [
+    {
+      id: "routes",
+      title: "Routes",
+      order: 1,
+      // A count may come from a hook.
+      useCount: () => useState(6)[0],
+      component: () => null,
+    },
+    {
+      id: "domains",
+      title: "Domains",
+      order: 2,
+      useCount: (props) => (props.resource === "edge" ? 3 : 0),
+      component: () => null,
+    },
+    {
+      id: "discovery",
+      title: "Discovery",
+      order: 3,
+      useCount: () => undefined,
+      component: () => null,
+    },
+    { id: "settings", title: "Settings", order: 4, component: () => null },
+    {
+      id: "kubernetes",
+      title: "Kubernetes",
+      when: (props) => props.config.provider === "kubernetes",
+      useCount: () => useState(9)[0],
+      component: () => null,
+    },
+  ],
+})
+defineCatalogKind({
+  kind: "logoed",
+  title: "Logoed",
+  logo: "redis",
+  group: "cache",
+  blurb: "A kind with a product logo and an icon.",
+  features: [],
+  icon: () => <svg data-testid="logoed-icon" />,
+  panels: [],
 })
 
 const environments = [
@@ -313,4 +371,87 @@ test("a project without environments says so", async () => {
   expect(
     await screen.findByText("This project has no environments yet")
   ).toBeInTheDocument()
+})
+
+test("tabs show counts from useCount", async () => {
+  serve({
+    bindings: {
+      production: [binding("edge", { kind: "counted", provider: "server" })],
+    },
+  })
+  open("edge", "env_prod")
+  expect(await tabNames()).toEqual([
+    "Overview",
+    "Routes 6",
+    "Domains 3",
+    "Discovery",
+    "Settings",
+  ])
+  expect(screen.getByRole("tab", { name: "Routes 6" })).toBeInTheDocument()
+})
+
+test("actions render at the right of the header", async () => {
+  serve({
+    bindings: {
+      production: [binding("edge", { kind: "counted", provider: "server" })],
+    },
+  })
+  open("edge", "env_prod")
+  const header = await screen.findByRole("banner")
+  const action = within(header).getByRole("button", {
+    name: "Open edge admin",
+  })
+  // After the environment and state, at the end of the header.
+  const status = within(header).getByText("Deployed")
+  expect(
+    status.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy()
+  cleanup()
+  forgeClient.clear()
+  serve({ bindings: { production: composed } })
+  open("app", "env_prod")
+  expect(
+    within(await screen.findByRole("banner")).queryByRole("button")
+  ).not.toBeInTheDocument()
+})
+
+test("subtitle renders under the name", async () => {
+  serve({
+    bindings: {
+      production: [binding("edge", { kind: "counted", provider: "server" })],
+    },
+  })
+  open("edge", "env_prod")
+  const header = await screen.findByRole("banner")
+  const name = within(header).getByRole("heading", { level: 1 })
+  const subtitle = within(header).getByText("Hosted gateway · server")
+  expect(
+    name.compareDocumentPosition(subtitle) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy()
+  // The subtitle says which instance it is, so the catalog blurb gives way.
+  expect(
+    within(header).queryByText("The kind's catalog blurb.")
+  ).not.toBeInTheDocument()
+})
+
+test("icon is used when there is no product logo", async () => {
+  serve({
+    bindings: {
+      production: [binding("edge", { kind: "counted", provider: "server" })],
+    },
+  })
+  open("edge", "env_prod")
+  const header = await screen.findByRole("banner")
+  expect(within(header).getByTestId("counted-icon")).toBeInTheDocument()
+  cleanup()
+  forgeClient.clear()
+  serve({
+    bindings: {
+      production: [binding("cache", { kind: "logoed", provider: "server" })],
+    },
+  })
+  open("cache", "env_prod")
+  const logoed = await screen.findByRole("banner")
+  expect(within(logoed).queryByTestId("logoed-icon")).not.toBeInTheDocument()
+  expect(within(logoed).getByTitle("Logoed")).toBeInTheDocument()
 })

@@ -2,16 +2,14 @@
 // where its parts come from and what recovery keeps of each, then the
 // panels its kind's module adds.
 import {
-  BoxesIcon,
   BoxIcon,
   ChevronLeftIcon,
   DatabaseIcon,
   LockIcon,
   PlayIcon,
   PlugIcon,
-  type LucideIcon,
 } from "lucide-react"
-import type { ReactNode } from "react"
+import type { ComponentType, ReactNode } from "react"
 
 import { statusOf } from "@/client/errors"
 import {
@@ -28,7 +26,13 @@ import { QueryError } from "@/components/query-error"
 import { StatusPill } from "@/components/runs"
 import { SiteHeader } from "@/components/site-header"
 import { buttonVariants } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Tabs,
+  TabsContent,
+  TabsCount,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
 import {
   ZeroState,
   ZeroStateContent,
@@ -41,9 +45,11 @@ import {
   catalogKind,
   componentName,
   dependencyChoices,
+  kindIcon,
   parseResourceConfig,
   serviceBindings,
   type CatalogKindModule,
+  type CatalogPanel,
   type CatalogPanelProps,
   type ResourceConfigView,
 } from "@/lib/catalog-kinds"
@@ -197,15 +203,13 @@ function InEnvironment({
         title={module?.title ?? info?.title ?? kind}
         description={module?.blurb ?? info?.description}
         version={versionOf(binding, config)}
-        binding={binding}
+        props={props}
       />
       <Tabs defaultValue="overview">
         <TabsList variant="line" className="mb-3 max-w-full overflow-x-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {panels.map((panel) => (
-            <TabsTrigger key={panel.id} value={`panel:${panel.id}`}>
-              {panel.title}
-            </TabsTrigger>
+            <PanelTab key={`${kind}:${panel.id}`} panel={panel} props={props} />
           ))}
         </TabsList>
         <TabsContent value="overview">
@@ -231,11 +235,33 @@ function InEnvironment({
   )
 }
 
-const groupIcons: Record<CatalogKindModule["group"], LucideIcon> = {
-  database: DatabaseIcon,
-  cache: DatabaseIcon,
-  gateway: PlugIcon,
-  data: BoxesIcon,
+// Each tab is its own component so a panel's useCount, which may use
+// hooks, always runs from the same place: a tab that comes or goes
+// mounts or unmounts with its hooks, and no other tab's order shifts.
+function PanelTab({
+  panel,
+  props,
+}: {
+  panel: CatalogPanel
+  props: CatalogPanelProps
+}) {
+  const useCount = panel.useCount ?? noCount
+  const count = useCount(props)
+  return (
+    <TabsTrigger value={`panel:${panel.id}`}>
+      {panel.title}
+      {count !== undefined && (
+        <>
+          {" "}
+          <TabsCount>{count}</TabsCount>
+        </>
+      )}
+    </TabsTrigger>
+  )
+}
+
+function noCount(): number | undefined {
+  return undefined
 }
 
 function Header({
@@ -245,7 +271,7 @@ function Header({
   title,
   description,
   version,
-  binding,
+  props,
 }: {
   resource: string
   environment: string
@@ -253,15 +279,19 @@ function Header({
   title: string
   description?: string
   version?: string
-  binding: Binding
+  props: CatalogPanelProps
 }) {
-  const state = stateOf(binding)
+  const state = stateOf(props.binding)
+  const Actions = module?.actions
+  // A module's subtitle says which instance this is, so it stands in for
+  // the catalog's description of the kind.
+  const subtitle = module?.subtitle?.(props)
   return (
     <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
       <div className="flex min-w-0 flex-1 items-start gap-4 sm:items-center">
         <ProductIcon
           product={module?.logo}
-          fallback={module ? groupIcons[module.group] : BoxIcon}
+          fallback={kindIcon(module)}
           label={title}
           size="xl"
         />
@@ -273,10 +303,16 @@ function Header({
               {version && <span className="ml-1.5 font-mono">{version}</span>}
             </span>
           </h1>
-          {description && (
-            <p className="max-w-[72ch] text-[13.5px] leading-relaxed text-pretty text-muted-foreground">
-              {description}
+          {subtitle ? (
+            <p className="text-[13.5px] leading-relaxed text-pretty text-muted-foreground">
+              {subtitle}
             </p>
+          ) : (
+            description && (
+              <p className="max-w-[72ch] text-[13.5px] leading-relaxed text-pretty text-muted-foreground">
+                {description}
+              </p>
+            )
           )}
         </div>
       </div>
@@ -287,6 +323,11 @@ function Header({
         <StatusPill tone={state.drift ? "waiting" : "live"}>
           {state.label}
         </StatusPill>
+        {Actions && (
+          <div className="flex flex-wrap items-center gap-2 sm:ml-2">
+            <Actions {...props} />
+          </div>
+        )}
       </div>
     </header>
   )
@@ -344,7 +385,7 @@ function Overview({
             )
           ) : (
             <Row
-              icon={module ? groupIcons[module.group] : BoxIcon}
+              icon={kindIcon(module)}
               name={binding.name}
               detail={title}
               keeps={protectionOf(binding)?.label}
@@ -441,7 +482,7 @@ function Row({
   keeps,
   state,
 }: {
-  icon: LucideIcon
+  icon: ComponentType<{ className?: string }>
   name: string
   detail: string
   keeps?: string
@@ -451,8 +492,11 @@ function Row({
   return (
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,17rem)_auto]">
       <span className="flex min-w-0 items-center gap-2.5">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
-          <Icon className="size-4" aria-hidden="true" />
+        <span
+          aria-hidden="true"
+          className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted"
+        >
+          <Icon className="size-4" />
         </span>
         <span className="grid min-w-0 gap-0.5">
           <span className="truncate text-sm font-semibold">{name}</span>

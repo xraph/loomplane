@@ -3,9 +3,17 @@
 // and adds panels to the service page of every resource of that kind.
 // Nothing else needs to change for a kind to appear: the modules are
 // discovered here, once, when this file is first imported.
+import {
+  BoxesIcon,
+  BoxIcon,
+  DatabaseIcon,
+  PlugIcon,
+  ZapIcon,
+  type LucideIcon,
+} from "lucide-react"
 import type { ComponentType } from "react"
 
-import type { Binding } from "@/client/forge/loomplane/types"
+import type { Binding, KindInfo } from "@/client/forge/loomplane/types"
 import type { ProductKey } from "@/components/product-logos"
 import {
   bindingConfig,
@@ -66,6 +74,21 @@ export type CatalogPanel = {
   /** Leave the panel out for resources it doesn't apply to. */
   when?: (props: CatalogPanelProps) => boolean
   component: ComponentType<CatalogPanelProps>
+  /**
+   * The number beside the tab's label, or undefined for none. The page
+   * calls it on every render while the tab shows, always from the same
+   * place, so it may use hooks.
+   */
+  useCount?: (props: CatalogPanelProps) => number | undefined
+}
+
+/** What a module's add dialog is given once the project is chosen. */
+export type CatalogAddProps = {
+  projectId: string
+  projectName: string
+  onClose: () => void
+  /** Opens the plan that adds the service, for review. */
+  onPlanned: (planId: string) => void
 }
 
 export type CatalogKindModule = {
@@ -76,6 +99,44 @@ export type CatalogKindModule = {
   blurb: string
   features: string[]
   panels: CatalogPanel[]
+  /** Buttons at the right of the service page's header. */
+  actions?: ComponentType<CatalogPanelProps>
+  /** Drawn in place of a product logo when the kind has none. */
+  icon?: ComponentType<{ className?: string }>
+  /** Keeps the kind off the service catalog. */
+  hidden?: boolean
+  /**
+   * Replaces the add page's own steps once the project is chosen. It
+   * renders its own dialog, and calls onPlanned with the plan it made.
+   */
+  addDialog?: ComponentType<CatalogAddProps>
+  /** A line under the resource's name on its service page. */
+  subtitle?: (props: CatalogPanelProps) => string
+}
+
+/** The icon of each group, for a kind with neither a logo nor an icon. */
+export const groupIcons: Record<CatalogKindModule["group"], LucideIcon> = {
+  database: DatabaseIcon,
+  cache: ZapIcon,
+  gateway: PlugIcon,
+  data: BoxesIcon,
+}
+
+/** How the catalog names the targets a kind runs on. */
+export const targetLabels: Record<string, string> = {
+  server: "Docker",
+  kubernetes: "Kubernetes",
+}
+
+/**
+ * kindIcon is what a kind is drawn with when it has no product logo: the
+ * module's own icon, then its group's, then a plain box.
+ */
+export function kindIcon(
+  module: CatalogKindModule | undefined
+): ComponentType<{ className?: string }> {
+  if (!module) return BoxIcon
+  return module.icon ?? groupIcons[module.group]
 }
 
 // Kind modules call defineCatalogKind while this file is still being
@@ -126,6 +187,15 @@ export function catalogKind(kind: string): CatalogKindModule | undefined {
 /** catalogKinds lists every registered kind's module. */
 export function catalogKinds(): CatalogKindModule[] {
   return [...(registered?.values() ?? [])]
+}
+
+/**
+ * inCatalog reports whether a kind gets a card in the service catalog. A
+ * kind provisioned only as another's dependency never does, and neither
+ * does one whose module is hidden.
+ */
+export function inCatalog(kind: Pick<KindInfo, "name" | "placement">): boolean {
+  return kind.placement !== "dependency" && !catalogKind(kind.name)?.hidden
 }
 
 /**

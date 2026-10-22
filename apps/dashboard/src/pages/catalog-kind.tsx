@@ -2,17 +2,14 @@
 // front of a project's services: pick the project, environment and
 // checked target, say where each dependency comes from, name it, and
 // Loomplane adds it to the manifest and plans the change. Nothing runs
-// until someone approves that plan on its review page.
+// until someone approves that plan on its review page. A kind whose
+// module brings its own add dialog takes over once the project is chosen.
 import {
-  BoxesIcon,
   BoxIcon,
   CheckIcon,
   ChevronLeftIcon,
-  DatabaseIcon,
   LockIcon,
   PlayIcon,
-  PlugIcon,
-  type LucideIcon,
 } from "lucide-react"
 import { useState, type FormEvent, type ReactNode } from "react"
 import { toast } from "sonner"
@@ -71,24 +68,17 @@ import {
   type AddCatalogServiceInput,
   type DependencyPicks,
 } from "@/lib/catalog-add"
-import { catalogKind, type CatalogKindModule } from "@/lib/catalog-kinds"
+import {
+  catalogKind,
+  kindIcon,
+  targetLabels,
+  type CatalogKindModule,
+} from "@/lib/catalog-kinds"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import { protectionLabel, type Protection } from "@/lib/service-recovery"
 import { cn } from "@/lib/utils"
-
-const groupIcons: Record<CatalogKindModule["group"], LucideIcon> = {
-  database: DatabaseIcon,
-  cache: DatabaseIcon,
-  gateway: PlugIcon,
-  data: BoxesIcon,
-}
-
-const targetLabels: Record<string, string> = {
-  server: "Docker",
-  kubernetes: "Kubernetes",
-}
 
 /**
  * CatalogKind adds a resource of an app-project kind to an existing
@@ -147,7 +137,7 @@ export function CatalogKind({ kind }: { kind: string }) {
           <>
             <Header info={info} module={module} title={title} />
             <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-              <AddForm info={info} title={title} />
+              <AddForm info={info} module={module} title={title} />
               <WhatYouGet info={info} module={module} />
             </div>
           </>
@@ -171,7 +161,7 @@ function Header({
     <header className="flex flex-wrap items-center gap-4">
       <ProductIcon
         product={module?.logo}
-        fallback={module ? groupIcons[module.group] : BoxIcon}
+        fallback={kindIcon(module)}
         label={title}
         size="xl"
       />
@@ -273,10 +263,22 @@ function targetsFor(info: KindInfo, connections: Connection[]): Target[] {
   })
 }
 
-function AddForm({ info, title }: { info: KindInfo; title: string }) {
+function AddForm({
+  info,
+  module,
+  title,
+}: {
+  info: KindInfo
+  module?: CatalogKindModule
+  title: string
+}) {
   const projects = useQuery(useProjectsList)
   const [chosen, setChosen] = useState("")
-  const list = projects.data?.projects ?? []
+  // A database's own service project isn't where an app-project kind
+  // goes: catalog deploys make those with the database icon.
+  const list = (projects.data?.projects ?? []).filter(
+    (p) => p.icon !== "database"
+  )
   const project = list.find((p) => p.id === chosen) ?? list[0]
   return (
     <section
@@ -354,16 +356,67 @@ function AddForm({ info, title }: { info: KindInfo; title: string }) {
               </SelectContent>
             </Select>
           </Step>
-          {/* Keyed so a project's environments, manifest and choices start fresh. */}
-          <ProjectForm
-            key={project.id}
-            info={info}
-            title={title}
-            project={project}
-          />
+          {module?.addDialog ? (
+            <ModuleDialog
+              key={project.id}
+              dialog={module.addDialog}
+              title={title}
+              project={project}
+            />
+          ) : (
+            // Keyed so a project's environments, manifest and choices start fresh.
+            <ProjectForm
+              key={project.id}
+              info={info}
+              title={title}
+              project={project}
+            />
+          )}
         </>
       )}
     </section>
+  )
+}
+
+/**
+ * ModuleDialog opens a module's own add dialog for the chosen project, in
+ * place of the steps below, and opens the plan it makes.
+ */
+function ModuleDialog({
+  dialog: AddDialog,
+  title,
+  project,
+}: {
+  dialog: NonNullable<CatalogKindModule["addDialog"]>
+  title: string
+  project: Project
+}) {
+  const { can } = useOrganization()
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const allowed = can("project:update") && can("deployment:create")
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+      <span className="max-w-[46ch] text-xs leading-relaxed text-muted-foreground">
+        {allowed
+          ? `Choose how ${title} runs in ${project.name}, then review the plan. Nothing runs until it's approved.`
+          : "Adding a service needs project update and deployment create access."}
+      </span>
+      <Button type="button" disabled={!allowed} onClick={() => setOpen(true)}>
+        {`Add ${title} to ${project.name}`}
+      </Button>
+      {open && (
+        <AddDialog
+          projectId={project.id}
+          projectName={project.name}
+          onClose={() => setOpen(false)}
+          onPlanned={(planId) => {
+            setOpen(false)
+            void navigate({ to: "/deployments/$id", params: { id: planId } })
+          }}
+        />
+      )}
+    </div>
   )
 }
 

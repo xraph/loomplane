@@ -386,7 +386,8 @@ function EndpointForm({
             className="font-mono"
             value={dsn}
             required
-            autoComplete="off"
+            // "off" doesn't stop a browser filling in a saved password.
+            autoComplete="new-password"
             spellCheck={false}
             placeholder={
               engine === "redis"
