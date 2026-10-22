@@ -77,7 +77,9 @@ func (z infrastructureZone) zone(credential provider.InfrastructureCredential) (
 }
 
 // eachPage reads a list page by page, handing each page's items to add. It
-// stops at the last page and gives up after infrastructureMaxPages.
+// stops at the last page and gives up after infrastructureMaxPages. A page
+// must answer for the page asked for. Without a page count, only a short
+// page can be the last one.
 func eachPage[T any](ctx context.Context, c *Client, token, path string, query url.Values, permission string, add func([]T) error) error {
 	for page := 1; page <= infrastructureMaxPages; page++ {
 		q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(pageSize)}}
@@ -89,10 +91,19 @@ func eachPage[T any](ctx context.Context, c *Client, token, path string, query u
 		if err != nil {
 			return infrastructureError(err, permission)
 		}
-		if err = add(items); err != nil {
-			return err
+		if addErr := add(items); addErr != nil {
+			return addErr
 		}
-		if info.Page >= info.TotalPages {
+		described := info.Page != 0 || info.TotalPages != 0
+		switch {
+		case described && info.Page != page:
+			return provider.ErrInfrastructurePagination
+		case info.TotalPages == 0:
+			if len(items) < pageSize {
+				return nil
+			}
+			return provider.ErrInfrastructurePagination
+		case info.Page >= info.TotalPages:
 			return nil
 		}
 	}

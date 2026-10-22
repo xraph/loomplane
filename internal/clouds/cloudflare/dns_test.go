@@ -42,6 +42,9 @@ type dnsFixture struct {
 	zoneExists  bool
 	nextID      int
 	deleteGone  bool
+	// noInfo leaves result_info off record lists; stalePage always
+	// reports page 1.
+	noInfo, stalePage bool
 }
 
 func (f *dnsFixture) zone() map[string]any {
@@ -97,7 +100,14 @@ func newDNSFixture(t *testing.T) (*dnsFixture, *cloudflare.Client, provider.Infr
 			if end > len(f.records) {
 				end = len(f.records)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "errors": []any{}, "result": f.records[start:end], "result_info": map[string]any{"page": page, "per_page": size, "total_pages": total}})
+			body := map[string]any{"success": true, "errors": []any{}, "result": f.records[start:end]}
+			if f.stalePage {
+				page = 1
+			}
+			if !f.noInfo {
+				body["result_info"] = map[string]any{"page": page, "per_page": size, "total_pages": total}
+			}
+			_ = json.NewEncoder(w).Encode(body)
 		case r.Method == http.MethodPost && r.URL.Path == records:
 			f.writes++
 			_ = json.NewDecoder(r.Body).Decode(&f.lastBody)
@@ -302,6 +312,28 @@ func TestCloudflareDNSPagination(t *testing.T) {
 	f.perPage, f.pagesServed = 1, 0
 	if _, err = c.ListRecords(t.Context(), cred, zone); !errors.Is(err, provider.ErrInfrastructurePagination) || f.pagesServed != 100 {
 		t.Fatalf("unbounded pages (%d): %v", f.pagesServed, err)
+	}
+}
+
+func TestCloudflareDNSPaginationNeedsTheRequestedPage(t *testing.T) {
+	f, c, cred, zone := newDNSFixture(t)
+	for i := 0; i < 150; i++ {
+		f.records = append(f.records, cfRecord{ID: "r" + strconv.Itoa(i), Name: "h" + strconv.Itoa(i) + ".example.test", Type: "A", Content: "192.0.2.1", TTL: 60})
+	}
+	// Without result_info a full page can't be the last one.
+	f.perPage, f.noInfo = 100, true
+	if _, err := c.ListRecords(t.Context(), cred, zone); !errors.Is(err, provider.ErrInfrastructurePagination) || f.pagesServed != 1 {
+		t.Fatalf("a full page without result_info (%d pages): %v", f.pagesServed, err)
+	}
+	// A short one can.
+	f.records, f.pagesServed = f.records[:3], 0
+	if listed, err := c.ListRecords(t.Context(), cred, zone); err != nil || len(listed) != 3 || f.pagesServed != 1 {
+		t.Fatalf("a short page without result_info: %d records %d pages %v", len(listed), f.pagesServed, err)
+	}
+	// An answer for another page than the one asked for is refused.
+	f.perPage, f.noInfo, f.stalePage, f.pagesServed = 2, false, true, 0
+	if _, err := c.ListRecords(t.Context(), cred, zone); !errors.Is(err, provider.ErrInfrastructurePagination) || f.pagesServed != 2 {
+		t.Fatalf("page 1 answered for page 2 (%d pages): %v", f.pagesServed, err)
 	}
 }
 
