@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -131,8 +132,14 @@ func (cf CloudflareChecker) Check(ctx context.Context, credential []byte, settin
 	if err != nil {
 		return Check{}, err
 	}
+	// Account details need Account Settings Read, which the form doesn't
+	// ask for; without it the account ID names the connection.
 	acct, err := cf.Client.Account(ctx, token, account)
-	if err != nil {
+	var ae *cloudflare.APIError
+	switch {
+	case errors.As(err, &ae) && ae.Status == http.StatusForbidden:
+		acct = cloudflare.Account{ID: account}
+	case err != nil:
 		return Check{}, err
 	}
 	perms, err := cf.Client.Permissions(ctx, token, account)

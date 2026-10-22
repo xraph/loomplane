@@ -19,11 +19,13 @@ type cloudflareFixture struct {
 	*httptest.Server
 	account string
 	status  string
+	// accountCode and dnsCode are what the account and DNS probes answer.
+	accountCode, dnsCode int
 }
 
 func newCloudflareFixture(t *testing.T) *cloudflareFixture {
 	t.Helper()
-	f := &cloudflareFixture{account: strings.Repeat("c", 32), status: "active"}
+	f := &cloudflareFixture{account: strings.Repeat("c", 32), status: "active", accountCode: http.StatusOK, dnsCode: http.StatusForbidden}
 	reply := func(w http.ResponseWriter, code int, result any) {
 		w.WriteHeader(code)
 		if code >= 300 {
@@ -39,11 +41,11 @@ func newCloudflareFixture(t *testing.T) *cloudflareFixture {
 		case r.URL.Path == "/accounts/"+f.account+"/tokens/verify":
 			reply(w, http.StatusOK, map[string]any{"id": "tok1", "status": f.status})
 		case r.URL.Path == "/accounts/"+f.account:
-			reply(w, http.StatusOK, map[string]any{"id": f.account, "name": "Acme"})
+			reply(w, f.accountCode, map[string]any{"id": f.account, "name": "Acme"})
 		case r.URL.Path == "/zones":
 			reply(w, http.StatusOK, []any{map[string]any{"id": "zone1"}})
 		case r.URL.Path == "/zones/zone1/dns_records":
-			reply(w, http.StatusForbidden, nil)
+			reply(w, f.dnsCode, nil)
 		case strings.HasSuffix(r.URL.Path, "/registrations") && r.Method == http.MethodGet:
 			reply(w, http.StatusOK, []any{})
 		case strings.HasSuffix(r.URL.Path, "/registrations"):
@@ -71,6 +73,23 @@ func TestCloudflareCheckerReportsMissingAndKeepsSecretsOut(t *testing.T) {
 	sandbox, err := CloudflareChecker{Client: cloudflare.New(f.URL, true)}.Check(t.Context(), []byte("tok-secret"), map[string]string{"account_id": f.account})
 	if err != nil || sandbox.Details["registrar_mode"] != "sandbox" {
 		t.Fatalf("%+v %v", sandbox, err)
+	}
+}
+
+// The account details need a permission the form doesn't ask for, so a
+// 403 there is not a failed token.
+func TestCloudflareCheckerToleratesAccountDetailsRefusal(t *testing.T) {
+	f := newCloudflareFixture(t)
+	f.accountCode, f.dnsCode = http.StatusForbidden, http.StatusBadRequest
+	checker := CloudflareChecker{Client: cloudflare.New(f.URL, false)}
+	c, err := checker.Check(t.Context(), []byte("tok-secret"), map[string]string{"account_id": f.account})
+	if err != nil || c.Account != f.account || len(c.Missing) != 0 || c.Details["zone_read"] != "granted" || c.Details["dns_write"] != "granted" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	// Any other failure still fails the check.
+	f.accountCode = http.StatusInternalServerError
+	if _, err := checker.Check(t.Context(), []byte("tok-secret"), map[string]string{"account_id": f.account}); err == nil {
+		t.Fatal("a 500 on the account was ignored")
 	}
 }
 
