@@ -56,20 +56,25 @@ func JobOutput(output []byte, secrets map[string]string) string {
 }
 
 // sensitiveParts is what of a secret value must never be shown. Of an
-// address (a URL with a scheme and a host) it's what's secret in it: its
-// password, its user when that looks like a token (urlTokenUser), and
-// its query values that look secret (secretQueryValue), each as decoded
-// and as the address spells it. Its host, path and an ordinary user, such
-// as postgres, are left, so output naming them stays readable. An address
-// with nothing secret in it, and anything else, is secret whole. A value
-// of several lines is covered line by line too, since its pieces include
-// each line's.
+// address (a URL with a scheme and a host) with a password it's what's
+// secret in it: its password, its user when that looks like a token
+// (urlTokenUser), and its query values that look secret
+// (secretQueryValue), each as decoded and as the address spells it. Its
+// host, path and an ordinary user, such as postgres, are left, so output
+// naming them stays readable. An address without a password is secret
+// whole, since its path can hold the secret (a bot's token, a webhook's
+// key), and its token user and secret query values count on their own
+// too. Anything else is secret whole. A value of several lines is covered
+// line by line too, since its pieces include each line's.
 func sensitiveParts(value string) []string {
 	u, err := url.Parse(value)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return []string{value}
 	}
 	var parts []string
+	if password, ok := u.User.Password(); !ok || password == "" {
+		parts = append(parts, value)
+	}
 	add := func(decoded, raw string) {
 		for _, part := range []string{decoded, raw} {
 			if part != "" && !slices.Contains(parts, part) {
@@ -102,9 +107,6 @@ func sensitiveParts(value string) []string {
 		if secretQueryValue(key, v) {
 			add(v, rawValue)
 		}
-	}
-	if len(parts) == 0 {
-		return []string{value}
 	}
 	return parts
 }
