@@ -70,7 +70,7 @@ func TestEffectHelperRequiresCompleteResponseFraming(t *testing.T) {
 			run := func(mode string, generation int) string {
 				t.Helper()
 				input, _ := json.Marshal(map[string]any{"Mode": mode, "Daemon": daemon, "Socket": socket, "Method": "POST", "Path": "/mutation", "Headers": map[string]string{}, "Fence": map[string]any{"operation": "scope", "generation": generation}})
-				command := exec.CommandContext(t.Context(), python, "-c", effectFenceScript)
+				command := exec.CommandContext(t.Context(), python, "-c", fenceScript())
 				command.Stdin = bytes.NewReader(append(input, '\n'))
 				out, e := command.Output()
 				if e != nil {

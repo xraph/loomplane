@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/net/idna"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -34,12 +35,17 @@ type Zone struct {
 	VerifiedAt           time.Time        `json:"verified_at"`
 	// RegistrationID names the registration that bought the domain, if one did.
 	RegistrationID string `json:"registration_id,omitempty"`
-	Revision       int64  `json:"revision"`
+	// ChallengeConnectionID is the second Cloudflare connection whose token
+	// answers DNS-01 challenges for this zone's wildcard routes.
+	ChallengeConnectionID string `json:"challenge_connection_id,omitempty"`
+	Revision              int64  `json:"revision"`
 }
 
 // Wildcards reports whether routes under the zone may use wildcard
-// hostnames. That needs a DNS-01 challenge connection, which no zone has yet.
-func (z Zone) Wildcards() bool { return false }
+// hostnames: a Cloudflare zone with a DNS challenge connection attached.
+func (z Zone) Wildcards() bool {
+	return z.Mode == "managed" && z.Provider == connections.Cloudflare && z.ChallengeConnectionID != ""
+}
 
 type ZoneInput struct {
 	Name         string   `json:"name"`

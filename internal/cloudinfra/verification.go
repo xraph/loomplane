@@ -207,7 +207,7 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			return checkErr
 		}
 	}
-	if checkErr := s.reconcileRouteConfig(ctx, st, c, op, state); checkErr != nil {
+	if checkErr := s.reconcileRouteConfig(ctx, st, c, op, state, zone); checkErr != nil {
 		return checkErr
 	}
 	if op.Kind != "verify" && op.Kind != "prepare" && op.Kind != "release" {
@@ -216,6 +216,9 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		}
 	}
 	if op.Kind == "remove" {
+		if checkErr := removeUnusedDNSToken(ctx, c, *route, state.Config); checkErr != nil {
+			return checkErr
+		}
 		if checkErr := server.DisconnectIngressBackend(ctx, c, state.Config, routeBackend(*route)); checkErr != nil {
 			return checkErr
 		}
@@ -244,7 +247,7 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 	return nil
 }
 
-func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *server.Client, op *RouteOperation, state *IngressState) error {
+func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *server.Client, op *RouteOperation, state *IngressState, zone *Zone) error {
 	route := &op.Route
 	if op.DesiredConfig != nil && op.AppliedConfig == nil && state.Current != nil {
 		// Another hostname may have advanced the complete config after this
@@ -288,6 +291,9 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 				return err
 			}
 			next := server.IngressRoute{ID: route.ID, Hostname: route.Input.Hostname, Backend: backend, BlockedPathPrefixes: slices.Clone(route.Input.BlockedPathPrefixes)}
+			if isWildcard(route.Input.Hostname) {
+				next.DNSChallenge = &server.IngressDNSChallenge{ZoneID: zone.ID, Zone: zone.Name}
+			}
 			if op.Kind == "prepare" && op.Source != nil && op.Source.Binding.ServerID == route.Binding.ServerID {
 				index := slices.IndexFunc(desired.Routes, func(r server.IngressRoute) bool { return r.ID == route.ID })
 				if index < 0 || desired.Routes[index].Backend.ContainerID != op.Source.Binding.ContainerID || desired.Routes[index].Backend.ReleaseID != op.Source.Binding.ReleaseID {
@@ -304,8 +310,16 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 			return err
 		}
 	}
+	if op.Kind != "remove" && isWildcard(route.Input.Hostname) {
+		if err := s.prepareWildcardIngress(ctx, st, c, op, state, zone); err != nil {
+			return err
+		}
+	}
 	actual, err := server.ReadIngress(ctx, c, route.OrgID, route.Binding.ServerID)
 	if err != nil {
+		return err
+	}
+	if err = adoptUpgradedIngress(ctx, st, c, op, state, actual); err != nil {
 		return err
 	}
 	desired, err := op.DesiredConfig.JSON()
@@ -326,13 +340,78 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 	return st.SaveRouteOperation(ctx, op)
 }
 
+// prepareWildcardIngress readies a server for a wildcard route's config:
+// the DNS-capable proxy first, then the zone's token in its config volume.
+func (s *Service) prepareWildcardIngress(ctx context.Context, st DomainStore, c *server.Client, op *RouteOperation, state *IngressState, zone *Zone) error {
+	route := op.Route
+	upgrade, err := server.IngressNeedsUpgrade(ctx, c, route.OrgID, route.Binding.ServerID)
+	if err != nil {
+		return err
+	}
+	if upgrade {
+		if !server.IngressImagePinned() {
+			return unpublishedProxyImage
+		}
+		upgraded, upgradeErr := server.UpgradeIngress(ctx, c, route.OrgID, route.Binding.ServerID, op.PreviousConfig)
+		if upgradeErr != nil {
+			return upgradeErr
+		}
+		if checkErr := saveUpgradedIngress(ctx, st, op, state, upgraded); checkErr != nil {
+			return checkErr
+		}
+	}
+	token, err := s.zoneChallengeToken(ctx, zone)
+	if err != nil {
+		return err
+	}
+	return server.WriteIngressDNSToken(ctx, c, route.OrgID, route.Binding.ServerID, zone.ID, token)
+}
+
+// adoptUpgradedIngress follows a proxy an upgrade replaced after its new
+// snapshot was lost: the same config, now on the DNS-capable image.
+func adoptUpgradedIngress(ctx context.Context, st DomainStore, c *server.Client, op *RouteOperation, state *IngressState, actual *server.IngressSnapshot) error {
+	previous := op.PreviousConfig
+	if previous == nil || actual.ContainerID == previous.ContainerID || !server.SameIngressConfig(actual.Config, previous.Config) {
+		return nil
+	}
+	upgrade, err := server.IngressNeedsUpgrade(ctx, c, op.Route.OrgID, op.Route.Binding.ServerID)
+	if err != nil || upgrade {
+		return err
+	}
+	return saveUpgradedIngress(ctx, st, op, state, actual)
+}
+
+func saveUpgradedIngress(ctx context.Context, st DomainStore, op *RouteOperation, state *IngressState, upgraded *server.IngressSnapshot) error {
+	op.PreviousConfig, state.Current = upgraded, upgraded
+	if err := st.SaveIngress(ctx, op, state); err != nil {
+		return err
+	}
+	return st.SaveRouteOperation(ctx, op)
+}
+
+// removeUnusedDNSToken deletes a removed wildcard's zone token once no
+// route left on the server names that zone.
+func removeUnusedDNSToken(ctx context.Context, c *server.Client, route Route, config server.IngressConfig) error {
+	if !isWildcard(route.Input.Hostname) {
+		return nil
+	}
+	for _, r := range config.Routes {
+		if r.DNSChallenge != nil && r.DNSChallenge.ZoneID == route.Input.ZoneID {
+			return nil
+		}
+	}
+	return server.RemoveIngressDNSToken(ctx, c, route.OrgID, route.Binding.ServerID, route.Input.ZoneID)
+}
+
 func (s *Service) verifyRouteDestination(ctx context.Context, c *server.Client, route Route, state *IngressState, preparation bool) RouteVerification {
 	out := RouteVerification{CheckedAt: s.now().UTC()}
 	if !routeConfigMatches(route, state.Config, preparation) {
 		out.BackendError = "The recorded proxy upstream does not match the accepted runtime."
 		return out
 	}
-	addresses, err := s.domainResolver().LookupIPAddr(ctx, route.Input.Hostname)
+	// A wildcard is checked through one name under it.
+	hostname := routeProbeHostname(route)
+	addresses, err := s.domainResolver().LookupIPAddr(ctx, hostname)
 	out.DNS = err == nil && len(addresses) > 0
 	for _, address := range addresses {
 		out.DNS = out.DNS && address.IP.Equal(net.ParseIP(route.Binding.Address))
@@ -342,7 +421,7 @@ func (s *Service) verifyRouteDestination(ctx context.Context, c *server.Client, 
 	}
 	tlsCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 15 * time.Second}, Config: &tls.Config{ServerName: route.Input.Hostname, MinVersion: tls.VersionTLS12}}
+	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 15 * time.Second}, Config: &tls.Config{ServerName: hostname, MinVersion: tls.VersionTLS12}}
 	connection, err := dialer.DialContext(tlsCtx, "tcp", net.JoinHostPort(route.Binding.Address, "443"))
 	if err == nil {
 		if secured, ok := connection.(*tls.Conn); ok {
@@ -407,8 +486,8 @@ func routeConfigMatches(route Route, config server.IngressConfig, preparation bo
 		if r.ID != route.ID || r.Hostname != route.Input.Hostname {
 			continue
 		}
-		// A hand-edited block list is drift like a changed upstream.
-		if !slices.Equal(r.BlockedPathPrefixes, route.Input.BlockedPathPrefixes) {
+		// A hand-edited block list or challenge zone is drift like a changed upstream.
+		if !slices.Equal(r.BlockedPathPrefixes, route.Input.BlockedPathPrefixes) || (r.DNSChallenge != nil) != isWildcard(route.Input.Hostname) || (r.DNSChallenge != nil && r.DNSChallenge.ZoneID != route.Input.ZoneID) {
 			return false
 		}
 		backend := r.Backend

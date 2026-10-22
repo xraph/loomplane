@@ -58,6 +58,7 @@ func (e *Extension) domainRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodGet, "/dns-zones", "dnsZones.list", e.domainZones, nil, ZoneList{}, http.StatusOK},
 		{http.MethodPost, "/dns-zones", "dnsZones.create", e.createDomainZone, infra.ZoneInput{}, infra.Zone{}, http.StatusCreated},
 		{http.MethodPost, "/dns-zones/:zoneId/verify", "dnsZones.verify", e.verifyDomainZone, nil, infra.Zone{}, http.StatusOK},
+		{http.MethodPost, "/dns-zones/:zoneId/challenge-credential", "dnsZones.setChallengeCredential", e.setZoneChallengeCredential, infra.ChallengeCredentialInput{}, infra.Zone{}, http.StatusOK},
 		{http.MethodGet, "/projects/:projectId/domain-routes", "domainRoutes.list", e.listDomainRoutes, nil, DomainRouteList{}, http.StatusOK},
 		{http.MethodPost, "/projects/:projectId/domain-routes/preview", "domainRoutes.preview", e.previewDomainRoute, infra.RouteInput{}, infra.RouteOperation{}, http.StatusOK},
 		{http.MethodGet, "/projects/:projectId/route-operations/:operationId", "domainRoutes.operation", e.domainRouteOperation, nil, infra.RouteOperation{}, http.StatusOK},
@@ -124,6 +125,19 @@ func (e *Extension) verifyDomainZone(c forge.Context) error {
 		return result(c, 0, nil, err)
 	}
 	v, err := e.svc.VerifyZone(c.Request().Context(), p, c.Param("zoneId"))
+	return result(c, http.StatusOK, v, err)
+}
+
+func (e *Extension) setZoneChallengeCredential(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	var in infra.ChallengeCredentialInput
+	if err = c.BindJSON(&in); err != nil {
+		return result(c, 0, nil, infra.ErrInvalid)
+	}
+	v, err := e.svc.SetZoneChallengeCredential(c.Request().Context(), p, c.Param("zoneId"), in)
 	return result(c, http.StatusOK, v, err)
 }
 

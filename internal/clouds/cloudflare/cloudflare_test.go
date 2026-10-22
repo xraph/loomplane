@@ -30,6 +30,8 @@ type fixture struct {
 	registrarWrite int
 	verifyStatus   string
 	noZones        bool
+	// otherZone lists a zone ahead of zone.
+	otherZone bool
 
 	mu       sync.Mutex
 	requests []recorded
@@ -73,7 +75,10 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == acct:
 		f.reply(w, http.StatusOK, map[string]any{"id": f.account, "name": "Acme"})
 	case r.Method == http.MethodGet && r.URL.Path == "/zones":
-		zones := []map[string]any{{"id": f.zone, "name": "acme.dev"}}
+		zones := []map[string]any{{"id": f.zone, "name": "acme.dev", "status": "active", "account": map[string]string{"id": f.account}}}
+		if f.otherZone {
+			zones = append([]map[string]any{{"id": "zone0", "name": "other.dev", "status": "active", "account": map[string]string{"id": f.account}}}, zones...)
+		}
 		if f.noZones {
 			zones = nil
 		}
@@ -246,5 +251,34 @@ func TestCheckToken(t *testing.T) {
 	}
 	if err := cloudflare.CheckToken(" abc_DEF-123 \n"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChallengeScopeProbesTheNamedZone(t *testing.T) {
+	f := newFixture(t)
+	f.otherZone, f.registrarRead, f.registrarWrite = true, http.StatusForbidden, http.StatusForbidden
+	scope, err := cloudflare.New(f.URL, false).ChallengeScope(t.Context(), provider.InfrastructureCredential{Provider: "cloudflare", AccountID: f.account, Token: "tok"}, f.zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scope.ZoneIDs) != 2 || scope.ZoneIDs[0] != "zone0" || scope.ZoneIDs[1] != f.zone {
+		t.Fatalf("zones: %v", scope.ZoneIDs)
+	}
+	p := scope.Permissions
+	if p.DNSWrite != cloudflare.Granted || p.RegistrarRead != cloudflare.Missing || p.RegistrarWrite != cloudflare.Missing {
+		t.Fatalf("%+v", p)
+	}
+	if f.saw("/zones/zone0/dns_records") || !f.saw("/zones/"+f.zone+"/dns_records") {
+		t.Fatal("the DNS Write probe aimed at the first listed zone")
+	}
+	if !f.saw("/accounts/" + f.account + "/tokens/verify") {
+		t.Fatal("the token wasn't verified")
+	}
+	// The checker still probes the first zone the token lists.
+	if _, err = cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); err != nil || !f.saw("/zones/zone0/dns_records") {
+		t.Fatal("Permissions moved its probe", err)
+	}
+	if _, err = cloudflare.New(f.URL, false).ZonePermissions(t.Context(), "tok", f.account, ""); !errors.Is(err, provider.ErrInfrastructureInvalid) {
+		t.Fatal("probed without a zone", err)
 	}
 }

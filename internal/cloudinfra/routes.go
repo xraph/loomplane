@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -105,6 +106,7 @@ type RouteOperation struct {
 	DesiredRecord    provider.DNSRecord      `json:"desired_record"`
 	PreviousReceipt  *provider.DNSRecord     `json:"previous_receipt,omitempty"`
 	Receipt          *provider.DNSRecord     `json:"receipt,omitempty"`
+	Notices          []string                `json:"notices,omitempty"`
 	DesiredConfig    *server.IngressConfig   `json:"-"`
 	PreviousConfig   *server.IngressSnapshot `json:"-"`
 	AppliedConfig    *server.IngressSnapshot `json:"-"`
@@ -171,9 +173,14 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
-	in.Hostname, err = NormalizeHostname(in.Hostname)
-	if err != nil || in.Port < 1 || in.Port > 65535 || (in.ExternalTTLSeconds != 0 && (in.ExternalTTLSeconds < 60 || in.ExternalTTLSeconds > 86400)) {
+	if in.Port < 1 || in.Port > 65535 || (in.ExternalTTLSeconds != 0 && (in.ExternalTTLSeconds < 60 || in.ExternalTTLSeconds > 86400)) {
 		return nil, ErrInvalid
+	}
+	// Exact hostnames are refused before any lookup, as before wildcards.
+	if !strings.Contains(in.Hostname, "*") {
+		if _, err = NormalizeHostname(in.Hostname); err != nil {
+			return nil, err
+		}
 	}
 	in.BlockedPathPrefixes = slices.Compact(slices.Sorted(slices.Values(in.BlockedPathPrefixes)))
 	if checkErr := ValidateBlockedPathPrefixes(in.BlockedPathPrefixes); checkErr != nil {
@@ -186,6 +193,11 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if !slices.Contains(zone.ProjectIDs, project) || zone.VerifiedAt.IsZero() {
 		return nil, ErrNotFound
 	}
+	hostname, err := ValidateRouteHostname(zone, in.Hostname)
+	if err != nil {
+		return nil, err
+	}
+	in.Hostname = hostname.Hostname
 	if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {
 		return nil, checkErr
 	}
@@ -206,6 +218,13 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
+	route := Route{ID: id, OrgID: p.OrgID, ProjectID: project, Input: in, Binding: binding, Status: "pending", Revision: 1, UpdatedAt: s.now().UTC()}
+	var notices []string
+	if hostname.Wildcard {
+		if notices, err = s.wildcardNotices(ctx, st, route); err != nil {
+			return nil, err
+		}
+	}
 	record, err := routeDNSRecord(zone, in.Hostname, binding.Address, id)
 	if err != nil {
 		return nil, err
@@ -221,12 +240,49 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
+	route.OperationID = opID
 	op := &RouteOperation{ID: opID, Kind: "apply", Status: "preview", Review: review, ExpiresAt: s.now().UTC().Add(15 * time.Minute), Revision: 1, Principal: p,
-		Route: Route{ID: id, OrgID: p.OrgID, ProjectID: project, Input: in, Binding: binding, Status: "pending", OperationID: opID, Revision: 1, UpdatedAt: s.now().UTC()}, DesiredRecord: record}
+		Route: route, DesiredRecord: record, Notices: notices}
 	if checkErr := st.PreviewRoute(ctx, op); checkErr != nil {
 		return nil, checkErr
 	}
 	return op, nil
+}
+
+const unpublishedProxyImage = wildcardRefusal("Wildcard routes on servers need Loomplane's DNS-capable proxy image, which isn't published yet.")
+
+// wildcardNotices says what a wildcard route on a server costs: a proxy
+// still on the stock image restarts on the DNS-capable one.
+func (s *Service) wildcardNotices(ctx context.Context, st DomainStore, route Route) ([]string, error) {
+	if route.Binding.BackendName() == RouteBackendKubernetes {
+		// Kubernetes wildcards need a DNS-01 issuer, which routes don't make yet.
+		return nil, ErrWildcardUnsupported
+	}
+	if !s.ingressImagePinned() {
+		return nil, unpublishedProxyImage
+	}
+	upgrade, err := s.ingressNeedsUpgrade(ctx, route)
+	if err != nil || !upgrade {
+		return nil, err
+	}
+	names, err := st.RuntimeNames(ctx, route.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	name := names[route.Binding.ServerID]
+	if name == "" {
+		name = route.Binding.ServerID
+	}
+	return []string{"Every HTTPS hostname on " + name + " is unavailable for a few seconds while Loomplane restarts its proxy with DNS challenge support. Certificates and settings stay in their volumes."}, nil
+}
+
+func (s *Service) routeIngressNeedsUpgrade(ctx context.Context, route Route) (bool, error) {
+	c, err := s.routeClient(ctx, route)
+	if err != nil {
+		return false, err
+	}
+	defer c.Close()
+	return server.IngressNeedsUpgrade(ctx, c, route.OrgID, route.Binding.ServerID)
 }
 
 func (s *Service) routeOperation(ctx context.Context, p security.Principal, project, id string, write bool) (DomainStore, *RouteOperation, error) {

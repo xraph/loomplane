@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
@@ -153,14 +154,19 @@ type Service struct {
 	// hostname. Tests replace them.
 	kubernetesRoutes func(ctx context.Context, route Route, cleanup bool) (kubernetesRouteClient, error)
 	routeHTTPS       func(ctx context.Context, hostname string) (time.Time, int, error)
+	// ingressImagePinned and ingressNeedsUpgrade tell a wildcard preview
+	// whether its server's proxy has to restart. Tests replace them.
+	ingressImagePinned  func() bool
+	ingressNeedsUpgrade func(ctx context.Context, route Route) (bool, error)
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
 		d.Runtime = SSHRuntime{}
 	}
-	s := &Service{Deps: d, now: time.Now, routeHTTPS: probeRouteHTTPS}
+	s := &Service{Deps: d, now: time.Now, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned}
 	s.kubernetesRoutes = s.openKubernetesRoute
+	s.ingressNeedsUpgrade = s.routeIngressNeedsUpgrade
 	return s
 }
 

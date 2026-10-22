@@ -290,6 +290,10 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if !slices.Contains(zone.ProjectIDs, route.ProjectID) || zone.VerifiedAt.IsZero() {
 			return ErrNotFound
 		}
+		// The zone row is locked, so its credential can't detach under this route.
+		if isWildcard(route.Input.Hostname) && !zone.Wildcards() {
+			return ErrWildcardUnsupported
+		}
 		raw, encodeErr := json.Marshal(route)
 		if encodeErr != nil {
 			return encodeErr

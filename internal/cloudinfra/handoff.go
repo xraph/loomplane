@@ -227,7 +227,10 @@ func (s *Service) prepareSourceIngress(ctx context.Context, st DomainStore, op *
 		if index < 0 || desired.Routes[index].Backend.ContainerID != source.Binding.ContainerID || desired.Routes[index].Backend.ReleaseID != source.Binding.ReleaseID {
 			return ErrConflict
 		}
-		desired.Routes[index].ChallengeAddress = op.Route.Binding.Address
+		// A wildcard's certificate comes through DNS-01 on the destination.
+		if desired.Routes[index].DNSChallenge == nil {
+			desired.Routes[index].ChallengeAddress = op.Route.Binding.Address
+		}
 		op.SourceTransition = &IngressTransition{Desired: desired, Previous: state.Current}
 		if checkErr := st.SaveRouteOperation(ctx, op); checkErr != nil {
 			return checkErr
@@ -421,6 +424,9 @@ func (s *Service) releaseSourceIngress(ctx context.Context, st DomainStore, op *
 	}
 	if ingressReferences(state.Config, routeBackend(*source)) {
 		return ErrConflict
+	}
+	if checkErr := removeUnusedDNSToken(ctx, c, *source, state.Config); checkErr != nil {
+		return checkErr
 	}
 	if checkErr := server.DisconnectIngressBackend(ctx, c, state.Config, routeBackend(*source)); checkErr != nil {
 		return checkErr

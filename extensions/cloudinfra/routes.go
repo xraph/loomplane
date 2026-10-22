@@ -93,7 +93,7 @@ func result(c forge.Context, status int, value any, err error) error {
 	}
 	code := security.StatusFor(err)
 	switch {
-	case errors.Is(err, infra.ErrInvalid), errors.Is(err, provider.ErrInfrastructureInvalid):
+	case errors.Is(err, infra.ErrInvalid), errors.Is(err, provider.ErrInfrastructureInvalid), errors.Is(err, infra.ErrWildcardUnsupported):
 		code = http.StatusUnprocessableEntity
 	case errors.Is(err, infra.ErrNotFound), errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, connections.ErrNotFound):
 		code = http.StatusNotFound

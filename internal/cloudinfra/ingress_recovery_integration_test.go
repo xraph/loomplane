@@ -91,6 +91,9 @@ func recoveryFixture(t *testing.T) (*server.Client, string, []byte) {
 	return c, name, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
 
+// recoveryZone holds the exact test hostnames; none is a wildcard.
+var recoveryZone = &Zone{ID: "zone", OrgID: "org", Name: "ingress.test"}
+
 type recoveryIngressStore struct {
 	DomainStore
 	state     IngressState
@@ -125,7 +128,7 @@ func TestIngressCancelledSaveRecoveryAndRotatedCleanup(t *testing.T) {
 	}
 	backends := map[string]server.IngressBackend{}
 	for _, name := range []string{"a", "b"} {
-		container := recoveryDocker(t, "exec", host, "docker", "run", "-d", "--name", "app-"+name, "--label", "loomplane.org=org", "--label", "loomplane.project="+name, "--label", "loomplane.environment=env", "--label", "loomplane.instance=instance-"+name, "--label", "loomplane.revision=release", "--label", "loomplane.service=web", server.IngressImage, "sh", "-c", "mkdir -p /tmp/www && echo "+name+" > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+		container := recoveryDocker(t, "exec", host, "docker", "run", "-d", "--name", "app-"+name, "--label", "loomplane.org=org", "--label", "loomplane.project="+name, "--label", "loomplane.environment=env", "--label", "loomplane.instance=instance-"+name, "--label", "loomplane.revision=release", "--label", "loomplane.service=web", server.LegacyIngressImage, "sh", "-c", "mkdir -p /tmp/www && echo "+name+" > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
 		backend, connectErr := server.ConnectIngressBackend(ctx, c, "org", "server", server.IngressBackend{OrgID: "org", ProjectID: name, EnvironmentID: "env", Service: "web", InstanceID: "instance-" + name, ReleaseID: "release", ContainerID: container, Port: 8080})
 		if connectErr != nil {
 			t.Fatal(connectErr)
@@ -163,7 +166,7 @@ func TestIngressCancelledSaveRecoveryAndRotatedCleanup(t *testing.T) {
 			st := &recoveryIngressStore{state: persisted, failSave: true}
 			svc := NewService(Deps{})
 			working := persisted
-			if applyErr := svc.reconcileRouteConfig(ctx, st, c, apply, &working); applyErr == nil {
+			if applyErr := svc.reconcileRouteConfig(ctx, st, c, apply, &working, recoveryZone); applyErr == nil {
 				t.Fatal("lost SaveIngress not injected")
 			}
 			removal := &RouteOperation{ID: "remove-" + scenario, Kind: "remove", Route: route, CancelledIngress: &IngressTransition{Desired: *apply.DesiredConfig, Previous: apply.PreviousConfig}}
@@ -204,7 +207,7 @@ func TestIngressCancelledSaveRecoveryAndRotatedCleanup(t *testing.T) {
 
 			st.state = restarted // the newer known config is already the database state
 			st.failSave = true
-			if removeErr := svc.reconcileRouteConfig(ctx, st, c, removal, &restarted); removeErr == nil {
+			if removeErr := svc.reconcileRouteConfig(ctx, st, c, removal, &restarted, recoveryZone); removeErr == nil {
 				t.Fatal("lost removal SaveIngress not injected")
 			}
 			restarted = st.state
@@ -212,7 +215,7 @@ func TestIngressCancelledSaveRecoveryAndRotatedCleanup(t *testing.T) {
 			if recoveryErr := svc.recoverCancelledIngress(ctx, st, c, &retry, &restarted); recoveryErr != nil {
 				t.Fatal("removal retry reused obsolete cancelled intent", recoveryErr)
 			}
-			if removeErr := svc.reconcileRouteConfig(ctx, st, c, &retry, &restarted); removeErr != nil {
+			if removeErr := svc.reconcileRouteConfig(ctx, st, c, &retry, &restarted, recoveryZone); removeErr != nil {
 				t.Fatal(removeErr)
 			}
 
@@ -355,7 +358,7 @@ func TestIngressAbandonedSameServerPreparation(t *testing.T) {
 		if name == "unrelated" {
 			project = "other"
 		}
-		container := recoveryDocker(t, "exec", host, "docker", "run", "-d", "--name", name, "--label", "loomplane.org=org", "--label", "loomplane.project="+project, "--label", "loomplane.environment=env", "--label", "loomplane.instance="+name, "--label", "loomplane.revision=release", "--label", "loomplane.service=web", server.IngressImage, "sh", "-c", "mkdir -p /tmp/www && echo "+name+" > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+		container := recoveryDocker(t, "exec", host, "docker", "run", "-d", "--name", name, "--label", "loomplane.org=org", "--label", "loomplane.project="+project, "--label", "loomplane.environment=env", "--label", "loomplane.instance="+name, "--label", "loomplane.revision=release", "--label", "loomplane.service=web", server.LegacyIngressImage, "sh", "-c", "mkdir -p /tmp/www && echo "+name+" > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
 		b, connectErr := server.ConnectIngressBackend(ctx, c, "org", "server", server.IngressBackend{OrgID: "org", ProjectID: project, EnvironmentID: "env", Service: "web", InstanceID: name, ReleaseID: "release", ContainerID: container, Port: 8080})
 		if connectErr != nil {
 			t.Fatal(connectErr)
@@ -510,5 +513,32 @@ func TestIngressAbandonedSameServerPreparation(t *testing.T) {
 			}
 			assertPublic(t)
 		})
+	}
+}
+
+// Until the DNS-capable image is published, a wildcard route that reaches
+// the worker stops before the proxy changes.
+func TestWildcardRouteWaitsForPublishedProxy(t *testing.T) {
+	c, host, _ := recoveryFixture(t)
+	ctx := server.WithEffectFence(t.Context(), server.EffectFence{Operation: "org/ingress/server", Generation: 1})
+	snapshot, err := server.EnsureIngress(ctx, c, "org", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	container := recoveryDocker(t, "exec", host, "docker", "run", "-d", "--name", "app-w", "--label", "loomplane.org=org", "--label", "loomplane.project=w", "--label", "loomplane.environment=env", "--label", "loomplane.instance=instance-w", "--label", "loomplane.revision=release", "--label", "loomplane.service=web", server.LegacyIngressImage, "sh", "-c", "mkdir -p /tmp/www && echo w > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+	route := Route{ID: "route-w", OrgID: "org", ProjectID: "w", Input: RouteInput{ZoneID: "zone", Hostname: "*.ingress.test", EnvironmentID: "env", Service: "web", Port: 8080}, Binding: RouteBinding{ServerID: "server", ConnectionID: "runtime", ConnectionGeneration: 1, RuntimeID: c.Config.Details["docker_id"], InstanceID: "instance-w", ReleaseID: "release", ContainerID: container}}
+	op := &RouteOperation{ID: "apply-w", Kind: "apply", Route: route}
+	state := IngressState{Generation: 1, Config: server.IngressConfig{OrgID: "org", ServerID: "server", Version: "initial", Routes: []server.IngressRoute{}}, Current: snapshot}
+	st := &recoveryIngressStore{state: state}
+	err = NewService(Deps{}).reconcileRouteConfig(ctx, st, c, op, &state, &Zone{ID: "zone", OrgID: "org", Name: "ingress.test", Mode: "managed", Provider: "cloudflare", ChallengeConnectionID: "cf-dns"})
+	if !errors.Is(err, ErrWildcardUnsupported) || err.Error() != "Wildcard routes on servers need Loomplane's DNS-capable proxy image, which isn't published yet." {
+		t.Fatal(err)
+	}
+	if op.DesiredConfig == nil || op.DesiredConfig.Routes[0].DNSChallenge == nil || op.DesiredConfig.Routes[0].DNSChallenge.ZoneID != "zone" {
+		t.Fatalf("desired route: %+v", op.DesiredConfig)
+	}
+	after, err := server.ReadIngress(ctx, c, "org", "server")
+	if err != nil || after.ContainerID != snapshot.ContainerID || !server.SameIngressConfig(after.Config, snapshot.Config) {
+		t.Fatal("the proxy changed", err)
 	}
 }

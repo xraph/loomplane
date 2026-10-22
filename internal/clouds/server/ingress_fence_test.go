@@ -28,6 +28,7 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 		lostCaller               bool
 		exit                     int
 		clean                    bool
+		args                     []string
 	}{
 		{name: "lost_caller", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true, lostCaller: true},
 		{name: "complete", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true},
@@ -37,6 +38,8 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 		{name: "still_running", running: true},
 		{name: "unrelated_owned_container", foreign: true, clean: true},
 		{name: "detached", detach: true, clean: true},
+		{name: "token_removal", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true, args: []string{"-c", ingressTokenScript, "dns", "zone_1"}},
+		{name: "token_removal_outside_dns", clean: true, foreign: true, args: []string{"-c", ingressTokenScript, "dns", "../zone"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, err := os.MkdirTemp("/tmp", "lp-ingress-fence-")
@@ -54,18 +57,22 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 			}
 			container, execution := strings.Repeat("a", 64), strings.Repeat("b", 64)
 			var starts atomic.Int32
+			args := tc.args
+			if args == nil {
+				args = []string{"-c", ingressAdminScript, "ingress", "read", "", ""}
+			}
 			api := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/info":
 					_ = json.NewEncoder(w).Encode(map[string]string{"ID": daemon})
 				case "/exec/" + execution + "/json":
-					_ = json.NewEncoder(w).Encode(map[string]any{"ContainerID": container, "Running": starts.Load() > 0 && tc.running, "ExitCode": tc.exit, "ProcessConfig": map[string]any{"tty": false, "privileged": false, "entrypoint": "sh", "arguments": []string{"-c", ingressAdminScript, "ingress", "read", "", ""}}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"ContainerID": container, "Running": starts.Load() > 0 && tc.running, "ExitCode": tc.exit, "ProcessConfig": map[string]any{"tty": false, "privileged": false, "entrypoint": "sh", "arguments": args}})
 				case "/containers/" + container + "/json":
 					owner := "server"
-					if tc.foreign {
+					if tc.foreign && tc.args == nil {
 						owner = "another-server"
 					}
-					_ = json.NewEncoder(w).Encode(map[string]any{"Id": container, "State": map[string]any{"Running": true}, "Config": map[string]any{"Image": IngressImage, "Labels": map[string]string{"loomplane.org": "org", "loomplane.ingress": owner}}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"Id": container, "State": map[string]any{"Running": true}, "Config": map[string]any{"Image": LegacyIngressImage, "Labels": map[string]string{"loomplane.org": "org", "loomplane.ingress": owner}}})
 				case "/exec/" + execution + "/start":
 					// Docker reads the start request before completing the stream.
 					// Closing while Python is still sending its body causes EPIPE.
@@ -93,7 +100,7 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 			run := func(mode string, generation int) string {
 				q, _ := json.Marshal(map[string]any{"Headers": map[string][]string{}, "Mode": mode, "Daemon": daemon, "Socket": socket, "Method": "POST", "Path": "/exec/" + execution + "/start", "Fence": EffectFence{Operation: "org/ingress/server", Generation: int64(generation)}})
 				body, _ := json.Marshal(map[string]bool{"Detach": tc.detach, "Tty": false})
-				cmd := exec.CommandContext(t.Context(), python, "-c", strings.Replace(strings.Replace(effectFenceScript, "range(120)", "range(2)", 1), "except Exception: fail()", "except Exception:\n import traceback;traceback.print_exc();fail()", 1))
+				cmd := exec.CommandContext(t.Context(), python, "-c", strings.Replace(strings.Replace(fenceScript(), "range(120)", "range(2)", 1), "except Exception: fail()", "except Exception:\n import traceback;traceback.print_exc();fail()", 1))
 				cmd.Stderr = &diagnostics
 				cmd.Stdin = bytes.NewReader(append(append(q, '\n'), body...))
 				if tc.lostCaller && mode == "ingress-exec" && generation == 1 && starts.Load() == 0 {

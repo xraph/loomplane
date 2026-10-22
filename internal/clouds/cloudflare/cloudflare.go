@@ -279,6 +279,19 @@ type Permissions struct {
 // one that's held. A write that succeeds anyway is a bug in the probe,
 // and ErrInfrastructureAmbiguous.
 func (c *Client) Permissions(ctx context.Context, token, accountID string) (Permissions, error) {
+	return c.permissions(ctx, token, accountID, "")
+}
+
+// ZonePermissions is Permissions with the DNS Write probe aimed at zoneID
+// rather than the first zone the token lists.
+func (c *Client) ZonePermissions(ctx context.Context, token, accountID, zoneID string) (Permissions, error) {
+	if zoneID == "" {
+		return Permissions{}, provider.ErrInfrastructureInvalid
+	}
+	return c.permissions(ctx, token, accountID, zoneID)
+}
+
+func (c *Client) permissions(ctx context.Context, token, accountID, zoneID string) (Permissions, error) {
 	p := Permissions{ZoneRead: Unchecked, DNSWrite: Unchecked, RegistrarRead: Unchecked, RegistrarWrite: Unchecked}
 	var zones []struct {
 		ID string `json:"id"`
@@ -287,8 +300,11 @@ func (c *Client) Permissions(ctx context.Context, token, accountID string) (Perm
 	if p.ZoneRead, err = probeState(err); err != nil {
 		return Permissions{}, err
 	}
-	if p.ZoneRead == Granted && len(zones) > 0 && zones[0].ID != "" {
-		if p.DNSWrite, err = c.probeDNSWrite(ctx, token, zones[0].ID); err != nil {
+	if zoneID == "" && p.ZoneRead == Granted && len(zones) > 0 {
+		zoneID = zones[0].ID
+	}
+	if zoneID != "" {
+		if p.DNSWrite, err = c.probeDNSWrite(ctx, token, zoneID); err != nil {
 			return Permissions{}, err
 		}
 	}
@@ -352,4 +368,32 @@ func (c *Client) probeDNSWrite(ctx context.Context, token, zoneID string) (Permi
 		return Unchecked, errors.Join(ambiguous, derr)
 	}
 	return Unchecked, ambiguous
+}
+
+// ChallengeScope is what a DNS challenge token reaches: every zone it
+// lists, and its permissions with DNS Write probed on one zone.
+type ChallengeScope struct {
+	ZoneIDs     []string
+	Permissions Permissions
+}
+
+// ChallengeScope checks a token meant for one zone's DNS-01 challenges. It
+// verifies the token, lists every zone it can see in the account and probes
+// DNS Write on zoneID, all without changing anything.
+func (c *Client) ChallengeScope(ctx context.Context, credential provider.InfrastructureCredential, zoneID string) (ChallengeScope, error) {
+	if _, err := c.VerifyToken(ctx, credential.Token, credential.AccountID); err != nil {
+		return ChallengeScope{}, err
+	}
+	zones, err := c.ListZones(ctx, credential)
+	if err != nil {
+		return ChallengeScope{}, err
+	}
+	out := ChallengeScope{ZoneIDs: make([]string, 0, len(zones))}
+	for _, zone := range zones {
+		out.ZoneIDs = append(out.ZoneIDs, zone.ID)
+	}
+	if out.Permissions, err = c.ZonePermissions(ctx, credential.Token, credential.AccountID, zoneID); err != nil {
+		return ChallengeScope{}, err
+	}
+	return out, nil
 }

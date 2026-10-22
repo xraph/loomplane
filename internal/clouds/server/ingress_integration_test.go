@@ -103,7 +103,7 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 		id := ingressDocker(t, "exec", host, "docker", "run", "-d", "--network", envnet, "--name", "app-"+project,
 			"--label", "loomplane.org=org", "--label", "loomplane.project="+project, "--label", "loomplane.environment=env-"+project,
 			"--label", "loomplane.instance=instance-"+project, "--label", "loomplane.revision=release-"+project, "--label", "loomplane.service=web",
-			IngressImage, "sh", "-c", "mkdir -p /tmp/www/admin && echo project-"+project+"-release-"+project+" > /tmp/www/index.html && echo admin-"+project+" > /tmp/www/admin/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+			LegacyIngressImage, "sh", "-c", "mkdir -p /tmp/www/admin && echo project-"+project+"-release-"+project+" > /tmp/www/index.html && echo admin-"+project+" > /tmp/www/admin/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
 		backend, connectErr := ConnectIngressBackend(ctx, c, "org", "server", IngressBackend{OrgID: "org", ProjectID: project, EnvironmentID: "env-" + project, Service: "web", InstanceID: "instance-" + project, ReleaseID: "release-" + project, ContainerID: id, Port: 8080})
 		if connectErr != nil {
 			t.Fatal(connectErr)
@@ -156,7 +156,7 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 
 	// Same-server preparation changes only the private probe upstream. The old
 	// HTTPS app remains available even when the new exact instance fails.
-	candidateID := ingressDocker(t, "exec", host, "docker", "run", "-d", "--name", "app-a-next", "--label", "loomplane.org=org", "--label", "loomplane.project=a", "--label", "loomplane.environment=env-a", "--label", "loomplane.instance=next-instance", "--label", "loomplane.revision=next-release", IngressImage, "sh", "-c", "mkdir -p /tmp/www && echo next-instance-next-release > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+	candidateID := ingressDocker(t, "exec", host, "docker", "run", "-d", "--name", "app-a-next", "--label", "loomplane.org=org", "--label", "loomplane.project=a", "--label", "loomplane.environment=env-a", "--label", "loomplane.instance=next-instance", "--label", "loomplane.revision=next-release", LegacyIngressImage, "sh", "-c", "mkdir -p /tmp/www && echo next-instance-next-release > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
 	next := config.Routes[0].Backend
 	next.ContainerID = candidateID
 	next.InstanceID = "next-instance"

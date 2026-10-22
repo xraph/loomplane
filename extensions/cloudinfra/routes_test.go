@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/forge"
 
@@ -53,5 +54,41 @@ func TestCreateZoneProviderErrorStatuses(t *testing.T) {
 	// A connection whose account was never verified can't prove the zone.
 	if code := create(map[string]string{}); code != http.StatusUnprocessableEntity {
 		t.Fatal("unverified account identity", code)
+	}
+}
+
+// wildcardStore holds one verified external zone, which takes no challenge
+// credential, and one wildcard route on it.
+type wildcardStore struct{ infra.DomainStore }
+
+func (wildcardStore) Zone(_ context.Context, org, id string) (*infra.Zone, error) {
+	return &infra.Zone{ID: id, OrgID: org, Name: "acme.dev", Mode: "external", ProjectIDs: []string{"shop"}, VerifiedAt: time.Now(), Revision: 1}, nil
+}
+func (wildcardStore) OrgRoutes(context.Context, string) ([]*infra.Route, error) {
+	return []*infra.Route{{ID: "route_w", Status: "ready", Input: infra.RouteInput{ZoneID: "zone", Hostname: "*.acme.dev"}}}, nil
+}
+
+func TestWildcardRouteStatuses(t *testing.T) {
+	svc := infra.NewService(infra.Deps{Authz: overviewAuthz{allow: true}, Domains: wildcardStore{}})
+	r := forge.NewRouter()
+	if err := (&Extension{svc: svc}).domainRoutes(r, nil); err != nil {
+		t.Fatal(err)
+	}
+	post := func(path, body string) (int, string) {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org", UserID: "member"}))
+		out := httptest.NewRecorder()
+		r.ServeHTTP(out, req)
+		return out.Code, out.Body.String()
+	}
+	if code, body := post("/api/v1/projects/shop/domain-routes/preview", `{"zone_id":"zone","environment_id":"prod","service":"web","hostname":"*.acme.dev","port":8080}`); code != http.StatusUnprocessableEntity || !strings.Contains(body, "DNS challenge credential") {
+		t.Fatal("wildcard on a zone without a challenge credential", code, body)
+	}
+	if code, _ := post("/api/v1/dns-zones/zone/challenge-credential", `{"connection_id":"cf","revision":1}`); code != http.StatusUnprocessableEntity {
+		t.Fatal("challenge credential on an external zone", code)
+	}
+	if code, _ := post("/api/v1/dns-zones/zone/challenge-credential", `{"connection_id":"","revision":1}`); code != http.StatusConflict {
+		t.Fatal("detached under a wildcard route", code)
 	}
 }

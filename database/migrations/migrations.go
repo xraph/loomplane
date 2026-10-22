@@ -32,6 +32,7 @@ const GroupName = "loomplane"
 func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
 	g.MustRegister(
+		statements("20261105000400", "zone_challenge_uses", zoneChallengeUsesUp, nil),
 		statements("20261105000300", "kubernetes_routes", kubernetesRoutesUp, nil),
 		statements("20261105000200", "notification_kinds", notificationKindsUp, nil),
 		statements("20261105000100", "domain_registrations", domainRegistrationsUp, domainRegistrationsDown),
