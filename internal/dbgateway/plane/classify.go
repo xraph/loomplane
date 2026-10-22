@@ -31,10 +31,13 @@ const (
 	EffectReset
 	// EffectDiscardAll is DISCARD ALL: it drops all session state.
 	EffectDiscardAll
+	// EffectDeallocate drops the SQL-level prepared statement named Param, or
+	// all of them for "*" (DEALLOCATE ALL and DISCARD PLANS).
+	EffectDeallocate
 )
 
 // Classification is what ClassifySQL found. Param and Value are set for
-// EffectSet and EffectReset, and Channel for EffectListen and EffectUnlisten.
+// EffectSet and EffectReset, Param alone for EffectDeallocate, and Channel for EffectListen and EffectUnlisten.
 type Classification struct {
 	Effect  Effect
 	Param   string
@@ -59,9 +62,10 @@ const literalMark = 0x01
 // statement creates session state. It errs toward pinning: anything that might
 // create state the gateway can't replay is EffectPinSession.
 //
-// It reads the first keyword for LISTEN, SET, RESET, DISCARD and COPY, and
-// scans the whole text, minus string literals and comments, for advisory
-// locks, temporary objects, WITH HOLD cursors, PREPARE and set_config. Text
+// It reads the first keyword for LISTEN, SET, RESET, DISCARD, DEALLOCATE and
+// COPY, and scans the whole text, minus string literals and comments, for
+// advisory locks, temporary objects, WITH HOLD cursors, PREPARE, set_config
+// and the other calls that change session state (see pinsAnywhere). Text
 // holding more than one statement pins when any statement does, and LISTEN,
 // UNLISTEN, SET and RESET always pin there, because the gateway can't tell
 // which of the statements the client meant to track.
@@ -74,8 +78,29 @@ func ClassifySQL(sql string) Classification {
 	} else {
 		buf = make([]byte, len(sql))
 	}
-	maskSQL(buf, sql)
+	m := maskSQL(buf, sql, false)
+	if m.pin {
+		return Classification{Effect: EffectPinSession}
+	}
+	c := classifyMasked(sql, buf)
 
+	// A plain '...' string with a backslash lexes differently under
+	// standard_conforming_strings = off, which a client may set, and the
+	// gateway replays that setting on other backends. Read the text both ways
+	// and pin if they disagree, so a quote the two readings see differently
+	// can't hide a statement.
+	if m.plainBackslash {
+		alt := make([]byte, len(sql))
+		maskSQL(alt, sql, true)
+		if classifyMasked(sql, alt) != c {
+			return Classification{Effect: EffectPinSession}
+		}
+	}
+	return c
+}
+
+// classifyMasked classifies sql from its masked text.
+func classifyMasked(sql string, buf []byte) Classification {
 	r := scanWords(buf)
 	switch {
 	case r.pin:
@@ -100,9 +125,14 @@ func ClassifySQL(sql string) Classification {
 	case "reset":
 		return classifyReset(sql, buf, p)
 	case "discard":
-		if w, _ := wordAt(buf, skipSpace(buf, p)); string(w) == "all" {
+		switch w, _ := wordAt(buf, skipSpace(buf, p)); string(w) {
+		case "all":
 			return Classification{Effect: EffectDiscardAll}
+		case "plans":
+			return Classification{Effect: EffectDeallocate, Param: "*"}
 		}
+	case "deallocate":
+		return classifyDeallocate(sql, buf, p)
 	case "copy":
 		return Classification{Effect: EffectPinStatement}
 	case "prepare", "do", "load":
@@ -116,6 +146,8 @@ type scan struct {
 	multi    bool // text follows a semicolon
 	pin      bool // something in the text pins the session
 	copyStmt bool // some statement is a COPY
+	update   bool // the word update appears
+	settings bool // the word pg_settings appears
 	hs, he   int  // bounds of the first word of the first statement, hs is -1 if it isn't a word
 }
 
@@ -163,11 +195,21 @@ func scanWords(buf []byte) scan {
 		if pinsAnywhere(w, prev) {
 			r.pin = true
 		}
+		switch string(w) {
+		case "update":
+			r.update = true
+		case "pg_settings":
+			r.settings = true
+		}
 		prev = w
 		i = j
 	}
 	if r.multi && r.hs >= 0 {
 		r.startOfStatement(buf, r.hs, r.he)
+	}
+	// UPDATE pg_settings is SET by another name.
+	if r.update && r.settings {
+		r.pin = true
 	}
 	return r
 }
@@ -176,10 +218,11 @@ func scanWords(buf []byte) scan {
 // several, where the first-keyword classification doesn't apply.
 func (r *scan) startOfStatement(buf []byte, s, e int) {
 	switch string(buf[s:e]) {
-	case "listen", "unlisten", "set", "reset", "prepare", "do", "load":
+	case "listen", "unlisten", "set", "reset", "prepare", "do", "load", "deallocate":
 		r.pin = true
 	case "discard":
-		if w, _ := wordAt(buf, skipSpace(buf, e)); string(w) == "all" {
+		switch w, _ := wordAt(buf, skipSpace(buf, e)); string(w) {
+		case "all", "plans":
 			r.pin = true
 		}
 	case "copy":
@@ -193,7 +236,12 @@ func (r *scan) startOfStatement(buf []byte, s, e int) {
 // end with the transaction.
 func pinsAnywhere(w, prev []byte) bool {
 	switch string(w) {
-	case "pg_advisory_lock", "pg_advisory_lock_shared", "pg_try_advisory_lock", "pg_try_advisory_lock_shared", "set_config":
+	case "pg_advisory_lock", "pg_advisory_lock_shared", "pg_try_advisory_lock", "pg_try_advisory_lock_shared", "set_config",
+		// setseed seeds the session's random() sequence. The query_to_xml
+		// family and ts_stat run SQL held in a string, which is masked.
+		// dblink_connect opens a named connection that lives as long as the
+		// session.
+		"setseed", "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema", "ts_stat", "dblink_connect":
 		return true
 	case "temp", "temporary":
 		switch string(prev) {
@@ -255,17 +303,22 @@ func classifySet(sql string, buf []byte, p int) Classification {
 	w, e := wordAt(buf, p)
 	switch string(w) {
 	case "local", "transaction":
-		return Classification{}
+		// SET local.foo is a custom parameter set for the session.
+		if e >= len(buf) || buf[e] != '.' {
+			return Classification{}
+		}
 	case "session":
 		p = skipSpace(buf, e)
 		w, e = wordAt(buf, p)
 	}
 
 	var param string
+	timeZone := false
 	if string(w) == "time" {
 		// SET TIME ZONE v takes no TO or =.
 		if z, ze := wordAt(buf, skipSpace(buf, e)); string(z) == "zone" {
 			param, p = "timezone", ze
+			timeZone = true
 		}
 	}
 	if param == "" {
@@ -304,10 +357,40 @@ func classifySet(sql string, buf []byte, p int) Classification {
 		return pin
 	}
 	value := sql[start:end]
-	if strings.EqualFold(value, "default") {
+	if strings.EqualFold(value, "default") || timeZone && strings.EqualFold(value, "local") {
 		return Classification{Effect: EffectReset, Param: param}
 	}
+	if timeZone {
+		// SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE has a syntax of its own.
+		if w, _ := wordAt(buf, start); string(w) == "interval" {
+			return pin
+		}
+	}
 	return Classification{Effect: EffectSet, Param: param, Value: value}
+}
+
+// classifyDeallocate reads a DEALLOCATE whose keyword ends at p:
+// DEALLOCATE [PREPARE] name, or ALL.
+func classifyDeallocate(sql string, buf []byte, p int) Classification {
+	pin := Classification{Effect: EffectPinSession}
+	p = skipSpace(buf, p)
+	w, e := wordAt(buf, p)
+	if string(w) == "prepare" && !atEnd(buf, e) {
+		// PREPARE is optional, and also a legal statement name.
+		p = skipSpace(buf, e)
+		w, e = wordAt(buf, p)
+	}
+	if string(w) == "all" {
+		if atEnd(buf, e) {
+			return Classification{Effect: EffectDeallocate, Param: "*"}
+		}
+		return pin
+	}
+	name, end, ok := identAt(sql, buf, p)
+	if !ok || !atEnd(buf, end) {
+		return pin
+	}
+	return Classification{Effect: EffectDeallocate, Param: name}
 }
 
 func isKnownParam(name string) bool {
@@ -379,19 +462,28 @@ func lowerByte(c byte) byte {
 	return c
 }
 
+// masked is what maskSQL noticed besides the masked text.
+type masked struct {
+	pin            bool // text the classifier can't read, such as a decoded U& identifier
+	plainBackslash bool // a plain '...' string holds a backslash
+}
+
 // maskSQL writes the lowercased code of src into dst, which is as long as src,
 // so positions line up. Comments become spaces. String literals, with the
 // quotes, become literalMark. A double-quoted identifier keeps its text, so
 // that a call such as "pg_advisory_lock"(1) is seen, but a semicolon inside it
-// becomes an underscore so that it can't read as a statement end.
-func maskSQL(dst []byte, src string) {
+// becomes an underscore so that it can't read as a statement end. With
+// allEscapes, a backslash escapes in every string, as it does under
+// standard_conforming_strings = off.
+func maskSQL(dst []byte, src string, allEscapes bool) masked {
+	var m masked
 	n := len(src)
 	for i := 0; i < n; {
 		c := src[i]
 		switch {
 		case c == '-' && i+1 < n && src[i+1] == '-':
 			j := i + 2
-			for j < n && src[j] != '\n' {
+			for j < n && src[j] != '\n' && src[j] != '\r' {
 				j++
 			}
 			fill(dst[i:j], ' ')
@@ -401,11 +493,18 @@ func maskSQL(dst []byte, src string) {
 			fill(dst[i:j], ' ')
 			i = j
 		case c == '\'':
-			j := stringEnd(src, i)
+			j, plainBackslash := stringEnd(src, i, allEscapes)
+			if plainBackslash {
+				m.plainBackslash = true
+			}
 			fill(dst[i:j], literalMark)
 			i = j
 		case c == '"':
 			j := quotedIdentEnd(src, i)
+			if isUnicodeIdent(src, i) && (strings.IndexByte(src[i:j], '\\') >= 0 || uescapeFollows(src, j)) {
+				// U&"..." names are decoded from escapes, and UESCAPE changes the escape character.
+				m.pin = true
+			}
 			for k := i; k < j; k++ {
 				dst[k] = lowerByte(src[k])
 				if dst[k] == ';' {
@@ -426,6 +525,35 @@ func maskSQL(dst []byte, src string) {
 			i++
 		}
 	}
+	return m
+}
+
+// isUnicodeIdent reports whether the double quote at src[i] opens a U&"..." identifier.
+func isUnicodeIdent(src string, i int) bool {
+	return i >= 2 && src[i-1] == '&' && src[i-2]|0x20 == 'u' && (i == 2 || !isWordByte(src[i-3]))
+}
+
+// uescapeFollows reports whether the keyword UESCAPE comes next after p.
+func uescapeFollows(src string, p int) bool {
+	for p < len(src) {
+		switch {
+		case isSpace(src[p]):
+			p++
+		case src[p] == '-' && p+1 < len(src) && src[p+1] == '-':
+			for p < len(src) && src[p] != '\n' && src[p] != '\r' {
+				p++
+			}
+		case src[p] == '/' && p+1 < len(src) && src[p+1] == '*':
+			p = blockCommentEnd(src, p)
+		default:
+			const kw = "uescape"
+			if len(src)-p < len(kw) || !strings.EqualFold(src[p:p+len(kw)], kw) {
+				return false
+			}
+			return p+len(kw) == len(src) || !isWordByte(src[p+len(kw)])
+		}
+	}
+	return false
 }
 
 func fill(b []byte, c byte) {
@@ -459,12 +587,15 @@ func blockCommentEnd(src string, i int) int {
 }
 
 // stringEnd returns the index after the single-quoted string that starts at
-// src[i]. A doubled quote is a quote in the string. After an E prefix a
-// backslash escapes the next byte as well.
-func stringEnd(src string, i int) int {
-	escapes := i > 0 && src[i-1]|0x20 == 'e' && (i == 1 || !isWordByte(src[i-2]))
-	j := i + 1
-	for j < len(src) {
+// src[i]. A doubled quote is a quote in the string. After an E prefix, or with
+// allEscapes, a backslash escapes the next byte as well. A string that is
+// followed by a newline and another quoted string is one string, read in the
+// same mode. plainBackslash reports a backslash in a string that was read
+// without escapes.
+func stringEnd(src string, i int, allEscapes bool) (end int, plainBackslash bool) {
+	escapes := allEscapes || i > 0 && src[i-1]|0x20 == 'e' && (i == 1 || !isWordByte(src[i-2]))
+	end = len(src)
+	for j := i + 1; j < len(src); {
 		switch {
 		case escapes && src[j] == '\\':
 			j += 2
@@ -473,12 +604,64 @@ func stringEnd(src string, i int) int {
 				j += 2
 				continue
 			}
-			return j + 1
+			if k, ok := stringContinuation(src, j+1); ok {
+				j = k + 1
+				continue
+			}
+			end = j + 1
+			j = len(src)
 		default:
 			j++
 		}
 	}
-	return len(src)
+	return end, !escapes && strings.IndexByte(src[i:end], '\\') >= 0
+}
+
+// stringContinuation reports whether the string that closed just before
+// src[p] goes on, and if so where its next quote is. Postgres joins two
+// strings that are separated only by whitespace holding a newline, where a
+// line comment counts as whitespace.
+func stringContinuation(src string, p int) (int, bool) {
+	n := len(src)
+	// Whitespace and comments on the line of the closing quote.
+	for p < n {
+		if src[p] == ' ' || src[p] == '\t' || src[p] == '\f' {
+			p++
+		} else if src[p] == '-' && p+1 < n && src[p+1] == '-' {
+			p += 2
+			for p < n && src[p] != '\n' && src[p] != '\r' {
+				p++
+			}
+		} else {
+			break
+		}
+	}
+	if p >= n || src[p] != '\n' && src[p] != '\r' {
+		return 0, false
+	}
+	p++
+	// More whitespace, and comments that end with a newline.
+	for p < n {
+		c := src[p]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' {
+			p++
+		} else if c == '-' && p+1 < n && src[p+1] == '-' {
+			p += 2
+			for p < n && src[p] != '\n' && src[p] != '\r' {
+				p++
+			}
+			if p >= n {
+				return 0, false
+			}
+			p++
+		} else {
+			break
+		}
+	}
+	if p < n && src[p] == '\'' {
+		return p, true
+	}
+	return 0, false
 }
 
 // quotedIdentEnd returns the index after the double-quoted identifier that
