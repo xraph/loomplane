@@ -281,8 +281,14 @@ func acceptanceRegistrar(t *testing.T) {
 	if conn.Details["registrar"] != "granted" {
 		t.Fatalf("the token's registrar permission is %q; it needs Registrar read and edit", conn.Details["registrar"])
 	}
-	if probes := guard.sandboxOnly(t); len(probes) == 0 {
+	probes := guard.sandboxOnly(t)
+	if len(probes) == 0 {
 		t.Fatal("the permission check made no registrar-sandbox request")
+	}
+	for _, request := range probes {
+		if strings.HasPrefix(request, http.MethodPost+" ") {
+			t.Fatalf("the permission check sent %s; only an approved purchase may", request)
+		}
 	}
 
 	var extensions cloudinfra.RegistrationExtensionList

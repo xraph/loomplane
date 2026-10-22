@@ -19,13 +19,14 @@ type cloudflareFixture struct {
 	*httptest.Server
 	account string
 	status  string
-	// accountCode and dnsCode are what the account and DNS probes answer.
-	accountCode, dnsCode int
+	// accountCode, dnsCode and registrarCode are what the account, DNS and
+	// registrar write probes answer.
+	accountCode, dnsCode, registrarCode int
 }
 
 func newCloudflareFixture(t *testing.T) *cloudflareFixture {
 	t.Helper()
-	f := &cloudflareFixture{account: strings.Repeat("c", 32), status: "active", accountCode: http.StatusOK, dnsCode: http.StatusForbidden}
+	f := &cloudflareFixture{account: strings.Repeat("c", 32), status: "active", accountCode: http.StatusOK, dnsCode: http.StatusForbidden, registrarCode: http.StatusForbidden}
 	reply := func(w http.ResponseWriter, code int, result any) {
 		w.WriteHeader(code)
 		if code >= 300 {
@@ -48,8 +49,8 @@ func newCloudflareFixture(t *testing.T) *cloudflareFixture {
 			reply(w, f.dnsCode, nil)
 		case strings.HasSuffix(r.URL.Path, "/registrations") && r.Method == http.MethodGet:
 			reply(w, http.StatusOK, []any{})
-		case strings.HasSuffix(r.URL.Path, "/registrations"):
-			reply(w, http.StatusForbidden, nil)
+		case strings.HasSuffix(r.URL.Path, "/registrations/loomplane-permission-probe.invalid") && r.Method == http.MethodPatch:
+			reply(w, f.registrarCode, nil)
 		default:
 			http.NotFound(w, r)
 		}
@@ -90,6 +91,17 @@ func TestCloudflareCheckerToleratesAccountDetailsRefusal(t *testing.T) {
 	f.accountCode = http.StatusInternalServerError
 	if _, err := checker.Check(t.Context(), []byte("tok-secret"), map[string]string{"account_id": f.account}); err == nil {
 		t.Fatal("a 500 on the account was ignored")
+	}
+}
+
+// Registrar access is optional, so a Cloudflare blip on its probe leaves a
+// DNS connection ready with the registrar unchecked.
+func TestCloudflareCheckerKeepsDNSThroughARegistrarBlip(t *testing.T) {
+	f := newCloudflareFixture(t)
+	f.dnsCode, f.registrarCode = http.StatusBadRequest, http.StatusServiceUnavailable
+	c, err := CloudflareChecker{Client: cloudflare.New(f.URL, false)}.Check(t.Context(), []byte("tok-secret"), map[string]string{"account_id": f.account})
+	if err != nil || len(c.Missing) != 0 || c.Details["dns_write"] != "granted" || c.Details["registrar"] != "unchecked" {
+		t.Fatalf("%+v %v", c, err)
 	}
 }
 

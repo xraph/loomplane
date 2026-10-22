@@ -64,7 +64,7 @@ Create an API token in Cloudflare, then open **Integrations**, choose **Cloudfla
 | Zone, DNS, Edit | Writing route records. Required. |
 | Account, Registrar, Edit | Registering domains. Optional. |
 
-Loomplane checks each permission without changing anything. It lists zones, then sends a DNS record and a registration that Cloudflare can only refuse, and reads whether the refusal is about permission. Registrar access is optional, so a token without it still connects. It just can't buy. If the token can't read account details, the connection is named after the account ID.
+Loomplane checks each permission without changing anything. It lists zones, sends a DNS record that Cloudflare can only refuse, and asks to edit the registration of `loomplane-permission-probe.invalid`, a name nobody can ever register. Then it reads whether each refusal is about permission. Registrar access is optional, so a token without it still connects. It just can't buy. If Cloudflare is rate limiting or having trouble when Loomplane asks about the registrar, you'll see that permission as unchecked while DNS keeps working, and **Check again** asks a second time. If the token can't read account details, the connection is named after the account ID.
 
 Every record Loomplane writes is DNS-only (`proxied: false`) and carries Loomplane's owner token in its comment. That comment is how it knows a record is its own. A record you made yourself is never touched, and preview refuses a hostname that one of your records already holds. Loomplane never adopts a proxied record it didn't create. If you later switch on the orange cloud for a record Loomplane did create, the next write sets it back to DNS-only.
 

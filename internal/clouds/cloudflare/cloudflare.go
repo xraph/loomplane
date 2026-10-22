@@ -273,11 +273,17 @@ type Permissions struct {
 	RegistrarWrite PermissionState
 }
 
-// Permissions probes the token. Reads are plain lists. Writes send a
-// payload no valid request could match, so Cloudflare checks permission
-// first and then refuses the payload: 403 is a missing permission, 400
-// one that's held. A write that succeeds anyway is a bug in the probe,
-// and ErrInfrastructureAmbiguous.
+// Permissions probes the token. Reads are plain lists. The DNS write sends
+// a record no zone accepts, so Cloudflare checks permission first and then
+// refuses the payload: 403 is a missing permission, 400 one that's held.
+// The registrar write edits a registration under .invalid, which nobody
+// can ever register: 403 is missing, 404 or 400 held. A PATCH can't buy
+// anything, so the registration POST is only ever sent for an approved
+// purchase. A write that succeeds anyway is a bug in the probe, and
+// ErrInfrastructureAmbiguous.
+//
+// Registrar access is optional, so a 429, a 5xx or a network failure on a
+// registrar probe leaves it unchecked and the rest of the answer stands.
 func (c *Client) Permissions(ctx context.Context, token, accountID string) (Permissions, error) {
 	return c.permissions(ctx, token, accountID, "")
 }
@@ -311,20 +317,37 @@ func (c *Client) permissions(ctx context.Context, token, accountID, zoneID strin
 
 	registrar := c.registrarPath(accountID)
 	err = c.json(ctx, token, http.MethodGet, registrar+"/registrations", url.Values{"per_page": {"1"}}, nil, nil)
-	if p.RegistrarRead, err = probeState(err); err != nil {
+	if p.RegistrarRead, err = registrarProbeState(ctx, err); err != nil {
 		return Permissions{}, err
 	}
-	var created json.RawMessage
-	err = c.json(ctx, token, http.MethodPost, registrar+"/registrations", nil, map[string]string{"domain_name": ""}, &created)
+	var edited json.RawMessage
+	err = c.json(ctx, token, http.MethodPatch, registrar+"/registrations/"+registrarProbeDomain, nil, map[string]bool{"auto_renew": false}, &edited)
 	if err == nil {
-		// Nothing was named, so nothing can be undone, but the outcome
-		// isn't one to trust.
-		return Permissions{}, fmt.Errorf("%w: the registrar accepted an empty registration probe", provider.ErrInfrastructureAmbiguous)
+		// No such registration can exist, so there's nothing to undo, but
+		// the outcome isn't one to trust.
+		return Permissions{}, fmt.Errorf("%w: the registrar accepted an edit of %s", provider.ErrInfrastructureAmbiguous, registrarProbeDomain)
 	}
-	if p.RegistrarWrite, err = probeState(err); err != nil {
+	if statusOf(err) == http.StatusNotFound {
+		// The token may edit registrations; this one just doesn't exist.
+		p.RegistrarWrite = Granted
+	} else if p.RegistrarWrite, err = registrarProbeState(ctx, err); err != nil {
 		return Permissions{}, err
 	}
 	return p, nil
+}
+
+// registrarProbeDomain is under .invalid, which can never be registered.
+const registrarProbeDomain = "loomplane-permission-probe.invalid"
+
+// registrarProbeState is probeState for the optional registrar probes:
+// Cloudflare trouble leaves the permission unchecked rather than failing
+// the check. A 401 is still a refusal, and so is a cancelled check.
+func registrarProbeState(ctx context.Context, err error) (PermissionState, error) {
+	state, err := probeState(err)
+	if err != nil && ctx.Err() == nil && statusOf(err) != http.StatusUnauthorized {
+		return Unchecked, nil
+	}
+	return state, err
 }
 
 // probeState reads a probe's answer. A list that succeeds is a grant,

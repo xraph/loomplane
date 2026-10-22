@@ -43,7 +43,7 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{
 		account: strings.Repeat("a", 32), zone: "zone1",
 		zoneRead: http.StatusOK, dnsWrite: http.StatusBadRequest,
-		registrarRead: http.StatusOK, registrarWrite: http.StatusBadRequest,
+		registrarRead: http.StatusOK, registrarWrite: http.StatusNotFound,
 		verifyStatus: "active", deleted: map[string]bool{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
@@ -51,7 +51,17 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
+// dropped is a status that closes the connection without an answer.
+const dropped = -1
+
 func (f *fixture) reply(w http.ResponseWriter, status int, result any) {
+	if status == dropped {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+		return
+	}
 	w.WriteHeader(status)
 	if status >= 300 {
 		fmt.Fprint(w, `{"success":false,"errors":[{"code":10000,"message":"secret detail tok-secret"}],"result":null}`)
@@ -92,7 +102,7 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 		f.reply(w, http.StatusOK, map[string]any{"id": "rec_probe"})
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/registrations"):
 		f.reply(w, f.registrarRead, []any{})
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/registrations"):
+	case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/registrations/loomplane-permission-probe.invalid"):
 		f.reply(w, f.registrarWrite, map[string]any{})
 	default:
 		http.NotFound(w, r)
@@ -121,10 +131,13 @@ func TestPermissionsProbeWithoutSideEffects(t *testing.T) {
 		if r.Method == http.MethodPost && r.Path == "/zones/"+f.zone+"/dns_records" && r.Body["content"] != "permission-probe" {
 			t.Fatal("probe could be valid")
 		}
-		if r.Method == http.MethodPost && strings.HasSuffix(r.Path, "/registrations") && r.Body["domain_name"] != "" {
-			t.Fatal("probe named a domain")
+		if r.Method == http.MethodPost && strings.Contains(r.Path, "/registrations") {
+			t.Fatal("the permission check sent a registration")
 		}
-		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		if r.Method == http.MethodPatch && (!strings.HasSuffix(r.Path, "/registrar/registrations/loomplane-permission-probe.invalid") || len(r.Body) != 1 || r.Body["auto_renew"] != false) {
+			t.Fatalf("registrar probe %s %v", r.Path, r.Body)
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodPatch {
 			t.Fatalf("unexpected %s %s", r.Method, r.Path)
 		}
 		if r.Auth != "Bearer tok" {
@@ -155,6 +168,54 @@ func TestPermissionsRegistrarWriteSuccessIsAmbiguous(t *testing.T) {
 	}
 }
 
+func TestPermissionsRegistrarWriteProbeAnswers(t *testing.T) {
+	for status, want := range map[int]cloudflare.PermissionState{
+		http.StatusForbidden:  cloudflare.Missing,
+		http.StatusNotFound:   cloudflare.Granted,
+		http.StatusBadRequest: cloudflare.Granted,
+	} {
+		f := newFixture(t)
+		f.registrarWrite = status
+		p, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+		if err != nil || p.RegistrarWrite != want {
+			t.Fatalf("%d: %+v %v", status, p, err)
+		}
+	}
+}
+
+// A Cloudflare blip on the optional registrar probes leaves them unchecked
+// and the rest of the answer standing. A 401 is still a refusal.
+func TestPermissionsRegistrarBlipIsUnchecked(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable, dropped} {
+		for _, probe := range []string{"read", "write"} {
+			f := newFixture(t)
+			if probe == "read" {
+				f.registrarRead = status
+			} else {
+				f.registrarWrite = status
+			}
+			p, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+			if err != nil || p.ZoneRead != cloudflare.Granted || p.DNSWrite != cloudflare.Granted {
+				t.Fatalf("%s %d: %+v %v", probe, status, p, err)
+			}
+			if got := map[string]cloudflare.PermissionState{"read": p.RegistrarRead, "write": p.RegistrarWrite}[probe]; got != cloudflare.Unchecked {
+				t.Fatalf("%s %d: %s", probe, status, got)
+			}
+		}
+	}
+	for _, probe := range []string{"read", "write"} {
+		f := newFixture(t)
+		if probe == "read" {
+			f.registrarRead = http.StatusUnauthorized
+		} else {
+			f.registrarWrite = http.StatusUnauthorized
+		}
+		if _, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); !errors.Is(err, cloudflare.ErrRejected) {
+			t.Fatalf("%s 401: %v", probe, err)
+		}
+	}
+}
+
 func TestPermissionsMissingAndUnchecked(t *testing.T) {
 	f := newFixture(t)
 	f.zoneRead, f.registrarRead = http.StatusForbidden, http.StatusForbidden
@@ -177,18 +238,26 @@ func TestPermissionsServerErrorIsNotAPermissionAnswer(t *testing.T) {
 	if _, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); err == nil {
 		t.Fatal("a 500 was read as a permission answer")
 	}
+	f = newFixture(t)
+	f.zoneRead = http.StatusTooManyRequests
+	if _, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); err == nil {
+		t.Fatal("a 429 on Zone Read was read as a permission answer")
+	}
 }
 
 func TestSandboxUsesRegistrarSandboxPaths(t *testing.T) {
 	f := newFixture(t)
-	_, _ = cloudflare.New(f.URL, true).Permissions(t.Context(), "tok", f.account)
-	if !f.saw("/accounts/"+f.account+"/registrar-sandbox/registrations") || f.saw("/accounts/"+f.account+"/registrar/registrations") {
-		t.Fatal(f.requests)
+	probe := "/registrations/loomplane-permission-probe.invalid"
+	p, err := cloudflare.New(f.URL, true).Permissions(t.Context(), "tok", f.account)
+	if err != nil || p.RegistrarWrite != cloudflare.Granted || !f.saw("/accounts/"+f.account+"/registrar-sandbox/registrations") || !f.saw("/accounts/"+f.account+"/registrar-sandbox"+probe) ||
+		f.saw("/accounts/"+f.account+"/registrar/registrations") || f.saw("/accounts/"+f.account+"/registrar"+probe) {
+		t.Fatal(f.requests, p, err)
 	}
 	f = newFixture(t)
-	_, _ = cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
-	if !f.saw("/accounts/"+f.account+"/registrar/registrations") || f.saw("/accounts/"+f.account+"/registrar-sandbox/registrations") {
-		t.Fatal(f.requests)
+	p, err = cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+	if err != nil || p.RegistrarWrite != cloudflare.Granted || !f.saw("/accounts/"+f.account+"/registrar/registrations") || !f.saw("/accounts/"+f.account+"/registrar"+probe) ||
+		f.saw("/accounts/"+f.account+"/registrar-sandbox/registrations") || f.saw("/accounts/"+f.account+"/registrar-sandbox"+probe) {
+		t.Fatal(f.requests, p, err)
 	}
 }
 
