@@ -33,6 +33,15 @@ type BackendConn struct {
 	Params     map[string]string
 	Statements map[string]bool
 	Broken     bool
+
+	// maxStatements caps Statements, 0 for no cap. used stamps each
+	// statement with the clock tick it was last needed at, and leaseMark is
+	// the tick the current lease began at: a statement used since then may
+	// back a portal the lease still holds, so it is never evicted.
+	maxStatements int
+	used          map[string]uint64
+	clock         uint64
+	leaseMark     uint64
 }
 
 // Close closes the underlying connection. Closing twice is not an error.

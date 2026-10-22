@@ -117,6 +117,7 @@ type session struct {
 	overrides map[string]string // the overrides the client's session should have
 
 	stmts          map[string]*prepared
+	stmtBytes      int // the length of every query in stmts
 	stmtSeq        uint64
 	unnamed        *prepared
 	unnamedOnLease bool

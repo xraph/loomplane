@@ -26,7 +26,11 @@ var (
 const (
 	defaultPoolWait = 5 * time.Second
 	defaultPoolIdle = 5 * time.Minute
-	maxReapInterval = 30 * time.Second
+	// defaultMaxStatements is how many prepared statements each backend
+	// connection keeps by default, as pgbouncer's max_prepared_statements
+	// is a few hundred.
+	defaultMaxStatements = 256
+	maxReapInterval      = 30 * time.Second
 	// resetTimeout bounds the ROLLBACK or DISCARD ALL that Release sends.
 	resetTimeout = 10 * time.Second
 	// waitSamples is how many recent Acquire waits WaitP95 is taken over.
@@ -54,12 +58,15 @@ const (
 // default session parameters, sent as startup parameters on every dial. Wait
 // bounds how long Acquire queues for a connection (default 5s) and Idle how
 // long a connection may sit unused before it is closed (default 5m).
+// MaxStatements caps the prepared statements the gateway keeps on each
+// connection (default 256); past it, the least recently used are closed.
 type PoolConfig struct {
-	Backend Backend
-	Secret  BackendSecret
-	Params  map[string]string
-	Wait    time.Duration
-	Idle    time.Duration
+	Backend       Backend
+	Secret        BackendSecret
+	Params        map[string]string
+	Wait          time.Duration
+	Idle          time.Duration
+	MaxStatements int
 }
 
 // PoolStats is a snapshot of a pool. Open counts every connection the pool
@@ -130,6 +137,9 @@ func newPool(cfg PoolConfig, d Dialer, now func() time.Time) *Pool {
 	}
 	if cfg.Idle <= 0 {
 		cfg.Idle = defaultPoolIdle
+	}
+	if cfg.MaxStatements <= 0 {
+		cfg.MaxStatements = defaultMaxStatements
 	}
 	cfg.Params = copyParams(cfg.Params)
 	p := &Pool{
@@ -392,6 +402,7 @@ func (p *Pool) ready(ctx context.Context, pc *pooled, slot bool, want map[string
 		}
 		pc.overrides = copyParams(want)
 	}
+	pc.conn.markLease()
 	return &Lease{p: p, pc: pc}, nil
 }
 
@@ -406,6 +417,7 @@ func (p *Pool) dial(ctx context.Context) (*pooled, error) {
 	if conn.Statements == nil {
 		conn.Statements = map[string]bool{}
 	}
+	conn.maxStatements = p.cfg.MaxStatements
 	pc := &pooled{conn: conn, overrides: map[string]string{}}
 	p.mu.Lock()
 	closed := p.closed
@@ -490,7 +502,7 @@ func (p *Pool) release(pc *pooled, state LeaseState) {
 			if keep = resetConn(pc, "DISCARD ALL"); keep {
 				// DISCARD ALL includes RESET ALL, which returns every
 				// parameter to its startup value: no overrides remain.
-				pc.conn.Statements = map[string]bool{}
+				pc.conn.resetStatements()
 				pc.overrides = map[string]string{}
 			}
 		default: // LeaseBroken, or a state this pool doesn't know.

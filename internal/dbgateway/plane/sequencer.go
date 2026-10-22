@@ -53,9 +53,9 @@ type entry struct {
 	// injected marks a Parse the gateway sent on its own, ahead of a Bind or
 	// Describe. Its ParseComplete is not the client's to see.
 	injected bool
-	// stmt is the backend statement a forwarded Parse creates, and unnamed
-	// marks a Parse of the unnamed statement. Both are undone if the Parse
-	// fails or is skipped.
+	// stmt is the backend statement a forwarded Parse creates, or an
+	// injected Close evicts, and unnamed marks a Parse of the unnamed
+	// statement. All are undone if the message fails or is skipped.
 	stmt    string
 	unnamed bool
 	// client and prep are the registry entry a client's Parse created, or the
@@ -68,6 +68,10 @@ type entry struct {
 	effect Classification
 	upTo   uint64
 	synth  synthKind
+	// refused is the error the client gets in place of the backend's 26000
+	// for a Parse the session refused, which it sends as a Bind of a
+	// statement that doesn't exist.
+	refused *pgproto3.ErrorResponse
 }
 
 // sequencer is the FIFO of entries.

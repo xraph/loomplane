@@ -150,6 +150,9 @@ func (s *session) dispatch(l *Lease, msg pgproto3.BackendMessage) (out []pgproto
 		return append(out, msg), true
 	case verdictError:
 		s.seg.failed = true
+		if e, isErr := msg.(*pgproto3.ErrorResponse); isErr && head != nil && head.refused != nil && e.Code == "26000" {
+			msg = head.refused
+		}
 		if head != nil && head.kind.extended() {
 			dropped, synced := s.seq.fail()
 			for _, e := range dropped {
@@ -213,7 +216,7 @@ func (s *session) completed(l *Lease, e *entry, cc *pgproto3.CommandComplete) {
 			s.dropStatements(e.upTo)
 			s.resetBackendStatements(l.Conn())
 		} else if !s.parsePending(e.effect.Param) {
-			delete(l.Conn().Statements, e.effect.Param)
+			l.Conn().dropStatement(e.effect.Param)
 		}
 	}
 }
@@ -236,6 +239,11 @@ func (s *session) ready(l *Lease, status byte) {
 		}
 	}
 	s.seg = segment{}
+	if status == 'I' && s.seq.empty() {
+		// No transaction and nothing in flight, so no portal is left: a
+		// pinned session's statements become evictable again.
+		l.Conn().markLease()
+	}
 }
 
 // applyEffect applies a committed SET or RESET to the client's overrides and

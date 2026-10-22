@@ -322,8 +322,8 @@ func forgetStatements(c *BackendConn, class Classification) {
 		return
 	}
 	if class.Param == "*" {
-		c.Statements = map[string]bool{}
+		c.resetStatements()
 		return
 	}
-	delete(c.Statements, class.Param)
+	c.dropStatement(class.Param)
 }
