@@ -40,9 +40,10 @@ var pullActions = []string{
 
 // PullMode reports how container apps will pull images: PullModeIdentity
 // when the principal may assign roles, in the resource group or in the
-// subscription while the group isn't there, and PullModeAdmin when it
-// may not. A Contributor may not, which is why this is a capability and
-// never something a connection is missing.
+// subscription while the group isn't there, and register
+// Microsoft.ManagedIdentity in the subscription while it isn't, and
+// PullModeAdmin when it may not. A Contributor may not, which is why this
+// is a capability and never something a connection is missing.
 func (s *Session) PullMode(ctx context.Context) (string, error) {
 	scope, _, err := s.checkScope(ctx)
 	if err != nil {
@@ -57,6 +58,22 @@ func (s *Session) PullMode(ctx context.Context) (string, error) {
 			return PullModeAdmin, nil
 		}
 	}
+	ok, err := s.registered(ctx, managedIdentityNamespace)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		return PullModeIdentity, nil
+	}
+	subPerms := perms
+	if scope != s.subscription() {
+		if subPerms, err = s.permissionsOrNone(ctx, s.subscription()); err != nil {
+			return "", err
+		}
+	}
+	if !allowed(subPerms, managedIdentityNamespace+"/register/action") {
+		return PullModeAdmin, nil
+	}
 	return PullModeIdentity, nil
 }
 
@@ -68,11 +85,16 @@ type Identity struct {
 }
 
 func (s *Session) pullIdentityPath() string {
-	return s.group() + "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/" + PullIdentity
+	return s.group() + "/providers/" + managedIdentityNamespace + "/userAssignedIdentities/" + PullIdentity
 }
 
+// managedIdentityNamespace is the resource provider of the pull
+// identity.
+const managedIdentityNamespace = "Microsoft.ManagedIdentity"
+
 // EnsurePullIdentity makes the resource group's pull identity in
-// location, unless it's there.
+// location, unless it's there. Making the first one registers
+// Microsoft.ManagedIdentity in the subscription.
 func (s *Session) EnsurePullIdentity(ctx context.Context, location string) (*Identity, error) {
 	var out struct {
 		ID         string `json:"id"`
@@ -82,6 +104,9 @@ func (s *Session) EnsurePullIdentity(ctx context.Context, location string) (*Ide
 	}
 	_, err := s.do(ctx, http.MethodGet, s.pullIdentityPath(), identityVersion, nil, &out)
 	if IsNotFound(err) {
+		if rerr := s.register(ctx, managedIdentityNamespace); rerr != nil {
+			return nil, rerr
+		}
 		if _, perr := s.do(ctx, http.MethodPut, s.pullIdentityPath(), identityVersion, map[string]any{"location": location}, &out); perr != nil {
 			return nil, fmt.Errorf("make the pull identity: %w", perr)
 		}

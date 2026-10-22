@@ -19,7 +19,7 @@ Contributor can't assign roles, though, and that decides how your apps pull thei
 
 Azure takes a while to let a new identity pull. The first deployment after you grant the role can sit at "Waiting for the pull identity's role to reach the container registry" for a few minutes, and Loomplane waits up to ten. If that runs out, retry the deployment.
 
-The subscription also needs the `Microsoft.App` and `Microsoft.ContainerRegistry` resource providers. Loomplane registers them on the first deployment if you haven't, which Contributor on the subscription may do. With Contributor on just a resource group, register them yourself under the subscription's **Resource providers**.
+The subscription also needs the `Microsoft.App` and `Microsoft.ContainerRegistry` resource providers. Loomplane registers them on the first deployment if you haven't, which Contributor on the subscription may do. With Contributor on just a resource group, register them yourself under the subscription's **Resource providers**. Apps that pull with the identity also need `Microsoft.ManagedIdentity`, which Loomplane registers when it first makes `loomplane-pull`. A principal that may assign roles in the group but can't register that provider in the subscription gets the admin user until you register it yourself.
 
 The subscription and resource group are the connection's account. You can replace the secret, or switch to another principal with access to the same group, and nothing that uses the connection has to change.
 

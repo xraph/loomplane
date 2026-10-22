@@ -60,7 +60,9 @@ const createGroup = "Microsoft.Resources/subscriptions/resourceGroups/write"
 // namespace's register action. A database's namespace, Microsoft.Cache
 // for Redis among them, isn't one of them: it's registered when a
 // deployment first makes that database, so a subscription that only runs
-// apps needn't have it.
+// apps needn't have it. Nor is Microsoft.ManagedIdentity, which making
+// the pull identity registers, so one that pulls as the admin user
+// needn't have it.
 var Namespaces = []string{"Microsoft.App", "Microsoft.ContainerRegistry"}
 
 // Subscription is the subscription a principal deploys to.

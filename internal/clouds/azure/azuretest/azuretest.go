@@ -235,6 +235,13 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		reply(http.StatusOK, res)
 	}
 	get := func() { getAt(id) }
+	// Like Azure, a resource can't be made under a namespace the
+	// subscription hasn't registered.
+	if r.Method == http.MethodPut && (len(rest) == 0 || kind == "microsoft.managedidentity/userassignedidentities") && !f.registered[parts[5]] {
+		reply(http.StatusConflict, map[string]any{"error": map[string]string{"code": "MissingSubscriptionRegistration",
+			"message": "The subscription is not registered to use namespace '" + strings.Split(strings.Trim(p, "/"), "/")[5] + "'."}})
+		return
+	}
 	// An identity is there as soon as it's made.
 	if kind == "microsoft.managedidentity/userassignedidentities" {
 		f.identity(r, reply, notFound, id, canonical, name, body)

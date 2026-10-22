@@ -373,12 +373,29 @@ func TestPullMode(t *testing.T) {
 	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeAdmin {
 		t.Fatalf("a principal that can't assign the identity: %q, %v", got, err)
 	}
+	// Making the identity registers Microsoft.ManagedIdentity, which a
+	// principal may not do without its register action.
+	f.Lock()
+	f.Actions = append(slices.Clone(pullActions), "Microsoft.Resources/subscriptions/resourceGroups/read")
+	f.Unlock()
+	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeAdmin {
+		t.Fatalf("a principal that can't register the identity's namespace: %q, %v", got, err)
+	}
+	f.Lock()
+	f.Actions = append(f.Actions, "Microsoft.ManagedIdentity/register/action")
+	f.Unlock()
+	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeIdentity {
+		t.Fatalf("a principal that may register it: %q, %v", got, err)
+	}
 }
 
 func TestPullIdentityAndGrant(t *testing.T) {
 	f := azuretest.New(t)
 	s := fakeSession(t, f)
 	ctx := t.Context()
+	if err := s.EnsureRegistered(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.EnsureGroup(ctx, "eastus"); err != nil {
 		t.Fatal(err)
 	}
@@ -419,6 +436,21 @@ func TestPullIdentityAndGrant(t *testing.T) {
 	if got[0].RoleDefinitionID != want || got[0].PrincipalID != id.PrincipalID || got[0].PrincipalType != "ServicePrincipal" ||
 		!strings.EqualFold(got[0].Scope, reg.ID) || got[0].Name != RoleAssignmentName(reg.ID, id.PrincipalID) {
 		t.Fatalf("assignment %+v, want role %s on %s", got[0], want, reg.ID)
+	}
+}
+
+func TestEnsurePullIdentity_registersManagedIdentity(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	if err := s.EnsureGroup(t.Context(), "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh subscription hasn't registered Microsoft.ManagedIdentity.
+	if _, err := s.EnsurePullIdentity(t.Context(), "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Registered("Microsoft.ManagedIdentity") {
+		t.Fatal("Microsoft.ManagedIdentity wasn't registered")
 	}
 }
 
