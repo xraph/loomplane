@@ -51,6 +51,12 @@ func engineTitle(engine string) string {
 	return engine
 }
 
+// Endpoint returns the endpoint Check would probe, without its DSN, or
+// ErrNotFound.
+func (c *Checker) Endpoint(ctx context.Context, orgID, id string) (*Endpoint, error) {
+	return c.Endpoints.Get(ctx, orgID, id)
+}
+
 // Check probes an endpoint through dial. An endpoint that can't be reached
 // or refuses the check is a Report problem naming its host and port, never
 // an error; errors are an endpoint that isn't there (ErrNotFound) or a

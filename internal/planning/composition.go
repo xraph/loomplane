@@ -8,10 +8,31 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
+
+// EndpointCheck is what checking an external endpoint from a target
+// found. Found is false when the organization has no such endpoint; Err
+// says why the check couldn't run. Neither Err nor Report holds the DSN.
+type EndpointCheck struct {
+	ID     string
+	Engine string
+	Found  bool
+	Report *catalogconnect.Report
+	Err    string
+}
+
+// endpointKey is where Input.Endpoints holds the check of an endpoint from
+// one target against one requirement, when the endpoint is checked more
+// than once.
+func endpointKey(id, connection string, req recipes.Requirement) string {
+	extensions := slices.Clone(req.Extensions)
+	slices.Sort(extensions)
+	return id + "@" + connection + "/" + req.Engine + "/" + req.MinVersion + "/" + strings.Join(extensions, ",")
+}
 
 // kinds is the catalog the plan reads its engines and composed kinds from.
 func (p *planner) kinds() *recipes.Registry {
@@ -237,6 +258,7 @@ func (p *planner) dependencies(name, base string, r manifest.Resource, kind reci
 			choice = was
 		} else {
 			p.checkConnected(name, path, dep, choice)
+			p.checkExternal(name, path, kind, dep, choice, r.Target, prov.Cloud)
 		}
 		choices[dep.Name] = choice
 		switch choice.Mode {
@@ -290,6 +312,56 @@ func (p *planner) checkConnected(name, path string, dep recipes.Dependency, choi
 			Code: "catalog-connect-across-targets", Subject: ResourceSubject, Name: name, Path: path,
 			Message: fmt.Sprintf("%s and %s must run on the same checked target network.", name, choice.Resource),
 		})
+	}
+}
+
+// checkExternal reports what the check of a connected external endpoint
+// found, which was made before planning from the composed resource's
+// target. A dependency that takes no external endpoint refuses one.
+func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipes.Dependency, choice DependencyChoice, connection, cloud string) {
+	if choice.Mode != DependencyExternal {
+		return
+	}
+	path += ".external"
+	finding := func(code, message string) Finding {
+		return Finding{Code: code, Subject: ResourceSubject, Name: name, Path: path, Message: message}
+	}
+	if dep.External == nil {
+		p.problem(finding("catalog-connect-external-unaccepted", fmt.Sprintf("%s can't connect %s to an external endpoint. Provision one, or connect a resource.", kind.Title, dep.Title)))
+		return
+	}
+	p.warn(finding("catalog-endpoint-unmanaged", "Not managed by Loomplane: no backups or restores"))
+	if cloud == "kubernetes" {
+		p.warn(finding("catalog-endpoint-checked-from-loomplane", "Checked from Loomplane, not from inside the cluster."))
+	}
+	id := choice.External
+	check, ok := p.in.Endpoints[endpointKey(id, connection, *dep.External)]
+	if !ok {
+		check, ok = p.in.Endpoints[id]
+	}
+	label := "endpoint " + id
+	const unavailable, incompatible = "catalog-endpoint-unavailable", "catalog-endpoint-incompatible"
+	switch {
+	case !ok || (check.Found && check.Err == "" && check.Report == nil):
+		p.problem(finding(unavailable, fmt.Sprintf("Loomplane couldn't check %s from %s's target, so %s can't use it. Plan again.", label, name, name)))
+	case check.Err != "":
+		p.problem(finding(unavailable, fmt.Sprintf("Loomplane couldn't check %s: %s", label, check.Err)))
+	case !check.Found:
+		p.problem(finding(unavailable, fmt.Sprintf("%s isn't in this organization. Connect another endpoint, or provision one.", label)))
+	case check.Engine != "" && check.Engine != dep.External.Engine:
+		p.problem(finding(incompatible, fmt.Sprintf("%s runs %s, and %s's %s dependency needs %s.", label, check.Engine, name, dep.Name, dep.External.Engine)))
+	default:
+		// A check that got no version never reached a usable endpoint.
+		code := incompatible
+		if check.Report.Version == "" {
+			code = unavailable
+		}
+		for _, problem := range check.Report.Problems {
+			p.problem(finding(code, fmt.Sprintf("%s can't be used: %s", label, problem)))
+		}
+		for _, extension := range check.Report.Missing {
+			p.problem(finding(incompatible, fmt.Sprintf("%s lacks the %s extension", label, extension)))
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
 	"github.com/xraph/loomplane/internal/security"
@@ -177,5 +180,36 @@ func TestCatalogEndpointRoutes(t *testing.T) {
 	}
 	if out = send(http.MethodDelete, "/catalog/endpoints/"+created.ID, "", true); out.Code != http.StatusNotFound {
 		t.Fatalf("delete again: %d %s", out.Code, out.Body.String())
+	}
+}
+
+type dialCredentials map[string]*connections.Connection
+
+func (c dialCredentials) Credential(_ context.Context, orgID, id string) (*connections.Connection, []byte, error) {
+	conn, ok := c[id]
+	if !ok || conn.OrgID != orgID {
+		return nil, nil, connections.ErrNotFound
+	}
+	return conn, nil, nil
+}
+
+func TestEndpointChecksDialFromTheConnectionsTarget(t *testing.T) {
+	creds := dialCredentials{
+		"conn_cluster": {ID: "conn_cluster", OrgID: "org", Name: "prod", Cloud: connections.Kubernetes, Status: connections.StatusReady},
+		"conn_gcp":     {ID: "conn_gcp", OrgID: "org", Name: "gcp", Cloud: "gcp", Status: connections.StatusReady},
+	}
+	d := ownedDialer{credentials: creds, targets: map[string]*deployments.OwnedTarget{
+		connections.Server:     {Cloud: connections.Server, Credentials: creds},
+		connections.Kubernetes: {Cloud: connections.Kubernetes, Credentials: creds},
+	}}
+	dial, closer, err := d.TargetDial(t.Context(), "org", "conn_cluster")
+	if err != nil || dial == nil || closer == nil {
+		t.Fatalf("cluster: %v", err)
+	}
+	if _, _, err = d.TargetDial(t.Context(), "org", "conn_gcp"); err == nil || !strings.Contains(err.Error(), "gcp is a gcp connection") {
+		t.Fatalf("gcp: %v", err)
+	}
+	if _, _, err = d.TargetDial(t.Context(), "org", "conn_gone"); !errors.Is(err, connections.ErrNotFound) {
+		t.Fatalf("missing connection: %v", err)
 	}
 }

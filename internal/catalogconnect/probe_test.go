@@ -341,3 +341,22 @@ func TestPostgresProberSendsOnlyTheDSNsCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckerLooksUpEndpointsWithoutTheDSN(t *testing.T) {
+	svc := NewService(newMemStore(), memSecrets{}, roleAuthz{})
+	pg, err := svc.Create(t.Context(), admin, CreateInput{Name: "prod-pg", Engine: "postgres", DSN: testDSN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker := &Checker{Endpoints: svc}
+	got, err := checker.Endpoint(t.Context(), "org", pg.ID)
+	if err != nil || got.ID != pg.ID || got.Engine != EnginePostgres || got.Name != "prod-pg" {
+		t.Fatalf("endpoint: %+v %v", got, err)
+	}
+	if _, err = checker.Endpoint(t.Context(), "org", "endpoint_missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing endpoint: %v", err)
+	}
+	if _, err = checker.Endpoint(t.Context(), "other-org", pg.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another organization's endpoint: %v", err)
+	}
+}

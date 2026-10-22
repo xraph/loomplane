@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -185,13 +186,6 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.cloudStore = cloudprofiles.NewPgStore(pg)
 	e.cloudProfiles = cloudprofiles.NewService(cloudprofiles.Deps{Store: e.cloudStore, Projects: prj, Connections: clouds, Providers: catalog, Authz: authz, Audit: auditor})
 	e.manifests = manifests.NewService(manifests.NewPgStore(pg), prj, authz, auditor)
-	e.plans = planning.NewService(planning.Deps{
-		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
-		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
-		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
-		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
-		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
-	})
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
 	e.deploys.Projects = prj
@@ -267,6 +261,20 @@ func (e *Extension) Register(fapp forge.App) error {
 	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
 	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg)}
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
+	// Plans check the external endpoints composed resources connect from
+	// the target each resource runs on.
+	checker := &catalogconnect.Checker{Endpoints: e.endpoints, Probers: map[string]catalogconnect.Prober{
+		catalogconnect.EnginePostgres: catalogconnect.PostgresProber{}, catalogconnect.EngineRedis: catalogconnect.RedisProber{},
+	}}
+	e.plans = planning.NewService(planning.Deps{
+		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
+		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
+		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
+		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
+		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+		Endpoints: checker,
+		Dialer:    ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}},
+	})
 	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Credentials: clouds}, auditor); err != nil {
 		return err
 	}
@@ -371,6 +379,24 @@ func (e *Extension) Stop(ctx context.Context) error {
 	}
 	e.MarkStopped()
 	return nil
+}
+
+// ownedDialer dials from the server or cluster a connection belongs to.
+type ownedDialer struct {
+	credentials deployments.Credentials
+	targets     map[string]*deployments.OwnedTarget
+}
+
+func (d ownedDialer) TargetDial(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error) {
+	c, _, err := d.credentials.Credential(ctx, orgID, connectionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	target, ok := d.targets[c.Cloud]
+	if !ok {
+		return nil, nil, fmt.Errorf("endpoints are checked from a server or Kubernetes target, and %s is a %s connection", c.Name, c.Cloud)
+	}
+	return target.TargetDial(ctx, orgID, connectionID)
 }
 
 // fail maps a service error to its HTTP response.

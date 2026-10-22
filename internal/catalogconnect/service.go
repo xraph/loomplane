@@ -114,6 +114,12 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	return nil
 }
 
+// Get returns an endpoint, without its DSN, for Loomplane's own use, such
+// as a plan checking the endpoints it connects. It checks no principal.
+func (s *Service) Get(ctx context.Context, orgID, id string) (*Endpoint, error) {
+	return s.store.Get(ctx, orgID, id)
+}
+
 // Resolve returns an endpoint and its DSN for Loomplane's own use, such as
 // a deployment connecting a service to it. It checks no principal: callers
 // have already authorized the work the DSN is for.

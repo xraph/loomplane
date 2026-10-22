@@ -49,6 +49,12 @@ type Input struct {
 	// Kinds are the catalog's engines and composed kinds. Nil means
 	// recipes.Default().
 	Kinds *recipes.Registry
+	// Endpoints are the checks of the external endpoints composed
+	// resources connect, by endpoint ID. An endpoint checked from more
+	// than one target, or against more than one requirement, is under
+	// endpointKey instead. A connected endpoint with no check can't be
+	// used.
+	Endpoints map[string]EndpointCheck
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
