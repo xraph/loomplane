@@ -133,6 +133,15 @@ func TestChallengeCredentialMustBeZoneScoped(t *testing.T) {
 	if _, err := set("do"); !errors.Is(err, ErrInvalid) {
 		t.Fatal("a connection that isn't Cloudflare", err)
 	}
+	// A registrar probe Cloudflare didn't answer is no scope refusal.
+	dns.scopes[tokenFor("cf-readonly", 1)] = func() cloudflare.ChallengeScope {
+		scope := zoneScoped("cfzone1")
+		scope.Permissions.RegistrarWrite = cloudflare.Unchecked
+		return scope
+	}()
+	if _, err := set("cf-readonly"); !errors.Is(err, ErrConflict) || errors.Is(err, provider.ErrInfrastructureScope) {
+		t.Fatal("an unanswered registrar probe", err)
+	}
 	probes := len(dns.probed)
 	if _, err := set("cf-short"); !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "too-short") || len(dns.probed) != probes {
 		t.Fatal("a token Caddy's Cloudflare module would refuse", err, dns.probed)

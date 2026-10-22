@@ -131,8 +131,12 @@ func (s *Service) checkChallengeScope(ctx context.Context, zone *Zone, conn *con
 	if scope.Permissions.DNSWrite != cloudflare.Granted {
 		return provider.InfrastructureCredential{}, &provider.InfrastructureScopeError{Provider: zone.Provider, Permission: "DNS Write on " + zone.Name}
 	}
-	if scope.Permissions.RegistrarRead != cloudflare.Missing || scope.Permissions.RegistrarWrite != cloudflare.Missing {
+	if scope.Permissions.RegistrarRead == cloudflare.Granted || scope.Permissions.RegistrarWrite == cloudflare.Granted {
 		return provider.InfrastructureCredential{}, only
+	}
+	if scope.Permissions.RegistrarRead != cloudflare.Missing || scope.Permissions.RegistrarWrite != cloudflare.Missing {
+		// Cloudflare was busy; the token may well be fine.
+		return provider.InfrastructureCredential{}, fmt.Errorf("%w: Cloudflare didn't say whether the DNS challenge token can reach the registrar; try again shortly", ErrConflict)
 	}
 	return credential, nil
 }
