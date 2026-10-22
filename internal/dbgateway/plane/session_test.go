@@ -30,10 +30,11 @@ import (
 // CopyData until CopyDone, and everything else completes with its first word
 // as the tag.
 type fakePG struct {
-	mu     sync.Mutex
-	log    []string
-	closed chan struct{}
-	hold   chan struct{} // a statement containing "hold" waits on it mid-result
+	mu       sync.Mutex
+	log      []string
+	closed   chan struct{}
+	hold     chan struct{} // a statement containing "hold" waits on it mid-result
+	maxConns string        // the answer to SHOW max_connections
 }
 
 type fakeState struct {
@@ -300,6 +301,12 @@ func (f *fakePG) run(b *pgproto3.Backend, st *fakeState, sql string, simple bool
 		}
 		delete(st.stmts, name)
 		tag("DEALLOCATE")
+	case upper == "SHOW MAX_CONNECTIONS":
+		if simple {
+			b.Send(rowDescription())
+		}
+		b.Send(&pgproto3.DataRow{Values: [][]byte{[]byte(f.maxConns)}})
+		tag("SHOW")
 	case strings.HasPrefix(upper, "SET APPLICATION_NAME TO "):
 		// application_name is reported, so its new value comes back.
 		tag("SET")
@@ -359,18 +366,32 @@ type fakeDialer struct {
 	err        error
 	failWrites atomic.Bool
 	hold       chan struct{} // set before the first dial; see fakePG.hold
+	maxConns   string        // SHOW max_connections; "100" when empty
+	dialed     []dialRecord  // what each successful dial was given
 }
 
-func (d *fakeDialer) Dial(_ context.Context, _ Backend, _ BackendSecret, _ map[string]string) (*BackendConn, error) {
+// dialRecord is what one Dial was asked for.
+type dialRecord struct {
+	backend Backend
+	secret  BackendSecret
+	params  map[string]string
+}
+
+func (d *fakeDialer) Dial(_ context.Context, b Backend, sec BackendSecret, params map[string]string) (*BackendConn, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.err != nil {
 		return nil, d.err
 	}
 	client, server := net.Pipe()
-	f := &fakePG{closed: make(chan struct{}), hold: d.hold}
+	maxConns := d.maxConns
+	if maxConns == "" {
+		maxConns = "100"
+	}
+	f := &fakePG{closed: make(chan struct{}), hold: d.hold, maxConns: maxConns}
 	go f.serve(server)
 	d.servers = append(d.servers, f)
+	d.dialed = append(d.dialed, dialRecord{backend: b, secret: sec, params: copyParams(params)})
 	conn := &flakyConn{Conn: client, fail: &d.failWrites}
 	return &BackendConn{
 		Frontend:   pgproto3.NewFrontend(conn, conn),
@@ -1582,4 +1603,85 @@ func TestSessionTwoClientsOneConnection(t *testing.T) {
 	}
 	a.terminate()
 	b.terminate()
+}
+
+// R46: a pinned session holds its connection between transactions, so it
+// ends at the first point where it owes the client nothing, and the pool
+// gets the connection back through DISCARD ALL.
+func TestSessionRemovedWhilePinned(t *testing.T) {
+	h := newHarness(t, 1, time.Second)
+	c := h.connect(nil)
+	c.query("SELECT pg_advisory_lock(1)")
+	h.route.remove()
+	if got := c.recv(); got != "ErrorResponse FATAL 57P01 the database route was removed" {
+		t.Fatalf("message = %q, want FATAL 57P01", got)
+	}
+	if err := c.wait(); !errors.Is(err, errRouteRemoved) {
+		t.Fatalf("ServeSession = %v, want errRouteRemoved", err)
+	}
+	waitFor(t, "the pinned connection back in the pool", func() bool { return h.pool.Stats().Idle == 1 })
+	q := h.dialer.server(0).queries()
+	if q[len(q)-1] != "DISCARD ALL" {
+		t.Fatalf("queries = %q, want DISCARD ALL on release", q)
+	}
+}
+
+func TestSessionRemovedWhilePinnedInTxn(t *testing.T) {
+	h := newHarness(t, 1, time.Second)
+	c := h.connect(nil)
+	c.query("SELECT pg_advisory_lock(1)")
+	c.query("BEGIN")
+	h.route.remove()
+	want(t, "inside", c.query("SELECT 1"), []string{"RowDescription", "DataRow 1", "CommandComplete SELECT 1", "ReadyForQuery T"})
+	want(t, "COMMIT", c.query("COMMIT"), []string{"CommandComplete COMMIT", "ReadyForQuery I"})
+	if got := c.recv(); got != "ErrorResponse FATAL 57P01 the database route was removed" {
+		t.Fatalf("after COMMIT = %q, want FATAL 57P01", got)
+	}
+	if err := c.wait(); !errors.Is(err, errRouteRemoved) {
+		t.Fatalf("ServeSession = %v, want errRouteRemoved", err)
+	}
+	waitFor(t, "the pinned connection back in the pool", func() bool { return h.pool.Stats().Idle == 1 })
+}
+
+// pinRoute records the pin transitions a session reports.
+type pinRoute struct {
+	*fakeRoute
+	mu      sync.Mutex
+	changes []bool
+}
+
+func (r *pinRoute) PinChanged(pinned bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.changes = append(r.changes, pinned)
+}
+
+func (r *pinRoute) seen() []bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]bool(nil), r.changes...)
+}
+
+func TestSessionReportsPinChanges(t *testing.T) {
+	h := newHarness(t, 1, time.Second)
+	r := &pinRoute{fakeRoute: h.route}
+	cc, sc := net.Pipe()
+	defer sc.Close()
+	done := make(chan error, 1)
+	go func() { done <- ServeSession(t.Context(), pgproto3.NewBackend(sc, sc), r, nil) }()
+	c := &testClient{t: t, conn: cc, fe: pgproto3.NewFrontend(cc, cc), done: done}
+	c.readUntilReady()
+	c.query("SELECT 1")
+	if got := r.seen(); len(got) != 0 {
+		t.Fatalf("pin changes after an unpinned query = %v, want none", got)
+	}
+	c.query("SELECT pg_advisory_lock(1)")
+	c.query("SELECT pg_advisory_lock(2)")
+	if got := r.seen(); !reflect.DeepEqual(got, []bool{true}) {
+		t.Fatalf("pin changes after pinning = %v, want [true]", got)
+	}
+	c.terminate()
+	if got := r.seen(); !reflect.DeepEqual(got, []bool{true, false}) {
+		t.Fatalf("pin changes after the session = %v, want [true false]", got)
+	}
 }

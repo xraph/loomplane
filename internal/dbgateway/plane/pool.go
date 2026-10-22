@@ -29,6 +29,8 @@ const (
 	maxReapInterval = 30 * time.Second
 	// resetTimeout bounds the ROLLBACK or DISCARD ALL that Release sends.
 	resetTimeout = 10 * time.Second
+	// waitSamples is how many recent Acquire waits WaitP95 is taken over.
+	waitSamples = 256
 )
 
 // LeaseState tells the pool what shape a connection is in when it comes back.
@@ -61,8 +63,13 @@ type PoolConfig struct {
 }
 
 // PoolStats is a snapshot of a pool. Open counts every connection the pool
-// owns, including ones being dialed and ones leased out.
-type PoolStats struct{ Open, Idle, Waiting, Limit int }
+// owns, including ones being dialed and ones leased out. WaitP95 is the 95th
+// percentile of how long the last 256 Acquire calls queued for a connection,
+// 0 for one that didn't queue.
+type PoolStats struct {
+	Open, Idle, Waiting, Limit int
+	WaitP95                    time.Duration
+}
 
 // pooled is a backend connection with the pool's own bookkeeping. overrides
 // are the KnownParams values a client has set on top of the route defaults, as
@@ -99,6 +106,10 @@ type Pool struct {
 	idle    []*pooled // oldest first
 	waiters list.List // of *waiter, oldest first
 	closed  bool
+
+	waits    [waitSamples]time.Duration // a ring of recent Acquire waits
+	waitNext int
+	waitN    int
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -229,7 +240,28 @@ func (p *Pool) SetLimit(n int) {
 func (p *Pool) Stats() PoolStats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return PoolStats{Open: p.open, Idle: len(p.idle), Waiting: p.waiters.Len(), Limit: p.limit}
+	return PoolStats{Open: p.open, Idle: len(p.idle), Waiting: p.waiters.Len(), Limit: p.limit, WaitP95: p.waitP95Locked()}
+}
+
+// recordWaitLocked adds one Acquire's queue time to the ring.
+func (p *Pool) recordWaitLocked(d time.Duration) {
+	p.waits[p.waitNext] = d
+	p.waitNext = (p.waitNext + 1) % waitSamples
+	if p.waitN < waitSamples {
+		p.waitN++
+	}
+}
+
+// waitP95Locked is the 95th percentile of the recorded waits, by the
+// nearest-rank method.
+func (p *Pool) waitP95Locked() time.Duration {
+	if p.waitN == 0 {
+		return 0
+	}
+	sorted := make([]time.Duration, p.waitN)
+	copy(sorted, p.waits[:p.waitN])
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return sorted[(95*p.waitN+99)/100-1]
 }
 
 // Lease is one connection checked out of a Pool.
@@ -283,13 +315,18 @@ func (p *Pool) Acquire(ctx context.Context, params map[string]string) (*Lease, e
 		w := &waiter{ready: make(chan struct{})}
 		w.elem = p.waiters.PushBack(w)
 		p.mu.Unlock()
+		start := time.Now()
 		var err error
 		pc, slot, err = p.wait(ctx, w)
+		p.mu.Lock()
+		p.recordWaitLocked(time.Since(start))
+		p.mu.Unlock()
 		if err != nil {
 			return nil, err
 		}
 		return p.ready(ctx, pc, slot, want)
 	}
+	p.recordWaitLocked(0)
 	p.mu.Unlock()
 	return p.ready(ctx, pc, slot, want)
 }

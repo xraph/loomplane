@@ -69,7 +69,7 @@ func (s *session) parse(m *pgproto3.Parse) (bool, error) {
 		return false, nil
 	}
 	if pins(class) {
-		s.pinned = true
+		s.pinLocked()
 	}
 	s.stmtSeq++
 	p := &prepared{query: m.Query, oids: slices.Clone(m.ParameterOIDs), class: class, seq: s.stmtSeq}

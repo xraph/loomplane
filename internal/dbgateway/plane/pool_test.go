@@ -893,3 +893,42 @@ func TestPoolStress(t *testing.T) {
 		t.Errorf("stats = %+v", s)
 	}
 }
+
+func TestPoolWaitP95(t *testing.T) {
+	p, _ := newTestPool(t, PoolConfig{Wait: time.Second}, 1)
+	if s := p.Stats(); s.WaitP95 != 0 {
+		t.Fatalf("WaitP95 before any Acquire = %v, want 0", s.WaitP95)
+	}
+	l := mustAcquire(t, p, nil)
+	l.Release(LeaseClean)
+	if s := p.Stats(); s.WaitP95 > 20*time.Millisecond {
+		t.Fatalf("WaitP95 after an immediate Acquire = %v, want about 0", s.WaitP95)
+	}
+
+	// One Acquire queues behind a held lease for at least 60ms. With two
+	// samples the 95th percentile is the slower one.
+	held := mustAcquire(t, p, nil)
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		held.Release(LeaseClean)
+	}()
+	l = mustAcquire(t, p, nil)
+	l.Release(LeaseClean)
+	if s := p.Stats(); s.WaitP95 < 60*time.Millisecond {
+		t.Fatalf("WaitP95 = %v, want at least the 60ms queue", s.WaitP95)
+	}
+}
+
+func TestPoolWaitP95KeepsRecentSamples(t *testing.T) {
+	p, _ := newTestPool(t, PoolConfig{}, 1)
+	p.mu.Lock()
+	p.recordWaitLocked(time.Hour)
+	p.mu.Unlock()
+	for range waitSamples {
+		l := mustAcquire(t, p, nil)
+		l.Release(LeaseClean)
+	}
+	if s := p.Stats(); s.WaitP95 >= time.Hour {
+		t.Fatalf("WaitP95 = %v, want the old sample gone after %d newer ones", s.WaitP95, waitSamples)
+	}
+}

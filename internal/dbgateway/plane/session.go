@@ -187,6 +187,12 @@ func ServeSession(ctx context.Context, be *pgproto3.Backend, r SessionRoute, sta
 		}
 		close(s.quit)
 		s.readers.Wait()
+		s.mu.Lock()
+		pinned := s.pinned
+		s.mu.Unlock()
+		if pc, ok := s.route.(pinCounter); ok && pinned {
+			pc.PinChanged(false)
+		}
 	}()
 	return s.serve()
 }
@@ -241,15 +247,17 @@ func (s *session) serve() error {
 	defer s.endLease()
 	for {
 		s.mu.Lock()
-		lost, idle := s.lost, s.lease == nil
+		lost, idle, atRest := s.lost, s.lease == nil, s.pinnedAtRestLocked()
 		s.mu.Unlock()
 		if lost {
 			return errBackendLost
 		}
-		// Only the session goroutine acquires, so a session idle here stays
-		// idle until the select returns.
+		// Only the session goroutine acquires or forwards, so a session idle
+		// here, or pinned with nothing outstanding, stays that way until the
+		// select returns. A pinned session ends there too; its lease goes
+		// back through DISCARD ALL.
 		var removed <-chan struct{}
-		if idle {
+		if idle || atRest {
 			removed = s.route.Removed()
 		}
 		select {
@@ -262,6 +270,14 @@ func (s *session) serve() error {
 			}
 			s.ack <- struct{}{}
 		case <-removed:
+			if !idle {
+				s.mu.Lock()
+				atRest = s.pinnedAtRestLocked()
+				s.mu.Unlock()
+				if !atRest {
+					continue
+				}
+			}
 			s.fatal("57P01", msgRouteRemoved)
 			return errRouteRemoved
 		case <-s.wake:
@@ -327,6 +343,30 @@ func (s *session) handle(msg pgproto3.FrontendMessage) (end bool, err error) {
 	return true, errors.New("unexpected client message")
 }
 
+// pinnedAtRestLocked reports whether the session is pinned and its backend
+// owes it nothing: idle at ReadyForQuery 'I' with no transaction, batch or
+// write in progress. Called with s.mu held.
+func (s *session) pinnedAtRestLocked() bool {
+	return s.pinned && s.lease != nil && !s.lost && !s.batch && !s.skip &&
+		s.status == 'I' && s.seq.empty() && s.idleAtSync && s.writing == 0
+}
+
+// pinLocked pins the session to its backend connection and tells a route
+// that counts pinned sessions. Called with s.mu held.
+func (s *session) pinLocked() {
+	if s.pinned {
+		return
+	}
+	s.pinned = true
+	if pc, ok := s.route.(pinCounter); ok {
+		pc.PinChanged(true)
+	}
+}
+
+// pinCounter is implemented by a route that counts its pinned sessions. The
+// session reports when it becomes pinned, and when a pinned session ends.
+type pinCounter interface{ PinChanged(pinned bool) }
+
 func (s *session) skipping() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -367,7 +407,7 @@ func (s *session) query(m *pgproto3.Query) (bool, error) {
 		return false, nil
 	}
 	if pins(class) {
-		s.pinned = true
+		s.pinLocked()
 	}
 	s.unnamedOnLease = false
 	return s.forwardLocked(l, true, &entry{kind: entryQuery, effect: class, upTo: s.stmtSeq}, m)
@@ -413,7 +453,7 @@ func (s *session) functionCall(m *pgproto3.FunctionCall) (bool, error) {
 		s.mu.Unlock()
 		return false, nil
 	}
-	s.pinned = true
+	s.pinLocked()
 	return s.forwardLocked(l, true, &entry{kind: entryFunctionCall}, m)
 }
 

@@ -79,6 +79,9 @@ func (s *session) fromBackend(l *Lease, msg pgproto3.BackendMessage) bool {
 	drained := l.Conn().Frontend.ReadBufferLen() == 0
 	release := s.idleAtSync && drained && !s.stopping && !s.pinned && !s.writeFailed &&
 		s.status == 'I' && s.seq.empty() && s.writing == 0
+	// A pinned session keeps its lease, but the session goroutine looks
+	// again at whether the route was removed.
+	recheck := ready && s.pinned
 
 	// Encode the reply before the lease goes back: msg belongs to the
 	// connection's Frontend, which the next holder reads into.
@@ -97,7 +100,7 @@ func (s *session) fromBackend(l *Lease, msg pgproto3.BackendMessage) bool {
 		s.flushLocked()
 	}
 	s.writeMu.Unlock()
-	if release {
+	if release || recheck {
 		s.signal()
 	}
 	return exit
@@ -229,7 +232,7 @@ func (s *session) ready(l *Lease, status byte) {
 			}
 			l.SetOverrides(s.connParams)
 		} else {
-			s.pinned = true
+			s.pinLocked()
 		}
 	}
 	s.seg = segment{}
