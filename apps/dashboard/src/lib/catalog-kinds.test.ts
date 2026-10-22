@@ -5,10 +5,12 @@ import type { Binding } from "@/client/forge/loomplane/types"
 import {
   catalogKind,
   catalogKinds,
+  catalogResources,
   defineCatalogKind,
   inCatalog,
   kindIcon,
   parseResourceConfig,
+  serviceBindings,
 } from "@/lib/catalog-kinds"
 
 test("discovers kind modules from src/catalog-kinds", () => {
@@ -105,4 +107,58 @@ test("icon is used when there is no product logo", () => {
     PlugIcon
   )
   expect(kindIcon(undefined)).toBe(BoxIcon)
+})
+
+test("a composed resource's parts are the bindings that say so, not every name it prefixes", () => {
+  const resource = (name: string, config: object) =>
+    ({ subject: "resource", name, config }) as unknown as Binding
+  const component = (name: string, parent: string, kind = "sample") =>
+    resource(name, {
+      kind,
+      provider: "server",
+      component: {
+        kind,
+        resource: parent,
+        protection: "none",
+        component: { name: name.split("--").pop(), role: "process" },
+      },
+    })
+  const bindings = [
+    resource("app", {
+      kind: "sample",
+      provider: "server",
+      composition: {
+        kind: "sample",
+        version: "1",
+        dependencies: {
+          postgres: {
+            mode: "new",
+            resource: "app--postgres",
+            kind: "postgres",
+          },
+          graph: { mode: "new", resource: "app--graph", kind: "graph" },
+          cache: { mode: "off" },
+        },
+      },
+    }),
+    component("app--api", "app"),
+    component("app--worker", "app"),
+    // A provisioned database and a dependency-only kind's one component,
+    // which is its own resource.
+    resource("app--postgres", { kind: "postgres", provider: "server" }),
+    component("app--graph", "app--graph", "graph"),
+    // A database someone named after app, and another composition's part.
+    resource("app--reports", { kind: "postgres", provider: "server" }),
+    component("app--other", "other"),
+    { subject: "service", name: "app--web", config: {} } as unknown as Binding,
+  ]
+  expect(
+    serviceBindings(bindings, "app").components.map((b) => b.name)
+  ).toEqual(["app--api", "app--graph", "app--postgres", "app--worker"])
+  expect(catalogResources(bindings).map((b) => b.name)).toEqual([
+    "app",
+    "app--reports",
+    "app--other",
+  ])
+  expect(serviceBindings(bindings, "app--reports").components).toEqual([])
 })

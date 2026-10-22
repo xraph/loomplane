@@ -57,9 +57,9 @@ export type CatalogPanelProps = {
   binding: Binding
   config: ResourceConfigView
   /**
-   * Every binding named <resource>--<part>: a composed resource's
-   * components and the dependencies provisioned for it. Empty for a
-   * resource that isn't composed.
+   * A composed resource's parts, each named <resource>--<part>: its
+   * components and the dependencies provisioned for it (see
+   * serviceBindings). Empty for a resource that isn't composed.
    */
   components: Binding[]
 }
@@ -253,7 +253,9 @@ export function componentName(resource: string, part: string): string {
 
 /**
  * serviceBindings finds a resource's own binding and, when it is composed,
- * the bindings of its parts.
+ * the bindings of its parts: its components, which name it as their
+ * resource, and the dependencies provisioned for it, which its composition
+ * names. A resource that only shares the name prefix isn't one of them.
  */
 export function serviceBindings(
   bindings: Binding[],
@@ -263,11 +265,19 @@ export function serviceBindings(
   const binding = resources.find((b) => b.name === resource)
   const config = binding && parseResourceConfig(binding)
   if (!config?.composition) return { binding, components: [] }
-  const prefix = componentName(resource, "")
+  const provisioned = new Set(
+    dependencyChoices(config)
+      .filter(([, choice]) => choice.mode === "new" && choice.resource)
+      .map(([, choice]) => choice.resource)
+  )
   return {
     binding,
     components: resources
-      .filter((b) => b.name.startsWith(prefix))
+      .filter((b) => {
+        if (b.name === resource) return false
+        if (provisioned.has(b.name)) return true
+        return parseResourceConfig(b)?.component?.resource === resource
+      })
       .sort((a, b) => a.name.localeCompare(b.name)),
   }
 }
