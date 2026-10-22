@@ -1,5 +1,7 @@
+import { InfoIcon } from "lucide-react"
 import { useMemo, useState } from "react"
 import { statusOf, messageOf } from "@/client/errors"
+import { notices } from "@/lib/build-notices"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -89,7 +91,9 @@ export function BuildLogPanel({
           onValueChange={(value) => value && setAttempt(value)}
         >
           <SelectTrigger size="sm" aria-label="Build attempt">
-            <SelectValue />
+            <SelectValue>
+              {attempt === "all" ? "All attempts" : `Attempt ${attempt}`}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All attempts</SelectItem>
@@ -105,7 +109,9 @@ export function BuildLogPanel({
           onValueChange={(value) => value && setSource(value)}
         >
           <SelectTrigger size="sm" aria-label="Log source">
-            <SelectValue />
+            <SelectValue>
+              {source === "all" ? "All sources and activity" : source}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All sources and activity</SelectItem>
@@ -146,25 +152,33 @@ export function BuildLogPanel({
           </EmptyContent>
         </Empty>
       )}
-      {output.collections
-        .filter(
-          (collection) =>
-            collection.state !== "complete" &&
-            collection.state !== "collecting" &&
-            (!step || collection.actionId === step)
-        )
-        .map((collection) => (
-          <Empty key={collection.id} className="py-4">
-            <EmptyHeader>
-              <EmptyTitle>
-                {collection.state === "unavailable"
-                  ? "Build output unavailable"
-                  : "Build output is incomplete"}
-              </EmptyTitle>
-              <EmptyDescription>{collection.message}</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ))}
+      {notices(output.collections, step).map((n) => (
+        <div
+          key={n.key}
+          role="note"
+          className="flex items-start gap-2.5 rounded-xl bg-subtle px-3.5 py-2.5 text-[13px] ring-1 ring-border"
+        >
+          <InfoIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0">
+            <span className="font-medium">
+              {n.unavailable
+                ? "Build output unavailable"
+                : "Build output is incomplete"}
+            </span>
+            {n.count > 1 && (
+              <span className="text-muted-foreground">
+                {" "}
+                for {n.count} builds
+              </span>
+            )}
+            {n.message ? (
+              <span className="text-muted-foreground">. {n.message}</span>
+            ) : (
+              "."
+            )}
+          </span>
+        </div>
+      ))}
       {lines.length === 0 && output.loaded && !output.error ? (
         <Empty preview={false}>
           <EmptyHeader>
