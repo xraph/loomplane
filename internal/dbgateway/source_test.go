@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/semver"
 )
 
 func unpack(t *testing.T, data []byte) map[string][]byte {
@@ -130,11 +131,27 @@ func TestProgramModuleMatchesRoot(t *testing.T) {
 			t.Errorf("%s is %s in the program, %s in the root go.mod", mod, prog[mod], root[mod])
 		}
 	}
+	// The program builds against at least the golang.org/x/ versions the
+	// root module does.
+	for mod, v := range prog {
+		if !strings.HasPrefix(mod, "golang.org/x/") {
+			continue
+		}
+		want, ok := root[mod]
+		if !ok {
+			t.Errorf("%s is required by the program but not by the root go.mod", mod)
+		} else if semver.Compare(v, want) < 0 {
+			t.Errorf("%s is %s in the program, older than %s in the root go.mod", mod, v, want)
+		}
+	}
 }
 
 // TestSourceBuilds compiles the generated program, which fetches its
 // modules the first time.
 func TestSourceBuilds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the gateway, fetching its modules")
+	}
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go isn't on PATH")
 	}
