@@ -85,7 +85,8 @@ func (e *Extension) deleteCatalogEndpoint(c forge.Context) error {
 
 // checkCatalogEndpoint checks a DSN before it's stored, from the target
 // it will be reached from. Each person may check checksPerMinute a minute
-// in each organization, and every check is audited, without its DSN.
+// in each organization, and checksPerUserPerMinute a minute across all of
+// them. Every check is audited, without its DSN.
 func (e *Extension) checkCatalogEndpoint(c forge.Context) error {
 	p, err := principal(c)
 	if err != nil {

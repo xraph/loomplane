@@ -7,7 +7,6 @@ import (
 	"maps"
 	"net"
 	"net/netip"
-	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -24,11 +23,25 @@ const dialGuardTTL = time.Minute
 // dialGuardLookupTimeout bounds looking up one service's host.
 const dialGuardLookupTimeout = 2 * time.Second
 
-// nat64 are the NAT64 prefixes whose addresses reach the IPv4 address in
-// their last 32 bits through a NAT64 gateway: the well-known prefix
-// (RFC 6052), where 64:ff9b::a.b.c.d reaches a.b.c.d, and the local-use
-// prefix (RFC 8215), read the same way.
-var nat64 = []netip.Prefix{netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("64:ff9b:1::/48")}
+// NAT64 prefixes, whose addresses reach an IPv4 address through a NAT64
+// gateway. In the well-known prefix (RFC 6052), a /96, 64:ff9b::a.b.c.d
+// reaches a.b.c.d. The local-use prefix (RFC 8215) is a /48 an operator
+// may use as a /48, /56, /64 or /96, so where its IPv4 address sits
+// depends on which: localUseIPv4 lists each place.
+var (
+	nat64WellKnown = netip.MustParsePrefix("64:ff9b::/96")
+	nat64LocalUse  = netip.MustParsePrefix("64:ff9b:1::/48")
+)
+
+// localUseIPv4 are the bytes an IPv4 address takes in an IPv6 address
+// under a /48, /56, /64 and /96 prefix (RFC 6052, section 2.2), skipping
+// byte 8, the u octet (bits 64 to 71), which is always zero.
+var localUseIPv4 = [][4]int{
+	{6, 7, 9, 10},    // /48
+	{7, 9, 10, 11},   // /56
+	{9, 10, 11, 12},  // /64
+	{12, 13, 14, 15}, // /96
+}
 
 // awsMetadata is AWS's instance metadata service over IPv6. Its IPv4
 // address, 169.254.169.254, is link-local; this one isn't.
@@ -110,14 +123,22 @@ func (g *DialGuard) permits(services map[netip.AddrPort]bool, ap netip.AddrPort)
 	return true
 }
 
-// dialForms are the addresses ip reaches: itself, unmapped, and the IPv4
-// address inside a NAT64 one.
+// dialForms are the addresses ip may reach: itself, unmapped, and the
+// IPv4 address inside a NAT64 one, at each place it may sit in a
+// local-use one.
 func dialForms(ip netip.Addr) []netip.Addr {
 	ip = ip.Unmap()
 	forms := []netip.Addr{ip}
-	if slices.ContainsFunc(nat64, func(p netip.Prefix) bool { return p.Contains(ip) }) {
-		b := ip.As16()
+	b := ip.As16()
+	switch {
+	case nat64WellKnown.Contains(ip):
 		forms = append(forms, netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}))
+	case nat64LocalUse.Contains(ip):
+		// Which length the operator uses can't be told from the address,
+		// so it's read every way; any refused reading refuses it.
+		for _, at := range localUseIPv4 {
+			forms = append(forms, netip.AddrFrom4([4]byte{b[at[0]], b[at[1]], b[at[2]], b[at[3]]}))
+		}
 	}
 	return forms
 }

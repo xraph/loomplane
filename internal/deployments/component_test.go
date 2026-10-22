@@ -211,7 +211,14 @@ func TestLoomplaneDialsOnlyOutsideItsOwnHost(t *testing.T) {
 		// AWS's IPv6 metadata service, and local-use NAT64 (RFC 8215).
 		"fd00:ec2::254": false, "fd00:ec2::253": true,
 		"64:ff9b:1::7f00:1": false, "64:ff9b:1:ab::a9fe:a9fe": false, "64:ff9b:1::": false,
-		"64:ff9b:1::a00:5": true, "64:ff9b:2::7f00:1": true,
+		// A local-use prefix may be a /48, /56, /64 or /96, so its IPv4
+		// address is read at each place RFC 6052 puts it: 127.0.0.1 in
+		// the /64 and /48 forms, and the metadata service in all four.
+		"64:ff9b:1:0:7f:0:100:0": false, "64:ff9b:1:7f00:0:100:a00:5": false,
+		"64:ff9b:1:a9fe:a9:fe00::": false, "64:ff9b:1:a9:fe:a9fe::": false, "64:ff9b:1:0:a9:fea9:fe00:0": false, "64:ff9b:1::a9fe:a9fe": false,
+		// One that reads as an allowed address in every form dials; a
+		// /96 form reads as 0.0.0.0 in the others, and doesn't.
+		"64:ff9b:1:a0a:a:a0a:a00:5": true, "64:ff9b:1::a00:5": false, "64:ff9b:2::7f00:1": true,
 	} {
 		if got := loomplaneDials(netip.MustParseAddr(addr)); got != want {
 			t.Fatalf("%s: got %t, want %t", addr, got, want)
