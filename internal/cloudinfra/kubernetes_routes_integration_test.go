@@ -89,6 +89,25 @@ func TestKubernetesRouteBindingQuery(t *testing.T) {
 	check("on the environment's connection", environment, loose)
 	check("by the Cloud's default", RouteInput{EnvironmentID: "prod", Service: "default--gateway", CloudID: "cloud_1", Port: 8080}, fallback)
 
+	// The rows as the planner and runner write them for a composed resource on
+	// a Cloud target: the component's instance runs one service, main, with
+	// every recipe port, and its binding config is the whole ResourceConfig.
+	// The composed resource's own binding has the placement but no ports.
+	planned := id.New(id.PrefixInstance)
+	exec(`INSERT INTO cp_instances VALUES($1,'org',NULL,'{}',jsonb_build_array(jsonb_build_object('name','main','image','octopus/gateway:1','ports','[{"container":8080,"protocol":"tcp"},{"container":9090,"protocol":"tcp"}]'::jsonb)),'{}','running')`, planned.String())
+	pin := `"cloud_placement":{"cloud_id":"cloud_1","cloud_revision":1,"assignment_revision":1,"grant_revision":1,"target_id":"target_k8s","target_revision":1,"target_name":"cluster","provider":"kubernetes","connection_id":"conn_k8s","account_identity":"cluster","region_source":"default"}`
+	binding("plan0--gateway", planned, `{"target":"conn_k8s","provider":"kubernetes","kind":"octopus","version":"1.0.0",`+
+		`"component":{"kind":"octopus","resource":"plan0","revision":"r1","component":{"name":"gateway","image":"octopus/gateway:1","ports":[{"name":"http","container":8080,"protocol":"http","routable":true},{"name":"admin","container":9090,"protocol":"http","control":true}]},"protection":"rebuildable"},`+
+		`"routable_ports":[8080],`+pin+`}`)
+	binding("plan0", planned, `{"target":"conn_k8s","provider":"kubernetes","kind":"octopus","version":"1.0.0","composition":{"kind":"octopus","version":"1.0.0","revision":"r1"},`+pin+`}`)
+	if cloud, err = st.RouteBindingCloud(ctx, "org", "shop", "prod", "plan0--gateway"); err != nil || cloud != "cloud_1" {
+		t.Fatal("planned component Cloud", cloud, err)
+	}
+	check("as the planner records a component", RouteInput{EnvironmentID: "prod", Service: "plan0--gateway", CloudID: "cloud_1", Port: 8080}, planned)
+	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", RouteInput{EnvironmentID: "prod", Service: "plan0", CloudID: "cloud_1", Port: 8080}); !errors.Is(resolveErr, ErrNotFound) {
+		t.Fatalf("the composed resource itself resolved: %+v %v", b, resolveErr)
+	}
+
 	for name, refused := range map[string]RouteInput{
 		"a placed binding without its Cloud":       {EnvironmentID: "prod", Service: "octo--gateway", Port: 8080},
 		"an unplaced binding under a Cloud":        {EnvironmentID: "prod", Service: "loose--gateway", CloudID: "cloud_1", Port: 8080},
