@@ -14,9 +14,8 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-// challengeConnections maps connection IDs to Cloudflare connections. Each
-// token is the connection ID with a -token suffix, and -g<generation> once
-// the connection has been replaced.
+// challengeConnections maps connection IDs to Cloudflare connections, each
+// with the token tokenFor gives it.
 type challengeConnections map[string]*connections.Connection
 
 func (c challengeConnections) Credential(_ context.Context, org, id string) (*connections.Connection, []byte, error) {
@@ -25,12 +24,25 @@ func (c challengeConnections) Credential(_ context.Context, org, id string) (*co
 		return nil, nil, connections.ErrNotFound
 	}
 	v := *conn
-	token := id + "-token"
-	if v.Generation > 1 {
-		token += fmt.Sprintf("-g%d", v.Generation)
+	if token, malformed := malformedTokens[id]; malformed {
+		return &v, []byte(token), nil
 	}
-	return &v, []byte(token), nil
+	return &v, []byte(tokenFor(id, v.Generation)), nil
 }
+
+// tokenFor is a connection's token in the format Caddy's Cloudflare module
+// accepts: the connection ID with a -token suffix, and -g<generation> once
+// the connection has been replaced.
+func tokenFor(id string, generation int64) string {
+	token := "cfat_" + id + "-token"
+	if generation > 1 {
+		token += fmt.Sprintf("-g%d", generation)
+	}
+	return token + "_" + strings.Repeat("0", 32)
+}
+
+// malformedTokens are connections whose token Caddy's module would refuse.
+var malformedTokens = map[string]string{"cf-short": "too-short"}
 
 // challengeDNS answers like Cloudflare for acme.dev. scopes holds what each
 // token reaches; probed records the zone each DNS Write probe aimed at.
@@ -70,7 +82,7 @@ func challengeFixture(t *testing.T) (*Service, *overviewStore, *challengeDNS) {
 		return &connections.Connection{ID: id, OrgID: "org", Cloud: connections.Cloudflare, Generation: 1, Status: "ready", Details: map[string]string{"account_id": account}}
 	}
 	conns := challengeConnections{}
-	for _, id := range []string{"cf-main", "cf-dns", "cf-wide", "cf-registrar", "cf-readonly", "cf-taken", "cf-other"} {
+	for _, id := range []string{"cf-main", "cf-dns", "cf-wide", "cf-registrar", "cf-readonly", "cf-taken", "cf-other", "cf-short"} {
 		conns[id] = cf(id, "acct")
 	}
 	conns["cf-elsewhere"] = cf("cf-elsewhere", "another-acct")
@@ -80,8 +92,9 @@ func challengeFixture(t *testing.T) (*Service, *overviewStore, *challengeDNS) {
 	readonly := zoneScoped("cfzone1")
 	readonly.Permissions.DNSWrite = cloudflare.Missing
 	dns := &challengeDNS{scopes: map[string]cloudflare.ChallengeScope{
-		"cf-dns-token": zoneScoped("cfzone1"), "cf-wide-token": zoneScoped("cfzone1", "cfzone2"), "cf-registrar-token": registrar,
-		"cf-readonly-token": readonly, "cf-taken-token": zoneScoped("cfzone1"), "cf-elsewhere-token": zoneScoped("cfzone1"),
+		tokenFor("cf-dns", 1): zoneScoped("cfzone1"), tokenFor("cf-wide", 1): zoneScoped("cfzone1", "cfzone2"), tokenFor("cf-registrar", 1): registrar,
+		tokenFor("cf-readonly", 1): readonly, tokenFor("cf-taken", 1): zoneScoped("cfzone1"), tokenFor("cf-elsewhere", 1): zoneScoped("cfzone1"),
+		"too-short": zoneScoped("cfzone1"),
 	}}
 	adapters := NewAdapters()
 	if err := adapters.RegisterDNS("cloudflare", dns); err != nil {
@@ -120,6 +133,10 @@ func TestChallengeCredentialMustBeZoneScoped(t *testing.T) {
 	if _, err := set("do"); !errors.Is(err, ErrInvalid) {
 		t.Fatal("a connection that isn't Cloudflare", err)
 	}
+	probes := len(dns.probed)
+	if _, err := set("cf-short"); !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "too-short") || len(dns.probed) != probes {
+		t.Fatal("a token Caddy's Cloudflare module would refuse", err, dns.probed)
+	}
 	if _, err := svc.SetZoneChallengeCredential(t.Context(), overviewDev, "zone", ChallengeCredentialInput{ConnectionID: "cf-dns", Revision: 1}); err == nil {
 		t.Fatal("a project member attached a credential")
 	}
@@ -142,8 +159,13 @@ func TestChallengeCredentialMustBeZoneScoped(t *testing.T) {
 		}
 	}
 	token, err := svc.zoneChallengeToken(t.Context(), zone)
-	if err != nil || string(token) != "cf-dns-token" {
+	if err != nil || string(token) != tokenFor("cf-dns", 1) {
 		t.Fatal("challenge token", string(token), err)
+	}
+	short := *zone
+	short.ChallengeConnectionID = "cf-short"
+	if _, err = svc.zoneChallengeToken(t.Context(), &short); !errors.Is(err, ErrInvalid) {
+		t.Fatal("a malformed token on its way to a write", err)
 	}
 	moved := *zone
 	moved.AccountID = "another-acct"
@@ -237,7 +259,7 @@ func TestZoneTokenIsRecheckedBeforeEveryWrite(t *testing.T) {
 			t.Fatalf("%s: wrote %v, %v", name, wrote, err)
 		}
 	}
-	if wrote, err := sync(true); !wrote || err != nil || !slices.Equal(written, []string{"srv_1/zone=cf-dns-token"}) || state.DNSTokens["zone"] != 1 {
+	if wrote, err := sync(true); !wrote || err != nil || !slices.Equal(written, []string{"srv_1/zone=" + tokenFor("cf-dns", 1)}) || state.DNSTokens["zone"] != 1 {
 		t.Fatal("first write", wrote, err, written)
 	}
 	probes := len(dns.probed)
@@ -247,14 +269,14 @@ func TestZoneTokenIsRecheckedBeforeEveryWrite(t *testing.T) {
 
 	// Rotated, still scoped to the zone: the next check puts it on the server.
 	conns["cf-dns"].Generation = 2
-	dns.scopes["cf-dns-token-g2"] = zoneScoped("cfzone1")
-	if wrote, err := sync(false); !wrote || err != nil || written[len(written)-1] != "srv_1/zone=cf-dns-token-g2" || state.DNSTokens["zone"] != 2 {
+	dns.scopes[tokenFor("cf-dns", 2)] = zoneScoped("cfzone1")
+	if wrote, err := sync(false); !wrote || err != nil || written[len(written)-1] != "srv_1/zone="+tokenFor("cf-dns", 2) || state.DNSTokens["zone"] != 2 {
 		t.Fatal("rotated token", wrote, err, written)
 	}
 
 	// Replaced with an account-wide token under the same connection ID.
 	conns["cf-dns"].Generation = 3
-	dns.scopes["cf-dns-token-g3"] = zoneScoped("cfzone1", "cfzone2")
+	dns.scopes[tokenFor("cf-dns", 3)] = zoneScoped("cfzone1", "cfzone2")
 	wrote, err := sync(false)
 	refused("replaced with a wider token", wrote, err, "a token scoped to acme.dev only")
 	wrote, err = sync(true)
@@ -264,11 +286,11 @@ func TestZoneTokenIsRecheckedBeforeEveryWrite(t *testing.T) {
 	conns["cf-dns"].Generation = 2
 	widened := zoneScoped("cfzone1")
 	widened.Permissions.RegistrarWrite = cloudflare.Granted
-	dns.scopes["cf-dns-token-g2"] = widened
+	dns.scopes[tokenFor("cf-dns", 2)] = widened
 	wrote, err = sync(true)
 	refused("widened at Cloudflare", wrote, err, "a token scoped to acme.dev only")
 
-	dns.scopes["cf-dns-token-g2"] = zoneScoped("cfzone1")
+	dns.scopes[tokenFor("cf-dns", 2)] = zoneScoped("cfzone1")
 	conns["cf-dns"].Status = "incomplete"
 	wrote, err = sync(true)
 	refused("connection not ready", wrote, err, "isn't ready")

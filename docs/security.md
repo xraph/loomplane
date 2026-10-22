@@ -45,7 +45,9 @@ A wildcard certificate is proven through DNS, so whatever serves the wildcard ha
 | A server serving a wildcard | `/config/dns/<zone>.token` in the proxy's config volume, readable only by its owner (0400). Caddy's config names the file through a `{file...}` placeholder, so the saved config, the admin API's readback and the logs never hold the token. It's removed when the last wildcard route for that zone leaves the server. |
 | A Kubernetes namespace serving a wildcard | A Secret, under `api-token`, that the zone's DNS-01 Issuer reads. It goes with the Issuer once no wildcard route in the namespace needs it. |
 
-This is a trade-off, and you should know what it costs. Anyone with Docker access to the host can read that token file. On Kubernetes, so can anyone allowed to read Secrets in that namespace. What they get is the power to edit one zone's DNS records. They can't touch your other zones, your account or your registrar, and that's the reason the token is a separate, narrow one. Application containers never receive DNS credentials. Loomplane also checks each token against the format Caddy's Cloudflare module accepts before writing it, because the module prints a token it refuses in its error.
+Anyone with Docker access to the host can read that token file. On Kubernetes, so can anyone allowed to read Secrets in that namespace. With it they can edit one zone's DNS records and nothing else, which is why you give the challenge its own narrow token and not the zone's. Application containers never receive DNS credentials.
+
+Caddy's Cloudflare module prints any token it refuses in its error, so Loomplane checks every challenge token against the format that module accepts. That check runs with the others, when you attach the token and before each write to a server or a cluster, and a malformed token is refused before Loomplane asks Cloudflare anything about it.
 
 ## What runs where
 

@@ -708,6 +708,10 @@ func finishIngressUpgrade(ctx context.Context, c *Client, org, server string, cu
 // refuses would appear in Caddy's error, so Loomplane refuses it first.
 var ingressDNSToken = regexp.MustCompile(`^([A-Za-z0-9_-]{35,50}|cf(ut|at)_[A-Za-z0-9_-]{32,256})$`)
 
+// ValidDNSChallengeToken says whether token has the format Caddy's
+// Cloudflare module accepts. Both backends check it before they write one.
+func ValidDNSChallengeToken(token []byte) bool { return ingressDNSToken.Match(token) }
+
 // WriteIngressDNSToken puts a zone's DNS challenge token in the proxy's
 // config volume, readable only by Caddy. Caddy's config names the file;
 // the token never enters a config, a readback or a log.

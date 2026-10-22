@@ -521,7 +521,7 @@ func TestKubernetesWildcardUsesDNSIssuer(t *testing.T) {
 		return &connections.Connection{ID: id, OrgID: "org", Cloud: connections.Cloudflare, Generation: 1, Status: "ready", Details: map[string]string{"account_id": "account"}}
 	}
 	conns := challengeConnections{"dns": cf("dns"), "cf-dns": cf("cf-dns")}
-	scopes := map[string]cloudflare.ChallengeScope{"cf-dns-token": zoneScoped("zone")}
+	scopes := map[string]cloudflare.ChallengeScope{tokenFor("cf-dns", 1): zoneScoped("zone")}
 	registry := NewAdapters()
 	if err := registry.RegisterDNS("cloudflare", challengeRouteDNS{orderedDNS{dns, log}, scopes}); err != nil {
 		t.Fatal(err)
@@ -558,7 +558,7 @@ func TestKubernetesWildcardUsesDNSIssuer(t *testing.T) {
 	if !slices.Equal(*log, []string{"prerequisites", "dns issuer zone example.com", "ingress", "status route_w lp-inst-gw"}) {
 		t.Fatal("apply order", *log)
 	}
-	if !slices.Equal(kube.dnsTokens, []string{"cf-dns-token"}) || kube.directory != "https://acme-staging-v02.api.letsencrypt.org/directory" {
+	if !slices.Equal(kube.dnsTokens, []string{tokenFor("cf-dns", 1)}) || kube.directory != "https://acme-staging-v02.api.letsencrypt.org/directory" {
 		t.Fatal("token", kube.dnsTokens, kube.directory)
 	}
 	if applied := kube.applied[len(kube.applied)-1]; applied.Hostname != "*.example.com" || applied.Issuer != kubernetes.DNSIssuerName("zone") {
@@ -582,23 +582,23 @@ func TestKubernetesWildcardUsesDNSIssuer(t *testing.T) {
 		_ = svc.ReconcileRoute(t.Context(), "org", "routeop_v", nil)
 	}
 	conns["cf-dns"].Generation = 2
-	scopes["cf-dns-token-g2"] = zoneScoped("zone")
+	scopes[tokenFor("cf-dns", 2)] = zoneScoped("zone")
 	verify()
-	if st.op.Status != "succeeded" || kube.dnsTokens[len(kube.dnsTokens)-1] != "cf-dns-token-g2" || !slices.Contains(*log, "dns issuer zone example.com") {
+	if st.op.Status != "succeeded" || kube.dnsTokens[len(kube.dnsTokens)-1] != tokenFor("cf-dns", 2) || !slices.Contains(*log, "dns issuer zone example.com") {
 		t.Fatal("rotated token", st.op.Status, st.op.Message, kube.dnsTokens, *log)
 	}
 
 	// Widened at Cloudflare: the token stays off the cluster.
 	widened := zoneScoped("zone", "zone_2")
-	scopes["cf-dns-token-g2"] = widened
+	scopes[tokenFor("cf-dns", 2)] = widened
 	before := len(kube.dnsTokens)
 	verify()
-	if st.op.Status != "failed" || len(kube.dnsTokens) != before || !strings.Contains(st.op.Message, "didn't put its token on the cluster") || strings.Contains(st.op.Message, "cf-dns-token") {
+	if st.op.Status != "failed" || len(kube.dnsTokens) != before || !strings.Contains(st.op.Message, "didn't put its token on the cluster") || strings.Contains(st.op.Message, tokenFor("cf-dns", 1)) {
 		t.Fatal("widened token", st.op.Status, st.op.Message, kube.dnsTokens)
 	}
 
 	// Removing the wildcard drops the zone's issuer once no route uses it.
-	scopes["cf-dns-token-g2"] = zoneScoped("zone")
+	scopes[tokenFor("cf-dns", 2)] = zoneScoped("zone")
 	route := st.op.Route
 	route.Status, route.Revision = "ready", 3
 	st.route = &route

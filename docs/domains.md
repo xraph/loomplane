@@ -77,7 +77,8 @@ Create a second Cloudflare token with Zone Read and DNS Edit on that one zone, a
 - it's a different connection from the one that manages the zone, in the same Cloudflare account,
 - no other zone uses it,
 - the only zone it can see is this one, and it can edit DNS there,
-- it has no Registrar access.
+- it has no Registrar access,
+- it's in the format Caddy's Cloudflare module accepts (Loomplane checks this first, before it asks Cloudflare anything).
 
 These checks run when you attach it and again every time Loomplane writes the token to a server or cluster. So if someone widens the token in Cloudflare later, the next write refuses it. See [security.md](security.md#dns-challenge-credentials) for where it ends up.
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/xraph/loomplane/internal/clouds/cloudflare"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -91,8 +92,8 @@ func (s *Service) checkChallengeCredential(ctx context.Context, st DomainStore, 
 }
 
 // checkChallengeScope holds a challenge connection to its rules: Cloudflare
-// on the zone's account, a token that lists only this zone, can write its
-// DNS and is refused by the registrar. It runs on attach and again before
+// on the zone's account, a token in the format Caddy's module accepts that
+// lists only this zone, can write its DNS and is refused by the registrar. It runs on attach and again before
 // every write of the token to a server, since a replaced connection or a
 // token widened at Cloudflare keeps its connection ID.
 func (s *Service) checkChallengeScope(ctx context.Context, zone *Zone, conn *connections.Connection, raw []byte) (provider.InfrastructureCredential, error) {
@@ -105,6 +106,11 @@ func (s *Service) checkChallengeScope(ctx context.Context, zone *Zone, conn *con
 	}
 	if credential.AccountID != zone.AccountID {
 		return provider.InfrastructureCredential{}, provider.ErrInfrastructureIdentity
+	}
+	// Caddy's module prints a token it refuses, and cert-manager's solver
+	// would only fail later, so neither backend is handed one.
+	if !server.ValidDNSChallengeToken([]byte(strings.TrimSpace(credential.Token))) {
+		return provider.InfrastructureCredential{}, fmt.Errorf("%w: that isn't a Cloudflare API token Caddy's DNS module accepts; create a new API token for the challenge connection", ErrInvalid)
 	}
 	adapter, err := s.Adapters.DNS(zone.Provider)
 	if err != nil {
