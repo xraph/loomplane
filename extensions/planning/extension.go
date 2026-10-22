@@ -52,6 +52,8 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/dbgateway"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
@@ -307,6 +309,18 @@ func (e *Extension) Register(fapp forge.App) error {
 		Providers: catalog,
 		Executors: executors,
 		Resources: resourceSecrets,
+		// The database gateway extension registers after this one and
+		// provides the service that holds the trust keys, so they're
+		// looked up when a gateway deploys.
+		DatabaseGateways: dbgateway.NewStore(pg),
+		DatabaseGatewayTrust: func() []plane.TrustKey {
+			svc, injectErr := forge.InjectType[*dbgateway.Service](c)
+			if injectErr != nil {
+				return nil
+			}
+			return svc.TrustKeys()
+		},
+		PublicURL: e.cfg.PublicURL,
 		Telemetry: metrics,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {

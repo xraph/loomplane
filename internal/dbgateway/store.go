@@ -111,6 +111,11 @@ func newID(prefix string) (string, error) {
 	return id.String(), nil
 }
 
+// NewGatewayID returns a fresh gateway id, such as dbgw_01h.... A deploy
+// generates one up front, so it can store the gateway's private keys under
+// it before the gateway itself is recorded.
+func NewGatewayID() (string, error) { return newID(gatewayPrefix) }
+
 // missingGateway turns the foreign key failure of a write against a gateway
 // that isn't there into ErrNotFound.
 func missingGateway(err error, id string) error {
@@ -151,7 +156,7 @@ func (s *Store) EnsureGateway(ctx context.Context, g Gateway) (Gateway, bool, er
 		g.OrgID, g.ID, g.ProjectID, g.EnvironmentID, g.Name, g.Provider, g.Region, g.Suffix,
 		[]byte(g.SigningPublicKey), g.SealingPublicKey.Bytes())
 	if err != nil {
-		return Gateway{}, false, fmt.Errorf("insert database gateway: %w", err)
+		return Gateway{}, false, fmt.Errorf("insert database gateway: %w", gatewayInsertError(err, g))
 	}
 	if n, rerr := res.RowsAffected(); rerr == nil && n == 1 {
 		return g, true, nil
@@ -162,6 +167,26 @@ func (s *Store) EnsureGateway(ctx context.Context, g Gateway) (Gateway, bool, er
 		return Gateway{}, false, fmt.Errorf("read database gateway: %w", err)
 	}
 	return stored, false, nil
+}
+
+// gatewayInsertError maps the insert's constraint failures onto the store's
+// errors: a missing environment (the foreign key) is ErrNotFound, and an id
+// another gateway of the organization already has (the primary key) is
+// ErrInvalid. The id grammar the CHECK constraint and idPattern enforce is
+// the plane's gateway id grammar, gatewayIDPattern in plane/run.go, since
+// the id reaches the gateway as LOOMPLANE_DBGW_ID.
+func gatewayInsertError(err error, g Gateway) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+	switch {
+	case pgErr.Code == "23503":
+		return fmt.Errorf("%w: environment %s of project %s", ErrNotFound, g.EnvironmentID, g.ProjectID)
+	case pgErr.Code == "23505" && pgErr.ConstraintName == "loomplane_db_gateways_pkey":
+		return fmt.Errorf("%w: gateway id %s is taken", ErrInvalid, g.ID)
+	}
+	return err
 }
 
 // Gateway returns one gateway, or ErrNotFound.

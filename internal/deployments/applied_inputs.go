@@ -12,16 +12,22 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 )
 
-// appliedVariables contains only user variables. Dependency addresses are
-// resolved against the serving bindings each time the pinned service runs.
+// appliedVariables contains user variables and resource addresses. Service
+// addresses are resolved against the serving bindings each time the pinned
+// service runs. GatewayValues are the <KEY>_GATEWAY addresses that go with a
+// resource behind the database gateway, which aren't secret.
 type appliedVariables struct {
 	ResourceValues map[string]string `json:"resource_values,omitempty"`
+	GatewayValues  map[string]string `json:"gateway_values,omitempty"`
 	Values         map[string]string `json:"values"`
 	Secrets        map[string]bool   `json:"secrets"`
 }
 
-func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *planning.Action) error {
-	if a.Service == nil || a.Service.Gateway != nil || r.resources == nil {
+// captureAppliedVariables pins what the service gets in this deployment.
+// services are the environment's service bindings, which say whether a
+// resource it needs is behind the database gateway.
+func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *planning.Action, services map[string]*planning.Binding) error {
+	if a.Service == nil || a.Service.Generated() || r.resources == nil {
 		return nil
 	}
 	cfg := *a.Service
@@ -62,7 +68,7 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 			}
 			ref = resourceKey(d.OrgID, d.EnvironmentID, "applied-inputs/"+d.ID, id.String())
 		}
-		resourceValues := map[string]string{}
+		resourceValues, gatewayValues := map[string]string{}, map[string]string{}
 		for _, link := range cfg.Env {
 			if link.Subject != planning.ResourceSubject {
 				continue
@@ -70,13 +76,16 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 			if _, overridden := values[link.Key]; overridden {
 				continue
 			}
-			value, e := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			value, extra, e := r.resourceAddress(ctx, d, a.Name, services, link.From, link.Key)
 			if e != nil {
 				return fmt.Errorf("capture applied resource variable: %w", e)
 			}
-			resourceValues[link.Key] = string(value)
+			resourceValues[link.Key] = value
+			for k, v := range extra {
+				gatewayValues[k] = v
+			}
 		}
-		raw, err = json.Marshal(appliedVariables{Values: values, Secrets: secrets, ResourceValues: resourceValues})
+		raw, err = json.Marshal(appliedVariables{Values: values, Secrets: secrets, ResourceValues: resourceValues, GatewayValues: gatewayValues})
 		if err == nil {
 			err = r.resources.Put(ctx, ref, raw)
 		}
@@ -127,7 +136,7 @@ func (r *Runner) appliedSource(ctx context.Context, d *Deployment, a planning.Ac
 }
 
 func pinAppliedSource(d *Deployment, p *planning.Plan, a *planning.Action) {
-	if a.Service == nil || a.Service.Gateway != nil {
+	if a.Service == nil || a.Service.Generated() {
 		return
 	}
 	cfg := *a.Service

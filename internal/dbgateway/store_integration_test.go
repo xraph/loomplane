@@ -165,6 +165,30 @@ func TestEnsureGatewayRejectsBadInput(t *testing.T) {
 	}
 }
 
+// R72: the deploy path tells a missing environment from a taken id.
+func TestEnsureGatewayMapsConstraintErrors(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	if _, _, err := s.EnsureGateway(ctx, newGateway(t, "env_missing", "d")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing environment: %v, want ErrNotFound", err)
+	}
+	first, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same id under another name, in another environment, hits the
+	// primary key rather than the name the insert skips on.
+	taken := newGateway(t, "env_2", "other")
+	taken.ID = first.ID
+	if _, _, err = s.EnsureGateway(ctx, taken); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("taken id: %v, want ErrInvalid", err)
+	}
+	id, err := NewGatewayID()
+	if err != nil || !idGrammar.MatchString(id) || id == first.ID {
+		t.Fatalf("NewGatewayID %q: %v", id, err)
+	}
+}
+
 func TestEnsureGatewayConcurrent(t *testing.T) {
 	s := testStore(t)
 	var wg sync.WaitGroup

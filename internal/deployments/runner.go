@@ -21,6 +21,8 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/dbgateway"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -184,6 +186,9 @@ type Runner struct {
 	providers     *provider.Registry
 	executors     map[string]Executor
 	resources     ResourceSecrets
+	dbGateways    DatabaseGatewayStore
+	dbTrust       func() []plane.TrustKey
+	publicURL     string
 	telemetry     *telemetry.Recorder
 	logs          LogSink
 	http          *http.Client
@@ -210,6 +215,15 @@ type RunnerDeps struct {
 	// Resources keeps provisioned resources' credentials. It may be nil
 	// when nothing is provisioned.
 	Resources ResourceSecrets
+	// DatabaseGateways records each environment's database gateway and its
+	// routes. It may be nil when no plan deploys one.
+	DatabaseGateways DatabaseGatewayStore
+	// DatabaseGatewayTrust returns the keys a database gateway trusts the
+	// control plane's snapshots with. None means no signing key is
+	// configured, and a database gateway can't deploy.
+	DatabaseGatewayTrust func() []plane.TrustKey
+	// PublicURL is Loomplane's own address, which a database gateway polls.
+	PublicURL string
 	// Telemetry records how deployments go. It may be nil.
 	Telemetry *telemetry.Recorder
 }
@@ -220,6 +234,7 @@ func NewRunner(d RunnerDeps) *Runner {
 		cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
 		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
+		dbGateways: d.DatabaseGateways, dbTrust: d.DatabaseGatewayTrust, publicURL: d.PublicURL,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -383,11 +398,11 @@ func sourceFor(d *Deployment, repo string) (string, error) {
 // for the service's repository. A service from a plan that names no
 // repository takes the commit of the deployment's one repository, and has
 // none when the deployment moves several, since it can't be told which. A
-// resource builds nothing, and a gateway is built from what Loomplane
-// generates, so neither has one.
+// resource builds nothing, and a gateway or the database gateway is built
+// from what Loomplane generates, so neither has one.
 func commitFor(d *Deployment, a planning.Action) string {
 	switch {
-	case a.Service == nil || a.Service.Gateway != nil:
+	case a.Service == nil || a.Service.Generated():
 		return ""
 	case a.Service.CommitSHA != "":
 		return a.Service.CommitSHA
@@ -596,7 +611,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
 	}
-	if captureErr := r.captureAppliedVariables(ctx, d, &a); captureErr != nil {
+	if captureErr := r.captureAppliedVariables(ctx, d, &a, byName); captureErr != nil {
 		return captureErr
 	}
 	pinAppliedSource(d, plan, &a)
@@ -633,9 +648,17 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
 	}
 	// A gateway is built from the source Loomplane generates for its
-	// routes, not from the repository.
-	if a.Service != nil && a.Service.Gateway != nil {
-		data, id, gerr := gateway.Source(a.Service.Gateway)
+	// routes, and the database gateway from the program Loomplane ships,
+	// not from the repository.
+	if a.Service != nil && a.Service.Generated() {
+		var data []byte
+		var id string
+		var gerr error
+		if a.Service.DatabaseGateway != nil {
+			data, id, gerr = dbgateway.Source()
+		} else {
+			data, id, gerr = gateway.Source(a.Service.Gateway)
+		}
 		if gerr != nil {
 			return fmt.Errorf("generate the gateway: %w", gerr)
 		}
@@ -720,12 +743,17 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		}
 	}
 	if a.Service != nil {
-		if a.Service.Gateway == nil {
+		if !a.Service.Generated() {
 			job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
 				return r.appliedSource(ctx, d, a)
 			}
 		}
-		if job.Env, job.Secrets, err = r.env(ctx, d, a, byName, resources); err != nil {
+		if a.Service.DatabaseGateway != nil {
+			job.Env, job.Secrets, err = r.ensureDatabaseGateway(ctx, d, &a)
+		} else {
+			job.Env, job.Secrets, err = r.env(ctx, d, a, byName, resources)
+		}
+		if err != nil {
 			return err
 		}
 		for _, link := range a.Service.Env {
@@ -1108,8 +1136,8 @@ func placement(prov, region string) string {
 // each thing it needs. A variable someone set wins over an address
 // Loomplane would set, so you can point a service elsewhere.
 func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, services, resources map[string]*planning.Binding) (env map[string]string, secret map[string]bool, err error) {
-	resourceValues := map[string]string{}
-	if a.Service.Gateway != nil {
+	resourceValues, gatewayValues := map[string]string{}, map[string]string{}
+	if a.Service.Generated() {
 		// A gateway gets the addresses it routes to and nothing else: none
 		// of the project's variables, and so none of its secrets.
 		env, secret = map[string]string{}, map[string]bool{}
@@ -1126,7 +1154,7 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			return nil, nil, snapshotErr
 		}
 		env, secret = snapshot.Values, snapshot.Secrets
-		resourceValues = snapshot.ResourceValues
+		resourceValues, gatewayValues = snapshot.ResourceValues, snapshot.GatewayValues
 		if env == nil {
 			env = map[string]string{}
 		}
@@ -1143,6 +1171,9 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 		if link.Subject == planning.ResourceSubject {
 			if pinned, ok := resourceValues[link.Key]; ok {
 				env[link.Key], secret[link.Key] = pinned, true
+				if gw, ok := gatewayValues[link.Key+GatewaySuffix]; ok {
+					setUnset(env, link.Key+GatewaySuffix, gw)
+				}
 				continue
 			}
 			if a.Service.AppliedInputs != nil && a.Service.AppliedInputs.Variables != "" {
@@ -1152,11 +1183,14 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			if resources[link.From] == nil || r.resources == nil {
 				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
 			}
-			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			addr, extra, err := r.resourceAddress(ctx, d, a.Name, services, link.From, link.Key)
 			if err != nil {
-				return nil, nil, fmt.Errorf("%s needs %s: %w", a.Name, link.From, err)
+				return nil, nil, err
 			}
-			env[link.Key], secret[link.Key] = string(addr), true
+			env[link.Key], secret[link.Key] = addr, true
+			for k, v := range extra {
+				setUnset(env, k, v)
+			}
 			continue
 		}
 		if link.Address != "" {
