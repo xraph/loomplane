@@ -576,8 +576,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", err
 	}
 	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
+	// A composed resource on one of the Cloud's targets is placed there too.
+	composed := len(composedResources(rev.Manifest, plan.Environment, s.kinds)) > 0
 	var assignment *cloudprofiles.Assignment
-	if resolutionErr == nil && (needs.Explicit || needs.Fallback) && s.cloudProfiles != nil {
+	if resolutionErr == nil && (needs.Explicit || needs.Fallback || composed) && s.cloudProfiles != nil {
 		assignment, resolutionErr = s.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
 		// A revoked grant only matters to services that ask for the Cloud.
 		if !needs.Explicit && errors.Is(resolutionErr, cloudprofiles.ErrNotFound) {
@@ -610,9 +612,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		}
 		result = &Result{Problems: []Finding{finding}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
+		placed := map[string]CloudPlacement{}
+		maps.Copy(placed, placements)
+		maps.Copy(placed, composedPlacements(resolved, plan.Environment, s.kinds, assignment, options))
 		result = Compute(Input{
 			Catalog: plan.Catalog, Routes: routes,
-			Federation: federation, CloudPlacements: placements,
+			Federation: federation, CloudPlacements: placed,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
 			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),

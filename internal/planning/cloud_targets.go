@@ -11,6 +11,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
 
@@ -52,6 +53,61 @@ type CloudPlacementError struct {
 }
 
 func (e *CloudPlacementError) Error() string { return e.Path + ": " + e.Message }
+
+// targetPlacement pins a workload to one of the assignment's targets,
+// reached through the target's own connection.
+func targetPlacement(a *cloudprofiles.Assignment, t cloudprofiles.Target, identity, region, regionSource string) CloudPlacement {
+	return CloudPlacement{GrantRevision: a.GrantRevision, CloudID: a.CloudID, CloudRevision: a.CloudRevision, AssignmentRevision: a.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: regionSource}
+}
+
+// composedResources are the manifest's composed catalog resources that are
+// on in the environment.
+func composedResources(m *manifest.Manifest, environment string, kinds *recipes.Registry) []string {
+	if m == nil {
+		return nil
+	}
+	if kinds == nil {
+		kinds = recipes.Default()
+	}
+	var out []string
+	for _, name := range m.ResourceNames() {
+		r := m.Resources[name]
+		if kinds.Composed(r.Kind) && manifest.On(r.For(environment, m.Defaults).Enabled) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// composedPlacements places each composed resource whose target is a
+// direct-connection target of the assignment, as a service on that target
+// is placed. Pool targets aren't matched.
+func composedPlacements(m *manifest.Manifest, environment string, kinds *recipes.Registry, assignment *cloudprofiles.Assignment, options []ConnectionOption) map[string]CloudPlacement {
+	out := map[string]CloudPlacement{}
+	if assignment == nil {
+		return out
+	}
+	for _, name := range composedResources(m, environment, kinds) {
+		r := m.Resources[name]
+		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool {
+			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == r.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID
+		})
+		if i < 0 {
+			continue
+		}
+		identity := ""
+		if ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == r.Target }); ci >= 0 {
+			identity = connections.AccountIdentity(options[ci].Cloud, options[ci].Account, options[ci].Details)
+		}
+		set := r.For(environment, m.Defaults)
+		regionSource := "manifest"
+		if set.Region == "" {
+			regionSource = "default"
+		}
+		out[name] = targetPlacement(assignment, assignment.Targets[i], identity, set.Region, regionSource)
+	}
+	return out
+}
 
 // SelectCloudTarget returns the target a service's settings name or tag, or
 // nil when they select none. Tags match the targets the project's grant
@@ -209,7 +265,9 @@ func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment
 		if OwnedCloud(c.Cloud) {
 			set.Target = c.ID
 		}
-		placements[name] = CloudPlacement{Default: fallback, GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: target.Provider, ConnectionID: connectionID, AccountIdentity: identity, Region: set.Region, RegionSource: regionSource}
+		placement := targetPlacement(assignment, target, identity, set.Region, regionSource)
+		placement.Default, placement.ConnectionID = fallback, connectionID
+		placements[name] = placement
 		if pool != nil {
 			p := placements[name]
 			p.PoolID = pool.PoolID

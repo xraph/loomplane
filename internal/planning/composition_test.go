@@ -653,3 +653,96 @@ func TestCompositionWithControlPortNeedsServiceProxy(t *testing.T) {
 		t.Fatalf("service proxy required without a control port: %+v", r.Problems)
 	}
 }
+
+const edgeApp = "version: 1\nresources:\n  edge: {kind: sample, provider: server, target: " + targetA + "}\n"
+
+func edgePlacement() CloudPlacement {
+	return CloudPlacement{CloudID: "cloud_1", CloudRevision: 1, AssignmentRevision: 1, TargetID: "t1", TargetRevision: 1, TargetName: "edge-host", Provider: "server", ConnectionID: targetA, RegionSource: "default"}
+}
+
+func TestComposedComponentsCarryTheCloudPlacement(t *testing.T) {
+	r := Compute(Input{
+		Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, edgeApp), Providers: providers.Registry(),
+		Connections: composedConnections(t), Kinds: recipestest.Registry(t), CloudPlacements: map[string]CloudPlacement{"edge": edgePlacement()},
+	})
+	if !r.Executable {
+		t.Fatalf("composed plan blocked: %+v", r.Problems)
+	}
+	if hasCode(r.Warnings, "catalog-cloud-placement-missing") {
+		t.Fatalf("placed resource warned: %+v", r.Warnings)
+	}
+	for _, id := range []string{"resource:edge", "resource:edge--migrate", "resource:edge--api", "resource:edge--worker"} {
+		a := findAction(r, id)
+		if a == nil || a.Resource == nil || a.Resource.CloudPlacement == nil || a.Resource.CloudPlacement.CloudID != "cloud_1" || a.Resource.CloudPlacement.TargetID != "t1" || a.Resource.CloudPlacement.ConnectionID != targetA {
+			t.Fatalf("%s placement: %+v", id, a)
+		}
+		data, err := json.Marshal(a.Resource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(data, []byte(`"cloud_placement":{`)) || !bytes.Contains(data, []byte(`"cloud_id":"cloud_1"`)) {
+			t.Fatalf("%s binding config: %s", id, data)
+		}
+	}
+	// The dependency it provisions is an ordinary database.
+	if a := findAction(r, "resource:edge--postgres"); a == nil || a.Resource.CloudPlacement != nil {
+		t.Fatalf("provisioned dependency placed: %+v", a)
+	}
+
+	// Without a placement the key is absent, and the plan says why.
+	r = Compute(Input{
+		Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, edgeApp), Providers: providers.Registry(),
+		Connections: composedConnections(t), Kinds: recipestest.Registry(t),
+	})
+	for _, a := range r.Actions {
+		data, err := json.Marshal(a.Resource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte("cloud_placement")) {
+			t.Fatalf("%s placed without a Cloud: %s", a.ID, data)
+		}
+	}
+	w := findCode(r.Warnings, "catalog-cloud-placement-missing")
+	if w == nil || w.Subject != ResourceSubject || w.Name != "edge" || w.Path != "resources.edge.target" || w.Message != "edge isn't on a target of this environment's Cloud, so it can't take domain routes." {
+		t.Fatalf("missing placement warning: %+v", r.Warnings)
+	}
+}
+
+func TestEnginesNeverGetACloudPlacement(t *testing.T) {
+	connections := infrastructureConnections(t)
+	connections[0].Details["architecture"] = "arm64"
+	connections[0].Details["docker_id"] = "reviewed-daemon"
+	doc := "version: 1\nresources:\n  database: {kind: postgres, provider: server, target: " + targetA + "}\n"
+	r := Compute(Input{
+		Environment: "production", Graph: &graph.Graph{}, Manifest: parse(t, doc), Providers: providers.Registry(), Connections: connections,
+		CloudPlacements: map[string]CloudPlacement{"database": edgePlacement()},
+	})
+	for _, a := range r.Actions {
+		if a.Resource != nil && a.Resource.CloudPlacement != nil {
+			t.Fatalf("%s placed: %+v", a.ID, a.Resource.CloudPlacement)
+		}
+	}
+	if hasCode(r.Warnings, "catalog-cloud-placement-missing") {
+		t.Fatalf("engine warned about its placement: %+v", r.Warnings)
+	}
+	got, err := json.Marshal(r.Actions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("testdata/engine-plans.golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	var want bytes.Buffer
+	if err := json.Compact(&want, golden["postgres"]); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want.Bytes()) {
+		t.Fatalf("engine plan changed:\n%s", got)
+	}
+}

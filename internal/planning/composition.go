@@ -148,8 +148,17 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 	}
 	region := p.place(ResourceSubject, name, base+".region", prov, set.Region)
 	settings := ReviewedConnectionSettings(connection.Cloud, connection.Details)
+	// The resource and its components carry the Cloud target they run on.
+	// A dependency it provisions doesn't.
+	placement, placed := p.in.CloudPlacements[name]
+	placement.Region = region
 	resource := func() *ResourceConfig {
-		return &ResourceConfig{Provider: prov.Name, Region: region, Target: connection.ID, TargetSettings: settings, Kind: kind.Name, Version: version}
+		cfg := &ResourceConfig{Provider: prov.Name, Region: region, Target: connection.ID, TargetSettings: settings, Kind: kind.Name, Version: version}
+		if placed {
+			pin := placement
+			cfg.CloudPlacement = &pin
+		}
+		return cfg
 	}
 
 	choices, uses := p.dependencies(name, base, r, kind, prov, set)
@@ -204,6 +213,12 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 	p.namedChanges(a)
 	p.resources[name] = a
 	p.actions = append(p.actions, a)
+	if !placed {
+		p.warn(Finding{
+			Code: "catalog-cloud-placement-missing", Subject: ResourceSubject, Name: name, Path: base + ".target",
+			Message: fmt.Sprintf("%s isn't on a target of this environment's Cloud, so it can't take domain routes.", name),
+		})
+	}
 }
 
 // clusterRuns reports, as problems, what a cluster connection lacks to run

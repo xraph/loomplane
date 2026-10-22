@@ -242,6 +242,10 @@ type ResourceConfig struct {
 	// may get a public HTTP route. Control ports are never listed, and
 	// nothing else has any.
 	RoutablePorts []int `json:"routable_ports,omitempty"`
+	// CloudPlacement is the environment's Cloud target a composed resource
+	// and each of its components run on, when its target is one. Nothing
+	// else has one.
+	CloudPlacement *CloudPlacement `json:"cloud_placement,omitempty"`
 }
 
 // ComponentActionName names the action for one part of a composed catalog

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
@@ -240,4 +241,84 @@ func (s *approvalStore) GetPlan(context.Context, string, string) (*Plan, error) 
 func (s *approvalStore) Decide(_ context.Context, _, _, status, _, _ string, _ time.Time) (bool, error) {
 	s.settled = status
 	return true, nil
+}
+
+// edgeService plans doc as a catalog plan in an environment assigned
+// cloud_1, whose one target is reached through targets.
+func edgeService(t *testing.T, doc string, targets ...cloudprofiles.Target) (*Service, *Plan, *targetResolver) {
+	t.Helper()
+	resolver := &targetResolver{assignment: &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud_1", CloudRevision: 2, Revision: 3, GrantRevision: 4, Targets: targets}}
+	service := NewService(Deps{
+		Store: catalogStore{}, Manifests: catalogManifest{revision: &manifests.Revision{Manifest: parse(t, doc)}}, Providers: providers.Registry(),
+		Connections: serverClouds{}, Kinds: recipestest.Registry(t), CloudProfiles: resolver,
+	})
+	plan := &Plan{Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
+	return service, plan, resolver
+}
+
+func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) {
+	doc := "version: 1\nresources:\n  edge: {kind: sample, provider: server, target: " + targetA + "}\n"
+	edgeHost := cloudprofiles.Target{ID: "t1", OrgID: "org", CloudID: "cloud_1", Name: "edge-host", Provider: "server", ConnectionID: targetA, Runtime: "server", Revision: 5}
+	service, plan, resolver := edgeService(t, doc, edgeHost)
+	result, _, err := service.compute(t.Context(), plan)
+	if err != nil || !result.Executable {
+		t.Fatalf("plan: %+v, %v", result, err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolved the assignment %d times", resolver.calls)
+	}
+	want := CloudPlacement{GrantRevision: 4, CloudID: "cloud_1", CloudRevision: 2, AssignmentRevision: 3, TargetID: "t1", TargetRevision: 5, TargetName: "edge-host", Provider: "server", ConnectionID: targetA,
+		AccountIdentity: connections.AccountIdentity(connections.Server, "", map[string]string{"host": targetA + ".example.com", "user": "deploy", "docker_socket": "/var/run/docker.sock"}), RegionSource: "default"}
+	for _, id := range []string{"resource:edge", "resource:edge--api"} {
+		a := findAction(result, id)
+		if a == nil || a.Resource.CloudPlacement == nil || *a.Resource.CloudPlacement != want {
+			t.Fatalf("%s placement: %+v", id, a)
+		}
+	}
+	if hasCode(result.Warnings, "catalog-cloud-placement-missing") {
+		t.Fatalf("placed resource warned: %+v", result.Warnings)
+	}
+
+	missing := func(t *testing.T, result *Result) {
+		t.Helper()
+		for _, a := range result.Actions {
+			if a.Resource != nil && a.Resource.CloudPlacement != nil {
+				t.Fatalf("%s placed: %+v", a.ID, a.Resource.CloudPlacement)
+			}
+		}
+		w := findCode(result.Warnings, "catalog-cloud-placement-missing")
+		if w == nil || w.Name != "edge" || w.Message != "edge isn't on a target of this environment's Cloud, so it can't take domain routes." {
+			t.Fatalf("missing placement warning: %+v", result.Warnings)
+		}
+	}
+	other := edgeHost
+	other.ConnectionID = targetB
+	pooled := edgeHost
+	pooled.PoolID = "pool_1"
+	for name, targets := range map[string][]cloudprofiles.Target{"no matching target": {other}, "a pool target": {pooled}, "no targets": nil} {
+		t.Run(name, func(t *testing.T) {
+			s, p, _ := edgeService(t, doc, targets...)
+			r, _, planErr := s.compute(t.Context(), p)
+			if planErr != nil {
+				t.Fatal(planErr)
+			}
+			missing(t, r)
+		})
+	}
+	t.Run("no assigned Cloud", func(t *testing.T) {
+		s, p, unassigned := edgeService(t, doc)
+		unassigned.assignment = nil
+		r, _, planErr := s.compute(t.Context(), p)
+		if planErr != nil || !r.Executable {
+			t.Fatalf("plan: %+v, %v", r, planErr)
+		}
+		missing(t, r)
+	})
+
+	// A plan without a composed resource doesn't look the assignment up.
+	service, plan, resolver = edgeService(t, "version: 1\nresources:\n  db: {kind: postgres, provider: server, target: "+targetA+"}\n", edgeHost)
+	result, _, err = service.compute(t.Context(), plan)
+	if err != nil || !result.Executable || resolver.calls != 0 {
+		t.Fatalf("engine plan: %+v, %v, %d lookups", result, err, resolver.calls)
+	}
 }
