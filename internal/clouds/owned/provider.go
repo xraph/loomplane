@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -76,6 +77,79 @@ type Backend interface {
 	Status(context.Context, id.ID, map[string]string) (*cpprovider.InstanceStatus, error)
 	SetRunning(context.Context, id.ID, map[string]string, bool) error
 	Scale(context.Context, id.ID, map[string]string, cpprovider.ResourceSpec) error
+}
+
+// JobBackend runs a one-shot container to completion: a composed
+// resource's migration, for one deployment's action. name identifies the
+// run on the target, so a retry finds what an earlier attempt left. A
+// finished run is a JobResult whatever its exit code; an error is a run
+// that couldn't start or didn't finish within timeout. What it created is
+// removed either way.
+type JobBackend interface {
+	RunJob(ctx context.Context, name string, spec cpprovider.ServiceSpec, labels map[string]string, timeout time.Duration) (JobResult, error)
+}
+
+// JobResult is how a job ended: its exit code and the last JobOutputLimit
+// bytes of what it wrote, with every secret value replaced by "[redacted]".
+type JobResult struct {
+	ExitCode int
+	Output   string
+}
+
+// JobOutputLimit is how much of a job's output its result keeps.
+const JobOutputLimit = 16 << 10
+
+// JobOutput is the end of what a job wrote, at most JobOutputLimit bytes,
+// with each secret value replaced by "[redacted]". output may run up to the
+// longest secret past the limit, so a secret the cut would split is still
+// found whole.
+func JobOutput(output []byte, secrets map[string]string) string {
+	values := slices.Collect(maps.Values(secrets))
+	// The longest first, so a secret containing another isn't left half
+	// shown.
+	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
+	text := string(output)
+	for _, value := range values {
+		if value != "" {
+			text = strings.ReplaceAll(text, value, "[redacted]")
+		}
+	}
+	if len(text) > JobOutputLimit {
+		text = text[len(text)-JobOutputLimit:]
+	}
+	return strings.ToValidUTF8(text, "")
+}
+
+// JobTail keeps the end of a job's output as it's read: JobOutputLimit
+// bytes and the longest secret's length besides, so JobOutput still finds
+// a secret the limit cuts through.
+type JobTail struct {
+	keep int
+	data []byte
+}
+
+func NewJobTail(secrets map[string]string) *JobTail {
+	keep := JobOutputLimit
+	for _, value := range secrets {
+		keep = max(keep, JobOutputLimit+len(value))
+	}
+	return &JobTail{keep: keep}
+}
+
+func (t *JobTail) Write(p []byte) (int, error) {
+	t.data = append(t.data, p...)
+	if len(t.data) > 2*t.keep {
+		t.data = append([]byte(nil), t.data[len(t.data)-t.keep:]...)
+	}
+	return len(p), nil
+}
+
+// Bytes is what's kept.
+func (t *JobTail) Bytes() []byte {
+	if len(t.data) > t.keep {
+		return t.data[len(t.data)-t.keep:]
+	}
+	return t.data
 }
 
 type Provider struct {

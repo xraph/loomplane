@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,10 +18,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xraph/ctrlplane"
 	"github.com/xraph/ctrlplane/id"
 	cpprovider "github.com/xraph/ctrlplane/provider"
+	"go.jetify.com/typeid/v2"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
@@ -208,7 +211,7 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 	}
 	component := cfg.Component.Component
 	if component.Role == recipes.RoleJob {
-		return nil, fmt.Errorf("%s is a job, and catalog jobs are not supported yet", job.Action.Name)
+		return e.runComponentJob(ctx, job, kind)
 	}
 	if e.Secrets == nil || job.Keep == nil {
 		return nil, ErrNoCredential
@@ -240,6 +243,110 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 		return nil, fmt.Errorf("%s is ready, and setting it up failed: %w", job.Action.Name, readyErr)
 	}
 	return out, nil
+}
+
+// A job's checkpoint says whether its run is running or succeeded.
+const (
+	jobRunning   = "running"
+	jobSucceeded = "succeeded"
+)
+
+type jobCheckpoint struct {
+	Job   string `json:"job"`
+	State string `json:"state"`
+}
+
+// defaultJobTimeout is how long a job runs when its recipe doesn't say.
+const defaultJobTimeout = 10 * time.Minute
+
+// componentJobName names a job's run for one deployment's action, so a
+// retry of the step finds it again.
+func componentJobName(deploymentID, actionID string) string {
+	sum := sha256.Sum256([]byte(deploymentID + "/" + actionID))
+	return "lp-job-" + hex.EncodeToString(sum[:])[:12]
+}
+
+// runComponentJob runs a job component to completion on the target,
+// without Ctrl Plane: nothing keeps running once it's done. It gets what a
+// process would, its secrets through runtime values kept only while it
+// runs. A job that exits with anything but 0 fails the step, so the
+// components after it don't start. A retry of a step whose job succeeded
+// doesn't run it again.
+func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipes.Kind) (out *Outcome, err error) {
+	cfg := job.Action.Resource
+	component := cfg.Component.Component
+	name := componentJobName(job.Deployment.ID, job.Action.ID)
+	done := &Outcome{ExternalID: "job/" + name, Revision: component.Image}
+	var resumed jobCheckpoint
+	if len(job.Resume) > 0 && json.Unmarshal(job.Resume, &resumed) == nil && resumed.Job == name && resumed.State == jobSucceeded {
+		return done, nil
+	}
+	backend, err := e.registeredBackend(e.Register(job.Deployment.OrgID, job.Connection.ID))
+	if err != nil {
+		return nil, err
+	}
+	jobs, ok := backend.(owned.JobBackend)
+	if !ok {
+		return nil, fmt.Errorf("%s is a job, and this %s target can't run catalog jobs", job.Action.Name, e.Cloud)
+	}
+	if e.Secrets == nil || job.Keep == nil || job.Checkpoint == nil {
+		return nil, ErrNoCredential
+	}
+	run, secret, err := e.componentEnv(ctx, job, kind)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := typeid.Generate("runtime")
+	if err != nil {
+		return nil, err
+	}
+	state := ownedState{RuntimeRef: resourceKey(job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, ref.String())}
+	values := map[string]string{}
+	for key := range secret {
+		values[key] = run.Env[key]
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return nil, err
+	}
+	if putErr := e.Secrets.Put(ctx, state.RuntimeRef, raw); putErr != nil {
+		return nil, putErr
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		err = errors.Join(err, e.deleteRuntime(cleanup, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef))
+		if err != nil {
+			out = nil
+		}
+	}()
+	copyJob := *job
+	copyJob.Action.Resource = nil
+	copyJob.Action.Service = componentService(cfg)
+	copyJob.Env, copyJob.Secrets = maps.Clone(run.Env), secret
+	sp, labels := ownedSpec(&copyJob, component.Image, state)
+	// The recipe pinned the image for the target's architecture.
+	labels[owned.LabelArchitecture] = cfg.TargetSettings["architecture"]
+	save := func(s string) error {
+		raw, _ := json.Marshal(jobCheckpoint{Job: name, State: s}) //nolint:errcheck // a plain struct always encodes
+		return job.Checkpoint(raw)
+	}
+	if saveErr := save(jobRunning); saveErr != nil {
+		return nil, saveErr
+	}
+	job.Progress(StepDeploying, "Running the "+component.Name+" job")
+	result, err := jobs.RunJob(ctx, name, sp, labels, cmp.Or(component.Timeout, defaultJobTimeout))
+	if err != nil {
+		return nil, err
+	}
+	if result.ExitCode != 0 {
+		// The target redacted the output; this catches anything it missed.
+		return nil, fmt.Errorf("%s exited with code %d: %s", component.Name, result.ExitCode, owned.JobOutput([]byte(result.Output), values))
+	}
+	if saveErr := save(jobSucceeded); saveErr != nil {
+		return nil, saveErr
+	}
+	return done, nil
 }
 
 // componentEnv resolves what a component gets: every derived or generated

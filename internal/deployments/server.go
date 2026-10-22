@@ -572,6 +572,10 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 	if resource != nil && resource.Composition != nil {
 		return e.removeComposition(ctx, job, b, resource.Composition)
 	}
+	if resource != nil && resource.Component != nil && resource.Component.Component.Role == recipes.RoleJob {
+		// A job removed its container or Kubernetes Job when it finished.
+		return nil
+	}
 	if err := e.removeInstance(ctx, job, b); err != nil {
 		return err
 	}
@@ -671,6 +675,10 @@ func (e *OwnedTarget) Observe(ctx context.Context, c *connections.Connection, _ 
 	if resource := boundResource(b); resource != nil && resource.Composition != nil {
 		// A composed resource is its components and the outputs it keeps:
 		// nothing runs as it.
+		return &Observation{Exists: true}, nil
+	}
+	if resource := boundResource(b); resource != nil && resource.Component != nil && resource.Component.Component.Role == recipes.RoleJob {
+		// A job ran once and was removed: nothing runs as it either.
 		return &Observation{Exists: true}, nil
 	}
 	iid, err := id.Parse(b.ExternalID)

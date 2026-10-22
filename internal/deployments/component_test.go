@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -15,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	cpauth "github.com/xraph/ctrlplane/auth"
 	"github.com/xraph/ctrlplane/event"
@@ -33,6 +36,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
 	"github.com/xraph/loomplane/internal/security"
@@ -402,13 +406,14 @@ func TestStatelessComponentHasNoVolumeOrStatefulLabel(t *testing.T) {
 		t.Fatalf("command or resources: %+v", sp)
 	}
 
-	// A plan made from another recipe isn't applied, and a job isn't run yet.
+	// A plan made from another recipe isn't applied, and a target that
+	// can't run jobs doesn't run one.
 	changed := f.componentJob(t, "api", newPostgres)
 	changed.Action.Resource.Component.Component.Image = "registry.example/other@sha256:" + strings.Repeat("c", 64)
 	if _, err := f.target.Apply(t.Context(), changed); err == nil || !strings.Contains(err.Error(), "recipe changed") {
 		t.Fatalf("changed recipe: %v", err)
 	}
-	if _, err := f.target.Apply(t.Context(), f.componentJob(t, "migrate", newPostgres)); err == nil || !strings.Contains(err.Error(), "jobs are not supported yet") {
+	if _, err := f.target.Apply(t.Context(), f.componentJob(t, "migrate", newPostgres)); err == nil || err.Error() != "app--migrate is a job, and this server target can't run catalog jobs" {
 		t.Fatalf("job component: %v", err)
 	}
 	if f.instances.creates != 0 {
@@ -748,5 +753,151 @@ func TestStatelessComponentRecoveryLabelsAbsent(t *testing.T) {
 	}
 	if _, ok := f.secrets.m[resourceKey("org", "env", "app--api", "url")]; ok {
 		t.Fatal("a component kept a database address")
+	}
+}
+
+// jobRun is one RunJob call, with what the job's container got: the
+// spec's variables and its runtime values, secrets included.
+type jobRun struct {
+	name    string
+	spec    cpprovider.ServiceSpec
+	labels  map[string]string
+	env     map[string]string
+	timeout time.Duration
+}
+
+// jobComponentBackend also runs jobs, which end as result says.
+type jobComponentBackend struct {
+	*componentBackend
+	secrets *memSecrets
+	result  owned.JobResult
+	runs    []jobRun
+}
+
+func (b *jobComponentBackend) RunJob(ctx context.Context, name string, spec cpprovider.ServiceSpec, labels map[string]string, timeout time.Duration) (owned.JobResult, error) {
+	env := maps.Clone(spec.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	raw, err := b.secrets.Get(ctx, labels[owned.LabelRuntime])
+	if err != nil {
+		return owned.JobResult{}, err
+	}
+	var values map[string]string
+	if err = json.Unmarshal(raw, &values); err != nil {
+		return owned.JobResult{}, err
+	}
+	maps.Copy(env, values)
+	b.runs = append(b.runs, jobRun{name: name, spec: spec, labels: labels, env: env, timeout: timeout})
+	return b.result, nil
+}
+
+func newJobFixture(t *testing.T, result owned.JobResult) (*componentFixture, *jobComponentBackend) {
+	t.Helper()
+	f := newComponentFixture(t, recipestest.Registry(t))
+	jobs := &jobComponentBackend{componentBackend: f.backend, secrets: f.secrets, result: result}
+	f.target.Backend = func(string, string) owned.Backend { return jobs }
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	return f, jobs
+}
+
+func TestRunJobFailureStopsLaterComponents(t *testing.T) {
+	f, jobs := newJobFixture(t, owned.JobResult{ExitCode: 3, Output: "migration 0003 failed: relation \"users\" exists"})
+	migrate := f.componentJob(t, "migrate", newPostgres).Action
+	api := f.componentJob(t, "api", newPostgres).Action
+	migrate.Op, migrate.Step = planning.Create, 2
+	api.Op, api.Step = planning.Create, 3
+	plan := &planning.Plan{
+		ID: "plan", OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Environment: "production",
+		Status: planning.StatusApproved, Executable: true, Connections: map[string]string{"server": "conn"},
+		Actions: []planning.Action{migrate, api},
+	}
+	store := &memStore{d: map[string]*Deployment{}}
+	r := NewRunner(RunnerDeps{
+		Store: store, Plans: &fakePlans{plan: plan, bindings: map[string]*planning.Binding{}}, Variables: fakeVariables{}, Sources: &fakeSources{},
+		Credentials: dialCredentials{"conn": {ID: "conn", OrgID: "org", Cloud: connections.Server, Status: connections.StatusReady}},
+		Providers:   providers.Registry(), Executors: map[string]Executor{"server": f.target}, Resources: f.secrets,
+	})
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org", id)
+	if d.Status != StatusFailed || len(d.Steps) != 2 {
+		t.Fatalf("deployment %+v", d)
+	}
+	if want := "migrate exited with code 3: migration 0003 failed: relation \"users\" exists"; d.Steps[0].Status != StepFailed || d.Steps[0].Message != want {
+		t.Fatalf("migrate step: %+v", d.Steps[0])
+	}
+	if d.Steps[1].ActionID != "resource:app--api" || d.Steps[1].Status != StepSkipped {
+		t.Fatalf("api step: %+v", d.Steps[1])
+	}
+	if len(jobs.runs) != 1 || f.backend.applied != 0 || f.instances.creates != 0 {
+		t.Fatalf("after a failed job: %d runs, %d applies, %d instances", len(jobs.runs), f.backend.applied, f.instances.creates)
+	}
+}
+
+func TestRunJobSucceededIsNotRerunOnResume(t *testing.T) {
+	f, jobs := newJobFixture(t, owned.JobResult{Output: "migrated"})
+	job := f.componentJob(t, "migrate", newPostgres)
+	var saved [][]byte
+	job.Checkpoint = func(raw []byte) error { saved = append(saved, raw); return nil }
+	out, err := f.target.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("dep/resource:app--migrate"))
+	name := "lp-job-" + hex.EncodeToString(sum[:])[:12]
+	image := job.Action.Resource.Component.Component.Image
+	if out.ExternalID != "job/"+name || out.Revision != image {
+		t.Fatalf("outcome: %+v", out)
+	}
+	if len(jobs.runs) != 1 {
+		t.Fatalf("ran %d times", len(jobs.runs))
+	}
+	run := jobs.runs[0]
+	if run.name != name || run.spec.Image != image || !slices.Equal(run.spec.Command, []string{"sample", "migrate"}) || run.timeout != 10*time.Minute {
+		t.Fatalf("run: %+v", run)
+	}
+	if run.env["DATABASE_URL"] != postgresURL || run.spec.Env["DATABASE_URL"] != "" {
+		t.Fatalf("job DATABASE_URL: env %q, spec %q", run.env["DATABASE_URL"], run.spec.Env["DATABASE_URL"])
+	}
+	for key, want := range map[string]string{owned.LabelCatalogComponent: "migrate", owned.LabelCatalogResource: "app", owned.LabelArchitecture: "amd64", owned.LabelOrg: "org", owned.LabelEnvironment: "env"} {
+		if run.labels[key] != want {
+			t.Fatalf("label %s = %q, want %q", key, run.labels[key], want)
+		}
+	}
+	if _, kept := f.secrets.m[run.labels[owned.LabelRuntime]]; kept {
+		t.Fatal("the job's runtime values outlived it")
+	}
+	if len(saved) != 2 || string(saved[0]) != `{"job":"`+name+`","state":"running"}` || string(saved[1]) != `{"job":"`+name+`","state":"succeeded"}` {
+		t.Fatalf("checkpoints: %q", saved)
+	}
+
+	// A retry of the step that finds the job succeeded doesn't run it again.
+	resumed := f.componentJob(t, "migrate", newPostgres)
+	resumed.Resume = saved[1]
+	again, err := f.target.Apply(t.Context(), resumed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.runs) != 1 || *again != *out {
+		t.Fatalf("resumed: %d runs, %+v", len(jobs.runs), again)
+	}
+	// One that was still running runs it again.
+	running := f.componentJob(t, "migrate", newPostgres)
+	running.Resume = saved[0]
+	if _, err = f.target.Apply(t.Context(), running); err != nil || len(jobs.runs) != 2 {
+		t.Fatalf("a running job's retry: %d runs, %v", len(jobs.runs), err)
+	}
+
+	// Nothing runs as a job once it's done, so there's nothing to remove
+	// and nothing to observe.
+	b := bound(job, out)
+	if err = f.target.Remove(t.Context(), job, b); err != nil || len(jobs.runs) != 2 {
+		t.Fatalf("remove: %v", err)
+	}
+	if observed, err := f.target.Observe(t.Context(), job.Connection, nil, b); err != nil || !observed.Exists {
+		t.Fatalf("observe: %+v %v", observed, err)
 	}
 }
