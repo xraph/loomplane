@@ -219,6 +219,9 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		if checkErr := removeUnusedDNSToken(ctx, c, *route, state.Config); checkErr != nil {
 			return checkErr
 		}
+		if checkErr := forgetDNSToken(ctx, st, op, state); checkErr != nil {
+			return checkErr
+		}
 		if checkErr := server.DisconnectIngressBackend(ctx, c, state.Config, routeBackend(*route)); checkErr != nil {
 			return checkErr
 		}
@@ -264,6 +267,9 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 	if op.Kind == "verify" || op.AppliedConfig != nil {
 		if state.Current == nil {
 			return ErrConflict
+		}
+		if op.Kind == "verify" && isWildcard(route.Input.Hostname) {
+			return s.refreshZoneToken(ctx, st, c, op, state, zone)
 		}
 		return nil
 	}
@@ -350,7 +356,7 @@ func (s *Service) prepareWildcardIngress(ctx context.Context, st DomainStore, c 
 	}
 	if upgrade {
 		if !server.IngressImagePinned() {
-			return unpublishedProxyImage
+			return &routeNoticeError{err: unpublishedProxyImage, message: unpublishedProxyImage.Error()}
 		}
 		upgraded, upgradeErr := server.UpgradeIngress(ctx, c, route.OrgID, route.Binding.ServerID, op.PreviousConfig)
 		if upgradeErr != nil {
@@ -360,11 +366,52 @@ func (s *Service) prepareWildcardIngress(ctx context.Context, st DomainStore, c 
 			return checkErr
 		}
 	}
-	token, err := s.zoneChallengeToken(ctx, zone)
+	// The config this op applies has Caddy load the file again.
+	_, err = s.syncZoneToken(ctx, c, route, state, zone, true)
+	return err
+}
+
+// syncZoneToken writes the zone's challenge token to the route's server
+// after its connection passes the challenge checks again. Unless always,
+// it writes only a token from a generation the server doesn't hold. It
+// reports whether it wrote; the caller saves state.
+func (s *Service) syncZoneToken(ctx context.Context, c *server.Client, route Route, state *IngressState, zone *Zone, always bool) (bool, error) {
+	if !always {
+		conn, _, err := s.Connections.Credential(ctx, zone.OrgID, zone.ChallengeConnectionID)
+		if err != nil {
+			return false, err
+		}
+		if held, ok := state.DNSTokens[zone.ID]; ok && held == conn.Generation {
+			return false, nil
+		}
+	}
+	token, generation, err := s.zoneChallengeCredential(ctx, zone)
+	if err != nil {
+		return false, &routeNoticeError{err: err, message: "The DNS challenge connection for " + zone.Name + " failed its checks, so Loomplane didn't put its token on the server: " + err.Error()}
+	}
+	if err = s.writeDNSToken(ctx, c, route.OrgID, route.Binding.ServerID, zone.ID, token); err != nil {
+		return false, err
+	}
+	if state.DNSTokens == nil {
+		state.DNSTokens = map[string]int64{}
+	}
+	state.DNSTokens[zone.ID] = generation
+	return true, nil
+}
+
+// refreshZoneToken puts a replaced challenge token on the server during a
+// wildcard route's check and has Caddy load its unchanged config again.
+func (s *Service) refreshZoneToken(ctx context.Context, st DomainStore, c *server.Client, op *RouteOperation, state *IngressState, zone *Zone) error {
+	wrote, err := s.syncZoneToken(ctx, c, op.Route, state, zone, false)
+	if err != nil || !wrote {
+		return err
+	}
+	reloaded, err := server.ReloadIngress(ctx, c, op.Route.OrgID, op.Route.Binding.ServerID, state.Current)
 	if err != nil {
 		return err
 	}
-	return server.WriteIngressDNSToken(ctx, c, route.OrgID, route.Binding.ServerID, zone.ID, token)
+	state.Current = reloaded
+	return st.SaveIngress(ctx, op, state)
 }
 
 // adoptUpgradedIngress follows a proxy an upgrade replaced after its new
@@ -375,8 +422,18 @@ func adoptUpgradedIngress(ctx context.Context, st DomainStore, c *server.Client,
 		return nil
 	}
 	upgrade, err := server.IngressNeedsUpgrade(ctx, c, op.Route.OrgID, op.Route.Binding.ServerID)
-	if err != nil || upgrade {
+	if err != nil {
 		return err
+	}
+	if upgrade {
+		if !server.IngressImagePinned() {
+			return nil
+		}
+		// Only an upgrade replaces the proxy, and this one left its old
+		// container behind. Finishing it removes that.
+		if actual, err = server.UpgradeIngress(ctx, c, op.Route.OrgID, op.Route.Binding.ServerID, previous); err != nil {
+			return err
+		}
 	}
 	return saveUpgradedIngress(ctx, st, op, state, actual)
 }
@@ -401,6 +458,17 @@ func removeUnusedDNSToken(ctx context.Context, c *server.Client, route Route, co
 		}
 	}
 	return server.RemoveIngressDNSToken(ctx, c, route.OrgID, route.Binding.ServerID, route.Input.ZoneID)
+}
+
+// forgetDNSToken drops a removed token file's record.
+func forgetDNSToken(ctx context.Context, st DomainStore, op *RouteOperation, state *IngressState) error {
+	if _, ok := state.DNSTokens[op.Route.Input.ZoneID]; !ok || !isWildcard(op.Route.Input.Hostname) || slices.ContainsFunc(state.Config.Routes, func(r server.IngressRoute) bool {
+		return r.DNSChallenge != nil && r.DNSChallenge.ZoneID == op.Route.Input.ZoneID
+	}) {
+		return nil
+	}
+	delete(state.DNSTokens, op.Route.Input.ZoneID)
+	return st.SaveIngress(ctx, op, state)
 }
 
 func (s *Service) verifyRouteDestination(ctx context.Context, c *server.Client, route Route, state *IngressState, preparation bool) RouteVerification {

@@ -157,6 +157,10 @@ if [ "$1" = apply ]; then
  printf '%s' "$3" | base64 -d > "$d/new.json"
  wget -q -T 20 --header='Content-Type: application/json' --header="If-Match: $2" --post-file="$d/new.json" -O "$d/result" http://127.0.0.1:2019/config/
 fi
+if [ "$1" = reload ]; then
+ printf '%s' "$3" | base64 -d > "$d/new.json"
+ wget -q -T 20 --header='Content-Type: application/json' --header='Cache-Control: must-revalidate' --header="If-Match: $2" --post-file="$d/new.json" -O "$d/result" http://127.0.0.1:2019/config/
+fi
 wget -S -T 20 -O "$d/config" http://127.0.0.1:2019/config/ 2> "$d/headers"
 awk 'tolower($1)=="etag:" {sub(/^[^:]*:[ \t]*/, ""); sub(/\r$/, ""); print}' "$d/headers"
 cat "$d/config"
@@ -209,6 +213,32 @@ func ApplyIngress(ctx context.Context, c *Client, expected *IngressSnapshot, v I
 		return nil, err
 	}
 	if !sameIngressJSON(raw, out.Config) {
+		return nil, errors.New("ingress config changed during readback")
+	}
+	return out, nil
+}
+
+// ReloadIngress has Caddy load its unchanged config again, which reads a
+// rewritten DNS token file. The config and its ETag stay as they were.
+func ReloadIngress(ctx context.Context, c *Client, org, server string, expected *IngressSnapshot) (*IngressSnapshot, error) {
+	if expected == nil || expected.ETag == "" {
+		return nil, ErrInvalid
+	}
+	if err := ingressFence(ctx, c); err != nil {
+		return nil, err
+	}
+	container, err := ingressContainer(ctx, c, org, server)
+	if err != nil {
+		return nil, err
+	}
+	if container.ID != expected.ContainerID {
+		return nil, ErrOwned
+	}
+	out, err := ingressAdmin(ctx, c, container.ID, "reload", expected.ETag, expected.Config)
+	if err != nil {
+		return nil, err
+	}
+	if !sameIngressJSON(expected.Config, out.Config) {
 		return nil, errors.New("ingress config changed during readback")
 	}
 	return out, nil
@@ -451,10 +481,8 @@ func IngressNeedsUpgrade(ctx context.Context, c *Client, org, server string) (bo
 	if container.Config.Image != dnsIngressImage {
 		return true, nil
 	}
-	if container.State.Running {
-		return false, nil
-	}
-	// A new proxy that never started, with the old one stopped beside it.
+	// An upgrade that stopped before removing the old proxy, or before
+	// starting the new one, left the old one under its previous name.
 	_, err = ingressContainerNamed(ctx, c, org, server, previousIngressName(org, server))
 	if errors.Is(err, ErrMissing) {
 		return false, nil
@@ -498,12 +526,16 @@ func UpgradeIngress(ctx context.Context, c *Client, org, server string, current 
 	switch {
 	case err == nil:
 		old = proxy
-		actual, readErr := ingressAdmin(ctx, c, old.ID, "read", "", nil)
-		if readErr != nil {
-			return nil, readErr
-		}
-		if !sameIngressJSON(actual.Config, current.Config) {
-			return nil, ErrOwned
+		// A stop that failed or was cut off leaves the old proxy stopped.
+		// The new one must still resume current, which waitIngressConfig checks.
+		if old.State.Running {
+			actual, readErr := ingressAdmin(ctx, c, old.ID, "read", "", nil)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if !sameIngressJSON(actual.Config, current.Config) {
+				return nil, ErrOwned
+			}
 		}
 	case errors.Is(err, ErrMissing):
 		if old, err = ingressContainerNamed(ctx, c, org, server, previous); err != nil {
@@ -521,8 +553,13 @@ func UpgradeIngress(ctx context.Context, c *Client, org, server string, current 
 		return nil, err
 	}
 	if old.State.Running {
-		if err = dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/stop?t=10", nil, nil); err != nil {
-			return nil, err
+		err = dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/stop?t=10", nil, nil)
+		if err == nil {
+			err = upgradeStep("stop")
+		}
+		// Docker may stop the proxy even when the answer is lost.
+		if err != nil {
+			return nil, errors.Join(err, restoreIngress(ctx, c, org, server, old.ID, ""))
 		}
 	}
 	if !renamed {
@@ -538,10 +575,25 @@ func UpgradeIngress(ctx context.Context, c *Client, org, server string, current 
 		}
 		return nil, errors.Join(err, restoreIngress(ctx, c, org, server, old.ID, created))
 	}
+	// The new proxy serves from here; a retry removes an old one left behind.
+	if err = upgradeStep("started"); err != nil {
+		return nil, err
+	}
 	if err = dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(old.ID), nil, nil); err != nil && !errors.Is(err, ErrMissing) {
 		return nil, err
 	}
 	return snapshot, nil
+}
+
+// upgradeFault lets tests fail UpgradeIngress after a step, as a lost
+// Docker answer or a crash would. It is nil outside tests.
+var upgradeFault func(step string) error
+
+func upgradeStep(step string) error {
+	if upgradeFault == nil {
+		return nil
+	}
+	return upgradeFault(step)
 }
 
 // ingressRouteNetworks are the route bridges a proxy is attached to.
@@ -608,6 +660,9 @@ func waitIngressConfig(ctx context.Context, c *Client, container string, current
 // restoreIngress removes a new proxy that failed and brings the old one back
 // under its own name.
 func restoreIngress(ctx context.Context, c *Client, org, server, old, created string) error {
+	// The restore runs even when the caller gave up; the fence stays on ctx.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
 	if created != "" {
 		if err := dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(created)+"?force=true", nil, nil); err != nil && !errors.Is(err, ErrMissing) {
 			return err

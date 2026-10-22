@@ -10,3 +10,16 @@ func pinIngressImageForTest(t testing.TB, image string) {
 	dnsIngressImage = image
 	t.Cleanup(func() { dnsIngressImage = previous })
 }
+
+// failUpgradeForTest fails UpgradeIngress after step until the test ends.
+func failUpgradeForTest(t testing.TB, step string, err error) {
+	t.Helper()
+	previous := upgradeFault
+	upgradeFault = func(at string) error {
+		if at == step {
+			return err
+		}
+		return nil
+	}
+	t.Cleanup(func() { upgradeFault = previous })
+}

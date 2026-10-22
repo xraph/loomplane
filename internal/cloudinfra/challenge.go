@@ -86,60 +86,74 @@ func (s *Service) checkChallengeCredential(ctx context.Context, st DomainStore, 
 	if err != nil {
 		return err
 	}
+	_, err = s.checkChallengeScope(ctx, zone, conn, raw)
+	return err
+}
+
+// checkChallengeScope holds a challenge connection to its rules: Cloudflare
+// on the zone's account, a token that lists only this zone, can write its
+// DNS and is refused by the registrar. It runs on attach and again before
+// every write of the token to a server, since a replaced connection or a
+// token widened at Cloudflare keeps its connection ID.
+func (s *Service) checkChallengeScope(ctx context.Context, zone *Zone, conn *connections.Connection, raw []byte) (provider.InfrastructureCredential, error) {
 	if conn.OrgID != zone.OrgID || conn.Cloud != connections.Cloudflare {
-		return fmt.Errorf("%w: the challenge credential must be a Cloudflare connection", ErrInvalid)
+		return provider.InfrastructureCredential{}, fmt.Errorf("%w: the challenge credential must be a Cloudflare connection", ErrInvalid)
 	}
 	credential, err := Credential(conn, raw)
 	if err != nil {
-		return err
+		return provider.InfrastructureCredential{}, err
 	}
 	if credential.AccountID != zone.AccountID {
-		return provider.ErrInfrastructureIdentity
+		return provider.InfrastructureCredential{}, provider.ErrInfrastructureIdentity
 	}
 	adapter, err := s.Adapters.DNS(zone.Provider)
 	if err != nil {
-		return err
+		return provider.InfrastructureCredential{}, err
 	}
 	scoper, ok := adapter.(challengeScoper)
 	if !ok {
-		return &provider.UnsupportedCapabilityError{Provider: zone.Provider, Capability: "dns challenge"}
+		return provider.InfrastructureCredential{}, &provider.UnsupportedCapabilityError{Provider: zone.Provider, Capability: "dns challenge"}
 	}
 	scope, err := scoper.ChallengeScope(ctx, credential, zone.ProviderZone.ID)
 	if err != nil {
-		return err
+		return provider.InfrastructureCredential{}, err
 	}
 	only := &provider.InfrastructureScopeError{Provider: zone.Provider, Permission: "a token scoped to " + zone.Name + " only"}
 	if len(scope.ZoneIDs) != 1 || scope.ZoneIDs[0] != zone.ProviderZone.ID {
-		return only
+		return provider.InfrastructureCredential{}, only
 	}
 	if scope.Permissions.DNSWrite != cloudflare.Granted {
-		return &provider.InfrastructureScopeError{Provider: zone.Provider, Permission: "DNS Write on " + zone.Name}
+		return provider.InfrastructureCredential{}, &provider.InfrastructureScopeError{Provider: zone.Provider, Permission: "DNS Write on " + zone.Name}
 	}
 	if scope.Permissions.RegistrarRead != cloudflare.Missing || scope.Permissions.RegistrarWrite != cloudflare.Missing {
-		return only
+		return provider.InfrastructureCredential{}, only
 	}
-	return nil
+	return credential, nil
 }
 
 // zoneChallengeToken reads the zone's DNS challenge token from the vault.
 // It goes only to a proxy's token file, never to a log or an error.
 func (s *Service) zoneChallengeToken(ctx context.Context, zone *Zone) ([]byte, error) {
+	token, _, err := s.zoneChallengeCredential(ctx, zone)
+	return token, err
+}
+
+// zoneChallengeCredential is the token with the connection generation it
+// came from, once the connection is ready and passes checkChallengeScope.
+func (s *Service) zoneChallengeCredential(ctx context.Context, zone *Zone) ([]byte, int64, error) {
 	if zone.ChallengeConnectionID == "" || !zone.Wildcards() {
-		return nil, ErrWildcardUnsupported
+		return nil, 0, ErrWildcardUnsupported
 	}
 	conn, raw, err := s.Connections.Credential(ctx, zone.OrgID, zone.ChallengeConnectionID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if conn.OrgID != zone.OrgID || conn.Cloud != zone.Provider {
-		return nil, ErrConflict
+	if conn.Status != connections.StatusReady {
+		return nil, 0, fmt.Errorf("%w: the DNS challenge connection for %s isn't ready", ErrConflict, zone.Name)
 	}
-	credential, err := Credential(conn, raw)
+	credential, err := s.checkChallengeScope(ctx, zone, conn, raw)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if credential.AccountID != zone.AccountID {
-		return nil, provider.ErrInfrastructureIdentity
-	}
-	return []byte(strings.TrimSpace(credential.Token)), nil
+	return []byte(strings.TrimSpace(credential.Token)), conn.Generation, nil
 }

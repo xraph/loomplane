@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"strings"
 	"sync"
@@ -100,11 +101,30 @@ func TestIngressConfigNeverEmbedsDNSToken(t *testing.T) {
 	if !strings.Contains(string(read.Config), "{file./config/dns/zone_1.token}") {
 		t.Fatal("readback lost the placeholder")
 	}
+	// A rotated token reaches Caddy through a reload of the same config.
+	if err = WriteIngressDNSToken(ctx, c, "org", "server", "zone_1", []byte("cf-rotated-token-0123456789abcdefghijkl")); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := ReloadIngress(ctx, c, "org", "server", read)
+	if err != nil || reloaded.ETag != read.ETag || !sameIngressJSON(reloaded.Config, read.Config) {
+		t.Fatal("reload changed the config", err)
+	}
 	if err = RemoveIngressDNSToken(ctx, c, "org", "server", "zone_1"); err != nil {
 		t.Fatal(err)
 	}
 	if exec.CommandContext(t.Context(), "docker", "exec", host, "docker", "exec", IngressName("org", "server"), "test", "-e", "/config/dns/zone_1.token").Run() == nil {
 		t.Fatal("token file survived removal")
+	}
+	// Without the file the DNS module can't provision, so a reload that
+	// really reads it fails and Caddy keeps the running config.
+	if _, err = ReloadIngress(ctx, c, "org", "server", reloaded); err == nil {
+		t.Fatal("reload didn't read the token file again")
+	}
+	if kept, readErr := ReadIngress(ctx, c, "org", "server"); readErr != nil || kept.ETag != read.ETag {
+		t.Fatal("a failed reload changed the config", readErr)
+	}
+	if logs := proxyLogs(t, host, "server"); strings.Contains(logs, "cf-rotated-token") {
+		t.Fatal("Caddy's log holds the rotated token")
 	}
 	if err = RemoveIngressDNSToken(ctx, c, "org", "server", "zone_1"); err != nil {
 		t.Fatal("removing a missing token", err)
@@ -161,6 +181,19 @@ func TestIngressUpgradeKeepsConfigAndRoutes(t *testing.T) {
 	if upgrade, needErr := IngressNeedsUpgrade(ctx, c, "org", "server"); needErr != nil || !upgrade {
 		t.Fatal("stock proxy with a published image", upgrade, needErr)
 	}
+	// A crash after the new proxy starts leaves the old one behind; the
+	// next upgrade finds it and finishes.
+	failUpgradeForTest(t, "started", errors.New("worker stopped"))
+	if _, err = UpgradeIngress(ctx, c, "org", "server", current); err == nil {
+		t.Fatal("injected failure after start was lost")
+	}
+	upgradeFault = nil
+	if exec.CommandContext(t.Context(), "docker", "exec", host, "docker", "inspect", previousIngressName("org", "server")).Run() != nil {
+		t.Fatal("no old proxy left to clean up")
+	}
+	if upgrade, needErr := IngressNeedsUpgrade(ctx, c, "org", "server"); needErr != nil || !upgrade {
+		t.Fatal("an old proxy left behind needs no cleanup", upgrade, needErr)
+	}
 	upgraded, err := UpgradeIngress(ctx, c, "org", "server", current)
 	if err != nil {
 		t.Fatal(err)
@@ -186,5 +219,61 @@ func TestIngressUpgradeKeepsConfigAndRoutes(t *testing.T) {
 	// Running it again finds the work done.
 	if again, againErr := UpgradeIngress(ctx, c, "org", "server", upgraded); againErr != nil || again.ContainerID != upgraded.ContainerID {
 		t.Fatal("a repeated upgrade", againErr)
+	}
+}
+
+func TestIngressUpgradeRecoversFromAnInterruptedStop(t *testing.T) {
+	c, host := ingressFixture(t)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Caddy diagnostics: %s", proxyLogs(t, host, "server"))
+		}
+	})
+	ctx := WithEffectFence(t.Context(), EffectFence{Operation: "org/ingress/server", Generation: 1})
+	pinIngressImageForTest(t, "")
+	snapshot, err := EnsureIngress(ctx, c, "org", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := ingressApp(ctx, t, c, host, "server", "shop")
+	config := IngressConfig{OrgID: "org", ServerID: "server", Version: "v1", InternalCA: true, Routes: []IngressRoute{{ID: "route_a", Hostname: "a.ingress.test", Backend: backend}}}
+	current, err := ApplyIngress(ctx, c, snapshot, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinIngressImageForTest(t, testIngressImage(t, host))
+	proxy := IngressName("org", "server")
+
+	// Docker stopped the proxy but its answer was lost: the old one restarts.
+	failUpgradeForTest(t, "stop", errors.New("lost stop answer"))
+	if _, err = UpgradeIngress(ctx, c, "org", "server", current); err == nil {
+		t.Fatal("injected stop failure was lost")
+	}
+	upgradeFault = nil
+	after, err := ReadIngress(ctx, c, "org", "server")
+	if err != nil || after.ContainerID != current.ContainerID {
+		t.Fatal("the old proxy isn't serving after a failed stop", err)
+	}
+	if err = ProbeIngressBackend(ctx, c, config, after, "route_a"); err != nil {
+		t.Fatal("route after a failed stop", err)
+	}
+
+	// The worker died during the stop, before it could restart anything.
+	ingressDocker(t, "exec", host, "docker", "stop", proxy)
+	if upgrade, needErr := IngressNeedsUpgrade(ctx, c, "org", "server"); needErr != nil || !upgrade {
+		t.Fatal("a stopped stock proxy", upgrade, needErr)
+	}
+	upgraded, err := UpgradeIngress(ctx, c, "org", "server", current)
+	if err != nil {
+		t.Fatal("upgrade after an interrupted stop", err)
+	}
+	if upgraded.ContainerID == current.ContainerID || !sameIngressJSON(upgraded.Config, current.Config) {
+		t.Fatal("upgrade didn't resume the same config on a new proxy")
+	}
+	if err = ProbeIngressBackend(ctx, c, config, upgraded, "route_a"); err != nil {
+		t.Fatal("route after the upgrade", err)
+	}
+	if exec.CommandContext(t.Context(), "docker", "exec", host, "docker", "inspect", previousIngressName("org", "server")).Run() == nil {
+		t.Fatal("the old proxy is left behind")
 	}
 }

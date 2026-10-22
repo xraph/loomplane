@@ -119,6 +119,9 @@ type IngressState struct {
 	Config     server.IngressConfig    `json:"config"`
 	Current    *server.IngressSnapshot `json:"current"`
 	Previous   *server.IngressSnapshot `json:"previous"`
+	// DNSTokens maps each zone whose token file the server holds to the
+	// challenge connection generation that token came from.
+	DNSTokens map[string]int64 `json:"dns_tokens,omitempty"`
 }
 
 type RouteWorkflow interface {

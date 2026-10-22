@@ -3,17 +3,20 @@ package cloudinfra
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/clouds/cloudflare"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // challengeConnections maps connection IDs to Cloudflare connections. Each
-// token is the connection ID with a -token suffix.
+// token is the connection ID with a -token suffix, and -g<generation> once
+// the connection has been replaced.
 type challengeConnections map[string]*connections.Connection
 
 func (c challengeConnections) Credential(_ context.Context, org, id string) (*connections.Connection, []byte, error) {
@@ -22,7 +25,11 @@ func (c challengeConnections) Credential(_ context.Context, org, id string) (*co
 		return nil, nil, connections.ErrNotFound
 	}
 	v := *conn
-	return &v, []byte(id + "-token"), nil
+	token := id + "-token"
+	if v.Generation > 1 {
+		token += fmt.Sprintf("-g%d", v.Generation)
+	}
+	return &v, []byte(token), nil
 }
 
 // challengeDNS answers like Cloudflare for acme.dev. scopes holds what each
@@ -205,5 +212,67 @@ func TestWildcardPreviewNoticesProxyRestart(t *testing.T) {
 	}
 	if _, err = svc.PreviewRoute(t.Context(), overviewDev, "shop", exact); err != nil {
 		t.Fatal("exact hostnames need no new image", err)
+	}
+}
+
+func TestZoneTokenIsRecheckedBeforeEveryWrite(t *testing.T) {
+	svc, st, dns := challengeFixture(t)
+	zone := st.zones[0]
+	zone.ChallengeConnectionID = "cf-dns"
+	conns := svc.Connections.(challengeConnections)
+	var written []string
+	svc.writeDNSToken = func(_ context.Context, _ *server.Client, org, serverID, zoneID string, token []byte) error {
+		written = append(written, serverID+"/"+zoneID+"="+string(token))
+		return nil
+	}
+	route := Route{ID: "route_w", OrgID: "org", Input: RouteInput{ZoneID: "zone", Hostname: "*.acme.dev"}, Binding: RouteBinding{ServerID: "srv_1"}}
+	state := &IngressState{}
+	sync := func(always bool) (bool, error) {
+		return svc.syncZoneToken(t.Context(), nil, route, state, zone, always)
+	}
+	refused := func(name string, wrote bool, err error, want string) {
+		t.Helper()
+		var notice *routeNoticeError
+		if wrote || !errors.As(err, &notice) || !strings.Contains(notice.message, "didn't put its token on the server") || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: wrote %v, %v", name, wrote, err)
+		}
+	}
+	if wrote, err := sync(true); !wrote || err != nil || !slices.Equal(written, []string{"srv_1/zone=cf-dns-token"}) || state.DNSTokens["zone"] != 1 {
+		t.Fatal("first write", wrote, err, written)
+	}
+	probes := len(dns.probed)
+	if wrote, err := sync(false); wrote || err != nil || len(written) != 1 || len(dns.probed) != probes {
+		t.Fatal("a check rewrote or reprobed an unchanged token", wrote, err)
+	}
+
+	// Rotated, still scoped to the zone: the next check puts it on the server.
+	conns["cf-dns"].Generation = 2
+	dns.scopes["cf-dns-token-g2"] = zoneScoped("cfzone1")
+	if wrote, err := sync(false); !wrote || err != nil || written[len(written)-1] != "srv_1/zone=cf-dns-token-g2" || state.DNSTokens["zone"] != 2 {
+		t.Fatal("rotated token", wrote, err, written)
+	}
+
+	// Replaced with an account-wide token under the same connection ID.
+	conns["cf-dns"].Generation = 3
+	dns.scopes["cf-dns-token-g3"] = zoneScoped("cfzone1", "cfzone2")
+	wrote, err := sync(false)
+	refused("replaced with a wider token", wrote, err, "a token scoped to acme.dev only")
+	wrote, err = sync(true)
+	refused("replaced with a wider token, on apply", wrote, err, "a token scoped to acme.dev only")
+
+	// Widened at Cloudflare without any change in Loomplane.
+	conns["cf-dns"].Generation = 2
+	widened := zoneScoped("cfzone1")
+	widened.Permissions.RegistrarWrite = cloudflare.Granted
+	dns.scopes["cf-dns-token-g2"] = widened
+	wrote, err = sync(true)
+	refused("widened at Cloudflare", wrote, err, "a token scoped to acme.dev only")
+
+	dns.scopes["cf-dns-token-g2"] = zoneScoped("cfzone1")
+	conns["cf-dns"].Status = "incomplete"
+	wrote, err = sync(true)
+	refused("connection not ready", wrote, err, "isn't ready")
+	if len(written) != 2 || state.DNSTokens["zone"] != 2 {
+		t.Fatal("a refused token reached the server", written, state.DNSTokens)
 	}
 }

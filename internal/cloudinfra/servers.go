@@ -158,13 +158,15 @@ type Service struct {
 	// whether its server's proxy has to restart. Tests replace them.
 	ingressImagePinned  func() bool
 	ingressNeedsUpgrade func(ctx context.Context, route Route) (bool, error)
+	// writeDNSToken puts a challenge token on a server. Tests replace it.
+	writeDNSToken func(ctx context.Context, c *server.Client, org, serverID, zoneID string, token []byte) error
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
 		d.Runtime = SSHRuntime{}
 	}
-	s := &Service{Deps: d, now: time.Now, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned}
+	s := &Service{Deps: d, now: time.Now, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned, writeDNSToken: server.WriteIngressDNSToken}
 	s.kubernetesRoutes = s.openKubernetesRoute
 	s.ingressNeedsUpgrade = s.routeIngressNeedsUpgrade
 	return s

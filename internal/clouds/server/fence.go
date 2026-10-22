@@ -174,7 +174,7 @@ def main():
   admin=r"""` + ingressAdminScript + `"""
   probe=r"""` + ingressProbeScript + `"""
   token=r"""` + ingressTokenScript + `"""
-  assert (len(args)==6 and args[1]==admin and args[2]=='ingress' and args[3] in ('read','apply')) or (len(args)==4 and args[1]==probe and args[2]=='probe' and re.fullmatch(r'[a-z0-9.-]+',args[3])) or (len(args)==4 and args[1]==token and args[2]=='dns' and re.fullmatch(r'[a-z0-9_]{1,64}',args[3]))
+  assert (len(args)==6 and args[1]==admin and args[2]=='ingress' and args[3] in ('read','apply','reload')) or (len(args)==4 and args[1]==probe and args[2]=='probe' and re.fullmatch(r'[a-z0-9.-]+',args[3])) or (len(args)==4 and args[1]==token and args[2]=='dns' and re.fullmatch(r'[a-z0-9_]{1,64}',args[3]))
   c.request('GET','/containers/'+container+'/json');r=c.getresponse();owned=json.loads(r.read());assert r.status==200
   assert owned['Id']==container and owned['State']['Running'] and owned['Config']['Image'] in INGRESS_IMAGES
   assert owned['Config']['Labels'].get('loomplane.org') and owned['Config']['Labels'].get('loomplane.ingress')
