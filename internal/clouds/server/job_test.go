@@ -172,3 +172,34 @@ func TestServerRunJobTimesOut(t *testing.T) {
 		t.Fatalf("a job that ran out of time: %v", docker.requests)
 	}
 }
+
+func TestServerRunJobMapsCommandToEntrypoint(t *testing.T) {
+	// A job's command replaces the image's entrypoint and its args are
+	// the command, as a process's are, so an image whose entrypoint
+	// serves still runs the job.
+	docker := &jobDocker{t: t}
+	spec, labels := jobFixture()
+	spec.Command, spec.Args = []string{"/bin/x"}, []string{"a"}
+	if _, err := docker.runtime(t).RunJob(t.Context(), jobFixtureName, spec, labels, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if entrypoint, _ := json.Marshal(docker.create["Entrypoint"]); string(entrypoint) != `["/bin/x"]` {
+		t.Fatalf("entrypoint: %s", entrypoint)
+	}
+	if cmd, _ := json.Marshal(docker.create["Cmd"]); string(cmd) != `["a"]` {
+		t.Fatalf("cmd: %s", cmd)
+	}
+
+	// Without a command, the image's own entrypoint runs.
+	docker = &jobDocker{t: t}
+	spec.Command, spec.Args = nil, nil
+	if _, err := docker.runtime(t).RunJob(t.Context(), jobFixtureName, spec, labels, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, set := docker.create["Entrypoint"]; set {
+		t.Fatalf("entrypoint set: %v", docker.create["Entrypoint"])
+	}
+	if _, set := docker.create["Cmd"]; set {
+		t.Fatalf("cmd set: %v", docker.create["Cmd"])
+	}
+}

@@ -258,3 +258,28 @@ func TestKubernetesCheckReportsJobPermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestKubernetesRunJobMapsCommandToEntrypoint(t *testing.T) {
+	// A job's command replaces the image's entrypoint and its args are
+	// the command, as a process's are.
+	cluster, runtime := newJobCluster(t, 0, func(job *batchv1.Job) { job.Status.Succeeded = 1 })
+	spec, labels := kubernetesJobFixture()
+	spec.Command, spec.Args = []string{"/bin/x"}, []string{"a"}
+	if _, err := runtime.RunJob(t.Context(), jobFixtureName, spec, labels, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	container := cluster.created.Spec.Template.Spec.Containers[0]
+	if !slices.Equal(container.Command, []string{"/bin/x"}) || !slices.Equal(container.Args, []string{"a"}) {
+		t.Fatalf("command %v, args %v", container.Command, container.Args)
+	}
+
+	// Without a command, the image's own entrypoint runs.
+	cluster, runtime = newJobCluster(t, 0, func(job *batchv1.Job) { job.Status.Succeeded = 1 })
+	spec.Command, spec.Args = nil, nil
+	if _, err := runtime.RunJob(t.Context(), jobFixtureName, spec, labels, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if container = cluster.created.Spec.Template.Spec.Containers[0]; container.Command != nil || container.Args != nil {
+		t.Fatalf("command %v, args %v", container.Command, container.Args)
+	}
+}
