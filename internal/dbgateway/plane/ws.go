@@ -16,10 +16,6 @@ import (
 )
 
 const (
-	// wsReadLimit caps one WebSocket message, and the body of one Postgres
-	// message. A client may pipeline a lot of Postgres messages into one
-	// WebSocket message.
-	wsReadLimit = 64 << 20
 	// wsStartupTimeout is how long a client has to send its StartupMessage
 	// after the upgrade.
 	wsStartupTimeout = 10 * time.Second
@@ -68,7 +64,7 @@ func WebSocketHandlerContext(base context.Context, r *Router) http.Handler {
 		// Clients authenticate with a password and carry no cookies, so
 		// there is nothing for a cross-origin page to ride on.
 		up:             websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
-		readLimit:      wsReadLimit,
+		readLimit:      MaxMessageLen,
 		startupTimeout: wsStartupTimeout,
 		pingInterval:   wsPingInterval,
 		readWait:       wsReadTimeout,
@@ -110,10 +106,6 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	go ws.ping(h.pingInterval, done)
 
 	be := pgproto3.NewBackend(ws, ws)
-	// Without this, a message header declaring a 2 GiB body makes pgproto3
-	// allocate it before the first byte of the body arrives, and
-	// authentication reads one before it checks the password.
-	be.SetMaxBodyLen(int(h.readLimit))
 	_ = c.SetReadDeadline(time.Now().Add(h.startupTimeout))
 	startup, err := readWSStartup(be, ws)
 	if err != nil {

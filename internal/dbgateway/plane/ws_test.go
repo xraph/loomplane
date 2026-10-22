@@ -576,16 +576,40 @@ func TestWSOversizedMessageBodyCloses(t *testing.T) {
 		c.frame(oversizedHeader('Q'))
 		c.expectClosed()
 	})
-	t.Run("just over the limit", func(t *testing.T) {
+	// Before the password a client may send little: 1 MiB is far more than
+	// any password.
+	t.Run("1 MiB before login", func(t *testing.T) {
 		g := newWSRig(t)
-		g.hd.readLimit = 1024
 		c := g.dial(wsTestAddress)
-		c.login(g)
-		// A body of 1025 bytes is refused at its header, with only five
-		// bytes sent.
-		c.frame([]byte{'Q', 0, 0, 0x04, 0x05})
+		c.frame(startupBytes(t, appStartup))
+		if got := c.recv(); got != "AuthenticationCleartextPassword" {
+			t.Fatalf("first message = %q, want AuthenticationCleartextPassword", got)
+		}
+		c.frame([]byte{'p', 0, 0x10, 0, 0x04})
 		c.expectClosed()
 	})
+}
+
+func TestWSLargeQueryAfterLogin(t *testing.T) {
+	g := newWSRig(t)
+	c := g.dial(wsTestAddress)
+	c.login(g)
+	// The pre-login cap is gone once the client is in.
+	c.frame(frontendBytes(t, &pgproto3.Query{String: "SELECT " + strings.Repeat("x", 1<<20)}))
+	checkBigSelect(t, c.readUntilReady())
+}
+
+// checkBigSelect checks the reply to a SELECT of a 1 MiB value without
+// printing the value if it is wrong.
+func checkBigSelect(t *testing.T, got []string) {
+	t.Helper()
+	if len(got) != 4 || got[0] != "RowDescription" || len(got[1]) < 1<<20 || got[2] != "CommandComplete SELECT 1" || got[3] != "ReadyForQuery I" {
+		shown := make([]string, len(got))
+		for i, m := range got {
+			shown[i] = m[:min(len(m), 40)]
+		}
+		t.Fatalf("reply to a 1 MiB query = %q (messages cut to 40 bytes)", shown)
+	}
 }
 
 func TestWSMessageOverReadLimitCloses1009(t *testing.T) {

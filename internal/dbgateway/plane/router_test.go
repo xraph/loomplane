@@ -1089,6 +1089,52 @@ func TestRouterAuthTimeout(t *testing.T) {
 	}
 }
 
+func TestRouterAuthTimeoutStartsAfterHold(t *testing.T) {
+	holder := &fakeHolder{}
+	h := newRouterHarness(t, nil, holder)
+	h.r.holdLimit = 400 * time.Millisecond
+	h.r.authLimit = 100 * time.Millisecond
+	h.apply(h.route("r1", "orders"))
+
+	// The hold for the branch runs for its whole limit, well past the auth
+	// bound, and the client still hears that it timed out.
+	start := time.Now()
+	c := h.start(hostFor("orders--feat-x"), nil, "")
+	if got := c.recv(); !strings.HasPrefix(got, "ErrorResponse FATAL 08004") {
+		t.Fatalf("message = %q, want the 08004 reply", got)
+	}
+	if d := time.Since(start); d < 400*time.Millisecond {
+		t.Fatalf("answered after %v, want the hold limit", d)
+	}
+}
+
+func TestRouterPreAuthMessageCap(t *testing.T) {
+	h := newRouterHarness(t, nil, nil)
+	h.apply(h.route("r1", "orders"))
+
+	c := h.start(hostFor("orders"), nil, "")
+	if got := c.recv(); got != "AuthenticationCleartextPassword" {
+		t.Fatalf("first message = %q, want AuthenticationCleartextPassword", got)
+	}
+	// A header declaring a 1 MiB password.
+	if _, err := c.conn.Write([]byte{'p', 0, 0x10, 0, 0x04}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.wait(); err == nil {
+		t.Fatal("Serve accepted a 1 MiB message before login")
+	}
+	if h.dialer.dials() != 0 {
+		t.Fatal("an oversized pre-login message dialed the backend")
+	}
+
+	// After login a 1 MiB query goes through.
+	d := h.connect("orders")
+	_ = d.conn.SetWriteDeadline(time.Now().Add(3 * time.Second)) // a refused message fails the test instead of hanging it
+	d.send(&pgproto3.Query{String: "SELECT " + strings.Repeat("x", 1<<20)})
+	checkBigSelect(t, d.readUntilReady())
+	d.terminate()
+}
+
 func TestRouterAuthTimeoutStopsAfterLogin(t *testing.T) {
 	h := newRouterHarness(t, nil, nil)
 	h.apply(h.route("r1", "orders"))

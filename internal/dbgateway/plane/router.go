@@ -17,6 +17,11 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
+// MaxMessageLen is the largest client message the gateway accepts: the body
+// of one Postgres message once the client has logged in, and one WebSocket
+// message. Clients may pipeline a lot into one WebSocket message.
+const MaxMessageLen = 64 << 20
+
 const (
 	// holdLimit is how long a connection waits, from arrival, for an unknown
 	// branch route to appear or a waking backend to answer.
@@ -32,10 +37,13 @@ const (
 	// telling its client why, before the router closes the client's
 	// connection under it.
 	closeGrace = time.Second
-	// authLimit is how long a client has, from the start of Serve, to finish
+	// authLimit is how long a client has, once its route is found, to finish
 	// authenticating before the router closes its connection, like
 	// Postgres's authentication_timeout.
 	authLimit = 10 * time.Second
+	// maxPreAuthLen is the largest message body Serve reads from a client
+	// that hasn't logged in: a password and not much else.
+	maxPreAuthLen = 16 << 10
 	// replicationLimit is how many replication connections one gateway
 	// instance relays at once.
 	replicationLimit = 2
@@ -384,11 +392,11 @@ func (r *Router) Serve(ctx context.Context, be *pgproto3.Backend, conn io.Closer
 		// block on the client for good.
 		return errNoConn
 	}
-	// A client that never sends its password would otherwise hold a goroutine
-	// and a socket for as long as it likes. The timer stops once the login
-	// has succeeded or failed.
-	authTimer := time.AfterFunc(r.authLimit, func() { _ = conn.Close() })
-	defer authTimer.Stop()
+	// Until the client has logged in, it may not send a large message: a
+	// header declaring a 2 GiB body would otherwise have pgproto3 allocate it
+	// before the first byte of the body arrives, and authentication reads
+	// one before it checks the password.
+	be.SetMaxBodyLen(maxPreAuthLen)
 	deadline := time.Now().Add(r.holdLimit)
 	if r.Draining() {
 		SendError(be, "57P01", msgShuttingDown)
@@ -414,6 +422,14 @@ func (r *Router) Serve(ctx context.Context, be *pgproto3.Backend, conn io.Closer
 		SendError(be, "57P01", msgRouteDraining)
 		return errRouteDraining
 	}
+
+	// A client that never sends its password would otherwise hold a goroutine
+	// and a socket for as long as it likes. The clock starts once the route
+	// is found, so a branch hold that runs its full length still gets to
+	// tell the client it timed out. It stops once the login has succeeded or
+	// failed.
+	authTimer := time.AfterFunc(r.authLimit, func() { _ = conn.Close() })
+	defer authTimer.Stop()
 
 	ls, sctx, err := r.register(ctx, h)
 	if err != nil {
@@ -455,6 +471,7 @@ func (r *Router) serveRoute(ctx context.Context, be *pgproto3.Backend, conn io.C
 		}
 		return err
 	}
+	be.SetMaxBodyLen(MaxMessageLen)
 	if h.pool == nil {
 		SendError(be, "08006", msgNoBackend)
 		return errUnreachable
