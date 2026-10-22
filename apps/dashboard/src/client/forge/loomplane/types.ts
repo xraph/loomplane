@@ -233,6 +233,11 @@ export interface CatalogconnectEndpoint {
   username?: string;
 }
 
+export interface CatalogproxySession {
+  expiresAt: string;
+  url: string;
+}
+
 export interface Change {
   field: string;
   from: string;
@@ -261,6 +266,22 @@ export interface ChangeInputBody {
   revision: number;
   runtime?: string;
   targetId?: string;
+}
+
+export interface CheckInputBody {
+  dependency: string;
+  dsn: string;
+  engine: string;
+  kind: string;
+  target: string;
+}
+
+export interface CheckResult {
+  missing?: string[];
+  notes?: string[];
+  ok: boolean;
+  problems?: string[];
+  version?: string;
 }
 
 export interface ChooseConnectionInputBody {
@@ -459,6 +480,13 @@ export interface ConnectionsCreateInputBody {
   credential: string;
   name: string;
   settings?: Record<string, any>;
+}
+
+export interface ConsumerOption {
+  name: string;
+  pattern?: string;
+  required?: boolean;
+  title: string;
 }
 
 export interface CreateEnvironmentInputBody {
@@ -666,6 +694,11 @@ export interface EditInputBody {
   version?: string;
 };
   ignore?: string;
+  link?: {
+  need: string;
+  options?: Record<string, any>;
+  service: string;
+};
   placement?: {
   build?: Build;
   cloudTags?: string[];
@@ -679,6 +712,16 @@ export interface EditInputBody {
   region?: string;
   section: string;
   target?: string;
+};
+  setUse?: {
+  dependency: string;
+  resource: string;
+  use: Use;
+};
+  unlink?: {
+  need: string;
+  options?: Record<string, any>;
+  service: string;
 };
 }
 
@@ -695,13 +738,16 @@ export interface EnvLink {
   field?: string;
   from: string;
   key: string;
+  options?: Record<string, any>;
   subject: string;
 }
 
 export interface EnvVar {
   from?: Ref;
   name: string;
+  requires?: string;
   secret?: string;
+  template?: string;
   value?: string;
 }
 
@@ -796,6 +842,7 @@ export interface GeneratedSecret {
   bytes?: number;
   encoding?: string;
   name: string;
+  prefix?: string;
 }
 
 export interface GitHubInstallation {
@@ -851,6 +898,12 @@ export interface Held {
   sameAddress?: string;
 }
 
+export interface IdentitySession {
+  orgId: string;
+  permissions: string[];
+  userId: string;
+}
+
 export interface Ignore {
   resources?: string[];
 }
@@ -870,6 +923,7 @@ export interface InfrastructureStatus {
 
 export interface KindInfo {
   components?: ComponentInfo[];
+  consumerOptions?: ConsumerOption[];
   dependencies?: DependencyInfo[];
   description?: string;
   engine: boolean;
@@ -879,6 +933,12 @@ export interface KindInfo {
   targets: string[];
   title: string;
   versions: string[];
+}
+
+export interface KubernetesRule {
+  apiGroups: string[];
+  resources: string[];
+  verbs: string[];
 }
 
 export interface Log {
@@ -1125,7 +1185,9 @@ export interface Output {
   from?: Ref;
   name: string;
   perConsumer?: boolean;
+  requires?: string;
   secret?: boolean;
+  template?: string;
 }
 
 export interface OutputInfo {
@@ -1456,7 +1518,9 @@ export interface RealtimeSend {
 export interface Recipe {
   architecture: string;
   backupFormat: string;
+  extensions?: string[];
   family?: string;
+  fsGroup?: number;
   id: string;
   image: string;
   mountPath: string;
@@ -1519,10 +1583,12 @@ export interface ResolvedComponent {
   env?: EnvVar[];
   files?: File[];
   image: string;
+  kubernetesRules?: KubernetesRule[];
   name: string;
   ports?: Port[];
   protection?: string;
   readiness?: HTTPProbe;
+  requires?: string;
   resources: Resources;
   role: string;
   step: number;
@@ -1546,6 +1612,7 @@ export interface Resource {
 
 export interface ResourceConfig {
   catalog?: Recipe;
+  cloudPlacement?: CloudPlacement;
   component?: ComponentConfig;
   composition?: CompositionConfig;
   kind: string;
@@ -2000,12 +2067,6 @@ export interface ServiceConfig {
   workload: string;
 }
 
-export interface Session {
-  orgId: string;
-  permissions: string[];
-  userId: string;
-}
-
 export interface SetDefaultPlacementInputBody {
   defaultPlacement: ({
   connectionId: string;
@@ -2185,6 +2246,12 @@ export interface UpdateVariableInputBody {
   value: string;
 }
 
+export interface Use {
+  enabled?: boolean;
+  external?: string;
+  resource?: string;
+}
+
 export interface Variable {
   createdAt: string;
   createdBy: string;
@@ -2206,6 +2273,7 @@ export interface VariableList {
 }
 
 export interface Volume {
+  fsGroup?: number;
   kubernetesSizeMb?: number;
   mountPath: string;
 }

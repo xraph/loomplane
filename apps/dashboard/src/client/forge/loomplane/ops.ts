@@ -145,6 +145,14 @@ export const ops = {
     bodyCodec: CODECS['CatalogconnectCreateInputBody'],
     responseCodec: CODECS['CatalogconnectEndpoint'],
   },
+  'catalogEndpoints.check': {
+    method: 'POST',
+    path: '/api/v1/catalog/endpoints/checks',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['CheckInputBody'],
+    responseCodec: CODECS['CheckResult'],
+  },
   'catalogEndpoints.delete': {
     method: 'DELETE',
     path: '/api/v1/catalog/endpoints/{id}',
@@ -1464,6 +1472,13 @@ export const ops = {
     invalidates: ['RouteOperation[]'],
     responseCodec: CODECS['RouteOperation'],
   },
+  'catalogAdmin.open': {
+    method: 'POST',
+    path: '/api/v1/projects/{projectId}/environments/{environmentId}/catalog/{resource}/admin-sessions',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['CatalogproxySession'],
+  },
   'domainRoutes.operation': {
     method: 'GET',
     path: '/api/v1/projects/{projectId}/route-operations/{operationId}',
@@ -1669,7 +1684,7 @@ export const ops = {
     path: '/api/v1/session',
     provides: [],
     invalidates: [],
-    responseCodec: CODECS['Session'],
+    responseCodec: CODECS['IdentitySession'],
   },
   'variables.list': {
     method: 'GET',

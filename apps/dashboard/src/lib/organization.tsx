@@ -21,14 +21,14 @@ import {
 } from "@/client/forge/authsome/hooks"
 import type { Organization } from "@/client/forge/authsome/types"
 import { useSessionGet } from "@/client/forge/loomplane/hooks"
-import type { Session } from "@/client/forge/loomplane/types"
+import type { IdentitySession } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { forgeClient, setTabOrganization } from "@/client/runtime"
 
 const lastOrgKey = "loomplane.last-org"
 
 type Value = {
-  session: Session
+  session: IdentitySession
   organizations: Organization[]
   switchOrganization: (orgId: string) => Promise<void>
   /** can reports whether the session holds a permission, such as "project:create". */

@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/catalogproxy"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/page"
@@ -270,6 +271,11 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodDelete, "/catalog/endpoints/:id", e.deleteCatalogEndpoint, []forge.RouteOption{
 			forge.WithName("catalogEndpoints.delete"),
 			forge.WithSummary("Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes"),
+		}},
+		{http.MethodPost, "/projects/:projectId/environments/:environmentId/catalog/:resource/admin-sessions", e.openCatalogAdmin, []forge.RouteOption{
+			forge.WithName("catalogAdmin.open"),
+			forge.WithSummary("Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure"),
+			forge.WithResponseSchema(http.StatusCreated, "The session: open its URL on this origin", catalogproxy.Session{}),
 		}},
 	}
 	groups := []struct {

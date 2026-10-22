@@ -1417,6 +1417,10 @@
           "key": {
             "type": "string"
           },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "subject": {
             "type": "string"
           }
@@ -1434,7 +1438,13 @@
           "name": {
             "type": "string"
           },
+          "requires": {
+            "type": "string"
+          },
           "secret": {
+            "type": "string"
+          },
+          "template": {
             "type": "string"
           },
           "value": {
@@ -1618,6 +1628,9 @@
           },
           "name": {
             "type": "string"
+          },
+          "prefix": {
+            "type": "string"
           }
         }
       },
@@ -1676,6 +1689,34 @@
         "type": "object",
         "properties": {
           "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "KubernetesRule": {
+        "type": "object",
+        "required": [
+          "api_groups",
+          "resources",
+          "verbs"
+        ],
+        "properties": {
+          "api_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verbs": {
             "type": "array",
             "items": {
               "type": "string"
@@ -1835,8 +1876,14 @@
           "per_consumer": {
             "type": "boolean"
           },
+          "requires": {
+            "type": "string"
+          },
           "secret": {
             "type": "boolean"
+          },
+          "template": {
+            "type": "string"
           }
         }
       },
@@ -1980,8 +2027,17 @@
           "backup_format": {
             "type": "string"
           },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "family": {
             "type": "string"
+          },
+          "fs_group": {
+            "type": "integer"
           },
           "id": {
             "type": "string"
@@ -2063,6 +2119,12 @@
           "image": {
             "type": "string"
           },
+          "kubernetes_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KubernetesRule"
+            }
+          },
           "name": {
             "type": "string"
           },
@@ -2077,6 +2139,9 @@
           },
           "readiness": {
             "$ref": "#/components/schemas/HTTPProbe"
+          },
+          "requires": {
+            "type": "string"
           },
           "resources": {
             "$ref": "#/components/schemas/Resources"
@@ -2104,6 +2169,9 @@
         "properties": {
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
+          },
+          "cloud_placement": {
+            "$ref": "#/components/schemas/CloudPlacement"
           },
           "component": {
             "$ref": "#/components/schemas/ComponentConfig"
@@ -2544,6 +2612,9 @@
           "mount_path"
         ],
         "properties": {
+          "fs_group": {
+            "type": "integer"
+          },
           "kubernetes_size_mb": {
             "type": "integer"
           },

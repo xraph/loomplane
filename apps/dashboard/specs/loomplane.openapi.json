@@ -232,6 +232,38 @@
         }
       }
     },
+    "/api/v1/catalog/endpoints/checks": {
+      "post": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Check a Postgres or Redis DSN from a target against what a kind's dependency needs, before storing it; the DSN isn't stored or returned",
+        "operationId": "catalogEndpoints.check",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the check found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/catalog/endpoints/{id}": {
       "delete": {
         "tags": [
@@ -5867,6 +5899,56 @@
         }
       }
     },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/catalog/{resource}/admin-sessions": {
+      "post": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure",
+        "operationId": "catalogAdmin.open",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The session: open its URL on this origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogproxySession"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{projectId}/route-operations/{operationId}": {
       "get": {
         "tags": [
@@ -6817,7 +6899,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Session"
+                  "$ref": "#/components/schemas/IdentitySession"
                 }
               }
             }
@@ -7723,6 +7805,23 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/catalogconnect.Endpoint"
       },
+      "CatalogproxySession": {
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/catalogproxy.Session"
+      },
       "Change": {
         "type": "object",
         "required": [
@@ -7810,6 +7909,65 @@
             "type": "string"
           },
           "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CheckInputBody": {
+        "type": "object",
+        "required": [
+          "engine",
+          "dsn",
+          "target",
+          "kind",
+          "dependency"
+        ],
+        "properties": {
+          "dependency": {
+            "type": "string"
+          },
+          "dsn": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "CheckResult": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
             "type": "string"
           }
         }
@@ -8444,6 +8602,27 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/connections.CreateInput"
+      },
+      "ConsumerOption": {
+        "type": "object",
+        "required": [
+          "name",
+          "title"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
       },
       "CreateEnvironmentInputBody": {
         "type": "object",
@@ -9166,6 +9345,25 @@
           "ignore": {
             "type": "string"
           },
+          "link": {
+            "type": "object",
+            "required": [
+              "service",
+              "need"
+            ],
+            "properties": {
+              "need": {
+                "type": "string"
+              },
+              "options": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "service": {
+                "type": "string"
+              }
+            }
+          },
           "placement": {
             "type": "object",
             "required": [
@@ -9210,6 +9408,44 @@
                 "type": "string"
               },
               "target": {
+                "type": "string"
+              }
+            }
+          },
+          "set_use": {
+            "type": "object",
+            "required": [
+              "resource",
+              "dependency",
+              "use"
+            ],
+            "properties": {
+              "dependency": {
+                "type": "string"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "use": {
+                "$ref": "#/components/schemas/Use"
+              }
+            }
+          },
+          "unlink": {
+            "type": "object",
+            "required": [
+              "service",
+              "need"
+            ],
+            "properties": {
+              "need": {
+                "type": "string"
+              },
+              "options": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "service": {
                 "type": "string"
               }
             }
@@ -9273,6 +9509,10 @@
           "key": {
             "type": "string"
           },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "subject": {
             "type": "string"
           }
@@ -9290,7 +9530,13 @@
           "name": {
             "type": "string"
           },
+          "requires": {
+            "type": "string"
+          },
           "secret": {
+            "type": "string"
+          },
+          "template": {
             "type": "string"
           },
           "value": {
@@ -9584,6 +9830,9 @@
           },
           "name": {
             "type": "string"
+          },
+          "prefix": {
+            "type": "string"
           }
         }
       },
@@ -9784,6 +10033,29 @@
           }
         }
       },
+      "IdentitySession": {
+        "properties": {
+          "org_id": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "org_id",
+          "permissions"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/extensions/identity.Session"
+      },
       "Ignore": {
         "type": "object",
         "properties": {
@@ -9857,6 +10129,12 @@
               "$ref": "#/components/schemas/ComponentInfo"
             }
           },
+          "consumer_options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsumerOption"
+            }
+          },
           "dependencies": {
             "type": "array",
             "items": {
@@ -9891,6 +10169,34 @@
             "type": "string"
           },
           "versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "KubernetesRule": {
+        "type": "object",
+        "required": [
+          "api_groups",
+          "resources",
+          "verbs"
+        ],
+        "properties": {
+          "api_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verbs": {
             "type": "array",
             "items": {
               "type": "string"
@@ -10790,8 +11096,14 @@
           "per_consumer": {
             "type": "boolean"
           },
+          "requires": {
+            "type": "string"
+          },
           "secret": {
             "type": "boolean"
+          },
+          "template": {
+            "type": "string"
           }
         }
       },
@@ -11916,8 +12228,17 @@
           "backup_format": {
             "type": "string"
           },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "family": {
             "type": "string"
+          },
+          "fs_group": {
+            "type": "integer"
           },
           "id": {
             "type": "string"
@@ -12132,6 +12453,12 @@
           "image": {
             "type": "string"
           },
+          "kubernetes_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KubernetesRule"
+            }
+          },
           "name": {
             "type": "string"
           },
@@ -12146,6 +12473,9 @@
           },
           "readiness": {
             "$ref": "#/components/schemas/HTTPProbe"
+          },
+          "requires": {
+            "type": "string"
           },
           "resources": {
             "$ref": "#/components/schemas/Resources"
@@ -12225,6 +12555,9 @@
         "properties": {
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
+          },
+          "cloud_placement": {
+            "$ref": "#/components/schemas/CloudPlacement"
           },
           "component": {
             "$ref": "#/components/schemas/ComponentConfig"
@@ -13824,28 +14157,6 @@
           }
         }
       },
-      "Session": {
-        "type": "object",
-        "required": [
-          "user_id",
-          "org_id",
-          "permissions"
-        ],
-        "properties": {
-          "org_id": {
-            "type": "string"
-          },
-          "permissions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "user_id": {
-            "type": "string"
-          }
-        }
-      },
       "SetDefaultPlacementInputBody": {
         "type": "object",
         "required": [
@@ -14461,6 +14772,20 @@
           }
         }
       },
+      "Use": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "external": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
       "Variable": {
         "type": "object",
         "required": [
@@ -14542,6 +14867,9 @@
           "mount_path"
         ],
         "properties": {
+          "fs_group": {
+            "type": "integer"
+          },
           "kubernetes_size_mb": {
             "type": "integer"
           },

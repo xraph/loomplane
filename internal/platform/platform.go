@@ -145,7 +145,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
-		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),
+		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/catalog-admin/"),
 	}
 }
 

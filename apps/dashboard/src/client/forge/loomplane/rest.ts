@@ -213,7 +213,44 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly catalogAdmin = {
+    /**
+     * Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure
+     */
+    open: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogproxySession> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/catalog/${encodeURIComponent(String(resource))}/admin-sessions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogproxySession"],
+      };
+
+      return this.request<types.CatalogproxySession>(config);
+    },
+
+  };
+
   public readonly catalogEndpoints = {
+    /**
+     * Check a Postgres or Redis DSN from a target against what a kind's dependency needs, before storing it; the DSN isn't stored or returned
+     */
+    check: async (body: types.CheckInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CheckResult> => {
+      let __path = `/api/v1/catalog/endpoints/checks`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CheckInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CheckResult"],
+      };
+
+      return this.request<types.CheckResult>(config);
+    },
+
     /**
      * Register an external Postgres or Redis; its DSN is kept in Vault and never returned
      */
@@ -3285,17 +3322,17 @@ export class RESTClient extends Client {
     /**
      * The signed-in user, their active organization and their permissions in it
      */
-    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Session> => {
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.IdentitySession> => {
       let __path = `/api/v1/session`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Session"],
+        responseCodec: CODECS["IdentitySession"],
       };
 
-      return this.request<types.Session>(config);
+      return this.request<types.IdentitySession>(config);
     },
 
   };

@@ -42,6 +42,7 @@ import (
 	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/artifacts"
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/catalogproxy"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/aws"
@@ -93,6 +94,7 @@ type Extension struct {
 	restoreTargets      func(context.Context) error
 	cloudProfiles       *cloudprofiles.Service
 	endpoints           *catalogconnect.Service
+	catalogAdmin        *catalogproxy.Service
 	endpointChecks      *catalogconnect.Checker
 	endpointDialer      endpointDialer
 	catalogKinds        *recipes.Registry // nil is recipes.Default()
@@ -286,6 +288,19 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, catalogAccess); err != nil {
 		return err
 	}
+	// A kind's admin UI opens through Loomplane's sandboxed proxy, which
+	// reaches the component over the same private channel. The proxy is
+	// mounted outside the identity guard: a session's token, in its path,
+	// is the credential.
+	e.catalogAdmin = catalogproxy.NewService(catalogproxy.Deps{
+		Store: catalogproxy.NewPgStore(pg), Access: catalogAccess, Authz: authz, Bindings: planStore.ListBindings,
+	})
+	if err := forge.ProvideValue(c, e.catalogAdmin); err != nil {
+		return err
+	}
+	if err := fapp.Router().Handle(catalogAdminRoute, e.catalogAdmin.Handler()); err != nil {
+		return fmt.Errorf("mount the catalog admin proxy: %w", err)
+	}
 	e.plans = planning.NewService(planning.Deps{
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
@@ -444,7 +459,7 @@ func (d ownedDialer) TargetDial(ctx context.Context, orgID, connectionID string)
 func fail(err error) error {
 	switch {
 	case errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, recovery.ErrNotFound), errors.Is(err, catalogconnect.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
-		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound),
+		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound), errors.Is(err, catalogproxy.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
@@ -455,7 +470,7 @@ func fail(err error) error {
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
 	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid),
-		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort):
+		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort), errors.Is(err, catalogproxy.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

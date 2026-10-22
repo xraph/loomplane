@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativeRecoverySources, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, Server, ServerList, ServerOptions, ServerUsage, Session, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativeRecoverySources, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, Server, ServerList, ServerOptions, ServerUsage, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -20,6 +20,7 @@ export const useApiKeysCreate = mutation(ops['apiKeys.create']);
 export const useApiKeysRevoke = mutation(ops['apiKeys.revoke']);
 export const useCatalogEndpointsList = query<EndpointList>(ops['catalogEndpoints.list']);
 export const useCatalogEndpointsCreate = mutation<CatalogconnectEndpoint, CatalogconnectEndpoint>(ops['catalogEndpoints.create']);
+export const useCatalogEndpointsCheck = mutation(ops['catalogEndpoints.check']);
 export const useCatalogEndpointsDelete = mutation(ops['catalogEndpoints.delete']);
 export const useCatalogKindsList = query<CatalogKindList>(ops['catalogKinds.list']);
 export const useOrganizationCloudsList = query<PlanningCloudList>(ops['organizationClouds.list']);
@@ -172,6 +173,7 @@ export const useDomainRoutesPrepareHandoff = mutation<RouteOperation, RouteOpera
 export const useDomainRoutesRemove = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.remove']);
 export const useDomainRoutesUpdateTtl = mutation<CloudinfraRoute, CloudinfraRoute>(ops['domainRoutes.updateTTL']);
 export const useDomainRoutesVerify = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.verify']);
+export const useCatalogAdminOpen = mutation(ops['catalogAdmin.open']);
 export const useDomainRoutesOperation = query<RouteOperation>(ops['domainRoutes.operation']);
 export const useDomainRoutesApply = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.apply']);
 export const useDomainRoutesCutover = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.cutover']);
@@ -196,7 +198,7 @@ export const useServiceRetirementsCreate = mutation<Retirement, Retirement>(ops[
 export const useServiceBackupsRetry = mutation<Backup, Backup>(ops['serviceBackups.retry']);
 export const useServiceRestoresGet = query<Restore>(ops['serviceRestores.get']);
 export const useServiceRestoresDelete = mutation(ops['serviceRestores.delete']);
-export const useSessionGet = query<Session>(ops['session.get']);
+export const useSessionGet = query<IdentitySession>(ops['session.get']);
 export const useVariablesList = query<VariableList>(ops['variables.list']);
 export const useVariablesCreate = mutation<Variable, Variable>(ops['variables.create']);
 export const useVariablesUpdate = mutation<Variable, Variable>(ops['variables.update']);
