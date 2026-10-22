@@ -181,14 +181,7 @@ func (e *OwnedTarget) checkComponent(cfg *planning.ResourceConfig) (recipes.Kind
 		return recipes.Kind{}, errRecipeChanged
 	}
 	resolved := composition.Components[i]
-	protection := resolved.Protection
-	if protection == "" {
-		protection = recipes.ProtectionNone
-		if resolved.Volume != nil {
-			protection = recipes.ProtectionRebuildable
-		}
-	}
-	expected := planning.ComponentConfig{Kind: composition.Kind, Resource: c.Resource, Revision: composition.Revision, Component: resolved, Dependencies: c.Dependencies, Protection: protection}
+	expected := planning.ComponentConfig{Kind: composition.Kind, Resource: c.Resource, Revision: composition.Revision, Component: resolved, Dependencies: c.Dependencies, Protection: planning.ComponentProtection(resolved.Component)}
 	if !sameJSON(expected, *c) {
 		return recipes.Kind{}, errRecipeChanged
 	}
@@ -276,14 +269,22 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 		}
 		external[v.From.Dependency] = dsn
 	}
+	// The component's hooks may need any of the composition's secrets, not
+	// only the ones its variables read.
+	for _, s := range kind.Secrets {
+		value, err := e.generatedSecret(ctx, job, s)
+		if err != nil {
+			return run, nil, err
+		}
+		run.Secrets[s.Name] = value
+	}
 	for _, v := range run.Component.Env {
 		switch {
 		case v.Secret != "":
-			value, err := e.generatedSecret(ctx, job, kind, v.Secret)
-			if err != nil {
-				return run, nil, err
+			value, ok := run.Secrets[v.Secret]
+			if !ok {
+				return run, nil, fmt.Errorf("%s has no generated secret %s", kind.Title, v.Secret)
 			}
-			run.Secrets[v.Secret] = value
 			run.Env[v.Name], secret[v.Name] = string(value), true
 		case v.From != nil && v.From.Dependency != "":
 			address, on, err := e.dependencyURL(ctx, job, v.From.Dependency, external)
@@ -387,13 +388,11 @@ func withoutDSN(message, dsn string) string {
 
 // generatedSecret is one of the composition's generated secrets, kept once
 // for the whole composed resource. It's generated the first time a
-// component needs it. A bound component whose secret is gone fails rather
-// than get a new one its data doesn't know.
-func (e *OwnedTarget) generatedSecret(ctx context.Context, job *Job, kind recipes.Kind, name string) ([]byte, error) {
-	i := slices.IndexFunc(kind.Secrets, func(s recipes.GeneratedSecret) bool { return s.Name == name })
-	if i < 0 {
-		return nil, fmt.Errorf("%s has no generated secret %s", kind.Title, name)
-	}
+// component needs it, which for a deployed component can be a later
+// revision adding it. One the deployed component already had and that's
+// gone fails rather than get a new one its data doesn't know.
+func (e *OwnedTarget) generatedSecret(ctx context.Context, job *Job, s recipes.GeneratedSecret) ([]byte, error) {
+	name := s.Name
 	key := resourceKey(job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Resource.Component.Resource, "secret:"+name)
 	kept, err := e.Secrets.Get(ctx, key)
 	if err == nil && len(kept) > 0 {
@@ -402,19 +401,33 @@ func (e *OwnedTarget) generatedSecret(ctx context.Context, job *Job, kind recipe
 	if err != nil && !errors.Is(err, ErrNoCredential) {
 		return nil, err
 	}
-	if job.Binding != nil {
+	if hadSecret(job, name) {
 		return nil, fmt.Errorf("the generated secret %s is missing; recover it before changing the service", name)
 	}
-	value, err := generateSecret(kind.Secrets[i])
+	value, err := generateSecret(s)
 	if err != nil {
 		return nil, err
 	}
 	if putErr := e.Secrets.Put(ctx, key, value); putErr != nil {
 		return nil, putErr
 	}
-	// Another component may have kept one at the same moment: every
-	// component gets the one that's kept.
+	// Steps apply one action at a time, so nothing else keeps one in
+	// between; reading it back still hands every component what's kept.
 	return e.Secrets.Get(ctx, key)
+}
+
+// hadSecret reports whether the deployed component already had a
+// generated secret: its variables read it, or it was deployed from this
+// same revision, which declared it, so it was kept then.
+func hadSecret(job *Job, name string) bool {
+	was := boundResource(job.Binding)
+	if was == nil || was.Component == nil {
+		return false
+	}
+	if was.Component.Kind == job.Action.Resource.Component.Kind && was.Component.Revision == job.Action.Resource.Component.Revision {
+		return true
+	}
+	return slices.ContainsFunc(was.Component.Component.Env, func(v recipes.EnvVar) bool { return v.Secret == name })
 }
 
 func generateSecret(s recipes.GeneratedSecret) ([]byte, error) {

@@ -158,14 +158,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		}
 		parts = append(parts, id)
 		cfg := resource()
-		protection := c.Protection
-		if protection == "" {
-			protection = recipes.ProtectionNone
-			if c.Volume != nil {
-				protection = recipes.ProtectionRebuildable
-			}
-		}
-		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Dependencies: choices, Protection: protection}
+		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Dependencies: choices, Protection: ComponentProtection(c.Component)}
 		creates := componentCreates(kind.Title, c.Component)
 		if c.Role != recipes.RoleJob {
 			for _, port := range c.Ports {
@@ -275,6 +268,18 @@ func (p *planner) dependencies(name, base string, r manifest.Resource, kind reci
 		}
 	}
 	return choices, uses
+}
+
+// ComponentProtection is how a component's data is protected: as its
+// recipe says, otherwise not at all without a volume, and rebuilt with one.
+func ComponentProtection(c recipes.Component) recipes.Protection {
+	if c.Protection != "" {
+		return c.Protection
+	}
+	if c.Volume != nil {
+		return recipes.ProtectionRebuildable
+	}
+	return recipes.ProtectionNone
 }
 
 func firstKind(dep recipes.Dependency) string {

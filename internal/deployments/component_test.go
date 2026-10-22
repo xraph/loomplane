@@ -472,6 +472,42 @@ func TestComponentGeneratedSecretsAreKeptOncePerComposition(t *testing.T) {
 	}
 }
 
+func TestComponentRevisionAddingASecretGeneratesIt(t *testing.T) {
+	f := newComponentFixture(t, recipestest.Registry(t))
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	first := f.componentJob(t, "api", newPostgres)
+	out, err := f.target.Apply(t.Context(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Revision 2 adds a secret the deployed api now reads.
+	f.kinds = sampleKinds(t, func(k *recipes.Kind) {
+		k.Releases[0].Revision = "2"
+		k.Secrets = append(k.Secrets, recipes.GeneratedSecret{Name: "api-token"})
+		k.Components[1].Env = append(k.Components[1].Env, recipes.EnvVar{Name: "API_TOKEN", Secret: "api-token"})
+	})
+	f.target.Kinds = f.kinds
+	upgrade := f.componentJob(t, "api", newPostgres)
+	upgrade.Binding = bound(first, out)
+	out, err = f.target.Apply(t.Context(), upgrade)
+	if err != nil {
+		t.Fatalf("a secret the new revision adds: %v", err)
+	}
+	token := string(f.secrets.m[resourceKey("org", "env", "app", "secret:api-token")])
+	if _, _, env := f.started(t, out); token == "" || env["API_TOKEN"] != token {
+		t.Fatalf("API_TOKEN = %q, kept %q", env["API_TOKEN"], token)
+	}
+
+	// A secret the deployed component already read is lost, not new.
+	delete(f.secrets.m, resourceKey("org", "env", "app", "secret:admin-password"))
+	again := f.componentJob(t, "api", newPostgres)
+	again.Binding = bound(first, out)
+	if _, err = f.target.Apply(t.Context(), again); err == nil || err.Error() != "the generated secret admin-password is missing; recover it before changing the service" {
+		t.Fatalf("lost secret across revisions: %v", err)
+	}
+}
+
 func TestComponentEnvResolvesDependencyFields(t *testing.T) {
 	kinds := sampleKinds(t, func(k *recipes.Kind) {
 		for field, name := range map[string]string{
@@ -521,8 +557,6 @@ func TestComponentEnvResolvesDependencyFields(t *testing.T) {
 	}
 
 	// Without the dependency's address the component doesn't start.
-	delete(f.secrets.m, resourceKey("org", "env", "app--postgres", "url"))
-	f.instances.creates = 0
 	fresh := newComponentFixture(t, kinds)
 	if _, err := fresh.target.Apply(t.Context(), fresh.componentJob(t, "api", newPostgres)); err == nil || fresh.instances.creates != 0 {
 		t.Fatalf("missing dependency: %v", err)
@@ -556,6 +590,11 @@ func TestComponentEnvResolvesSiblingAddress(t *testing.T) {
 	spec, _, env := f.started(t, out)
 	if env["API_URL"] != "http://"+host+":8080" || spec.Env["API_URL"] != env["API_URL"] {
 		t.Fatalf("worker API_URL = %q", env["API_URL"])
+	}
+	// The worker reads no secret, and its hooks still get the composition's.
+	run := f.hooks.ready[len(f.hooks.ready)-1]
+	if _, ok := env["ADMIN_PASSWORD"]; ok || run.Component.Name != "worker" || len(run.Secrets) != 1 || string(run.Secrets["admin-password"]) != string(f.secrets.m[resourceKey("org", "env", "app", "secret:admin-password")]) {
+		t.Fatalf("worker run secrets: %v", run.Secrets)
 	}
 
 	// Removing a component forgets its address with its runtime values.
@@ -685,6 +724,11 @@ func TestRunnerEnvReadsLinkField(t *testing.T) {
 	want := map[string]string{"SAMPLE_URL": "http://lp-inst-api:8080", "SAMPLE_ADMIN_URL": "http://lp-inst-api:9090", "DATABASE_URL": postgresURL}
 	if !maps.Equal(env, want) || len(secret) != 3 {
 		t.Fatalf("env %v, secret %v", env, secret)
+	}
+
+	a.Service.Env = []planning.EnvLink{{Key: "SAMPLE_TOKEN", From: "app", Subject: planning.ResourceSubject, Field: "consumer:x"}}
+	if _, _, err = r.env(t.Context(), d, a, nil, resources); err == nil || !strings.Contains(err.Error(), "can't give it yet") {
+		t.Fatalf("unsupported field: %v", err)
 	}
 }
 
