@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/connections"
@@ -15,14 +16,17 @@ import (
 )
 
 type cloudSQLState struct {
-	Version    int                     `json:"cloud_sql_checkpoint"`
-	Scope      databaseCheckpointScope `json:"scope"`
-	Stage      string                  `json:"stage"`
-	Operation  string                  `json:"operation,omitempty"`
-	ResourceID string                  `json:"resource_id,omitempty"`
-	Intent     string                  `json:"intent"`
-	Uncertain  bool                    `json:"uncertain,omitempty"`
-	checkpoint func([]byte) error
+	Version         int                     `json:"cloud_sql_checkpoint"`
+	Scope           databaseCheckpointScope `json:"scope"`
+	Stage           string                  `json:"stage"`
+	Operation       string                  `json:"operation,omitempty"`
+	ResourceID      string                  `json:"resource_id,omitempty"`
+	Intent          string                  `json:"intent"`
+	RequestedAt     *time.Time              `json:"requested_at,omitempty"`
+	Caller          string                  `json:"caller,omitempty"`
+	RecoveredCreate *gcp.SQLCreateProof     `json:"recovered_create,omitempty"`
+	Uncertain       bool                    `json:"uncertain,omitempty"`
+	checkpoint      func([]byte) error
 }
 
 func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, instance, mode string) (*cloudSQLState, error) {
@@ -30,7 +34,7 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 	if err != nil {
 		return nil, err
 	}
-	state := &cloudSQLState{Version: 2, Scope: scope, Stage: "instance", checkpoint: job.Checkpoint}
+	state := &cloudSQLState{Version: 3, Scope: scope, Stage: "instance", checkpoint: job.Checkpoint}
 	raw, err := json.Marshal(scope)
 	if err != nil {
 		return nil, err
@@ -59,7 +63,7 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 	}
 	state = &restored
 	state.checkpoint = job.Checkpoint
-	if state.Version != 2 || state.Scope != scope || !slices.Contains(stages, state.Stage) ||
+	if (state.Version != 2 && state.Version != 3) || state.Scope != scope || !slices.Contains(stages, state.Stage) ||
 		(state.Operation != "" && !state.Uncertain) || ((state.Stage == "ready" || state.Stage == "removed") && state.Uncertain) {
 		return nil, errors.New("cloud sql checkpoint does not match the original account, resource and operation")
 	}
@@ -69,7 +73,21 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 	if state.Scope.Mode == "remove" && (state.Operation != "" || state.Stage == "removed") && state.ResourceID == "" {
 		return nil, errors.New("cloud sql checkpoint has no original incarnation pin")
 	}
-	if state.Uncertain && state.Operation == "" {
+	if state.Version == 2 && (state.RequestedAt != nil || state.Caller != "" || state.RecoveredCreate != nil) {
+		return nil, errors.New("cloud sql v2 checkpoint has unexpected recovery evidence")
+	}
+	if state.Version == 3 && (state.Uncertain && (state.RequestedAt == nil || state.RequestedAt.IsZero() || state.Caller == "") || !state.Uncertain && (state.RequestedAt != nil || state.Caller != "")) {
+		return nil, errors.New("cloud sql checkpoint has incomplete original request context")
+	}
+	if proof := state.RecoveredCreate; proof != nil {
+		if mode != "apply" || proof.Validate(project, region, instance, state.ResourceID, state.Intent, sqlVersions[cfg.Kind+"/"+cfg.Version]) != nil {
+			return nil, errors.New("cloud sql checkpoint has inconsistent create recovery evidence")
+		}
+		if state.Stage == "instance" && (state.Operation != proof.Operation || state.Caller != proof.Caller || state.RequestedAt == nil || !state.RequestedAt.Equal(proof.RequestedAt)) {
+			return nil, errors.New("cloud sql checkpoint original create request changed")
+		}
+	}
+	if state.Uncertain && state.Operation == "" && (state.Version != 3 || state.Stage != "instance" || mode != "apply" || job.Binding != nil) {
 		return nil, errors.New("cloud sql checkpoint has an uncertain request without a captured operation; reconcile the original cloud operation before retrying")
 	}
 	return state, nil
@@ -83,15 +101,23 @@ func (s *cloudSQLState) save() error {
 	return s.checkpoint(raw)
 }
 
-func (s *cloudSQLState) track() gcp.SQLMutation {
+func (s *cloudSQLState) track(caller string) gcp.SQLMutation {
 	return gcp.SQLMutation{Resume: s.Operation,
-		Before:  func() error { s.Uncertain = true; return s.save() },
+		Before: func() error {
+			if caller == "" {
+				return errors.New("cloud sql request has no original caller identity")
+			}
+			now := time.Now().UTC()
+			s.Version, s.Uncertain, s.RequestedAt, s.Caller = 3, true, &now, caller
+			return s.save()
+		},
 		Started: func(op string) error { s.Operation = op; return s.save() },
 	}
 }
 
 func (s *cloudSQLState) advance(stage string) error {
 	s.Stage, s.Operation, s.Uncertain = stage, "", false
+	s.RequestedAt, s.Caller = nil, ""
 	return s.save()
 }
 
@@ -128,7 +154,7 @@ func (s *cloudSQLState) inspect(in *gcp.SQLInstance, fresh bool) error {
 }
 
 func (s *cloudSQLState) guarded(client *gcp.Session, fresh bool) gcp.SQLMutation {
-	track := s.track()
+	track := s.track(client.Key().ClientEmail)
 	track.Check = func(ctx context.Context) error {
 		in, err := client.GetSQLInstance(ctx, s.Scope.Instance)
 		if gcp.IsNotFound(err) {
@@ -146,4 +172,21 @@ func (s *cloudSQLState) guarded(client *gcp.Session, fresh bool) gcp.SQLMutation
 		return s.inspect(in, fresh)
 	}
 	return track
+}
+
+// recoverCreate only resolves a lost instance-create response. Other mutation
+// types do not expose enough native payload identity for automatic recovery.
+func (s *cloudSQLState) recoverCreate(ctx context.Context, client *gcp.Session, version string) error {
+	if !s.Uncertain || s.Operation != "" {
+		return nil
+	}
+	if s.Version != 3 || s.Stage != "instance" || s.Scope.Mode != "apply" || s.RequestedAt == nil || s.Caller == "" {
+		return errors.New("cloud sql checkpoint has an uncertain request without original create evidence")
+	}
+	proof, err := client.FindSQLCreate(ctx, gcp.SQLCreateRequest{Instance: s.Scope.Instance, Region: s.Scope.Region, PhysicalID: s.ResourceID, Intent: s.Intent, DatabaseVersion: version, RequestedAt: *s.RequestedAt, Caller: s.Caller})
+	if err != nil {
+		return errors.New("cloud sql checkpoint has an uncertain request: native discovery could not establish the original successful create; reconcile its operation before retrying")
+	}
+	s.ResourceID, s.Operation, s.RecoveredCreate = proof.PhysicalID, proof.Operation, proof
+	return s.save()
 }

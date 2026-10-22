@@ -38,22 +38,9 @@ type sqlBackup struct {
 	Settings *SQLInstance `json:"instanceSettings"`
 }
 
-func sqlNativeName(name string) bool {
-	if name == "" || name[0] < 'a' || name[0] > 'z' {
-		return false
-	}
-	return strings.IndexFunc(name, func(r rune) bool {
-		valid := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
-		return !valid
-	}) < 0
-}
-
 func (s *Session) sqlBackupID(reference string) (string, error) {
 	id, ok := strings.CutPrefix(reference, "projects/"+s.key.ProjectID+"/backups/")
-	if !ok || id == "" || strings.ContainsAny(id, "/\\?#\x00\r\n") || id == "." || id == ".." || len(id) > 256 || strings.IndexFunc(id, func(r rune) bool {
-		valid := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.'
-		return !valid
-	}) >= 0 {
+	if !ok || !validSQLPathID(id) {
 		return "", errors.New("cloud sql backup reference does not match the original project")
 	}
 	return id, nil
