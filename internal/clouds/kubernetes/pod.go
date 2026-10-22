@@ -17,8 +17,10 @@ import (
 )
 
 // runtimePod keeps workload environment, ports, resource limits and readiness
-// identical across Deployment and StatefulSet runtimes.
-func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values owned.RuntimeValues, runtimeSecret *corev1.Secret, pulls []corev1.LocalObjectReference) (*corev1.PodTemplateSpec, []corev1.ServicePort, error) {
+// identical across Deployment and StatefulSet runtimes. A workload with its
+// own ServiceAccount runs as it and gets its token; others keep the
+// namespace default.
+func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values owned.RuntimeValues, runtimeSecret *corev1.Secret, pulls []corev1.LocalObjectReference, serviceAccount string) (*corev1.PodTemplateSpec, []corev1.ServicePort, error) {
 	env := []corev1.EnvVar{}
 	for _, key := range slices.Sorted(maps.Keys(spec.Env)) {
 		if _, secret := values.Env[key]; !secret {
@@ -49,7 +51,17 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		}
 		container.Resources = corev1.ResourceRequirements{Requests: limits.DeepCopy(), Limits: limits}
 	}
-	if health := labels[owned.LabelHealth]; health != "" && len(ports) > 0 {
+	switch protocol, health := labels[owned.LabelHealthProtocol], labels[owned.LabelHealth]; {
+	case protocol != "" && protocol != "redis":
+		return nil, nil, fmt.Errorf("unsupported readiness protocol %q", protocol)
+	case protocol == "redis" && len(ports) > 0:
+		// The kubelet has no RESP probe; an open port is the closest it gets.
+		port, err := healthPort(spec, labels)
+		if err != nil {
+			return nil, nil, err
+		}
+		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}
+	case health != "" && len(ports) > 0:
 		port, err := healthPort(spec, labels)
 		if err != nil {
 			return nil, nil, err
@@ -70,6 +82,19 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 	template := &corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{owned.LabelRevision: labels[owned.LabelRevision]}}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}, ImagePullSecrets: pulls, Volumes: volumes}}
 	if architecture := labels[owned.LabelArchitecture]; architecture != "" {
 		template.Spec.NodeSelector = map[string]string{"kubernetes.io/arch": architecture}
+	}
+	if serviceAccount != "" {
+		automount := true
+		template.Spec.ServiceAccountName, template.Spec.AutomountServiceAccountToken = serviceAccount, &automount
+	}
+	if raw := labels[owned.LabelFSGroup]; raw != "" {
+		group, err := strconv.ParseInt(raw, 10, 32)
+		if err != nil || group < 1 {
+			return nil, nil, errors.New("invalid volume group")
+		}
+		// OnRootMismatch changes ownership once, not on every start.
+		policy := corev1.FSGroupChangeOnRootMismatch
+		template.Spec.SecurityContext = &corev1.PodSecurityContext{FSGroup: &group, FSGroupChangePolicy: &policy}
 	}
 	return template, servicePorts, nil
 }

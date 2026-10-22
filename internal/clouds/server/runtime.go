@@ -32,11 +32,12 @@ var ErrMissing = errors.New("the Docker resource is absent")
 type Session func(context.Context, map[string]string) (*Client, error)
 
 type Runtime struct {
-	Session Session
-	Values  owned.Values
-	Ports   owned.PortReservations
-	Probe   func(context.Context, *Client, int, string) error
-	Wait    time.Duration
+	Session   Session
+	Values    owned.Values
+	Ports     owned.PortReservations
+	Probe     func(context.Context, *Client, int, string) error
+	ProbeRESP func(context.Context, *Client, int) error
+	Wait      time.Duration
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -408,16 +409,16 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 				if probeErr := databaseReady(ctx, c, name, labels); probeErr == nil {
 					return nil
 				}
-			} else if labels[owned.LabelHealth] == "" {
+			} else if !probed(labels) {
 				return nil
 			}
 			if !isDatabase(labels) {
-				probe := r.Probe
-				if probe == nil {
-					probe = probeServer
+				probe, probeErr := r.healthProbe(labels)
+				if probeErr != nil {
+					return probeErr
 				}
 				for _, value := range healthPorts(info, labels) {
-					if err = probe(ctx, c, value, labels[owned.LabelHealth]); err == nil {
+					if err = probe(ctx, c, value); err == nil {
 						return nil
 					}
 				}
@@ -546,14 +547,11 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 				state = cpprovider.StateStarting
 			}
 		}
-		if labels[owned.LabelHealth] != "" {
+		if probed(labels) {
 			ready = false
-			probe := r.Probe
-			if probe == nil {
-				probe = probeServer
-			}
+			probe, probeErr := r.healthProbe(labels)
 			for _, value := range healthPorts(info, labels) {
-				if probe(ctx, c, value, labels[owned.LabelHealth]) == nil {
+				if probeErr == nil && probe(ctx, c, value) == nil {
 					ready = true
 				}
 			}

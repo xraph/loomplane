@@ -49,13 +49,20 @@ const (
 // manifest name and its own name. LabelHealthPort is the container port
 // its readiness probe answers on, when it publishes more than one.
 // LabelRuntimeFiles is "true" on a component whose runtime values include
-// rendered files.
+// rendered files. LabelKubernetesRules is the JSON array of
+// recipes.KubernetesRule a process gets through its own ServiceAccount on
+// Kubernetes. LabelHealthProtocol is "redis" when readiness is a RESP PING;
+// absent, it is HTTP. LabelFSGroup is the group that owns a component's
+// volume on Kubernetes.
 const (
 	LabelCatalogKind      = "loomplane.catalog.kind"
 	LabelCatalogResource  = "loomplane.catalog.resource"
 	LabelCatalogComponent = "loomplane.catalog.component"
 	LabelHealthPort       = "loomplane.health.port"
 	LabelRuntimeFiles     = "loomplane.runtime.files"
+	LabelKubernetesRules  = "loomplane.kubernetes.rules"
+	LabelHealthProtocol   = "loomplane.health.protocol"
+	LabelFSGroup          = "loomplane.fs.group"
 )
 
 type Instances interface {

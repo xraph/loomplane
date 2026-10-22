@@ -121,7 +121,7 @@ func execPod(ctx context.Context, c *Client, pod *corev1.Pod, args []string, inp
 		return err
 	}
 	if err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: input, Stdout: out, Stderr: io.Discard, Tty: false}); err != nil {
-		return fmt.Errorf("native PostgreSQL command failed: %w", err)
+		return fmt.Errorf("native database command failed: %w", err)
 	}
 	return nil
 }
@@ -129,8 +129,16 @@ func (s *postgresPod) run(ctx context.Context, args []string, out io.Writer) err
 	return execPod(ctx, s.client, s.pod, args, nil, out)
 }
 func (s *postgresPod) upload(ctx context.Context, name string, size int64, write func(io.Writer) error) error {
+	return uploadTemporary(ctx, func(ctx context.Context, args []string, input io.Reader, out io.Writer) error {
+		return execPod(ctx, s.client, s.pod, args, input, out)
+	}, name, size, write)
+}
+
+// uploadTemporary writes one file into a pod's /tmp through tar over
+// exec, which every native engine image has.
+func uploadTemporary(ctx context.Context, run func(context.Context, []string, io.Reader, io.Writer) error, name string, size int64, write func(io.Writer) error) error {
 	if name == "" || strings.ContainsAny(name, "/\\\x00") || size < 0 {
-		return errors.New("invalid PostgreSQL temporary file")
+		return errors.New("invalid temporary file")
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -148,7 +156,7 @@ func (s *postgresPod) upload(ctx context.Context, name string, size int64, write
 		writer.Close()
 		done <- err
 	}()
-	err := execPod(ctx, s.client, s.pod, []string{"tar", "-xf", "-", "-C", "/tmp"}, reader, io.Discard)
+	err := run(ctx, []string{"tar", "-xf", "-", "-C", "/tmp"}, reader, io.Discard)
 	reader.CloseWithError(err)
 	cancel()
 	return errors.Join(err, <-done)

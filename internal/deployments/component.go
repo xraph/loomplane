@@ -141,11 +141,21 @@ func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *pl
 	if c.Readiness != nil {
 		if port, ok := componentPort(c.Component, c.Readiness.Port); ok {
 			labels[owned.LabelHealthPort] = strconv.Itoa(port.Container)
+			if port.Protocol != "" && port.Protocol != "http" {
+				labels[owned.LabelHealthProtocol] = port.Protocol
+			}
 		}
 	}
 	if c.Volume != nil {
 		sp.Volumes = []cpprovider.VolumeSpec{{Name: "data", Type: "persistent", MountPath: c.Volume.MountPath, SizeMB: c.Volume.KubernetesSizeMB}}
 		labels[owned.LabelStateful] = "true"
+		if c.Volume.FSGroup != 0 {
+			labels[owned.LabelFSGroup] = strconv.Itoa(c.Volume.FSGroup)
+		}
+	}
+	if len(c.KubernetesRules) > 0 {
+		rules, _ := json.Marshal(c.KubernetesRules) //nolint:errcheck // string slices always encode
+		labels[owned.LabelKubernetesRules] = string(rules)
 	}
 }
 

@@ -295,3 +295,88 @@ func TestKubernetesFileKeyClashWritesNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestKubernetesFSGroupFromLabel(t *testing.T) {
+	r, c, labels, sp := persistentFixture()
+	labels[owned.LabelPublic] = "false"
+	labels[owned.LabelCatalogKind] = "sample"
+	labels[owned.LabelCatalogResource] = "app"
+	labels[owned.LabelCatalogComponent] = "index"
+	sp.Name, sp.Image = "index", "registry.example/sample-index@sha256:fixture"
+	applied := func() (*corev1.PodSecurityContext, error) {
+		t.Helper()
+		iid := id.New(id.PrefixInstance)
+		if _, err := r.Apply(t.Context(), iid, sp, labels); err != nil {
+			return nil, err
+		}
+		set, err := c.Kube.AppsV1().StatefulSets("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return set.Spec.Template.Spec.SecurityContext, nil
+	}
+	security, err := applied()
+	if err != nil || security != nil {
+		t.Fatalf("security context without a group: %+v %v", security, err)
+	}
+	labels[owned.LabelFSGroup] = "1000"
+	security, err = applied()
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, policy := int64(1000), corev1.FSGroupChangeOnRootMismatch
+	if !reflect.DeepEqual(security, &corev1.PodSecurityContext{FSGroup: &group, FSGroupChangePolicy: &policy}) {
+		t.Fatalf("security context: %+v", security)
+	}
+	for _, invalid := range []string{"0", "-1", "group", "4294967296"} {
+		labels[owned.LabelFSGroup] = invalid
+		if _, err = applied(); err == nil {
+			t.Fatalf("accepted fs group %q", invalid)
+		}
+	}
+}
+
+func TestKubernetesRESPReadinessIsTCP(t *testing.T) {
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelPublic: "false", owned.LabelCatalogKind: "sample", owned.LabelCatalogResource: "app", owned.LabelCatalogComponent: "queue", owned.LabelHealthPort: "6379", owned.LabelHealthProtocol: "redis"}
+	spec := cpprovider.ServiceSpec{Name: "queue", Image: "registry.example/sample-queue@sha256:fixture", Ports: []cpprovider.PortSpec{{Container: 8080, Protocol: "tcp"}, {Container: 6379, Protocol: "tcp"}}}
+	tcp := func(probe *corev1.Probe) bool {
+		return probe != nil && probe.HTTPGet == nil && probe.Exec == nil && probe.TCPSocket != nil && probe.TCPSocket.Port.IntValue() == 6379
+	}
+
+	kube := fake.NewClientset()
+	client := &Client{Config: &Config{Namespace: "selected"}, Kube: kube}
+	runtime := &Runtime{WaitReady: func(context.Context, *Client, string) error { return nil }, Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }}
+	iid := id.New(id.PrefixInstance)
+	if _, err := runtime.Apply(t.Context(), iid, spec, labels); err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := kube.AppsV1().Deployments("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe := deployment.Spec.Template.Spec.Containers[0].ReadinessProbe; !tcp(probe) {
+		t.Fatalf("deployment readiness: %+v", probe)
+	}
+
+	r, c, persistent, sp := persistentFixture()
+	for key, value := range labels {
+		persistent[key] = value
+	}
+	sp.Name, sp.Image, sp.Ports = spec.Name, spec.Image, spec.Ports
+	iid = id.New(id.PrefixInstance)
+	if _, err = r.Apply(t.Context(), iid, sp, persistent); err != nil {
+		t.Fatal(err)
+	}
+	set, err := c.Kube.AppsV1().StatefulSets("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe := set.Spec.Template.Spec.Containers[0].ReadinessProbe; !tcp(probe) {
+		t.Fatalf("stateful readiness: %+v", probe)
+	}
+
+	labels[owned.LabelHealthProtocol] = "gopher"
+	if _, err = runtime.Apply(t.Context(), id.New(id.PrefixInstance), spec, labels); err == nil {
+		t.Fatal("applied an unknown readiness protocol")
+	}
+}

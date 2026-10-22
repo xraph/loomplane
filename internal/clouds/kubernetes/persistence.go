@@ -21,6 +21,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
+	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 )
 
 const volumeMountAnnotation = "loomplane.volume.mount"
@@ -146,6 +147,13 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 		}
 		identity[nativepg.LabelDatabase] = database
 	}
+	if engine := labels[nativecache.LabelEngine]; engine != "" {
+		// A cache's pods carry its engine, which configuring it checks.
+		if !nativecache.ValidEngine(engine) {
+			return nil, errors.New("invalid Redis/Valkey database identity")
+		}
+		identity[nativecache.LabelEngine] = engine
+	}
 	if recovery := labels[nativepg.LabelRecovery]; recovery != "" {
 		if labels[owned.LabelPublic] != "false" || labels[nativepg.LabelDatabase] == "" {
 			return nil, errors.New("recovery requires a private database profile")
@@ -224,7 +232,15 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	if pull := c.Config.Details["image_pull_secret"]; pull != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: pull})
 	}
-	template, ports, err := runtimePod(spec, labels, values, secret, pulls)
+	rules, err := accessRules(labels)
+	if err != nil {
+		return nil, err
+	}
+	account := ""
+	if rules != nil {
+		account = name
+	}
+	template, ports, err := runtimePod(spec, labels, values, secret, pulls, account)
 	if err != nil {
 		return nil, err
 	}
@@ -235,8 +251,10 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 		}
 	}
 	template.Spec.Containers[0].Env = append(template.Spec.Containers[0].Env, podIdentityEnv())
-	automount := false
-	template.Spec.AutomountServiceAccountToken = &automount
+	if account == "" {
+		automount := false
+		template.Spec.AutomountServiceAccountToken = &automount
+	}
 	port, err := healthPort(spec, labels)
 	if err != nil {
 		return nil, err
@@ -245,6 +263,8 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	switch database, health := labels[nativepg.LabelDatabase], labels[owned.LabelHealth]; {
 	case database != "":
 		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
+	case labels[owned.LabelHealthProtocol] == "redis":
+		// A RESP port keeps the TCP probe.
 	case health != "":
 		// A catalog component declares an HTTP readiness probe.
 		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}
@@ -285,6 +305,9 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 		if checkErr := checkClaim(actual, want); checkErr != nil {
 			return nil, checkErr
 		}
+	}
+	if _, err = r.applyAccess(ctx, c, iid, labels); err != nil {
+		return nil, err
 	}
 	// Claims have no owner references and are never rolled back or deleted here.
 	mutated = true

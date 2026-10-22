@@ -167,7 +167,7 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 	if selected := c.Config.Details["image_pull_secret"]; selected != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: selected})
 	}
-	template, _, err := runtimePod(spec, labels, values, runtimeSecret, pulls)
+	template, _, err := runtimePod(spec, labels, values, runtimeSecret, pulls, "")
 	if err != nil {
 		return result, err
 	}
