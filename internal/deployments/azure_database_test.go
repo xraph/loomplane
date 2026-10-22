@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -202,5 +203,101 @@ func TestAzurePassword(t *testing.T) {
 			!strings.ContainsAny(p, "abcdefghijklmnopqrstuvwxyz") || !strings.ContainsAny(p, "0123456789") {
 			t.Fatalf("password %q", p)
 		}
+	}
+}
+
+// azureRedisJob is a job for redis on azure-managed-redis.
+func azureRedisJob(kept map[string]string) *Job {
+	job := azureDatabaseJob("redis", "", kept)
+	job.Action.Name, job.Action.ID, job.Action.Provider, job.Action.Resource.Provider = "cache", "resource:cache", "azure-managed-redis", "azure-managed-redis"
+	return job
+}
+
+func TestAzureRedis(t *testing.T) {
+	f := azuretest.New(t)
+	exec := &AzureRedis{Client: azure.New(f.URL())}
+	kept := map[string]string{}
+	job := azureRedisJob(kept)
+	var saved map[string]string
+	job.Checkpoint = func(data []byte) error { return json.Unmarshal(data, &saved) }
+	out, err := exec.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := AzureDatabaseName(job, azuretest.Subscription)
+	if !strings.HasSuffix(out.ExternalID, "/resourceGroups/loomplane/providers/Microsoft.Cache/redisEnterprise/"+name) ||
+		out.Revision != "redis" || saved["cluster_id"] != out.ExternalID {
+		t.Fatalf("outcome %+v, checkpoint %v", out, saved)
+	}
+	// The key is escaped in the address, and nothing else is kept.
+	want := "rediss://:fake%2Fredis+key=@" + name + ".westeurope.redis.azure.net:10000"
+	if kept[ResourceURL] != want || len(kept) != 1 {
+		t.Fatalf("kept %v, want %s", kept, want)
+	}
+	if !f.Registered("Microsoft.Cache") {
+		t.Fatal("Microsoft.Cache wasn't registered")
+	}
+	f.Lock()
+	clusters, dbs := slices.Clone(f.RedisPuts), slices.Clone(f.RedisDatabasePuts)
+	f.Unlock()
+	if len(clusters) != 1 || clusters[0]["location"] != "westeurope" || clusters[0]["sku"].(map[string]any)["name"] != "Balanced_B0" {
+		t.Fatalf("clusters %v", clusters)
+	}
+	props := dbs[0]["properties"].(map[string]any)
+	if len(dbs) != 1 || props["accessKeysAuthentication"] != "Enabled" || props["clientProtocol"] != "Encrypted" {
+		t.Fatalf("databases %v", dbs)
+	}
+	if loc := exec.Locate(&planning.Binding{ExternalID: out.ExternalID, Region: "westeurope"}); loc != "the Azure Managed Redis cluster "+name+" in westeurope" {
+		t.Fatalf("locate %q", loc)
+	}
+	if id, perr := exec.PendingCloudResource(t.Context(), &Job{Resume: []byte(`{"cluster_id":"` + out.ExternalID + `"}`)}); perr != nil || id != out.ExternalID {
+		t.Fatalf("pending %q, %v", id, perr)
+	}
+
+	// Applying it again keeps the cluster and reads the key afresh.
+	job.Binding = &planning.Binding{Provider: "azure-managed-redis", ExternalID: out.ExternalID, Region: "westeurope"}
+	clear(kept)
+	again, err := exec.Apply(t.Context(), job)
+	if err != nil || again.ExternalID != out.ExternalID || kept[ResourceURL] != want {
+		t.Fatalf("again %+v, %v, kept %v", again, err, kept)
+	}
+
+	obs, err := exec.Observe(t.Context(), job.Connection, job.Credential, job.Binding)
+	if err != nil || !obs.Exists || obs.Revision != "redis" {
+		t.Fatalf("observe %+v, %v", obs, err)
+	}
+	forgot := false
+	job.Forget = func(context.Context) error { forgot = true; return nil }
+	if rerr := exec.Remove(t.Context(), job, job.Binding); rerr != nil || !forgot {
+		t.Fatalf("remove %v, forgot %v", rerr, forgot)
+	}
+	f.Lock()
+	deleted := slices.Clone(f.Deleted)
+	f.Unlock()
+	if !slices.Contains(deleted, name) {
+		t.Fatalf("deleted %v", deleted)
+	}
+	obs, err = exec.Observe(t.Context(), job.Connection, job.Credential, job.Binding)
+	if err != nil || obs.Exists {
+		t.Fatalf("observe after remove %+v, %v", obs, err)
+	}
+}
+
+func TestAzureRedis_aRegionWithoutManagedRedis(t *testing.T) {
+	f := azuretest.New(t)
+	f.RedisUnavailableIn = "westeurope"
+	exec := &AzureRedis{Client: azure.New(f.URL())}
+	kept := map[string]string{}
+	_, err := exec.Apply(t.Context(), azureRedisJob(kept))
+	if err == nil || !strings.Contains(err.Error(), "westeurope") || !strings.Contains(err.Error(), "another region") || len(kept) != 0 {
+		t.Fatalf("%v, kept %v", err, kept)
+	}
+}
+
+func TestAzureRedis_onlyRedis(t *testing.T) {
+	f := azuretest.New(t)
+	exec := &AzureRedis{Client: azure.New(f.URL())}
+	if _, err := exec.Apply(t.Context(), azureDatabaseJob("postgres", "16", map[string]string{})); !errors.Is(err, ErrNoExecutor) {
+		t.Fatalf("%v", err)
 	}
 }

@@ -141,10 +141,10 @@ func (a *AzureDatabase) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	return &Outcome{ExternalID: state.ServerID, Revision: cfg.Kind}, nil
 }
 
-// azureDatabaseCheckpoint saves the server an action makes. A cloud sync
-// must save it before the server is made; otherwise a failed save is
+// azureDatabaseCheckpoint saves the server or cluster an action makes. A
+// cloud sync must save it before it's made; otherwise a failed save is
 // tried again with the next heartbeat.
-func azureDatabaseCheckpoint(job *Job, state azureDatabaseState) error {
+func azureDatabaseCheckpoint(job *Job, state any) error {
 	if job.Plan != nil && job.Plan.CloudSyncID != "" {
 		return checkpointCloudIdentity(job, state)
 	}
@@ -160,14 +160,20 @@ func azureDatabaseCheckpoint(job *Job, state azureDatabaseState) error {
 // after a move to another region, keeps that name, so this one takes
 // another.
 func (a *AzureDatabase) serverName(s *azure.Session, job *Job, kind string) string {
-	sub := s.Credential().SubscriptionID
-	if job.Binding != nil && azure.FlexibleServerEngine(job.Binding.ExternalID) == kind &&
-		strings.EqualFold(job.Binding.ExternalID, s.FlexibleServerPath(kind, path.Base(job.Binding.ExternalID))) {
+	return azureGlobalName(job, s.Credential().SubscriptionID, func(name string) string { return s.FlexibleServerPath(kind, name) })
+}
+
+// azureGlobalName is the globally named resource an action makes, whose
+// resource ID pathOf gives: the bound one, or the action's name. One the
+// action replaces in the same subscription, as after a move to another
+// region, keeps that name, so this one takes another.
+func azureGlobalName(job *Job, subscription string, pathOf func(name string) string) string {
+	if job.Binding != nil && strings.EqualFold(job.Binding.ExternalID, pathOf(path.Base(job.Binding.ExternalID))) {
 		return path.Base(job.Binding.ExternalID)
 	}
-	name := AzureDatabaseName(job, sub)
-	if job.Replaces != nil && strings.EqualFold(job.Replaces.ExternalID, s.FlexibleServerPath(kind, name)) {
-		name = azureServerName(doName(job.Action.Name+"-"+job.Deployment.Environment+"-"+idSuffix(job.Deployment.ProjectID)+"-2"), sub)
+	name := AzureDatabaseName(job, subscription)
+	if job.Replaces != nil && strings.EqualFold(job.Replaces.ExternalID, pathOf(name)) {
+		name = azureServerName(doName(job.Action.Name+"-"+job.Deployment.Environment+"-"+idSuffix(job.Deployment.ProjectID)+"-2"), subscription)
 	}
 	return name
 }
@@ -228,4 +234,112 @@ func (a *AzureDatabase) Locate(b *planning.Binding) string {
 // PendingCloudResource reads the exact flexible server the operation made.
 func (a *AzureDatabase) PendingCloudResource(_ context.Context, job *Job) (string, error) {
 	return pendingCheckpointID(job.Resume, "server_id")
+}
+
+// AzureRedis makes Redis as Azure Managed Redis in the connection's
+// resource group: the smallest Balanced cluster, with one database that
+// takes TLS connections and an access key. The key is read from Azure on
+// every apply, so only the address is kept.
+type AzureRedis struct {
+	Client *azure.Client
+}
+
+var (
+	_ Executor             = (*AzureRedis)(nil)
+	_ Locator              = (*AzureRedis)(nil)
+	_ PendingCloudResource = (*AzureRedis)(nil)
+)
+
+// azureRedisRevision is what an azure-managed-redis binding runs.
+const azureRedisRevision = "redis"
+
+// azureRedisState is what an azure-managed-redis action checkpoints: the
+// cluster it makes, before it makes it, so cleanup can find it.
+type azureRedisState struct {
+	ClusterID string `json:"cluster_id,omitempty"`
+}
+
+// Apply implements Executor.
+func (a *AzureRedis) Apply(ctx context.Context, job *Job) (*Outcome, error) {
+	cfg := job.Action.Resource
+	if cfg == nil || cfg.Kind != "redis" {
+		return nil, fmt.Errorf("%w: azure-managed-redis provisions redis, not %s", ErrNoExecutor, job.Action.Subject)
+	}
+	s, err := azureSession(ctx, a.Client, job.Connection, job.Credential)
+	if err != nil {
+		return nil, err
+	}
+	location := cmp.Or(job.Action.Region, cfg.Region, azureRegion)
+	// Cluster names are DNS names across Azure, like flexible servers'.
+	name := azureGlobalName(job, s.Credential().SubscriptionID, s.ManagedRedisPath)
+	state := azureRedisState{ClusterID: s.ManagedRedisPath(name)}
+	if cerr := azureDatabaseCheckpoint(job, state); cerr != nil {
+		return nil, cerr
+	}
+	ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
+
+	job.Progress(StepDeploying, "Setting up the resource group")
+	if gerr := s.EnsureGroup(ctx, location); gerr != nil {
+		return nil, fmt.Errorf("make resource group %s: %w", s.Credential().ResourceGroup, gerr)
+	}
+	job.Progress(StepDeploying, "Making the Managed Redis cluster "+name+"; this takes several minutes")
+	host, key, err := s.EnsureManagedRedis(ctx, name, location)
+	if err != nil {
+		return nil, err
+	}
+	if kerr := job.Keep(ctx, ResourceURL, []byte(azureRedisURL(key, host))); kerr != nil {
+		return nil, kerr
+	}
+	return &Outcome{ExternalID: state.ClusterID, Revision: azureRedisRevision}, nil
+}
+
+// azureRedisURL is how a service reaches Managed Redis: over TLS, with
+// the access key as the password.
+func azureRedisURL(key, host string) string {
+	return "rediss://" + url.UserPassword("", key).String() + "@" + host + ":" + strconv.Itoa(azure.ManagedRedisPort)
+}
+
+// Remove implements Executor. The cluster goes with its data, and then
+// what Loomplane kept for it.
+func (a *AzureRedis) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
+	if b.ExternalID != "" {
+		s, err := azureSession(ctx, a.Client, job.Connection, job.Credential)
+		if err != nil {
+			return err
+		}
+		ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
+		if derr := s.DeleteManagedRedis(ctx, b.ExternalID); derr != nil {
+			return derr
+		}
+	}
+	return job.Forget(ctx)
+}
+
+// Observe implements Executor.
+func (a *AzureRedis) Observe(ctx context.Context, conn *connections.Connection, cred []byte, b *planning.Binding) (*Observation, error) {
+	s, err := azureSession(ctx, a.Client, conn, cred)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.GetManagedRedis(ctx, b.ExternalID)
+	if azure.IsNotFound(err) {
+		return &Observation{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Observation{Exists: true, Revision: azureRedisRevision}, nil
+}
+
+// Locate implements Locator.
+func (a *AzureRedis) Locate(b *planning.Binding) string {
+	if b.ExternalID == "" || !azure.IsManagedRedis(b.ExternalID) {
+		return ""
+	}
+	return fmt.Sprintf("the Azure Managed Redis cluster %s in %s", path.Base(b.ExternalID), b.Region)
+}
+
+// PendingCloudResource reads the exact cluster the operation made.
+func (a *AzureRedis) PendingCloudResource(_ context.Context, job *Job) (string, error) {
+	return pendingCheckpointID(job.Resume, "cluster_id")
 }

@@ -229,6 +229,17 @@ func Catalog() []provider.Provider {
 			Available: true,
 		},
 		{
+			Name: "azure-managed-redis", Title: "Azure Managed Redis", Cloud: "azure",
+			Description: "Managed Redis on Azure, reached over TLS with an access key.",
+			Model:       provider.Managed,
+			Provisions:  []provider.Provisions{{Kind: "redis", Creates: "Azure Managed Redis cluster"}},
+			Regions:     azureRegions,
+			// Provisioned by Loomplane on the smallest Balanced size, its
+			// key read from Azure on every apply (internal/deployments,
+			// internal/clouds/azure).
+			Available: true,
+		},
+		{
 			Name: "server", Title: "Existing server", Cloud: "server",
 			BuildLogs:   "streamed",
 			Description: "Runs a service container on the Docker daemon of the SSH server you choose.",

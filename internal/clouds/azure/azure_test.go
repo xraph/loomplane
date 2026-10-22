@@ -198,13 +198,16 @@ func TestMissing(t *testing.T) {
 			t.Fatal(err)
 		}
 		missing, err := s.Missing(t.Context())
-		// Nor may it make databases.
-		want := make([]string, 0, 11)
+		// Nor may it make databases or Redis.
+		want := make([]string, 0, 17)
 		want = append(want, createGroup, "Microsoft.ContainerRegistry/registries/scheduleRun/action")
 		for _, ns := range []string{"Microsoft.DBforPostgreSQL", "Microsoft.DBforMySQL"} {
 			for _, a := range []string{"read", "write", "delete", "firewallRules/write"} {
 				want = append(want, ns+"/flexibleServers/"+a)
 			}
+		}
+		for _, a := range []string{"read", "write", "delete", "databases/read", "databases/write", "databases/listKeys/action"} {
+			want = append(want, "Microsoft.Cache/redisEnterprise/"+a)
 		}
 		want = append(want, "Microsoft.App/register/action")
 		if err != nil || !slices.Equal(missing, want) {
@@ -505,6 +508,77 @@ func TestFlexibleServer_aDisabledServerFails(t *testing.T) {
 	}
 	_, err := s.EnsureFlexibleServer(t.Context(), FlexibleServer{Engine: "postgres", Name: "db", Location: "eastus", Version: "16", Login: "loomplane", Password: "Pw-1"})
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestManagedRedis(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	ctx := t.Context()
+	if err := s.EnsureGroup(ctx, "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+	host, key, err := s.EnsureManagedRedis(ctx, "cache-production-a1b2c3", "westeurope")
+	if err != nil || host != "cache-production-a1b2c3.westeurope.redis.azure.net" || key != azuretest.RedisKey {
+		t.Fatalf("%q %q, %v", host, key, err)
+	}
+	// Microsoft.Cache is registered on first use, and nothing else is.
+	if !f.Registered("Microsoft.Cache") || f.Registered("Microsoft.DBforPostgreSQL") {
+		t.Fatal("Microsoft.Cache wasn't registered on its own")
+	}
+	f.Lock()
+	clusters, dbs := slices.Clone(f.RedisPuts), slices.Clone(f.RedisDatabasePuts)
+	f.Unlock()
+	if len(clusters) != 1 || len(dbs) != 1 {
+		t.Fatalf("clusters %v, databases %v", clusters, dbs)
+	}
+	if sku := clusters[0]["sku"].(map[string]any); sku["name"] != "Balanced_B0" || clusters[0]["location"] != "westeurope" {
+		t.Fatalf("cluster %v", clusters[0])
+	}
+	props := dbs[0]["properties"].(map[string]any)
+	if props["clientProtocol"] != "Encrypted" || props["accessKeysAuthentication"] != "Enabled" || props["port"] != float64(ManagedRedisPort) {
+		t.Fatalf("database %v", dbs[0])
+	}
+	id := s.ManagedRedisPath("cache-production-a1b2c3")
+	if !strings.HasSuffix(id, "/resourceGroups/loomplane/providers/Microsoft.Cache/redisEnterprise/cache-production-a1b2c3") || !IsManagedRedis(id) || IsManagedRedis(s.AppPath("api")) {
+		t.Fatalf("id %s", id)
+	}
+	c, err := s.GetManagedRedis(ctx, id)
+	if err != nil || !strings.EqualFold(c.Properties.ProvisioningState, "Succeeded") || c.Properties.HostName != host {
+		t.Fatalf("%+v, %v", c, err)
+	}
+	// A second apply PUTs the same cluster and reads the key again.
+	if _, again, aerr := s.EnsureManagedRedis(ctx, "cache-production-a1b2c3", "westeurope"); aerr != nil || again != key {
+		t.Fatalf("again %q, %v", again, aerr)
+	}
+
+	if derr := s.DeleteManagedRedis(ctx, id); derr != nil {
+		t.Fatal(derr)
+	}
+	if _, gerr := s.GetManagedRedis(ctx, id); !IsNotFound(gerr) {
+		t.Fatalf("after delete: %v", gerr)
+	}
+	if derr := s.DeleteManagedRedis(ctx, id); derr != nil {
+		t.Fatalf("deleting it again: %v", derr)
+	}
+	// Nothing outside the subscription's Managed Redis goes through it.
+	for _, other := range []string{s.AppPath("api"), s.FlexibleServerPath("postgres", "db"), "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/loomplane/providers/Microsoft.Cache/redisEnterprise/x"} {
+		if derr := s.DeleteManagedRedis(ctx, other); derr == nil {
+			t.Errorf("deleted %s", other)
+		}
+	}
+}
+
+func TestManagedRedis_aRegionWithoutTheSKU(t *testing.T) {
+	f := azuretest.New(t)
+	f.RedisUnavailableIn = "brazilsouth"
+	s := fakeSession(t, f)
+	if err := s.EnsureGroup(t.Context(), "brazilsouth"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := s.EnsureManagedRedis(t.Context(), "cache", "brazilsouth")
+	if err == nil || !strings.Contains(err.Error(), "brazilsouth") || !strings.Contains(err.Error(), "another region") {
 		t.Fatalf("%v", err)
 	}
 }

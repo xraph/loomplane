@@ -17,8 +17,8 @@ const (
 
 // Actions are what a service principal needs for Loomplane to build a
 // service with ACR Tasks and run it on Container Apps, and to make
-// Postgres and MySQL flexible servers, in the resource group it deploys
-// to. Each is checked before a connection counts as ready. The
+// Postgres and MySQL flexible servers and Azure Managed Redis, in the
+// resource group it deploys to. Each is checked before a connection counts as ready. The
 // Contributor role on the resource group or the subscription has them
 // all.
 var Actions = []string{
@@ -43,6 +43,12 @@ var Actions = []string{
 	"Microsoft.DBforMySQL/flexibleServers/write",
 	"Microsoft.DBforMySQL/flexibleServers/delete",
 	"Microsoft.DBforMySQL/flexibleServers/firewallRules/write",
+	"Microsoft.Cache/redisEnterprise/read",
+	"Microsoft.Cache/redisEnterprise/write",
+	"Microsoft.Cache/redisEnterprise/delete",
+	"Microsoft.Cache/redisEnterprise/databases/read",
+	"Microsoft.Cache/redisEnterprise/databases/write",
+	"Microsoft.Cache/redisEnterprise/databases/listKeys/action",
 }
 
 // createGroup is what making the resource group takes, needed only while
@@ -51,9 +57,10 @@ const createGroup = "Microsoft.Resources/subscriptions/resourceGroups/write"
 
 // Namespaces are the resource providers a subscription must have
 // registered. Loomplane registers one that isn't, which takes the
-// namespace's register action. A database's namespace isn't one of
-// them: it's registered when a deployment first makes that database, so
-// a subscription that only runs apps needn't have it.
+// namespace's register action. A database's namespace, Microsoft.Cache
+// for Redis among them, isn't one of them: it's registered when a
+// deployment first makes that database, so a subscription that only runs
+// apps needn't have it.
 var Namespaces = []string{"Microsoft.App", "Microsoft.ContainerRegistry"}
 
 // Subscription is the subscription a principal deploys to.

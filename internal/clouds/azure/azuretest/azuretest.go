@@ -1,9 +1,9 @@
 // Package azuretest is a fake of the parts of Microsoft Entra ID and
 // Azure Resource Manager that Loomplane uses, for tests: one tenant, one
 // subscription, and the resource group's registry, Container Apps
-// environments, container apps and Postgres and MySQL flexible servers.
-// Everything it makes reports provisioning once before it succeeds, so
-// pollers are exercised.
+// environments, container apps, Postgres and MySQL flexible servers and
+// Azure Managed Redis. Everything it makes reports provisioning once
+// before it succeeds, so pollers are exercised.
 //
 //nolint:errcheck,gosec // A test fake: its secret is fake, and a request it can't read fails the test that sent it.
 package azuretest
@@ -30,6 +30,9 @@ const (
 	Secret       = "fake~client.secret"
 	// PullPrincipal is the principal ID of the pull identity.
 	PullPrincipal = "66666666-6666-6666-6666-666666666666"
+	// RedisKey is every Managed Redis database's primary access key. Like
+	// Azure's, it has characters an address must escape.
+	RedisKey = "fake/redis+key="
 )
 
 // RoleAssignment is a role Loomplane assigned.
@@ -86,6 +89,12 @@ type Fake struct {
 	// ServerState is the state a flexible server settles in once it's
 	// done provisioning: Ready unless it's set.
 	ServerState string
+	// RedisPuts are the Managed Redis cluster bodies Loomplane PUT, and
+	// RedisDatabasePuts its databases' bodies, in order.
+	RedisPuts, RedisDatabasePuts []map[string]any
+	// RedisUnavailableIn is a region that answers SkuNotAvailable to a
+	// Managed Redis cluster.
+	RedisUnavailableIn string
 }
 
 // New starts a fake.
@@ -200,7 +209,7 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		return
 	}
 	// GET reports provisioning once, then the final state.
-	get := func() {
+	getAt := func(id string) {
 		res := f.resources[id]
 		if res == nil {
 			notFound("ResourceNotFound")
@@ -225,6 +234,7 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		f.polls[id]++
 		reply(http.StatusOK, res)
 	}
+	get := func() { getAt(id) }
 	// An identity is there as soon as it's made.
 	if kind == "microsoft.managedidentity/userassignedidentities" {
 		f.identity(r, reply, notFound, id, canonical, name, body)
@@ -246,14 +256,20 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		case "microsoft.app/managedenvironments":
 			props["defaultDomain"] = "fake.azurecontainerapps.io"
 		case "microsoft.dbforpostgresql/flexibleservers", "microsoft.dbformysql/flexibleservers":
-			var record map[string]any
-			data, _ := json.Marshal(body)
-			_ = json.Unmarshal(data, &record)
-			f.ServerPuts = append(f.ServerPuts, record)
+			f.ServerPuts = append(f.ServerPuts, record(body))
 			// Azure never shows the password again.
 			delete(props, "administratorLoginPassword")
 			engine := map[bool]string{true: "postgres", false: "mysql"}[kind == "microsoft.dbforpostgresql/flexibleservers"]
 			props["fullyQualifiedDomainName"] = strings.ToLower(name) + "." + engine + ".database.azure.com"
+		case "microsoft.cache/redisenterprise":
+			location, _ := body["location"].(string)
+			if strings.EqualFold(location, f.RedisUnavailableIn) {
+				reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "SkuNotAvailable",
+					"message": "The requested SKU Balanced_B0 is not available in location " + location + "."}})
+				return
+			}
+			f.RedisPuts = append(f.RedisPuts, record(body))
+			props["hostName"] = strings.ToLower(name) + "." + strings.ToLower(location) + ".redis.azure.net"
 		case "microsoft.app/containerapps":
 			f.Apps[name] = body
 			f.AppPuts = append(f.AppPuts, body)
@@ -279,6 +295,11 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			return
 		}
 		delete(f.resources, id)
+		for child := range f.resources {
+			if strings.HasPrefix(child, id+"/") {
+				delete(f.resources, child)
+			}
+		}
 		f.Deleted = append(f.Deleted, name)
 		for rule := range f.FirewallRules {
 			if strings.HasPrefix(rule, name+"/") {
@@ -342,6 +363,8 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		}
 		f.FirewallRules[name+"/"+strings.Split(strings.Trim(p, "/"), "/")[9]] = body
 		reply(http.StatusAccepted, body)
+	case kind == "microsoft.cache/redisenterprise" && len(rest) >= 2 && rest[0] == "databases":
+		f.redisDatabase(r, reply, notFound, getAt, id, canonical, rest, body)
 	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions" && f.pullDenied[rest[1]]:
 		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioned", "runningState": "Failed",
 			"runningStateDetails": "Failed to pull image: UNAUTHORIZED: authentication required"}})
@@ -350,6 +373,44 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 	default:
 		notFound("NotFound")
 	}
+}
+
+// redisDatabase serves a Managed Redis cluster's database and its keys.
+func (f *Fake) redisDatabase(r *http.Request, reply func(int, any), notFound, getAt func(string), id, canonical string, rest []string, body map[string]any) {
+	key := id + "/databases/" + rest[1]
+	switch {
+	case f.resources[id] == nil:
+		notFound("ParentResourceNotFound")
+	case len(rest) == 2 && r.Method == http.MethodGet:
+		getAt(key)
+	case len(rest) == 2 && r.Method == http.MethodPut:
+		f.RedisDatabasePuts = append(f.RedisDatabasePuts, record(body))
+		props, _ := body["properties"].(map[string]any)
+		if props == nil {
+			props = map[string]any{}
+		}
+		body["id"], body["name"], body["properties"] = canonical+"/databases/"+rest[1], rest[1], props
+		props["provisioningState"] = "InProgress"
+		f.resources[key], f.polls[key] = body, 0
+		reply(http.StatusCreated, body)
+	case len(rest) == 3 && rest[2] == "listkeys" && r.Method == http.MethodPost:
+		if f.resources[key] == nil {
+			notFound("ResourceNotFound")
+			return
+		}
+		reply(http.StatusOK, map[string]string{"primaryKey": RedisKey, "secondaryKey": "fake-secondary-key"})
+	default:
+		notFound("NotFound")
+	}
+}
+
+// record is a deep copy of a request body, so what the fake changes in
+// it later doesn't change what was sent.
+func record(body map[string]any) map[string]any {
+	var out map[string]any
+	data, _ := json.Marshal(body)
+	_ = json.Unmarshal(data, &out)
+	return out
 }
 
 // isServer reports whether kind is a Postgres or MySQL flexible server.
