@@ -122,9 +122,9 @@ export function NativeRecovery({
         </>
       ) : sources.status !== "error" ? (
         <NativeEmpty title="No captured cloud database history">
-          Pinned RDS histories appear after deployment. Older unpinned databases
-          and Cloud SQL inventory still need qualification. You can deploy a
-          managed database in Services.
+          Pinned RDS and Cloud SQL histories appear after deployment. Older
+          unpinned databases need an explicit identity check first. You can
+          deploy a managed database in Services.
         </NativeEmpty>
       ) : null}
       {(pages.length > 1 || sources.data?.nextBefore) && (
@@ -205,6 +205,13 @@ function NativePoints({
         · {observed.complete ? "complete scan" : "partial scan or not checked"}
         {observed.state === "failed" ? " · last refresh failed" : ""}
       </p>
+      {source.provider === "cloud-sql" && !observed.complete && (
+        <p className="text-xs text-muted-foreground">
+          Cloud SQL points need matching source creation metadata. Missing
+          proof, provider warnings or a scan limit leave this scan partial.
+          Earlier observations stay visible.
+        </p>
+      )}
       {failure && (
         <Alert variant="destructive">
           <AlertDescription>
@@ -236,8 +243,8 @@ function NativePoints({
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Created {formatDate(point.createdAt)} · {point.engine}{" "}
-                {point.version}
+                {source.provider === "cloud-sql" ? "Point time" : "Created"}{" "}
+                {formatDate(point.createdAt)} · {point.engine} {point.version}
               </p>
               <details className="text-xs">
                 <summary className="cursor-pointer text-muted-foreground">
