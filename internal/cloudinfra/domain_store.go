@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/ctrlplane/id"
 	"github.com/xraph/grove/driver"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
 )
@@ -117,7 +119,62 @@ func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	return out, nil
 }
 
+// A Kubernetes binding routes to its connection's ingress. With a Cloud ID it
+// needs a live grant covering its placement, a target or the Cloud's default.
+// Without one it must have no placement at all: it runs on the environment's
+// own connection, and the project's infrastructure permission authorizes it.
+const kubernetesRouteBindingQuery = `SELECT b.id,c.id,c.generation,b.external_id,coalesce(b.config->'cloud_placement'->>'target_id',''),coalesce(c.details->>'namespace_uid',''),coalesce(c.details->>'namespace',''),coalesce(c.details->>'ingress_class',''),coalesce(c.details->>'ingress_address','')
+ FROM loomplane_bindings b
+ JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
+ JOIN loomplane_cloud_connections c ON c.org_id=b.org_id AND c.id=b.connection_id AND c.cloud='kubernetes' AND c.status='ready'
+ JOIN cp_instances i ON i.tenant_id=b.org_id AND i.id=b.external_id` + routedService + `
+ WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.provider='kubernetes'
+ AND (b.subject='service' OR (b.subject='resource' AND b.config->'routable_ports' @> jsonb_build_array($6::int)))
+ AND CASE WHEN $5='' THEN coalesce(b.config->'cloud_placement','null'::jsonb)='null'::jsonb
+ ELSE b.config->'cloud_placement'->>'cloud_id'=$5 AND EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=b.org_id AND g.cloud_id=$5 AND g.project_id=b.project_id AND NOT g.revoked
+ AND CASE WHEN coalesce(b.config->'cloud_placement'->>'target_id','')='' THEN coalesce((b.config->'cloud_placement'->>'default')::boolean,false) AND cardinality(g.target_ids)=0
+ ELSE (cardinality(g.target_ids)=0 OR b.config->'cloud_placement'->>'target_id'=ANY(g.target_ids))
+ AND EXISTS(SELECT 1 FROM loomplane_cloud_targets t WHERE t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id') END) END
+ ORDER BY b.subject='service' DESC`
+
+// scanKubernetesRouteBinding leaves the config digest, release and container
+// empty: the Ingress reaches the Service by name, so a release keeps the binding.
+func scanKubernetesRouteBinding(row pgx.Row) (RouteBinding, error) {
+	out := RouteBinding{Backend: RouteBackendKubernetes}
+	err := row.Scan(&out.BindingID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.TargetID, &out.RuntimeID, &out.Namespace, &out.IngressClass, &out.Address)
+	if err != nil {
+		return out, storeError(err)
+	}
+	instance, parseErr := id.Parse(out.InstanceID)
+	if out.RuntimeID == "" || out.Namespace == "" || parseErr != nil {
+		return out, fmt.Errorf("%w: the Kubernetes connection has no checked namespace or the service has no instance; check the connection and deploy the service first", ErrConflict)
+	}
+	out.ServiceName = kubernetes.WorkloadName(instance)
+	if out.Address == "" {
+		return out, fmt.Errorf("%w: set the Kubernetes connection's ingress address before routing to it", ErrInvalid)
+	}
+	return out, nil
+}
+
+// routeBindingBackend is the provider of the binding a route names. A service
+// wins over a catalog component with the same name, as in the binding queries.
+func (s *PgStore) routeBindingBackend(ctx context.Context, org, project string, in RouteInput) (string, error) {
+	var backend string
+	err := s.db.QueryRow(ctx, `SELECT provider FROM loomplane_bindings WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND name=$4 AND subject IN ('service','resource') ORDER BY subject='service' DESC LIMIT 1`, org, project, in.EnvironmentID, in.Service).Scan(&backend)
+	return backend, storeError(err)
+}
+
 func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, in RouteInput) (RouteBinding, error) {
+	backend, err := s.routeBindingBackend(ctx, org, project, in)
+	if err != nil {
+		return RouteBinding{}, err
+	}
+	if backend == RouteBackendKubernetes {
+		return scanKubernetesRouteBinding(s.db.QueryRow(ctx, kubernetesRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+	}
+	if in.CloudID == "" {
+		return RouteBinding{}, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
+	}
 	return scanRouteBinding(s.db.QueryRow(ctx, routeBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
 }
 
@@ -177,7 +234,7 @@ func insertRouteOperation(ctx context.Context, tx driver.Tx, op *RouteOperation)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,generation,body,principal,checkpoint) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, op.ID, op.Route.OrgID, op.Route.ProjectID, op.Route.ID, op.Route.Binding.ServerID, op.Route.Input.CloudID, op.Status, op.Revision, op.Generation, raw, principal, checkpoint)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,generation,body,principal,checkpoint,backend) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, op.ID, op.Route.OrgID, op.Route.ProjectID, op.Route.ID, op.Route.Binding.ServerID, op.Route.Input.CloudID, op.Status, op.Revision, op.Generation, raw, principal, checkpoint, op.Route.Binding.BackendName())
 	return storeError(err)
 }
 
@@ -207,7 +264,15 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		return checkErr
 	}
 	if op.Kind == "apply" {
-		current, lookupErr := scanRouteBinding(tx.QueryRow(ctx, routeBindingQuery+" FOR SHARE OF b,g,t,s,c,i", route.OrgID, route.ProjectID, route.Input.EnvironmentID, route.Input.Service, route.Input.CloudID, route.Input.Port))
+		args := []any{route.OrgID, route.ProjectID, route.Input.EnvironmentID, route.Input.Service, route.Input.CloudID, route.Input.Port}
+		var current RouteBinding
+		var lookupErr error
+		// The organization lock already orders this with grant changes.
+		if route.Binding.BackendName() == RouteBackendKubernetes {
+			current, lookupErr = scanKubernetesRouteBinding(tx.QueryRow(ctx, kubernetesRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
+		} else {
+			current, lookupErr = scanRouteBinding(tx.QueryRow(ctx, routeBindingQuery+" FOR SHARE OF b,g,t,s,c,i", args...))
+		}
 		if lookupErr != nil {
 			return lookupErr
 		}
@@ -229,7 +294,7 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if encodeErr != nil {
 			return encodeErr
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO loomplane_domain_routes(id,org_id,project_id,environment_id,cloud_id,server_id,connection_id,zone_id,hostname,status,revision,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, route.ID, route.OrgID, route.ProjectID, route.Input.EnvironmentID, route.Input.CloudID, route.Binding.ServerID, route.Binding.ConnectionID, route.Input.ZoneID, route.Input.Hostname, route.Status, route.Revision, raw)
+		_, err = tx.Exec(ctx, `INSERT INTO loomplane_domain_routes(id,org_id,project_id,environment_id,cloud_id,server_id,connection_id,zone_id,hostname,status,revision,body,backend) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, route.ID, route.OrgID, route.ProjectID, route.Input.EnvironmentID, route.Input.CloudID, route.Binding.ServerID, route.Binding.ConnectionID, route.Input.ZoneID, route.Input.Hostname, route.Status, route.Revision, raw, route.Binding.BackendName())
 		if err != nil {
 			return storeError(err)
 		}
@@ -360,9 +425,13 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 		return err
 	}
 	defer rollback(tx)
-	var generation int64
-	if checkErr := tx.QueryRow(ctx, `SELECT generation FROM loomplane_ingress_configs WHERE org_id=$1 AND server_id=$2 AND generation=$3 FOR UPDATE`, op.Route.OrgID, op.Route.Binding.ServerID, op.Generation).Scan(&generation); checkErr != nil {
-		return ErrConflict
+	// A Kubernetes route has no server ingress config to fence on; the route
+	// lock and the revisions below order its workers.
+	if op.Route.Binding.BackendName() != RouteBackendKubernetes {
+		var generation int64
+		if checkErr := tx.QueryRow(ctx, `SELECT generation FROM loomplane_ingress_configs WHERE org_id=$1 AND server_id=$2 AND generation=$3 FOR UPDATE`, op.Route.OrgID, op.Route.Binding.ServerID, op.Generation).Scan(&generation); checkErr != nil {
+			return ErrConflict
+		}
 	}
 	op.Route.Receipt = op.Receipt
 	op.Route.OperationID = op.ID
@@ -392,6 +461,12 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 }
 
 func (s *PgStore) BeginIngress(ctx context.Context, op *RouteOperation) (*IngressState, error) {
+	if op.Route.Binding.BackendName() == RouteBackendKubernetes {
+		if err := s.SaveRouteOperation(ctx, op); err != nil {
+			return nil, err
+		}
+		return &IngressState{}, nil
+	}
 	state, err := s.BeginServerIngress(ctx, op.Route.OrgID, op.Route.Binding.ServerID)
 	if err != nil {
 		return nil, err

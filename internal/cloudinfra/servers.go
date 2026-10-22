@@ -141,18 +141,27 @@ type Deps struct {
 	Audit                projects.Auditor
 	EnrollmentURL        string
 	AllowLocalEnrollment bool
+	// ACMEDirectory is where Kubernetes routes order certificates. Empty
+	// means Let's Encrypt's production directory.
+	ACMEDirectory string
 }
 
 type Service struct {
 	Deps
 	now func() time.Time
+	// kubernetesRoutes and routeHTTPS reach a route's cluster and public
+	// hostname. Tests replace them.
+	kubernetesRoutes func(ctx context.Context, route Route, cleanup bool) (kubernetesRouteClient, error)
+	routeHTTPS       func(ctx context.Context, hostname string) (time.Time, int, error)
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
 		d.Runtime = SSHRuntime{}
 	}
-	return &Service{Deps: d, now: time.Now}
+	s := &Service{Deps: d, now: time.Now, routeHTTPS: probeRouteHTTPS}
+	s.kubernetesRoutes = s.openKubernetesRoute
+	return s
 }
 
 func (s *Service) authorize(ctx context.Context, p security.Principal, cloud string) (*cloudprofiles.Profile, error) {

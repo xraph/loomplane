@@ -27,8 +27,10 @@ func (s *gatewayStore) RouteBindingCloud(_ context.Context, org, project, enviro
 	return cloud, nil
 }
 func (s *gatewayStore) ResolveRouteBinding(_ context.Context, org, project string, in RouteInput) (RouteBinding, error) {
+	// A binding without a placement resolves only when no Cloud is asked
+	// for. PreviewRoute then refuses it, since it is a server binding.
 	cloud, ok := s.clouds[in.Service]
-	if org != "org" || project != "shop" || in.EnvironmentID != "prod" || !ok || cloud == "" || cloud != in.CloudID {
+	if org != "org" || project != "shop" || in.EnvironmentID != "prod" || !ok || cloud != in.CloudID {
 		return RouteBinding{}, ErrNotFound
 	}
 	return RouteBinding{BindingID: "binding_" + in.Service, ServerID: "srv_1", ConnectionID: "conn_srv", InstanceID: "instance", ReleaseID: "release", ContainerID: "container", RuntimeID: "daemon", Address: "192.0.2.10"}, nil

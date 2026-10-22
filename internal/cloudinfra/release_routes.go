@@ -33,6 +33,11 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		return err
 	}
 	for _, source := range in.Routes {
+		// A Kubernetes route follows its Service by name, so a release has
+		// nothing to hand off.
+		if source.Binding.BackendName() == RouteBackendKubernetes {
+			continue
+		}
 		drain, drainErr := ReviewedRouteDrain(source, in.DrainSeconds)
 		if drainErr != nil {
 			return drainErr
@@ -137,7 +142,7 @@ func (s *Service) verifyReleasedDestination(ctx context.Context, op *RouteOperat
 	if err != nil {
 		return err
 	}
-	return s.Store.WithOperationLock(ctx, "ingress/"+op.Route.OrgID+"/"+op.Route.Binding.ServerID, func() error {
+	return s.Store.WithOperationLock(ctx, routeLockKey(op.Route), func() error {
 		current, readErr := st.Route(ctx, op.Route.OrgID, op.Route.ProjectID, op.Route.ID)
 		if readErr != nil {
 			return readErr

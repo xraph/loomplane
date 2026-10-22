@@ -25,7 +25,8 @@ type RouteInput struct {
 	BlockedPathPrefixes []string `json:"blocked_path_prefixes,omitempty"`
 }
 
-// Servers always belong to a Cloud, so this only guards bad binding data.
+// Servers always belong to a Cloud. Only a Kubernetes binding on its
+// environment's own connection routes without one.
 const noCloudPlacement = "This service isn't placed through a Cloud, so Loomplane can't route to its server."
 
 const blockedPathRule = "Blocked path prefixes must look like /admin: start with /, no trailing slash, no //, %, *, ?, # or dot segments, at most 8 of at most 128 bytes."
@@ -52,6 +53,21 @@ type RouteBinding struct {
 	ContainerID          string `json:"container_id"`
 	Address              string `json:"address"`
 	Backend              string `json:"backend,omitempty"` // empty reads as server
+	// A Kubernetes binding names the namespace (RuntimeID is its UID), the
+	// Service and the connection's ingress class and address. It has no
+	// release or container, so it stays the same across releases.
+	Namespace    string `json:"namespace,omitempty"`
+	ServiceName  string `json:"service_name,omitempty"`
+	IngressClass string `json:"ingress_class,omitempty"`
+}
+
+// routeLockKey serializes the routes that share one ingress: a server's
+// Caddy config, or a Kubernetes connection's namespace.
+func routeLockKey(route Route) string {
+	if route.Binding.BackendName() == RouteBackendKubernetes {
+		return "ingress/" + route.OrgID + "/kubernetes:" + route.Binding.ConnectionID
+	}
+	return "ingress/" + route.OrgID + "/" + route.Binding.ServerID
 }
 
 type Route struct {
@@ -178,13 +194,13 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 		if in.CloudID, err = st.RouteBindingCloud(ctx, p.OrgID, project, in.EnvironmentID, in.Service); err != nil {
 			return nil, err
 		}
-		if in.CloudID == "" {
-			return nil, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
-		}
 	}
 	binding, err := st.ResolveRouteBinding(ctx, p.OrgID, project, in)
 	if err != nil {
 		return nil, err
+	}
+	if in.CloudID == "" && binding.BackendName() != RouteBackendKubernetes {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
 	}
 	id, err := randomID("route")
 	if err != nil {
@@ -312,7 +328,7 @@ func (s *Service) RemoveRoute(ctx context.Context, p security.Principal, project
 		return nil, err
 	}
 	op := &RouteOperation{ID: opID, Route: *route, Kind: "remove", Status: "pending", Attempt: 1, Revision: 1, Receipt: route.Receipt, Principal: p}
-	if checkErr := s.Store.WithOperationLock(ctx, "ingress/"+p.OrgID+"/"+route.Binding.ServerID, func() error { return st.AcceptRoute(ctx, op) }); checkErr != nil {
+	if checkErr := s.Store.WithOperationLock(ctx, routeLockKey(*route), func() error { return st.AcceptRoute(ctx, op) }); checkErr != nil {
 		return nil, checkErr
 	}
 	s.domainAudit(ctx, p, "domain.route."+op.Kind, op.ID, op.Route.ProjectID)

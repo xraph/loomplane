@@ -65,15 +65,15 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 	if err != nil {
 		return err
 	}
-	locks := []string{op.Route.Binding.ServerID}
-	if op.Source != nil && op.Source.Binding.ServerID != op.Route.Binding.ServerID {
-		locks = append(locks, op.Source.Binding.ServerID)
+	locks := []string{routeLockKey(op.Route)}
+	if op.Source != nil && routeLockKey(*op.Source) != locks[0] {
+		locks = append(locks, routeLockKey(*op.Source))
 	}
 	slices.Sort(locks)
 	var locked func(int) error
 	locked = func(index int) error {
 		if index < len(locks) {
-			return s.Store.WithOperationLock(ctx, "ingress/"+org+"/"+locks[index], func() error { return locked(index + 1) })
+			return s.Store.WithOperationLock(ctx, locks[index], func() error { return locked(index + 1) })
 		}
 		return func() error {
 			op, err = st.RouteOperation(ctx, org, id)
@@ -97,6 +97,7 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			var notice *routeNoticeError
 			switch {
 			case errors.Is(err, ErrPending):
 				op.Status, op.Message = "waiting", "DNS, certificate or backend verification is still pending."
@@ -104,6 +105,9 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 				op.Status, op.Message = "failed", safeFailure(err)
 			default:
 				op.Status, op.Message = "succeeded", ""
+			}
+			if errors.As(err, &notice) {
+				op.Message = notice.message
 			}
 			if saveErr := st.SaveRouteOperation(ctx, op); saveErr != nil {
 				return saveErr
@@ -161,6 +165,9 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {
 			return checkErr
 		}
+	}
+	if route.Binding.BackendName() == RouteBackendKubernetes {
+		return s.executeKubernetesRoute(ctx, st, op, zone)
 	}
 	if op.Kind == "prepare" && op.Source != nil && op.Source.Binding.ServerID != op.Route.Binding.ServerID {
 		if checkErr := s.prepareSourceIngress(ctx, st, op); checkErr != nil {
