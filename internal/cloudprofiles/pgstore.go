@@ -157,7 +157,7 @@ func (s *PgStore) UpdateProfile(ctx context.Context, p *Profile, previousRevisio
 		return storeError(err)
 	}
 	if redirects {
-		return fmt.Errorf("%w: unassign this Cloud from every environment before changing or clearing its default placement", ErrInUse)
+		return fmt.Errorf("%w: this Cloud is in use; review the default change as a Cloud change with default set, which moves its services, or unassign it first", ErrInUse)
 	}
 	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name=$4,revision=$5,updated_at=$6,default_provider=$8,default_connection_id=$9,default_region=$10 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND id=$3 AND revision=$7`, p.OrgID, p.ProjectID, p.ID, p.Name, p.Revision, p.UpdatedAt, previousRevision, provider, connection, region)
 	if err != nil {

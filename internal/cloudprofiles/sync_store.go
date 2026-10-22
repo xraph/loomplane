@@ -215,6 +215,22 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			return nil, ErrConflict
 		}
 	}
+	if p.Input.Default {
+		// The profile row is already locked through ProfileRevisions.
+		var provider, connection *string
+		var region string
+		var rev int64
+		if err = tx.QueryRow(ctx, `SELECT revision,default_provider,default_connection_id,default_region FROM loomplane_cloud_profiles WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID).Scan(&rev, &provider, &connection, &region); err != nil {
+			return nil, storeError(err)
+		}
+		var current *DefaultPlacement
+		if provider != nil && connection != nil {
+			current = &DefaultPlacement{Provider: *provider, ConnectionID: *connection, Region: region}
+		}
+		if rev != p.Input.Revision || !sameDefaultPlacement(current, p.BeforeDefault) {
+			return nil, ErrConflict
+		}
+	}
 	if lockErr := validateLockedConnections(ctx, tx, p.OrgID, snapshot); lockErr != nil {
 		return nil, lockErr
 	}
@@ -286,7 +302,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			}
 		}
 	}
-	if p.Input.TargetID != "" {
+	if p.Input.Shared() {
 		// Check the full assignment set too, including a newly assigned empty environment.
 		var ids []string
 		rows, qerr := tx.Query(ctx, `SELECT environment_id FROM loomplane_cloud_assignments WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 ORDER BY environment_id`, p.OrgID, p.ProjectID, p.Input.CloudID)
@@ -313,8 +329,14 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if !slices.Equal(ids, reviewed) {
 			return nil, ErrConflict
 		}
+	}
+	switch {
+	case p.Input.Default:
+		provider, connection, region := defaultColumns(p.AfterDefault)
+		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET default_provider=$4,default_connection_id=$5,default_region=$6,revision=revision+1,updated_at=$7 WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3`, p.OrgID, p.ProjectID, p.Input.CloudID, provider, connection, region, sync.CreatedAt)
+	case p.Input.TargetID != "":
 		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET provider=$5,connection_id=nullif($6,''),region=$7,revision=revision+1,updated_at=$8,runtime=$9,pool_id=nullif($10,'') WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 AND id=$4`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID, p.After.Provider, p.After.ConnectionID, p.After.Region, sync.CreatedAt, cmp.Or(p.After.Runtime, "managed"), p.After.PoolID)
-	} else {
+	default:
 		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES($1,$2,$3,nullif($4,''),1) ON CONFLICT(org_id,project_id,environment_id) DO UPDATE SET cloud_id=EXCLUDED.cloud_id,revision=loomplane_cloud_assignments.revision+1`, p.OrgID, p.ProjectID, p.Input.EnvironmentID, p.Input.CloudID)
 	}
 	if err != nil {
@@ -561,7 +583,7 @@ func (s *PgStore) ListSyncPage(ctx context.Context, org, project string, before 
 // validateAcceptedReview compares the caller to the immutable database review.
 // Only the approving actor and the deterministic materialized plans may differ.
 func validateAcceptedReview(ctx context.Context, tx driver.Tx, p *Preview, snapshot *Snapshot, sync *Sync) error {
-	if sync.OrgID != p.OrgID || sync.ProjectID != p.ProjectID || sync.PreviewID != p.ID || sync.CloudID != p.Input.CloudID || sync.TargetID != p.Input.TargetID || sync.Reverts != p.Reverts || sync.Status != SyncPending {
+	if sync.OrgID != p.OrgID || sync.ProjectID != p.ProjectID || sync.PreviewID != p.ID || sync.CloudID != p.Input.CloudID || sync.TargetID != p.Input.TargetID || sync.Default != p.Input.Default || !sameDefaultPlacement(sync.BeforeDefault, p.BeforeDefault) || !sameDefaultPlacement(sync.AfterDefault, p.AfterDefault) || sync.Reverts != p.Reverts || sync.Status != SyncPending {
 		return ErrConflict
 	}
 	reviewed := *snapshot
@@ -633,4 +655,8 @@ func validateAcceptedReview(ctx context.Context, tx driver.Tx, p *Preview, snaps
 		}
 	}
 	return nil
+}
+
+func sameDefaultPlacement(a, b *DefaultPlacement) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }

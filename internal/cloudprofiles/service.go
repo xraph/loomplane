@@ -255,8 +255,8 @@ func (s *Service) Update(ctx context.Context, p security.Principal, projectID, i
 
 // SetDefaultPlacement sets, replaces or clears the Cloud's single default
 // provider and account. Replacing or clearing one is refused while any
-// environment uses the Cloud, because it would move serving services without
-// a reviewed sync.
+// environment uses the Cloud: that goes through a reviewed default switch
+// (a ChangeInput with Default), which migrates the services it places.
 func (s *Service) SetDefaultPlacement(ctx context.Context, p security.Principal, projectID, id string, in SetDefaultPlacementInput) (*Profile, error) {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err

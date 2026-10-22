@@ -66,7 +66,13 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	if err != nil {
 		return nil, err
 	}
-	if (in.TargetID == "") == (in.EnvironmentID == "") || in.Revision < 0 {
+	selected := 0
+	for _, set := range []bool{in.TargetID != "", in.EnvironmentID != "", in.Default} {
+		if set {
+			selected++
+		}
+	}
+	if selected != 1 || in.Revision < 0 || in.Default && in.CloudID == "" {
 		return nil, cloudprofiles.ErrInvalid
 	}
 	id, err := typeid.Generate("cpv")
@@ -79,14 +85,15 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	if err != nil {
 		return nil, err
 	}
-	if in.TargetID != "" {
+	if in.Shared() {
 		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
 			return nil, authErr
 		}
 		snapshot.Shared = true
 	}
 	var desired *cloudprofiles.Assignment
-	if in.TargetID != "" {
+	switch {
+	case in.TargetID != "":
 		before, e := st.GetTarget(ctx, p.OrgID, "", in.CloudID, in.TargetID)
 		if e != nil {
 			return nil, e
@@ -112,7 +119,11 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			preview.Blockers = append(preview.Blockers, err.Error())
 		}
 		snapshot.Connections = append(snapshot.Connections, before.ConnectionID, after.ConnectionID)
-	} else if in.CloudID != "" {
+	case in.Default:
+		if switchErr := s.previewDefaultSwitch(ctx, st, p, in, preview, snapshot, options); switchErr != nil {
+			return nil, switchErr
+		}
+	case in.CloudID != "":
 		profile, e := st.GetProfile(ctx, p.OrgID, project, in.CloudID)
 		if e != nil {
 			return nil, e
@@ -168,7 +179,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if e != nil {
 			return nil, e
 		}
-		if in.TargetID != "" && (assignment == nil || assignment.CloudID != in.CloudID) {
+		if in.Shared() && (assignment == nil || assignment.CloudID != in.CloudID) {
 			continue
 		}
 		if in.EnvironmentID != "" && env.ID != in.EnvironmentID {
@@ -180,7 +191,8 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			return nil, e
 		}
 		after := desired
-		if in.TargetID != "" {
+		switch {
+		case in.TargetID != "":
 			copyAssignment := *assignment
 			copyAssignment.Targets = slices.Clone(assignment.Targets)
 			for i, t := range copyAssignment.Targets {
@@ -189,7 +201,17 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 				}
 			}
 			after = &copyAssignment
-		} else {
+		case in.Default:
+			// The grant check below drops the default for a target-limited grant.
+			copyAssignment := *assignment
+			copyAssignment.CloudRevision = in.Revision + 1
+			copyAssignment.DefaultPlacement = nil
+			if preview.AfterDefault != nil {
+				proposed := *preview.AfterDefault
+				copyAssignment.DefaultPlacement = &proposed
+			}
+			after = &copyAssignment
+		default:
 			if generation != in.Revision {
 				return nil, cloudprofiles.ErrConflict
 			}
@@ -234,6 +256,10 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 				snapshot.TargetRevisions[target.ID] = revision
 			}
 		}
+		if in.Default {
+			// Acceptance compares the Cloud as reviewed, before its default changes.
+			snapshot.ProfileRevisions[in.CloudID] = in.Revision
+		}
 		raw, e := st.SnapshotBindings(ctx, p.OrgID, env.ID)
 		if e != nil {
 			return nil, e
@@ -244,7 +270,12 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			return nil, e
 		}
 		plan := &Plan{ID: preview.ID + "/" + env.ID, OrgID: p.OrgID, ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, CreatedBy: p.UserID, CreatedAt: preview.CreatedAt, Status: StatusApproved, DecidedBy: p.UserID}
-		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, bindings, after, preview.Before, options, planned)
+		poolAssignment := after
+		if in.Default {
+			// A default is never a pool, and a default switch moves nothing pooled.
+			poolAssignment = nil
+		}
+		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, bindings, poolAssignment, preview.Before, options, planned)
 		if poolErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+poolErr.Error())
 		}
@@ -252,7 +283,11 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if routeErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
 		}
-		result := appliedCloudPlan(bindings, after, in.TargetID, options, s.providers, poolPlacements, routes)
+		selector := in.TargetID
+		if in.Default {
+			selector = defaultPlacementSelector
+		}
+		result := appliedCloudPlan(bindings, after, selector, options, s.providers, poolPlacements, routes)
 		if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings, routePlacementReview{Prior: planned, Before: preview.Before}); routeErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
 		}
@@ -394,7 +429,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 	if err != nil {
 		return nil, err
 	}
-	if preview.Input.TargetID != "" {
+	if preview.Input.Shared() {
 		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
 			return nil, authErr
 		}
@@ -442,7 +477,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 		return nil, err
 	}
 	now := s.now().UTC()
-	sync := &cloudprofiles.Sync{ID: id.String(), OrgID: p.OrgID, ProjectID: project, CloudID: preview.Input.CloudID, TargetID: preview.Input.TargetID, PreviewID: previewID, Status: cloudprofiles.SyncPending, CreatedBy: p.UserID, Actor: p, Before: preview.Before, After: preview.After, Environments: slices.Clone(preview.Environments), Attempt: 1, CreatedAt: now, UpdatedAt: now, Reverts: preview.Reverts}
+	sync := &cloudprofiles.Sync{ID: id.String(), OrgID: p.OrgID, ProjectID: project, CloudID: preview.Input.CloudID, TargetID: preview.Input.TargetID, Default: preview.Input.Default, BeforeDefault: preview.BeforeDefault, AfterDefault: preview.AfterDefault, PreviewID: previewID, Status: cloudprofiles.SyncPending, CreatedBy: p.UserID, Actor: p, Before: preview.Before, After: preview.After, Environments: slices.Clone(preview.Environments), Attempt: 1, CreatedAt: now, UpdatedAt: now, Reverts: preview.Reverts}
 	snapshot.Actor = p
 	if planErr := prepareAcceptedPlans(sync, snapshot); planErr != nil {
 		return nil, planErr
@@ -658,7 +693,12 @@ func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, proje
 
 func (s *Service) recordCloudSync(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, action string) {
 	if s.audit != nil {
-		s.audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", ProjectID: sync.ProjectID, Principal: p, Attributes: map[string]any{"sync_id": sync.ID, "status": sync.Status, "cloud_id": sync.CloudID, "target_id": sync.TargetID, "attempt": sync.Attempt, "reverts": sync.Reverts}})
+		attributes := map[string]any{"sync_id": sync.ID, "status": sync.Status, "cloud_id": sync.CloudID, "target_id": sync.TargetID, "attempt": sync.Attempt, "reverts": sync.Reverts}
+		if sync.Default {
+			attributes["default"] = true
+			attributes["before_default"], attributes["after_default"] = defaultAttributes(sync.BeforeDefault), defaultAttributes(sync.AfterDefault)
+		}
+		s.audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", ProjectID: sync.ProjectID, Principal: p, Attributes: attributes})
 	}
 }
 
@@ -672,7 +712,7 @@ func (s *Service) CloudPreview(ctx context.Context, p security.Principal, projec
 		return nil, err
 	}
 	preview, _, err := st.GetPreview(ctx, p.OrgID, project, id)
-	if err == nil && preview.Input.TargetID != "" {
+	if err == nil && preview.Input.Shared() {
 		err = s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}
 	if err == nil {
@@ -726,8 +766,19 @@ func (s *Service) filterCloudSync(ctx context.Context, p security.Principal, syn
 		return cloudprofiles.ParticipantProject(e.ProjectID, sync.ProjectID) != project
 	})
 	// Shared failures can contain another project's service error.
-	if sync.TargetID != "" {
+	if sync.TargetID != "" || sync.Default {
 		sync.Error = ""
+	}
+	if sync.Default {
+		// Like Resolve: a project sees the default only through a whole-Cloud grant.
+		grant, err := s.projectGrant(ctx, p.OrgID, sync.CloudID, project)
+		if err != nil {
+			return err
+		}
+		if grant == nil || grant.Revoked || len(grant.TargetIDs) > 0 {
+			sync.BeforeDefault, sync.AfterDefault = nil, nil
+		}
+		return nil
 	}
 	if sync.TargetID == "" && sync.Before == nil && sync.After == nil {
 		return nil

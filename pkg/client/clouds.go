@@ -64,9 +64,11 @@ type CloudChangeInput struct {
 	CloudID       string `json:"cloud_id"`
 	TargetID      string `json:"target_id,omitempty"`
 	EnvironmentID string `json:"environment_id,omitempty"`
-	Provider      string `json:"provider,omitempty"`
-	ConnectionID  string `json:"connection_id,omitempty"`
-	Region        string `json:"region,omitempty"`
+	// Default reviews a Cloud default switch; Revision is then the Cloud's.
+	Default      bool   `json:"default,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	ConnectionID string `json:"connection_id,omitempty"`
+	Region       string `json:"region,omitempty"`
 }
 
 // CloudPlanSummary is the public Cloud API record.
@@ -103,6 +105,8 @@ type CloudPreview struct {
 	Input            CloudChangeInput         `json:"input"`
 	Before           *CloudTarget             `json:"before,omitempty"`
 	After            *CloudTarget             `json:"after,omitempty"`
+	BeforeDefault    *CloudPlacement          `json:"before_default,omitempty"`
+	AfterDefault     *CloudPlacement          `json:"after_default,omitempty"`
 	BeforeAssignment *CloudAssignment         `json:"before_assignment,omitempty"`
 	AfterAssignment  *CloudAssignment         `json:"after_assignment,omitempty"`
 	Environments     []CloudEnvironmentChange `json:"environments"`
@@ -113,22 +117,25 @@ type CloudPreview struct {
 
 // CloudSync is the public Cloud API record.
 type CloudSync struct {
-	ID           string                   `json:"id" forge:"id"`
-	OrgID        string                   `json:"org_id"`
-	ProjectID    string                   `json:"project_id"`
-	CloudID      string                   `json:"cloud_id"`
-	TargetID     string                   `json:"target_id,omitempty"`
-	PreviewID    string                   `json:"preview_id"`
-	Status       string                   `json:"status"`
-	CreatedBy    string                   `json:"created_by"`
-	Before       *CloudTarget             `json:"before,omitempty"`
-	After        *CloudTarget             `json:"after,omitempty"`
-	Environments []CloudEnvironmentChange `json:"environments"`
-	Attempt      int                      `json:"attempt"`
-	Error        string                   `json:"error,omitempty"`
-	Reverts      string                   `json:"reverts,omitempty"`
-	CreatedAt    time.Time                `json:"created_at"`
-	UpdatedAt    time.Time                `json:"updated_at"`
+	ID            string                   `json:"id" forge:"id"`
+	OrgID         string                   `json:"org_id"`
+	ProjectID     string                   `json:"project_id"`
+	CloudID       string                   `json:"cloud_id"`
+	TargetID      string                   `json:"target_id,omitempty"`
+	Default       bool                     `json:"default,omitempty"`
+	PreviewID     string                   `json:"preview_id"`
+	Status        string                   `json:"status"`
+	CreatedBy     string                   `json:"created_by"`
+	Before        *CloudTarget             `json:"before,omitempty"`
+	After         *CloudTarget             `json:"after,omitempty"`
+	BeforeDefault *CloudPlacement          `json:"before_default,omitempty"`
+	AfterDefault  *CloudPlacement          `json:"after_default,omitempty"`
+	Environments  []CloudEnvironmentChange `json:"environments"`
+	Attempt       int                      `json:"attempt"`
+	Error         string                   `json:"error,omitempty"`
+	Reverts       string                   `json:"reverts,omitempty"`
+	CreatedAt     time.Time                `json:"created_at"`
+	UpdatedAt     time.Time                `json:"updated_at"`
 }
 
 type CloudCreateInput struct {
