@@ -197,6 +197,64 @@ func TestRouterUnknownRoute08004(t *testing.T) {
 	}
 }
 
+// A cold instance can be handed the connection that woke it before its
+// first poll. That connection waits for the first snapshot rather than
+// getting 08004 at once, over both transports' lookup.
+func TestRouterWaitsForTheFirstSnapshot(t *testing.T) {
+	h := newRouterHarness(t, nil, nil)
+	c := h.start(hostFor("orders"), nil, testPass)
+	httpDone := make(chan error, 1)
+	go func() {
+		httpDone <- h.r.withLease(t.Context(), hostFor("orders"), testRole, testPass, func() error { return nil },
+			func(*Lease) (LeaseState, error) { return LeaseClean, nil })
+	}()
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case err := <-httpDone:
+		t.Fatalf("the HTTP lookup answered %v before any snapshot", err)
+	default:
+	}
+	h.apply(h.route("r1", "orders"))
+	if got := c.recv(); got != "AuthenticationOk" {
+		t.Fatalf("a connection from before the first snapshot got %q, want AuthenticationOk", got)
+	}
+	c.readUntilReady()
+	want(t, "query", c.query("SELECT 1"), selectOne)
+	c.terminate()
+	select {
+	case err := <-httpDone:
+		if err != nil {
+			t.Fatalf("the HTTP request from before the first snapshot failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the HTTP request from before the first snapshot never ran")
+	}
+
+	// Once a snapshot is applied, an unknown label is 08004 at once.
+	start := time.Now()
+	c = h.start(hostFor("billing"), nil, testPass)
+	if got := c.recv(); !strings.HasPrefix(got, "ErrorResponse FATAL 08004") {
+		t.Fatalf("unknown label after the first snapshot = %q, want 08004", got)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("an unknown label waited after the first snapshot")
+	}
+}
+
+// With no snapshot by the hold limit, the connection gets 08004.
+func TestRouterFirstSnapshotWaitIsBounded(t *testing.T) {
+	h := newRouterHarness(t, nil, nil)
+	h.r.holdLimit = 150 * time.Millisecond
+	start := time.Now()
+	c := h.start(hostFor("orders"), nil, testPass)
+	if got := c.recv(); !strings.HasPrefix(got, "ErrorResponse FATAL 08004") {
+		t.Fatalf("message = %q, want 08004", got)
+	}
+	if d := time.Since(start); d < 150*time.Millisecond || d > 5*time.Second {
+		t.Fatalf("gave up after %v, want the hold limit", d)
+	}
+}
+
 func TestRouterRoutesByEndpointOptionAndUser(t *testing.T) {
 	h := newRouterHarness(t, nil, nil)
 	h.apply(h.route("r1", "orders"))

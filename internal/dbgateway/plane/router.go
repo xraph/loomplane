@@ -103,6 +103,7 @@ type Router struct {
 	labels   map[string]*routeHandle // by label
 	retiring map[*routeHandle]struct{}
 	changed  chan struct{} // closed and replaced by every Apply
+	applied  bool          // set by the first Apply
 	sessions map[*liveSession]struct{}
 	idle     chan struct{} // closed while no session is live
 	draining chan struct{} // closed when Drain starts
@@ -207,7 +208,7 @@ func (r *Router) Apply(s Snapshot) error {
 	for _, h := range retire {
 		r.retiring[h] = struct{}{}
 	}
-	r.routes, r.labels = routes, labels
+	r.routes, r.labels, r.applied = routes, labels, true
 	close(r.changed)
 	r.changed = make(chan struct{})
 	r.mu.Unlock()
@@ -498,11 +499,14 @@ func (r *Router) noRouteMessage(lead string) string {
 		", set options=endpoint=<label>, or connect as user=<role>@<label>"
 }
 
-// lookup finds the route for label. An unknown or holding branch label
-// whose parent database has a route is held: the Holder is asked for it,
-// and the connection waits until deadline for an Apply that brings it up.
-// Anything else unknown fails at once, so a client can't make the gateway
-// ask the control plane about labels that can't exist.
+// lookup finds the route for label. Before the first Apply every label
+// waits, until deadline, for the first snapshot: a cold instance can be
+// handed the very connection that woke it before it has polled. After
+// that, an unknown or holding branch label whose parent database has a
+// route is held: the Holder is asked for it, and the connection waits
+// until deadline for an Apply that brings it up. Anything else unknown
+// fails at once, so a client can't make the gateway ask the control plane
+// about labels that can't exist.
 func (r *Router) lookup(ctx context.Context, label Label, deadline time.Time) (*routeHandle, error) {
 	key := label.String()
 	asked := false
@@ -514,7 +518,7 @@ func (r *Router) lookup(ctx context.Context, label Label, deadline time.Time) (*
 	}()
 	for {
 		r.mu.Lock()
-		h, parent, changed := r.labels[key], r.labels[label.DB], r.changed
+		h, parent, changed, applied := r.labels[key], r.labels[label.DB], r.changed, r.applied
 		r.mu.Unlock()
 		if r.Draining() {
 			return nil, errShuttingDown
@@ -522,10 +526,10 @@ func (r *Router) lookup(ctx context.Context, label Label, deadline time.Time) (*
 		if h != nil && h.State() != RouteStateHolding {
 			return h, nil
 		}
-		if label.Branch == "" || r.holder == nil || parent == nil {
+		if applied && (label.Branch == "" || r.holder == nil || parent == nil) {
 			return nil, errUnknownRoute
 		}
-		if !asked {
+		if applied && !asked {
 			asked = true
 			if err := r.hold(ctx, label, deadline); err != nil {
 				switch {
@@ -536,8 +540,9 @@ func (r *Router) lookup(ctx context.Context, label Label, deadline time.Time) (*
 				}
 				return nil, errUnknownRoute
 			}
+		}
+		if timer == nil {
 			timer = time.NewTimer(time.Until(deadline))
-			continue
 		}
 		select {
 		case <-changed:
