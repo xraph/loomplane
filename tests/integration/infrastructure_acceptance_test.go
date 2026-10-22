@@ -117,7 +117,12 @@ func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]str
 					switch request.ChannelType() {
 					case "session":
 						// A deployment runs its effect-fence helper on the
-						// server with exec. Here the server is the builder.
+						// server with exec. Here the server is the builder,
+						// and a fixture without one has nowhere to run it.
+						if state.Builder == "" {
+							_ = request.Reject(ssh.Prohibited, "fixture destination refused")
+							continue
+						}
 						channel, requests, channelErr := request.Accept()
 						if channelErr != nil {
 							continue
