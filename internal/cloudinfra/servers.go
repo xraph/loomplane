@@ -126,6 +126,7 @@ type Runtime interface {
 type Deps struct {
 	Domains              DomainStore
 	Registrations        RegistrationStore
+	Notices              RenewalNotifier
 	Resolver             DomainResolver
 	PoolCleanup          PoolCleanup
 	Store                Store

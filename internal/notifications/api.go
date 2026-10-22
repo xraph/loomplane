@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/xraph/herald/id"
+	"github.com/xraph/herald/inbox"
 	"github.com/xraph/relay/delivery"
 	"github.com/xraph/relay/endpoint"
 	relayid "github.com/xraph/relay/id"
@@ -130,10 +131,10 @@ func (s *Service) List(ctx context.Context, p security.Principal) (NotificationL
 		if err != nil {
 			return out, err
 		}
-		if !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
+		if !domainNotice(n) && !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
 			continue
 		}
-		if err = s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); errors.Is(err, security.ErrForbidden) {
+		if err = s.requireReader(ctx, p, n); errors.Is(err, security.ErrForbidden) {
 			continue
 		} else if err != nil {
 			return out, err
@@ -164,13 +165,27 @@ func (s *Service) MarkRead(ctx context.Context, p security.Principal, value stri
 	if err != nil {
 		return ErrNotFound
 	}
-	if n.AppID != s.cfg.Identity.AppID || n.UserID != p.UserID || n.Metadata["org_id"] != p.OrgID || !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
+	if n.AppID != s.cfg.Identity.AppID || n.UserID != p.UserID || n.Metadata["org_id"] != p.OrgID || (!domainNotice(n) && !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"])) {
 		return ErrNotFound
 	}
-	if err := s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); err != nil {
+	if err := s.requireReader(ctx, p, n); err != nil {
 		return err
 	}
 	return s.mailStore.MarkRead(ctx, parsed)
+}
+
+// domainNotice is a renewal or registration notice, which belongs to the
+// organization rather than a project.
+func domainNotice(n *inbox.Notification) bool {
+	return n.Metadata["kind"] == kindRenewal || n.Metadata["kind"] == kindRegistration
+}
+
+// requireReader rechecks the grant the notification was sent under.
+func (s *Service) requireReader(ctx context.Context, p security.Principal, n *inbox.Notification) error {
+	if domainNotice(n) {
+		return s.require(ctx, p, security.OrganizationCloudManage, p.OrgID)
+	}
+	return s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"])
 }
 func publicEndpoint(ep *endpoint.Endpoint) WebhookEndpoint {
 	return WebhookEndpoint{ID: ep.ID.String(), URL: ep.URL, Description: ep.Description, Enabled: ep.Enabled, CreatedAt: ep.CreatedAt}

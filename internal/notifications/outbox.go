@@ -33,6 +33,7 @@ type DeploymentPayload struct {
 }
 type outboxItem struct {
 	id, org, user, owner   string
+	kind                   string
 	payload, wire          []byte
 	inboxDone, webhookDone bool
 	emailState             string
@@ -71,17 +72,46 @@ func (s *Service) drain(ctx context.Context) error {
 }
 func (s *Service) claim(ctx context.Context) (*outboxItem, error) {
 	item := &outboxItem{owner: rand.Text()}
-	err := s.pg.QueryRow(ctx, `UPDATE loomplane_notification_outbox SET lease_owner=$1,lease_until=clock_timestamp()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM loomplane_notification_outbox WHERE completed_at IS NULL AND attempts<10 AND next_attempt_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,org_id,user_id,payload,wire_payload,inbox_done,webhook_done,email_state,attempts,created_at`, item.owner).Scan(&item.id, &item.org, &item.user, &item.payload, &item.wire, &item.inboxDone, &item.webhookDone, &item.emailState, &item.attempts, &item.created)
+	err := s.pg.QueryRow(ctx, `UPDATE loomplane_notification_outbox SET lease_owner=$1,lease_until=clock_timestamp()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM loomplane_notification_outbox WHERE completed_at IS NULL AND attempts<10 AND next_attempt_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,org_id,user_id,kind,payload,wire_payload,inbox_done,webhook_done,email_state,attempts,created_at`, item.owner).Scan(&item.id, &item.org, &item.user, &item.kind, &item.payload, &item.wire, &item.inboxDone, &item.webhookDone, &item.emailState, &item.attempts, &item.created)
 	return item, err
 }
-func (s *Service) process(ctx context.Context, item *outboxItem) error {
+
+// outboxMessage is what one outbox row sends, whatever its kind.
+type outboxMessage struct {
+	sourceKey, event string
+	// project is empty for a domain notice, which is the organization's.
+	project                           string
+	inboxType, title, body, actionURL string
+	metadata                          map[string]string
+	subject, emailBody                string
+	// alwaysEmail ignores the deployment email preference.
+	alwaysEmail bool
+}
+
+func (s *Service) wirePayload(item *outboxItem) ([]byte, error) {
+	if item.kind != kindDeployment {
+		return s.domainWire(item)
+	}
 	var payload DeploymentPayload
+	if err := json.Unmarshal(item.payload, &payload); err != nil {
+		return nil, err
+	}
+	payload.URL = strings.TrimRight(s.cfg.PublicURL, "/") + "/deployments/" + payload.PlanID
+	return json.Marshal(payload)
+}
+func deploymentMessage(item *outboxItem) (*outboxMessage, error) {
+	var payload DeploymentPayload
+	if err := json.Unmarshal(item.wire, &payload); err != nil {
+		return nil, err
+	}
+	return &outboxMessage{sourceKey: item.id, event: "deployment." + payload.Status, project: payload.ProjectID, inboxType: "deployment." + payload.Status, title: "Deployment " + payload.Status,
+		body: "A deployment attempt finished. Open the deployment to review its result.", actionURL: payload.URL,
+		metadata: map[string]string{"org_id": item.org, "project_id": payload.ProjectID, "status": payload.Status, "outbox_id": item.id},
+		subject:  "Loomplane deployment " + payload.Status, emailBody: "Your deployment " + payload.Status + ".\n\nReview the deployment: " + payload.URL}, nil
+}
+func (s *Service) process(ctx context.Context, item *outboxItem) error {
 	if len(item.wire) == 0 {
-		if err := json.Unmarshal(item.payload, &payload); err != nil {
-			return err
-		}
-		payload.URL = strings.TrimRight(s.cfg.PublicURL, "/") + "/deployments/" + payload.PlanID
-		wire, err := json.Marshal(payload)
+		wire, err := s.wirePayload(item)
 		if err != nil {
 			return err
 		}
@@ -89,18 +119,26 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 			return err
 		}
 		item.wire = wire
-	} else if err := json.Unmarshal(item.wire, &payload); err != nil {
+	}
+	build := deploymentMessage
+	if item.kind != kindDeployment {
+		build = domainMessage
+	}
+	d, err := build(item)
+	if err != nil {
 		return err
 	}
 	if !item.webhookDone {
 		// JSONB changes whitespace and key order. Fingerprint the canonical
-		// payload so replay after a crash matches the original receipt.
-		canonical, err := acceptance.CanonicalJSON(item.wire)
-		if err != nil {
-			return err
+		// payload so replay after a crash matches the original receipt. A
+		// domain notice's rows share one source key, so the organization
+		// gets one webhook however many members it has.
+		canonical, canonicalErr := acceptance.CanonicalJSON(item.wire)
+		if canonicalErr != nil {
+			return canonicalErr
 		}
 		sum := sha256.Sum256(canonical)
-		_, err = s.relay.SendReliable(ctx, acceptance.Request{Producer: "loomplane", InstallationID: s.cfg.Identity.AppID, SourceKey: item.id, SourceFingerprint: hex.EncodeToString(sum[:]), AppID: s.cfg.Identity.AppID, OrgID: item.org, TenantID: item.org, Type: "deployment." + payload.Status, Data: canonical})
+		_, err = s.relay.SendReliable(ctx, acceptance.Request{Producer: "loomplane", InstallationID: s.cfg.Identity.AppID, SourceKey: d.sourceKey, SourceFingerprint: hex.EncodeToString(sum[:]), AppID: s.cfg.Identity.AppID, OrgID: item.org, TenantID: item.org, Type: d.event, Data: canonical})
 		if err != nil {
 			return err
 		}
@@ -110,7 +148,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		item.webhookDone = true
 	}
 	p := security.Principal{OrgID: item.org, UserID: item.user}
-	email, authorized, err := s.recipient(ctx, p, payload.ProjectID)
+	email, authorized, err := s.recipient(ctx, p, d.project)
 	if err != nil {
 		return err
 	}
@@ -125,7 +163,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		}
 		_, err = s.mailStore.GetNotification(ctx, inboxID)
 		if errors.Is(err, heraldstore.ErrNotificationNotFound) {
-			err = s.mailStore.CreateNotification(ctx, &inbox.Notification{ID: inboxID, AppID: s.cfg.Identity.AppID, UserID: item.user, Type: "deployment." + payload.Status, Title: "Deployment " + payload.Status, Body: "A deployment attempt finished. Open the deployment to review its result.", ActionURL: payload.URL, CreatedAt: item.created, Metadata: map[string]string{"org_id": item.org, "project_id": payload.ProjectID, "status": payload.Status, "outbox_id": item.id}})
+			err = s.mailStore.CreateNotification(ctx, &inbox.Notification{ID: inboxID, AppID: s.cfg.Identity.AppID, UserID: item.user, Type: d.inboxType, Title: d.title, Body: d.body, ActionURL: d.actionURL, CreatedAt: item.created, Metadata: d.metadata})
 		}
 		if err != nil {
 			return err
@@ -137,24 +175,33 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 	if item.emailState != "pending" {
 		return nil
 	}
-	enabled, err := s.emailPreference(ctx, p)
-	if err != nil {
-		return err
+	enabled := d.alwaysEmail
+	if !enabled {
+		if enabled, err = s.emailPreference(ctx, p); err != nil {
+			return err
+		}
 	}
 	if !enabled || !s.MailEnabled() {
 		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 		return err
 	}
-	res, err := s.herald.Send(ctx, &herald.SendRequest{AppID: s.cfg.Identity.AppID, Channel: "email", To: []string{email}, Subject: "Loomplane deployment " + payload.Status, Body: "Your deployment " + payload.Status + ".\n\nReview the deployment: " + payload.URL})
+	res, err := s.herald.Send(ctx, &herald.SendRequest{AppID: s.cfg.Identity.AppID, Channel: "email", To: []string{email}, Subject: d.subject, Body: d.emailBody})
 	if deliveryErr := deliveryError(res, err); deliveryErr != nil {
 		return deliveryErr
 	}
 	_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='sent' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 	return err
 }
+
+// recipient rechecks the grant a notice is sent under: project read for a
+// deployment, organization cloud management for a domain notice.
 func (s *Service) recipient(ctx context.Context, p security.Principal, project string) (address string, authorized bool, err error) {
 	var email string
-	err = s.pg.QueryRow(ctx, `SELECT u.email FROM authsome_users u JOIN authsome_members m ON m.user_id=u.id JOIN loomplane_projects p ON p.org_id=m.org_id WHERE m.org_id=$1 AND u.id=$2 AND p.id=$3 AND u.app_id=$4 AND u.deleted_at IS NULL AND NOT u.banned`, p.OrgID, p.UserID, project, s.cfg.Identity.AppID).Scan(&email)
+	if project == "" {
+		err = s.pg.QueryRow(ctx, `SELECT u.email FROM authsome_users u JOIN authsome_members m ON m.user_id=u.id WHERE m.org_id=$1 AND u.id=$2 AND u.app_id=$3 AND u.deleted_at IS NULL AND NOT u.banned LIMIT 1`, p.OrgID, p.UserID, s.cfg.Identity.AppID).Scan(&email)
+	} else {
+		err = s.pg.QueryRow(ctx, `SELECT u.email FROM authsome_users u JOIN authsome_members m ON m.user_id=u.id JOIN loomplane_projects p ON p.org_id=m.org_id WHERE m.org_id=$1 AND u.id=$2 AND p.id=$3 AND u.app_id=$4 AND u.deleted_at IS NULL AND NOT u.banned`, p.OrgID, p.UserID, project, s.cfg.Identity.AppID).Scan(&email)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
@@ -164,7 +211,11 @@ func (s *Service) recipient(ctx context.Context, p security.Principal, project s
 	if s.authz == nil {
 		return "", false, fmt.Errorf("notifications authorization unavailable")
 	}
-	err = s.authz.Require(ctx, p, security.ProjectRead, project)
+	permission, resource := security.ProjectRead, project
+	if project == "" {
+		permission, resource = security.OrganizationCloudManage, p.OrgID
+	}
+	err = s.authz.Require(ctx, p, permission, resource)
 	if errors.Is(err, security.ErrForbidden) || errors.Is(err, security.ErrNotMember) {
 		return "", false, nil
 	}

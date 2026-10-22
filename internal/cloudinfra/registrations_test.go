@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -30,6 +31,7 @@ type fakeRegistrar struct {
 	postErr            error
 	noContext          bool
 	getErr             error
+	gets               int
 	posts              int
 	reconcileOnlyCalls int
 	specs              []provider.DomainRegistrationSpec
@@ -98,10 +100,15 @@ func (r *fakeRegistrar) result(name string, reconciled bool) provider.DomainRegi
 }
 
 func (r *fakeRegistrar) GetRegisteredDomain(_ context.Context, _ provider.InfrastructureCredential, name string) (provider.RegisteredDomain, error) {
+	r.gets++
 	if r.getErr != nil {
 		return provider.RegisteredDomain{}, r.getErr
 	}
-	return provider.RegisteredDomain{Name: name, Status: "active", ExpiresAt: r.expires, AutoRenew: len(r.specs) > 0 && r.specs[len(r.specs)-1].AutoRenew}, nil
+	autoRenew := len(r.specs) > 0 && r.specs[len(r.specs)-1].AutoRenew
+	if len(r.autoRenew) > 0 {
+		autoRenew = r.autoRenew[len(r.autoRenew)-1]
+	}
+	return provider.RegisteredDomain{Name: name, Status: "active", ExpiresAt: r.expires, AutoRenew: autoRenew}, nil
 }
 
 func (r *fakeRegistrar) SetAutoRenew(_ context.Context, _ provider.InfrastructureCredential, name string, enabled bool) (provider.RegisteredDomain, error) {
@@ -205,14 +212,19 @@ func (s *memoryRegistrations) SaveRegistration(_ context.Context, reg *Registrat
 	return nil
 }
 func (s *memoryRegistrations) PendingRegistrations(context.Context) ([]*Registration, error) {
+	return s.withStatus(RegistrationPreview, RegistrationApproved, RegistrationRegistering, RegistrationZonePending)
+}
+func (s *memoryRegistrations) SucceededRegistrations(context.Context) ([]*Registration, error) {
+	return s.withStatus(RegistrationSucceededStatus)
+}
+func (s *memoryRegistrations) withStatus(statuses ...string) ([]*Registration, error) {
 	out := []*Registration{}
 	for _, id := range s.order {
 		reg, err := decodeRegistration(s.bodies[id])
 		if err != nil {
 			return nil, err
 		}
-		switch reg.Status {
-		case RegistrationPreview, RegistrationApproved, RegistrationRegistering, RegistrationZonePending:
+		if slices.Contains(statuses, reg.Status) {
 			out = append(out, reg)
 		}
 	}
@@ -682,7 +694,7 @@ func TestRecoverRegistrationsRequeuesWorkInFlight(t *testing.T) {
 	}
 }
 
-func TestSetRegistrationAutoRenewChecksRevision(t *testing.T) {
+func TestSetAutoRenewOffCallsProviderAndRecordsIt(t *testing.T) {
 	env := newRegistrationEnv(t)
 	env.dns.zone = &provider.DNSZone{ID: "cf_zone", Name: "acme.dev", AccountID: "account", Verified: true}
 	op := approvedRegistration(t, env.svc)
@@ -772,5 +784,226 @@ func TestRegistrationZoneAddedByHand(t *testing.T) {
 		if !errors.Is(err, ErrConflict) || got.Status != RegistrationZonePending || env.domains.zones[0].RegistrationID != "" || len(env.domains.zones) != 1 {
 			t.Fatalf("external zone: %v %+v", err, got)
 		}
+	}
+}
+
+// outboxNotices records every call, and keeps one row per outbox id the way
+// the outbox's primary key does.
+type outboxNotices struct {
+	sent    []notifications.RenewalNotice
+	rows    map[string]notifications.RenewalNotice
+	results []notifications.RegistrationResultNotice
+	err     error
+}
+
+func (n *outboxNotices) EnqueueRenewalNotice(_ context.Context, notice notifications.RenewalNotice) error {
+	if n.err != nil {
+		return n.err
+	}
+	n.sent = append(n.sent, notice)
+	key := "renewal:" + notice.RegistrationID + ":" + notice.RenewsOn.Format("2006-01-02")
+	if _, ok := n.rows[key]; !ok {
+		n.rows[key] = notice
+	}
+	return nil
+}
+
+func (n *outboxNotices) EnqueueRegistrationResult(_ context.Context, notice notifications.RegistrationResultNotice) error {
+	n.results = append(n.results, notice)
+	return nil
+}
+
+// newSweepEnv registers acme.dev, expiring on 2026-11-30 with auto-renew on.
+func newSweepEnv(t *testing.T, now time.Time) (*registrationEnv, *outboxNotices, *Registration) {
+	t.Helper()
+	env := newRegistrationEnv(t)
+	notices := &outboxNotices{rows: map[string]notifications.RenewalNotice{}}
+	env.svc.Notices = notices
+	env.now = now
+	env.registrar.expires = time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC)
+	env.dns.zone = &provider.DNSZone{ID: "cf_zone", Name: "acme.dev", AccountID: "account", Verified: true}
+	op := approvedRegistration(t, env.svc)
+	if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID)
+	if got.Status != RegistrationSucceededStatus || !got.AutoRenew {
+		t.Fatalf("fixture: %+v", got)
+	}
+	return env, notices, got
+}
+
+func sweepFixture(t *testing.T, now time.Time) (*Service, *outboxNotices) {
+	env, notices, _ := newSweepEnv(t, now)
+	return env.svc, notices
+}
+
+// staleRegistrations hands out what another replica read before this one saved.
+type staleRegistrations struct {
+	*memoryRegistrations
+	stale []*Registration
+}
+
+func (s staleRegistrations) SucceededRegistrations(context.Context) ([]*Registration, error) {
+	return s.stale, nil
+}
+
+func TestRenewalNoticeIsIdempotent(t *testing.T) {
+	svc, notices := sweepFixture(t, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)) // registration expires 2026-11-30, auto-renew on
+	if err := svc.SweepRegistrations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SweepRegistrations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(notices.sent) != 1 || notices.sent[0].RenewsOn.Format("2006-01-02") != "2026-11-30" || notices.sent[0].RenewalCost != "10.11" {
+		t.Fatalf("%+v", notices.sent)
+	}
+	n := notices.sent[0]
+	if n.OrgID != "org" || n.Domain != "acme.dev" || n.Currency != "USD" || n.RegistrationID == "" {
+		t.Fatalf("notice: %+v", n)
+	}
+
+	// Two API replicas read the registration before either saved it. Both
+	// enqueue, the outbox keeps one row, and the replica that lost the save
+	// race reports nothing.
+	env, notices, reg := newSweepEnv(t, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC))
+	stale, err := env.store.SucceededRegistrations(t.Context())
+	if err != nil || len(stale) != 1 {
+		t.Fatal(stale, err)
+	}
+	other := NewService(env.svc.Deps)
+	other.now = env.svc.now
+	other.Registrations = staleRegistrations{memoryRegistrations: env.store, stale: stale}
+	if err = env.svc.SweepRegistrations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = other.SweepRegistrations(t.Context()); err != nil {
+		t.Fatal("the replica that lost the race", err)
+	}
+	if len(notices.sent) != 2 || len(notices.rows) != 1 {
+		t.Fatalf("sent=%d rows=%d", len(notices.sent), len(notices.rows))
+	}
+	got, _ := env.svc.GetRegistration(t.Context(), admin, reg.ID)
+	if !got.NoticeSentFor.Equal(env.registrar.expires) {
+		t.Fatalf("notice not recorded: %+v", got)
+	}
+	if err = env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 2 {
+		t.Fatal("swept again", err, len(notices.sent))
+	}
+}
+
+func TestNoNoticeWhenAutoRenewOffOrTooEarly(t *testing.T) {
+	// 45 days ahead nothing goes out; 25 days ahead it does.
+	env, notices, _ := newSweepEnv(t, time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC))
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 0 {
+		t.Fatal("too early", err, notices.sent)
+	}
+	env.now = time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 1 {
+		t.Fatal("inside the lead", err, notices.sent)
+	}
+
+	// Auto-renew off: no notice.
+	env, notices, reg := newSweepEnv(t, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC))
+	if _, err := env.svc.SetRegistrationAutoRenew(t.Context(), admin, reg.ID, AutoRenewInput{AutoRenew: false, Revision: reg.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	env.now = env.now.Add(25 * time.Hour)
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 0 {
+		t.Fatal("auto-renew off", err, notices.sent)
+	}
+
+	// A renewal moves the expiry a year on, and the next notice carries the
+	// price the registrar quotes now.
+	env, notices, reg = newSweepEnv(t, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC))
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 1 {
+		t.Fatal(err, notices.sent)
+	}
+	// The registrar answering without an expiry keeps the stored one.
+	env.registrar.expires = time.Time{}
+	env.now = env.now.Add(25 * time.Hour)
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 1 {
+		t.Fatal("zero expiry", err, notices.sent)
+	}
+	if got, _ := env.svc.GetRegistration(t.Context(), admin, reg.ID); !got.DomainExpiresAt.Equal(time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("zero expiry stored: %+v", got)
+	}
+	env.registrar.expires = time.Date(2027, 11, 30, 0, 0, 0, 0, time.UTC)
+	env.registrar.price.RenewalCost = "11.00"
+	env.now = time.Date(2027, 11, 5, 0, 0, 0, 0, time.UTC)
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(notices.sent) != 2 || notices.sent[1].RenewsOn.Format("2006-01-02") != "2027-11-30" || notices.sent[1].RenewalCost != "11.00" {
+		t.Fatalf("after renewal: %+v", notices.sent)
+	}
+}
+
+func TestSweepRefreshesAtMostDaily(t *testing.T) {
+	env, notices, _ := newSweepEnv(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	for range 3 {
+		if err := env.svc.SweepRegistrations(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		env.now = env.now.Add(time.Hour)
+	}
+	if env.registrar.gets != 1 {
+		t.Fatalf("gets=%d", env.registrar.gets)
+	}
+	env.now = env.now.Add(24 * time.Hour)
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || env.registrar.gets != 2 {
+		t.Fatal(err, env.registrar.gets)
+	}
+	// A failed enqueue leaves the notice to the next sweep.
+	env.now = time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+	notices.err = errors.New("outbox unavailable")
+	if err := env.svc.SweepRegistrations(t.Context()); err == nil {
+		t.Fatal("a failed enqueue was hidden")
+	}
+	notices.err = nil
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 1 {
+		t.Fatal(err, notices.sent)
+	}
+}
+
+func TestRegistrationResultNotifiesOnce(t *testing.T) {
+	env, notices, reg := newSweepEnv(t, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC))
+	if err := env.svc.ReconcileRegistration(t.Context(), "org", reg.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(notices.results) != 1 || notices.results[0] != (notifications.RegistrationResultNotice{OrgID: "org", RegistrationID: reg.ID, Domain: "acme.dev", Status: RegistrationSucceededStatus}) {
+		t.Fatalf("succeeded: %+v", notices.results)
+	}
+
+	env = newRegistrationEnv(t)
+	notices = &outboxNotices{rows: map[string]notifications.RenewalNotice{}}
+	env.svc.Notices = notices
+	op := approvedRegistration(t, env.svc)
+	env.registrar.price = provider.DomainPrice{Currency: "USD", RegistrationCost: "12.00"}
+	_ = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil)
+	_ = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil)
+	if len(notices.results) != 1 || notices.results[0].Status != RegistrationPriceChanged || notices.results[0].Domain != "acme.dev" {
+		t.Fatalf("price_changed: %+v", notices.results)
+	}
+
+	// The dashboard link travels with a registration Cloudflare needs finished.
+	env = newRegistrationEnv(t)
+	notices = &outboxNotices{rows: map[string]notifications.RenewalNotice{}}
+	env.svc.Notices = notices
+	env.registrar.state = provider.RegistrationActionRequired
+	op = approvedRegistration(t, env.svc)
+	_ = env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil)
+	if len(notices.results) != 1 || notices.results[0].Status != RegistrationActionRequiredStatus || notices.results[0].Message != "https://dash.cloudflare.com/account/domains/registrations" {
+		t.Fatalf("action_required: %+v", notices.results)
+	}
+
+	// A preview nobody approved ends quietly.
+	if _, err := env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.uk"}); err != nil {
+		t.Fatal(err)
+	}
+	env.now = env.now.Add(time.Hour)
+	if err := env.svc.RecoverRegistrations(t.Context()); err != nil || len(notices.results) != 1 {
+		t.Fatal("expired preview", err, notices.results)
 	}
 }

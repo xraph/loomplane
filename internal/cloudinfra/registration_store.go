@@ -77,6 +77,10 @@ func (s *PgStore) PendingRegistrations(ctx context.Context) ([]*Registration, er
 	return s.registrations(ctx, `SELECT body FROM loomplane_domain_registrations WHERE status IN ('preview','approved','registering','zone_pending') ORDER BY created_at,id`)
 }
 
+func (s *PgStore) SucceededRegistrations(ctx context.Context) ([]*Registration, error) {
+	return s.registrations(ctx, `SELECT body FROM loomplane_domain_registrations WHERE status='succeeded' ORDER BY created_at,id`)
+}
+
 // SaveRegistration writes reg if nobody saved it since it was read, and
 // moves it to the next revision.
 func (s *PgStore) SaveRegistration(ctx context.Context, reg *Registration) error {

@@ -57,3 +57,14 @@ func TestDomainRegistrationsMigration(t *testing.T) {
 	exec(t, conn, domainRegistrationsDown...)
 	exec(t, conn, domainRegistrationsUp...)
 }
+
+func TestNotificationKindsMigration(t *testing.T) {
+	conn := scratch(t)
+	exec(t, conn, notificationsUp[1])
+	exec(t, conn, `INSERT INTO loomplane_notification_outbox(id,org_id,project_id,user_id,deployment_id,attempt,payload) VALUES('d:0','o','p','u','d',0,'{}')`)
+	exec(t, conn, notificationKindsUp...)
+	exec(t, conn, notificationKindsUp...)
+	if got := strs(t, conn, `SELECT kind FROM loomplane_notification_outbox`); len(got) != 1 || got[0] != "deployment" {
+		t.Fatalf("existing rows: %v", got)
+	}
+}

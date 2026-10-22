@@ -171,6 +171,13 @@ func TestRegistrationStore(t *testing.T) {
 	if err = st.SaveRegistration(ctx, second); err != nil {
 		t.Fatal("the name stayed taken after a failure", err)
 	}
+	other.Status = RegistrationSucceededStatus
+	if err = st.SaveRegistration(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if done, listErr := st.SucceededRegistrations(ctx); listErr != nil || len(done) != 1 || done[0].ID != "reg_x" {
+		t.Fatal("succeeded", done, listErr)
+	}
 	if _, err = pg.Exec(ctx, `DELETE FROM loomplane_cloud_connections WHERE org_id='org' AND id='cf'`); err == nil {
 		t.Fatal("an approved registration lost its connection")
 	}

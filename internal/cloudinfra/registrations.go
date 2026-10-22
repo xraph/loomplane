@@ -134,13 +134,15 @@ type RegistrationWorkflow interface {
 
 // RegistrationStore saves registrations with a revision check.
 // PendingRegistrations lists every organization's preview, approved,
-// registering and zone_pending rows.
+// registering and zone_pending rows, SucceededRegistrations its succeeded
+// ones.
 type RegistrationStore interface {
 	CreateRegistration(context.Context, *Registration) error
 	Registration(ctx context.Context, org, id string) (*Registration, error)
 	Registrations(ctx context.Context, org string) ([]*Registration, error)
 	SaveRegistration(context.Context, *Registration) error
 	PendingRegistrations(context.Context) ([]*Registration, error)
+	SucceededRegistrations(context.Context) ([]*Registration, error)
 }
 
 func (s *Service) registrationStore() (RegistrationStore, error) {
@@ -665,7 +667,7 @@ func (s *Service) recordResult(ctx context.Context, st RegistrationStore, reg *R
 		}
 		return s.unconfirmed(ctx, st, reg)
 	}
-	dashboard := "https://dash.cloudflare.com/" + url.PathEscape(reg.AccountID) + "/domains/registrations"
+	dashboard := registrationDashboard(reg.AccountID)
 	switch result.State {
 	case provider.RegistrationInProgress:
 		return s.keepRegistering(ctx, st, reg, "Cloudflare is still registering "+reg.Name+".", time.Time{})
@@ -826,8 +828,14 @@ func (s *Service) zoneHandedOff(ctx context.Context, st RegistrationStore, reg *
 	return s.finishRegistration(ctx, st, reg)
 }
 
+func registrationDashboard(accountID string) string {
+	return "https://dash.cloudflare.com/" + url.PathEscape(accountID) + "/domains/registrations"
+}
+
 // finishRegistration saves a final status. The registrant contact is
-// deleted first, so no final registration leaves one in Vault.
+// deleted first, so no final registration leaves one in Vault. Only the
+// call that saves the status notifies, and the outbox keeps one notice per
+// status, so a retried step can't send it twice.
 func (s *Service) finishRegistration(ctx context.Context, st RegistrationStore, reg *Registration) error {
 	if reg.CustomRegistrant {
 		if err := s.Secrets.Delete(ctx, reg.OrgID, registrantKey(reg.ID)); err != nil {
@@ -838,6 +846,7 @@ func (s *Service) finishRegistration(ctx context.Context, st RegistrationStore, 
 		return err
 	}
 	s.registrationAudit(ctx, reg.Principal, "domain.registration."+reg.Status, reg)
+	s.notifyResult(ctx, reg)
 	return nil
 }
 

@@ -22,3 +22,8 @@ var domainRegistrationsDown = []string{
 	`DELETE FROM loomplane_connection_uses WHERE kind='domain_registration'`,
 	`DROP TABLE IF EXISTS loomplane_domain_registrations`,
 }
+
+// Outbox rows were all deployment notices until domain notices joined them.
+var notificationKindsUp = []string{
+	`ALTER TABLE loomplane_notification_outbox ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'deployment'`,
+}
