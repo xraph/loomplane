@@ -110,6 +110,10 @@ type NewResource struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Provider string `json:"provider,omitempty"`
+	// Target is the checked server connection a catalog resource runs on.
+	Target  string                  `json:"target,omitempty"`
+	Version string                  `json:"version,omitempty"`
+	Uses    map[string]manifest.Use `json:"uses,omitempty"`
 }
 
 // Edit applies one change to the project's current manifest and saves the
@@ -137,7 +141,9 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 		return nil, false, fmt.Errorf("%w: make one edit at a time", ErrInvalid)
 	case in.AddResource != nil:
 		r := in.AddResource
-		out, err = manifest.WithResource([]byte(cur.YAML), strings.TrimSpace(r.Name), manifest.Resource{Kind: r.Kind, Provider: r.Provider})
+		out, err = manifest.WithResource([]byte(cur.YAML), strings.TrimSpace(r.Name), manifest.Resource{
+			Kind: r.Kind, Provider: r.Provider, Target: r.Target, Version: r.Version, Uses: r.Uses,
+		})
 	case in.Ignore != "":
 		out, err = manifest.WithIgnored([]byte(cur.YAML), strings.TrimSpace(in.Ignore))
 	case in.Placement != nil:

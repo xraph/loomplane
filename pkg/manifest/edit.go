@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -280,11 +281,40 @@ func WithResource(doc []byte, name string, r Resource) ([]byte, error) {
 	if r.Provider != "" {
 		value.Content = append(value.Content, scalar("provider"), scalar(r.Provider))
 	}
+	if r.Target != "" {
+		value.Content = append(value.Content, scalar("target"), scalar(r.Target))
+	}
 	if r.Version != "" {
 		value.Content = append(value.Content, scalar("version"), scalar(r.Version))
 	}
+	if len(r.Uses) > 0 {
+		uses := &yaml.Node{Kind: yaml.MappingNode}
+		for _, dep := range sortedKeys(r.Uses) {
+			uses.Content = append(uses.Content, scalar(dep), useNode(r.Uses[dep]))
+		}
+		value.Content = append(value.Content, scalar("uses"), uses)
+	}
 	resources.Content = append(resources.Content, scalar(name), value)
 	return encode(file)
+}
+
+// useNode is a dependency choice as YAML. A choice with nothing set is an
+// empty mapping, which reads back as a new dependency.
+func useNode(u Use) *yaml.Node {
+	n := &yaml.Node{Kind: yaml.MappingNode}
+	if u.Resource != "" {
+		n.Content = append(n.Content, scalar("resource"), scalar(u.Resource))
+	}
+	if u.External != "" {
+		n.Content = append(n.Content, scalar("external"), scalar(u.External))
+	}
+	if u.Enabled != nil {
+		n.Content = append(n.Content, scalar("enabled"), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: strconv.FormatBool(*u.Enabled)})
+	}
+	if len(n.Content) == 0 {
+		n.Style = yaml.FlowStyle
+	}
+	return n
 }
 
 // WithIgnored adds a resource kind to what a manifest's YAML ignores.

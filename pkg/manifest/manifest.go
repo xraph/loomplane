@@ -209,6 +209,9 @@ type Resource struct {
 	// Version is the engine's version, such as "17" for Postgres. Empty
 	// lets the provider choose.
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+	// Uses chooses, by dependency name, where a catalog resource gets each
+	// dependency. A dependency left out gets a new one of its own.
+	Uses map[string]Use `json:"uses,omitempty" yaml:"uses,omitempty"`
 	// Environments override the provider or region in one environment, or
 	// leave the resource out of it.
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
@@ -302,6 +305,9 @@ var (
 	dirRE     = regexp.MustCompile(`^[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 	sourceRE  = regexp.MustCompile(`^(?:[a-z]+:)?[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 	repoRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	// endpointRE is a catalog endpoint's ID: the typeid prefix endpoint and
+	// a 26 character suffix.
+	endpointRE = regexp.MustCompile(`^endpoint_[0-9a-z]{26}$`)
 )
 
 // Problem is one thing wrong with a manifest, at a path such as
@@ -464,6 +470,7 @@ func (m *Manifest) Validate() error {
 		if r.Version != "" && !versionRE.MatchString(r.Version) {
 			add(path+".version", "%q isn't a version", r.Version)
 		}
+		m.validateUses(add, name, path, r.Uses)
 		for _, env := range sortedKeys(r.Environments) {
 			o := r.Environments[env]
 			epath := path + ".environments." + env
@@ -636,6 +643,35 @@ func (m *Manifest) serviceCycle() []string {
 		}
 	}
 	return nil
+}
+
+// validateUses checks one resource's choices of where its dependencies
+// come from. Whether the kind has a dependency by that name is the
+// planner's question, not the manifest's.
+func (m *Manifest) validateUses(add func(string, string, ...any), resource, path string, uses map[string]Use) {
+	for _, dep := range sortedKeys(uses) {
+		u := uses[dep]
+		upath := path + ".uses." + dep
+		if !nameRE.MatchString(dep) {
+			add(upath, "the name must be lower case letters, digits and hyphens, starting with a letter, at most 40 long")
+		}
+		if u.Resource != "" && u.External != "" {
+			add(upath, "choose resource or external, not both")
+		}
+		if u.Resource != "" {
+			if _, ok := m.Resources[u.Resource]; !ok {
+				add(upath+".resource", "%q isn't a resource in this manifest", u.Resource)
+			} else if u.Resource == resource {
+				add(upath+".resource", "a resource can't use itself")
+			}
+		}
+		if u.External != "" && !endpointRE.MatchString(u.External) {
+			add(upath+".external", "%q isn't a catalog endpoint ID", u.External)
+		}
+		if u.Enabled != nil && !*u.Enabled && (u.Resource != "" || u.External != "") {
+			add(upath, "enabled: false can't be set with resource or external")
+		}
+	}
 }
 
 func (m *Manifest) validateLinks(add func(string, string, ...any)) {

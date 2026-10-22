@@ -336,6 +336,25 @@
         }
       }
     },
+    "use": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "description": "A resource in this manifest to use for the dependency.",
+          "$ref": "#/$defs/name"
+        },
+        "external": {
+          "description": "A catalog endpoint to connect to instead, by ID.",
+          "type": "string",
+          "pattern": "^endpoint_[0-9a-z]{26}$"
+        },
+        "enabled": {
+          "description": "Turns an optional dependency on or off. Off can't be set with resource or external.",
+          "type": "boolean"
+        }
+      }
+    },
     "resource": {
       "type": "object",
       "required": ["kind"],
@@ -358,6 +377,16 @@
           "description": "The engine's version, such as \"17\" for Postgres. Without it, the provider chooses.",
           "type": "string",
           "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$"
+        },
+        "uses": {
+          "description": "Where a catalog resource gets each dependency, by dependency name: a resource in this manifest, an external endpoint, or on or off for an optional one. A dependency left out gets a new one.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/use"
+          }
         },
         "environments": {
           "description": "Overrides in one environment, by name.",

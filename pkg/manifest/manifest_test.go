@@ -274,6 +274,7 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"scale", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["scale"]), Scale{}},
 		{"size", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["size"]), Size{}},
 		{"resource", props(defs["resource"]), Resource{}},
+		{"use", props(defs["use"]), Use{}},
 		{"resource settings", props(envOverride), ResourceSettings{}},
 		{"gateway", props(defs["gateway"]), Gateway{}},
 		{"link", props(defs["link"]), Link{}},
@@ -367,5 +368,101 @@ func TestParse_held(t *testing.T) {
 	}
 	if out, _ := Marshal(&Manifest{Version: 1}); strings.Contains(string(out), "held") {
 		t.Fatalf("Marshal wrote an unset held:\n%s", out)
+	}
+}
+
+const usesEndpoint = "endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae"
+
+func TestUsesValidation(t *testing.T) {
+	tests := []struct {
+		name, yaml, want string
+	}{
+		{"both resource and external", "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, external: " + usesEndpoint + "}", "resources.gateway.uses.postgres: choose resource or external, not both"},
+		{"resource that isn't there", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: nope}", "resources.gateway.uses.postgres.resource: \"nope\" isn't a resource in this manifest"},
+		{"a service isn't a resource", "version: 1\nservices:\n  api: {source: x}\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: api}", "\"api\" isn't a resource in this manifest"},
+		{"resource names itself", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: gateway}", "resources.gateway.uses.postgres.resource: a resource can't use itself"},
+		{"external that isn't an endpoint", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: x}", "resources.gateway.uses.postgres.external: \"x\" isn't a catalog endpoint ID"},
+		{"external with the wrong prefix", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: target_01jbz7q5mx8vh3k2r9t4w6y0ae}", "isn't a catalog endpoint ID"},
+		{"disabled but connected to a resource", "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, enabled: false}", "resources.gateway.uses.postgres: enabled: false can't be set with resource or external"},
+		{"disabled but connected to an endpoint", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: " + usesEndpoint + ", enabled: false}", "enabled: false can't be set with resource or external"},
+		{"bad dependency name", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      Bad: {enabled: true}", "resources.gateway.uses.Bad: the name must be"},
+		{"unknown field", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {kind: postgres}", "field kind not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			if err == nil {
+				t.Fatal("parsed")
+			}
+			if !errors.Is(err, ErrInvalid) {
+				t.Errorf("%v doesn't wrap ErrInvalid", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsesAccepts(t *testing.T) {
+	for name, doc := range map[string]string{
+		"nothing set takes a new one": "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {}",
+		"switched off":                "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      falkordb: {enabled: false}",
+		"switched on":                 "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      falkordb: {enabled: true}",
+		"enabled with a resource":     "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, enabled: true}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(doc)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestUsesRoundTrips(t *testing.T) {
+	doc := `version: 1
+resources:
+  db:
+    kind: postgres
+  gateway:
+    kind: sample
+    target: conn_1
+    uses:
+      postgres:
+        resource: db
+      redis:
+        external: ` + usesEndpoint + `
+      falkordb:
+        enabled: true
+`
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uses := m.Resources["gateway"].Uses
+	on := true
+	want := map[string]Use{
+		"postgres": {Resource: "db"},
+		"redis":    {External: usesEndpoint},
+		"falkordb": {Enabled: &on},
+	}
+	if !reflect.DeepEqual(uses, want) {
+		t.Fatalf("uses = %+v, want %+v", uses, want)
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil {
+		t.Fatalf("reparse: %v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(m, again) {
+		t.Errorf("round trip changed the manifest:\n%s", out)
+	}
+	for _, s := range []string{"uses:", "resource: db", "external: " + usesEndpoint, "enabled: true"} {
+		if !strings.Contains(string(out), s) {
+			t.Errorf("lost %q:\n%s", s, out)
+		}
 	}
 }

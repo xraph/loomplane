@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -145,5 +146,33 @@ func TestWithPlacement_clearsAMergedRegion(t *testing.T) {
 	m, _ := Parse(out)
 	if s := m.Services["api"].For("preview", m.Defaults); s.Provider != provider || s.Region != "" {
 		t.Fatalf("merged region wasn't cleared: %+v", s)
+	}
+}
+
+func TestWithResourceWritesCatalogFields(t *testing.T) {
+	on := true
+	want := Resource{
+		Kind: "sample", Provider: "server", Target: "conn_1", Version: "1",
+		Uses: map[string]Use{
+			"postgres": {Resource: "db"},
+			"falkordb": {Enabled: &on},
+		},
+	}
+	doc := strings.Replace(commented, "services:", "resources:\n  db: {kind: postgres}\nservices:", 1)
+	out, err := WithResource([]byte(doc), "gateway", want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"# Acme's manifest.", "# The API, which needs a database.", "# the Go module"} {
+		if !strings.Contains(string(out), s) {
+			t.Errorf("lost %q:\n%s", s, out)
+		}
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := m.Resources["gateway"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("gateway = %+v, want %+v\n%s", got, want, out)
 	}
 }

@@ -110,9 +110,41 @@ Backing services the application needs, by name. A resource can't share a servic
 | `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.            |
 | `provider`, `region` | Where it's provisioned.                                                               |
 | `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest. |
+| `target`             | The checked server connection a catalog resource runs on.                             |
+| `uses`               | Where a catalog resource gets each dependency. See [Catalog services](#catalog-services). |
 | `environments`       | `provider`, `region` or `enabled` by environment name.                                |
 
 A managed resource is only reachable from services on its own cloud. A Vercel app that needs a Cloud SQL database is a problem on the plan.
+
+### Catalog services
+
+A catalog resource can depend on other things, a Postgres for its data or a Redis for its cache. By default Loomplane provisions a new one of each, next to the resource, and wires it in. `uses` lets you choose something else, one dependency at a time. The key is the dependency's name, as the catalog lists it for that kind.
+
+| Field      | What it does                                                                               |
+| ---------- | ------------------------------------------------------------------------------------------ |
+| `resource` | Use another resource in this manifest. It has to be there, and it can't be the resource itself. |
+| `external` | Connect to an endpoint you added to the catalog, by its ID (`endpoint_` and 26 characters). |
+| `enabled`  | Turn an optional dependency on or off. `false` can't go with `resource` or `external`.     |
+
+Set `resource` or `external`, not both. Set nothing and you get a new one.
+
+```yaml
+resources:
+  db:
+    kind: postgres
+  gateway:
+    kind: sample
+    target: conn_1
+    uses:
+      postgres:
+        resource: db
+      redis:
+        external: endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae
+      falkordb:
+        enabled: true
+```
+
+In this example `sample` stands in for a catalog kind with those three dependencies. The `gateway` resource shares the `db` Postgres, connects to an existing Redis instead of creating one, and switches on its optional FalkorDB. The manifest only checks the shape. Whether `gateway`'s kind has a dependency called `postgres`, and whether the endpoint is reachable, is checked when you plan.
 
 ## gateways
 
