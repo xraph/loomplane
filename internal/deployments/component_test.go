@@ -1169,3 +1169,309 @@ func TestGeneratedSecretStartsWithItsPrefix(t *testing.T) {
 		t.Fatalf("got %q %v", plain, err)
 	}
 }
+
+func TestTemplateEnvResolvesEveryPlaceholder(t *testing.T) {
+	const dsn = "postgres://fabriq_app:${secret:app-password}@${dep:postgres:hostport}/${dep:postgres:database}?${dep:postgres:query}"
+	edit := func(revision string) func(*recipes.Kind) {
+		return func(k *recipes.Kind) {
+			k.Releases[0].Revision = revision
+			k.Secrets = append(k.Secrets, recipes.GeneratedSecret{Name: "app-password"})
+			k.Components[1].Env = append(k.Components[1].Env, recipes.EnvVar{Name: "FABRIQ_DSN", Template: dsn})
+			k.Components[2].Env = append(k.Components[2].Env, recipes.EnvVar{Name: "API_ADMIN", Template: "${component:api:url:admin}/v1"})
+		}
+	}
+	f := newComponentFixture(t, sampleKinds(t, edit("1")))
+	f.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte("postgresql://loomplane:pg-Secret-1@lp-x:5432/fabriq?sslmode=disable")
+	f.secrets.m[ResourceKey("org", "env", "app", "secret:app-password")] = []byte("abc")
+
+	api := f.componentJob(t, "api", newPostgres)
+	out, err := f.target.Apply(t.Context(), api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, env := f.started(t, out)
+	if want := "postgres://fabriq_app:abc@lp-x:5432/fabriq?sslmode=disable"; env["FABRIQ_DSN"] != want {
+		t.Fatalf("FABRIQ_DSN = %q, want %q", env["FABRIQ_DSN"], want)
+	}
+	if _, plain := spec.Env["FABRIQ_DSN"]; plain {
+		t.Fatal("a template entered the Ctrl Plane spec")
+	}
+
+	// A component placeholder reads a sibling's address, and is secret too.
+	worker, err := f.target.Apply(t.Context(), f.componentJob(t, "worker", newPostgres))
+	if err != nil {
+		t.Fatal(err)
+	}
+	iid, _ := id.Parse(out.ExternalID)
+	spec, _, env = f.started(t, worker)
+	if want := "http://" + server.ContainerName(iid) + ":9090/v1"; env["API_ADMIN"] != want {
+		t.Fatalf("API_ADMIN = %q, want %q", env["API_ADMIN"], want)
+	}
+	if _, plain := spec.Env["API_ADMIN"]; plain {
+		t.Fatal("a component template entered the Ctrl Plane spec")
+	}
+
+	// A secret the deployed api read only through a template is lost, not
+	// new, under another revision.
+	f.kinds = sampleKinds(t, edit("2"))
+	f.target.Kinds = f.kinds
+	delete(f.secrets.m, ResourceKey("org", "env", "app", "secret:app-password"))
+	upgrade := f.componentJob(t, "api", newPostgres)
+	upgrade.Binding = bound(api, out)
+	if _, err = f.target.Apply(t.Context(), upgrade); err == nil || err.Error() != "the generated secret app-password is missing; recover it before changing the service" {
+		t.Fatalf("a secret read through a template: %v", err)
+	}
+}
+
+func TestAdminURLUsesTheSuperuserPassword(t *testing.T) {
+	kinds := sampleKinds(t, func(k *recipes.Kind) {
+		k.Components[1].Env = append(k.Components[1].Env, recipes.EnvVar{Name: "PG_ADMIN_URL", From: &recipes.Ref{Dependency: "postgres", Field: recipes.FieldAdminURL}})
+	})
+	want := "postgresql://postgres:Admin-Secret-1@lp-inst-db:5432/app__postgres?sslmode=disable"
+	for name, deps := range map[string]map[string]planning.DependencyChoice{
+		"new":      newPostgres,
+		"resource": {"postgres": {Mode: planning.DependencyResource, Resource: "db", Kind: "postgres"}, "cache": {Mode: planning.DependencyOff}},
+	} {
+		f := newComponentFixture(t, kinds)
+		action := deps["postgres"].Resource
+		f.secrets.m[ResourceKey("org", "env", action, "url")] = []byte(postgresURL)
+		f.secrets.m[ResourceKey("org", "env", action, "admin-password")] = []byte("Admin-Secret-1")
+		out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", deps))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		spec, _, env := f.started(t, out)
+		if env["PG_ADMIN_URL"] != want || spec.Env["PG_ADMIN_URL"] != "" {
+			t.Fatalf("%s: PG_ADMIN_URL = %q, spec %q", name, env["PG_ADMIN_URL"], spec.Env["PG_ADMIN_URL"])
+		}
+		// Without the superuser password the component doesn't start.
+		delete(f.secrets.m, ResourceKey("org", "env", action, "admin-password"))
+		if _, err = f.target.Apply(t.Context(), f.componentJob(t, "api", deps)); err == nil || strings.Contains(err.Error(), "pg-Secret-1") {
+			t.Fatalf("%s without the admin password: %v", name, err)
+		}
+	}
+
+	// An external endpoint's admin URL is its DSN.
+	const dsn = "postgres://app:hunter2-Secret@db.internal:5432/app?sslmode=require"
+	f := newComponentFixture(t, kinds)
+	f.target.Endpoints = fakeEndpoints{endpoint: &catalogconnect.Endpoint{ID: "endpoint_01k0000000000000000000000a", OrgID: "org", Name: "prod-pg", Engine: "postgres", Host: "db.internal", Port: 5432}, dsn: dsn}
+	f.target.Checker = &fakeChecker{report: &catalogconnect.Report{Version: "17.2"}}
+	f.target.endpointDial = func(context.Context, string, string) (catalogconnect.DialFunc, io.Closer, error) {
+		return func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("no network") }, noClose{}, nil
+	}
+	external := map[string]planning.DependencyChoice{
+		"postgres": {Mode: planning.DependencyExternal, External: "endpoint_01k0000000000000000000000a"},
+		"cache":    {Mode: planning.DependencyOff},
+	}
+	out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", external))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, env := f.started(t, out); env["PG_ADMIN_URL"] != dsn {
+		t.Fatalf("external PG_ADMIN_URL = %q", env["PG_ADMIN_URL"])
+	}
+}
+
+// graphKinds are the graph kind, with a second output, and the sample
+// kind needing it as falkordb.
+func graphKinds(t *testing.T, edit func(*recipes.Kind)) *recipes.Registry {
+	t.Helper()
+	graph := recipestest.Graph()
+	graph.Outputs = append(graph.Outputs, recipes.Output{Name: "host", EnvKey: "GRAPH_HOST", From: &recipes.Ref{Component: "server", Field: "address:resp"}})
+	sample := recipestest.Sample()
+	sample.Dependencies = append(sample.Dependencies, recipes.Dependency{Name: "falkordb", Title: "FalkorDB", Kinds: []string{"graph"}})
+	if edit != nil {
+		edit(&sample)
+	}
+	r := recipes.NewRegistry()
+	for _, k := range []recipes.Kind{graph, sample} {
+		if err := r.Register(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return r
+}
+
+// withGraph is newPostgres with falkordb provisioned for app.
+var withGraph = map[string]planning.DependencyChoice{
+	"postgres": newPostgres["postgres"],
+	"cache":    newPostgres["cache"],
+	"falkordb": {Mode: planning.DependencyNew, Resource: "app--falkordb", Kind: "graph"},
+}
+
+func TestDependencyOnlyKindFields(t *testing.T) {
+	kinds := graphKinds(t, func(k *recipes.Kind) {
+		k.Components[1].Env = append(k.Components[1].Env,
+			recipes.EnvVar{Name: "GRAPH_URL", From: &recipes.Ref{Dependency: "falkordb", Field: recipes.FieldURL}},
+			recipes.EnvVar{Name: "GRAPH_HOST", From: &recipes.Ref{Dependency: "falkordb", Field: "output:host"}},
+			recipes.EnvVar{Name: "GRAPH_AUTH", Template: "auth=${dep:falkordb:secret:password}"},
+		)
+	})
+	f := newComponentFixture(t, kinds)
+	f.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	f.secrets.m[ResourceKey("org", "env", "app--falkordb", "url")] = []byte("redis://:graph_pw@lp-inst-graph:6379")
+	f.secrets.m[ResourceKey("org", "env", "app--falkordb", "output:host")] = []byte("lp-inst-graph:6379")
+	f.secrets.m[ResourceKey("org", "env", "app--falkordb", "secret:password")] = []byte("graph_pw")
+	out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", withGraph))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, env := f.started(t, out)
+	for key, value := range map[string]string{"GRAPH_URL": "redis://:graph_pw@lp-inst-graph:6379", "GRAPH_HOST": "lp-inst-graph:6379", "GRAPH_AUTH": "auth=graph_pw"} {
+		if env[key] != value {
+			t.Fatalf("%s = %q, want %q", key, env[key], value)
+		}
+		if _, plain := spec.Env[key]; plain {
+			t.Fatalf("%s entered the Ctrl Plane spec", key)
+		}
+	}
+
+	// Before the dependency publishes what's read, nothing starts.
+	fresh := newComponentFixture(t, kinds)
+	fresh.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	fresh.secrets.m[ResourceKey("org", "env", "app--falkordb", "url")] = []byte("redis://:graph_pw@lp-inst-graph:6379")
+	if _, err = fresh.target.Apply(t.Context(), fresh.componentJob(t, "api", withGraph)); err == nil || fresh.instances.creates != 0 {
+		t.Fatalf("missing dependency output: %v", err)
+	}
+}
+
+func TestEnvRequiringAnOffDependencyIsOmitted(t *testing.T) {
+	kinds := sampleKinds(t, func(k *recipes.Kind) {
+		k.Components[1].Env = append(k.Components[1].Env,
+			recipes.EnvVar{Name: "CACHE_ENABLED", Value: "true", Requires: "cache"},
+			recipes.EnvVar{Name: "CACHE_HOST", Template: "${dep:cache:host}", Requires: "cache"},
+		)
+		k.Outputs = append(k.Outputs, recipes.Output{Name: "cache", EnvKey: "SAMPLE_CACHE_URL", Template: "${dep:cache:url}", Requires: "cache", Secret: true})
+	})
+	kind, _ := kinds.Kind("sample")
+	parent := func(deps map[string]planning.DependencyChoice) *planning.ResourceConfig {
+		return &planning.ResourceConfig{
+			Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": "amd64"}, Kind: "sample", Version: "1",
+			Composition: &planning.CompositionConfig{Kind: "sample", Version: "1", Revision: "1", Dependencies: deps, Outputs: kind.Outputs, Secrets: kind.Secrets},
+		}
+	}
+
+	f := newComponentFixture(t, kinds)
+	f.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", newPostgres))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, env := f.started(t, out)
+	for _, key := range []string{"CACHE_ENABLED", "CACHE_HOST", "REDIS_URL"} {
+		if _, ok := env[key]; ok {
+			t.Fatalf("%s is set while cache is off", key)
+		}
+	}
+	if _, err = f.target.Apply(t.Context(), f.job("app", parent(newPostgres))); err != nil {
+		t.Fatalf("an output requiring an off dependency: %v", err)
+	}
+	if _, ok := f.secrets.m[ResourceKey("org", "env", "app", "output:cache")]; ok {
+		t.Fatal("an output requiring an off dependency was published")
+	}
+
+	// With the cache on, they're all there.
+	on := maps.Clone(newPostgres)
+	on["cache"] = planning.DependencyChoice{Mode: planning.DependencyNew, Resource: "app--cache", Kind: "redis"}
+	f.secrets.m[ResourceKey("org", "env", "app--cache", "url")] = []byte("redis://:cache-Secret@lp-inst-cache:6379")
+	out, err = f.target.Apply(t.Context(), f.componentJob(t, "api", on))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, env = f.started(t, out)
+	if env["CACHE_ENABLED"] != "true" || env["CACHE_HOST"] != "lp-inst-cache" || env["REDIS_URL"] != "redis://:cache-Secret@lp-inst-cache:6379" {
+		t.Fatalf("cache on: %v", env)
+	}
+	if _, err = f.target.Apply(t.Context(), f.job("app", parent(on))); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(f.secrets.m[ResourceKey("org", "env", "app", "output:cache")]); got != "redis://:cache-Secret@lp-inst-cache:6379" {
+		t.Fatalf("output:cache = %q", got)
+	}
+
+	// Turning it off again forgets the output it no longer has.
+	if _, err = f.target.Apply(t.Context(), f.job("app", parent(newPostgres))); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.secrets.m[ResourceKey("org", "env", "app", "output:cache")]; ok {
+		t.Fatal("an output whose dependency went off kept its old value")
+	}
+}
+
+// graphJob is the plan's action for app's falkordb, a dependency-only
+// kind: one component action under its own name.
+func (f *componentFixture) graphJob(t *testing.T) *Job {
+	t.Helper()
+	composition, err := f.kinds.Resolve("graph", "1", "amd64", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := composition.Components[0]
+	cfg := &planning.ResourceConfig{
+		Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": "amd64"}, Kind: "graph", Version: "1",
+		Component: &planning.ComponentConfig{Kind: "graph", Resource: "app--falkordb", Revision: composition.Revision, Component: c, Protection: planning.ComponentProtection(c.Component)},
+	}
+	return f.job("app--falkordb", cfg)
+}
+
+func TestDependencyOnlyActionPublishesItsOwnOutputs(t *testing.T) {
+	f := newComponentFixture(t, graphKinds(t, nil))
+	job := f.graphJob(t)
+	out, err := f.target.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := string(f.secrets.m[ResourceKey("org", "env", "app--falkordb", "secret:password")])
+	if !strings.HasPrefix(password, "graph_") {
+		t.Fatalf("secret:password = %q", password)
+	}
+	iid, _ := id.Parse(out.ExternalID)
+	host := server.ContainerName(iid) + ":6379"
+	for field, want := range map[string]string{"url": "redis://:" + password + "@" + host, "output:host": host} {
+		if got := string(f.secrets.m[ResourceKey("org", "env", "app--falkordb", field)]); got != want {
+			t.Fatalf("%s = %q, want %q", field, got, want)
+		}
+	}
+	spec, _, env := f.started(t, out)
+	if env["GRAPH_ARGS"] != "--requirepass "+password || spec.Env["GRAPH_ARGS"] != "" {
+		t.Fatalf("GRAPH_ARGS = %q, spec %q", env["GRAPH_ARGS"], spec.Env["GRAPH_ARGS"])
+	}
+	for key := range f.secrets.m {
+		if strings.HasPrefix(key, "org/env/app/") || strings.HasPrefix(key, "org/env/app--falkordb--") {
+			t.Fatalf("the dependency kept %s under another name", key)
+		}
+	}
+
+	// Removing it forgets what it published with its address.
+	if err = f.target.Remove(t.Context(), job, bound(job, out)); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"url", "output:host", "secret:password", "address"} {
+		if _, ok := f.secrets.m[ResourceKey("org", "env", "app--falkordb", field)]; ok {
+			t.Fatalf("%s survived removing the dependency", field)
+		}
+	}
+}
+
+func TestComponentRunCarriesTargetSettings(t *testing.T) {
+	f := newComponentFixture(t, sampleWithFiles(t))
+	hooks := &fileHooks{files: map[string][]byte{sampleConfig: []byte("listen: 8080\n")}}
+	f.target.Hooks["sample"] = hooks
+	f.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	job := f.componentJob(t, "api", newPostgres)
+	job.Action.Resource.TargetSettings["namespace"] = "apps"
+	if _, err := f.target.Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if len(hooks.rendered) != 1 || hooks.rendered[0].TargetSettings["namespace"] != "apps" || hooks.rendered[0].TargetSettings["architecture"] != "amd64" {
+		t.Fatalf("files saw %+v", hooks.rendered)
+	}
+	if len(hooks.ready) != 1 || hooks.ready[0].TargetSettings["namespace"] != "apps" {
+		t.Fatalf("ready saw %+v", hooks.ready)
+	}
+	// The hooks get their own copy of the reviewed settings.
+	hooks.rendered[0].TargetSettings["namespace"] = "changed"
+	if job.Action.Resource.TargetSettings["namespace"] != "apps" {
+		t.Fatal("a hook can change the reviewed settings")
+	}
+}

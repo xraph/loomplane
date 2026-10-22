@@ -60,6 +60,10 @@ type ComponentRun struct {
 	// yet. Requests can't carry an Authorization header (see
 	// ComponentChannel).
 	Channel func(ctx context.Context, component, port string) (*ComponentChannel, error)
+	// TargetSettings are the target's reviewed connection settings the
+	// component runs with, such as a cluster's "namespace". They're a
+	// copy: changing them changes nothing.
+	TargetSettings map[string]string
 }
 
 // ConsumerBinder is implemented by the hooks of a kind with an Output that
@@ -90,6 +94,15 @@ type Consumer struct {
 	// resource, which is already running. Requests can't carry an
 	// Authorization header (see ComponentChannel).
 	Channel func(ctx context.Context, component, port string) (*ComponentChannel, error)
+	// Options are what the service set for this need under
+	// need_options, checked against the kind's ConsumerOptions when it
+	// was planned. They're a copy.
+	Options map[string]string
+	// Address is where the composition reaches a port of one of its
+	// running process components, by Component.Name and Port.Name, such
+	// as http://lp-inst-...:8080. It's an error for a component that
+	// hasn't started or a port it doesn't declare.
+	Address func(component, port string) (*url.URL, error)
 }
 
 // ComposedResource is a composed resource being deleted.

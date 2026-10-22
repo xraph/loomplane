@@ -85,6 +85,7 @@ type OwnedTarget struct {
 var _ Executor = (*OwnedTarget)(nil)
 var _ Locator = (*OwnedTarget)(nil)
 var _ ComponentDialer = (*OwnedTarget)(nil)
+var _ JobRunner = (*OwnedTarget)(nil)
 
 func (e *OwnedTarget) connection(ctx context.Context, org, connection string, labels map[string]string) (*connections.Connection, []byte, error) {
 	if labels[owned.LabelOrg] != org || labels[owned.LabelConnection] != connection {
@@ -679,7 +680,10 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 		if e.Secrets == nil {
 			return ErrNoCredential
 		}
-		return e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField))
+		if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
+			return err
+		}
+		return e.forgetPublished(ctx, b, resource.Component)
 	}
 	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -23,8 +25,9 @@ func consumerOutput(link planning.EnvLink) (string, bool) {
 }
 
 // consumerOf describes service as a consumer of a per-consumer output of
-// the composed resource a link reads, and the binder of its kind.
-func (r *Runner) consumerOf(d *Deployment, service, output string, link planning.EnvLink, resources map[string]*planning.Binding) (Consumer, ConsumerBinder, error) {
+// the composed resource a link reads, with the options the link carries,
+// and the binder of its kind.
+func (r *Runner) consumerOf(ctx context.Context, d *Deployment, service, output string, link planning.EnvLink, resources map[string]*planning.Binding) (Consumer, ConsumerBinder, error) {
 	var composition *planning.CompositionConfig
 	if cfg := boundResource(resources[link.From]); cfg != nil {
 		composition = cfg.Composition
@@ -39,6 +42,8 @@ func (r *Runner) consumerOf(d *Deployment, service, output string, link planning
 		OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Environment: d.Environment,
 		Resource: link.From, Kind: composition.Kind, Output: output, Service: service,
 		Channel: r.consumerChannel(d, link.From),
+		Options: maps.Clone(link.Options),
+		Address: r.consumerAddress(ctx, d, link.From),
 	}
 	binder, ok := r.catalogHooks[composition.Kind].(ConsumerBinder)
 	if !ok {
@@ -50,7 +55,7 @@ func (r *Runner) consumerOf(d *Deployment, service, output string, link planning
 // bindConsumer issues the value of a per-consumer output to a service.
 func (r *Runner) bindConsumer(ctx context.Context, d *Deployment, service string, link planning.EnvLink, resources map[string]*planning.Binding) (string, error) {
 	output, _ := consumerOutput(link)
-	c, binder, err := r.consumerOf(d, service, output, link, resources)
+	c, binder, err := r.consumerOf(ctx, d, service, output, link, resources)
 	if err != nil {
 		return "", err
 	}
@@ -90,7 +95,7 @@ func (r *Runner) releaseConsumers(ctx context.Context, d *Deployment, service st
 			continue
 		}
 		released = append(released, n)
-		c, binder, err := r.consumerOf(d, service, output, link, resources)
+		c, binder, err := r.consumerOf(ctx, d, service, output, link, resources)
 		if err == nil {
 			err = binder.ReleaseConsumer(ctx, c)
 		}
@@ -114,5 +119,30 @@ func (r *Runner) consumerChannel(d *Deployment, resource string) func(ctx contex
 		}
 		ref := ComponentRef{ResourceRef: ResourceRef{ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Resource: resource}, Component: component, Port: port}
 		return openComponentChannel(ctx, r.executors, bindings, security.Principal{OrgID: d.OrgID, UserID: d.StartedBy}, ref)
+	}
+}
+
+// consumerAddress is where the composition reaches a port of one of a
+// composed resource's running process components, from the address it
+// kept when it started.
+func (r *Runner) consumerAddress(ctx context.Context, d *Deployment, resource string) func(component, port string) (*url.URL, error) {
+	return func(component, port string) (*url.URL, error) {
+		if r.resources == nil {
+			return nil, ErrNoCredential
+		}
+		name := planning.ComponentActionName(resource, component)
+		addresses, err := keptAddresses(ctx, r.resources, d.OrgID, d.EnvironmentID, name)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		address, ok := addresses[port]
+		if !ok {
+			return nil, fmt.Errorf("%s has no %s port", name, port)
+		}
+		u, err := url.Parse(address)
+		if err != nil {
+			return nil, fmt.Errorf("%s's %s address isn't a URL", name, port)
+		}
+		return u, nil
 	}
 }

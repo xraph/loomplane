@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
@@ -372,5 +374,190 @@ func TestComponentTransportOpensTheReviewedSession(t *testing.T) {
 	// the connection the way a deployment does.
 	if _, _, err := f.target.ComponentTransport(t.Context(), b, 9090); !errors.Is(err, ErrNoCredential) {
 		t.Fatalf("session: %v", err)
+	}
+}
+
+func TestInternalChannelSkipsAuthzButChecksControlPort(t *testing.T) {
+	log := &accessLog{}
+	dialer := &componentDialer{log: log, handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })}
+	access := newCatalogAccess(t, log, dialer, &memSecrets{m: map[string][]byte{}})
+	ref := func(resource, component, port string) ComponentRef {
+		return ComponentRef{ResourceRef: ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: resource}, Component: component, Port: port}
+	}
+
+	channel, err := access.InternalChannel(t.Context(), "org", ref("app", "api", "admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = channel.Close()
+	if calls := log.all(); !slices.Equal(calls, []string{"bindings org env", "dial app--api inst_api 9090"}) {
+		t.Fatalf("calls: %v", calls)
+	}
+	if _, err = access.InternalChannel(t.Context(), "org", ref("app", "api", "http")); !errors.Is(err, ErrNotControlPort) {
+		t.Fatalf("http port: %v", err)
+	}
+	for name, r := range map[string]ComponentRef{
+		"unknown resource": ref("other", "api", "admin"),
+		"a job":            ref("app", "migrate", "admin"),
+		"a service":        ref("web", "api", "admin"),
+	} {
+		if _, err = access.InternalChannel(t.Context(), "org", r); !errors.Is(err, ErrComponentNotFound) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	// Another organization's bindings aren't there to reach.
+	if _, err = access.InternalChannel(t.Context(), "other", ref("app", "api", "admin")); !errors.Is(err, ErrComponentNotFound) {
+		t.Fatalf("another org: %v", err)
+	}
+	if slices.ContainsFunc(log.all(), func(c string) bool { return strings.HasPrefix(c, "require") }) {
+		t.Fatalf("an internal channel checked a principal: %v", log.all())
+	}
+}
+
+func TestInternalSecretReadsTheGeneratedSecret(t *testing.T) {
+	log := &accessLog{}
+	secrets := &memSecrets{m: map[string][]byte{ResourceKey("org", "env", "app", "secret:admin-password"): []byte("s3cret-admin")}}
+	access := newCatalogAccess(t, log, &componentDialer{log: log}, secrets)
+	app := ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "app"}
+
+	value, err := access.InternalSecret(t.Context(), "org", app, "admin-password")
+	if err != nil || string(value) != "s3cret-admin" {
+		t.Fatalf("secret %q: %v", value, err)
+	}
+	for name, tc := range map[string]struct {
+		org    string
+		ref    ResourceRef
+		secret string
+	}{
+		"undeclared":       {"org", app, "root-password"},
+		"a component":      {"org", ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "app--api"}, "admin-password"},
+		"another project":  {"org", ResourceRef{ProjectID: "elsewhere", EnvironmentID: "env", Resource: "app"}, "admin-password"},
+		"another org":      {"other", app, "admin-password"},
+		"unknown resource": {"org", ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "other"}, "admin-password"},
+	} {
+		if _, err = access.InternalSecret(t.Context(), tc.org, tc.ref, tc.secret); !errors.Is(err, ErrComponentNotFound) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if slices.ContainsFunc(log.all(), func(c string) bool { return strings.HasPrefix(c, "require") }) {
+		t.Fatalf("an internal secret checked a principal: %v", log.all())
+	}
+}
+
+// jobRunner stands in for a target that reruns bound jobs.
+type jobRunner struct {
+	componentDialer
+	reruns []string
+}
+
+func (r *jobRunner) RerunJob(_ context.Context, b *planning.Binding, name string) (owned.JobResult, error) {
+	r.reruns = append(r.reruns, b.Name+" "+b.ExternalID+" "+name)
+	return owned.JobResult{Output: "rebuilt"}, nil
+}
+
+func TestCatalogAccessRunJobRerunsTheBoundJob(t *testing.T) {
+	log := &accessLog{}
+	runner := &jobRunner{componentDialer: componentDialer{log: log}}
+	access := newCatalogAccess(t, log, runner, &memSecrets{m: map[string][]byte{}})
+	app := ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "app"}
+
+	result, err := access.RunJob(t.Context(), "org", app, "migrate", "lp-rerun-1")
+	if err != nil || result.Output != "rebuilt" {
+		t.Fatalf("rerun %+v: %v", result, err)
+	}
+	if !slices.Equal(runner.reruns, []string{"app--migrate inst_migrate lp-rerun-1"}) {
+		t.Fatalf("reruns: %v", runner.reruns)
+	}
+	if _, err = access.RunJob(t.Context(), "org", app, "api", "lp-rerun-2"); !errors.Is(err, ErrNotAJob) {
+		t.Fatalf("a process: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		org       string
+		ref       ResourceRef
+		component string
+	}{
+		"unknown component": {"org", app, "cron"},
+		"another project":   {"org", ResourceRef{ProjectID: "elsewhere", EnvironmentID: "env", Resource: "app"}, "migrate"},
+		"another org":       {"other", app, "migrate"},
+	} {
+		if _, err = access.RunJob(t.Context(), tc.org, tc.ref, tc.component, "lp-rerun-3"); !errors.Is(err, ErrComponentNotFound) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if len(runner.reruns) != 1 {
+		t.Fatalf("reruns: %v", runner.reruns)
+	}
+
+	// The target reruns it as applyComponent ran it, and records nothing.
+	f, jobs := newJobFixture(t, owned.JobResult{Output: "migrated with " + postgresURL})
+	f.target.Credentials = dialCredentials{"conn": {ID: "conn", OrgID: "org", Cloud: connections.Server, Status: connections.StatusReady, Details: map[string]string{}}}
+	migrate := f.componentJob(t, "migrate", newPostgres)
+	out, err := f.target.Apply(t.Context(), migrate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := maps.Clone(f.secrets.m)
+	b := bound(migrate, out)
+	result, err = f.target.RerunJob(t.Context(), b, "lp-rerun-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.runs) != 2 {
+		t.Fatalf("ran %d times", len(jobs.runs))
+	}
+	run := jobs.runs[1]
+	if run.name != "lp-rerun-1" || run.env["DATABASE_URL"] != postgresURL || run.spec.Env["DATABASE_URL"] != "" || run.spec.Image != migrate.Action.Resource.Component.Component.Image {
+		t.Fatalf("rerun: %+v", run)
+	}
+	if strings.Contains(result.Output, "pg-Secret-1") || !strings.Contains(result.Output, "[redacted]") {
+		t.Fatalf("output %q", result.Output)
+	}
+	if !maps.EqualFunc(f.secrets.m, kept, func(a, b []byte) bool { return string(a) == string(b) }) {
+		t.Fatal("a rerun recorded something in Vault")
+	}
+	api := f.componentJob(t, "api", newPostgres)
+	apiOut, err := f.target.Apply(t.Context(), api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.target.RerunJob(t.Context(), bound(api, apiOut), "lp-rerun-2"); !errors.Is(err, ErrNotAJob) {
+		t.Fatalf("a process: %v", err)
+	}
+	if _, err = f.target.RerunJob(t.Context(), b, "Not A Name"); err == nil || len(jobs.runs) != 2 {
+		t.Fatalf("an invalid job name: %v", err)
+	}
+}
+
+func TestCatalogAccessComponentsListsTheComposition(t *testing.T) {
+	log := &accessLog{}
+	access := newCatalogAccess(t, log, &componentDialer{log: log}, &memSecrets{m: map[string][]byte{}})
+	member := security.Principal{OrgID: "org", UserID: "usr"}
+	app := ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "app"}
+
+	if _, err := access.Components(t.Context(), security.Principal{OrgID: "org", UserID: "intruder"}, security.DeploymentRead, app); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("intruder: %v", err)
+	}
+	if calls := log.all(); !slices.Equal(calls, []string{"require intruder deployment:read proj"}) {
+		t.Fatalf("intruder calls: %v", calls)
+	}
+	bindings, err := access.Components(t.Context(), member, security.DeploymentRead, app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(bindings))
+	for _, b := range bindings {
+		names = append(names, b.Name)
+	}
+	if want := []string{"app", "app--api", "app--migrate", "app--worker"}; !slices.Equal(names, want) {
+		t.Fatalf("components %v, want %v", names, want)
+	}
+	for name, ref := range map[string]ResourceRef{
+		"unknown":         {ProjectID: "proj", EnvironmentID: "env", Resource: "other"},
+		"a component":     {ProjectID: "proj", EnvironmentID: "env", Resource: "app--api"},
+		"another project": {ProjectID: "elsewhere", EnvironmentID: "env", Resource: "app"},
+	} {
+		if _, err = access.Components(t.Context(), member, security.DeploymentRead, ref); !errors.Is(err, ErrComponentNotFound) {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }

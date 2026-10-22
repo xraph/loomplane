@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -1553,10 +1554,10 @@ func TestPerConsumerOutputIsIssuedPerService(t *testing.T) {
 	}
 	for i, service := range []string{"web", "jobs"} {
 		c := hooks.bound[i]
-		channel := c.Channel
-		c.Channel = nil
+		channel, address := c.Channel, c.Address
+		c.Channel, c.Address = nil, nil
 		want := Consumer{OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production", Resource: "app", Kind: "sample", Output: "key", Service: service}
-		if !reflect.DeepEqual(c, want) || channel == nil {
+		if !reflect.DeepEqual(c, want) || channel == nil || address == nil {
 			t.Fatalf("consumer %d is %+v, channel %v; want %+v with a channel", i, c, channel != nil, want)
 		}
 		job := exec.jobs[i]
@@ -1648,5 +1649,149 @@ func TestFailingToReleaseAConsumerWarns(t *testing.T) {
 	}
 	if plans.bindings["service:web"] != nil {
 		t.Fatal("the binding is still there")
+	}
+}
+
+// releaseLog is a release observer that records each release, with how
+// long it had, and fails with err.
+type releaseLog struct {
+	mu       sync.Mutex
+	releases []Release
+	budgets  []time.Duration
+	err      error
+}
+
+func (l *releaseLog) Released(ctx context.Context, r Release) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.releases = append(l.releases, r)
+	if deadline, ok := ctx.Deadline(); ok {
+		l.budgets = append(l.budgets, time.Until(deadline))
+	}
+	return l.err
+}
+
+func (l *releaseLog) all() []Release {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.releases)
+}
+
+// observerFunc is a ReleaseObserver from a function.
+type observerFunc func(ctx context.Context, r Release) error
+
+func (f observerFunc) Released(ctx context.Context, r Release) error { return f(ctx, r) }
+
+// cacheAction is the resource cache on Cloud Run, as a plan has it.
+func cacheAction(op planning.Op) planning.Action {
+	a := planning.Action{ID: "resource:cache", Op: op, Subject: planning.ResourceSubject, Name: "cache", Provider: "cloud-run", Step: 1}
+	if op != planning.Delete {
+		a.Resource = &planning.ResourceConfig{Provider: "cloud-run", Kind: "redis"}
+	}
+	return a
+}
+
+func TestReleaseObserverNeverFailsTheDeployment(t *testing.T) {
+	plan := consumerPlan(cacheAction(planning.Create), consumerService(planning.Create, "web"))
+	plan.Actions[1].Step = 2
+	failing := &releaseLog{err: errors.New("the catalog is down")}
+	fine := &releaseLog{}
+	r, store, plans, _ := consumerRunner(t, plan, NoHooks{})
+	r.observers = []ReleaseObserver{failing, fine}
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	if d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	web := d.Step("service:web")
+	if web.Status != StepSucceeded || !slices.Equal(web.Warnings, []string{"web: the catalog is down"}) {
+		t.Fatalf("web step %s, warnings %q", web.Status, web.Warnings)
+	}
+	if cache := d.Step("resource:cache"); len(cache.Warnings) != 0 {
+		t.Fatalf("cache warnings %q", cache.Warnings)
+	}
+	for _, observer := range []*releaseLog{failing, fine} {
+		releases := observer.all()
+		if len(releases) != 1 {
+			t.Fatalf("released %d times: %+v", len(releases), releases)
+		}
+		got := releases[0]
+		if got.OrgID != "org_1" || got.ProjectID != "proj_1" || got.EnvironmentID != "env_1" || got.Removed || got.Binding == nil || got.Binding.Name != "web" || got.Binding.Subject != planning.ServiceSubject || got.Binding.ExternalID != "ext-web" {
+			t.Fatalf("release %+v", got)
+		}
+		if got.Binding.ID != plans.bindings["service:web"].ID {
+			t.Fatalf("released binding %s, bound %s", got.Binding.ID, plans.bindings["service:web"].ID)
+		}
+		if len(observer.budgets) != 1 || observer.budgets[0] > 10*time.Second || observer.budgets[0] < 9*time.Second {
+			t.Fatalf("observer had %v", observer.budgets)
+		}
+	}
+}
+
+func TestRemovedServiceNotifiesObservers(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Delete, "web"), cacheAction(planning.Delete))
+	observer := &releaseLog{}
+	cache := &planning.Binding{ID: "bind_cache", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ResourceSubject, Name: "cache", Provider: "cloud-run", ExternalID: "ext-cache", ConnectionID: "conn_g", Config: json.RawMessage(`{}`)}
+	r, store, plans, _ := consumerRunner(t, plan, NoHooks{}, boundService(t, "web"), cache)
+	r.observers = []ReleaseObserver{observerFunc(func(ctx context.Context, rel Release) error {
+		// The binding is gone by the time observers hear of it.
+		if b := plans.bindings["service:web"]; b != nil {
+			t.Error("observers ran before the binding was deleted")
+		}
+		return observer.Released(ctx, rel)
+	})}
+
+	step := runStep(t, r, plan, store, "service:web")
+	releases := observer.all()
+	if len(releases) != 1 || !releases[0].Removed || releases[0].Binding == nil || releases[0].Binding.ID != "bind_web" || releases[0].OrgID != "org_1" || releases[0].EnvironmentID != "env_1" {
+		t.Fatalf("releases %+v", releases)
+	}
+	if len(step.Warnings) != 0 {
+		t.Fatalf("warnings %q", step.Warnings)
+	}
+	runStep(t, r, plan, store, "resource:cache")
+	if plans.bindings["resource:cache"] != nil || len(observer.all()) != 1 {
+		t.Fatalf("removing a resource: %d releases", len(observer.all()))
+	}
+}
+
+func TestConsumerCarriesOptionsAndAddress(t *testing.T) {
+	link := consumerLink
+	link.Options = map[string]string{"tenant": "acme"}
+	plan := consumerPlan(consumerService(planning.Create, "web", link))
+	hooks := &binderHooks{}
+	r, store, _, _ := consumerRunner(t, plan, hooks)
+	if err := r.resources.Put(t.Context(), ResourceKey("org_1", "env_1", "app--server", "address"), []byte(`{"api":"http://lp-inst-server:8080","admin":"http://lp-inst-server:9090"}`)); err != nil {
+		t.Fatal(err)
+	}
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if len(hooks.bound) != 1 || !maps.Equal(hooks.bound[0].Options, map[string]string{"tenant": "acme"}) {
+		t.Fatalf("bound %+v", hooks.bound)
+	}
+	c := hooks.bound[0]
+	// The consumer gets its own copy of the options.
+	c.Options["tenant"] = "changed"
+	if plan.Actions[0].Service.Env[0].Options["tenant"] != "acme" {
+		t.Fatal("a binder can change the plan's options")
+	}
+	address, err := c.Address("server", "api")
+	if err != nil || address.String() != "http://lp-inst-server:8080" {
+		t.Fatalf("address %v: %v", address, err)
+	}
+	if _, err = c.Address("server", "metrics"); err == nil {
+		t.Fatal("an undeclared port has an address")
+	}
+	if _, err = c.Address("worker", "api"); err == nil {
+		t.Fatal("a component that hasn't started has an address")
 	}
 }

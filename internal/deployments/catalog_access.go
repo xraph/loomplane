@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -25,7 +27,16 @@ var (
 	// ErrNotControlPort is a port the component doesn't declare as a
 	// control port. Only those are reached privately.
 	ErrNotControlPort = errors.New("not a control port")
+	// ErrNotAJob is a component asked to run again as a job that's a
+	// process.
+	ErrNotAJob = errors.New("not a job")
 )
+
+// JobRunner runs a bound job component again. *OwnedTarget is the real
+// one (see OwnedTarget.RerunJob).
+type JobRunner interface {
+	RerunJob(ctx context.Context, b *planning.Binding, name string) (owned.JobResult, error)
+}
 
 // componentChannelTimeout bounds each request over a component channel.
 const componentChannelTimeout = 30 * time.Second
@@ -95,8 +106,12 @@ type CatalogAccessDeps struct {
 
 // CatalogAccess lets a catalog kind's own API reach its running
 // components: their control ports over the target's private channel, and
-// the composition's generated secrets. Every call checks the caller's
-// permission on the project first.
+// the composition's generated secrets. Every call that takes a principal
+// checks its permission on the project first.
+//
+// The Internal calls and RunJob take none. They're for Loomplane's own
+// background work, such as a kind's reconciler, and no HTTP handler calls
+// them without checking the caller's permission on the project first.
 type CatalogAccess struct{ d CatalogAccessDeps }
 
 // NewCatalogAccess returns a CatalogAccess.
@@ -133,8 +148,93 @@ func openComponentChannel(ctx context.Context, executors map[string]Executor, bi
 	return openChannel(infrastructure.WithPrincipal(ctx, p), dialer, b, port)
 }
 
+// InternalChannel opens a channel to a control port of a running
+// component, as Channel does, for Loomplane's own background work. It
+// makes Channel's checks of the binding, the component and its port, and
+// checks no permission: an HTTP handler checks the caller's first.
+func (a *CatalogAccess) InternalChannel(ctx context.Context, orgID string, ref ComponentRef) (*ComponentChannel, error) {
+	bindings, err := a.d.Bindings(ctx, orgID, ref.EnvironmentID)
+	if err != nil {
+		return nil, err
+	}
+	return openComponentChannel(ctx, a.d.Executors, bindings, security.Principal{OrgID: orgID}, ref)
+}
+
 // GeneratedSecret reads one of a composed resource's generated secrets.
 func (a *CatalogAccess) GeneratedSecret(ctx context.Context, p security.Principal, need security.Permission, ref ResourceRef, name string) ([]byte, error) {
+	if err := a.d.Authz.Require(ctx, p, need, ref.ProjectID); err != nil {
+		return nil, err
+	}
+	return a.keptSecret(ctx, p.OrgID, ref, name)
+}
+
+// InternalSecret reads one of a composed resource's generated secrets,
+// as GeneratedSecret does, for Loomplane's own background work. It makes
+// GeneratedSecret's checks of the binding and the secret, and checks no
+// permission: an HTTP handler checks the caller's first.
+func (a *CatalogAccess) InternalSecret(ctx context.Context, orgID string, ref ResourceRef, name string) ([]byte, error) {
+	return a.keptSecret(ctx, orgID, ref, name)
+}
+
+// keptSecret reads a generated secret the composed resource ref declares.
+// It checks no permission: callers do.
+func (a *CatalogAccess) keptSecret(ctx context.Context, orgID string, ref ResourceRef, name string) ([]byte, error) {
+	bindings, err := a.d.Bindings(ctx, orgID, ref.EnvironmentID)
+	if err != nil {
+		return nil, err
+	}
+	parent := composedParent(bindings, orgID, ref)
+	if parent == nil {
+		return nil, fmt.Errorf("%w: %s isn't a composed resource in this environment", ErrComponentNotFound, ref.Resource)
+	}
+	composition := boundResource(parent).Composition
+	if !slices.ContainsFunc(composition.Secrets, func(s recipes.GeneratedSecret) bool { return s.Name == name }) {
+		return nil, fmt.Errorf("%w: %s has no generated secret %s", ErrComponentNotFound, ref.Resource, name)
+	}
+	if a.d.Secrets == nil {
+		return nil, ErrNoCredential
+	}
+	value, err := a.d.Secrets.Get(ctx, resourceKey(orgID, ref.EnvironmentID, ref.Resource, "secret:"+name))
+	if errors.Is(err, ErrNoCredential) {
+		return nil, fmt.Errorf("%s's generated secret %s hasn't been kept yet", ref.Resource, name)
+	}
+	return value, err
+}
+
+// RunJob runs a bound job component of a composed resource again, now,
+// as name, through the target it runs on (see JobRunner), for Loomplane's
+// own background work. It records nothing, and checks no permission: an
+// HTTP handler checks the caller's first. A process is ErrNotAJob.
+func (a *CatalogAccess) RunJob(ctx context.Context, orgID string, ref ResourceRef, component, name string) (owned.JobResult, error) {
+	bindings, err := a.d.Bindings(ctx, orgID, ref.EnvironmentID)
+	if err != nil {
+		return owned.JobResult{}, err
+	}
+	action := planning.ComponentActionName(ref.Resource, component)
+	for _, b := range bindings {
+		if b.OrgID != orgID || b.ProjectID != ref.ProjectID || b.EnvironmentID != ref.EnvironmentID || b.Subject != planning.ResourceSubject || b.Name != action {
+			continue
+		}
+		cfg := boundResource(b)
+		if cfg == nil || cfg.Component == nil || cfg.Component.Resource != ref.Resource || cfg.Component.Component.Name != component {
+			continue
+		}
+		if role := cfg.Component.Component.Role; role != recipes.RoleJob {
+			return owned.JobResult{}, fmt.Errorf("%w: %s's %s is a %s", ErrNotAJob, ref.Resource, component, role)
+		}
+		runner, ok := a.d.Executors[b.Provider].(JobRunner)
+		if !ok {
+			return owned.JobResult{}, fmt.Errorf("%s runs on %s, which can't run catalog jobs again", b.Name, b.Provider)
+		}
+		return runner.RerunJob(ctx, b, name)
+	}
+	return owned.JobResult{}, fmt.Errorf("%w: %s has no job %s", ErrComponentNotFound, ref.Resource, component)
+}
+
+// Components lists a composed resource's bindings: the resource itself
+// first, then each of its components, and each dependency-only
+// dependency it provisioned, by name.
+func (a *CatalogAccess) Components(ctx context.Context, p security.Principal, need security.Permission, ref ResourceRef) ([]*planning.Binding, error) {
 	if err := a.d.Authz.Require(ctx, p, need, ref.ProjectID); err != nil {
 		return nil, err
 	}
@@ -142,29 +242,42 @@ func (a *CatalogAccess) GeneratedSecret(ctx context.Context, p security.Principa
 	if err != nil {
 		return nil, err
 	}
-	i := slices.IndexFunc(bindings, func(b *planning.Binding) bool {
-		return b.OrgID == p.OrgID && b.ProjectID == ref.ProjectID && b.EnvironmentID == ref.EnvironmentID && b.Subject == planning.ResourceSubject && b.Name == ref.Resource
-	})
-	var composition *planning.CompositionConfig
-	if i >= 0 {
-		if cfg := boundResource(bindings[i]); cfg != nil {
-			composition = cfg.Composition
-		}
-	}
-	if composition == nil {
+	parent := composedParent(bindings, p.OrgID, ref)
+	if parent == nil {
 		return nil, fmt.Errorf("%w: %s isn't a composed resource in this environment", ErrComponentNotFound, ref.Resource)
 	}
-	if !slices.ContainsFunc(composition.Secrets, func(s recipes.GeneratedSecret) bool { return s.Name == name }) {
-		return nil, fmt.Errorf("%w: %s has no generated secret %s", ErrComponentNotFound, ref.Resource, name)
+	// A dependency-only dependency runs as its own resource.
+	provisioned := map[string]bool{}
+	for _, choice := range boundResource(parent).Composition.Dependencies {
+		if choice.Mode == planning.DependencyNew {
+			provisioned[choice.Resource] = true
+		}
 	}
-	if a.d.Secrets == nil {
-		return nil, ErrNoCredential
+	var parts []*planning.Binding
+	for _, b := range bindings {
+		if b.OrgID != p.OrgID || b.ProjectID != ref.ProjectID || b.EnvironmentID != ref.EnvironmentID || b.Subject != planning.ResourceSubject || !strings.HasPrefix(b.Name, ref.Resource+"--") {
+			continue
+		}
+		if cfg := boundResource(b); cfg != nil && cfg.Component != nil && (cfg.Component.Resource == ref.Resource || (provisioned[b.Name] && cfg.Component.Resource == b.Name)) {
+			parts = append(parts, b)
+		}
 	}
-	value, err := a.d.Secrets.Get(ctx, resourceKey(p.OrgID, ref.EnvironmentID, ref.Resource, "secret:"+name))
-	if errors.Is(err, ErrNoCredential) {
-		return nil, fmt.Errorf("%s's generated secret %s hasn't been kept yet", ref.Resource, name)
+	slices.SortFunc(parts, func(x, y *planning.Binding) int { return strings.Compare(x.Name, y.Name) })
+	return append([]*planning.Binding{parent}, parts...), nil
+}
+
+// composedParent finds a composed resource's own binding among an
+// environment's bindings, or nil.
+func composedParent(bindings []*planning.Binding, orgID string, ref ResourceRef) *planning.Binding {
+	for _, b := range bindings {
+		if b.OrgID != orgID || b.ProjectID != ref.ProjectID || b.EnvironmentID != ref.EnvironmentID || b.Subject != planning.ResourceSubject || b.Name != ref.Resource {
+			continue
+		}
+		if cfg := boundResource(b); cfg != nil && cfg.Composition != nil {
+			return b
+		}
 	}
-	return value, err
+	return nil
 }
 
 // controlPort finds a running process component of a composed resource

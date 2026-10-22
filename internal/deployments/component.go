@@ -35,6 +35,7 @@ import (
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -211,6 +212,9 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 		return nil, errors.New("the component's target differs from the reviewed connection")
 	}
 	component := cfg.Component.Component
+	if dependencyOnly(kind) && cfg.Component.Resource != job.Action.Name {
+		return nil, errRecipeChanged
+	}
 	if component.Role == recipes.RoleJob {
 		return e.runComponentJob(ctx, job, kind)
 	}
@@ -244,6 +248,15 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 	}
 	if keepErr := job.Keep(ctx, componentAddressField, address); keepErr != nil {
 		return nil, keepErr
+	}
+	if dependencyOnly(kind) {
+		// It's its own composed resource, so it publishes what the kind
+		// it's part of reads, under its own name, as a parent does.
+		reads := e.reads(job, kind, cfg.Component.Resource, nil)
+		reads.self, reads.secrets = component.Name, run.Secrets
+		if publishErr := e.publishOutputs(ctx, job, reads, kind.Outputs); publishErr != nil {
+			return nil, publishErr
+		}
 	}
 	// Once it runs, its hooks can reach it too.
 	self, err := selfBinding(job, out.ExternalID)
@@ -284,7 +297,7 @@ func componentJobName(deploymentID, actionID string) string {
 // runs. A job that exits with anything but 0 fails the step, so the
 // components after it don't start. A retry of a step whose job succeeded
 // doesn't run it again.
-func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipes.Kind) (out *Outcome, err error) {
+func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipes.Kind) (*Outcome, error) {
 	cfg := job.Action.Resource
 	component := cfg.Component.Component
 	name := componentJobName(job.Deployment.ID, job.Action.ID)
@@ -293,28 +306,73 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 	if len(job.Resume) > 0 && json.Unmarshal(job.Resume, &resumed) == nil && resumed.Job == name && resumed.State == jobSucceeded {
 		return done, nil
 	}
-	backend, err := e.registeredBackend(e.Register(job.Deployment.OrgID, job.Connection.ID))
+	jobs, err := e.jobBackend(job.Deployment.OrgID, job.Connection.ID, job.Action.Name)
+	if err != nil {
+		return nil, err
+	}
+	if e.Secrets == nil || job.Keep == nil || job.Checkpoint == nil {
+		return nil, ErrNoCredential
+	}
+	save := func(s string) error {
+		raw, _ := json.Marshal(jobCheckpoint{Job: name, State: s}) //nolint:errcheck // a plain struct always encodes
+		return job.Checkpoint(raw)
+	}
+	starting := func() error {
+		if saveErr := save(jobRunning); saveErr != nil {
+			return saveErr
+		}
+		job.Progress(StepDeploying, "Running the "+component.Name+" job")
+		return nil
+	}
+	finished := func(result owned.JobResult) error {
+		if result.ExitCode != 0 {
+			if result.Output != "" {
+				return fmt.Errorf("%s exited with code %d: %s", component.Name, result.ExitCode, result.Output)
+			}
+			return fmt.Errorf("%s exited with code %d", component.Name, result.ExitCode)
+		}
+		return save(jobSucceeded)
+	}
+	if _, err = e.runJob(ctx, job, kind, jobs, name, starting, finished); err != nil {
+		return nil, err
+	}
+	return done, nil
+}
+
+// jobBackend is the job backend of a target connection.
+func (e *OwnedTarget) jobBackend(org, connection, action string) (owned.JobBackend, error) {
+	backend, err := e.registeredBackend(e.Register(org, connection))
 	if err != nil {
 		return nil, err
 	}
 	jobs, ok := backend.(owned.JobBackend)
 	if !ok {
-		return nil, fmt.Errorf("%s is a job, and this %s target can't run catalog jobs", job.Action.Name, e.Cloud)
+		return nil, fmt.Errorf("%s is a job, and this %s target can't run catalog jobs", action, e.Cloud)
 	}
-	if e.Secrets == nil || job.Keep == nil || job.Checkpoint == nil {
-		return nil, ErrNoCredential
-	}
+	return jobs, nil
+}
+
+// runJob resolves a job component and runs it once, as name, through
+// jobs. Its runtime values and rendered files are kept in Vault only
+// while it runs. starting runs just before it starts and finished once
+// it ends, before what it was handed is deleted; either may be nil. The
+// result's output has what it was handed redacted.
+func (e *OwnedTarget) runJob(ctx context.Context, job *Job, kind recipes.Kind, jobs owned.JobBackend, name string,
+	starting func() error, finished func(owned.JobResult) error,
+) (result owned.JobResult, err error) {
+	cfg := job.Action.Resource
+	component := cfg.Component.Component
 	run, secret, err := e.componentEnv(ctx, job, kind)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	files, err := e.renderFiles(ctx, kind, run)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	ref, err := typeid.Generate("runtime")
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	state := ownedState{RuntimeRef: resourceKey(job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, ref.String())}
 	values := map[string]string{}
@@ -323,10 +381,10 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 	}
 	raw, err := json.Marshal(values)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	if putErr := e.Secrets.Put(ctx, state.RuntimeRef, raw); putErr != nil {
-		return nil, putErr
+		return result, putErr
 	}
 	copyJob := *job
 	copyJob.Action.Resource = nil
@@ -339,23 +397,17 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 		defer cancel()
 		err = errors.Join(err, e.deleteRuntimeFiles(cleanup, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, labels))
 		err = errors.Join(err, e.deleteRuntime(cleanup, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef))
-		if err != nil {
-			out = nil
-		}
 	}()
 	if putErr := e.keepRuntimeFiles(ctx, state.RuntimeRef, files); putErr != nil {
-		return nil, putErr
+		return result, putErr
 	}
 	// The recipe pinned the image for the target's architecture.
 	labels[owned.LabelArchitecture] = cfg.TargetSettings["architecture"]
-	save := func(s string) error {
-		raw, _ := json.Marshal(jobCheckpoint{Job: name, State: s}) //nolint:errcheck // a plain struct always encodes
-		return job.Checkpoint(raw)
+	if starting != nil {
+		if startErr := starting(); startErr != nil {
+			return result, startErr
+		}
 	}
-	if saveErr := save(jobRunning); saveErr != nil {
-		return nil, saveErr
-	}
-	job.Progress(StepDeploying, "Running the "+component.Name+" job")
 	// The target redacts what the job got as variables. A rendered file
 	// can hold any of the composition's generated secrets, which the
 	// target never sees, so they're redacted here too.
@@ -365,24 +417,70 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 			redact["secret:"+secretName] = string(value)
 		}
 	}
-	result, err := jobs.RunJob(ctx, name, sp, labels, cmp.Or(component.Timeout, defaultJobTimeout))
+	result, err = jobs.RunJob(ctx, name, sp, labels, cmp.Or(component.Timeout, defaultJobTimeout))
 	if err != nil {
 		if redacted := owned.JobOutput([]byte(err.Error()), redact); redacted != err.Error() {
-			return nil, errors.New(redacted)
+			return owned.JobResult{}, errors.New(redacted)
 		}
-		return nil, err
+		return owned.JobResult{}, err
 	}
-	if result.ExitCode != 0 {
-		// The target redacted the output; this catches anything it missed.
-		if output := owned.JobOutput([]byte(result.Output), redact); output != "" {
-			return nil, fmt.Errorf("%s exited with code %d: %s", component.Name, result.ExitCode, output)
-		}
-		return nil, fmt.Errorf("%s exited with code %d", component.Name, result.ExitCode)
+	// The target redacted the output; this catches anything it missed.
+	result.Output = owned.JobOutput([]byte(result.Output), redact)
+	if finished != nil {
+		err = finished(result)
 	}
-	if saveErr := save(jobSucceeded); saveErr != nil {
-		return nil, saveErr
+	return result, err
+}
+
+// RerunJob runs a bound job component again, now, as name: what it gets
+// is resolved from the binding's configuration exactly as a deployment
+// resolves it, and it runs through the target's job backend. It records
+// nothing: no binding, checkpoint or kept value changes, and its runtime
+// values are kept only while it runs. The result's output has what it
+// was handed redacted; a job that exits with anything but 0 isn't an
+// error, so check ExitCode. A process component is ErrNotAJob.
+func (e *OwnedTarget) RerunJob(ctx context.Context, b *planning.Binding, name string) (owned.JobResult, error) {
+	cfg := boundResource(b)
+	if cfg == nil || cfg.Component == nil {
+		return owned.JobResult{}, fmt.Errorf("%w: %s isn't a catalog component", ErrComponentNotFound, b.Name)
 	}
-	return done, nil
+	if role := cfg.Component.Component.Role; role != recipes.RoleJob {
+		return owned.JobResult{}, fmt.Errorf("%w: %s is a %s", ErrNotAJob, b.Name, role)
+	}
+	if problems := validation.IsDNS1123Label(name); len(problems) > 0 {
+		return owned.JobResult{}, fmt.Errorf("a job's name must be a DNS label, and %q isn't", name)
+	}
+	if b.Provider != e.Cloud || b.ConnectionID == "" || cfg.Target != b.ConnectionID {
+		return owned.JobResult{}, fmt.Errorf("%s doesn't run on this %s target", b.Name, e.Cloud)
+	}
+	kind, err := e.checkComponent(cfg)
+	if err != nil {
+		return owned.JobResult{}, err
+	}
+	if e.Credentials == nil || e.Secrets == nil {
+		return owned.JobResult{}, ErrNoCredential
+	}
+	conn, _, err := e.Credentials.Credential(ctx, b.OrgID, b.ConnectionID)
+	if err != nil {
+		return owned.JobResult{}, err
+	}
+	if conn == nil || conn.ID != b.ConnectionID || conn.OrgID != b.OrgID || conn.Cloud != e.Cloud || conn.Status != connections.StatusReady {
+		return owned.JobResult{}, fmt.Errorf("%s's target connection isn't ready", b.Name)
+	}
+	jobs, err := e.jobBackend(b.OrgID, conn.ID, b.Name)
+	if err != nil {
+		return owned.JobResult{}, err
+	}
+	// The binding is what's deployed, so a generated secret it already
+	// had and that's gone fails rather than get a new one.
+	job := &Job{
+		Deployment: &Deployment{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID, PlanID: b.PlanID},
+		Plan:       &planning.Plan{ID: b.PlanID},
+		Action:     planning.Action{ID: string(planning.ResourceSubject) + ":" + b.Name, Subject: planning.ResourceSubject, Name: b.Name, Provider: b.Provider, ConnectionID: b.ConnectionID, Resource: cfg},
+		Connection: conn, Binding: b,
+		Progress: func(string, string) {},
+	}
+	return e.runJob(infrastructure.WithPrincipal(ctx, security.Principal{OrgID: b.OrgID}), job, kind, jobs, name, nil, nil)
 }
 
 // runtimeFilesSuffix is where a component's rendered files are kept in
@@ -493,7 +591,8 @@ func declaresFiles(b *planning.Binding) bool {
 
 // componentEnv resolves what a component gets: every derived or generated
 // value is secret, so only plain values and sibling addresses reach Ctrl
-// Plane. External endpoints are checked before anything is generated.
+// Plane. External endpoints are checked before anything is generated. A
+// variable that requires an optional dependency that's off is left out.
 func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.Kind) (ComponentRun, map[string]bool, error) {
 	cfg := job.Action.Resource
 	d := job.Deployment
@@ -501,23 +600,27 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 		OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Environment: d.Environment, PlanID: d.PlanID, DeploymentID: d.ID,
 		Resource: cfg.Component.Resource, Kind: kind.Name, Provider: e.Cloud, Component: cfg.Component.Component,
 		Env: map[string]string{}, Secrets: map[string][]byte{},
-		Channel: e.runChannel(job, nil),
+		Channel:        e.runChannel(job, nil),
+		TargetSettings: maps.Clone(cfg.TargetSettings),
+	}
+	reads := e.reads(job, kind, cfg.Component.Resource, cfg.Component.Dependencies)
+	if dependencyOnly(kind) {
+		reads.self = run.Component.Name
 	}
 	secret := map[string]bool{}
-	external := map[string]string{}
 	for _, v := range run.Component.Env {
-		if v.From == nil || v.From.Dependency == "" || external[v.From.Dependency] != "" {
+		if reads.off(v.Requires) {
 			continue
 		}
-		choice := cfg.Component.Dependencies[v.From.Dependency]
-		if choice.Mode != planning.DependencyExternal {
-			continue
+		dependencies := placeholderNames(v.Template, "dep")
+		if v.From != nil && v.From.Dependency != "" {
+			dependencies = append(dependencies, v.From.Dependency)
 		}
-		dsn, err := e.recheckEndpoint(ctx, job, kind, v.From.Dependency, choice.External)
-		if err != nil {
-			return run, nil, err
+		for _, dependency := range dependencies {
+			if err := reads.recheck(ctx, dependency); err != nil {
+				return run, nil, err
+			}
 		}
-		external[v.From.Dependency] = dsn
 	}
 	// The component's hooks may need any of the composition's secrets, not
 	// only the ones its variables read.
@@ -528,38 +631,326 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 		}
 		run.Secrets[s.Name] = value
 	}
+	reads.secrets = run.Secrets
 	for _, v := range run.Component.Env {
+		if reads.off(v.Requires) {
+			continue
+		}
+		var value string
+		var err error
+		on, derived := true, true
 		switch {
 		case v.Secret != "":
-			value, ok := run.Secrets[v.Secret]
+			raw, ok := run.Secrets[v.Secret]
 			if !ok {
 				return run, nil, fmt.Errorf("%s has no generated secret %s", kind.Title, v.Secret)
 			}
-			run.Env[v.Name], secret[v.Name] = string(value), true
+			value = string(raw)
+		case v.Template != "":
+			// What a template reads is inserted verbatim, and any of it
+			// may be a credential.
+			value, on, err = reads.expand(ctx, v.Template)
 		case v.From != nil && v.From.Dependency != "":
-			address, on, err := e.dependencyURL(ctx, job, v.From.Dependency, external)
-			if err != nil {
-				return run, nil, err
-			}
-			if !on {
-				continue
-			}
-			value, err := urlField(address, v.From.Field)
-			if err != nil {
-				return run, nil, fmt.Errorf("%s's %s dependency: %w", run.Resource, v.From.Dependency, err)
-			}
-			run.Env[v.Name], secret[v.Name] = value, true
+			value, on, err = reads.dependency(ctx, v.From.Dependency, v.From.Field)
 		case v.From != nil:
-			value, err := e.siblingAddress(ctx, job, *v.From)
-			if err != nil {
-				return run, nil, err
-			}
-			run.Env[v.Name] = value
+			value, err = reads.component(ctx, *v.From)
+			derived = false
 		default:
-			run.Env[v.Name] = v.Value
+			value, derived = v.Value, false
+		}
+		if err != nil {
+			return run, nil, err
+		}
+		if !on {
+			continue
+		}
+		run.Env[v.Name] = value
+		if derived {
+			secret[v.Name] = true
 		}
 	}
 	return run, secret, nil
+}
+
+// dependencyOnly reports whether a kind is only ever another kind's
+// dependency. Its one component runs as its own composed resource, under
+// its action's name.
+func dependencyOnly(kind recipes.Kind) bool { return kind.Placement == recipes.PlacementDependency }
+
+// compositionReads resolves what a composed resource's variables and
+// outputs read: its dependencies, its components' addresses and its
+// generated secrets.
+type compositionReads struct {
+	e    *OwnedTarget
+	job  *Job
+	kind recipes.Kind
+	// resource is the composed resource, whose secrets are kept under its
+	// name and whose components run as "<resource>--<component>".
+	resource     string
+	dependencies map[string]planning.DependencyChoice
+	// self is a dependency-only kind's component, which runs under the
+	// action's own name; "" for any other kind.
+	self string
+	// external is each external endpoint's DSN, once it's checked again.
+	external map[string]string
+	// secrets are the generated secrets read so far.
+	secrets map[string][]byte
+}
+
+func (e *OwnedTarget) reads(job *Job, kind recipes.Kind, resource string, dependencies map[string]planning.DependencyChoice) *compositionReads {
+	return &compositionReads{e: e, job: job, kind: kind, resource: resource, dependencies: dependencies, external: map[string]string{}, secrets: map[string][]byte{}}
+}
+
+// off reports whether an optional dependency is off, which leaves out
+// what requires it.
+func (r *compositionReads) off(dependency string) bool {
+	return dependency != "" && r.dependencies[dependency].Mode == planning.DependencyOff
+}
+
+// recheck checks an external endpoint a dependency connects to from the
+// target again, once.
+func (r *compositionReads) recheck(ctx context.Context, dependency string) error {
+	choice := r.dependencies[dependency]
+	if choice.Mode != planning.DependencyExternal || r.external[dependency] != "" {
+		return nil
+	}
+	dsn, err := r.e.recheckEndpoint(ctx, r.job, r.kind, dependency, choice.External)
+	if err != nil {
+		return err
+	}
+	r.external[dependency] = dsn
+	return nil
+}
+
+// adminUser is the superuser the postgres image creates, whose password
+// a provisioned postgres keeps as "admin-password" (see applyDatabase).
+const adminUser = "postgres"
+
+// dependency reads one field of a dependency: a field of the address of
+// what it connects to, with the superuser's credentials for admin-url,
+// or what a dependency-only kind published, for output:<name> and
+// secret:<name>. on is false for an optional dependency that's off.
+// Nothing it returns as an error quotes an address or a secret.
+func (r *compositionReads) dependency(ctx context.Context, dependency, field string) (value string, on bool, err error) {
+	choice, ok := r.dependencies[dependency]
+	if !ok {
+		return "", false, fmt.Errorf("the plan doesn't say where %s gets %s; plan again", r.resource, dependency)
+	}
+	_, _, published := cutPrefix(field, "output:", "secret:")
+	var address string
+	switch choice.Mode {
+	case planning.DependencyOff:
+		return "", false, nil
+	case planning.DependencyExternal:
+		if published {
+			return "", false, fmt.Errorf("%s's %s dependency is an external endpoint, which has no %s", r.resource, dependency, field)
+		}
+		if recheckErr := r.recheck(ctx, dependency); recheckErr != nil {
+			return "", false, recheckErr
+		}
+		address = r.external[dependency]
+		if field == recipes.FieldAdminURL {
+			// An external endpoint connects as what its DSN says.
+			return address, true, nil
+		}
+	case planning.DependencyNew, planning.DependencyResource:
+		if published {
+			value, err = r.kept(ctx, choice.Resource, field)
+			return value, err == nil, err
+		}
+		if address, err = r.kept(ctx, choice.Resource, ResourceURL); err != nil {
+			return "", false, err
+		}
+		if field == recipes.FieldAdminURL {
+			password, keptErr := r.kept(ctx, choice.Resource, "admin-password")
+			if keptErr != nil {
+				return "", false, keptErr
+			}
+			value, err = adminURL(address, password)
+			if err != nil {
+				return "", false, fmt.Errorf("%s's %s dependency: %w", r.resource, dependency, err)
+			}
+			return value, true, nil
+		}
+	default:
+		return "", false, fmt.Errorf("%s gets %s in a way this Loomplane doesn't know: %q", r.resource, dependency, choice.Mode)
+	}
+	value, err = urlField(address, field)
+	if err != nil {
+		return "", false, fmt.Errorf("%s's %s dependency: %w", r.resource, dependency, err)
+	}
+	return value, true, nil
+}
+
+// kept reads a field a dependency's action kept.
+func (r *compositionReads) kept(ctx context.Context, action, field string) (string, error) {
+	d := r.job.Deployment
+	raw, err := r.e.Secrets.Get(ctx, ResourceKey(d.OrgID, d.EnvironmentID, action, field))
+	switch {
+	case errors.Is(err, ErrNoCredential) && field == ResourceURL:
+		return "", fmt.Errorf("%s needs %s, which hasn't been provisioned", r.job.Action.Name, action)
+	case errors.Is(err, ErrNoCredential):
+		return "", fmt.Errorf("%s needs %s's %s, which it hasn't kept", r.job.Action.Name, action, field)
+	case err != nil:
+		return "", fmt.Errorf("%s needs %s: %w", r.job.Action.Name, action, err)
+	}
+	return string(raw), nil
+}
+
+// component reads a port of one of the composition's components that
+// started before: "url:<port>" is its URL, "address:<port>" its host and
+// port.
+func (r *compositionReads) component(ctx context.Context, ref recipes.Ref) (string, error) {
+	name := planning.ComponentActionName(r.resource, ref.Component)
+	if r.self != "" && ref.Component == r.self {
+		name = r.job.Action.Name
+	}
+	d := r.job.Deployment
+	addresses, err := r.e.componentAddresses(ctx, d.OrgID, d.EnvironmentID, name)
+	if err != nil {
+		return "", fmt.Errorf("%s needs %s: %w", r.job.Action.Name, name, err)
+	}
+	return addressField(addresses, name, ref.Field)
+}
+
+// secret reads one of the composition's generated secrets.
+func (r *compositionReads) secret(ctx context.Context, name string) (string, error) {
+	if value, ok := r.secrets[name]; ok {
+		return string(value), nil
+	}
+	d := r.job.Deployment
+	value, err := r.e.Secrets.Get(ctx, ResourceKey(d.OrgID, d.EnvironmentID, r.resource, "secret:"+name))
+	if errors.Is(err, ErrNoCredential) {
+		return "", fmt.Errorf("%s's generated secret %s hasn't been kept yet", r.resource, name)
+	}
+	if err != nil {
+		return "", err
+	}
+	r.secrets[name] = value
+	return string(value), nil
+}
+
+// expand fills a template's ${dep:...}, ${secret:...} and
+// ${component:...} placeholders, each with what it reads inserted
+// verbatim. on is false when one reads an optional dependency that's
+// off.
+func (r *compositionReads) expand(ctx context.Context, template string) (value string, on bool, err error) {
+	var b strings.Builder
+	rest := template
+	for {
+		start := strings.Index(rest, "${")
+		if start < 0 {
+			b.WriteString(rest)
+			return b.String(), true, nil
+		}
+		end := strings.IndexByte(rest[start:], '}')
+		if end < 0 {
+			return "", false, errors.New("a template has an unterminated placeholder")
+		}
+		b.WriteString(rest[:start])
+		inner := rest[start+2 : start+end]
+		rest = rest[start+end+1:]
+		parts := strings.SplitN(inner, ":", 3)
+		var read string
+		switch {
+		case len(parts) == 3 && parts[0] == "dep":
+			read, on, err = r.dependency(ctx, parts[1], parts[2])
+		case len(parts) == 3 && parts[0] == "component":
+			read, err = r.component(ctx, recipes.Ref{Component: parts[1], Field: parts[2]})
+			on = true
+		case len(parts) == 2 && parts[0] == "secret":
+			read, err = r.secret(ctx, parts[1])
+			on = true
+		default:
+			return "", false, fmt.Errorf("a template's placeholder %q isn't one this Loomplane knows", "${"+inner+"}")
+		}
+		if err != nil || !on {
+			return "", on, err
+		}
+		b.WriteString(read)
+	}
+}
+
+// placeholderNames are the names a template's ${<form>:<name>...}
+// placeholders read: the dependencies of form "dep", the secrets of form
+// "secret".
+func placeholderNames(template, form string) []string {
+	var names []string
+	prefix := "${" + form + ":"
+	for rest := template; ; {
+		start := strings.Index(rest, prefix)
+		if start < 0 {
+			return names
+		}
+		rest = rest[start+len(prefix):]
+		inner, _, _ := strings.Cut(rest, "}")
+		name, _, _ := strings.Cut(inner, ":")
+		names = append(names, name)
+	}
+}
+
+// cutPrefix cuts the first of prefixes s starts with.
+func cutPrefix(s string, prefixes ...string) (prefix, rest string, ok bool) {
+	for _, prefix := range prefixes {
+		if rest, ok := strings.CutPrefix(s, prefix); ok {
+			return prefix, rest, true
+		}
+	}
+	return "", s, false
+}
+
+// adminURL is a postgres address with the superuser's credentials in
+// place of its own.
+func adminURL(address, password string) (string, error) {
+	u, err := url.Parse(address)
+	if err != nil || u.Host == "" {
+		return "", errors.New("its address isn't a URL")
+	}
+	u.User = url.UserPassword(adminUser, password)
+	return u.String(), nil
+}
+
+// publishOutputs keeps a composition's outputs, each read through reads:
+// the primary under "url", which is what a service that needs it gets,
+// and the others as "output:<name>". Outputs issued per consuming
+// service aren't kept here, and one that requires an optional dependency
+// that's off is forgotten.
+func (e *OwnedTarget) publishOutputs(ctx context.Context, job *Job, reads *compositionReads, outputs []recipes.Output) error {
+	d := job.Deployment
+	for i, output := range outputs {
+		if output.PerConsumer || (output.From == nil && output.Template == "") {
+			continue
+		}
+		field := ResourceURL
+		if i > 0 {
+			field = "output:" + output.Name
+		}
+		var value string
+		var err error
+		on := !reads.off(output.Requires)
+		switch {
+		case !on:
+		case output.Template != "":
+			value, on, err = reads.expand(ctx, output.Template)
+		case output.From.Dependency != "":
+			value, on, err = reads.dependency(ctx, output.From.Dependency, output.From.Field)
+		default:
+			value, err = reads.component(ctx, *output.From)
+		}
+		if err != nil {
+			return fmt.Errorf("%s's %s output: %w", job.Action.Name, output.Name, err)
+		}
+		if !on {
+			if deleteErr := e.Secrets.Delete(ctx, ResourceKey(d.OrgID, d.EnvironmentID, job.Action.Name, field)); deleteErr != nil {
+				return deleteErr
+			}
+			continue
+		}
+		if keepErr := job.Keep(ctx, field, []byte(value)); keepErr != nil {
+			return keepErr
+		}
+	}
+	return nil
 }
 
 // recheckEndpoint checks an external endpoint from the component's target
@@ -667,8 +1058,9 @@ func (e *OwnedTarget) generatedSecret(ctx context.Context, job *Job, s recipes.G
 }
 
 // hadSecret reports whether the deployed component already had a
-// generated secret: its variables read it, or it was deployed from this
-// same revision, which declared it, so it was kept then.
+// generated secret: its variables read it, directly or through a
+// template's placeholder, or it was deployed from this same revision,
+// which declared it, so it was kept then.
 func hadSecret(job *Job, name string) bool {
 	was := boundResource(job.Binding)
 	if was == nil || was.Component == nil {
@@ -677,7 +1069,9 @@ func hadSecret(job *Job, name string) bool {
 	if was.Component.Kind == job.Action.Resource.Component.Kind && was.Component.Revision == job.Action.Resource.Component.Revision {
 		return true
 	}
-	return slices.ContainsFunc(was.Component.Component.Env, func(v recipes.EnvVar) bool { return v.Secret == name })
+	return slices.ContainsFunc(was.Component.Component.Env, func(v recipes.EnvVar) bool {
+		return v.Secret == name || slices.Contains(placeholderNames(v.Template, "secret"), name)
+	})
 }
 
 func generateSecret(s recipes.GeneratedSecret) ([]byte, error) {
@@ -693,34 +1087,6 @@ func generateSecret(s recipes.GeneratedSecret) ([]byte, error) {
 		return []byte(s.Prefix + hex.EncodeToString(raw)), nil
 	}
 	return nil, fmt.Errorf("the generated secret %s has an unknown encoding %q", s.Name, s.Encoding)
-}
-
-// dependencyURL is the address of what a dependency connects to, with its
-// credentials: a provisioned or connected resource's kept address, or an
-// external endpoint's DSN. on is false for an optional dependency that's
-// off.
-func (e *OwnedTarget) dependencyURL(ctx context.Context, job *Job, dependency string, external map[string]string) (address string, on bool, err error) {
-	cfg := job.Action.Resource.Component
-	choice, ok := cfg.Dependencies[dependency]
-	if !ok {
-		return "", false, fmt.Errorf("the plan doesn't say where %s gets %s; plan again", cfg.Resource, dependency)
-	}
-	switch choice.Mode {
-	case planning.DependencyOff:
-		return "", false, nil
-	case planning.DependencyExternal:
-		return external[dependency], true, nil
-	case planning.DependencyNew, planning.DependencyResource:
-		raw, getErr := e.Secrets.Get(ctx, resourceKey(job.Deployment.OrgID, job.Deployment.EnvironmentID, choice.Resource, ResourceURL))
-		if errors.Is(getErr, ErrNoCredential) {
-			return "", false, fmt.Errorf("%s needs %s, which hasn't been provisioned", job.Action.Name, choice.Resource)
-		}
-		if getErr != nil {
-			return "", false, fmt.Errorf("%s needs %s: %w", job.Action.Name, choice.Resource, getErr)
-		}
-		return string(raw), true, nil
-	}
-	return "", false, fmt.Errorf("%s gets %s in a way this Loomplane doesn't know: %q", cfg.Resource, dependency, choice.Mode)
 }
 
 // defaultPorts are the ports a dependency's address may leave out.
@@ -758,24 +1124,20 @@ func urlField(address, field string) (string, error) {
 		return password, nil
 	case recipes.FieldDatabase:
 		return strings.TrimPrefix(u.Path, "/"), nil
+	case recipes.FieldQuery:
+		return u.RawQuery, nil
 	}
 	return "", fmt.Errorf("a dependency has no field %q", field)
 }
 
-// siblingAddress reads a port of a component that started before this
-// one: "url:<port>" is its URL, "address:<port>" its host and port.
-func (e *OwnedTarget) siblingAddress(ctx context.Context, job *Job, ref recipes.Ref) (string, error) {
-	resource := job.Action.Resource.Component.Resource
-	name := planning.ComponentActionName(resource, ref.Component)
-	addresses, err := e.componentAddresses(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, name)
-	if err != nil {
-		return "", fmt.Errorf("%s needs %s: %w", job.Action.Name, name, err)
-	}
-	return addressField(addresses, name, ref.Field)
+func (e *OwnedTarget) componentAddresses(ctx context.Context, org, environment, name string) (map[string]string, error) {
+	return keptAddresses(ctx, e.Secrets, org, environment, name)
 }
 
-func (e *OwnedTarget) componentAddresses(ctx context.Context, org, environment, name string) (map[string]string, error) {
-	raw, err := e.Secrets.Get(ctx, resourceKey(org, environment, name, componentAddressField))
+// keptAddresses reads the address a process component kept of each of
+// its ports when it started.
+func keptAddresses(ctx context.Context, secrets ResourceSecrets, org, environment, name string) (map[string]string, error) {
+	raw, err := secrets.Get(ctx, resourceKey(org, environment, name, componentAddressField))
 	if errors.Is(err, ErrNoCredential) {
 		return nil, errors.New("it hasn't started yet")
 	}
@@ -853,15 +1215,14 @@ func (e *OwnedTarget) checkComposition(cfg *planning.ResourceConfig) (recipes.Ki
 }
 
 // applyComposition publishes a composed resource's outputs, once its
-// components run: the primary under "url", which is what a service that
-// needs it gets, and the others as "output:<name>". Outputs issued per
-// consuming service aren't kept here.
+// components run (see publishOutputs).
 func (e *OwnedTarget) applyComposition(ctx context.Context, job *Job) (*Outcome, error) {
 	if !planning.OwnedCloud(e.Cloud) || job.Connection == nil || job.Deployment == nil {
 		return nil, ErrNoExecutor
 	}
 	cfg := job.Action.Resource
-	if _, err := e.checkComposition(cfg); err != nil {
+	kind, err := e.checkComposition(cfg)
+	if err != nil {
 		return nil, err
 	}
 	if cfg.Provider != e.Cloud || job.Connection.Cloud != e.Cloud || cfg.Target != job.Connection.ID {
@@ -870,29 +1231,9 @@ func (e *OwnedTarget) applyComposition(ctx context.Context, job *Job) (*Outcome,
 	if e.Secrets == nil || job.Keep == nil {
 		return nil, ErrNoCredential
 	}
-	for i, output := range cfg.Composition.Outputs {
-		if output.PerConsumer || output.From == nil {
-			continue
-		}
-		if output.From.Component == "" {
-			return nil, fmt.Errorf("%s's %s output comes from a dependency, which this Loomplane can't publish yet", job.Action.Name, output.Name)
-		}
-		name := planning.ComponentActionName(job.Action.Name, output.From.Component)
-		addresses, err := e.componentAddresses(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, name)
-		if err != nil {
-			return nil, fmt.Errorf("%s's %s output needs %s: %w", job.Action.Name, output.Name, name, err)
-		}
-		value, err := addressField(addresses, name, output.From.Field)
-		if err != nil {
-			return nil, err
-		}
-		field := ResourceURL
-		if i > 0 {
-			field = "output:" + output.Name
-		}
-		if keepErr := job.Keep(ctx, field, []byte(value)); keepErr != nil {
-			return nil, keepErr
-		}
+	reads := e.reads(job, kind, job.Action.Name, cfg.Composition.Dependencies)
+	if err := e.publishOutputs(ctx, job, reads, cfg.Composition.Outputs); err != nil {
+		return nil, err
 	}
 	return &Outcome{ExternalID: "catalog/" + job.Action.Name}, nil
 }
@@ -918,6 +1259,31 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 	}
 	for _, field := range fields {
 		if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, field)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// forgetPublished forgets what a dependency-only kind's component
+// published under its own name once it's gone: its outputs and generated
+// secrets. Any other component published nothing.
+func (e *OwnedTarget) forgetPublished(ctx context.Context, b *planning.Binding, c *planning.ComponentConfig) error {
+	kind, ok := e.kinds().Kind(c.Kind)
+	if !ok || !dependencyOnly(kind) || c.Resource != b.Name {
+		return nil
+	}
+	fields := []string{ResourceURL}
+	for i, output := range kind.Outputs {
+		if i > 0 {
+			fields = append(fields, "output:"+output.Name)
+		}
+	}
+	for _, s := range kind.Secrets {
+		fields = append(fields, "secret:"+s.Name)
+	}
+	for _, field := range fields {
+		if err := e.Secrets.Delete(ctx, ResourceKey(b.OrgID, b.EnvironmentID, b.Name, field)); err != nil {
 			return err
 		}
 	}

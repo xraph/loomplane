@@ -202,6 +202,7 @@ type Runner struct {
 	providers     *provider.Registry
 	executors     map[string]Executor
 	catalogHooks  map[string]CatalogHooks
+	observers     []ReleaseObserver
 	resources     ResourceSecrets
 	telemetry     *telemetry.Recorder
 	logs          LogSink
@@ -234,6 +235,25 @@ type RunnerDeps struct {
 	// CatalogHooks are composed catalog kinds' hooks, by kind: the same
 	// ones the owned targets run.
 	CatalogHooks map[string]CatalogHooks
+	// Observers hear of each service binding a deployment writes or
+	// deletes. What they fail at only warns.
+	Observers []ReleaseObserver
+}
+
+// Release is a service binding a deployment step wrote, or deleted
+// (Removed), as a ReleaseObserver hears of it.
+type Release struct {
+	OrgID, ProjectID, EnvironmentID string
+	Binding                         *planning.Binding
+	Removed                         bool
+}
+
+// ReleaseObserver hears of each service binding a deployment step writes
+// or deletes, once that's done. Each call has 10 seconds; an error never
+// fails the step, and lands on it as a warning naming the service.
+// Resource bindings aren't observed.
+type ReleaseObserver interface {
+	Released(ctx context.Context, r Release) error
 }
 
 // NewRunner returns a Runner.
@@ -241,7 +261,7 @@ func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
 		cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -676,6 +696,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		}
 		// What the service was issued goes with it, once it's gone.
 		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, nil, resources)...)
+		step.Warnings = append(step.Warnings, r.released(ctx, d, current, true)...)
 		return nil
 	}
 	// A failure removing what an earlier move left only warns: the plan
@@ -819,6 +840,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if a.Service != nil {
 		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, a.Service, resources)...)
 	}
+	step.Warnings = append(step.Warnings, r.released(ctx, d, bound, false)...)
 	if plan.CloudSyncID != "" || len(a.Routes) > 0 {
 		return nil
 	}
@@ -1239,6 +1261,30 @@ func (r *Runner) verify(ctx context.Context, url string) error {
 		case <-time.After(3 * time.Second):
 		}
 	}
+}
+
+// releaseObserverTimeout is how long each release observer has.
+const releaseObserverTimeout = 10 * time.Second
+
+// released tells the release observers of a service binding a step wrote,
+// or deleted (removed). It returns what they failed at as warnings naming
+// the service: the binding has changed already, so failing the step
+// wouldn't undo it. A resource binding isn't observed.
+func (r *Runner) released(ctx context.Context, d *Deployment, b *planning.Binding, removed bool) []string {
+	if b == nil || b.Subject != planning.ServiceSubject {
+		return nil
+	}
+	var warnings []string
+	for _, observer := range r.observers {
+		observed, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseObserverTimeout)
+		binding := *b
+		err := observer.Released(observed, Release{OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Binding: &binding, Removed: removed})
+		cancel()
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", b.Name, err))
+		}
+	}
+	return warnings
 }
 
 // bind records what runs an action now, with what it ran as before it
