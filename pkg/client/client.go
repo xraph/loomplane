@@ -20,6 +20,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // Client calls one Loomplane with one API key.
@@ -327,6 +329,31 @@ func (c *Client) DraftManifest(ctx context.Context, projectID string) (string, e
 func (c *Client) SaveManifest(ctx context.Context, projectID, yaml string) (*ManifestRevision, error) {
 	var m ManifestRevision
 	return &m, c.do(ctx, http.MethodPut, "/api/v1/projects/"+esc(projectID)+"/manifest", map[string]string{"yaml": yaml}, &m)
+}
+
+// ManifestEdit is one change to the project's manifest, which keeps the
+// YAML's comments and order.
+type ManifestEdit struct {
+	AddResource *NewResource `json:"add_resource,omitempty"`
+}
+
+// NewResource is a resource to add to the manifest. Target is the checked
+// connection it runs on, and Uses says where its dependencies come from.
+type NewResource struct {
+	Name     string                  `json:"name"`
+	Kind     string                  `json:"kind"`
+	Provider string                  `json:"provider,omitempty"`
+	Target   string                  `json:"target,omitempty"`
+	Version  string                  `json:"version,omitempty"`
+	Uses     map[string]manifest.Use `json:"uses,omitempty"`
+}
+
+// EditManifest applies one change to the project's current manifest and
+// saves the result as a new revision. A change that's already there adds
+// nothing.
+func (c *Client) EditManifest(ctx context.Context, projectID string, in ManifestEdit) (*ManifestRevision, error) {
+	var m ManifestRevision
+	return &m, c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(projectID)+"/manifest/edits", in, &m)
 }
 
 // --- Plans ---

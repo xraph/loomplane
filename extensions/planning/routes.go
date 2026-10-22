@@ -243,10 +243,17 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithResponseSchema(http.StatusOK, "Activity", activity.ActivitySummary{}),
 		}},
 	}
+	catalogRoutes := []route{
+		{http.MethodGet, "/catalog/kinds", e.listCatalogKinds, []forge.RouteOption{
+			forge.WithName("catalogKinds.list"),
+			forge.WithSummary("The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run"),
+			forge.WithResponseSchema(http.StatusOK, "Kinds", CatalogKindList{}),
+		}},
+	}
 	groups := []struct {
 		tag    string
 		routes []route
-	}{{"Manifests", manifestRoutes}, {"Plans", planRoutes}, {"Activity", activityRoutes}}
+	}{{"Manifests", manifestRoutes}, {"Plans", planRoutes}, {"Activity", activityRoutes}, {"Catalog", catalogRoutes}}
 	for _, grp := range groups {
 		g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags(grp.tag))
 		for _, rt := range grp.routes {

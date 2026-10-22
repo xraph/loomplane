@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/manageddb"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -40,9 +41,19 @@ var (
 	}
 )
 
+// builtinKinds are the engines whose provisions are listed literally for
+// the server and Kubernetes targets. Every other registered kind is added
+// after them.
+var builtinKinds = []string{"postgres", "mysql", "mariadb", "redis", "valkey"}
+
 // Catalog returns the built-in targets, in the order a person choosing one
-// should see them.
+// should see them. The server and Kubernetes targets also offer every kind
+// registered in internal/recipes that runs on them.
 func Catalog() []provider.Provider {
+	return catalogWith(recipes.Default())
+}
+
+func catalogWith(kinds *recipes.Registry) []provider.Provider {
 	all := []provider.Provider{
 		{
 			Name: "vercel", Title: "Vercel", Cloud: "vercel",
@@ -243,9 +254,28 @@ func Catalog() []provider.Provider {
 			all[i].Infrastructure = digitalocean.InfrastructureCapabilities()
 		case "vercel":
 			all[i].Infrastructure = vercel.InfrastructureCapabilities()
+		case "server", "kubernetes":
+			all[i].Provisions = append(all[i].Provisions, registeredProvisions(kinds, all[i].Cloud)...)
 		}
 	}
 	return all
+}
+
+// registeredProvisions describes the registered kinds, other than the five
+// built-in engines, that run on the cloud.
+func registeredProvisions(kinds *recipes.Registry, cloud string) []provider.Provisions {
+	var out []provider.Provisions
+	for _, info := range kinds.Kinds() {
+		if slices.Contains(builtinKinds, info.Name) || !slices.Contains(info.Targets, cloud) {
+			continue
+		}
+		out = append(out, provider.Provisions{
+			Kind:     info.Name,
+			Creates:  info.Title + " catalog service",
+			Versions: slices.Clone(info.Versions),
+		})
+	}
+	return out
 }
 
 func containerWorkloads(creates string) []provider.Runs {

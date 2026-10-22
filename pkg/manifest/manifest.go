@@ -214,6 +214,16 @@ type Resource struct {
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
 }
 
+// Use says how a composed catalog resource gets one of its dependencies:
+// from another resource in this manifest, from an external endpoint, or
+// switched on or off when the dependency is optional. With none of them
+// set, the resource gets a new one of its own.
+type Use struct {
+	Resource string `json:"resource,omitempty" yaml:"resource,omitempty"` // a resource in this manifest
+	External string `json:"external,omitempty" yaml:"external,omitempty"` // an external endpoint's ID
+	Enabled  *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`   // optional dependencies
+}
+
 // Gateway is one public address in front of several services, routing
 // each request by its path. Loomplane builds it and runs it on a target
 // like any service.
