@@ -111,7 +111,7 @@ Backing services the application needs, by name. A resource can't share a servic
 | `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.            |
 | `provider`, `region` | Where it's provisioned.                                                               |
 | `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest. |
-| `target`             | The checked server connection a catalog resource runs on.                             |
+| `target`             | The ID of the checked server or Kubernetes connection a catalog resource runs on.     |
 | `uses`               | Where a catalog resource gets each dependency. See [Catalog services](#catalog-services). |
 | `environments`       | `provider`, `region` or `enabled` by environment name.                                |
 
@@ -135,7 +135,7 @@ resources:
     kind: postgres
   gateway:
     kind: sample
-    target: conn_1
+    target: conn_your_server
     uses:
       postgres:
         resource: db
@@ -145,7 +145,7 @@ resources:
         enabled: true
 ```
 
-In this example `sample` stands in for a catalog kind with those three dependencies. The `gateway` resource shares the `db` Postgres, connects to an existing Redis instead of creating one, and switches on its optional FalkorDB. The manifest only checks the shape. Whether `gateway`'s kind has a dependency called `postgres`, and whether the endpoint is reachable, is checked when you plan.
+In this example `sample` stands in for a catalog kind with those three dependencies, and `conn_your_server` for the ID of one of your checked connections. The `gateway` resource shares the `db` Postgres, connects to an existing Redis instead of creating one, and switches on its optional FalkorDB. The manifest checks what it can see on its own: that `db` is a resource in it and isn't `gateway` itself, and that the endpoint ID has the right form. The rest waits until you plan. That's where Loomplane finds out whether `gateway`'s kind has a dependency called `postgres`, whether `db` is a kind it accepts, and whether the endpoint answers from the target.
 
 #### Passing options to what a service needs
 
