@@ -4,9 +4,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/clouds/azure/azuretest"
 )
 
 const (
@@ -298,5 +301,112 @@ func TestOwns(t *testing.T) {
 		if s.Owns(id) {
 			t.Errorf("owns %s", id)
 		}
+	}
+}
+
+func TestRoleAssignmentName(t *testing.T) {
+	scope := "/subscriptions/" + sub + "/resourceGroups/loomplane/providers/Microsoft.ContainerRegistry/registries/" + RegistryName(sub, "loomplane")
+	a := RoleAssignmentName(scope, "66666666-6666-6666-6666-666666666666")
+	if a != RoleAssignmentName(scope, "66666666-6666-6666-6666-666666666666") {
+		t.Fatal("the name isn't deterministic")
+	}
+	if a == RoleAssignmentName(scope, "77777777-7777-7777-7777-777777777777") {
+		t.Fatal("two principals share a name")
+	}
+	if a == RoleAssignmentName(scope+"x", "66666666-6666-6666-6666-666666666666") {
+		t.Fatal("two scopes share a name")
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(a) {
+		t.Fatalf("%s isn't a version 5 UUID", a)
+	}
+}
+
+// fakeSession signs in to the Azure fake as its principal.
+func fakeSession(t *testing.T, f *azuretest.Fake) *Session {
+	t.Helper()
+	cred, err := ParseCredential([]byte(azuretest.Secret), azuretest.Settings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(f.URL()).Session(t.Context(), cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestPullMode(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	// A Contributor may not assign roles, in the subscription while the
+	// group isn't there or in the group once it is.
+	for _, when := range []string{"before the group", "with the group"} {
+		got, err := s.PullMode(t.Context())
+		if err != nil || got != PullModeAdmin {
+			t.Fatalf("contributor %s: %q, %v", when, got, err)
+		}
+		if err := s.EnsureGroup(t.Context(), "eastus"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.Lock()
+	f.NotActions = nil
+	f.Unlock()
+	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeIdentity {
+		t.Fatalf("an owner: %q, %v", got, err)
+	}
+	// Assigning roles isn't enough: the app also needs the identity.
+	f.Lock()
+	f.Actions, f.NotActions = []string{"Microsoft.Authorization/roleAssignments/write", "Microsoft.ManagedIdentity/userAssignedIdentities/write"}, nil
+	f.Unlock()
+	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeAdmin {
+		t.Fatalf("a principal that can't assign the identity: %q, %v", got, err)
+	}
+}
+
+func TestPullIdentityAndGrant(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	ctx := t.Context()
+	if err := s.EnsureGroup(ctx, "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := s.EnsureRegistry(ctx, "eastus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.EnsurePullIdentity(ctx, "eastus")
+	if err != nil || id.PrincipalID != azuretest.PullPrincipal || !strings.HasSuffix(id.ID, "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/"+PullIdentity) {
+		t.Fatalf("%+v, %v", id, err)
+	}
+	again, err := s.EnsurePullIdentity(ctx, "eastus")
+	if err != nil || *again != *id {
+		t.Fatalf("a second call: %+v, %v", again, err)
+	}
+	f.Lock()
+	puts := f.IdentityPuts
+	f.Unlock()
+	if puts != 1 {
+		t.Fatalf("the identity was PUT %d times", puts)
+	}
+
+	created, err := s.GrantPull(ctx, reg.ID, id.PrincipalID)
+	if err != nil || !created {
+		t.Fatalf("the first grant: %v, %v", created, err)
+	}
+	created, err = s.GrantPull(ctx, reg.ID, id.PrincipalID)
+	if err != nil || created {
+		t.Fatalf("the second grant: %v, %v", created, err)
+	}
+	f.Lock()
+	got := slices.Clone(f.RoleAssignments)
+	f.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("assignments %+v", got)
+	}
+	want := "/subscriptions/" + sub + "/providers/Microsoft.Authorization/roleDefinitions/" + AcrPull
+	if got[0].RoleDefinitionID != want || got[0].PrincipalID != id.PrincipalID || got[0].PrincipalType != "ServicePrincipal" ||
+		!strings.EqualFold(got[0].Scope, reg.ID) || got[0].Name != RoleAssignmentName(reg.ID, id.PrincipalID) {
+		t.Fatalf("assignment %+v, want role %s on %s", got[0], want, reg.ID)
 	}
 }

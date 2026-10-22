@@ -24,7 +24,14 @@ const (
 	Client       = "22222222-2222-2222-2222-222222222222"
 	Subscription = "33333333-3333-3333-3333-333333333333"
 	Secret       = "fake~client.secret"
+	// PullPrincipal is the principal ID of the pull identity.
+	PullPrincipal = "66666666-6666-6666-6666-666666666666"
 )
+
+// RoleAssignment is a role Loomplane assigned.
+type RoleAssignment struct {
+	Scope, Name, RoleDefinitionID, PrincipalID, PrincipalType string
+}
 
 // Settings are what a connection to the fake gives.
 func Settings() map[string]string {
@@ -51,6 +58,10 @@ type Fake struct {
 	// Apps are the container app bodies Loomplane PUT, by name.
 	Apps    map[string]map[string]any
 	Deleted []string
+	// RoleAssignments are the roles assigned, each once.
+	RoleAssignments []RoleAssignment
+	// IdentityPuts counts the requests that made a managed identity.
+	IdentityPuts int
 }
 
 // New starts a fake.
@@ -182,6 +193,11 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		f.polls[id]++
 		reply(http.StatusOK, res)
 	}
+	// An identity is there as soon as it's made.
+	if kind == "microsoft.managedidentity/userassignedidentities" {
+		f.identity(r, reply, notFound, id, canonical, name, body)
+		return
+	}
 	switch {
 	case len(rest) == 0 && r.Method == http.MethodGet:
 		get()
@@ -246,8 +262,47 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			}
 		}
 		reply(http.StatusOK, map[string]any{"properties": map[string]any{"runId": rest[1], "status": status, "runErrorMessage": map[bool]string{true: "The command returned a non-zero code: 1"}[status == "Failed"]}})
+	case kind == "microsoft.containerregistry/registries" && len(rest) == 4 && rest[0] == "providers" && rest[1] == "microsoft.authorization" && rest[2] == "roleassignments" && r.Method == http.MethodPut:
+		if f.resources[id] == nil {
+			notFound("ParentResourceNotFound")
+			return
+		}
+		key := strings.ToLower(canonical) + "/" + rest[3]
+		for _, have := range f.RoleAssignments {
+			if strings.ToLower(have.Scope)+"/"+strings.ToLower(have.Name) == key {
+				reply(http.StatusConflict, map[string]any{"error": map[string]string{"code": "RoleAssignmentExists", "message": "The role assignment already exists."}})
+				return
+			}
+		}
+		props, _ := body["properties"].(map[string]any)
+		str := func(k string) string { v, _ := props[k].(string); return v }
+		f.RoleAssignments = append(f.RoleAssignments, RoleAssignment{
+			Scope: canonical, Name: strings.Split(strings.Trim(p, "/"), "/")[11],
+			RoleDefinitionID: str("roleDefinitionId"), PrincipalID: str("principalId"), PrincipalType: str("principalType"),
+		})
+		reply(http.StatusCreated, map[string]any{"properties": props})
 	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions":
 		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioning", "runningState": "Processing"}})
+	default:
+		notFound("NotFound")
+	}
+}
+
+// identity serves a user-assigned managed identity.
+func (f *Fake) identity(r *http.Request, reply func(int, any), notFound func(string), id, canonical, name string, body map[string]any) {
+	switch r.Method {
+	case http.MethodGet:
+		if res := f.resources[id]; res != nil {
+			reply(http.StatusOK, res)
+			return
+		}
+		notFound("ResourceNotFound")
+	case http.MethodPut:
+		f.IdentityPuts++
+		body["id"], body["name"] = canonical, name
+		body["properties"] = map[string]any{"principalId": PullPrincipal, "clientId": "77777777-7777-7777-7777-777777777777"}
+		f.resources[id] = body
+		reply(http.StatusCreated, body)
 	default:
 		notFound("NotFound")
 	}

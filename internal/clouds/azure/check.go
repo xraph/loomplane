@@ -174,20 +174,47 @@ func (s *Session) groupExists(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// checkScope is where a deployment's permissions are read: the resource
+// group, or the subscription while the group isn't there. A principal
+// that may not even read the group is checked in the group, where it
+// may do nothing.
+func (s *Session) checkScope(ctx context.Context) (scope string, groupMissing bool, err error) {
+	exists, err := s.groupExists(ctx)
+	if isForbidden(err) {
+		return s.group(), false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if !exists {
+		return s.subscription(), true, nil
+	}
+	return s.group(), false, nil
+}
+
+// permissionsOrNone is permissions, except that a principal without any
+// role at scope may not read its own permissions there: it may do none
+// of it.
+func (s *Session) permissionsOrNone(ctx context.Context, scope string) ([]permission, error) {
+	perms, err := s.permissions(ctx, scope)
+	if isForbidden(err) {
+		return nil, nil
+	}
+	return perms, err
+}
+
 // Missing returns which actions a deployment needs the principal lacks,
 // in the order Actions lists them: Actions in the resource group, or in
 // the subscription along with making the group while it isn't there,
 // and registering each of Namespaces the subscription hasn't.
 func (s *Session) Missing(ctx context.Context) ([]string, error) {
-	exists, err := s.groupExists(ctx)
-	if err != nil && !isForbidden(err) {
+	scope, groupMissing, err := s.checkScope(ctx)
+	if err != nil {
 		return nil, err
 	}
 	want := Actions
-	scope := s.group()
-	if !exists && err == nil {
+	if groupMissing {
 		want = append([]string{createGroup}, Actions...)
-		scope = s.subscription()
 	}
 	var subscriptionWide []string
 	for _, ns := range Namespaces {
@@ -199,12 +226,7 @@ func (s *Session) Missing(ctx context.Context) ([]string, error) {
 			subscriptionWide = append(subscriptionWide, ns+"/register/action")
 		}
 	}
-	perms, err := s.permissions(ctx, scope)
-	if isForbidden(err) {
-		// A principal without any role in the group may not read its
-		// own permissions there: it may do none of it.
-		perms, err = nil, nil
-	}
+	perms, err := s.permissionsOrNone(ctx, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -217,10 +239,7 @@ func (s *Session) Missing(ctx context.Context) ([]string, error) {
 	if len(subscriptionWide) > 0 {
 		subPerms := perms
 		if scope != s.subscription() {
-			if subPerms, err = s.permissions(ctx, s.subscription()); isForbidden(err) {
-				subPerms, err = nil, nil
-			}
-			if err != nil {
+			if subPerms, err = s.permissionsOrNone(ctx, s.subscription()); err != nil {
 				return nil, err
 			}
 		}
