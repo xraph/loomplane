@@ -61,13 +61,23 @@ type Fake struct {
 	// PullDeniedFor makes the first N container app revisions made after
 	// a role assignment fail to pull their image, as they do while the
 	// assignment propagates.
-	PullDeniedFor   int
-	principalMissed int
-	pullDenied      map[string]bool   // lower-cased revision name
-	groups          map[string]string // name → location
-	registered      map[string]bool
-	resources       map[string]map[string]any // lower-cased resource ID → body
-	polls           map[string]int
+	PullDeniedFor int
+	// AppPullFailedFor makes the first N container app PUTs settle with
+	// the app's own provisioningState Failed, and its revision's
+	// provisioningError saying the managed identity couldn't pull, as
+	// Container Apps reports a pull it gives up on while provisioning.
+	AppPullFailedFor int
+	// PutPullRefusedFor makes the first N container app PUTs answer 400,
+	// saying the managed identity couldn't pull the image.
+	PutPullRefusedFor int
+	principalMissed   int
+	appPuts           int
+	pullDenied        map[string]bool   // lower-cased revision name
+	provisionFailed   map[string]bool   // lower-cased revision name
+	groups            map[string]string // name → location
+	registered        map[string]bool
+	resources         map[string]map[string]any // lower-cased resource ID → body
+	polls             map[string]int
 	// Uploads are the source tarballs, by relative path.
 	Uploads map[string][]byte
 	// Tasks are the ACR Tasks files of the runs started, decoded.
@@ -104,7 +114,7 @@ func New(t *testing.T) *Fake {
 		Actions: []string{"*"}, NotActions: []string{"Microsoft.Authorization/*/Write", "Microsoft.Authorization/*/Delete"},
 		groups: map[string]string{}, registered: map[string]bool{}, resources: map[string]map[string]any{},
 		polls: map[string]int{}, Uploads: map[string][]byte{}, Apps: map[string]map[string]any{},
-		pullDenied: map[string]bool{}, FirewallRules: map[string]map[string]any{},
+		pullDenied: map[string]bool{}, provisionFailed: map[string]bool{}, FirewallRules: map[string]map[string]any{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Server.Close)
@@ -220,7 +230,12 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			props["provisioningState"] = "InProgress"
 		} else if props["provisioningState"] == "InProgress" {
 			props["provisioningState"] = "Succeeded"
-			if latest, _ := props["latestRevisionName"].(string); kind == "microsoft.app/containerapps" && !f.pullDenied[strings.ToLower(latest)] {
+			latest, _ := props["latestRevisionName"].(string)
+			switch {
+			case kind != "microsoft.app/containerapps" || f.pullDenied[strings.ToLower(latest)]:
+			case f.provisionFailed[strings.ToLower(latest)]:
+				props["provisioningState"] = "Failed"
+			default:
 				props["latestReadyRevisionName"] = latest
 			}
 		}
@@ -285,8 +300,15 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			f.RedisPuts = append(f.RedisPuts, record(body))
 			props["hostName"] = strings.ToLower(name) + "." + strings.ToLower(location) + ".redis.azure.net"
 		case "microsoft.app/containerapps":
-			f.Apps[name] = body
 			f.AppPuts = append(f.AppPuts, body)
+			f.appPuts++
+			if f.appPuts <= f.PutPullRefusedFor {
+				reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "ContainerAppOperationError",
+					"message": "Failed to provision revision for container app '" + name + "'. Error details: Field 'template.containers.main.image' is invalid with details: " +
+						"'Invalid value: unable to pull image using Managed identity " + PullPrincipal + "'."}})
+				return
+			}
+			f.Apps[name] = body
 			// Like Container Apps, a PUT makes a new revision only when the
 			// template changed, its revisionSuffix included.
 			if old := f.resources[id]; old != nil && reflect.DeepEqual(old["properties"].(map[string]any)["template"], props["template"]) {
@@ -379,6 +401,9 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		reply(http.StatusAccepted, body)
 	case kind == "microsoft.cache/redisenterprise" && len(rest) >= 2 && rest[0] == "databases":
 		f.redisDatabase(r, reply, notFound, getAt, id, canonical, rest, body)
+	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions" && f.provisionFailed[rest[1]]:
+		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Failed", "runningState": "Failed",
+			"provisioningError": "Failed to provision revision for container app. Error details: unable to pull image using Managed identity " + PullPrincipal + "."}})
 	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions" && f.pullDenied[rest[1]]:
 		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioned", "runningState": "Failed",
 			"runningStateDetails": "Failed to pull image: UNAUTHORIZED: authentication required"}})
@@ -446,7 +471,7 @@ func isServer(kind string) bool {
 
 // newRevision numbers a container app's new revision, or names it with
 // the template's revisionSuffix, and denies it a pull while
-// PullDeniedFor says so.
+// PullDeniedFor or AppPullFailedFor says so.
 func (f *Fake) newRevision(name string, old, body, props map[string]any) {
 	rev := 1
 	if old != nil {
@@ -462,6 +487,9 @@ func (f *Fake) newRevision(name string, old, body, props map[string]any) {
 	props["latestRevisionName"] = revision
 	if len(f.RoleAssignments) > 0 && len(f.pullDenied) < f.PullDeniedFor {
 		f.pullDenied[strings.ToLower(revision)] = true
+	}
+	if f.appPuts-f.PutPullRefusedFor <= f.AppPullFailedFor {
+		f.provisionFailed[strings.ToLower(revision)] = true
 	}
 }
 

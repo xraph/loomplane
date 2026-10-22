@@ -169,36 +169,45 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	name := a.appName(s, job)
 	job.Progress(StepDeploying, "Deploying "+state.Image)
 	// An app can't pull with a new identity until its role propagates, so
-	// a revision that couldn't pull is tried again. Container Apps only
+	// an app that couldn't pull is tried again, whether Azure refused the
+	// PUT, failed the app or failed its revision. Container Apps only
 	// makes a revision when the template changes, so each retry names a
 	// new one.
 	for attempt := 1; ; attempt++ {
 		if attempt > 1 {
 			app.Properties.Template.RevisionSuffix = azureRetrySuffix(attempt)
 		}
-		if state.AppID, err = s.PutApp(ctx, name, app); err != nil {
-			return nil, fmt.Errorf("deploy container app %s: %w", name, err)
-		}
-		if checkpointErr := checkpointCloudIdentity(job, state); checkpointErr != nil {
-			return nil, checkpointErr
-		}
-		save()
-		live, werr := s.WaitApp(ctx, state.AppID)
-		if werr == nil {
+		live, derr := azureDeployApp(ctx, s, job, name, app, &state, save)
+		if derr == nil {
 			return &Outcome{ExternalID: state.AppID, URL: s.URL(live), Image: state.Image, Revision: state.Image}, nil
 		}
 		var pe *azure.PullError
-		if pull.Identity == "" || !errors.As(werr, &pe) {
-			return nil, werr
+		if pull.Identity == "" || !errors.As(derr, &pe) {
+			return nil, derr
 		}
 		if time.Now().Add(azurePullRetry).After(deadline) {
-			return nil, fmt.Errorf("%w. The pull identity may need a few more minutes before it can pull from the container registry, so retry the deployment", werr)
+			return nil, fmt.Errorf("%w. The pull identity may need a few more minutes before it can pull from the container registry, so retry the deployment", derr)
 		}
 		job.Progress(StepDeploying, "Waiting for the pull identity's role to reach the container registry")
 		if serr := azureSleep(ctx, azurePullRetry); serr != nil {
 			return nil, serr
 		}
 	}
+}
+
+// azureDeployApp PUTs the container app and waits until it's ready. A PUT
+// Azure refused leaves state's app as it was.
+func azureDeployApp(ctx context.Context, s *azure.Session, job *Job, name string, app azure.App, state *azureState, save func()) (*azure.App, error) {
+	id, perr := s.PutApp(ctx, name, app)
+	if perr != nil {
+		return nil, fmt.Errorf("deploy container app %s: %w", name, perr)
+	}
+	state.AppID = id
+	if checkpointErr := checkpointCloudIdentity(job, *state); checkpointErr != nil {
+		return nil, checkpointErr
+	}
+	save()
+	return s.WaitApp(ctx, id)
 }
 
 // pullIdentity makes the resource group's pull identity and gives it

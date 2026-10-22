@@ -521,3 +521,71 @@ func TestAzure_givesUpWhenEntraNeverKnowsTheIdentity(t *testing.T) {
 		t.Fatalf("built %d, apps %v", len(f.Tasks), f.Apps)
 	}
 }
+
+// azurePullShapes are the ways Container Apps says an app couldn't pull
+// its image besides a failed revision: the app's own provisioning
+// failing, and the PUT refused outright.
+var azurePullShapes = map[string]func(f *azuretest.Fake, n int){
+	"the app failed":      func(f *azuretest.Fake, n int) { f.AppPullFailedFor = n },
+	"the PUT was refused": func(f *azuretest.Fake, n int) { f.PutPullRefusedFor = n },
+}
+
+func TestAzure_waitsThroughEveryShapeOfAFailedPull(t *testing.T) {
+	shortPullWaits(t, time.Minute)
+	for shape, fail := range azurePullShapes {
+		t.Run(shape, func(t *testing.T) {
+			f := azuretest.New(t)
+			f.NotActions = nil
+			fail(f, 2)
+			job := azureJob(t, apiConfig())
+			out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Lock()
+			defer f.Unlock()
+			if len(f.AppPuts) != 3 || !strings.HasSuffix(out.ExternalID, "/containerApps/"+AzureName(job)) {
+				t.Fatalf("app puts %d, outcome %+v", len(f.AppPuts), out)
+			}
+		})
+	}
+}
+
+func TestAzure_givesUpOnEveryShapeOfAFailedPull(t *testing.T) {
+	shortPullWaits(t, 600*time.Millisecond)
+	for shape, fail := range azurePullShapes {
+		t.Run(shape, func(t *testing.T) {
+			f := azuretest.New(t)
+			f.NotActions = nil
+			fail(f, 1000)
+			_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+			if err == nil || !strings.Contains(err.Error(), "Managed identity") || !strings.Contains(err.Error(), "retry the deployment") {
+				t.Fatalf("err %v", err)
+			}
+			f.Lock()
+			defer f.Unlock()
+			if len(f.AppPuts) < 2 {
+				t.Fatalf("gave up after %d app puts", len(f.AppPuts))
+			}
+		})
+	}
+}
+
+func TestAzure_theAdminUserNeverRetriesAPull(t *testing.T) {
+	shortPullWaits(t, time.Minute)
+	for shape, fail := range azurePullShapes {
+		t.Run(shape, func(t *testing.T) {
+			f := azuretest.New(t)
+			fail(f, 1)
+			_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+			if err == nil || strings.Contains(err.Error(), "retry the deployment") {
+				t.Fatalf("err %v", err)
+			}
+			f.Lock()
+			defer f.Unlock()
+			if len(f.AppPuts) != 1 {
+				t.Fatalf("app puts %d", len(f.AppPuts))
+			}
+		})
+	}
+}

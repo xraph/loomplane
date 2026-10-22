@@ -454,6 +454,59 @@ func TestEnsurePullIdentity_registersManagedIdentity(t *testing.T) {
 	}
 }
 
+// pullApp is a container app that pulls from the fake's registry with
+// the pull identity.
+func pullApp(t *testing.T, s *Session) App {
+	t.Helper()
+	ctx := t.Context()
+	if err := s.EnsureRegistered(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureGroup(ctx, "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	env, err := s.EnsureEnvironment(ctx, "eastus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return App{Location: "eastus", Properties: AppProperties{EnvironmentID: env.ID,
+		Template: Template{Containers: []Container{{Name: "main", Image: "registry.azurecr.io/api:1"}}}}}
+}
+
+func TestPutApp_aRefusedPullIsAPullError(t *testing.T) {
+	f := azuretest.New(t)
+	f.PutPullRefusedFor = 1
+	s := fakeSession(t, f)
+	_, err := s.PutApp(t.Context(), "api", pullApp(t, s))
+	var pe *PullError
+	var ae *APIError
+	if !errors.As(err, &pe) || !errors.As(err, &ae) || ae.Status != http.StatusBadRequest || !strings.Contains(pe.Detail, "Managed identity") {
+		t.Fatalf("err %v", err)
+	}
+	// The error reads as Azure's answer, as it did before.
+	if err.Error() != ae.Error() {
+		t.Fatalf("err %q, want %q", err, ae)
+	}
+	if _, perr := s.PutApp(t.Context(), "api", pullApp(t, s)); perr != nil {
+		t.Fatal(perr)
+	}
+}
+
+func TestWaitApp_anAppThatFailedToPullIsAPullError(t *testing.T) {
+	f := azuretest.New(t)
+	f.AppPullFailedFor = 1
+	s := fakeSession(t, f)
+	id, err := s.PutApp(t.Context(), "api", pullApp(t, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.WaitApp(t.Context(), id)
+	var pe *PullError
+	if !errors.As(err, &pe) || pe.Revision != "api--1" || !strings.Contains(pe.Detail, "unable to pull image using Managed identity") {
+		t.Fatalf("err %v", err)
+	}
+}
+
 func TestFlexibleServer(t *testing.T) {
 	f := azuretest.New(t)
 	s := fakeSession(t, f)

@@ -552,10 +552,15 @@ func (s *Session) GetApp(ctx context.Context, id string) (*App, error) {
 }
 
 // PutApp creates or replaces the container app called name, and returns
-// its resource ID without waiting for it.
+// its resource ID without waiting for it. A PUT Azure refuses because the
+// app couldn't pull its image is a PullError that wraps Azure's answer.
 func (s *Session) PutApp(ctx context.Context, name string, app App) (string, error) {
 	var out App
 	if _, err := s.do(ctx, http.MethodPut, s.AppPath(name), appsVersion, app, &out); err != nil {
+		var ae *APIError
+		if errors.As(err, &ae) && ae.Status == http.StatusBadRequest && pullFailure(ae.Message) {
+			return "", &PullError{Detail: ae.Message, Err: err}
+		}
 		return "", err
 	}
 	if out.ID == "" {
@@ -575,19 +580,51 @@ type revision struct {
 	} `json:"properties"`
 }
 
-// PullError is a revision that didn't start because it couldn't pull
-// its image, as while a pull identity's role propagates.
+// PullError is an app that couldn't pull its image, as while a pull
+// identity's role propagates: a revision that didn't start, an app whose
+// provisioning failed, or a PUT Azure refused. Err is what Azure said,
+// when that's the error to show.
 type PullError struct {
 	Revision, Detail string
+	Err              error
 }
 
 func (e *PullError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
 	return fmt.Sprintf("revision %s didn't start: %s", e.Revision, e.Detail)
 }
 
+func (e *PullError) Unwrap() error { return e.Err }
+
+// pullFailure reports whether Azure's detail says an image couldn't be
+// pulled.
+func pullFailure(detail string) bool {
+	lower := strings.ToLower(detail)
+	return strings.Contains(lower, "pull") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "managed identity")
+}
+
+// revisionDetail is why the app's revision called name isn't serving, or
+// "" when it hasn't failed.
+func (s *Session) revisionDetail(ctx context.Context, id, name string) (string, error) {
+	var rev revision
+	if _, err := s.do(ctx, http.MethodGet, id+"/revisions/"+url.PathEscape(name), appsVersion, nil, &rev); err != nil && !IsNotFound(err) {
+		return "", err
+	}
+	rp := rev.Properties
+	if !strings.EqualFold(rp.ProvisioningState, "Failed") && !strings.EqualFold(rp.RunningState, "Failed") {
+		return "", nil
+	}
+	if detail := strings.TrimSpace(rp.ProvisioningError + " " + rp.RunningDetails); detail != "" {
+		return detail, nil
+	}
+	return "it failed", nil
+}
+
 // WaitApp waits until the app's newest revision is provisioned and ready,
-// and fails if it can't be: with a PullError when the revision couldn't
-// pull its image.
+// and fails if it can't be: with a PullError when the revision, or the
+// app's own provisioning, failed because it couldn't pull its image.
 func (s *Session) WaitApp(ctx context.Context, id string) (*App, error) {
 	for {
 		a, err := s.GetApp(ctx, id)
@@ -597,25 +634,32 @@ func (s *Session) WaitApp(ctx context.Context, id string) (*App, error) {
 		p := a.Properties
 		switch strings.ToLower(p.ProvisioningState) {
 		case "failed", "canceled":
-			return nil, fmt.Errorf("azure couldn't deploy the container app: provisioning %s", strings.ToLower(p.ProvisioningState))
+			failed := fmt.Errorf("azure couldn't deploy the container app: provisioning %s", strings.ToLower(p.ProvisioningState))
+			if p.LatestRevisionName == "" {
+				return nil, failed
+			}
+			detail, derr := s.revisionDetail(ctx, id, p.LatestRevisionName)
+			if derr != nil || detail == "" {
+				return nil, failed
+			}
+			failed = fmt.Errorf("%w: %s", failed, detail)
+			if pullFailure(detail) {
+				return nil, &PullError{Revision: p.LatestRevisionName, Detail: detail, Err: failed}
+			}
+			return nil, failed
 		case "succeeded":
 			if p.LatestRevisionName != "" && p.LatestRevisionName == p.LatestReadyRevision {
 				return a, nil
 			}
 			if p.LatestRevisionName != "" {
-				var rev revision
-				if _, err := s.do(ctx, http.MethodGet, id+"/revisions/"+url.PathEscape(p.LatestRevisionName), appsVersion, nil, &rev); err != nil && !IsNotFound(err) {
-					return nil, err
+				detail, derr := s.revisionDetail(ctx, id, p.LatestRevisionName)
+				if derr != nil {
+					return nil, derr
 				}
-				rp := rev.Properties
-				if strings.EqualFold(rp.ProvisioningState, "Failed") || strings.EqualFold(rp.RunningState, "Failed") {
-					detail := strings.TrimSpace(rp.ProvisioningError + " " + rp.RunningDetails)
-					if detail == "" {
-						detail = "it failed"
-					}
-					if lower := strings.ToLower(detail); strings.Contains(lower, "pull") || strings.Contains(lower, "unauthorized") {
-						return nil, &PullError{Revision: p.LatestRevisionName, Detail: detail}
-					}
+				if pullFailure(detail) {
+					return nil, &PullError{Revision: p.LatestRevisionName, Detail: detail}
+				}
+				if detail != "" {
 					return nil, fmt.Errorf("revision %s didn't start: %s", p.LatestRevisionName, detail)
 				}
 			}
