@@ -11,11 +11,14 @@ import (
 // ErrBusy identifies an environment or target with unfinished release work.
 var ErrBusy = errors.New("environment has unfinished deployment or Cloud sync work")
 
-// ChangeInput selects either a target placement or an environment assignment.
-// Revision is the target revision, or the assignment generation (zero initially).
+// ChangeInput selects a target placement, a Cloud's default placement or an
+// environment assignment. Revision is the target revision, the Cloud revision
+// for a default switch, or the assignment generation (zero initially). A
+// default switch with no provider clears the default.
 type ChangeInput struct {
 	Runtime string `json:"runtime,omitempty"`
 	PoolID  string `json:"pool_id,omitempty"`
+	Default bool   `json:"default,omitempty"`
 
 	Revision      int64  `json:"revision"`
 	CloudID       string `json:"cloud_id"`
@@ -60,6 +63,8 @@ type Preview struct {
 	Input            ChangeInput         `json:"input"`
 	Before           *Target             `json:"before,omitempty"`
 	After            *Target             `json:"after,omitempty"`
+	BeforeDefault    *DefaultPlacement   `json:"before_default,omitempty"`
+	AfterDefault     *DefaultPlacement   `json:"after_default,omitempty"`
 	BeforeAssignment *Assignment         `json:"before_assignment,omitempty"`
 	AfterAssignment  *Assignment         `json:"after_assignment,omitempty"`
 	Environments     []EnvironmentChange `json:"environments"`
@@ -82,24 +87,28 @@ const (
 
 // Sync tracks deployment and routing checkpoints across all affected environments.
 type Sync struct {
-	ID           string              `json:"id" forge:"id"`
-	OrgID        string              `json:"org_id"`
-	ProjectID    string              `json:"project_id"`
-	CloudID      string              `json:"cloud_id"`
-	TargetID     string              `json:"target_id,omitempty"`
-	PreviewID    string              `json:"preview_id"`
-	Status       string              `json:"status"`
-	CreatedBy    string              `json:"created_by"`
-	Actor        security.Principal  `json:"-"`
-	Before       *Target             `json:"before,omitempty"`
-	After        *Target             `json:"after,omitempty"`
-	Environments []EnvironmentChange `json:"environments"`
-	Attempt      int                 `json:"attempt"`
-	Version      int64               `json:"-"`
-	Error        string              `json:"error,omitempty"`
-	Reverts      string              `json:"reverts,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
-	UpdatedAt    time.Time           `json:"updated_at"`
+	ID        string             `json:"id" forge:"id"`
+	OrgID     string             `json:"org_id"`
+	ProjectID string             `json:"project_id"`
+	CloudID   string             `json:"cloud_id"`
+	TargetID  string             `json:"target_id,omitempty"`
+	Default   bool               `json:"default,omitempty"`
+	PreviewID string             `json:"preview_id"`
+	Status    string             `json:"status"`
+	CreatedBy string             `json:"created_by"`
+	Actor     security.Principal `json:"-"`
+	Before    *Target            `json:"before,omitempty"`
+	After     *Target            `json:"after,omitempty"`
+	// BeforeDefault and AfterDefault record a reviewed default switch.
+	BeforeDefault *DefaultPlacement   `json:"before_default,omitempty"`
+	AfterDefault  *DefaultPlacement   `json:"after_default,omitempty"`
+	Environments  []EnvironmentChange `json:"environments"`
+	Attempt       int                 `json:"attempt"`
+	Version       int64               `json:"-"`
+	Error         string              `json:"error,omitempty"`
+	Reverts       string              `json:"reverts,omitempty"`
+	CreatedAt     time.Time           `json:"created_at"`
+	UpdatedAt     time.Time           `json:"updated_at"`
 }
 
 // Snapshot is stored separately from API JSON. It contains references, never
@@ -135,6 +144,10 @@ type EnvironmentSnapshot struct {
 	Bindings           json.RawMessage `json:"bindings"`
 	Plan               json.RawMessage `json:"plan"`
 }
+
+// Shared reports whether a change reaches every environment using the Cloud,
+// rather than one environment's assignment.
+func (in ChangeInput) Shared() bool { return in.TargetID != "" || in.Default }
 
 // ParticipantProject preserves the original scope of legacy operation snapshots.
 func ParticipantProject(project, original string) string {

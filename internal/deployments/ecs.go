@@ -191,17 +191,15 @@ func buildspec(s *aws.Session, cfg *planning.ServiceConfig, image string) string
 	} else {
 		install = []string{"curl -sSL https://github.com/buildpacks/pack/releases/download/" + packVersion + "/pack-" + packVersion +
 			"-linux.tgz | tar -C /usr/local/bin -xz pack"}
+		path, env := packPlan(cfg)
 		args := "pack build " + image + " --builder " + googleBuilder + " --publish"
-		switch {
-		case cfg.Ecosystem == "go":
-			args += " --env GOOGLE_BUILDABLE=./" + cfg.Source + ` --path "$CODEBUILD_SRC_DIR"`
-		case cfg.Ecosystem == "jvm" && cfg.Source != ".":
-			args += " --env GOOGLE_BUILDABLE=" + cfg.Source + ` --path "$CODEBUILD_SRC_DIR"`
-		default:
-			args += ` --path "$CODEBUILD_SRC_DIR/` + cfg.Source + `"`
+		for _, e := range env {
+			args += " --env " + shellWord(e)
 		}
-		if cfg.Ecosystem == "python" && cfg.Start != "" {
-			args += " --env " + shellQuote("GOOGLE_ENTRYPOINT="+cfg.Start)
+		if path == "." {
+			args += ` --path "$CODEBUILD_SRC_DIR"`
+		} else {
+			args += ` --path "$CODEBUILD_SRC_DIR/` + path + `"`
 		}
 		build = []string{args}
 	}
@@ -219,6 +217,15 @@ func buildspec(s *aws.Session, cfg *planning.ServiceConfig, image string) string
 		b.WriteString("      - " + quote(c) + "\n")
 	}
 	return b.String()
+}
+
+// shellWord leaves s bare when the shell would read it as one plain word, and
+// quotes it otherwise.
+func shellWord(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./=:+,@") == "" {
+		return s
+	}
+	return shellQuote(s)
 }
 
 // shellQuote makes s one word for the shell, whatever it holds.

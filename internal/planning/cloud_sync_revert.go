@@ -43,7 +43,21 @@ func (s *Service) PreviewCloudRevert(ctx context.Context, p security.Principal, 
 		return nil, err
 	}
 	var in cloudprofiles.ChangeInput
-	if sync.TargetID != "" {
+	switch {
+	case sync.Default:
+		// Compensate only while the Cloud still holds exactly the default this sync set.
+		current, e := st.GetProfile(ctx, p.OrgID, "", sync.CloudID)
+		if e != nil {
+			return nil, e
+		}
+		if !sameDefault(current.DefaultPlacement, sync.AfterDefault) {
+			return nil, cloudprofiles.ErrConflict
+		}
+		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, Default: true, Revision: current.Revision}
+		if before := sync.BeforeDefault; before != nil {
+			in.Provider, in.ConnectionID, in.Region = before.Provider, before.ConnectionID, before.Region
+		}
+	case sync.TargetID != "":
 		current, e := st.GetTarget(ctx, p.OrgID, "", sync.CloudID, sync.TargetID)
 		if e != nil {
 			return nil, e
@@ -52,7 +66,7 @@ func (s *Service) PreviewCloudRevert(ctx context.Context, p security.Principal, 
 			return nil, cloudprofiles.ErrConflict
 		}
 		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, TargetID: sync.TargetID, Revision: current.Revision, Provider: sync.Before.Provider, ConnectionID: sync.Before.ConnectionID, Region: sync.Before.Region, Runtime: sync.Before.Runtime, PoolID: sync.Before.PoolID}
-	} else {
+	default:
 		env := previous.Input.EnvironmentID
 		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env)
 		if e != nil {

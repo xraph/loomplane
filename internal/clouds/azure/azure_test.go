@@ -4,9 +4,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/clouds/azure/azuretest"
 )
 
 const (
@@ -195,7 +198,18 @@ func TestMissing(t *testing.T) {
 			t.Fatal(err)
 		}
 		missing, err := s.Missing(t.Context())
-		want := []string{createGroup, "Microsoft.ContainerRegistry/registries/scheduleRun/action", "Microsoft.App/register/action"}
+		// Nor may it make databases or Redis.
+		want := make([]string, 0, 17)
+		want = append(want, createGroup, "Microsoft.ContainerRegistry/registries/scheduleRun/action")
+		for _, ns := range []string{"Microsoft.DBforPostgreSQL", "Microsoft.DBforMySQL"} {
+			for _, a := range []string{"read", "write", "delete", "firewallRules/write"} {
+				want = append(want, ns+"/flexibleServers/"+a)
+			}
+		}
+		for _, a := range []string{"read", "write", "delete", "databases/read", "databases/write", "databases/listKeys/action"} {
+			want = append(want, "Microsoft.Cache/redisEnterprise/"+a)
+		}
+		want = append(want, "Microsoft.App/register/action")
 		if err != nil || !slices.Equal(missing, want) {
 			t.Fatalf("missing %v, want %v (%v)", missing, want, err)
 		}
@@ -238,6 +252,53 @@ func TestBuildRequest_task(t *testing.T) {
 	}
 }
 
+func TestBuildRequest_packTask(t *testing.T) {
+	pack := &PackBuild{
+		Image: "gcr.io/k8s-skaffold/pack", Builder: "gcr.io/buildpacks/builder:latest", Path: "acme-mono-1/apps/web",
+		Env: []string{"GOOGLE_ENTRYPOINT=gunicorn main:app"},
+	}
+	task, err := BuildRequest{Source: "s.tar.gz", Image: "web-1:abc", Pack: pack}.task()
+	want := "version: v1.1.0\nsteps:\n" +
+		"  - cmd: gcr.io/k8s-skaffold/pack build {{.Run.Registry}}/web-1:abc --builder gcr.io/buildpacks/builder:latest --path acme-mono-1/apps/web --env GOOGLE_ENTRYPOINT\n" +
+		"    entryPoint: pack\n" +
+		"    env: [\"GOOGLE_ENTRYPOINT=gunicorn main:app\"]\n" +
+		"  - push:\n    - \"{{.Run.Registry}}/web-1:abc\"\n"
+	if err != nil || task != want {
+		t.Fatalf("%q, %v", task, err)
+	}
+
+	// Pack wins over the Dockerfile fields, and a build with no variables
+	// has no env line.
+	bare := *pack
+	bare.Env = nil
+	task, err = BuildRequest{Image: "web-1:abc", Dockerfile: "a b", Context: "c d", Pack: &bare}.task()
+	if err != nil || strings.Contains(task, "env:") || strings.Contains(task, "--env") || !strings.Contains(task, "--path acme-mono-1/apps/web\n") {
+		t.Fatalf("%q, %v", task, err)
+	}
+
+	spaced := *pack
+	spaced.Path = "acme mono/apps/web"
+	if _, err = (BuildRequest{Image: "x:y", Pack: &spaced}).task(); err == nil {
+		t.Fatal("a path with a space")
+	}
+	multiline := *pack
+	multiline.Env = []string{"GOOGLE_ENTRYPOINT=a\nb"}
+	if _, err = (BuildRequest{Image: "x:y", Pack: &multiline}).task(); err == nil {
+		t.Fatal("a value with a newline")
+	}
+	quoted := *pack
+	quoted.Env = []string{`GOOGLE_ENTRYPOINT=gunicorn -k "uvicorn" main:app`}
+	task, err = BuildRequest{Image: "x:y", Pack: &quoted}.task()
+	if err != nil || !strings.Contains(task, `env: ["GOOGLE_ENTRYPOINT=gunicorn -k \"uvicorn\" main:app"]`) {
+		t.Fatalf("%q, %v", task, err)
+	}
+	badKey := *pack
+	badKey.Env = []string{"A B=1"}
+	if _, err = (BuildRequest{Image: "x:y", Pack: &badKey}).task(); err == nil {
+		t.Fatal("a name with a space")
+	}
+}
+
 func TestOwns(t *testing.T) {
 	s := &Session{cred: Credential{SubscriptionID: sub, ResourceGroup: "loomplane"}}
 	if !s.Owns(s.AppPath("api")) || !s.Owns(strings.Replace(s.AppPath("api"), "resourceGroups", "resourcegroups", 1)) {
@@ -251,5 +312,398 @@ func TestOwns(t *testing.T) {
 		if s.Owns(id) {
 			t.Errorf("owns %s", id)
 		}
+	}
+}
+
+func TestRoleAssignmentName(t *testing.T) {
+	scope := "/subscriptions/" + sub + "/resourceGroups/loomplane/providers/Microsoft.ContainerRegistry/registries/" + RegistryName(sub, "loomplane")
+	a := RoleAssignmentName(scope, "66666666-6666-6666-6666-666666666666")
+	if a != RoleAssignmentName(scope, "66666666-6666-6666-6666-666666666666") {
+		t.Fatal("the name isn't deterministic")
+	}
+	if a == RoleAssignmentName(scope, "77777777-7777-7777-7777-777777777777") {
+		t.Fatal("two principals share a name")
+	}
+	if a == RoleAssignmentName(scope+"x", "66666666-6666-6666-6666-666666666666") {
+		t.Fatal("two scopes share a name")
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(a) {
+		t.Fatalf("%s isn't a version 5 UUID", a)
+	}
+}
+
+// fakeSession signs in to the Azure fake as its principal.
+func fakeSession(t *testing.T, f *azuretest.Fake) *Session {
+	t.Helper()
+	cred, err := ParseCredential([]byte(azuretest.Secret), azuretest.Settings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(f.URL()).Session(t.Context(), cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestPullMode(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	// A Contributor may not assign roles, in the subscription while the
+	// group isn't there or in the group once it is.
+	for _, when := range []string{"before the group", "with the group"} {
+		got, err := s.PullMode(t.Context())
+		if err != nil || got != PullModeAdmin {
+			t.Fatalf("contributor %s: %q, %v", when, got, err)
+		}
+		if err := s.EnsureGroup(t.Context(), "eastus"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.Lock()
+	f.NotActions = nil
+	f.Unlock()
+	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeIdentity {
+		t.Fatalf("an owner: %q, %v", got, err)
+	}
+	// Assigning roles isn't enough: the app also needs the identity.
+	f.Lock()
+	f.Actions, f.NotActions = []string{"Microsoft.Authorization/roleAssignments/write", "Microsoft.ManagedIdentity/userAssignedIdentities/write"}, nil
+	f.Unlock()
+	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeAdmin {
+		t.Fatalf("a principal that can't assign the identity: %q, %v", got, err)
+	}
+	// Making the identity registers Microsoft.ManagedIdentity, which a
+	// principal may not do without its register action.
+	f.Lock()
+	f.Actions = append(slices.Clone(pullActions), "Microsoft.Resources/subscriptions/resourceGroups/read")
+	f.Unlock()
+	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeAdmin {
+		t.Fatalf("a principal that can't register the identity's namespace: %q, %v", got, err)
+	}
+	f.Lock()
+	f.Actions = append(f.Actions, "Microsoft.ManagedIdentity/register/action")
+	f.Unlock()
+	if got, err := s.PullMode(t.Context()); err != nil || got != PullModeIdentity {
+		t.Fatalf("a principal that may register it: %q, %v", got, err)
+	}
+}
+
+func TestPullIdentityAndGrant(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	ctx := t.Context()
+	if err := s.EnsureRegistered(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureGroup(ctx, "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := s.EnsureRegistry(ctx, "eastus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.EnsurePullIdentity(ctx, "eastus")
+	if err != nil || id.PrincipalID != azuretest.PullPrincipal || !strings.HasSuffix(id.ID, "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/"+PullIdentity) {
+		t.Fatalf("%+v, %v", id, err)
+	}
+	again, err := s.EnsurePullIdentity(ctx, "eastus")
+	if err != nil || *again != *id {
+		t.Fatalf("a second call: %+v, %v", again, err)
+	}
+	f.Lock()
+	puts := f.IdentityPuts
+	f.Unlock()
+	if puts != 1 {
+		t.Fatalf("the identity was PUT %d times", puts)
+	}
+
+	created, err := s.GrantPull(ctx, reg.ID, id.PrincipalID)
+	if err != nil || !created {
+		t.Fatalf("the first grant: %v, %v", created, err)
+	}
+	created, err = s.GrantPull(ctx, reg.ID, id.PrincipalID)
+	if err != nil || created {
+		t.Fatalf("the second grant: %v, %v", created, err)
+	}
+	f.Lock()
+	got := slices.Clone(f.RoleAssignments)
+	f.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("assignments %+v", got)
+	}
+	want := "/subscriptions/" + sub + "/providers/Microsoft.Authorization/roleDefinitions/" + AcrPull
+	if got[0].RoleDefinitionID != want || got[0].PrincipalID != id.PrincipalID || got[0].PrincipalType != "ServicePrincipal" ||
+		!strings.EqualFold(got[0].Scope, reg.ID) || got[0].Name != RoleAssignmentName(reg.ID, id.PrincipalID) {
+		t.Fatalf("assignment %+v, want role %s on %s", got[0], want, reg.ID)
+	}
+}
+
+func TestEnsurePullIdentity_registersManagedIdentity(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	if err := s.EnsureGroup(t.Context(), "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh subscription hasn't registered Microsoft.ManagedIdentity.
+	if _, err := s.EnsurePullIdentity(t.Context(), "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Registered("Microsoft.ManagedIdentity") {
+		t.Fatal("Microsoft.ManagedIdentity wasn't registered")
+	}
+}
+
+// pullApp is a container app that pulls from the fake's registry with
+// the pull identity.
+func pullApp(t *testing.T, s *Session) App {
+	t.Helper()
+	ctx := t.Context()
+	if err := s.EnsureRegistered(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureGroup(ctx, "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	env, err := s.EnsureEnvironment(ctx, "eastus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return App{Location: "eastus", Properties: AppProperties{EnvironmentID: env.ID,
+		Template: Template{Containers: []Container{{Name: "main", Image: "registry.azurecr.io/api:1"}}}}}
+}
+
+func TestPutApp_aRefusedPullIsAPullError(t *testing.T) {
+	f := azuretest.New(t)
+	f.PutPullRefusedFor = 1
+	s := fakeSession(t, f)
+	_, err := s.PutApp(t.Context(), "api", pullApp(t, s))
+	var pe *PullError
+	var ae *APIError
+	if !errors.As(err, &pe) || !errors.As(err, &ae) || ae.Status != http.StatusBadRequest || !strings.Contains(pe.Detail, "Managed identity") {
+		t.Fatalf("err %v", err)
+	}
+	// The error reads as Azure's answer, as it did before.
+	if err.Error() != ae.Error() {
+		t.Fatalf("err %q, want %q", err, ae)
+	}
+	if _, perr := s.PutApp(t.Context(), "api", pullApp(t, s)); perr != nil {
+		t.Fatal(perr)
+	}
+}
+
+func TestWaitApp_anAppThatFailedToPullIsAPullError(t *testing.T) {
+	f := azuretest.New(t)
+	f.AppPullFailedFor = 1
+	s := fakeSession(t, f)
+	id, err := s.PutApp(t.Context(), "api", pullApp(t, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.WaitApp(t.Context(), id)
+	var pe *PullError
+	if !errors.As(err, &pe) || pe.Revision != "api--1" || !strings.Contains(pe.Detail, "unable to pull image using Managed identity") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestFlexibleServer(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	ctx := t.Context()
+	if err := s.EnsureGroup(ctx, "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+	fqdn, err := s.EnsureFlexibleServer(ctx, FlexibleServer{Engine: "postgres", Name: "db-production-a1b2c3", Location: "westeurope", Version: "16", Login: "loomplane", Password: "Pw-1"})
+	if err != nil || fqdn != "db-production-a1b2c3.postgres.database.azure.com" {
+		t.Fatalf("%q, %v", fqdn, err)
+	}
+	// The database namespace is registered on first use.
+	if !f.Registered("Microsoft.DBforPostgreSQL") || f.Registered("Microsoft.DBforMySQL") {
+		t.Fatal("the postgres namespace wasn't registered on its own")
+	}
+	f.Lock()
+	puts := slices.Clone(f.ServerPuts)
+	rule := f.FirewallRules["db-production-a1b2c3/AllowAllAzureServicesAndResourcesWithinAzureIps"]
+	f.Unlock()
+	if len(puts) != 1 {
+		t.Fatalf("puts %v", puts)
+	}
+	put := puts[0]
+	props := put["properties"].(map[string]any)
+	sku := put["sku"].(map[string]any)
+	storage := props["storage"].(map[string]any)
+	network := props["network"].(map[string]any)
+	if put["location"] != "westeurope" || sku["name"] != "Standard_B1ms" || sku["tier"] != "Burstable" || storage["storageSizeGB"] != float64(32) ||
+		props["version"] != "16" || props["administratorLogin"] != "loomplane" || props["administratorLoginPassword"] != "Pw-1" ||
+		network["publicNetworkAccess"] != "Enabled" {
+		t.Fatalf("server %v", put)
+	}
+	rp, _ := rule["properties"].(map[string]any)
+	if rp["startIpAddress"] != "0.0.0.0" || rp["endIpAddress"] != "0.0.0.0" {
+		t.Fatalf("firewall rule %v", rule)
+	}
+	id := s.FlexibleServerPath("postgres", "db-production-a1b2c3")
+	if !strings.HasSuffix(id, "/resourceGroups/loomplane/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-production-a1b2c3") || FlexibleServerEngine(id) != "postgres" {
+		t.Fatalf("id %s", id)
+	}
+	srv, err := s.GetFlexibleServer(ctx, id)
+	if err != nil || !strings.EqualFold(srv.Properties.State, "Ready") {
+		t.Fatalf("%+v, %v", srv, err)
+	}
+
+	// MySQL gets its own namespace, API and storage.
+	fqdn, err = s.EnsureFlexibleServer(ctx, FlexibleServer{Engine: "mysql", Name: "my-production-a1b2c3", Location: "westeurope", Version: "8.0.21", Login: "loomplane", Password: "Pw-2"})
+	if err != nil || fqdn != "my-production-a1b2c3.mysql.database.azure.com" || !f.Registered("Microsoft.DBforMySQL") {
+		t.Fatalf("%q, %v", fqdn, err)
+	}
+	f.Lock()
+	mysql := f.ServerPuts[1]
+	f.Unlock()
+	if mysql["properties"].(map[string]any)["storage"].(map[string]any)["storageSizeGB"] != float64(20) {
+		t.Fatalf("mysql %v", mysql)
+	}
+
+	if err := s.DeleteFlexibleServer(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetFlexibleServer(ctx, id); !IsNotFound(err) {
+		t.Fatalf("after delete: %v", err)
+	}
+	if err := s.DeleteFlexibleServer(ctx, id); err != nil {
+		t.Fatalf("deleting it again: %v", err)
+	}
+	// Nothing outside the subscription's flexible servers goes through it.
+	for _, other := range []string{s.AppPath("api"), "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/loomplane/providers/Microsoft.DBforPostgreSQL/flexibleServers/x"} {
+		if err := s.DeleteFlexibleServer(ctx, other); err == nil {
+			t.Errorf("deleted %s", other)
+		}
+	}
+	if _, err := s.EnsureFlexibleServer(ctx, FlexibleServer{Engine: "redis", Name: "x"}); err == nil {
+		t.Fatal("made a redis flexible server")
+	}
+}
+
+func TestFlexibleServer_aDisabledServerFails(t *testing.T) {
+	f := azuretest.New(t)
+	f.ServerState = "Disabled"
+	s := fakeSession(t, f)
+	if err := s.EnsureGroup(t.Context(), "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.EnsureFlexibleServer(t.Context(), FlexibleServer{Engine: "postgres", Name: "db", Location: "eastus", Version: "16", Login: "loomplane", Password: "Pw-1"})
+	if err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestEnsure_waitsForWhatAzureCantFindYet(t *testing.T) {
+	f := azuretest.New(t)
+	// Azure can answer 404 for a while after it accepts the PUT.
+	f.NotFoundAfterPut = 3
+	s := fakeSession(t, f)
+	ctx := t.Context()
+	if err := s.EnsureGroup(ctx, "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnsureFlexibleServer(ctx, FlexibleServer{Engine: "postgres", Name: "db", Location: "westeurope", Version: "16", Login: "loomplane", Password: "Pw-1"}); err != nil {
+		t.Fatal(err)
+	}
+	// The cluster and its database each answer 404 three times.
+	if _, _, err := s.EnsureManagedRedis(ctx, "cache", "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsure_aServerAzureNeverFindsFails(t *testing.T) {
+	old := missingPolls
+	missingPolls = 3
+	t.Cleanup(func() { missingPolls = old })
+	f := azuretest.New(t)
+	f.NotFoundAfterPut = 1000
+	s := fakeSession(t, f)
+	if err := s.EnsureGroup(t.Context(), "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.EnsureFlexibleServer(t.Context(), FlexibleServer{Engine: "postgres", Name: "db", Location: "westeurope", Version: "16", Login: "loomplane", Password: "Pw-1"})
+	if !IsNotFound(err) {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestManagedRedis(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	ctx := t.Context()
+	if err := s.EnsureGroup(ctx, "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+	host, key, err := s.EnsureManagedRedis(ctx, "cache-production-a1b2c3", "westeurope")
+	if err != nil || host != "cache-production-a1b2c3.westeurope.redis.azure.net" || key != azuretest.RedisKey {
+		t.Fatalf("%q %q, %v", host, key, err)
+	}
+	// Microsoft.Cache is registered on first use, and nothing else is.
+	if !f.Registered("Microsoft.Cache") || f.Registered("Microsoft.DBforPostgreSQL") {
+		t.Fatal("Microsoft.Cache wasn't registered on its own")
+	}
+	f.Lock()
+	clusters, dbs := slices.Clone(f.RedisPuts), slices.Clone(f.RedisDatabasePuts)
+	f.Unlock()
+	if len(clusters) != 1 || len(dbs) != 1 {
+		t.Fatalf("clusters %v, databases %v", clusters, dbs)
+	}
+	if sku := clusters[0]["sku"].(map[string]any); sku["name"] != "Balanced_B0" || clusters[0]["location"] != "westeurope" {
+		t.Fatalf("cluster %v", clusters[0])
+	}
+	props := dbs[0]["properties"].(map[string]any)
+	if props["clientProtocol"] != "Encrypted" || props["accessKeysAuthentication"] != "Enabled" || props["port"] != float64(ManagedRedisPort) {
+		t.Fatalf("database %v", dbs[0])
+	}
+	id := s.ManagedRedisPath("cache-production-a1b2c3")
+	if !strings.HasSuffix(id, "/resourceGroups/loomplane/providers/Microsoft.Cache/redisEnterprise/cache-production-a1b2c3") || !IsManagedRedis(id) || IsManagedRedis(s.AppPath("api")) {
+		t.Fatalf("id %s", id)
+	}
+	c, err := s.GetManagedRedis(ctx, id)
+	if err != nil || !strings.EqualFold(c.Properties.ProvisioningState, "Succeeded") || c.Properties.HostName != host {
+		t.Fatalf("%+v, %v", c, err)
+	}
+	// A second apply PUTs the same cluster and reads the key again.
+	if _, again, aerr := s.EnsureManagedRedis(ctx, "cache-production-a1b2c3", "westeurope"); aerr != nil || again != key {
+		t.Fatalf("again %q, %v", again, aerr)
+	}
+
+	if derr := s.DeleteManagedRedis(ctx, id); derr != nil {
+		t.Fatal(derr)
+	}
+	if _, gerr := s.GetManagedRedis(ctx, id); !IsNotFound(gerr) {
+		t.Fatalf("after delete: %v", gerr)
+	}
+	if derr := s.DeleteManagedRedis(ctx, id); derr != nil {
+		t.Fatalf("deleting it again: %v", derr)
+	}
+	// Nothing outside the subscription's Managed Redis goes through it.
+	for _, other := range []string{s.AppPath("api"), s.FlexibleServerPath("postgres", "db"), "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/loomplane/providers/Microsoft.Cache/redisEnterprise/x"} {
+		if derr := s.DeleteManagedRedis(ctx, other); derr == nil {
+			t.Errorf("deleted %s", other)
+		}
+	}
+}
+
+func TestManagedRedis_aRegionWithoutIt(t *testing.T) {
+	// Azure says a region lacks Managed Redis, or just its size, with
+	// either code.
+	for _, code := range []string{"SkuNotAvailable", "LocationNotAvailableForResourceType"} {
+		t.Run(code, func(t *testing.T) {
+			f := azuretest.New(t)
+			f.RedisUnavailableIn, f.RedisUnavailableCode = "brazilsouth", code
+			s := fakeSession(t, f)
+			if err := s.EnsureGroup(t.Context(), "brazilsouth"); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err := s.EnsureManagedRedis(t.Context(), "cache", "brazilsouth")
+			if err == nil || !strings.Contains(err.Error(), "brazilsouth") || !strings.Contains(err.Error(), "another region") || !strings.Contains(err.Error(), code) {
+				t.Fatalf("%v", err)
+			}
+		})
 	}
 }

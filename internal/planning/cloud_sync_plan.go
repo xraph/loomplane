@@ -41,7 +41,7 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 		p.actions = append(p.actions, a)
 		p.services[b.Name] = a
 		pin := cfg.CloudPlacement
-		if pin == nil || targetID != "" && pin.TargetID != targetID {
+		if pin == nil || !selectsPlacement(targetID, pin) {
 			continue
 		}
 		if assignment == nil {
@@ -180,6 +180,21 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			}
 		}
 	}
+	// A service redeployed only to refresh a dependency keeps its placement,
+	// but deploys against the reviewed Cloud: a default switch advances the
+	// Cloud revision its old pin recorded.
+	for _, a := range p.actions {
+		if a.Op == Keep || a.Service == nil || a.Service.CloudPlacement == nil || assignment == nil {
+			continue
+		}
+		if _, moved := p.in.CloudPlacements[a.Name]; moved {
+			continue
+		}
+		// A pin that no longer matches is left for the deploy-time check to refuse.
+		if pin, ok := repinCloudPlacement(*a.Service.CloudPlacement, assignment); ok {
+			a.Service.CloudPlacement = &pin
+		}
+	}
 	visiting, done := map[string]bool{}, map[string]bool{}
 	var order func(*Action) int
 	order = func(a *Action) int {
@@ -258,4 +273,30 @@ func snapshotConnections(bindings []*Binding, plan *Plan) []string {
 
 func migrationPlanID(syncID, environmentID string) string {
 	return fmt.Sprintf("%s.%s", syncID, environmentID)
+}
+
+// repinCloudPlacement carries an unchanged placement onto a reviewed
+// assignment. It reports false when the default or target no longer matches.
+func repinCloudPlacement(pin CloudPlacement, assignment *cloudprofiles.Assignment) (CloudPlacement, bool) {
+	if pin.CloudID != assignment.CloudID {
+		return pin, false
+	}
+	if pin.Default {
+		d := assignment.DefaultPlacement
+		if d == nil || d.Provider != pin.Provider || d.ConnectionID != pin.ConnectionID {
+			return pin, false
+		}
+	} else {
+		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.ID == pin.TargetID })
+		if i < 0 {
+			return pin, false
+		}
+		t := assignment.Targets[i]
+		if t.Provider != pin.Provider || t.PoolID != pin.PoolID || t.PoolID == "" && t.ConnectionID != pin.ConnectionID {
+			return pin, false
+		}
+		pin.TargetRevision, pin.TargetName = t.Revision, t.Name
+	}
+	pin.CloudRevision, pin.AssignmentRevision, pin.GrantRevision = assignment.CloudRevision, assignment.Revision, assignment.GrantRevision
+	return pin, true
 }

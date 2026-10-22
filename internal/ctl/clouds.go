@@ -40,7 +40,8 @@ func (a *App) cloudsCommand() cli.Command {
 		cli.WithSubcommand(cli.NewCommand("update", "Rename a Cloud at its expected revision", a.updateCloud, cli.WithUsage("clouds update <project> <cloud-id> --name name --revision 1"), cli.WithFlags(jsonFlag, cloudFlag("name", "Cloud name"), cloudRevisionFlag()))),
 		cli.WithSubcommand(cli.NewCommand("delete", "Delete an unassigned Cloud", a.deleteCloud, cli.WithUsage("clouds delete <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
 		cli.WithSubcommand(cli.NewCommand("assignment", "Show an environment's Cloud and assignment generation", a.cloudAssignment, cli.WithUsage("clouds assignment <project> <environment-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("assign", "Review an environment assignment, then apply with --yes", a.assignCloud, cli.WithUsage("clouds assign <project> <environment-id> --cloud cloud-id --revision 0 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("cloud", "Cloud ID; empty to unassign"), cloudRevisionFlag())...))))
+		cli.WithSubcommand(cli.NewCommand("assign", "Review an environment assignment, then apply with --yes", a.assignCloud, cli.WithUsage("clouds assign <project> <environment-id> --cloud cloud-id --revision 0 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("cloud", "Cloud ID; empty to unassign"), cloudRevisionFlag())...))),
+		cli.WithSubcommand(cli.NewCommand("switch-default", "Review a change to a Cloud's default provider and account, then apply with --yes", a.switchCloudDefault, cli.WithUsage("clouds switch-default <project> <cloud-id> --provider vercel --connection conn-id --revision 3 [--clear] [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("provider", "Destination provider"), cloudFlag("connection", "Destination connection ID"), cloudFlag("region", "Destination region"), cli.NewBoolFlag("clear", "", "Remove the default", false), cloudRevisionFlag())...))))
 }
 func (a *App) cloudTargetsCommand() cli.Command {
 	return cli.NewCommand("cloud-targets", "List the targets in a Cloud", a.listCloudTargets, cli.WithUsage("cloud-targets <project> <cloud-id>"), cli.WithFlag(jsonFlag),
@@ -232,6 +233,25 @@ func (a *App) switchCloudTarget(ctx cli.CommandContext) error {
 		return err
 	}
 	preview, err := c.PreviewCloudChange(ctxOf(ctx), p.ID, client.CloudChangeInput{CloudID: ctx.Arg(1), TargetID: ctx.Arg(2), Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Revision: revision})
+	if err != nil {
+		return err
+	}
+	return a.acceptCloudPreview(ctx, c, p.ID, preview, false)
+}
+func (a *App) switchCloudDefault(ctx cli.CommandContext) error {
+	revision, err := cloudRevision(ctx)
+	if err != nil {
+		return err
+	}
+	in := client.CloudChangeInput{CloudID: ctx.Arg(1), Default: true, Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Revision: revision}
+	if ctx.Bool("clear") == (in.Provider != "") {
+		return fmt.Errorf("name the new --provider and --connection, or pass --clear")
+	}
+	c, p, err := a.cloudClient(ctx, 2)
+	if err != nil {
+		return err
+	}
+	preview, err := c.PreviewCloudChange(ctxOf(ctx), p.ID, in)
 	if err != nil {
 		return err
 	}

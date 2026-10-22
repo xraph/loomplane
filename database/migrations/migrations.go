@@ -34,6 +34,7 @@ func Group() *migrate.Group {
 	g.MustRegister(
 		statements("20261030000200", "catalog_proxy_sessions", catalogProxySessionsUp, catalogProxySessionsDown),
 		statements("20261030000100", "catalog_endpoints", catalogEndpointsUp, catalogEndpointsDown),
+		statements("20261029000500", "cloud_default_switch", cloudDefaultSwitchUp, cloudDefaultSwitchDown),
 		statements("20261029000400", "cloud_tags", cloudTagsUp, cloudTagsDown),
 		statements("20261028000400", "workload_attempt_safety", workloadAttemptSafetyUp, nil),
 		statements("20261028000300", "workload_attempts", workloadAttemptsUp, nil),

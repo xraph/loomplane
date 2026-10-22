@@ -247,6 +247,7 @@ export interface Change {
 export interface ChangeInput {
   cloudId: string;
   connectionId?: string;
+  default?: boolean;
   environmentId?: string;
   poolId?: string;
   provider?: string;
@@ -259,6 +260,7 @@ export interface ChangeInput {
 export interface ChangeInputBody {
   cloudId: string;
   connectionId?: string;
+  default?: boolean;
   environmentId?: string;
   poolId?: string;
   provider?: string;
@@ -1370,8 +1372,10 @@ export interface Preferences {
 export interface Preview {
   after?: Target;
   afterAssignment?: Assignment;
+  afterDefault?: DefaultPlacement;
   before?: Target;
   beforeAssignment?: Assignment;
+  beforeDefault?: DefaultPlacement;
   blockers: string[];
   createdAt: string;
   environments: EnvironmentChange[];
@@ -2183,11 +2187,14 @@ export interface StoredVolume {
 
 export interface Sync {
   after?: Target;
+  afterDefault?: DefaultPlacement;
   attempt: number;
   before?: Target;
+  beforeDefault?: DefaultPlacement;
   cloudId: string;
   createdAt: string;
   createdBy: string;
+  default?: boolean;
   environments: EnvironmentChange[];
   error?: string;
   id: string;
