@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,10 +31,12 @@ import (
 // status, SELECT x returns one row holding x, anything containing "fail"
 // errors, anything containing "die" closes the connection, COPY reads
 // CopyData until CopyDone, and everything else completes with its first word
-// as the tag.
+// as the tag. SELECT $n[::int|::text] AS name, run through Bind, returns
+// the nth bound parameter in a column called name, typed int4 or text.
 type fakePG struct {
 	mu       sync.Mutex
 	log      []string
+	binds    []fakeBind // every Bind the backend read, in order
 	closed   chan struct{}
 	hold     chan struct{} // a statement containing "hold" waits on it mid-result
 	maxConns string        // the answer to SHOW max_connections
@@ -42,6 +47,37 @@ type fakeState struct {
 	skipping bool
 	stmts    map[string]string
 	portals  map[string]string
+	params   map[string][][]byte // bound parameters, by portal
+}
+
+// fakeBind is what one Bind carried.
+type fakeBind struct {
+	params                      [][]byte
+	paramFormats, resultFormats []int16
+}
+
+// bound is every Bind the backend read.
+func (f *fakePG) bound() []fakeBind {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeBind(nil), f.binds...)
+}
+
+var paramSelect = regexp.MustCompile(`^SELECT \$([0-9]+)(::int|::text)? AS ([a-z]+)$`)
+
+// paramColumn describes a SELECT $n AS name statement: the column, and which
+// parameter fills it.
+func paramColumn(q string) (pgproto3.FieldDescription, int, bool) {
+	m := paramSelect.FindStringSubmatch(q)
+	if m == nil {
+		return pgproto3.FieldDescription{}, 0, false
+	}
+	n, _ := strconv.Atoi(m[1])
+	fd := pgproto3.FieldDescription{Name: []byte(m[3]), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1}
+	if m[2] == "::int" {
+		fd.DataTypeOID, fd.DataTypeSize = 23, 4
+	}
+	return fd, n, true
 }
 
 func (f *fakePG) record(msg pgproto3.FrontendMessage) {
@@ -81,7 +117,7 @@ func (f *fakePG) serve(conn net.Conn) {
 	defer close(f.closed)
 	defer conn.Close()
 	b := pgproto3.NewBackend(conn, conn)
-	st := &fakeState{status: 'I', stmts: map[string]string{}, portals: map[string]string{}}
+	st := &fakeState{status: 'I', stmts: map[string]string{}, portals: map[string]string{}, params: map[string][][]byte{}}
 	for {
 		msg, err := b.Receive()
 		if err != nil {
@@ -143,6 +179,16 @@ func (f *fakePG) serve(conn net.Conn) {
 				continue
 			}
 			st.portals[m.DestinationPortal] = q
+			params := make([][]byte, len(m.Parameters))
+			for i, p := range m.Parameters {
+				if p != nil {
+					params[i] = append([]byte{}, p...)
+				}
+			}
+			st.params[m.DestinationPortal] = params
+			f.mu.Lock()
+			f.binds = append(f.binds, fakeBind{params: params, paramFormats: slices.Clone(m.ParameterFormatCodes), resultFormats: slices.Clone(m.ResultFormatCodes)})
+			f.mu.Unlock()
 			b.Send(&pgproto3.BindComplete{})
 		case *pgproto3.Describe:
 			var q string
@@ -157,7 +203,9 @@ func (f *fakePG) serve(conn net.Conn) {
 				st.fail(b, "34000", "portal does not exist")
 				continue
 			}
-			if isSelect(q) {
+			if fd, _, ok := paramColumn(q); ok {
+				b.Send(&pgproto3.RowDescription{Fields: []pgproto3.FieldDescription{fd}})
+			} else if isSelect(q) {
 				b.Send(rowDescription())
 			} else {
 				b.Send(&pgproto3.NoData{})
@@ -166,6 +214,16 @@ func (f *fakePG) serve(conn net.Conn) {
 			q, ok := st.portals[m.Portal]
 			if !ok {
 				st.fail(b, "34000", "portal does not exist")
+				continue
+			}
+			if _, n, ok := paramColumn(q); ok && st.status != 'E' {
+				params := st.params[m.Portal]
+				if n < 1 || n > len(params) {
+					st.fail(b, "08P01", "bind message supplies too few parameters")
+					continue
+				}
+				b.Send(&pgproto3.DataRow{Values: [][]byte{params[n-1]}})
+				b.Send(&pgproto3.CommandComplete{CommandTag: []byte("SELECT 1")})
 				continue
 			}
 			if !f.run(b, st, q, false) {
