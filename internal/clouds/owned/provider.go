@@ -1,6 +1,7 @@
 package owned
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -100,20 +101,34 @@ type JobResult struct {
 const JobOutputLimit = 16 << 10
 
 // JobOutput is the end of what a job wrote, at most JobOutputLimit bytes,
-// with each secret value replaced by "[redacted]". output may run up to the
-// longest secret past the limit, so a secret the cut would split is still
-// found whole.
+// with each secret value replaced by "[redacted]". A value of several
+// lines also has each of its lines replaced wherever it appears, since a
+// target's log tail, which counts lines, can start partway through it.
+// output must start at the start of a line: JobTail.Output makes sure of
+// that for output it cut.
 func JobOutput(output []byte, secrets map[string]string) string {
-	values := slices.Collect(maps.Values(secrets))
-	// The longest first, so a secret containing another isn't left half
-	// shown.
-	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
-	text := string(output)
-	for _, value := range values {
-		if value != "" {
-			text = strings.ReplaceAll(text, value, "[redacted]")
+	var pieces []string
+	for _, value := range secrets {
+		if value == "" {
+			continue
+		}
+		pieces = append(pieces, value)
+		if strings.Contains(value, "\n") {
+			for line := range strings.SplitSeq(value, "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					pieces = append(pieces, line)
+				}
+			}
 		}
 	}
+	// The longest first, so a secret containing another isn't left half
+	// shown.
+	slices.SortFunc(pieces, func(a, b string) int { return len(b) - len(a) })
+	text := string(output)
+	for _, piece := range pieces {
+		text = strings.ReplaceAll(text, piece, "[redacted]")
+	}
+	// Nothing of a secret is left to cut through.
 	if len(text) > JobOutputLimit {
 		text = text[len(text)-JobOutputLimit:]
 	}
@@ -121,11 +136,11 @@ func JobOutput(output []byte, secrets map[string]string) string {
 }
 
 // JobTail keeps the end of a job's output as it's read: JobOutputLimit
-// bytes and the longest secret's length besides, so JobOutput still finds
-// a secret the limit cuts through.
+// bytes and the longest secret's length besides.
 type JobTail struct {
 	keep int
 	data []byte
+	cut  bool
 }
 
 func NewJobTail(secrets map[string]string) *JobTail {
@@ -140,16 +155,30 @@ func (t *JobTail) Write(p []byte) (int, error) {
 	t.data = append(t.data, p...)
 	if len(t.data) > 2*t.keep {
 		t.data = append([]byte(nil), t.data[len(t.data)-t.keep:]...)
+		t.cut = true
 	}
 	return len(p), nil
 }
 
-// Bytes is what's kept.
-func (t *JobTail) Bytes() []byte {
-	if len(t.data) > t.keep {
-		return t.data[len(t.data)-t.keep:]
+// Output is what's kept, as JobOutput gives it. When the start was cut
+// off, what's kept can start inside a secret, where it can't be found to
+// redact, so it starts after the first line break instead: a value
+// without one can't run past it, and the lines of one with them are each
+// redacted.
+func (t *JobTail) Output(secrets map[string]string) string {
+	data := t.data
+	cut := t.cut
+	if len(data) > t.keep {
+		data, cut = data[len(data)-t.keep:], true
 	}
-	return t.data
+	if cut {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			data = data[i+1:]
+		} else {
+			data = nil
+		}
+	}
+	return JobOutput(data, secrets)
 }
 
 type Provider struct {

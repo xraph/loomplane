@@ -151,16 +151,16 @@ func TestServerRunJobRemovesContainerAndRedactsOutput(t *testing.T) {
 }
 
 func TestServerRunJobTimesOut(t *testing.T) {
-	docker := &jobDocker{t: t, hang: true}
+	docker := &jobDocker{t: t, hang: true, logs: dockerFrame(1, "connecting with s3cret-Generated-value\napplying 0003\n")}
 	spec, labels := jobFixture()
 	_, err := docker.runtime(t).RunJob(t.Context(), jobFixtureName, spec, labels, 100*time.Millisecond)
-	if err == nil || err.Error() != "migrate did not finish within 100ms" {
+	if err == nil || err.Error() != "migrate did not finish within 100ms: connecting with [redacted]\napplying 0003\n" {
 		t.Fatalf("timeout: %v", err)
 	}
-	if !docker.called("POST /containers/job_one/kill") || !docker.called("DELETE /containers/job_one?force=1") {
-		t.Fatalf("a job that ran out of time was left behind: %v", docker.requests)
-	}
-	if docker.called("GET /containers/job_one/logs?stdout=1&stderr=1&tail=2000") {
-		t.Fatal("read the output of a job that didn't finish")
+	// Its output is read before it's killed and removed.
+	logs := slices.Index(docker.requests, "GET /containers/job_one/logs?stdout=1&stderr=1&tail=2000")
+	kill := slices.Index(docker.requests, "POST /containers/job_one/kill")
+	if logs < 0 || kill < logs || !docker.called("DELETE /containers/job_one?force=1") {
+		t.Fatalf("a job that ran out of time: %v", docker.requests)
 	}
 }

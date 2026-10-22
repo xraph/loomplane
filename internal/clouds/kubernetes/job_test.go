@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"context"
 	"encoding/pem"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -28,7 +29,8 @@ const jobFixtureName = "lp-job-0123456789ab"
 type jobCluster struct {
 	kube    *fake.Clientset
 	created *batchv1.Job
-	secret  *corev1.Secret
+	// secret is the runtime Secret as last written.
+	secret *corev1.Secret
 }
 
 func newJobCluster(t *testing.T, exitCode int32, finish func(*batchv1.Job)) (*jobCluster, *Runtime) {
@@ -50,6 +52,12 @@ func newJobCluster(t *testing.T, exitCode int32, finish func(*batchv1.Job)) (*jo
 	})
 	cluster.kube.PrependReactor("create", "secrets", func(action kubetesting.Action) (bool, kuberuntime.Object, error) {
 		secret, _ := action.(kubetesting.CreateAction).GetObject().(*corev1.Secret)
+		secret.UID = types.UID("secret-uid")
+		cluster.secret = secret.DeepCopy()
+		return false, nil, nil
+	})
+	cluster.kube.PrependReactor("update", "secrets", func(action kubetesting.Action) (bool, kuberuntime.Object, error) {
+		secret, _ := action.(kubetesting.UpdateAction).GetObject().(*corev1.Secret)
 		cluster.secret = secret.DeepCopy()
 		return false, nil, nil
 	})
@@ -86,20 +94,40 @@ func (c *jobCluster) deletedInBackground() bool {
 	return false
 }
 
+// secretRemoved reports whether the runtime Secret is gone, deleted only
+// if it's still the one this attempt made.
 func (c *jobCluster) secretRemoved(t *testing.T) bool {
 	t.Helper()
 	secrets, err := c.kube.CoreV1().Secrets("selected").List(t.Context(), metav1.ListOptions{})
-	return err == nil && len(secrets.Items) == 0
+	if err != nil || len(secrets.Items) != 0 {
+		return false
+	}
+	for _, action := range c.kube.Actions() {
+		if deleted, ok := action.(kubetesting.DeleteAction); ok && action.GetResource().Resource == "secrets" {
+			uid := deleted.GetDeleteOptions().Preconditions
+			return uid != nil && uid.UID != nil && *uid.UID == "secret-uid"
+		}
+	}
+	return false
 }
 
 func TestKubernetesRunJobCompletes(t *testing.T) {
 	cluster, runtime := newJobCluster(t, 0, func(job *batchv1.Job) { job.Status.Succeeded = 1 })
+	// A read of the running Job that fails once is tried again.
+	failed := false
+	cluster.kube.PrependReactor("get", "jobs", func(kubetesting.Action) (bool, kuberuntime.Object, error) {
+		if failed || cluster.created == nil {
+			return false, nil, nil
+		}
+		failed = true
+		return true, nil, errors.New("connection reset by peer")
+	})
 	spec, labels := kubernetesJobFixture()
 	result, err := runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitCode != 0 || result.Output != "connecting with [redacted]\nmigration 0003 finished\n" {
+	if result.ExitCode != 0 || result.Output != "connecting with [redacted]\nmigration 0003 finished\n" || !failed {
 		t.Fatalf("result: %+v", result)
 	}
 	job := cluster.created
@@ -128,6 +156,11 @@ func TestKubernetesRunJobCompletes(t *testing.T) {
 	}
 	if cluster.secret == nil || string(cluster.secret.Data["ADMIN_PASSWORD"]) != "s3cret-Generated-value" || cluster.secret.Labels[labelJob] != jobFixtureName {
 		t.Fatalf("runtime secret: %+v", cluster.secret)
+	}
+	// The Job owns it, so the cluster removes it with the Job when
+	// Loomplane can't.
+	if owners := cluster.secret.OwnerReferences; len(owners) != 1 || owners[0].Kind != "Job" || owners[0].APIVersion != "batch/v1" || owners[0].Name != jobFixtureName || owners[0].UID != "job-uid" {
+		t.Fatalf("runtime secret owners: %+v", owners)
 	}
 	if !cluster.deletedInBackground() || !cluster.secretRemoved(t) {
 		t.Fatal("a finished job was left behind")
@@ -161,7 +194,7 @@ func TestKubernetesRunJobDeletesFailedJob(t *testing.T) {
 		job.Status.Failed = 1
 		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "DeadlineExceeded"}}
 	})
-	if _, err = runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 10*time.Minute); err == nil || err.Error() != "migrate did not finish within 10m0s" {
+	if _, err = runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 10*time.Minute); err == nil || err.Error() != "migrate did not finish within 10m0s: connecting with [redacted]\nmigration 0003 finished\n" {
 		t.Fatalf("deadline: %v", err)
 	}
 	if !cluster.deletedInBackground() || !cluster.secretRemoved(t) {

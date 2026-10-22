@@ -115,19 +115,36 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 	if waitErr := dockerJSON(wait, c, http.MethodPost, container+"/wait?condition=not-running", nil, &exited); waitErr != nil {
 		if ctx.Err() == nil && errors.Is(wait.Err(), context.DeadlineExceeded) {
 			timedOut = true
-			return result, fmt.Errorf("%s did not finish within %s", component, timeout)
+			// What it wrote so far says where it got to.
+			read, cancelRead := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelRead()
+			return result, jobLate(component, timeout, r.jobOutput(read, c, container, values.Env))
 		}
 		return result, waitErr
 	}
 	if exited.Error != nil && exited.Error.Message != "" {
 		return result, fmt.Errorf("wait for the %s job: %s", component, owned.JobOutput([]byte(exited.Error.Message), values.Env))
 	}
-	output, logErr := r.jobLogs(ctx, c, container, owned.NewJobTail(values.Env))
-	if logErr != nil {
-		// The job ran, so it isn't run again over its output.
-		output = []byte("(its output couldn't be read: " + logErr.Error() + ")")
+	return owned.JobResult{ExitCode: exited.StatusCode, Output: r.jobOutput(ctx, c, container, values.Env)}, nil
+}
+
+// jobLate is the error of a job that ran out of time, with what it wrote.
+func jobLate(component string, timeout time.Duration, output string) error {
+	if output == "" {
+		return fmt.Errorf("%s did not finish within %s", component, timeout)
 	}
-	return owned.JobResult{ExitCode: exited.StatusCode, Output: owned.JobOutput(output, values.Env)}, nil
+	return fmt.Errorf("%s did not finish within %s: %s", component, timeout, output)
+}
+
+// jobOutput is the end of a job container's output, redacted. One that
+// can't be read says so: the job ran, so it isn't run again over its
+// output.
+func (r *Runtime) jobOutput(ctx context.Context, c *Client, container string, secrets map[string]string) string {
+	tail := owned.NewJobTail(secrets)
+	if err := r.jobLogs(ctx, c, container, tail); err != nil {
+		return owned.JobOutput([]byte("(its output couldn't be read: "+err.Error()+")"), secrets)
+	}
+	return tail.Output(secrets)
 }
 
 // removeLeftoverJob removes a container this job's earlier attempt left,
@@ -153,15 +170,15 @@ func (r *Runtime) removeLeftoverJob(ctx context.Context, c *Client, name string,
 }
 
 // jobLogs reads the end of a container's output, stdout and stderr
-// together, keeping what tail keeps.
-func (r *Runtime) jobLogs(ctx context.Context, c *Client, container string, tail *owned.JobTail) ([]byte, error) {
+// together, into tail.
+func (r *Runtime) jobLogs(ctx context.Context, c *Client, container string, tail *owned.JobTail) error {
 	res, err := c.Request(ctx, http.MethodGet, container+"/logs?stdout=1&stderr=1&tail=2000", nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("docker returned HTTP %d", res.StatusCode)
+		return fmt.Errorf("docker returned HTTP %d", res.StatusCode)
 	}
 	// A container without a terminal multiplexes its streams: each frame
 	// has an eight-byte header whose first byte names the stream and whose
@@ -170,24 +187,24 @@ func (r *Runtime) jobLogs(ctx context.Context, c *Client, container string, tail
 	for {
 		header, peekErr := reader.Peek(8)
 		if errors.Is(peekErr, io.EOF) && len(header) == 0 {
-			return tail.Bytes(), nil
+			return nil
 		}
 		if peekErr != nil || header[0] > 2 || header[1] != 0 || header[2] != 0 || header[3] != 0 {
 			// Not a frame: a terminal's raw output.
 			if _, copyErr := io.Copy(tail, reader); copyErr != nil {
-				return nil, copyErr
+				return copyErr
 			}
-			return tail.Bytes(), nil
+			return nil
 		}
 		if _, discardErr := reader.Discard(8); discardErr != nil {
-			return nil, discardErr
+			return discardErr
 		}
 		size := int64(binary.BigEndian.Uint32(header[4:]))
 		if _, copyErr := io.CopyN(tail, reader, size); copyErr != nil {
 			if errors.Is(copyErr, io.EOF) {
-				return tail.Bytes(), nil
+				return nil
 			}
-			return nil, copyErr
+			return copyErr
 		}
 	}
 }

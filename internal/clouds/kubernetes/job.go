@@ -128,14 +128,18 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 	old, err := secrets.Get(ctx, runtimeSecret.Name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		_, err = secrets.Create(ctx, runtimeSecret, metav1.CreateOptions{})
 	case err != nil:
+		return result, err
 	case checkJobOwner(old, identity) != nil:
 		return result, ErrOwned
 	default:
-		runtimeSecret.ResourceVersion = old.ResourceVersion
-		_, err = secrets.Update(ctx, runtimeSecret, metav1.UpdateOptions{})
+		// An earlier attempt's. This attempt makes its own, which only its
+		// own cleanup deletes.
+		if deleteErr := secrets.Delete(ctx, old.Name, deleteOwnedOptions(old)); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+			return result, deleteErr
+		}
 	}
+	kept, err := secrets.Create(ctx, runtimeSecret, metav1.CreateOptions{})
 	if err != nil {
 		return result, err
 	}
@@ -151,7 +155,7 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 				err = errors.Join(err, fmt.Errorf("delete the %s job: %w", component, deleteErr))
 			}
 		}
-		if deleteErr := secrets.Delete(cleanup, runtimeSecret.Name, metav1.DeleteOptions{}); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+		if deleteErr := secrets.Delete(cleanup, kept.Name, deleteOwnedOptions(kept)); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
 			err = errors.Join(err, fmt.Errorf("delete the %s job's runtime values: %w", component, deleteErr))
 		}
 	}()
@@ -172,18 +176,36 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 		created = nil
 		return result, err
 	}
-	finished, err := r.waitJob(ctx, c, created, component, timeout)
+	// The Job owns its runtime values, so the cluster deletes them with
+	// it when Loomplane can't.
+	kept.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: created.Name, UID: created.UID}}
+	updated, err := secrets.Update(ctx, kept, metav1.UpdateOptions{})
 	if err != nil {
 		return result, err
 	}
-	exitCode, output := r.jobPod(ctx, c, finished, spec.Name, owned.NewJobTail(values.Env))
-	if succeeded(finished) {
-		return owned.JobResult{ExitCode: 0, Output: owned.JobOutput(output, values.Env)}, nil
+	kept = updated
+	finished, late, err := r.waitJob(ctx, c, created, component, timeout)
+	if err != nil {
+		return result, err
 	}
-	if exitCode == 0 {
-		return result, fmt.Errorf("the %s job failed: %s", component, owned.JobOutput(output, values.Env))
+	exitCode, output := r.jobPod(ctx, c, finished, spec.Name, values.Env)
+	switch {
+	case late:
+		return result, jobLate(component, timeout, output)
+	case succeeded(finished):
+		return owned.JobResult{ExitCode: 0, Output: output}, nil
+	case exitCode == 0:
+		return result, fmt.Errorf("the %s job failed: %s", component, output)
 	}
-	return owned.JobResult{ExitCode: exitCode, Output: owned.JobOutput(output, values.Env)}, nil
+	return owned.JobResult{ExitCode: exitCode, Output: output}, nil
+}
+
+// jobLate is the error of a job that ran out of time, with what it wrote.
+func jobLate(component string, timeout time.Duration, output string) error {
+	if output == "" {
+		return fmt.Errorf("%s did not finish within %s", component, timeout)
+	}
+	return fmt.Errorf("%s did not finish within %s: %s", component, timeout, output)
 }
 
 func succeeded(job *batchv1.Job) bool {
@@ -198,52 +220,53 @@ func succeeded(job *batchv1.Job) bool {
 	return false
 }
 
-// waitJob polls a Job each second until it succeeds or fails. One the
-// cluster stopped at its deadline, or still running well past it, didn't
-// finish.
-func (r *Runtime) waitJob(ctx context.Context, c *Client, created *batchv1.Job, component string, timeout time.Duration) (*batchv1.Job, error) {
-	late := fmt.Errorf("%s did not finish within %s", component, timeout)
+// waitJob polls a Job each second until it succeeds or fails. late is a
+// Job the cluster stopped at its deadline, or still running well past it.
+// A failed read is tried again until then.
+func (r *Runtime) waitJob(ctx context.Context, c *Client, created *batchv1.Job, component string, timeout time.Duration) (job *batchv1.Job, late bool, err error) {
 	deadline := time.Now().Add(timeout + time.Minute)
 	for {
-		job, err := c.Kube.BatchV1().Jobs(created.Namespace).Get(ctx, created.Name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) || err == nil && created.UID != "" && job.UID != created.UID {
-			return nil, fmt.Errorf("the %s job was deleted before it finished", component)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if succeeded(job) {
-			return job, nil
-		}
-		for _, condition := range job.Status.Conditions {
-			if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
-				if condition.Reason == batchv1.JobReasonDeadlineExceeded {
-					return nil, late
-				}
-				return job, nil
+		job, err = c.Kube.BatchV1().Jobs(created.Namespace).Get(ctx, created.Name, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err) || err == nil && created.UID != "" && job.UID != created.UID:
+			return nil, false, fmt.Errorf("the %s job was deleted before it finished", component)
+		case err != nil:
+			if time.Now().After(deadline) {
+				return nil, false, err
 			}
-		}
-		if job.Status.Failed > 0 {
-			return job, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, late
+		case succeeded(job):
+			return job, false, nil
+		default:
+			for _, condition := range job.Status.Conditions {
+				if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
+					return job, condition.Reason == batchv1.JobReasonDeadlineExceeded, nil
+				}
+			}
+			if job.Status.Failed > 0 {
+				return job, false, nil
+			}
+			if time.Now().After(deadline) {
+				return job, true, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, false, ctx.Err()
 		case <-time.After(time.Second):
 		}
 	}
 }
 
 // jobPod reads how a finished Job's pod ended: its container's exit code
-// and the end of its log, keeping what tail keeps. A log that can't be
-// read says so, rather than fail a job that ran.
-func (r *Runtime) jobPod(ctx context.Context, c *Client, job *batchv1.Job, container string, tail *owned.JobTail) (exitCode int, output []byte) {
+// and the end of its log, redacted. A log that can't be read says so,
+// rather than fail a job that ran.
+func (r *Runtime) jobPod(ctx context.Context, c *Client, job *batchv1.Job, container string, secrets map[string]string) (exitCode int, output string) {
+	unread := func(err error) string {
+		return owned.JobOutput([]byte("(its output couldn't be read: "+err.Error()+")"), secrets)
+	}
 	pods, err := c.Kube.CoreV1().Pods(job.Namespace).List(ctx, metav1.ListOptions{LabelSelector: labelJob + "=" + job.Name})
 	if err != nil {
-		return 0, []byte("(its output couldn't be read: " + err.Error() + ")")
+		return 0, unread(err)
 	}
 	var pod *corev1.Pod
 	for i := range pods.Items {
@@ -256,7 +279,7 @@ func (r *Runtime) jobPod(ctx context.Context, c *Client, job *batchv1.Job, conta
 		}
 	}
 	if pod == nil {
-		return 0, []byte("(its pod is gone, so its output couldn't be read)")
+		return 0, "(its pod is gone, so its output couldn't be read)"
 	}
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.Name == container && status.State.Terminated != nil {
@@ -266,13 +289,14 @@ func (r *Runtime) jobPod(ctx context.Context, c *Client, job *batchv1.Job, conta
 	lines := int64(2000)
 	stream, err := c.Kube.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{Container: container, TailLines: &lines}).Stream(ctx)
 	if err != nil {
-		return exitCode, []byte("(its output couldn't be read: " + err.Error() + ")")
+		return exitCode, unread(err)
 	}
 	defer stream.Close()
+	tail := owned.NewJobTail(secrets)
 	if _, err = io.Copy(tail, stream); err != nil {
-		return exitCode, []byte("(its output couldn't be read: " + err.Error() + ")")
+		return exitCode, unread(err)
 	}
-	return exitCode, tail.Bytes()
+	return exitCode, tail.Output(secrets)
 }
 
 func ownedBy(pod *corev1.Pod, job *batchv1.Job) bool {
