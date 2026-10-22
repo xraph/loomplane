@@ -1,6 +1,7 @@
 // Package dbgateway is the Forge extension for the database gateway's
 // control plane: the endpoints each deployed gateway polls for its signed
-// routing snapshot, reports to and asks for holds.
+// routing snapshot, reports to and asks for holds, and the project routes
+// that list gateways and pause and resume their routes.
 package dbgateway
 
 import (
@@ -10,15 +11,18 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
 
+	"github.com/xraph/loomplane/extensions/identity"
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/dbgateway"
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/deployments"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // Name is the extension's name.
@@ -40,9 +44,10 @@ func New(cfg config.Config) *Extension {
 }
 
 // Dependencies implements forge.Extension. Planning owns the Vault service
-// resource addresses are kept in.
+// resource addresses are kept in; identity guards the project routes and
+// keeps the audit trail.
 func (e *Extension) Dependencies() []string {
-	return []string{planningext.Name}
+	return []string{identity.Name, planningext.Name}
 }
 
 // Register builds the service and mounts the routes. Without a signing key
@@ -60,6 +65,18 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("the database gateway needs the planning extension's resource secrets: %w", err)
 	}
+	authz, err := forge.InjectType[*security.Authorizer](c)
+	if err != nil {
+		return fmt.Errorf("the database gateway needs the identity extension: %w", err)
+	}
+	guard, err := forge.InjectType[identity.Guard](c)
+	if err != nil {
+		return fmt.Errorf("the database gateway needs the identity extension: %w", err)
+	}
+	audit, err := forge.InjectType[*chronicle.Chronicle](c)
+	if err != nil {
+		return fmt.Errorf("the database gateway needs the audit trail: %w", err)
+	}
 	var key ed25519.PrivateKey
 	var trust plane.TrustKey
 	if path := e.cfg.DBGateway.SigningKeyFile; path != "" {
@@ -70,6 +87,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		e.Logger().Warn("dbgateway.signing_key_file isn't set: the database gateway endpoints answer 503")
 	}
 	e.svc = dbgateway.NewService(dbgateway.NewStore(pgdriver.Unwrap(db)), resourceURLs{secrets: secrets}, key, trust, time.Now)
+	e.svc.Authz = authz
+	e.svc.Audit = auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}
 	e.svc.OnSkip = func(gatewayID string, skipped []dbgateway.Skipped) {
 		for _, s := range skipped {
 			e.Logger().Warn("a database gateway route is left out of its snapshot",
@@ -80,16 +99,38 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide the database gateway service: %w", err)
 	}
-	return mount(fapp.Router(), &handlers{
+	if err := mount(fapp.Router(), &handlers{
 		svc: e.svc, wait: pollWait, every: pollEvery, now: time.Now,
 		warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) },
-	})
+	}); err != nil {
+		return err
+	}
+	return mountManagement(fapp.Router(), guard, e.svc)
 }
 
 // Start has nothing to start.
 func (e *Extension) Start(context.Context) error {
 	e.MarkStarted()
 	return nil
+}
+
+// auditor records route pauses and resumes in Chronicle, in the
+// organization's stream: the route and its resource, never its salt.
+type auditor struct {
+	chronicle *chronicle.Chronicle
+	appID     string
+	log       forge.Logger
+}
+
+var _ dbgateway.Auditor = auditor{}
+
+func (a auditor) Record(ctx context.Context, action string, p security.Principal, route *dbgateway.RouteRecord) {
+	err := a.chronicle.Info(ctx, action, "db_gateway_route", route.ID).
+		Category("database_gateways").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
+		Meta("resource", route.Resource).Meta("state", route.State).Record()
+	if err != nil {
+		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
+	}
 }
 
 // resourceURLs reads resource addresses from the Vault resource secrets the

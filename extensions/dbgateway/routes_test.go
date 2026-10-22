@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/dbgateway"
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // fakeGateways stands in for *dbgateway.Service. A request verifies when
@@ -282,5 +285,169 @@ func TestGatewayRoutesCapTheBody(t *testing.T) {
 	exact = append(append([]byte("{"), exact...), '}')
 	if out := call(t, r, http.MethodPost, "/api/v1/db-gateways/dbgw_1/report", "dbgw_1", exact); out.Code != http.StatusOK {
 		t.Fatalf("a 1 MiB body: %d %q", out.Code, out.Body.String())
+	}
+}
+
+// fakeManagement stands in for the service's management methods, and
+// remembers each call.
+type fakeManagement struct {
+	mu    sync.Mutex
+	err   error
+	list  []dbgateway.GatewayStatus
+	calls []string
+}
+
+func (f *fakeManagement) ProjectGateways(_ context.Context, p security.Principal, project string) ([]dbgateway.GatewayStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "list "+project+" "+p.UserID)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.list, nil
+}
+
+func (f *fakeManagement) SetRouteState(_ context.Context, p security.Principal, project, gatewayID, routeID, state string) (*dbgateway.RouteSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, strings.Join([]string{"state", project, gatewayID, routeID, state, p.UserID}, " "))
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &dbgateway.RouteSummary{ID: routeID, GatewayID: gatewayID, Resource: "orders", State: state}, nil
+}
+
+func managementRouter(t *testing.T, f *fakeManagement) forge.Router {
+	t.Helper()
+	r := forge.NewRouter()
+	if err := mountManagement(r, nil, f); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// callAs makes a request as user, or with no principal when user is "".
+func callAs(t *testing.T, r forge.Router, method, uri, user string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), method, uri, nil)
+	if user != "" {
+		req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org_1", UserID: user}))
+	}
+	out := httptest.NewRecorder()
+	r.ServeHTTP(out, req)
+	return out
+}
+
+func TestListGatewaysRoute(t *testing.T) {
+	seen := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	f := &fakeManagement{list: []dbgateway.GatewayStatus{{
+		ID: "dbgw_1", EnvironmentID: "env_1", Name: "main", Provider: "cloud-run", Region: "us-central1", SnapshotVersion: 3,
+		Routes: []dbgateway.RouteStatus{{ID: "dbgr_1", Resource: "orders", State: "active", Reported: true, Reachable: true, BackendConns: 7, MaxConnections: 100, PinRate: 0.25}},
+		Instances: []dbgateway.InstanceStatus{{
+			ID: "i-1", SnapshotVersion: 2, LastSeenAt: seen, Reporting: true, Behind: true,
+			Routes: []dbgateway.InstanceRouteStats{{RouteID: "dbgr_1", BackendConns: 7, MaxConnections: 100, PinRate: 0.25, Reachable: true}},
+		}},
+	}}}
+	r := managementRouter(t, f)
+	out := callAs(t, r, http.MethodGet, "/api/v1/projects/proj_1/db-gateways", "usr_1")
+	if out.Code != http.StatusOK {
+		t.Fatalf("got %d %q", out.Code, out.Body.String())
+	}
+	var body struct {
+		Gateways []struct {
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+			Provider        string `json:"provider"`
+			Region          string `json:"region"`
+			SnapshotVersion uint64 `json:"snapshot_version"`
+			Routes          []struct {
+				Resource     string  `json:"resource"`
+				State        string  `json:"state"`
+				Reachable    bool    `json:"reachable"`
+				BackendConns int     `json:"backend_conns"`
+				MaxConns     int     `json:"max_connections"`
+				PinRate      float64 `json:"pin_rate"`
+			} `json:"routes"`
+			Instances []struct {
+				SnapshotVersion uint64    `json:"snapshot_version"`
+				LastSeenAt      time.Time `json:"last_seen_at"`
+				Draining        bool      `json:"draining"`
+				Behind          bool      `json:"behind"`
+				Routes          []struct {
+					RouteID string `json:"route_id"`
+				} `json:"routes"`
+			} `json:"instances"`
+		} `json:"gateways"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Gateways) != 1 {
+		t.Fatalf("body %s", out.Body.String())
+	}
+	g := body.Gateways[0]
+	if g.ID != "dbgw_1" || g.Name != "main" || g.Provider != "cloud-run" || g.Region != "us-central1" || g.SnapshotVersion != 3 ||
+		len(g.Routes) != 1 || g.Routes[0].Resource != "orders" || g.Routes[0].BackendConns != 7 || g.Routes[0].MaxConns != 100 ||
+		g.Routes[0].PinRate != 0.25 || !g.Routes[0].Reachable || g.Routes[0].State != "active" ||
+		len(g.Instances) != 1 || !g.Instances[0].Behind || g.Instances[0].SnapshotVersion != 2 || !g.Instances[0].LastSeenAt.Equal(seen) ||
+		len(g.Instances[0].Routes) != 1 || g.Instances[0].Routes[0].RouteID != "dbgr_1" {
+		t.Fatalf("body %s", out.Body.String())
+	}
+	if f.calls[0] != "list proj_1 usr_1" {
+		t.Fatalf("calls %v", f.calls)
+	}
+}
+
+func TestPauseAndResumeRoutes(t *testing.T) {
+	f := &fakeManagement{}
+	r := managementRouter(t, f)
+	for _, c := range []struct{ verb, state string }{{"pause", "paused"}, {"resume", "active"}} {
+		out := callAs(t, r, http.MethodPost, "/api/v1/projects/proj_1/db-gateways/dbgw_1/routes/dbgr_1/"+c.verb, "usr_admin")
+		if out.Code != http.StatusOK {
+			t.Fatalf("%s: %d %q", c.verb, out.Code, out.Body.String())
+		}
+		var got dbgateway.RouteSummary
+		if err := json.Unmarshal(out.Body.Bytes(), &got); err != nil || got != (dbgateway.RouteSummary{ID: "dbgr_1", GatewayID: "dbgw_1", Resource: "orders", State: c.state}) {
+			t.Fatalf("%s answered %q: %v", c.verb, out.Body.String(), err)
+		}
+	}
+	want := []string{"state proj_1 dbgw_1 dbgr_1 paused usr_admin", "state proj_1 dbgw_1 dbgr_1 active usr_admin"}
+	if !slices.Equal(f.calls, want) {
+		t.Fatalf("calls %v, want %v", f.calls, want)
+	}
+}
+
+// The management routes answer the service's refusals with their status,
+// and a request with no principal never reaches the service.
+func TestManagementRouteErrors(t *testing.T) {
+	paths := []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/projects/proj_1/db-gateways"},
+		{http.MethodPost, "/api/v1/projects/proj_1/db-gateways/dbgw_1/routes/dbgr_1/pause"},
+		{http.MethodPost, "/api/v1/projects/proj_1/db-gateways/dbgw_1/routes/dbgr_1/resume"},
+	}
+	f := &fakeManagement{}
+	r := managementRouter(t, f)
+	for _, p := range paths {
+		if out := callAs(t, r, p.method, p.path, ""); out.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s with no principal: %d", p.method, p.path, out.Code)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("calls %v", f.calls)
+	}
+	for _, c := range []struct {
+		err  error
+		want int
+	}{
+		{fmt.Errorf("%w (infrastructure:modify)", security.ErrForbidden), http.StatusForbidden},
+		{fmt.Errorf("%w: route dbgr_1", dbgateway.ErrNotFound), http.StatusNotFound},
+		{fmt.Errorf("%w: route state", dbgateway.ErrInvalid), http.StatusUnprocessableEntity},
+	} {
+		f.err = c.err
+		for _, p := range paths {
+			if out := callAs(t, r, p.method, p.path, "usr_viewer"); out.Code != c.want {
+				t.Fatalf("%s %s on %v: %d, want %d", p.method, p.path, c.err, out.Code, c.want)
+			}
+		}
 	}
 }

@@ -11,8 +11,10 @@ import (
 
 	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/dbgateway"
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 const (
@@ -59,6 +61,89 @@ func mount(r forge.Router, h *handlers) error {
 	}
 	return r.POST("/api/v1/db-gateways/:id/hold", h.hold,
 		forge.WithName("dbgateway.hold"), forge.WithSchemaExclude())
+}
+
+// management is what the project routes need from *dbgateway.Service.
+type management interface {
+	ProjectGateways(ctx context.Context, p security.Principal, project string) ([]dbgateway.GatewayStatus, error)
+	SetRouteState(ctx context.Context, p security.Principal, project, gatewayID, routeID, state string) (*dbgateway.RouteSummary, error)
+}
+
+var _ management = (*dbgateway.Service)(nil)
+
+// GatewayList is a project's database gateways.
+type GatewayList struct {
+	Gateways []dbgateway.GatewayStatus `json:"gateways"`
+}
+
+// ForgeEnvelope tells the generated client the list wraps Gateways.
+func (GatewayList) ForgeEnvelope() forge.EnvelopeDef {
+	return forge.EnvelopeDef{ItemsField: "gateways"}
+}
+
+// mountManagement registers the project routes a dashboard uses: listing
+// the project's gateways, and pausing and resuming a route. They're behind
+// the guard, and the service checks the caller's role.
+func mountManagement(r forge.Router, guard identity.Guard, m management) error {
+	group := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Database gateways"))
+	if err := group.GET("/projects/:id/db-gateways", func(c forge.Context) error {
+		p, err := principal(c)
+		if err != nil {
+			return err
+		}
+		list, err := m.ProjectGateways(c.Request().Context(), p, c.Param("id"))
+		if err != nil {
+			return fail(err)
+		}
+		return c.JSON(http.StatusOK, GatewayList{Gateways: list})
+	}, forge.WithName("dbGateways.list"),
+		forge.WithResponseSchema(http.StatusOK, "The project's database gateways, their instances and route metrics", GatewayList{})); err != nil {
+		return err
+	}
+	if err := group.POST("/projects/:id/db-gateways/:gatewayId/routes/:routeId/pause", setState(m, "paused"),
+		forge.WithName("dbGateways.pauseRoute"),
+		forge.WithResponseSchema(http.StatusOK, "The paused route", dbgateway.RouteSummary{})); err != nil {
+		return err
+	}
+	return group.POST("/projects/:id/db-gateways/:gatewayId/routes/:routeId/resume", setState(m, "active"),
+		forge.WithName("dbGateways.resumeRoute"),
+		forge.WithResponseSchema(http.StatusOK, "The resumed route", dbgateway.RouteSummary{}))
+}
+
+func setState(m management, state string) func(forge.Context) error {
+	return func(c forge.Context) error {
+		p, err := principal(c)
+		if err != nil {
+			return err
+		}
+		route, err := m.SetRouteState(c.Request().Context(), p, c.Param("id"), c.Param("gatewayId"), c.Param("routeId"), state)
+		if err != nil {
+			return fail(err)
+		}
+		return c.JSON(http.StatusOK, route)
+	}
+}
+
+func principal(c forge.Context) (security.Principal, error) {
+	p, ok := security.PrincipalFrom(c.Request().Context())
+	if !ok {
+		return p, forge.NewHTTPError(http.StatusUnauthorized, security.ErrUnauthenticated.Error())
+	}
+	return p, nil
+}
+
+// fail maps a management error to its HTTP response.
+func fail(err error) error {
+	switch {
+	case errors.Is(err, dbgateway.ErrNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, err.Error())
+	case errors.Is(err, dbgateway.ErrInvalid):
+		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
+	}
+	if status := security.StatusFor(err); status != http.StatusInternalServerError {
+		return forge.NewHTTPError(status, err.Error())
+	}
+	return err
 }
 
 type errorBody struct {

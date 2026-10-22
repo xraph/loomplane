@@ -4240,6 +4240,135 @@
         }
       }
     },
+    "/api/v1/projects/{id}/db-gateways": {
+      "get": {
+        "tags": [
+          "Database gateways"
+        ],
+        "operationId": "dbGateways.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project's database gateways, their instances and route metrics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/db-gateways/{gatewayId}/routes/{routeId}/pause": {
+      "post": {
+        "tags": [
+          "Database gateways"
+        ],
+        "operationId": "dbGateways.pauseRoute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "description": "Path parameter: gatewayId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The paused route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/db-gateways/{gatewayId}/routes/{routeId}/resume": {
+      "post": {
+        "tags": [
+          "Database gateways"
+        ],
+        "operationId": "dbGateways.resumeRoute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "description": "Path parameter: gatewayId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resumed route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/deployments": {
       "get": {
         "tags": [
@@ -8438,6 +8567,49 @@
           }
         }
       },
+      "DatabaseGateway": {
+        "type": "object",
+        "properties": {
+          "cloud_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "environments": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      },
+      "DatabaseGatewayConfig": {
+        "type": "object",
+        "required": [
+          "name",
+          "suffix",
+          "resources"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suffix": {
+            "type": "string"
+          }
+        }
+      },
       "DecideInputBody": {
         "type": "object",
         "properties": {
@@ -8945,6 +9117,9 @@
           "from": {
             "type": "string"
           },
+          "gateway": {
+            "type": "boolean"
+          },
           "key": {
             "type": "string"
           },
@@ -9188,6 +9363,21 @@
           }
         }
       },
+      "GatewayList": {
+        "properties": {
+          "gateways": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayStatus"
+            }
+          }
+        },
+        "required": [
+          "gateways"
+        ],
+        "type": "object",
+        "x-forge-envelope": "gateways"
+      },
       "GatewayRoute": {
         "properties": {
           "env": {
@@ -9210,6 +9400,51 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/gateway.Route"
+      },
+      "GatewayStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "environment_id",
+          "name",
+          "provider",
+          "region",
+          "snapshot_version",
+          "routes",
+          "instances"
+        ],
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "instances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceStatus"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RouteStatus"
+            }
+          },
+          "snapshot_version": {
+            "type": "integer"
+          }
+        }
       },
       "GitHubInstallation": {
         "type": "object",
@@ -9449,6 +9684,80 @@
           }
         }
       },
+      "InstanceRouteStats": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "backend_conns",
+          "max_connections",
+          "pinned",
+          "pin_rate",
+          "wait_p95_ms",
+          "reachable"
+        ],
+        "properties": {
+          "backend_conns": {
+            "type": "integer"
+          },
+          "max_connections": {
+            "type": "integer"
+          },
+          "pin_rate": {
+            "type": "number"
+          },
+          "pinned": {
+            "type": "integer"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "wait_p95_ms": {
+            "type": "integer"
+          }
+        }
+      },
+      "InstanceStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "snapshot_version",
+          "last_seen_at",
+          "draining",
+          "reporting",
+          "behind",
+          "routes"
+        ],
+        "properties": {
+          "behind": {
+            "type": "boolean"
+          },
+          "draining": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reporting": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceRouteStats"
+            }
+          },
+          "snapshot_version": {
+            "type": "integer"
+          }
+        }
+      },
       "Log": {
         "type": "object",
         "required": [
@@ -9636,6 +9945,9 @@
           "version"
         ],
         "properties": {
+          "database_gateway": {
+            "$ref": "#/components/schemas/DatabaseGateway"
+          },
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
           },
@@ -12412,6 +12724,68 @@
           }
         }
       },
+      "RouteStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "resource",
+          "state",
+          "reported",
+          "reachable",
+          "backend_conns",
+          "max_connections",
+          "pin_rate"
+        ],
+        "properties": {
+          "backend_conns": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "max_connections": {
+            "type": "integer"
+          },
+          "pin_rate": {
+            "type": "number"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "reported": {
+            "type": "boolean"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "RouteSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "gateway_id",
+          "resource",
+          "state"
+        ],
+        "properties": {
+          "gateway_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
       "RouteTTLInputBody": {
         "type": "object",
         "required": [
@@ -12532,6 +12906,9 @@
               "version"
             ],
             "properties": {
+              "database_gateway": {
+                "$ref": "#/components/schemas/DatabaseGateway"
+              },
               "defaults": {
                 "$ref": "#/components/schemas/Defaults"
               },
@@ -13091,6 +13468,9 @@
           },
           "context": {
             "type": "string"
+          },
+          "database_gateway": {
+            "$ref": "#/components/schemas/DatabaseGatewayConfig"
           },
           "ecosystem": {
             "type": "string"

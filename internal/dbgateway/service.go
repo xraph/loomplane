@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 var (
@@ -52,12 +54,28 @@ type ResourceURLs interface {
 
 // storage is what the service needs from Store.
 type storage interface {
+	Gateway(ctx context.Context, org, id string) (*Gateway, error)
 	GatewayByID(ctx context.Context, id string) (*Gateway, error)
+	Gateways(ctx context.Context, org, environmentID string) ([]Gateway, error)
 	Routes(ctx context.Context, org, gatewayID string) ([]RouteRecord, error)
+	SetRouteState(ctx context.Context, org, gatewayID, routeID, state string) error
 	BumpSnapshot(ctx context.Context, org, gatewayID, digest string) (uint64, bool, error)
 	LatestSnapshot(ctx context.Context, org, gatewayID string) (uint64, string, error)
 	RaiseSnapshotVersion(ctx context.Context, org, gatewayID, digest string, atLeast uint64) (uint64, error)
 	Report(ctx context.Context, org, gatewayID string, r plane.Report, now time.Time) (int, error)
+	Instances(ctx context.Context, org, gatewayID string) ([]InstanceRecord, error)
+}
+
+// Authorizer checks a caller's role, as *security.Authorizer does.
+type Authorizer interface {
+	Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error
+}
+
+// Auditor records route pauses and resumes. The route it's given still
+// carries its salt, which must not be recorded, and recording must not fail
+// the change.
+type Auditor interface {
+	Record(ctx context.Context, action string, p security.Principal, route *RouteRecord)
 }
 
 // Service is the control plane's side of the gateway protocol: it compiles
@@ -75,6 +93,11 @@ type Service struct {
 	// OnSkip, when set, hears about the routes a snapshot left out each
 	// time a gateway's snapshot changes.
 	OnSkip func(gatewayID string, skipped []Skipped)
+	// Authz checks the callers of the management methods, ProjectGateways
+	// and SetRouteState. Without it they refuse everyone.
+	Authz Authorizer
+	// Audit, when set, records each pause and resume.
+	Audit Auditor
 }
 
 // NewService returns the service. A nil key leaves it unconfigured: it signs
@@ -233,6 +256,204 @@ func (s *Service) Report(ctx context.Context, gw *Gateway, r plane.Report) (plan
 // always returns ErrNoHoldHandler.
 func (s *Service) Hold(context.Context, *Gateway, plane.Label) error {
 	return ErrNoHoldHandler
+}
+
+// The audit actions of SetRouteState.
+const (
+	AuditRoutePause  = "dbGateway.route.pause"
+	AuditRouteResume = "dbGateway.route.resume"
+)
+
+// GatewayStatus is one gateway as a project's members see it. It carries no
+// keys, salts, addresses or credentials.
+type GatewayStatus struct {
+	ID            string `json:"id"`
+	EnvironmentID string `json:"environment_id"`
+	Name          string `json:"name"`
+	Provider      string `json:"provider"`
+	Region        string `json:"region"`
+	// SnapshotVersion is the latest snapshot version, 0 before the first.
+	SnapshotVersion uint64           `json:"snapshot_version"`
+	Routes          []RouteStatus    `json:"routes"`
+	Instances       []InstanceStatus `json:"instances"`
+}
+
+// RouteStatus is one route with the metrics its live instances last
+// reported: the most backend connections any of them holds, and the
+// reachability, connection limit and pin rate from the one that reported
+// last. Reported is false when no live instance reported the route.
+type RouteStatus struct {
+	ID             string  `json:"id"`
+	Resource       string  `json:"resource"`
+	State          string  `json:"state"`
+	Reported       bool    `json:"reported"`
+	Reachable      bool    `json:"reachable"`
+	BackendConns   int     `json:"backend_conns"`
+	MaxConnections int     `json:"max_connections"`
+	PinRate        float64 `json:"pin_rate"`
+}
+
+// InstanceStatus is one running gateway instance seen in the last hour.
+// Reporting is false once its last report is over 30 seconds old, and
+// Behind is true while it holds an older snapshot than the latest.
+type InstanceStatus struct {
+	ID              string               `json:"id"`
+	SnapshotVersion uint64               `json:"snapshot_version"`
+	LastSeenAt      time.Time            `json:"last_seen_at"`
+	Draining        bool                 `json:"draining"`
+	Reporting       bool                 `json:"reporting"`
+	Behind          bool                 `json:"behind"`
+	Routes          []InstanceRouteStats `json:"routes"`
+}
+
+// InstanceRouteStats is what one instance last reported about one route.
+type InstanceRouteStats struct {
+	RouteID        string  `json:"route_id"`
+	BackendConns   int     `json:"backend_conns"`
+	MaxConnections int     `json:"max_connections"`
+	Pinned         int     `json:"pinned"`
+	PinRate        float64 `json:"pin_rate"`
+	WaitP95Millis  int64   `json:"wait_p95_ms"`
+	Reachable      bool    `json:"reachable"`
+}
+
+// RouteSummary is a route after a pause or resume.
+type RouteSummary struct {
+	ID        string `json:"id"`
+	GatewayID string `json:"gateway_id"`
+	Resource  string `json:"resource"`
+	State     string `json:"state"`
+}
+
+// require checks p through Authz, refusing everyone when there's none.
+func (s *Service) require(ctx context.Context, p security.Principal, perm security.Permission, project string) error {
+	if s.Authz == nil {
+		return fmt.Errorf("%w (%s): no authorizer", security.ErrForbidden, perm.Name())
+	}
+	return s.Authz.Require(ctx, p, perm, project)
+}
+
+// ProjectGateways lists the project's gateways, oldest first, for anyone who
+// may read its infrastructure.
+func (s *Service) ProjectGateways(ctx context.Context, p security.Principal, project string) ([]GatewayStatus, error) {
+	if err := s.require(ctx, p, security.InfrastructureRead, project); err != nil {
+		return nil, err
+	}
+	all, err := s.store.Gateways(ctx, p.OrgID, "")
+	if err != nil {
+		return nil, err
+	}
+	now := s.now()
+	out := []GatewayStatus{}
+	for i := range all {
+		if all[i].ProjectID != project {
+			continue
+		}
+		st, err := s.gatewayStatus(ctx, &all[i], now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, nil
+}
+
+func (s *Service) gatewayStatus(ctx context.Context, gw *Gateway, now time.Time) (GatewayStatus, error) {
+	latest, _, err := s.store.LatestSnapshot(ctx, gw.OrgID, gw.ID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return GatewayStatus{}, err
+	}
+	routes, err := s.store.Routes(ctx, gw.OrgID, gw.ID)
+	if err != nil {
+		return GatewayStatus{}, err
+	}
+	instances, err := s.store.Instances(ctx, gw.OrgID, gw.ID)
+	if err != nil {
+		return GatewayStatus{}, err
+	}
+	st := GatewayStatus{
+		ID: gw.ID, EnvironmentID: gw.EnvironmentID, Name: gw.Name, Provider: gw.Provider, Region: gw.Region,
+		SnapshotVersion: latest, Routes: make([]RouteStatus, 0, len(routes)), Instances: []InstanceStatus{},
+	}
+	// Per route, the live instance that reported it last.
+	last := map[string]time.Time{}
+	stats := map[string]*RouteStatus{}
+	for _, r := range routes {
+		st.Routes = append(st.Routes, RouteStatus{ID: r.ID, Resource: r.Resource, State: r.State})
+	}
+	for i := range st.Routes {
+		stats[st.Routes[i].ID] = &st.Routes[i]
+	}
+	for _, in := range instances {
+		if !in.LastSeenAt.After(now.Add(-instanceRetention)) {
+			continue
+		}
+		live := in.LastSeenAt.After(now.Add(-liveWindow))
+		is := InstanceStatus{
+			ID: in.InstanceID, SnapshotVersion: in.SnapshotVersion, LastSeenAt: in.LastSeenAt, Draining: in.Draining,
+			Reporting: live, Behind: in.SnapshotVersion < latest, Routes: make([]InstanceRouteStats, 0, len(in.Metrics)),
+		}
+		for _, m := range in.Metrics {
+			is.Routes = append(is.Routes, InstanceRouteStats{
+				RouteID: m.RouteID, BackendConns: m.BackendConns, MaxConnections: m.MaxConnections, Pinned: m.Pinned,
+				PinRate: m.PinRate, WaitP95Millis: m.WaitP95.Milliseconds(), Reachable: m.Reachable,
+			})
+			rs := stats[m.RouteID]
+			if !live || rs == nil {
+				continue
+			}
+			rs.BackendConns = max(rs.BackendConns, m.BackendConns)
+			if !rs.Reported || in.LastSeenAt.After(last[m.RouteID]) {
+				rs.Reported, rs.Reachable, rs.MaxConnections, rs.PinRate = true, m.Reachable, m.MaxConnections, m.PinRate
+				last[m.RouteID] = in.LastSeenAt
+			}
+		}
+		st.Instances = append(st.Instances, is)
+	}
+	return st, nil
+}
+
+// SetRouteState pauses (state "paused") or resumes (state "active") one of
+// the project's gateway routes, for anyone who may modify its
+// infrastructure, and records it through Audit. The gateway's next snapshot
+// carries the new state. A gateway outside the project, or a route outside
+// the gateway, gives ErrNotFound.
+func (s *Service) SetRouteState(ctx context.Context, p security.Principal, project, gatewayID, routeID, state string) (*RouteSummary, error) {
+	action := AuditRoutePause
+	switch state {
+	case "paused":
+	case "active":
+		action = AuditRouteResume
+	default:
+		return nil, fmt.Errorf("%w: route state %q", ErrInvalid, state)
+	}
+	if err := s.require(ctx, p, security.InfrastructureModify, project); err != nil {
+		return nil, err
+	}
+	gw, err := s.store.Gateway(ctx, p.OrgID, gatewayID)
+	if err != nil {
+		return nil, err
+	}
+	if gw.ProjectID != project {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, gatewayID)
+	}
+	routes, err := s.store.Routes(ctx, gw.OrgID, gw.ID)
+	if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(routes, func(r RouteRecord) bool { return r.ID == routeID })
+	if i < 0 {
+		return nil, fmt.Errorf("%w: route %s", ErrNotFound, routeID)
+	}
+	if err := s.store.SetRouteState(ctx, gw.OrgID, gw.ID, routeID, state); err != nil {
+		return nil, err
+	}
+	route := routes[i]
+	route.State = state
+	if s.Audit != nil {
+		s.Audit.Record(ctx, action, p, &route)
+	}
+	return &RouteSummary{ID: route.ID, GatewayID: gw.ID, Resource: route.Resource, State: state}, nil
 }
 
 // VerifyRequest returns the gateway that signed r, whose body is body. The

@@ -99,6 +99,7 @@ import {
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ServiceRecovery } from "@/pages/service-catalog"
+import { DatabaseGateways } from "@/components/database-gateway"
 import { projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -464,6 +465,7 @@ function Body({
               </>
             )}
           </Discovered>
+          <DatabaseGateways project={project.id} />
         </TabsContent>
         <TabsContent value="variables">
           {environments && environments.length > 0 ? (

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,12 +13,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // memStore stands in for Store. interfere makes LatestSnapshot report a
@@ -32,10 +35,11 @@ type memStore struct {
 	interfere int
 	reports   []plane.Report
 	live      int
+	instances map[string][]InstanceRecord
 }
 
 func newMemStore(gws ...Gateway) *memStore {
-	m := &memStore{gateways: map[string]Gateway{}, routes: map[string][]RouteRecord{}}
+	m := &memStore{gateways: map[string]Gateway{}, routes: map[string][]RouteRecord{}, instances: map[string][]InstanceRecord{}}
 	for _, g := range gws {
 		m.gateways[g.ID] = g
 	}
@@ -56,6 +60,47 @@ func (m *memStore) Routes(_ context.Context, _, gatewayID string) ([]RouteRecord
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]RouteRecord{}, m.routes[gatewayID]...), nil
+}
+
+func (m *memStore) Gateway(_ context.Context, org, id string) (*Gateway, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	g, ok := m.gateways[id]
+	if !ok || g.OrgID != org {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	return &g, nil
+}
+
+func (m *memStore) Gateways(_ context.Context, org, environmentID string) ([]Gateway, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Gateway{}
+	for _, g := range m.gateways {
+		if g.OrgID == org && (environmentID == "" || g.EnvironmentID == environmentID) {
+			out = append(out, g)
+		}
+	}
+	slices.SortFunc(out, func(a, b Gateway) int { return strings.Compare(a.ID, b.ID) })
+	return out, nil
+}
+
+func (m *memStore) Instances(_ context.Context, _, gatewayID string) ([]InstanceRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]InstanceRecord{}, m.instances[gatewayID]...), nil
+}
+
+func (m *memStore) SetRouteState(_ context.Context, _, gatewayID, routeID, state string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.routes[gatewayID] {
+		if m.routes[gatewayID][i].ID == routeID {
+			m.routes[gatewayID][i].State = state
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: route %s", ErrNotFound, routeID)
 }
 
 func (m *memStore) setState(gatewayID, routeID, state string) {
@@ -569,5 +614,278 @@ func TestDoesNotImportDeployments(t *testing.T) {
 		if strings.HasSuffix(dep, "/internal/deployments") {
 			t.Fatalf("internal/dbgateway depends on %s", dep)
 		}
+	}
+}
+
+// roleAuthz grants each user what security.Catalog gives their role, and
+// remembers the permission and project of every check.
+type roleAuthz struct {
+	mu     sync.Mutex
+	roles  map[string]string // user id to role slug
+	scopes []string
+}
+
+func (a *roleAuthz) Require(_ context.Context, p security.Principal, perm security.Permission, resourceID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.scopes = append(a.scopes, perm.Name()+"@"+resourceID)
+	if p.ReadOnly && !perm.Reads() {
+		return fmt.Errorf("%w (%s): this API key can only read", security.ErrForbidden, perm.Name())
+	}
+	for _, r := range security.Catalog() {
+		if r.Slug == a.roles[p.UserID] && slices.Contains(r.Permissions, perm) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w (%s)", security.ErrForbidden, perm.Name())
+}
+
+// memAudit keeps what it's asked to record.
+type memAudit struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (a *memAudit) Record(_ context.Context, action string, p security.Principal, r *RouteRecord) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, action+" "+p.UserID+" "+r.ID+" "+r.Resource+" "+r.State)
+}
+
+func (a *memAudit) list() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string{}, a.events...)
+}
+
+// managedHarness is the service harness with an authorizer that knows a
+// viewer, a developer and an admin, and an audit trail.
+func managedHarness(t *testing.T) (*serviceHarness, *roleAuthz, *memAudit) {
+	t.Helper()
+	h := newServiceHarness(t)
+	authz := &roleAuthz{roles: map[string]string{
+		"usr_viewer": security.RoleViewer, "usr_dev": security.RoleDeveloper, "usr_admin": security.RoleAdmin,
+	}}
+	audit := &memAudit{}
+	h.svc.Authz, h.svc.Audit = authz, audit
+	return h, authz, audit
+}
+
+func member(user string) security.Principal {
+	return security.Principal{OrgID: "org_1", UserID: user}
+}
+
+// A project's gateways come back with their latest snapshot version, the
+// instances seen in the last hour and each route's metrics from the live
+// ones, and nothing secret.
+func TestListGateways(t *testing.T) {
+	h, authz, _ := managedHarness(t)
+	other, _ := testGateway(t, "dbgw_02other")
+	other.ProjectID = "proj_2"
+	h.store.gateways[other.ID] = other
+	h.store.version, h.store.digest = 3, "d3"
+	h.store.instances[h.gw.ID] = []InstanceRecord{
+		{InstanceID: "i-behind", SnapshotVersion: 2, Draining: true, LastSeenAt: h.now.Add(-10 * time.Second), Metrics: []plane.RouteStats{
+			{RouteID: "dbgr_1", BackendConns: 7, MaxConnections: 100, PinRate: 0.5, Reachable: false, Pinned: 1, WaitP95: 12 * time.Millisecond},
+		}},
+		{InstanceID: "i-gone", SnapshotVersion: 1, LastSeenAt: h.now.Add(-2 * time.Hour), Metrics: []plane.RouteStats{}},
+		{InstanceID: "i-live", SnapshotVersion: 3, LastSeenAt: h.now.Add(-5 * time.Second), Metrics: []plane.RouteStats{
+			{RouteID: "dbgr_1", BackendConns: 4, MaxConnections: 100, PinRate: 0.25, Reachable: true},
+		}},
+		{InstanceID: "i-quiet", SnapshotVersion: 3, LastSeenAt: h.now.Add(-2 * time.Minute), Metrics: []plane.RouteStats{
+			{RouteID: "dbgr_1", BackendConns: 50, MaxConnections: 100, PinRate: 0.9, Reachable: false},
+		}},
+	}
+
+	list, err := h.svc.ProjectGateways(t.Context(), member("usr_viewer"), "proj_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("gateways %+v, want only proj_1's", list)
+	}
+	g := list[0]
+	if g.ID != h.gw.ID || g.Name != "main" || g.Provider != "cloud-run" || g.Region != "us-central1" ||
+		g.EnvironmentID != "env_1" || g.SnapshotVersion != 3 {
+		t.Fatalf("gateway %+v", g)
+	}
+
+	ids := make([]string, 0, len(g.Instances))
+	for _, in := range g.Instances {
+		ids = append(ids, in.ID)
+	}
+	if strings.Join(ids, ",") != "i-behind,i-live,i-quiet" {
+		t.Fatalf("instances %v, want the ones seen in the last hour", ids)
+	}
+	behind, live, quiet := g.Instances[0], g.Instances[1], g.Instances[2]
+	if !behind.Behind || !behind.Reporting || !behind.Draining || behind.SnapshotVersion != 2 || !behind.LastSeenAt.Equal(h.now.Add(-10*time.Second)) {
+		t.Fatalf("behind instance %+v", behind)
+	}
+	if live.Behind || !live.Reporting || live.Draining {
+		t.Fatalf("live instance %+v", live)
+	}
+	if quiet.Behind || quiet.Reporting {
+		t.Fatalf("quiet instance %+v, want not reporting", quiet)
+	}
+	if len(behind.Routes) != 1 || behind.Routes[0] != (InstanceRouteStats{
+		RouteID: "dbgr_1", BackendConns: 7, MaxConnections: 100, Pinned: 1, PinRate: 0.5, WaitP95Millis: 12,
+	}) {
+		t.Fatalf("behind instance routes %+v", behind.Routes)
+	}
+
+	if len(g.Routes) != 2 {
+		t.Fatalf("routes %+v", g.Routes)
+	}
+	orders, billing := g.Routes[0], g.Routes[1]
+	// The most connections any live instance holds; reachability and pin
+	// rate from the live instance that reported last. i-quiet isn't live.
+	if orders != (RouteStatus{
+		ID: "dbgr_1", Resource: "orders", State: "active", Reported: true,
+		Reachable: true, BackendConns: 7, MaxConnections: 100, PinRate: 0.25,
+	}) {
+		t.Fatalf("orders %+v", orders)
+	}
+	if billing != (RouteStatus{ID: "dbgr_2", Resource: "billing", State: "active"}) {
+		t.Fatalf("billing %+v, want no live report", billing)
+	}
+
+	raw, err := json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"salt", "key", "postgres://", "suffix", base64.StdEncoding.EncodeToString(testSalt)} {
+		if strings.Contains(strings.ToLower(string(raw)), strings.ToLower(secret)) {
+			t.Fatalf("the list carries %q: %s", secret, raw)
+		}
+	}
+	if got := strings.Join(authz.scopes, ","); got != "infrastructure:read@proj_1" {
+		t.Fatalf("checks %s", got)
+	}
+}
+
+// A gateway that has never compiled a snapshot lists at version 0, with no
+// instance behind.
+func TestListGatewaysBeforeTheFirstSnapshot(t *testing.T) {
+	h, _, _ := managedHarness(t)
+	h.store.instances[h.gw.ID] = []InstanceRecord{{InstanceID: "i-1", LastSeenAt: h.now, Metrics: []plane.RouteStats{}}}
+	list, err := h.svc.ProjectGateways(t.Context(), member("usr_viewer"), "proj_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].SnapshotVersion != 0 || len(list[0].Instances) != 1 || list[0].Instances[0].Behind {
+		t.Fatalf("list %+v", list)
+	}
+}
+
+func TestListGatewaysRequiresAMember(t *testing.T) {
+	h, _, _ := managedHarness(t)
+	if _, err := h.svc.ProjectGateways(t.Context(), member("usr_stranger"), "proj_1"); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("stranger: %v, want ErrForbidden", err)
+	}
+}
+
+// Only an admin may pause or resume. Anyone else changes nothing and
+// leaves no audit event, and so does an admin's read-only API key.
+func TestPauseRequiresAdmin(t *testing.T) {
+	h, authz, audit := managedHarness(t)
+	ctx := t.Context()
+	readOnly := member("usr_admin")
+	readOnly.ReadOnly = true
+	for _, p := range []security.Principal{member("usr_viewer"), member("usr_dev"), readOnly} {
+		for _, state := range []string{"paused", "active"} {
+			if _, err := h.svc.SetRouteState(ctx, p, "proj_1", h.gw.ID, "dbgr_1", state); !errors.Is(err, security.ErrForbidden) {
+				t.Fatalf("%+v setting %s: %v, want ErrForbidden", p, state, err)
+			}
+		}
+	}
+	if st := h.store.routes[h.gw.ID][0].State; st != "active" {
+		t.Fatalf("route is %s after refused pauses", st)
+	}
+	if ev := audit.list(); len(ev) != 0 {
+		t.Fatalf("audited %v", ev)
+	}
+	for _, scope := range authz.scopes {
+		if scope != "infrastructure:modify@proj_1" {
+			t.Fatalf("checked %s", scope)
+		}
+	}
+}
+
+// An admin's pause and resume are recorded, reach the store, and the next
+// snapshot carries the new state.
+func TestPauseAudits(t *testing.T) {
+	h, _, audit := managedHarness(t)
+	ctx := t.Context()
+	if _, err := h.svc.Snapshot(ctx, &h.gw, 0); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.svc.SetRouteState(ctx, member("usr_admin"), "proj_1", h.gw.ID, "dbgr_1", "paused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *got != (RouteSummary{ID: "dbgr_1", GatewayID: h.gw.ID, Resource: "orders", State: "paused"}) {
+		t.Fatalf("pause answered %+v", got)
+	}
+	s, err := h.svc.Snapshot(ctx, &h.gw, 1)
+	if err != nil || s == nil {
+		t.Fatalf("snapshot after the pause: %v %v", s, err)
+	}
+	if s.Routes[0].ID != "dbgr_1" || s.Routes[0].State != plane.RouteStatePaused {
+		t.Fatalf("snapshot routes %+v", s.Routes)
+	}
+	if _, err = h.svc.SetRouteState(ctx, member("usr_admin"), "proj_1", h.gw.ID, "dbgr_1", "active"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"dbGateway.route.pause usr_admin dbgr_1 orders paused",
+		"dbGateway.route.resume usr_admin dbgr_1 orders active",
+	}
+	if ev := audit.list(); !slices.Equal(ev, want) {
+		t.Fatalf("audited %v, want %v", ev, want)
+	}
+	if st := h.store.routes[h.gw.ID][0].State; st != "active" {
+		t.Fatalf("route is %s after resuming", st)
+	}
+}
+
+// A route is found only under its own gateway and project, and the only
+// states are active and paused. A refused change isn't audited.
+func TestPauseFindsOnlyTheProjectsRoute(t *testing.T) {
+	h, _, audit := managedHarness(t)
+	other, _ := testGateway(t, "dbgw_02other")
+	other.ProjectID = "proj_2"
+	h.store.gateways[other.ID] = other
+	h.store.routes[other.ID] = []RouteRecord{{ID: "dbgr_9", Resource: "orders", State: "active", Salt: testSalt}}
+	ctx := t.Context()
+	admin := member("usr_admin")
+	for _, c := range []struct{ gateway, route string }{
+		{other.ID, "dbgr_9"},  // another project's gateway
+		{h.gw.ID, "dbgr_9"},   // another gateway's route
+		{h.gw.ID, "dbgr_404"}, // no such route
+		{"dbgw_404", "dbgr_1"},
+	} {
+		if _, err := h.svc.SetRouteState(ctx, admin, "proj_1", c.gateway, c.route, "paused"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%+v: %v, want ErrNotFound", c, err)
+		}
+	}
+	if _, err := h.svc.SetRouteState(ctx, admin, "proj_1", h.gw.ID, "dbgr_1", "draining"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("draining: %v, want ErrInvalid", err)
+	}
+	if ev := audit.list(); len(ev) != 0 {
+		t.Fatalf("audited %v", ev)
+	}
+	if st := h.store.routes[other.ID][0].State; st != "active" {
+		t.Fatalf("another project's route is %s", st)
+	}
+}
+
+// Without an authorizer the management methods refuse everyone.
+func TestManagementWithoutAnAuthorizer(t *testing.T) {
+	h := newServiceHarness(t)
+	if _, err := h.svc.ProjectGateways(t.Context(), member("usr_admin"), "proj_1"); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("list: %v", err)
+	}
+	if _, err := h.svc.SetRouteState(t.Context(), member("usr_admin"), "proj_1", h.gw.ID, "dbgr_1", "paused"); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("pause: %v", err)
 	}
 }

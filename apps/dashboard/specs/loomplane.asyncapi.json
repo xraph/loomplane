@@ -1278,6 +1278,49 @@
           }
         }
       },
+      "DatabaseGateway": {
+        "type": "object",
+        "properties": {
+          "cloud_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "environments": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      },
+      "DatabaseGatewayConfig": {
+        "type": "object",
+        "required": [
+          "name",
+          "suffix",
+          "resources"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suffix": {
+            "type": "string"
+          }
+        }
+      },
       "DefaultPlacement": {
         "type": "object",
         "required": [
@@ -1344,6 +1387,9 @@
           },
           "from": {
             "type": "string"
+          },
+          "gateway": {
+            "type": "boolean"
           },
           "key": {
             "type": "string"
@@ -1648,6 +1694,9 @@
           "version"
         ],
         "properties": {
+          "database_gateway": {
+            "$ref": "#/components/schemas/DatabaseGateway"
+          },
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
           },
@@ -2020,6 +2069,9 @@
           },
           "context": {
             "type": "string"
+          },
+          "database_gateway": {
+            "$ref": "#/components/schemas/DatabaseGatewayConfig"
           },
           "ecosystem": {
             "type": "string"

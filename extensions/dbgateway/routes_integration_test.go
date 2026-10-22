@@ -7,10 +7,15 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +28,7 @@ import (
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/ops"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // testDB is a migrated database of its own holding one environment.
@@ -182,5 +188,141 @@ func TestControlClientAgainstTheRoutes(t *testing.T) {
 	_, otherKey, _ := ed25519.GenerateKey(rand.Reader)
 	if _, err := plane.NewControlClient(srv.URL, gw.ID, otherKey).Poll(ctx, 0); err == nil {
 		t.Fatal("a request signed with another key was answered")
+	}
+}
+
+// catalogAuthz grants each user what security.Catalog gives their role.
+type catalogAuthz map[string]string
+
+func (a catalogAuthz) Require(_ context.Context, p security.Principal, perm security.Permission, _ string) error {
+	for _, r := range security.Catalog() {
+		if r.Slug == a[p.UserID] && slices.Contains(r.Permissions, perm) {
+			return nil
+		}
+	}
+	return security.ErrForbidden
+}
+
+// actions keeps the audited actions.
+type actions struct {
+	mu   sync.Mutex
+	list []string
+}
+
+func (a *actions) Record(_ context.Context, action string, p security.Principal, r *dbgateway.RouteRecord) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.list = append(a.list, action+" "+p.UserID+" "+r.ID+" "+r.State)
+}
+
+// The project routes over the real store: a viewer lists the gateway with
+// its reporting instance and can't pause; an admin's pause is audited and
+// reaches the gateway's next snapshot.
+func TestManagementRoutesAgainstTheStore(t *testing.T) {
+	store := dbgateway.NewStore(testDB(t))
+	ctx := t.Context()
+	signPub, signPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealing, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, _, err := store.EnsureGateway(ctx, dbgateway.Gateway{
+		OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Name: "main",
+		Provider: "cloud-run", Region: "us-central1", Suffix: "us-central1.db.example.com",
+		SigningPublicKey: signPub, SealingPublicKey: sealing.PublicKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := store.EnsureRoute(ctx, "org_1", gw.ID, "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := memSecrets{deployments.ResourceURLKey("org_1", "env_1", "orders"): []byte("postgres://app:pw@db.do.example:25060/orders?sslmode=require")}
+	now := time.Now()
+	cpPub, cpPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := plane.TrustKey{PublicKey: cpPub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
+	svc := dbgateway.NewService(store, resourceURLs{secrets: secrets}, cpPriv, trust, time.Now)
+	audit := &actions{}
+	svc.Authz = catalogAuthz{"usr_viewer": security.RoleViewer, "usr_admin": security.RoleAdmin}
+	svc.Audit = audit
+	r := forge.NewRouter()
+	if err = mount(r, &handlers{svc: svc, wait: 200 * time.Millisecond, every: 20 * time.Millisecond, now: time.Now,
+		warn: func(msg string, werr error) { t.Errorf("%s: %v", msg, werr) }}); err != nil {
+		t.Fatal(err)
+	}
+	if err = mountManagement(r, nil, svc); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(r.Handler())
+	t.Cleanup(srv.Close)
+
+	client := plane.NewControlClient(srv.URL, gw.ID, signPriv)
+	s, err := client.Poll(ctx, 0)
+	if err != nil || s == nil {
+		t.Fatalf("Poll: %+v %v", s, err)
+	}
+	stats := []plane.RouteStats{{RouteID: route.ID, BackendConns: 3, MaxConnections: 25, PinRate: 0.5, Reachable: true}}
+	if _, err = client.Report(ctx, plane.Report{InstanceID: "inst-1", SnapshotVersion: s.Version, Routes: stats}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := callAs(t, r, http.MethodGet, "/api/v1/projects/proj_1/db-gateways", "usr_viewer")
+	if out.Code != http.StatusOK {
+		t.Fatalf("list: %d %q", out.Code, out.Body.String())
+	}
+	var list GatewayList
+	if err = json.Unmarshal(out.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Gateways) != 1 {
+		t.Fatalf("list %s", out.Body.String())
+	}
+	g := list.Gateways[0]
+	if g.ID != gw.ID || g.SnapshotVersion != s.Version || len(g.Instances) != 1 || !g.Instances[0].Reporting || g.Instances[0].Behind ||
+		len(g.Routes) != 1 || g.Routes[0] != (dbgateway.RouteStatus{
+		ID: route.ID, Resource: "orders", State: "active", Reported: true, Reachable: true, BackendConns: 3, MaxConnections: 25, PinRate: 0.5,
+	}) {
+		t.Fatalf("list %s", out.Body.String())
+	}
+	for _, secret := range []string{"salt", "postgres://", "public_key", "suffix"} {
+		if strings.Contains(out.Body.String(), secret) {
+			t.Fatalf("the list carries %q: %s", secret, out.Body.String())
+		}
+	}
+
+	pause := "/api/v1/projects/proj_1/db-gateways/" + gw.ID + "/routes/" + route.ID + "/pause"
+	if out = callAs(t, r, http.MethodPost, pause, "usr_viewer"); out.Code != http.StatusForbidden {
+		t.Fatalf("a viewer's pause: %d %q, want 403", out.Code, out.Body.String())
+	}
+	if out = callAs(t, r, http.MethodPost, "/api/v1/projects/proj_2/db-gateways/"+gw.ID+"/routes/"+route.ID+"/pause", "usr_admin"); out.Code != http.StatusNotFound {
+		t.Fatalf("a pause through another project: %d, want 404", out.Code)
+	}
+	routes, err := store.Routes(ctx, "org_1", gw.ID)
+	if err != nil || routes[0].State != "active" {
+		t.Fatalf("after refused pauses: %+v %v", routes, err)
+	}
+	if out = callAs(t, r, http.MethodPost, pause, "usr_admin"); out.Code != http.StatusOK {
+		t.Fatalf("an admin's pause: %d %q", out.Code, out.Body.String())
+	}
+	next, err := client.Poll(ctx, s.Version)
+	if err != nil || next == nil || next.Routes[0].State != plane.RouteStatePaused {
+		t.Fatalf("after pausing: %+v %v", next, err)
+	}
+	if out = callAs(t, r, http.MethodPost, "/api/v1/projects/proj_1/db-gateways/"+gw.ID+"/routes/"+route.ID+"/resume", "usr_admin"); out.Code != http.StatusOK {
+		t.Fatalf("an admin's resume: %d %q", out.Code, out.Body.String())
+	}
+	want := []string{
+		"dbGateway.route.pause usr_admin " + route.ID + " paused",
+		"dbGateway.route.resume usr_admin " + route.ID + " active",
+	}
+	if !slices.Equal(audit.list, want) {
+		t.Fatalf("audited %v, want %v", audit.list, want)
 	}
 }
