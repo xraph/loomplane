@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"maps"
 	"net"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -99,31 +100,24 @@ func TestTargetDialFromTheTargetsNetwork(t *testing.T) {
 		t.Fatalf("SSH config: %+v", dialed)
 	}
 
-	// A cluster's checks dial from Loomplane.
+	// A cluster's checks dial from Loomplane, which never reaches its own
+	// loopback from there.
 	upstream, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer upstream.Close()
-	go func() {
-		if conn, acceptErr := upstream.Accept(); acceptErr == nil {
-			_, _ = io.WriteString(conn, "ok")
-			_ = conn.Close()
-		}
-	}()
 	clusters := &OwnedTarget{Cloud: connections.Kubernetes, Credentials: creds}
 	dial, closer, err := clusters.TargetDial(t.Context(), "org", "conn_cluster")
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn, err := dial(t.Context(), "tcp", upstream.Addr().String())
-	if err != nil {
-		t.Fatal(err)
+	if conn, err := dial(t.Context(), "tcp", upstream.Addr().String()); err == nil {
+		_ = conn.Close()
+		t.Fatal("a cluster check dialed Loomplane's loopback")
 	}
-	got, _ := io.ReadAll(conn)
-	_ = conn.Close()
-	if string(got) != "ok" || closer.Close() != nil {
-		t.Fatalf("cluster dial read %q", got)
+	if closer.Close() != nil {
+		t.Fatal("closing a cluster dialer failed")
 	}
 
 	for name, tc := range map[string]struct {
@@ -139,6 +133,80 @@ func TestTargetDialFromTheTargetsNetwork(t *testing.T) {
 	} {
 		if dial, closer, err := tc.target.TargetDial(t.Context(), tc.org, tc.conn); err == nil || dial != nil || closer != nil {
 			t.Fatalf("%s: dialed (%v)", name, err)
+		}
+	}
+}
+
+func TestClusterChecksRefuseLoomplanesOwnNetwork(t *testing.T) {
+	creds := dialCredentials{
+		"conn_cluster": {ID: "conn_cluster", OrgID: "org", Cloud: connections.Kubernetes, Status: connections.StatusReady, Details: map[string]string{}},
+	}
+	dial, _, err := (&OwnedTarget{Cloud: connections.Kubernetes, Credentials: creds}).TargetDial(t.Context(), "org", "conn_cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	_, port, _ := net.SplitHostPort(upstream.Addr().String())
+	for _, host := range []string{"127.0.0.1", "localhost", "::1", "0.0.0.0", "::", "169.254.169.254", "fe80::1", "::ffff:127.0.0.1", "::ffff:169.254.169.254"} {
+		conn, dialErr := dial(t.Context(), "tcp", net.JoinHostPort(host, port))
+		if dialErr == nil {
+			_ = conn.Close()
+			t.Fatalf("%s: dialed", host)
+		}
+		if want := host + " resolves to an address Loomplane doesn't connect to from its own network"; dialErr.Error() != want {
+			t.Fatalf("%s: %v", host, dialErr)
+		}
+	}
+
+	// Any other address dials as before, here this host's own LAN address
+	// when it has one.
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range addrs {
+		prefix, err := netip.ParsePrefix(a.String())
+		if err != nil || !prefix.Addr().Is4() || !loomplaneDials(prefix.Addr()) {
+			continue
+		}
+		lan, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort(prefix.Addr().String(), "0"))
+		if err != nil {
+			continue
+		}
+		defer lan.Close()
+		go func() {
+			if conn, acceptErr := lan.Accept(); acceptErr == nil {
+				_, _ = io.WriteString(conn, "ok")
+				_ = conn.Close()
+			}
+		}()
+		conn, err := dial(t.Context(), "tcp", lan.Addr().String())
+		if err != nil {
+			t.Fatalf("dial %s: %v", lan.Addr(), err)
+		}
+		got, _ := io.ReadAll(conn)
+		_ = conn.Close()
+		if string(got) != "ok" {
+			t.Fatalf("cluster dial read %q", got)
+		}
+		return
+	}
+	t.Log("no LAN address to dial; the guard's allowed addresses are covered by TestLoomplaneDialsOnlyOutsideItsOwnHost")
+}
+
+func TestLoomplaneDialsOnlyOutsideItsOwnHost(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1": false, "127.8.9.10": false, "::1": false, "0.0.0.0": false, "::": false,
+		"169.254.169.254": false, "169.254.0.1": false, "fe80::1": false, "febf::1": false,
+		"::ffff:127.0.0.1": false, "::ffff:169.254.169.254": false, "::ffff:0.0.0.0": false,
+		"10.0.0.5": true, "192.168.1.20": true, "203.0.113.7": true, "2001:db8::1": true, "fd00::1": true,
+	} {
+		if got := loomplaneDials(netip.MustParseAddr(addr)); got != want {
+			t.Fatalf("%s: got %t, want %t", addr, got, want)
 		}
 	}
 }

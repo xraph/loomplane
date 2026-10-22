@@ -15,10 +15,12 @@ import (
 	"io/fs"
 	"maps"
 	"net"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/xraph/ctrlplane"
@@ -46,7 +48,8 @@ var _ planning.TargetDialer = (*OwnedTarget)(nil)
 // its SSH connection, opened and checked the way a deployment opens it, so
 // the host key, Docker identity and reviewed settings must still match;
 // closing the io.Closer ends that connection. A cluster's checks dial
-// from Loomplane: nothing runs inside the cluster to dial from.
+// from Loomplane: nothing runs inside the cluster to dial from. Those
+// dials never reach Loomplane's own host (see loomplaneDials).
 func (e *OwnedTarget) TargetDial(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error) {
 	if e.Credentials == nil {
 		return nil, nil, ErrNoCredential
@@ -71,9 +74,47 @@ func (e *OwnedTarget) TargetDial(ctx context.Context, orgID, connectionID string
 		}
 		return client.DialContext, client, nil
 	case connections.Kubernetes:
-		return (&net.Dialer{}).DialContext, noClose{}, nil
+		return dialFromLoomplane, noClose{}, nil
 	}
 	return nil, nil, fmt.Errorf("endpoints can't be checked from a %s target", e.Cloud)
+}
+
+// errLoomplaneNetwork is an address a check from Loomplane's own network
+// doesn't connect to.
+var errLoomplaneNetwork = errors.New("an address Loomplane doesn't connect to from its own network")
+
+// dialFromLoomplane dials an endpoint from Loomplane's own network. The
+// guard runs on each address the dialer actually connects to, after the
+// lookup, so a name that resolves to loopback is refused like the address.
+func dialFromLoomplane(ctx context.Context, network, address string) (net.Conn, error) {
+	d := &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return errLoomplaneNetwork
+		}
+		ip, err := netip.ParseAddr(host)
+		if err != nil || !loomplaneDials(ip) {
+			return errLoomplaneNetwork
+		}
+		return nil
+	}}
+	conn, err := d.DialContext(ctx, network, address)
+	if errors.Is(err, errLoomplaneNetwork) {
+		host, _, splitErr := net.SplitHostPort(address)
+		if splitErr != nil {
+			host = address
+		}
+		return nil, fmt.Errorf("%s resolves to %w", host, errLoomplaneNetwork)
+	}
+	return conn, err
+}
+
+// loomplaneDials reports whether a check from Loomplane's own network may
+// connect to ip: never its loopback, an unspecified address, or a link-local
+// one such as a cloud metadata service, in IPv4 or IPv4-mapped form.
+func loomplaneDials(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast()
 }
 
 // noClose is an io.Closer with nothing to close.
