@@ -182,46 +182,31 @@ func (r *Runtime) jobLogs(ctx context.Context, c *Client, container string, tail
 	}
 	// A container without a terminal multiplexes its streams: each frame
 	// has an eight-byte header whose first byte names the stream and whose
-	// last four give the frame's length. The tail puts each stream's lines
-	// together on its own.
+	// last four give the frame's length. The streams' bytes go to the tail
+	// as they come: JobOutput hides a secret however they interleave or
+	// wherever the log ends.
 	reader := bufio.NewReader(res.Body)
 	framed := false
 	for {
 		header, peekErr := reader.Peek(8)
-		if errors.Is(peekErr, io.EOF) && len(header) == 0 {
+		if errors.Is(peekErr, io.EOF) && (len(header) == 0 || framed) {
 			return nil
 		}
-		isFrame := peekErr == nil && header[0] <= 2 && header[1] == 0 && header[2] == 0 && header[3] == 0
-		if !isFrame && !framed {
+		if peekErr != nil || header[0] > 2 || header[1] != 0 || header[2] != 0 || header[3] != 0 {
+			if framed {
+				return errors.New("the log has a frame Docker didn't write")
+			}
 			// Not a frame: a terminal's raw output.
 			_, copyErr := io.Copy(tail, reader)
 			return copyErr
 		}
-		if !isFrame {
-			// What ends early could end inside a secret.
-			return errors.New("the log ended inside a frame")
-		}
 		framed = true
-		stream, size := header[0], int64(binary.BigEndian.Uint32(header[4:]))
+		size := int64(binary.BigEndian.Uint32(header[4:]))
 		if _, discardErr := reader.Discard(8); discardErr != nil {
 			return discardErr
 		}
-		if _, copyErr := io.CopyN(streamWriter{tail, stream}, reader, size); copyErr != nil {
-			if errors.Is(copyErr, io.EOF) {
-				return errors.New("the log ended inside a frame")
-			}
+		if _, copyErr := io.CopyN(tail, reader, size); copyErr != nil && !errors.Is(copyErr, io.EOF) {
 			return copyErr
 		}
 	}
-}
-
-// streamWriter writes one stream of a container's log to a tail.
-type streamWriter struct {
-	tail   *owned.JobTail
-	stream byte
-}
-
-func (w streamWriter) Write(p []byte) (int, error) {
-	w.tail.WriteStream(w.stream, p)
-	return len(p), nil
 }

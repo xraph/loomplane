@@ -1,128 +1,117 @@
 package owned
 
 import (
+	"math/rand/v2"
 	"strings"
 	"testing"
 )
 
-// leaks reports a piece of a secret, eight bytes or longer, that output
-// shows.
+// leaks reports four bytes of a sensitive part of a secret that output
+// shows outside its redactions.
 func leaks(output string, secrets map[string]string) string {
-	for _, secret := range secrets {
-		for start := 0; start+8 <= len(secret); start++ {
-			if piece := secret[start : start+8]; strings.Contains(output, piece) {
-				return piece
+	shown := strings.Split(output, "[redacted]")
+	for _, value := range secrets {
+		for _, part := range sensitiveParts(value) {
+			for start := 0; start+4 <= len(part); start++ {
+				for _, text := range shown {
+					if piece := part[start : start+4]; strings.Contains(text, piece) {
+						return piece
+					}
+				}
 			}
 		}
 	}
 	return ""
 }
 
-// straddle writes a stream whose kept end starts inside long: in tails
-// sized for secrets, long begins skip bytes before the start of what's
-// kept, and after are the bytes that follow it.
-func straddle(t *testing.T, secrets map[string]string, long string, skip int, after string) string {
-	t.Helper()
+// tailed is output as a JobTail keeps it.
+func tailed(secrets map[string]string, writes ...string) string {
 	tail := NewJobTail(secrets)
-	keep := tail.keep
-	pad := keep - len(after) - len(long) + skip
-	if pad < 0 {
-		t.Fatalf("%d bytes after the secret are more than the tail keeps", len(after))
-	}
-	after = strings.Repeat(".", pad) + after
-	_, _ = tail.Write([]byte(strings.Repeat("x", 3*keep) + "\n"))
-	_, _ = tail.Write([]byte(long))
-	_, _ = tail.Write([]byte(after))
-	if got := string(tail.data[len(tail.data)-keep:]); got[:len(long)-skip] != long[skip:] {
-		t.Fatalf("the kept output doesn't start inside the secret: %q", got[:20])
+	for _, w := range writes {
+		_, _ = tail.Write([]byte(w))
 	}
 	return tail.Output(secrets)
 }
 
-func TestJobOutputHidesASecretTheTailCuts(t *testing.T) {
-	long := strings.Repeat("Z9q", 24) + "k4"
-	secrets := map[string]string{"TOKEN": long}
-	output := straddle(t, secrets, long, 10, "\nmigration 0003 failed\n")
-	if piece := leaks(output, secrets); piece != "" {
-		t.Fatalf("output shows %q of the secret", piece)
-	}
-	if !strings.HasSuffix(output, "migration 0003 failed\n") || len(output) > JobOutputLimit {
-		t.Fatalf("output: %d bytes ending %q", len(output), output[max(0, len(output)-40):])
-	}
-}
+const (
+	token = "Qx4Lm7Z9qk4wR5T8pw-V3j2Hc6Nb1Yd0Fs9Ga8Kr7Ue6Wi5Oo4Pa3Sd2Df1Gh0Jk9Ll8Mn7Bv"
+	dsn   = "postgresql://loomplane:pg-Secret-Value-17x@lp-inst-db:5432/app__postgres?sslmode=disable"
+	pem   = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\nMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3S\n-----END PRIVATE KEY-----"
+)
 
-func TestJobOutputHidesACutSecretAmongShrinkingRedactions(t *testing.T) {
-	long := strings.Repeat("Lm7", 24) + "w2"
-	short := "pw-" + strings.Repeat("R5", 9) + "x"
-	secrets := map[string]string{"TOKEN": long, "PASSWORD": short}
-	// Each short secret redacted shrinks the text by twelve bytes, which
-	// would pull a cut made after redacting back into the cut secret.
-	after := " tail\n" + strings.Repeat("login "+short+"\n", 400)
-	output := straddle(t, secrets, long, 1, after)
+func TestJobOutputHidesASecretATailStartsInside(t *testing.T) {
+	secrets := map[string]string{"TOKEN": token}
+	output := tailed(secrets, token[4:]+"\n", "ok\nok\n")
 	if piece := leaks(output, secrets); piece != "" {
-		t.Fatalf("output shows %q of a secret", piece)
+		t.Fatalf("output %q shows %q", output, piece)
 	}
-	if !strings.Contains(output, "login [redacted]\n") || len(output) > JobOutputLimit {
-		t.Fatalf("output: %d bytes", len(output))
-	}
-}
-
-func TestJobOutputHidesAMultiLineSecretTheLineTailCuts(t *testing.T) {
-	key := "-----BEGIN PRIVATE KEY-----\r\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\r\nBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\r\nMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3S\r\n-----END PRIVATE KEY-----"
-	secrets := map[string]string{"TLS_KEY": key}
-	// The daemon's line tail started two lines into the key.
-	lines := strings.Split(key, "\n")
-	cut := strings.Join(lines[2:], "\n") + "\nloaded the key\n"
-	output := JobOutput([]byte(cut), secrets)
-	if piece := leaks(output, secrets); piece != "" {
-		t.Fatalf("output shows %q of the key", piece)
-	}
-	if !strings.HasSuffix(output, "loaded the key\n") {
+	if output != "[redacted]\nok\nok\n" {
 		t.Fatalf("output: %q", output)
 	}
-	// Whole, it's redacted as one.
-	if output = JobOutput([]byte("key: "+key+"\n"), secrets); output != "key: [redacted]\n" {
-		t.Fatalf("whole key: %q", output)
+}
+
+func TestJobOutputHidesASecretARunningContainersLogEndsInside(t *testing.T) {
+	// Reading a running container's log can stop partway through an
+	// entry, and so partway through a secret.
+	secrets := map[string]string{"TOKEN": token}
+	output := tailed(secrets, strings.Repeat("x", 16384-23)+"\nauth "+token[:23])
+	if piece := leaks(output, secrets); piece != "" {
+		t.Fatalf("output shows %q", piece)
+	}
+	if !strings.HasSuffix(output, "\nauth [redacted]") || len(output) > JobOutputLimit {
+		t.Fatalf("output ends %q", output[len(output)-20:])
 	}
 }
 
-func TestJobOutputDropsTheFirstLineOfATailedStream(t *testing.T) {
-	// A daemon's tail counts log entries, and a long line is several, so
-	// what it returns can start inside a secret even when JobTail cut
-	// nothing.
-	secret := strings.Repeat("Qx4", 24)
-	secrets := map[string]string{"TOKEN": secret}
-	tail := NewJobTail(secrets)
-	_, _ = tail.Write([]byte(secret[4:] + "\n"))
-	_, _ = tail.Write([]byte("ok\nok\n"))
-	if output := tail.Output(secrets); output != "ok\nok\n" {
+func TestJobOutputHidesASecretSplitByAnotherStream(t *testing.T) {
+	// Kubernetes merges stdout and stderr: a stderr line can land between
+	// two partial stdout entries of one secret.
+	secrets := map[string]string{"TOKEN": token}
+	output := tailed(secrets, "login "+token[:30], "warn: slow\n", token[30:]+"\n")
+	if piece := leaks(output, secrets); piece != "" {
+		t.Fatalf("output %q shows %q", output, piece)
+	}
+	if output != "login [redacted]warn: slow\n[redacted]\n" {
 		t.Fatalf("output: %q", output)
 	}
-	if piece := leaks(tail.Output(secrets), secrets); piece != "" {
-		t.Fatalf("output shows %q of the secret", piece)
+}
+
+func TestJobOutputHidesAURLsPasswordAndNotTheRest(t *testing.T) {
+	secrets := map[string]string{"DATABASE_URL": dsn}
+	// Whole, the address is redacted as one.
+	if output := JobOutput([]byte("using "+dsn+"\n"), secrets); output != "using [redacted]\n" {
+		t.Fatalf("whole: %q", output)
+	}
+	// Split, only its password is.
+	at := strings.Index(dsn, "Value")
+	output := tailed(secrets, "connecting to postgres://db:5432\n", "dial "+dsn[:at], "warn: slow\n", dsn[at:]+"\n")
+	if piece := leaks(output, secrets); piece != "" {
+		t.Fatalf("output %q shows %q", output, piece)
+	}
+	want := "connecting to postgres://db:5432\ndial postgresql://loomplane:[redacted]warn: slow\n[redacted]@lp-inst-db:5432/app__postgres?sslmode=disable\n"
+	if output != want {
+		t.Fatalf("output: %q", output)
 	}
 }
 
-func TestJobTailKeepsEachStreamsLinesWhole(t *testing.T) {
-	secret := "pw-" + strings.Repeat("T8", 12)
-	secrets := map[string]string{"PASSWORD": secret}
-	tail := NewJobTail(secrets)
-	// Each stream's first line can start anywhere, so it's dropped.
-	tail.WriteStream(1, []byte(secret[6:]+"\n"))
-	tail.WriteStream(2, []byte("tail of an earlier warning\n"))
-	// A secret written to stdout in two frames, with stderr between them,
-	// is still found whole.
-	tail.WriteStream(1, []byte("login "+secret[:9]))
-	tail.WriteStream(2, []byte("warning: slow\n"))
-	tail.WriteStream(1, []byte(secret[9:]+"\n"))
-	// A line too long to keep isn't shown, rather than shown from its
-	// middle.
-	tail.WriteStream(2, []byte(strings.Repeat("a", tail.keep+1)))
-	tail.WriteStream(2, []byte(secret+"\nlast\n"))
-	// The end of a stream with no line break is still the end of a line.
-	tail.WriteStream(1, []byte("exiting"))
-	want := "warning: slow\nlogin [redacted]\n[a line too long to show]\nlast\nexiting"
-	if output := tail.Output(secrets); output != want {
+func TestJobOutputHidesAKeyCutAnywhere(t *testing.T) {
+	secrets := map[string]string{"TLS_KEY": pem}
+	for cut := range len(pem) {
+		for _, output := range []string{
+			tailed(secrets, pem[cut:]+"\nloaded\n"),
+			tailed(secrets, "key: "+pem[:cut]),
+		} {
+			if piece := leaks(output, secrets); piece != "" {
+				t.Fatalf("cut at %d: output %q shows %q", cut, output, piece)
+			}
+		}
+	}
+}
+
+func TestJobOutputShowsAOneLineFailure(t *testing.T) {
+	secrets := map[string]string{"TOKEN": token, "DATABASE_URL": dsn, "TLS_KEY": pem}
+	const failure = "error: relation \"users\" already exists\n"
+	if output := tailed(secrets, failure); output != failure {
 		t.Fatalf("output: %q", output)
 	}
 }
@@ -132,5 +121,33 @@ func TestJobOutputRedactsAcrossInvalidBytes(t *testing.T) {
 	output := JobOutput([]byte("login pw-V3V3V3\xffV3V3V3V3V3V3V3\n"), secrets)
 	if output != "login [redacted]\n" {
 		t.Fatalf("output: %q", output)
+	}
+}
+
+// TestJobOutputNeverShowsFourBytesOfASecret writes secrets cut at random
+// points, in random pieces between other output, and checks that no four
+// bytes of any of them are shown, wherever the tail starts.
+func TestJobOutputNeverShowsFourBytesOfASecret(t *testing.T) {
+	random := rand.New(rand.NewPCG(1, 2))
+	secrets := map[string]string{"TOKEN": token, "DATABASE_URL": dsn, "TLS_KEY": pem}
+	values := []string{token, dsn, pem}
+	noise := []string{"warn: slow\n", "ok\n", "applying 0003", "\n", "connecting to postgres://db:5432\n", strings.Repeat("y", 4000)}
+	for round := range 300 {
+		var writes []string
+		for range 2 + random.IntN(12) {
+			value := values[random.IntN(len(values))]
+			start := random.IntN(len(value))
+			end := start + 1 + random.IntN(len(value)-start)
+			piece := value[start:end]
+			for piece != "" {
+				n := 1 + random.IntN(len(piece))
+				writes = append(writes, piece[:n], noise[random.IntN(len(noise))])
+				piece = piece[n:]
+			}
+		}
+		output := tailed(secrets, writes...)
+		if piece := leaks(output, secrets); piece != "" {
+			t.Fatalf("round %d: output shows %q", round, piece)
+		}
 	}
 }

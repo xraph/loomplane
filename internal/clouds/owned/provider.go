@@ -1,15 +1,12 @@
 package owned
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"maps"
-	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/xraph/ctrlplane"
 	"github.com/xraph/ctrlplane/id"
@@ -96,166 +93,6 @@ type JobBackend interface {
 type JobResult struct {
 	ExitCode int
 	Output   string
-}
-
-// JobOutputLimit is how much of a job's output its result keeps.
-const JobOutputLimit = 16 << 10
-
-// JobOutput is the end of what a job wrote, at most JobOutputLimit bytes,
-// with each secret value replaced by "[redacted]". A value of several
-// lines also has each of its lines replaced wherever it appears. Invalid
-// UTF-8 is dropped first, so it can't keep a secret from being found.
-// output must not start or end inside a secret: JobTail.Output makes sure
-// of that for a job's log.
-func JobOutput(output []byte, secrets map[string]string) string {
-	var pieces []string
-	for _, value := range secrets {
-		value = strings.ToValidUTF8(value, "")
-		if value == "" {
-			continue
-		}
-		pieces = append(pieces, value)
-		if strings.Contains(value, "\n") {
-			for line := range strings.SplitSeq(value, "\n") {
-				if line = strings.TrimSpace(line); line != "" {
-					pieces = append(pieces, line)
-				}
-			}
-		}
-	}
-	// The longest first, so a secret containing another isn't left half
-	// shown.
-	slices.SortFunc(pieces, func(a, b string) int { return len(b) - len(a) })
-	text := strings.ToValidUTF8(string(output), "")
-	for _, piece := range pieces {
-		text = strings.ReplaceAll(text, piece, "[redacted]")
-	}
-	// Nothing of a secret is left to cut through. A cut inside a
-	// character drops what's left of it.
-	if len(text) > JobOutputLimit {
-		text = text[len(text)-JobOutputLimit:]
-		for text != "" && !utf8.RuneStart(text[0]) {
-			text = text[1:]
-		}
-	}
-	return text
-}
-
-// jobLineTooLong stands in for a line longer than a JobTail keeps.
-const jobLineTooLong = "[a line too long to show]"
-
-// JobTail keeps the end of a job's log as it's read from a target, as
-// whole lines, so that no secret in it is cut. Its invariant is that what
-// it keeps starts at the start of a line and ends at the end of one:
-//   - A target's log tail counts log entries, and a long line is several
-//     entries, and rotation can drop the start of one, so each stream's
-//     first line can start anywhere, inside a secret. It's dropped.
-//   - Each stream's bytes are put together into lines before they're
-//     kept, so stdout and stderr interleave line by line and a secret
-//     written in pieces is still whole.
-//   - A line longer than it keeps isn't kept, rather than kept from its
-//     middle.
-//   - When what it keeps outgrows it, the cut starts after the first line
-//     break.
-//
-// A value without a line break can't then run past what's shown, and the
-// lines of one with them are each redacted by JobOutput.
-type JobTail struct {
-	keep    int
-	data    []byte
-	cut     bool
-	streams map[byte]*jobStream
-}
-
-// jobStream is one stream's line being put together.
-type jobStream struct {
-	started bool
-	line    []byte
-	long    bool
-}
-
-func NewJobTail(secrets map[string]string) *JobTail {
-	keep := JobOutputLimit
-	for _, value := range secrets {
-		keep = max(keep, JobOutputLimit+len(value))
-	}
-	return &JobTail{keep: keep, streams: map[byte]*jobStream{}}
-}
-
-// Write keeps a log of one stream, or of streams the target merged.
-func (t *JobTail) Write(p []byte) (int, error) {
-	t.WriteStream(0, p)
-	return len(p), nil
-}
-
-// WriteStream keeps bytes of one stream of a log: Docker's stdout is 1
-// and its stderr 2.
-func (t *JobTail) WriteStream(stream byte, p []byte) {
-	s := t.streams[stream]
-	if s == nil {
-		s = &jobStream{}
-		t.streams[stream] = s
-	}
-	for len(p) > 0 {
-		i := bytes.IndexByte(p, '\n')
-		if i < 0 {
-			if s.started && !s.long {
-				s.line = append(s.line, p...)
-				if len(s.line) > t.keep {
-					s.line, s.long = nil, true
-				}
-			}
-			return
-		}
-		switch {
-		case !s.started:
-			s.started = true
-		case s.long:
-			t.keepLine([]byte(jobLineTooLong + "\n"))
-		case len(s.line)+i >= t.keep:
-			t.keepLine([]byte(jobLineTooLong + "\n"))
-		default:
-			t.keepLine(append(s.line, p[:i+1]...))
-		}
-		s.line, s.long = nil, false
-		p = p[i+1:]
-	}
-}
-
-func (t *JobTail) keepLine(line []byte) {
-	t.data = append(t.data, line...)
-	if len(t.data) > 2*t.keep {
-		t.data = append([]byte(nil), t.data[len(t.data)-t.keep:]...)
-		t.cut = true
-	}
-}
-
-// Output is what's kept, as JobOutput gives it, followed by the end of
-// each stream that has no line break of its own.
-func (t *JobTail) Output(secrets map[string]string) string {
-	data := slices.Clone(t.data)
-	var ends [][]byte
-	for _, stream := range slices.Sorted(maps.Keys(t.streams)) {
-		switch s := t.streams[stream]; {
-		case s.long:
-			ends = append(ends, []byte(jobLineTooLong))
-		case len(s.line) > 0:
-			ends = append(ends, s.line)
-		}
-	}
-	data = append(data, bytes.Join(ends, []byte("\n"))...)
-	cut := t.cut
-	if len(data) > t.keep {
-		data, cut = data[len(data)-t.keep:], true
-	}
-	if cut {
-		if i := bytes.IndexByte(data, '\n'); i >= 0 {
-			data = data[i+1:]
-		} else {
-			data = nil
-		}
-	}
-	return JobOutput(data, secrets)
 }
 
 type Provider struct {

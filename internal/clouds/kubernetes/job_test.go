@@ -129,7 +129,7 @@ func TestKubernetesRunJobCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitCode != 0 || result.Output != "connecting with [redacted]\nmigration 0003 finished\n" || !failed {
+	if result.ExitCode != 0 || result.Output != "[redacted]\nconnecting with [redacted]\nmigration 0003 finished\n" || !failed {
 		t.Fatalf("result: %+v", result)
 	}
 	job := cluster.created
@@ -184,7 +184,7 @@ func TestKubernetesRunJobDeletesFailedJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitCode != 3 || result.Output != "connecting with [redacted]\nmigration 0003 finished\n" {
+	if result.ExitCode != 3 || result.Output != "[redacted]\nconnecting with [redacted]\nmigration 0003 finished\n" {
 		t.Fatalf("result: %+v", result)
 	}
 	if !cluster.deletedInBackground() || !cluster.secretRemoved(t) {
@@ -196,7 +196,7 @@ func TestKubernetesRunJobDeletesFailedJob(t *testing.T) {
 		job.Status.Failed = 1
 		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "DeadlineExceeded"}}
 	})
-	if _, err = runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 10*time.Minute); err == nil || err.Error() != "migrate did not finish within 10m0s: connecting with [redacted]\nmigration 0003 finished\n" {
+	if _, err = runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 10*time.Minute); err == nil || err.Error() != "migrate did not finish within 10m0s: [redacted]\nconnecting with [redacted]\nmigration 0003 finished\n" {
 		t.Fatalf("deadline: %v", err)
 	}
 	if !cluster.deletedInBackground() || !cluster.secretRemoved(t) {
@@ -206,7 +206,7 @@ func TestKubernetesRunJobDeletesFailedJob(t *testing.T) {
 	// Loomplane stops waiting at timeout, before the cluster's deadline
 	// deletes the pod, so the error still shows what it wrote.
 	cluster, runtime = newJobCluster(t, 0, func(*batchv1.Job) {})
-	if _, err = runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 50*time.Millisecond); err == nil || err.Error() != "migrate did not finish within 50ms: connecting with [redacted]\nmigration 0003 finished\n" {
+	if _, err = runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 50*time.Millisecond); err == nil || err.Error() != "migrate did not finish within 50ms: [redacted]\nconnecting with [redacted]\nmigration 0003 finished\n" {
 		t.Fatalf("local timeout: %v", err)
 	}
 	if deadline := cluster.created.Spec.ActiveDeadlineSeconds; deadline == nil || *deadline != 31 {

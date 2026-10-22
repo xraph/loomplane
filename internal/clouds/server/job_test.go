@@ -114,8 +114,8 @@ func jobFixture() (cpprovider.ServiceSpec, map[string]string) {
 }
 
 func TestServerRunJobRemovesContainerAndRedactsOutput(t *testing.T) {
-	// The daemon's tail can start inside a line, and so inside a secret:
-	// each stream's first line is dropped.
+	// The daemon's tail can start inside a secret, and stderr can come
+	// between two frames of one.
 	var logs []byte
 	for _, frame := range [][]byte{
 		dockerFrame(1, "Generated-value\n"), dockerFrame(2, "of an earlier line\n"),
@@ -129,7 +129,7 @@ func TestServerRunJobRemovesContainerAndRedactsOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitCode != 1 || result.Output != "migration 0003 failed\nconnecting with [redacted]\n" {
+	if result.ExitCode != 1 || result.Output != "[redacted]\nof an earlier line\nconnecting with [redacted]migration 0003 failed\n[redacted]\n" {
 		t.Fatalf("result: %+v", result)
 	}
 	host, _ := docker.create["HostConfig"].(map[string]any)
@@ -162,7 +162,7 @@ func TestServerRunJobTimesOut(t *testing.T) {
 	docker := &jobDocker{t: t, hang: true, logs: dockerFrame(1, "started\nconnecting with s3cret-Generated-value\napplying 0003\n")}
 	spec, labels := jobFixture()
 	_, err := docker.runtime(t).RunJob(t.Context(), jobFixtureName, spec, labels, 100*time.Millisecond)
-	if err == nil || err.Error() != "migrate did not finish within 100ms: connecting with [redacted]\napplying 0003\n" {
+	if err == nil || err.Error() != "migrate did not finish within 100ms: started\nconnecting with [redacted]\napplying 0003\n" {
 		t.Fatalf("timeout: %v", err)
 	}
 	// Its output is read before it's killed and removed.
