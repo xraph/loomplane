@@ -613,3 +613,124 @@ func TestDeletingTheEnvironmentRemovesItsGateways(t *testing.T) {
 		}
 	}
 }
+
+// R81: deleting a gateway takes its routes, snapshot and instances with it,
+// and leaves every other gateway alone. Deleting it again is no error.
+func TestDeleteGateway(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	ids := make([]string, 0, 2)
+	for _, env := range []string{"env_1", "env_2"} {
+		gw, _, err := s.EnsureGateway(ctx, newGateway(t, env, "main"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.EnsureRoute(ctx, "org_1", gw.ID, "orders-db"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err = s.BumpSnapshot(ctx, "org_1", gw.ID, "aaa"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Report(ctx, "org_1", gw.ID, plane.Report{InstanceID: "i"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, gw.ID)
+	}
+	if err := s.DeleteGateway(ctx, "org_2", ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Gateway(ctx, "org_1", ids[0]); err != nil {
+		t.Fatalf("another organization deleted the gateway: %v", err)
+	}
+	if err := s.DeleteGateway(ctx, "org_1", ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Gateway(ctx, "org_1", ids[0]); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the gateway is still there: %v", err)
+	}
+	for _, table := range []string{"gateways", "gateway_routes", "gateway_snapshots", "gateway_instances"} {
+		column := "gateway_id"
+		if table == "gateways" {
+			column = "id"
+		}
+		var gone, kept int
+		if err := s.db.QueryRow(ctx, `SELECT count(*) FILTER (WHERE `+column+` = $1), count(*) FILTER (WHERE `+column+` = $2)
+			FROM loomplane_db_`+table, ids[0], ids[1]).Scan(&gone, &kept); err != nil {
+			t.Fatal(err)
+		}
+		if gone != 0 || kept != 1 {
+			t.Fatalf("%s: %d rows of the deleted gateway left, %d of the other", table, gone, kept)
+		}
+	}
+	if err := s.DeleteGateway(ctx, "org_1", ids[0]); err != nil {
+		t.Fatalf("deleting again: %v", err)
+	}
+}
+
+// R82: a deploy drops the routes of resources no longer behind the gateway,
+// keeping the salt of the ones that stay.
+func TestDeleteRoutesExcept(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	gw, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := s.EnsureGateway(ctx, newGateway(t, "env_2", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := map[string]RouteRecord{}
+	for _, r := range []string{"orders-db", "users-db", "audit-db"} {
+		rec, rerr := s.EnsureRoute(ctx, "org_1", gw.ID, r)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		kept[r] = rec
+	}
+	if _, err = s.EnsureRoute(ctx, "org_1", other.ID, "users-db"); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := s.DeleteRoutesExcept(ctx, "org_1", gw.ID, []string{"orders-db", "audit-db"})
+	if err != nil || removed != 1 {
+		t.Fatalf("removed %d: %v", removed, err)
+	}
+	routes, err := s.Routes(ctx, "org_1", gw.ID)
+	if err != nil || len(routes) != 2 || routes[0].Resource != "audit-db" || routes[1].Resource != "orders-db" ||
+		!bytes.Equal(routes[1].Salt, kept["orders-db"].Salt) {
+		t.Fatalf("routes %+v: %v", routes, err)
+	}
+	// Keeping nothing drops every route.
+	if removed, err = s.DeleteRoutesExcept(ctx, "org_1", gw.ID, nil); err != nil || removed != 2 {
+		t.Fatalf("keep nothing: removed %d: %v", removed, err)
+	}
+	if routes, err = s.Routes(ctx, "org_1", other.ID); err != nil || len(routes) != 1 {
+		t.Fatalf("another gateway lost its routes: %+v %v", routes, err)
+	}
+}
+
+// R82: a deploy moves the gateway's recorded placement and never its keys.
+func TestUpdateGatewayPlacement(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	first, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.UpdateGatewayPlacement(ctx, "org_1", first.ID, "ecs-fargate", "us-east-1", "us-east-1.db.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Gateway(ctx, "org_1", first.ID)
+	if err != nil || got.Provider != "ecs-fargate" || got.Region != "us-east-1" || got.Suffix != "us-east-1.db.example.com" {
+		t.Fatalf("placement %+v: %v", got, err)
+	}
+	if !bytes.Equal(got.SigningPublicKey, first.SigningPublicKey) || !bytes.Equal(got.SealingPublicKey.Bytes(), first.SealingPublicKey.Bytes()) {
+		t.Fatal("updating the placement changed the keys")
+	}
+	if err = s.UpdateGatewayPlacement(ctx, "org_1", "dbgw_missing", "cloud-run", "r", "s"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing gateway: %v", err)
+	}
+	if err = s.UpdateGatewayPlacement(ctx, "org_2", first.ID, "cloud-run", "r", "s"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another organization: %v", err)
+	}
+}

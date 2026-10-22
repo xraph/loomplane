@@ -949,6 +949,12 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 			return err
 		}
 	}
+	// The database gateway's cloud service is gone, or out of reach for
+	// good, so its record and keys go too, while the binding still says
+	// what to delete if this fails.
+	if err := r.removeDatabaseGateway(ctx, job.Deployment, bound); err != nil {
+		return err
+	}
 	if err := r.plans.DeleteBinding(ctx, job.Deployment.OrgID, bound.ID); err != nil {
 		return err
 	}

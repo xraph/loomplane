@@ -43,7 +43,10 @@ var errDBGatewayKeysMissing = errors.New("the database gateway's keys are missin
 type DatabaseGatewayStore interface {
 	Gateways(ctx context.Context, org, environmentID string) ([]dbgateway.Gateway, error)
 	EnsureGateway(ctx context.Context, g dbgateway.Gateway) (dbgateway.Gateway, bool, error)
+	UpdateGatewayPlacement(ctx context.Context, org, id, provider, region, suffix string) error
+	DeleteGateway(ctx context.Context, org, id string) error
 	EnsureRoute(ctx context.Context, org, gatewayID, resource string) (dbgateway.RouteRecord, error)
+	DeleteRoutesExcept(ctx context.Context, org, gatewayID string, keep []string) (int, error)
 }
 
 var _ DatabaseGatewayStore = (*dbgateway.Store)(nil)
@@ -95,10 +98,20 @@ func (r *Runner) ensureDatabaseGateway(ctx context.Context, d *Deployment, a *pl
 	if err != nil {
 		return nil, nil, err
 	}
+	// The record follows the plan: where the gateway runs, the suffix its
+	// hosts are named under, and the resources it serves. The keys stay.
+	if gw.Provider != a.Provider || gw.Region != a.Region || gw.Suffix != cfg.Suffix {
+		if err = r.dbGateways.UpdateGatewayPlacement(ctx, d.OrgID, gw.ID, a.Provider, a.Region, cfg.Suffix); err != nil {
+			return nil, nil, fmt.Errorf("record where the database gateway runs: %w", err)
+		}
+	}
 	for _, resource := range cfg.Resources {
 		if _, err = r.dbGateways.EnsureRoute(ctx, d.OrgID, gw.ID, resource); err != nil {
 			return nil, nil, fmt.Errorf("record the database gateway's route to %s: %w", resource, err)
 		}
+	}
+	if _, err = r.dbGateways.DeleteRoutesExcept(ctx, d.OrgID, gw.ID, cfg.Resources); err != nil {
+		return nil, nil, fmt.Errorf("drop the database gateway's routes to resources it no longer serves: %w", err)
 	}
 	env = map[string]string{
 		"LOOMPLANE_DBGW_ID":          gw.ID,
@@ -214,6 +227,49 @@ func (r *Runner) databaseGatewayKeys(ctx context.Context, d *Deployment, gw dbga
 	return keys, nil
 }
 
+// databaseGatewayOf returns what the database gateway a binding deployed
+// serves, or nil when it deployed something else.
+func databaseGatewayOf(b *planning.Binding) *planning.DatabaseGatewayConfig {
+	var cfg planning.ServiceConfig
+	if b == nil || b.Subject != planning.ServiceSubject || len(b.Config) == 0 || json.Unmarshal(b.Config, &cfg) != nil {
+		return nil
+	}
+	return cfg.DatabaseGateway
+}
+
+// removeDatabaseGateway deletes the record and keys of the database gateway
+// b deployed, once its cloud service is gone, so deploying it again mints a
+// new one. Deleting the record takes its routes, snapshot and instances. The
+// keys go first: a crash in between leaves a record a retry finds and
+// finishes, never keys that no record points at.
+func (r *Runner) removeDatabaseGateway(ctx context.Context, d *Deployment, b *planning.Binding) error {
+	cfg := databaseGatewayOf(b)
+	if cfg == nil {
+		return nil
+	}
+	if r.dbGateways == nil || r.resources == nil {
+		return errors.New("this Loomplane has no store for database gateways, so it can't delete the gateway's record")
+	}
+	recorded, err := r.dbGateways.Gateways(ctx, d.OrgID, d.EnvironmentID)
+	if err != nil {
+		return fmt.Errorf("read the database gateway: %w", err)
+	}
+	for _, gw := range recorded {
+		if gw.Name != cfg.Name {
+			continue
+		}
+		for _, field := range []string{dbGatewaySigningField, dbGatewaySealingField} {
+			if err = r.resources.Delete(ctx, dbGatewayKey(d.OrgID, d.EnvironmentID, gw.ID, field)); err != nil {
+				return fmt.Errorf("delete the database gateway's keys: %w", err)
+			}
+		}
+		if err = r.dbGateways.DeleteGateway(ctx, d.OrgID, gw.ID); err != nil {
+			return fmt.Errorf("delete the database gateway's record: %w", err)
+		}
+	}
+	return nil
+}
+
 // dbGatewayControlURL is the address a database gateway polls Loomplane at:
 // public_url, which has to be https unless it's on this machine, since the
 // gateway refuses anything else.
@@ -264,6 +320,14 @@ func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string,
 		return "", nil, fmt.Errorf("%s needs %s, whose address isn't a URL the database gateway can stand in for", app, resource)
 	}
 	u.Host = resource + "." + suffix + ":" + dbGatewayPort
+	// libpq lets host, hostaddr and port in the query win over the URL's
+	// host, which would take the app past the gateway.
+	if q := u.Query(); q.Has("host") || q.Has("hostaddr") || q.Has("port") {
+		q.Del("host")
+		q.Del("hostaddr")
+		q.Del("port")
+		u.RawQuery = q.Encode()
+	}
 	return u.String(), map[string]string{key + GatewaySuffix: gw.URL}, nil
 }
 

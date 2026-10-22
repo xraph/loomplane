@@ -189,6 +189,31 @@ func gatewayInsertError(err error, g Gateway) error {
 	return err
 }
 
+// UpdateGatewayPlacement records where a gateway runs now and the suffix its
+// hosts are named under. It never touches the keys. A gateway that isn't
+// there gives ErrNotFound.
+func (s *Store) UpdateGatewayPlacement(ctx context.Context, org, id, provider, region, suffix string) error {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_db_gateways SET provider = $3, region = $4, suffix = $5
+		WHERE org_id = $1 AND id = $2`, org, id, provider, region, suffix)
+	if err != nil {
+		return fmt.Errorf("update database gateway placement: %w", err)
+	}
+	if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	return nil
+}
+
+// DeleteGateway deletes a gateway, and with it its routes, snapshot and
+// instance reports. One that's already gone is not an error, so a retried
+// delete finishes.
+func (s *Store) DeleteGateway(ctx context.Context, org, id string) error {
+	if _, err := s.db.Exec(ctx, `DELETE FROM loomplane_db_gateways WHERE org_id = $1 AND id = $2`, org, id); err != nil {
+		return fmt.Errorf("delete database gateway: %w", err)
+	}
+	return nil
+}
+
 // Gateway returns one gateway, or ErrNotFound.
 func (s *Store) Gateway(ctx context.Context, org, id string) (*Gateway, error) {
 	g, err := scanGateway(s.db.QueryRow(ctx, `SELECT `+gatewayColumns+` FROM loomplane_db_gateways
@@ -268,6 +293,25 @@ func (s *Store) EnsureRoute(ctx context.Context, org, gatewayID, resource string
 		return RouteRecord{}, fmt.Errorf("read database gateway route: %w", err)
 	}
 	return r, nil
+}
+
+// DeleteRoutesExcept deletes the gateway's routes for every resource not in
+// keep, and says how many it deleted. The routes kept keep their salt.
+func (s *Store) DeleteRoutesExcept(ctx context.Context, org, gatewayID string, keep []string) (int, error) {
+	if keep == nil {
+		// A NULL array matches nothing, which would keep every route.
+		keep = []string{}
+	}
+	res, err := s.db.Exec(ctx, `DELETE FROM loomplane_db_gateway_routes
+		WHERE org_id = $1 AND gateway_id = $2 AND NOT (resource = ANY($3::text[]))`, org, gatewayID, keep)
+	if err != nil {
+		return 0, fmt.Errorf("delete database gateway routes: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete database gateway routes: %w", err)
+	}
+	return int(n), nil
 }
 
 // SetRouteState pauses or resumes a route. The state is "active" or "paused".

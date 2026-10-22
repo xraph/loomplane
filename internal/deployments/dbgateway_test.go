@@ -64,6 +64,34 @@ func (f *fakeDBGateways) EnsureGateway(_ context.Context, g dbgateway.Gateway) (
 	return g, !f.unreported, nil
 }
 
+func (f *fakeDBGateways) UpdateGatewayPlacement(_ context.Context, org, id, provider, region, suffix string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.gateways {
+		if f.gateways[i].OrgID == org && f.gateways[i].ID == id {
+			f.gateways[i].Provider, f.gateways[i].Region, f.gateways[i].Suffix = provider, region, suffix
+			return nil
+		}
+	}
+	return dbgateway.ErrNotFound
+}
+
+func (f *fakeDBGateways) DeleteGateway(_ context.Context, org, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gateways = slices.DeleteFunc(f.gateways, func(g dbgateway.Gateway) bool { return g.OrgID == org && g.ID == id })
+	delete(f.routes, id)
+	return nil
+}
+
+func (f *fakeDBGateways) DeleteRoutesExcept(_ context.Context, _, gatewayID string, keep []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	before := len(f.routes[gatewayID])
+	f.routes[gatewayID] = slices.DeleteFunc(f.routes[gatewayID], func(r string) bool { return !slices.Contains(keep, r) })
+	return before - len(f.routes[gatewayID]), nil
+}
+
 func (f *fakeDBGateways) EnsureRoute(_ context.Context, _, gatewayID, resource string) (dbgateway.RouteRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -359,6 +387,134 @@ func TestResourceAddressGateway(t *testing.T) {
 	}
 	if len(extra) != 1 || extra["DATABASE_URL_GATEWAY"] != "https://db-gateway-xyz.run.app" {
 		t.Fatalf("extra %v", extra)
+	}
+}
+
+// R83: nothing in the DSN's query can point the app past the gateway.
+func TestResourceAddressGatewayDropsHostOverrides(t *testing.T) {
+	dsn := "postgres://app:pw@db.do.example:25060/orders?sslmode=require&host=evil.example&hostaddr=10.0.0.1&port=6543"
+	r := NewRunner(RunnerDeps{Resources: snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(dsn)}})
+	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
+	value, _, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, "db", "DATABASE_URL")
+	if err != nil || value != "postgres://app:pw@db.nyc3.db.example.com:5432/orders?sslmode=require" {
+		t.Fatalf("value %q: %v", value, err)
+	}
+}
+
+// R82: each deploy keeps the gateway's routes and recorded placement in
+// step with the plan, and never its keys.
+func TestEnsureDatabaseGatewayKeepsRoutesAndPlacementCurrent(t *testing.T) {
+	store, secrets := &fakeDBGateways{}, snapshotSecrets{}
+	r := dbGatewayRunner(store, secrets, testTrustKey(t))
+	a := dbGatewayAction()
+	first, _, err := r.ensureDatabaseGateway(t.Context(), gatewayDeployment, &a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := dbGatewayAction()
+	moved.Region, moved.Service.Region = "europe-west1", "europe-west1"
+	moved.Service.DatabaseGateway.Suffix = "europe-west1.db.example.com"
+	moved.Service.DatabaseGateway.Resources = []string{"orders"}
+	again, _, err := r.ensureDatabaseGateway(t.Context(), gatewayDeployment, &moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := store.gateways[0]
+	if !slices.Equal(store.routes[gw.ID], []string{"orders"}) {
+		t.Fatalf("routes %v: the dropped resource kept its route", store.routes[gw.ID])
+	}
+	if gw.Region != "europe-west1" || gw.Suffix != "europe-west1.db.example.com" || gw.Provider != "cloud-run" {
+		t.Fatalf("recorded placement %+v", gw)
+	}
+	if again["LOOMPLANE_DBGW_SUFFIX"] != "europe-west1.db.example.com" {
+		t.Fatalf("suffix %q", again["LOOMPLANE_DBGW_SUFFIX"])
+	}
+	for _, k := range []string{"LOOMPLANE_DBGW_ID", "LOOMPLANE_DBGW_SIGNING_KEY", "LOOMPLANE_DBGW_SEALING_KEY"} {
+		if again[k] != first[k] {
+			t.Fatalf("%s changed when the gateway moved", k)
+		}
+	}
+}
+
+// removing is an executor whose Remove checks the database gateway is still
+// recorded while its cloud service is removed, and can fail.
+type removing struct {
+	*recorder
+	gateways *fakeDBGateways
+	fail     error
+	removed  int
+	early    bool
+}
+
+func (e *removing) Remove(_ context.Context, job *Job, _ *planning.Binding) error {
+	e.removed++
+	if len(e.gateways.gateways) != 1 {
+		e.early = true
+	}
+	if err := job.Checkpoint([]byte("rm")); err != nil {
+		return err
+	}
+	return e.fail
+}
+
+// R81: deleting the database gateway removes its cloud service, then its
+// record and keys, so deploying it again starts afresh.
+func TestRunDeletingTheDatabaseGatewayRemovesItsRecordAndKeys(t *testing.T) {
+	secrets := snapshotSecrets{}
+	gw, _, _ := mintGateway(t, secrets, dbgateway.Gateway{OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Name: "db-gateway"})
+	other, _, _ := mintGateway(t, nil, dbgateway.Gateway{OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_2", Name: "db-gateway"})
+	other.ID = "dbgw_other_env"
+	otherKey := dbGatewayKey("org_1", "env_2", other.ID, "signing_key")
+	secrets[otherKey] = []byte("kept")
+	cfg, err := json.Marshal(dbGatewayAction().Service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fail := range []error{errors.New("permission denied"), nil} {
+		store := &fakeDBGateways{gateways: []dbgateway.Gateway{gw}, routes: map[string][]string{gw.ID: {"orders"}}}
+		exec := &removing{recorder: &recorder{}, gateways: store, fail: fail}
+		plan := &planning.Plan{
+			ID: "plan_del", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production",
+			Status: planning.StatusApproved, Executable: true, Connections: map[string]string{"gcp": "conn_g"},
+			Actions: []planning.Action{{ID: "service:db-gateway", Op: planning.Delete, Subject: planning.ServiceSubject,
+				Name: "db-gateway", Provider: "cloud-run", Region: "us-central1", ConnectionID: "conn_g", Step: 1}},
+		}
+		plans := &fakePlans{plan: plan, bindings: map[string]*planning.Binding{"service:db-gateway": {
+			ID: "bind_gw", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject, Name: "db-gateway",
+			Provider: "cloud-run", Region: "us-central1", ConnectionID: "conn_g", ExternalID: "ext-db-gateway", Config: cfg,
+		}}}
+		r := NewRunner(RunnerDeps{
+			Store: &memStore{d: map[string]*Deployment{}}, Plans: plans, Credentials: fakeCredentials{}, Variables: fakeVariables{},
+			Sources: &fakeSources{}, Providers: available(t), Executors: map[string]Executor{"cloud-run": exec}, Resources: secrets,
+			DatabaseGateways: store, PublicURL: "https://loomplane.example.com",
+		})
+		_, err := runAll(t, r, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signing, sealing := dbGatewayKey("org_1", "env_1", gw.ID, "signing_key"), dbGatewayKey("org_1", "env_1", gw.ID, "sealing_key")
+		if fail != nil {
+			// The cloud service is still there, so is everything it needs.
+			if len(store.gateways) != 1 || secrets[signing] == nil || secrets[sealing] == nil || plans.bindings["service:db-gateway"] == nil {
+				t.Fatal("a failed removal dropped the gateway's record or keys")
+			}
+			continue
+		}
+		if exec.removed != 1 || exec.early || len(store.gateways) != 0 || store.routes[gw.ID] != nil {
+			t.Fatalf("removed %d, gateways %+v, routes %v", exec.removed, store.gateways, store.routes)
+		}
+		if _, ok := secrets[signing]; ok {
+			t.Fatal("the signing key stayed in Vault")
+		}
+		if _, ok := secrets[sealing]; ok {
+			t.Fatal("the sealing key stayed in Vault")
+		}
+		if string(secrets[otherKey]) != "kept" {
+			t.Fatal("another environment's gateway lost its key")
+		}
+		if plans.bindings["service:db-gateway"] != nil {
+			t.Fatal("the binding is still there")
+		}
 	}
 }
 
