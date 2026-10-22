@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/url"
 	"reflect"
@@ -21,12 +22,14 @@ import (
 	cpprovider "github.com/xraph/ctrlplane/provider"
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -50,6 +53,21 @@ type OwnedTarget struct {
 	Controllers ControllerReceipts
 	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
 	Backend     func(string, string) owned.Backend
+
+	// Kinds is the catalog composed resources' components are checked
+	// against. Nil is recipes.Default().
+	Kinds *recipes.Registry
+	// Hooks are composed kinds' hooks, by kind. A kind without any gets
+	// NoHooks.
+	Hooks map[string]CatalogHooks
+	// Endpoints reads the external endpoints composed resources connect,
+	// and Checker checks them again from the target on each release.
+	Endpoints EndpointResolver
+	Checker   EndpointChecker
+
+	// endpointDial dials from a target for an endpoint check. Nil is
+	// TargetDial.
+	endpointDial func(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
 }
 
 var _ Executor = (*OwnedTarget)(nil)
@@ -214,7 +232,13 @@ type ownedState struct {
 }
 
 func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err error) {
-	if job.Action.Resource != nil {
+	if r := job.Action.Resource; r != nil {
+		switch {
+		case r.Component != nil:
+			return e.applyComponent(ctx, job)
+		case r.Composition != nil:
+			return e.applyComposition(ctx, job)
+		}
 		return e.applyDatabase(ctx, job)
 	}
 	if job.Action.Service == nil || job.Connection == nil || job.Deployment == nil {
@@ -459,6 +483,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		sp.Resources = cpprovider.ResourceSpec{CPUMillis: 1000, MemoryMB: 512}
 		sp.Ports = []cpprovider.PortSpec{{Container: cfg.Catalog.Port(), Protocol: "tcp"}}
 	}
+	if cfg.Component != nil {
+		componentSpec(&sp, labels, cfg.Component)
+	}
 	labels[labelImage] = image
 	if image == "" && cfg.BuildTarget != nil {
 		labels[labelImage] = cfg.BuildTarget.Image
@@ -476,7 +503,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelScaleMin] = strconv.Itoa(cfg.Scale.Min)
 		labels[owned.LabelScaleMax] = strconv.Itoa(cfg.Scale.Max)
 	}
-	if job.Action.Provider == "server" {
+	if job.Action.Provider == "server" && cfg.Component == nil {
 		cpu, memory, err := planning.ServerResources(cfg.Size)
 		if err == nil {
 			sp.Resources.CPUMillis = int(cpu)
@@ -541,6 +568,23 @@ func (e *OwnedTarget) validateTarget(ctx context.Context, labels map[string]stri
 }
 
 func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
+	resource := boundResource(b)
+	if resource != nil && resource.Composition != nil {
+		return e.removeComposition(ctx, job, b, resource.Composition)
+	}
+	if err := e.removeInstance(ctx, job, b); err != nil {
+		return err
+	}
+	if resource != nil && resource.Component != nil && job.Deployment != nil && job.Deployment.OrgID == b.OrgID {
+		if e.Secrets == nil {
+			return ErrNoCredential
+		}
+		return e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField))
+	}
+	return nil
+}
+
+func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.Binding) error {
 	if e.RouteGuard != nil {
 		if routeErr := e.RouteGuard.ValidateRuntimeRemoval(ctx, b.OrgID, b.ProjectID, b.ExternalID); routeErr != nil {
 			return routeErr
@@ -624,6 +668,11 @@ func (e *OwnedTarget) Observe(ctx context.Context, c *connections.Connection, _ 
 	if c == nil || c.ID != b.ConnectionID || c.OrgID != b.OrgID || c.Cloud != e.Cloud {
 		return nil, errors.New("the binding target is outside its recorded organization")
 	}
+	if resource := boundResource(b); resource != nil && resource.Composition != nil {
+		// A composed resource is its components and the outputs it keeps:
+		// nothing runs as it.
+		return &Observation{Exists: true}, nil
+	}
 	iid, err := id.Parse(b.ExternalID)
 	if err != nil {
 		return nil, err
@@ -637,11 +686,15 @@ func (e *OwnedTarget) Observe(ctx context.Context, c *connections.Connection, _ 
 		if decodeErr := json.Unmarshal(b.Config, &resource); decodeErr != nil {
 			return nil, decodeErr
 		}
-		converted, convertErr := databaseService(&resource)
-		if convertErr != nil {
-			return nil, convertErr
+		if resource.Component != nil {
+			cfg = *componentService(&resource)
+		} else {
+			converted, convertErr := databaseService(&resource)
+			if convertErr != nil {
+				return nil, convertErr
+			}
+			cfg = *converted
 		}
-		cfg = *converted
 	}
 	job := &Job{Deployment: &Deployment{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID}, Connection: c, Action: planning.Action{ID: "service:" + b.Name, Name: b.Name, Service: &cfg}}
 	_, labels := ownedSpec(job, "", ownedState{})

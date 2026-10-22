@@ -258,14 +258,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
-	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg)}
-	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	// Plans check the external endpoints composed resources connect from
-	// the target each resource runs on.
+	// the target each resource runs on, and each release checks them again.
 	checker := &catalogconnect.Checker{Endpoints: e.endpoints, Probers: map[string]catalogconnect.Prober{
 		catalogconnect.EnginePostgres: catalogconnect.PostgresProber{}, catalogconnect.EngineRedis: catalogconnect.RedisProber{},
 	}}
+	// catalogHooks are what composed catalog kinds do beyond their
+	// recipes, by kind. A kind registers its own here.
+	catalogHooks := map[string]deployments.CatalogHooks{}
+	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
+	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	e.plans = planning.NewService(planning.Deps{
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
@@ -310,10 +313,11 @@ func (e *Extension) Register(fapp forge.App) error {
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
 		},
-		Providers: catalog,
-		Executors: executors,
-		Resources: resourceSecrets,
-		Telemetry: metrics,
+		Providers:    catalog,
+		Executors:    executors,
+		Resources:    resourceSecrets,
+		Telemetry:    metrics,
+		CatalogHooks: catalogHooks,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err

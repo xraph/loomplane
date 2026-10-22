@@ -44,6 +44,16 @@ const (
 	LabelManageHPA            = "loomplane.manage.hpa"
 )
 
+// A composed catalog resource's component carries its kind, its resource's
+// manifest name and its own name. LabelHealthPort is the container port
+// its readiness probe answers on, when it publishes more than one.
+const (
+	LabelCatalogKind      = "loomplane.catalog.kind"
+	LabelCatalogResource  = "loomplane.catalog.resource"
+	LabelCatalogComponent = "loomplane.catalog.component"
+	LabelHealthPort       = "loomplane.health.port"
+)
+
 type Instances interface {
 	Get(context.Context, id.ID) (*instance.Instance, error)
 }

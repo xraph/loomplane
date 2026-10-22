@@ -123,6 +123,19 @@ type Job struct {
 // which the services that need it get.
 const ResourceURL = "url"
 
+// linkField is the field of a resource a service's variable reads: its
+// address, or one of a composed resource's outputs, which it keeps as
+// "output:<name>".
+func linkField(link planning.EnvLink) (string, error) {
+	switch {
+	case link.Field == "":
+		return ResourceURL, nil
+	case link.Field == ResourceURL, strings.HasPrefix(link.Field, "output:") && len(link.Field) > len("output:"):
+		return link.Field, nil
+	}
+	return "", fmt.Errorf("%s reads %s of %s, which this Loomplane can't give it yet", link.Key, link.Field, link.From)
+}
+
 // Outcome is what an executor did.
 type Outcome struct {
 	// ExternalID is what the provider calls it: a Ctrl Plane instance or a
@@ -183,6 +196,7 @@ type Runner struct {
 	sources       Sources
 	providers     *provider.Registry
 	executors     map[string]Executor
+	catalogHooks  map[string]CatalogHooks
 	resources     ResourceSecrets
 	telemetry     *telemetry.Recorder
 	logs          LogSink
@@ -212,6 +226,9 @@ type RunnerDeps struct {
 	Resources ResourceSecrets
 	// Telemetry records how deployments go. It may be nil.
 	Telemetry *telemetry.Recorder
+	// CatalogHooks are composed catalog kinds' hooks, by kind: the same
+	// ones the owned targets run.
+	CatalogHooks map[string]CatalogHooks
 }
 
 // NewRunner returns a Runner.
@@ -219,7 +236,7 @@ func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
 		cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -1152,7 +1169,11 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			if resources[link.From] == nil || r.resources == nil {
 				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
 			}
-			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			field, err := linkField(link)
+			if err != nil {
+				return nil, nil, err
+			}
+			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, field))
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s needs %s: %w", a.Name, link.From, err)
 			}

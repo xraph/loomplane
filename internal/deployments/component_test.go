@@ -4,17 +4,39 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
+	"maps"
 	"net"
+	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	cpauth "github.com/xraph/ctrlplane/auth"
+	"github.com/xraph/ctrlplane/event"
+	"github.com/xraph/ctrlplane/id"
+	"github.com/xraph/ctrlplane/instance"
+	cpprovider "github.com/xraph/ctrlplane/provider"
+	"github.com/xraph/ctrlplane/store/memory"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/xraph/loomplane/internal/backupfiles"
+	"github.com/xraph/loomplane/internal/catalogconnect"
+	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
+	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/infrastructure"
+	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/internal/recipes/recipestest"
+	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 type dialCredentials map[string]*connections.Connection
@@ -112,5 +134,575 @@ func TestTargetDialFromTheTargetsNetwork(t *testing.T) {
 		if dial, closer, err := tc.target.TargetDial(t.Context(), tc.org, tc.conn); err == nil || dial != nil || closer != nil {
 			t.Fatalf("%s: dialed (%v)", name, err)
 		}
+	}
+}
+
+// componentBackend stands in for a server's Docker runtime: it records
+// the image each component container runs.
+type componentBackend struct {
+	owned.Backend
+	mu      sync.Mutex
+	specs   map[id.ID]cpprovider.ServiceSpec
+	applied int
+}
+
+func (b *componentBackend) Apply(_ context.Context, iid id.ID, spec cpprovider.ServiceSpec, _ map[string]string) (*cpprovider.ProvisionResult, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.specs == nil {
+		b.specs = map[id.ID]cpprovider.ServiceSpec{}
+	}
+	b.specs[iid] = spec
+	b.applied++
+	return &cpprovider.ProvisionResult{ProviderRef: server.ContainerName(iid), ServiceRefs: map[string]string{spec.Name: "container"}}, nil
+}
+
+func (b *componentBackend) Remove(_ context.Context, iid id.ID, _ map[string]string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.specs, iid)
+	return nil
+}
+
+func (b *componentBackend) Status(_ context.Context, iid id.ID, _ map[string]string) (*cpprovider.InstanceStatus, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return &cpprovider.InstanceStatus{State: cpprovider.StateRunning, Ready: true, Metadata: map[string]string{"exists": "true", "revision": b.specs[iid].Image}}, nil
+}
+
+// databaseComponentBackend also offers the native database lifecycle,
+// which a component must never use.
+type databaseComponentBackend struct {
+	*componentBackend
+	t *testing.T
+}
+
+func (b databaseComponentBackend) ConfigureDatabase(context.Context, id.ID, map[string]string, string) error {
+	b.t.Error("a stateless component was configured as a database")
+	return nil
+}
+func (b databaseComponentBackend) BackupDatabase(context.Context, id.ID, map[string]string, *backupfiles.Store, string) (backupfiles.Object, error) {
+	b.t.Error("a stateless component was backed up")
+	return backupfiles.Object{}, nil
+}
+func (b databaseComponentBackend) RestoreDatabase(context.Context, id.ID, map[string]string, *backupfiles.Store, backupfiles.Object) error {
+	b.t.Error("a stateless component was restored")
+	return nil
+}
+func (b databaseComponentBackend) DatabaseProbe(context.Context, id.ID, map[string]string) error {
+	b.t.Error("a stateless component was probed as a database")
+	return nil
+}
+func (b databaseComponentBackend) PurgeRecovery(context.Context, id.ID, map[string]string) error {
+	b.t.Error("a stateless component had recovery purged")
+	return nil
+}
+
+// countedInstances counts what changes runtime state.
+type countedInstances struct {
+	instance.Service
+	creates, updates int
+}
+
+func (s *countedInstances) Create(ctx context.Context, r instance.CreateRequest) (*instance.Instance, error) {
+	s.creates++
+	return s.Service.Create(ctx, r)
+}
+func (s *countedInstances) Update(ctx context.Context, iid id.ID, r instance.UpdateRequest) (*instance.Instance, error) {
+	s.updates++
+	return s.Service.Update(ctx, iid, r)
+}
+
+type recordedHooks struct {
+	NoHooks
+	ready   []ComponentRun
+	removed []ComposedResource
+}
+
+func (h *recordedHooks) Ready(_ context.Context, run ComponentRun) error {
+	h.ready = append(h.ready, run)
+	return nil
+}
+func (h *recordedHooks) Removed(_ context.Context, res ComposedResource) error {
+	h.removed = append(h.removed, res)
+	return nil
+}
+
+type fakeEndpoints struct {
+	endpoint *catalogconnect.Endpoint
+	dsn      string
+}
+
+func (f fakeEndpoints) Resolve(_ context.Context, orgID, endpointID string) (*catalogconnect.Endpoint, string, error) {
+	if f.endpoint == nil || orgID != f.endpoint.OrgID || endpointID != f.endpoint.ID {
+		return nil, "", catalogconnect.ErrNotFound
+	}
+	return f.endpoint, f.dsn, nil
+}
+
+type fakeChecker struct {
+	report *catalogconnect.Report
+	checks []string
+	reqs   []recipes.Requirement
+	dialed bool
+}
+
+func (f *fakeChecker) Check(ctx context.Context, orgID, endpointID string, req recipes.Requirement, dial catalogconnect.DialFunc) (*catalogconnect.Report, error) {
+	f.checks = append(f.checks, orgID+"/"+endpointID)
+	f.reqs = append(f.reqs, req)
+	if _, err := dial(ctx, "tcp", "db.internal:5432"); err == nil {
+		f.dialed = true
+	}
+	return f.report, nil
+}
+
+// sampleKinds is the sample kind, changed by edit, in a fresh registry.
+func sampleKinds(t *testing.T, edit func(*recipes.Kind)) *recipes.Registry {
+	t.Helper()
+	k := recipestest.Sample()
+	if edit != nil {
+		edit(&k)
+	}
+	r := recipes.NewRegistry()
+	if err := r.Register(k); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+type componentFixture struct {
+	target    *OwnedTarget
+	backend   *componentBackend
+	instances *countedInstances
+	secrets   *memSecrets
+	hooks     *recordedHooks
+	kinds     *recipes.Registry
+}
+
+func newComponentFixture(t *testing.T, kinds *recipes.Registry) *componentFixture {
+	t.Helper()
+	providers := cpprovider.NewRegistry()
+	store := memory.New()
+	instances := &countedInstances{Service: instance.NewService(store, providers, event.NewInMemoryBus(), &cpauth.NoopProvider{}, nil)}
+	f := &componentFixture{backend: &componentBackend{}, instances: instances, secrets: &memSecrets{m: map[string][]byte{}}, hooks: &recordedHooks{}, kinds: kinds}
+	f.target = &OwnedTarget{
+		Cloud: connections.Server, Ctrl: CtrlPlane{Providers: providers, Instances: instances, Deploys: &ownedDeploys{}},
+		Secrets: f.secrets, Backend: func(string, string) owned.Backend { return f.backend },
+		Kinds: kinds, Hooks: map[string]CatalogHooks{"sample": f.hooks},
+	}
+	return f
+}
+
+var newPostgres = map[string]planning.DependencyChoice{
+	"postgres": {Mode: planning.DependencyNew, Resource: "app--postgres", Kind: "postgres"},
+	"cache":    {Mode: planning.DependencyOff},
+}
+
+// componentJob is the plan's action for one of app's components.
+func (f *componentFixture) componentJob(t *testing.T, name string, deps map[string]planning.DependencyChoice) *Job {
+	t.Helper()
+	composition, err := f.kinds.Resolve("sample", "1", "amd64", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Name == name })
+	if i < 0 {
+		t.Fatalf("no component %s", name)
+	}
+	c := composition.Components[i]
+	cfg := &planning.ResourceConfig{
+		Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": "amd64"}, Kind: "sample", Version: "1",
+		Component: &planning.ComponentConfig{Kind: "sample", Resource: "app", Revision: composition.Revision, Component: c, Dependencies: deps, Protection: c.Protection},
+	}
+	return f.job(planning.ComponentActionName("app", name), cfg)
+}
+
+func (f *componentFixture) job(name string, cfg *planning.ResourceConfig) *Job {
+	job := &Job{
+		Deployment: &Deployment{ID: "dep", StartedBy: "usr", PlanID: "plan", OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Environment: "production"},
+		Plan:       &planning.Plan{ID: "plan"},
+		Connection: &connections.Connection{ID: "conn", OrgID: "org", Cloud: connections.Server, Status: connections.StatusReady},
+		Action:     planning.Action{ID: "resource:" + name, Subject: planning.ResourceSubject, Name: name, Provider: "server", ConnectionID: "conn", Resource: cfg},
+		Progress:   func(string, string) {}, Checkpoint: func([]byte) error { return nil },
+	}
+	job.Keep = func(ctx context.Context, field string, value []byte) error {
+		return f.secrets.Put(ctx, resourceKey("org", "env", name, field), value)
+	}
+	job.Recall = func(ctx context.Context, field string) ([]byte, error) {
+		return f.secrets.Get(ctx, resourceKey("org", "env", name, field))
+	}
+	return job
+}
+
+// bound is the binding an applied job leaves.
+func bound(job *Job, out *Outcome) *planning.Binding {
+	raw, _ := json.Marshal(job.Action.Resource)
+	return &planning.Binding{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Subject: planning.ResourceSubject, Name: job.Action.Name, Provider: "server", ConnectionID: "conn", ExternalID: out.ExternalID, Config: raw}
+}
+
+// started is the spec and labels Ctrl Plane keeps for an applied
+// component, and what its container gets: the spec's variables and its
+// runtime values, secrets included.
+func (f *componentFixture) started(t *testing.T, out *Outcome) (cpprovider.ServiceSpec, map[string]string, map[string]string) {
+	t.Helper()
+	iid, err := id.Parse(out.ExternalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, err := f.instances.Get(infrastructure.WithPrincipal(t.Context(), security.Principal{OrgID: "org", UserID: "usr"}), iid)
+	if err != nil || len(inst.Services) != 1 {
+		t.Fatalf("instance: %+v %v", inst, err)
+	}
+	spec, labels := inst.Services[0], inst.Labels
+	env := maps.Clone(spec.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	var values map[string]string
+	if err := json.Unmarshal(f.secrets.m[labels[owned.LabelRuntime]], &values); err != nil {
+		t.Fatalf("runtime values: %v", err)
+	}
+	maps.Copy(env, values)
+	return spec, labels, env
+}
+
+const postgresURL = "postgresql://loomplane:pg-Secret-1@lp-inst-db:5432/app__postgres?sslmode=disable"
+
+func TestStatelessComponentHasNoVolumeOrStatefulLabel(t *testing.T) {
+	f := newComponentFixture(t, recipestest.Registry(t))
+	job := f.componentJob(t, "api", newPostgres)
+	svc := componentService(job.Action.Resource)
+	if svc == nil {
+		t.Fatal("no service for the api component")
+	}
+	if svc.Public || svc.Port != 8080 || svc.HealthPath != "/readyz" || svc.Workload != provider.HTTPService || svc.BuildTarget == nil || svc.BuildTarget.Image != job.Action.Resource.Component.Component.Image {
+		t.Fatalf("component service: %+v", svc)
+	}
+	copyJob := *job
+	copyJob.Action.Resource, copyJob.Action.Service = nil, svc
+	sp, labels := ownedSpec(&copyJob, svc.BuildTarget.Image, ownedState{})
+	if len(sp.Volumes) != 0 {
+		t.Fatalf("stateless component has volumes: %+v", sp.Volumes)
+	}
+	if _, ok := labels[owned.LabelStateful]; ok {
+		t.Fatal("stateless component is labelled stateful")
+	}
+	for key, want := range map[string]string{
+		owned.LabelHealth: "/readyz", owned.LabelHealthPort: "8080", owned.LabelPublic: "false",
+		owned.LabelCatalogKind: "sample", owned.LabelCatalogResource: "app", owned.LabelCatalogComponent: "api",
+	} {
+		if labels[key] != want {
+			t.Fatalf("label %s = %q, want %q", key, labels[key], want)
+		}
+	}
+	if want := []cpprovider.PortSpec{{Container: 8080, Protocol: "tcp"}, {Container: 9090, Protocol: "tcp"}}; !reflect.DeepEqual(sp.Ports, want) {
+		t.Fatalf("ports: %+v", sp.Ports)
+	}
+	if !slices.Equal(sp.Command, []string{"sample", "serve"}) || sp.Resources.CPUMillis != 500 || sp.Resources.MemoryMB != 256 {
+		t.Fatalf("command or resources: %+v", sp)
+	}
+
+	// A plan made from another recipe isn't applied, and a job isn't run yet.
+	changed := f.componentJob(t, "api", newPostgres)
+	changed.Action.Resource.Component.Component.Image = "registry.example/other@sha256:" + strings.Repeat("c", 64)
+	if _, err := f.target.Apply(t.Context(), changed); err == nil || !strings.Contains(err.Error(), "recipe changed") {
+		t.Fatalf("changed recipe: %v", err)
+	}
+	if _, err := f.target.Apply(t.Context(), f.componentJob(t, "migrate", newPostgres)); err == nil || !strings.Contains(err.Error(), "jobs are not supported yet") {
+		t.Fatalf("job component: %v", err)
+	}
+	if f.instances.creates != 0 {
+		t.Fatal("a refused component created an instance")
+	}
+}
+
+func TestComponentGeneratedSecretsAreKeptOncePerComposition(t *testing.T) {
+	kinds := sampleKinds(t, func(k *recipes.Kind) {
+		k.Secrets[0].Encoding = "hex"
+		k.Secrets[0].Bytes = 16
+		k.Components[2].Env = append(k.Components[2].Env, recipes.EnvVar{Name: "ADMIN_PASSWORD", Secret: "admin-password"})
+	})
+	f := newComponentFixture(t, kinds)
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	key := resourceKey("org", "env", "app", "secret:admin-password")
+
+	api := f.componentJob(t, "api", newPostgres)
+	out, err := f.target.Apply(t.Context(), api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := string(f.secrets.m[key])
+	if len(stored) != 32 || strings.Trim(stored, "0123456789abcdef") != "" {
+		t.Fatalf("generated secret %q isn't 16 hex-encoded bytes", stored)
+	}
+	spec, _, env := f.started(t, out)
+	if env["ADMIN_PASSWORD"] != stored || spec.Env["ADMIN_PASSWORD"] != "" {
+		t.Fatalf("api secret: env %q, spec %q", env["ADMIN_PASSWORD"], spec.Env["ADMIN_PASSWORD"])
+	}
+
+	worker, err := f.target.Apply(t.Context(), f.componentJob(t, "worker", newPostgres))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, env := f.started(t, worker); env["ADMIN_PASSWORD"] != stored {
+		t.Fatalf("worker got another secret: %q", env["ADMIN_PASSWORD"])
+	}
+
+	again := f.componentJob(t, "api", newPostgres)
+	again.Binding = bound(api, out)
+	out2, err := f.target.Apply(t.Context(), again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(f.secrets.m[key]) != stored {
+		t.Fatal("a second apply generated the secret again")
+	}
+	if _, _, env := f.started(t, out2); env["ADMIN_PASSWORD"] != stored {
+		t.Fatal("a second apply changed the api's secret")
+	}
+
+	delete(f.secrets.m, key)
+	lost := f.componentJob(t, "api", newPostgres)
+	lost.Binding = bound(api, out2)
+	if _, err := f.target.Apply(t.Context(), lost); err == nil || err.Error() != "the generated secret admin-password is missing; recover it before changing the service" {
+		t.Fatalf("missing secret: %v", err)
+	}
+	if _, ok := f.secrets.m[key]; ok {
+		t.Fatal("a missing secret of a bound component was generated again")
+	}
+}
+
+func TestComponentEnvResolvesDependencyFields(t *testing.T) {
+	kinds := sampleKinds(t, func(k *recipes.Kind) {
+		for field, name := range map[string]string{
+			recipes.FieldHost: "PGHOST", recipes.FieldPort: "PGPORT", recipes.FieldHostPort: "PGHOSTPORT",
+			recipes.FieldUsername: "PGUSER", recipes.FieldPassword: "PGPASSWORD", recipes.FieldDatabase: "PGDATABASE",
+		} {
+			k.Components[1].Env = append(k.Components[1].Env, recipes.EnvVar{Name: name, From: &recipes.Ref{Dependency: "postgres", Field: field}})
+		}
+	})
+	f := newComponentFixture(t, kinds)
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", newPostgres))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, env := f.started(t, out)
+	want := map[string]string{
+		"DATABASE_URL": postgresURL, "PGHOST": "lp-inst-db", "PGPORT": "5432", "PGHOSTPORT": "lp-inst-db:5432",
+		"PGUSER": "loomplane", "PGPASSWORD": "pg-Secret-1", "PGDATABASE": "app__postgres",
+	}
+	for key, value := range want {
+		if env[key] != value {
+			t.Fatalf("%s = %q, want %q", key, env[key], value)
+		}
+		if _, plain := spec.Env[key]; plain {
+			t.Fatalf("%s entered the Ctrl Plane spec", key)
+		}
+	}
+	if _, ok := env["REDIS_URL"]; ok {
+		t.Fatal("an optional dependency that's off still set its variable")
+	}
+	raw, _ := json.Marshal(spec)
+	if strings.Contains(string(raw), "pg-Secret-1") {
+		t.Fatal("the dependency password entered the Ctrl Plane spec")
+	}
+
+	// Ready gets the resolved run once the process passes readiness.
+	if len(f.hooks.ready) != 1 {
+		t.Fatalf("ready hook ran %d times", len(f.hooks.ready))
+	}
+	run := f.hooks.ready[0]
+	if run.Resource != "app" || run.Kind != "sample" || run.Provider != "server" || run.Component.Name != "api" || run.OrgID != "org" || run.EnvironmentID != "env" || run.Environment != "production" || run.DeploymentID != "dep" || run.PlanID != "plan" {
+		t.Fatalf("ready run: %+v", run)
+	}
+	if run.Env["PGPASSWORD"] != "pg-Secret-1" || string(run.Secrets["admin-password"]) != env["ADMIN_PASSWORD"] {
+		t.Fatalf("ready run env or secrets: %+v %+v", run.Env, run.Secrets)
+	}
+
+	// Without the dependency's address the component doesn't start.
+	delete(f.secrets.m, resourceKey("org", "env", "app--postgres", "url"))
+	f.instances.creates = 0
+	fresh := newComponentFixture(t, kinds)
+	if _, err := fresh.target.Apply(t.Context(), fresh.componentJob(t, "api", newPostgres)); err == nil || fresh.instances.creates != 0 {
+		t.Fatalf("missing dependency: %v", err)
+	}
+}
+
+func TestComponentEnvResolvesSiblingAddress(t *testing.T) {
+	f := newComponentFixture(t, recipestest.Registry(t))
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	worker := f.componentJob(t, "worker", newPostgres)
+	if _, err := f.target.Apply(t.Context(), worker); err == nil || f.instances.creates != 0 {
+		t.Fatalf("worker started before the api: %v", err)
+	}
+	api, err := f.target.Apply(t.Context(), f.componentJob(t, "api", newPostgres))
+	if err != nil {
+		t.Fatal(err)
+	}
+	iid, _ := id.Parse(api.ExternalID)
+	host := server.ContainerName(iid)
+	var address map[string]string
+	if err = json.Unmarshal(f.secrets.m[resourceKey("org", "env", "app--api", "address")], &address); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"http": "http://" + host + ":8080", "admin": "http://" + host + ":9090"}; !maps.Equal(address, want) {
+		t.Fatalf("api address: %v", address)
+	}
+	out, err := f.target.Apply(t.Context(), f.componentJob(t, "worker", newPostgres))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, env := f.started(t, out)
+	if env["API_URL"] != "http://"+host+":8080" || spec.Env["API_URL"] != env["API_URL"] {
+		t.Fatalf("worker API_URL = %q", env["API_URL"])
+	}
+
+	// Removing a component forgets its address with its runtime values.
+	apiJob := f.componentJob(t, "api", newPostgres)
+	if err = f.target.Remove(t.Context(), apiJob, bound(apiJob, api)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.secrets.m[resourceKey("org", "env", "app--api", "address")]; ok {
+		t.Fatal("a removed component's address survived")
+	}
+}
+
+func TestComponentRecheckFailsBeforeRuntimeChanges(t *testing.T) {
+	const dsn = "postgres://app:hunter2-Secret@db.internal:5432/app?sslmode=require"
+	external := map[string]planning.DependencyChoice{
+		"postgres": {Mode: planning.DependencyExternal, External: "endpoint_01k0000000000000000000000a"},
+		"cache":    {Mode: planning.DependencyOff},
+	}
+	f := newComponentFixture(t, recipestest.Registry(t))
+	checker := &fakeChecker{report: &catalogconnect.Report{Problems: []string{"db.internal:5432 isn't reachable from the target: dial tcp 10.0.0.5:5432: connect: connection refused"}}}
+	f.target.Endpoints = fakeEndpoints{endpoint: &catalogconnect.Endpoint{ID: "endpoint_01k0000000000000000000000a", OrgID: "org", Name: "prod-pg", Engine: "postgres", Host: "db.internal", Port: 5432}, dsn: dsn}
+	f.target.Checker = checker
+	var dialedFrom string
+	f.target.endpointDial = func(_ context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error) {
+		dialedFrom = orgID + "/" + connectionID
+		return func(context.Context, string, string) (net.Conn, error) {
+			client, peer := net.Pipe()
+			_ = peer.Close()
+			return client, nil
+		}, noClose{}, nil
+	}
+	_, err := f.target.Apply(t.Context(), f.componentJob(t, "api", external))
+	if err == nil || !strings.Contains(err.Error(), "endpoint prod-pg isn't reachable from the target") {
+		t.Fatalf("unreachable endpoint: %v", err)
+	}
+	if strings.Contains(err.Error(), dsn) || strings.Contains(err.Error(), "hunter2-Secret") {
+		t.Fatalf("the error shows the DSN: %v", err)
+	}
+	if f.instances.creates != 0 || f.instances.updates != 0 || f.backend.applied != 0 {
+		t.Fatal("runtime changed before the endpoint was rechecked")
+	}
+	if dialedFrom != "org/conn" || !checker.dialed || !slices.Equal(checker.checks, []string{"org/endpoint_01k0000000000000000000000a"}) || checker.reqs[0].Engine != "postgres" || checker.reqs[0].MinVersion != "16" {
+		t.Fatalf("check: from %q, %+v", dialedFrom, checker)
+	}
+
+	// A passing check starts the component with the DSN as a secret.
+	checker.report = &catalogconnect.Report{Version: "17.2"}
+	out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", external))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, env := f.started(t, out)
+	if env["DATABASE_URL"] != dsn || spec.Env["DATABASE_URL"] != "" {
+		t.Fatalf("external DATABASE_URL: env %q spec %q", env["DATABASE_URL"], spec.Env["DATABASE_URL"])
+	}
+}
+
+func TestCompositionPublishesOutputs(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	f := newComponentFixture(t, kinds)
+	f.secrets.m[resourceKey("org", "env", "app--api", "address")] = []byte(`{"http":"http://lp-inst-api:8080","admin":"http://lp-inst-api:9090"}`)
+	kind, _ := kinds.Kind("sample")
+	cfg := &planning.ResourceConfig{
+		Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": "amd64"}, Kind: "sample", Version: "1",
+		Composition: &planning.CompositionConfig{Kind: "sample", Version: "1", Revision: "1", Dependencies: newPostgres, Outputs: kind.Outputs, Secrets: kind.Secrets},
+	}
+	job := f.job("app", cfg)
+	out, err := f.target.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.ExternalID != "catalog/app" {
+		t.Fatalf("external ID %q", out.ExternalID)
+	}
+	if got := string(f.secrets.m[resourceKey("org", "env", "app", "url")]); got != "http://lp-inst-api:8080" {
+		t.Fatalf("url = %q", got)
+	}
+	if got := string(f.secrets.m[resourceKey("org", "env", "app", "output:admin")]); got != "http://lp-inst-api:9090" {
+		t.Fatalf("output:admin = %q", got)
+	}
+	if f.instances.creates != 0 {
+		t.Fatal("the composed resource itself started something")
+	}
+
+	b := bound(job, out)
+	observed, err := f.target.Observe(t.Context(), job.Connection, nil, b)
+	if err != nil || !observed.Exists {
+		t.Fatalf("observe: %+v %v", observed, err)
+	}
+
+	f.secrets.m[resourceKey("org", "env", "app", "secret:admin-password")] = []byte("generated")
+	f.secrets.m[resourceKey("org", "env", "app--api", "url")] = []byte("kept")
+	if err := f.target.Remove(t.Context(), job, b); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.hooks.removed) != 1 || f.hooks.removed[0] != (ComposedResource{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Resource: "app", Kind: "sample"}) {
+		t.Fatalf("removed hook: %+v", f.hooks.removed)
+	}
+	for _, field := range []string{"url", "output:admin", "secret:admin-password"} {
+		if _, ok := f.secrets.m[resourceKey("org", "env", "app", field)]; ok {
+			t.Fatalf("%s survived removing the composed resource", field)
+		}
+	}
+	if _, ok := f.secrets.m[resourceKey("org", "env", "app--api", "url")]; !ok {
+		t.Fatal("removing the composed resource deleted a component's value")
+	}
+}
+
+func TestRunnerEnvReadsLinkField(t *testing.T) {
+	secrets := &memSecrets{m: map[string][]byte{
+		resourceKey("org", "env", "app", "url"):          []byte("http://lp-inst-api:8080"),
+		resourceKey("org", "env", "app", "output:admin"): []byte("http://lp-inst-api:9090"),
+		resourceKey("org", "env", "db", "url"):           []byte(postgresURL),
+	}}
+	r := &Runner{resources: secrets, variables: fakeVariables{}}
+	d := &Deployment{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Environment: "production"}
+	a := planning.Action{Name: "web", Service: &planning.ServiceConfig{Service: "web", Env: []planning.EnvLink{
+		{Key: "SAMPLE_URL", From: "app", Subject: planning.ResourceSubject, Field: "url"},
+		{Key: "SAMPLE_ADMIN_URL", From: "app", Subject: planning.ResourceSubject, Field: "output:admin"},
+		{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject},
+	}}}
+	resources := map[string]*planning.Binding{"app": {Name: "app"}, "db": {Name: "db"}}
+	env, secret, err := r.env(t.Context(), d, a, nil, resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"SAMPLE_URL": "http://lp-inst-api:8080", "SAMPLE_ADMIN_URL": "http://lp-inst-api:9090", "DATABASE_URL": postgresURL}
+	if !maps.Equal(env, want) || len(secret) != 3 {
+		t.Fatalf("env %v, secret %v", env, secret)
+	}
+}
+
+func TestStatelessComponentRecoveryLabelsAbsent(t *testing.T) {
+	f := newComponentFixture(t, recipestest.Registry(t))
+	f.target.Backend = func(string, string) owned.Backend { return databaseComponentBackend{componentBackend: f.backend, t: t} }
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", newPostgres))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, labels, _ := f.started(t, out)
+	for _, key := range []string{owned.LabelStateful, server.LabelDatabase, server.LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine} {
+		if _, ok := labels[key]; ok {
+			t.Fatalf("stateless component carries %s", key)
+		}
+	}
+	if _, ok := f.secrets.m[resourceKey("org", "env", "app--api", "url")]; ok {
+		t.Fatal("a component kept a database address")
 	}
 }

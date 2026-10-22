@@ -413,14 +413,9 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 				if probe == nil {
 					probe = probeServer
 				}
-				for _, ports := range info.NetworkSettings.Ports {
-					for _, port := range ports {
-						value, parseErr := strconv.Atoi(port.HostPort)
-						if parseErr == nil && value > 0 {
-							if err = probe(ctx, c, value, labels[owned.LabelHealth]); err == nil {
-								return nil
-							}
-						}
+				for _, value := range healthPorts(info, labels) {
+					if err = probe(ctx, c, value, labels[owned.LabelHealth]); err == nil {
+						return nil
 					}
 				}
 			}
@@ -436,6 +431,24 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// healthPorts are the host ports a readiness probe may answer on: the one
+// published for LabelHealthPort when the container declares it, otherwise
+// every published port.
+func healthPorts(info *containerInfo, labels map[string]string) []int {
+	var out []int
+	for key, ports := range info.NetworkSettings.Ports {
+		if declared := labels[owned.LabelHealthPort]; declared != "" && key != declared+"/tcp" {
+			continue
+		}
+		for _, port := range ports {
+			if value, err := strconv.Atoi(port.HostPort); err == nil && value > 0 {
+				out = append(out, value)
+			}
+		}
+	}
+	return out
 }
 
 func probeServer(ctx context.Context, c *Client, port int, path string) error {
@@ -536,12 +549,9 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 			if probe == nil {
 				probe = probeServer
 			}
-			for _, ports := range info.NetworkSettings.Ports {
-				for _, port := range ports {
-					value, parseErr := strconv.Atoi(port.HostPort)
-					if parseErr == nil && value > 0 && probe(ctx, c, value, labels[owned.LabelHealth]) == nil {
-						ready = true
-					}
+			for _, value := range healthPorts(info, labels) {
+				if probe(ctx, c, value, labels[owned.LabelHealth]) == nil {
+					ready = true
 				}
 			}
 			if !ready {

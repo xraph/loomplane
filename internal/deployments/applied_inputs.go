@@ -70,7 +70,11 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 			if _, overridden := values[link.Key]; overridden {
 				continue
 			}
-			value, e := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			field, e := linkField(link)
+			if e != nil {
+				return e
+			}
+			value, e := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, field))
 			if e != nil {
 				return fmt.Errorf("capture applied resource variable: %w", e)
 			}

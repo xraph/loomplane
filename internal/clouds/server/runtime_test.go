@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/ctrlplane/id"
 	cpprovider "github.com/xraph/ctrlplane/provider"
@@ -322,5 +325,61 @@ func TestRuntime_pullErrorDoesNotExposeBrokeredToken(t *testing.T) {
 	})}}
 	if err := (&Runtime{}).pull(t.Context(), client, "registry.example.com/team/api@sha256:fixture", auth); err == nil || strings.Contains(err.Error(), "private-broker-token") {
 		t.Fatalf("pull error leaked authentication: %v", err)
+	}
+}
+
+func TestServerWaitProbesDeclaredHealthPort(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/containers/"+ContainerName(iid)+"/json" {
+			t.Errorf("unexpected runtime request: %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Id":     "container_one",
+			"Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}},
+			"State":  map[string]any{"Running": true, "Status": "running"},
+			"NetworkSettings": map[string]any{"Ports": map[string]any{
+				"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32001"}},
+				"9090/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32002"}},
+			}},
+		})
+	}))
+	defer api.Close()
+	u, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{Config: &Config{Details: map[string]string{"docker_id": "daemon_fixture"}}, HTTP: &http.Client{Transport: runtimeTransport(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
+		return http.DefaultTransport.RoundTrip(r)
+	})}}
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelHealth: "/readyz", owned.LabelHealthPort: "8080"}
+	var probed []int
+	answer := false
+	runtime := &Runtime{Wait: time.Nanosecond, Probe: func(_ context.Context, _ *Client, port int, path string) error {
+		probed = append(probed, port)
+		if path != "/readyz" {
+			t.Errorf("probed %s", path)
+		}
+		if answer {
+			return nil
+		}
+		return errors.New("not ready")
+	}}
+	if err = runtime.wait(t.Context(), client, ContainerName(iid), iid, labels); err == nil {
+		t.Fatal("a component that never answered passed readiness")
+	}
+	if !slices.Equal(probed, []int{32001}) {
+		t.Fatalf("probed host ports %v, want only 8080's", probed)
+	}
+	probed, answer = nil, true
+	if err = runtime.wait(t.Context(), client, ContainerName(iid), iid, labels); err != nil || !slices.Equal(probed, []int{32001}) {
+		t.Fatalf("ready component: probed %v, %v", probed, err)
+	}
+	status, err := (&Runtime{Probe: runtime.Probe, Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }}).Status(t.Context(), iid, labels)
+	if err != nil || !status.Ready || !slices.Equal(probed, []int{32001, 32001}) {
+		t.Fatalf("status: %+v probed %v, %v", status, probed, err)
 	}
 }
