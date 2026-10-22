@@ -127,7 +127,7 @@ func Catalog() []provider.Provider {
 		{
 			Name: "azure-container-apps", Title: "Azure Container Apps", Cloud: "azure",
 			BuildLogs: "unavailable", LogNote: "ACR Tasks' build logs are under Services, Tasks, Runs in the container registry Loomplane makes; progress remains available.",
-			Description: "Builds a service's Dockerfile with ACR Tasks and runs it on Azure Container Apps, which scales it with traffic, down to zero if you let it.",
+			Description: "Builds a service with ACR Tasks, from its Dockerfile or with Google's buildpacks, and runs it on Azure Container Apps, which scales it with traffic, down to zero if you let it.",
 			Model:       provider.Build,
 			Runs: []provider.Runs{
 				{Workload: provider.HTTPService, Execution: provider.Container, Creates: "Container app"},

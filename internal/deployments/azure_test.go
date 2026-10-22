@@ -183,13 +183,46 @@ func TestAzure_aFailedBuildDeploysNothing(t *testing.T) {
 	}
 }
 
-func TestAzure_refusesWhatItCantBuild(t *testing.T) {
-	exec := &Azure{Client: azure.New("http://127.0.0.1:1")}
+func TestAzure_buildsWithoutADockerfileUsingBuildpacks(t *testing.T) {
+	f := azuretest.New(t)
+	exec := &Azure{Client: azure.New(f.URL())}
 	cfg := apiConfig()
 	cfg.Image = ""
-	if _, err := exec.Apply(t.Context(), azureJob(t, cfg)); err == nil || !strings.Contains(err.Error(), "Dockerfile") {
-		t.Fatalf("no dockerfile: %v", err)
+	cfg.Ecosystem = "go"
+	cfg.Source = "services/api"
+	job := azureJob(t, cfg)
+	out, err := exec.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
 	}
+	image := azure.RegistryName(azuretest.Subscription, "loomplane") + ".azurecr.io/api-23456789:" + doApproved[:12]
+	if out.Image != image {
+		t.Fatalf("image %q, want %q", out.Image, image)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.Tasks) != 1 {
+		t.Fatalf("tasks %v", f.Tasks)
+	}
+	for _, want := range []string{
+		"cmd: gcr.io/k8s-skaffold/pack build {{.Run.Registry}}/api-23456789:",
+		"--builder gcr.io/buildpacks/builder:latest",
+		"--path acme-mono-0123456 ",
+		"--env GOOGLE_BUILDABLE",
+		`env: ["GOOGLE_BUILDABLE=./services/api"]`,
+		"entryPoint: pack",
+	} {
+		if !strings.Contains(f.Tasks[0], want) {
+			t.Fatalf("task lacks %q:\n%s", want, f.Tasks[0])
+		}
+	}
+	if strings.Contains(f.Tasks[0], "build: -t") {
+		t.Fatalf("a docker build step:\n%s", f.Tasks[0])
+	}
+}
+
+func TestAzure_refusesWhatItCantBuild(t *testing.T) {
+	exec := &Azure{Client: azure.New("http://127.0.0.1:1")}
 	static := &planning.ServiceConfig{Source: "web", Workload: provider.StaticSite, Execution: provider.Static}
 	if _, err := exec.Apply(t.Context(), azureJob(t, static)); err == nil {
 		t.Fatal("ran a static site")

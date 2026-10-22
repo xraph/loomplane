@@ -1,6 +1,6 @@
 # Deploy to Azure Container Apps
 
-Loomplane can build your services and run them on Azure Container Apps. It uploads the approved commit to a container registry in your subscription, ACR Tasks builds the service's Dockerfile there, and a container app runs the image. Nothing from your repository runs on a Loomplane machine.
+Loomplane can build your services and run them on Azure Container Apps. It uploads the approved commit to a container registry in your subscription, ACR Tasks builds the service there, and a container app runs the image. Nothing from your repository runs on a Loomplane machine.
 
 ## Connect Azure
 
@@ -43,7 +43,7 @@ Everything lives in the connection's resource group, which Loomplane makes in th
 - One Container Apps environment per region, called `loomplane-<region>`. It's consumption only, with no Log Analytics workspace.
 - A container app for each service in each environment, named after the service, the environment and the project.
 
-Each deployment builds the commit the plan approved, tagged with its first twelve characters, and the app runs that image in a single active revision. A public service takes HTTPS traffic from anywhere on the app's own address. A private one only takes traffic from apps in its environment. `size` picks the smallest consumption size that fits, a quarter CPU at a time with twice as many GiB of memory, up to 4 CPUs and 8 GiB. `scale` sets the minimum and maximum replicas; without it Container Apps scales the app with traffic, down to zero.
+A service with a Dockerfile builds from it. Anything else goes through Google's buildpacks, run by `pack` in the same ACR Tasks run, the way Cloud Run and ECS build it. They handle Go, Node, Python, Java and more; a Python service's `start` command in the manifest becomes its entrypoint. Each deployment builds the commit the plan approved, tagged with its first twelve characters, and the app runs that image in a single active revision. A public service takes HTTPS traffic from anywhere on the app's own address. A private one only takes traffic from apps in its environment. `size` picks the smallest consumption size that fits, a quarter CPU at a time with twice as many GiB of memory, up to 4 CPUs and 8 GiB. `scale` sets the minimum and maximum replicas; without it Container Apps scales the app with traffic, down to zero.
 
 Secret variables go in as app secrets, which Azure never shows again. The rest are plain environment variables.
 
@@ -51,4 +51,4 @@ Removing a service from the manifest deletes its container app. The registry and
 
 ## What it can't do yet
 
-Services need a Dockerfile. There are no buildpacks here yet, and the planner says so before you approve anything. Container Apps only runs HTTP services and web apps for now: no workers, static sites or databases. A private service only takes traffic from its own environment, and the planner doesn't give other services its address yet, so a service that needs one is asked to make it public. Build logs are under **Services**, **Tasks**, **Runs** in the container registry, and Loomplane shows the deployment's progress.
+Container Apps only runs HTTP services and web apps for now: no workers, static sites or databases. A private service only takes traffic from its own environment, and the planner doesn't give other services its address yet, so a service that needs one is asked to make it public. Build logs are under **Services**, **Tasks**, **Runs** in the container registry, and Loomplane shows the deployment's progress.

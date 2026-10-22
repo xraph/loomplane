@@ -20,8 +20,9 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-// Azure builds a service's Dockerfile with ACR Tasks and runs it on Azure
-// Container Apps. It's a Loomplane capability adapter, like Render's:
+// Azure builds a service with ACR Tasks, from its Dockerfile or with
+// Google's buildpacks when it has none, and runs it on Azure Container
+// Apps. It's a Loomplane capability adapter, like Render's:
 // Loomplane uploads the approved commit's source to the connection's
 // container registry, ACR Tasks builds and pushes it there, and the
 // container app runs that image. Nothing from the repository runs on a
@@ -83,9 +84,6 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	cfg := job.Action.Service
 	if cfg == nil || cfg.Execution == provider.Static {
 		return nil, fmt.Errorf("%w: azure container apps runs services, not %s", ErrNoExecutor, job.Action.Subject)
-	}
-	if cfg.Image == "" {
-		return nil, fmt.Errorf("loomplane builds for azure container apps from a Dockerfile, and %s has none", job.Action.Name)
 	}
 	s, err := azureSession(ctx, a.Client, job.Connection, job.Credential)
 	if err != nil {
@@ -177,13 +175,17 @@ func (a *Azure) build(ctx context.Context, s *azure.Session, job *Job, cfg *plan
 		if err != nil {
 			return err
 		}
-		// The tarball's one top-level directory is in every path.
-		dir := cfg.ContextDir()
 		repo := imageName(job) + ":" + tag
-		state.RunID, err = s.StartBuild(ctx, azure.BuildRequest{
-			Source: where, Image: repo,
-			Dockerfile: path.Join(root, dir, cfg.DockerfileIn(dir)), Context: path.Join(root, dir),
-		})
+		req := azure.BuildRequest{Source: where, Image: repo}
+		// The tarball's one top-level directory is in every path.
+		if cfg.Image == "" {
+			dir, env := packPlan(cfg)
+			req.Pack = &azure.PackBuild{Image: packBuilder, Builder: googleBuilder, Path: path.Join(root, dir), Env: env}
+		} else {
+			dir := cfg.ContextDir()
+			req.Dockerfile, req.Context = path.Join(root, dir, cfg.DockerfileIn(dir)), path.Join(root, dir)
+		}
+		state.RunID, err = s.StartBuild(ctx, req)
 		if err != nil {
 			return err
 		}

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	cloudprogress "github.com/xraph/loomplane/internal/clouds/progress"
@@ -198,26 +199,76 @@ func (s *Session) UploadSource(ctx context.Context, src io.Reader, size int64) (
 	return up.RelativePath, nil
 }
 
-// BuildRequest is a Docker build ACR Tasks runs on uploaded source.
+// BuildRequest is a build ACR Tasks runs on uploaded source: a Docker
+// build, or a buildpack build when Pack is set.
 type BuildRequest struct {
 	// Source is where UploadSource put the source.
 	Source string
 	// Image is the repository and tag to push, without the registry.
 	Image string
-	// Dockerfile and Context are paths in the source.
+	// Dockerfile and Context are paths in the source. Pack replaces them.
 	Dockerfile, Context string
+	// Pack builds with buildpacks instead of a Dockerfile.
+	Pack *PackBuild
 }
 
-// task is the ACR Tasks file for a build: docker build, then push.
+// PackBuild is a build by the pack CLI, for a service that has no
+// Dockerfile.
+type PackBuild struct {
+	// Image is the container image that has pack in it, and Builder the
+	// buildpack builder it uses.
+	Image, Builder string
+	// Path is the directory in the source to build.
+	Path string
+	// Env are KEY=VALUE variables for the builder.
+	Env []string
+}
+
+// unsafeInTask is what a value spliced into a task file may not hold.
+const unsafeInTask = " \t\r\n\"'`$\\{}"
+
+// task is the ACR Tasks file for a build: docker build or pack build,
+// then push.
 func (b BuildRequest) task() (string, error) {
+	ref := "{{.Run.Registry}}/" + b.Image
+	if b.Pack != nil {
+		return b.packTask(ref)
+	}
 	for _, v := range []string{b.Image, b.Dockerfile, b.Context} {
-		if v == "" || strings.ContainsAny(v, " \t\r\n\"'`$\\{}") {
+		if v == "" || strings.ContainsAny(v, unsafeInTask) {
 			return "", fmt.Errorf("ACR Tasks can't build from %q", v)
 		}
 	}
-	ref := "{{.Run.Registry}}/" + b.Image
 	return "version: v1.1.0\nsteps:\n" +
 		"  - build: -t " + ref + " -f " + b.Dockerfile + " " + b.Context + "\n" +
+		"  - push:\n    - \"" + ref + "\"\n", nil
+}
+
+// packTask is the task file for a buildpack build. The command line gets
+// each variable's name and the step's env its value, quoted, so a value
+// with spaces in it (a start command) is never split.
+func (b BuildRequest) packTask(ref string) (string, error) {
+	p := b.Pack
+	for _, v := range []string{b.Image, p.Image, p.Builder, p.Path} {
+		if v == "" || strings.ContainsAny(v, unsafeInTask) {
+			return "", fmt.Errorf("ACR Tasks can't build from %q", v)
+		}
+	}
+	cmd := p.Image + " build " + ref + " --builder " + p.Builder + " --path " + p.Path
+	var env []string
+	for _, e := range p.Env {
+		name, value, ok := strings.Cut(e, "=")
+		if !ok || name == "" || strings.ContainsAny(name, unsafeInTask) || strings.ContainsAny(value, "\r\n") {
+			return "", fmt.Errorf("ACR Tasks can't build with the variable %q", name)
+		}
+		cmd += " --env " + name
+		env = append(env, strconv.Quote(e))
+	}
+	step := "  - cmd: " + cmd + "\n    entryPoint: pack\n"
+	if len(env) > 0 {
+		step += "    env: [" + strings.Join(env, ", ") + "]\n"
+	}
+	return "version: v1.1.0\nsteps:\n" + step +
 		"  - push:\n    - \"" + ref + "\"\n", nil
 }
 

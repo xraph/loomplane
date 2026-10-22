@@ -238,6 +238,53 @@ func TestBuildRequest_task(t *testing.T) {
 	}
 }
 
+func TestBuildRequest_packTask(t *testing.T) {
+	pack := &PackBuild{
+		Image: "gcr.io/k8s-skaffold/pack", Builder: "gcr.io/buildpacks/builder:latest", Path: "acme-mono-1/apps/web",
+		Env: []string{"GOOGLE_ENTRYPOINT=gunicorn main:app"},
+	}
+	task, err := BuildRequest{Source: "s.tar.gz", Image: "web-1:abc", Pack: pack}.task()
+	want := "version: v1.1.0\nsteps:\n" +
+		"  - cmd: gcr.io/k8s-skaffold/pack build {{.Run.Registry}}/web-1:abc --builder gcr.io/buildpacks/builder:latest --path acme-mono-1/apps/web --env GOOGLE_ENTRYPOINT\n" +
+		"    entryPoint: pack\n" +
+		"    env: [\"GOOGLE_ENTRYPOINT=gunicorn main:app\"]\n" +
+		"  - push:\n    - \"{{.Run.Registry}}/web-1:abc\"\n"
+	if err != nil || task != want {
+		t.Fatalf("%q, %v", task, err)
+	}
+
+	// Pack wins over the Dockerfile fields, and a build with no variables
+	// has no env line.
+	bare := *pack
+	bare.Env = nil
+	task, err = BuildRequest{Image: "web-1:abc", Dockerfile: "a b", Context: "c d", Pack: &bare}.task()
+	if err != nil || strings.Contains(task, "env:") || strings.Contains(task, "--env") || !strings.Contains(task, "--path acme-mono-1/apps/web\n") {
+		t.Fatalf("%q, %v", task, err)
+	}
+
+	spaced := *pack
+	spaced.Path = "acme mono/apps/web"
+	if _, err = (BuildRequest{Image: "x:y", Pack: &spaced}).task(); err == nil {
+		t.Fatal("a path with a space")
+	}
+	multiline := *pack
+	multiline.Env = []string{"GOOGLE_ENTRYPOINT=a\nb"}
+	if _, err = (BuildRequest{Image: "x:y", Pack: &multiline}).task(); err == nil {
+		t.Fatal("a value with a newline")
+	}
+	quoted := *pack
+	quoted.Env = []string{`GOOGLE_ENTRYPOINT=gunicorn -k "uvicorn" main:app`}
+	task, err = BuildRequest{Image: "x:y", Pack: &quoted}.task()
+	if err != nil || !strings.Contains(task, `env: ["GOOGLE_ENTRYPOINT=gunicorn -k \"uvicorn\" main:app"]`) {
+		t.Fatalf("%q, %v", task, err)
+	}
+	badKey := *pack
+	badKey.Env = []string{"A B=1"}
+	if _, err = (BuildRequest{Image: "x:y", Pack: &badKey}).task(); err == nil {
+		t.Fatal("a name with a space")
+	}
+}
+
 func TestOwns(t *testing.T) {
 	s := &Session{cred: Credential{SubscriptionID: sub, ResourceGroup: "loomplane"}}
 	if !s.Owns(s.AppPath("api")) || !s.Owns(strings.Replace(s.AppPath("api"), "resourceGroups", "resourcegroups", 1)) {

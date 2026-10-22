@@ -115,7 +115,6 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 		cfg.Target = ""
 		p.configureTarget(b.Name, "services."+b.Name, prov, set, &cfg)
 		p.checkRender(b.Name, "services."+b.Name, &cfg)
-		p.checkAzure(b.Name, "services."+b.Name, &cfg)
 		a.Provider, a.Region, a.ConnectionID, a.Engine, a.Creates = prov.Name, region, t.ConnectionID, prov.Engine(runs), runs.Creates
 		if b.Provider != a.Provider || b.ConnectionID != a.ConnectionID || b.Region != a.Region {
 			a.Op = Replace

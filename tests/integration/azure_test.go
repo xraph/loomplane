@@ -126,12 +126,12 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 		t.Fatalf("assignment %+v", got)
 	}
 
-	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 1\nservices:\n  api:\n    source: go:services/api\n    cloud_target: backend\nignore:\n  resources: [postgres, redis, kafka]\n"}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 1\nservices:\n  api:\n    source: go:services/api\n    cloud_target: backend\n  gateway:\n    source: apps/gateway\n    needs: [api]\n    cloud_target: backend\nignore:\n  resources: [postgres, redis, kafka]\n"}, nil)
 	c.must(http.StatusCreated, http.MethodPost, base+"/variables", map[string]any{"key": "API_TOKEN", "value": "kept-in-azure", "secret": true, "environment": "production"}, nil)
 	var plan planBody
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 	waitPlanned(t, c, &plan)
-	if !plan.Executable || len(plan.Actions) != 1 || plan.Actions[0].Provider != "azure-container-apps" {
+	if !plan.Executable || len(plan.Actions) != 2 || plan.Actions[0].Provider != "azure-container-apps" || plan.Actions[1].Provider != "azure-container-apps" {
 		t.Fatalf("plan %+v", plan)
 	}
 	if d := approveAndWait(t, c, plan); d.Status != "succeeded" {
@@ -139,10 +139,18 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 	}
 	var bound struct{ Bindings []planning.Binding }
 	c.must(http.StatusOK, http.MethodGet, base+"/bindings?environment=production", nil, &bound)
-	if len(bound.Bindings) != 1 {
+	if len(bound.Bindings) != 2 {
 		t.Fatalf("bindings %+v", bound.Bindings)
 	}
-	b := bound.Bindings[0]
+	var b, gw planning.Binding
+	for _, got := range bound.Bindings {
+		switch got.Name {
+		case "api":
+			b = got
+		case "gateway":
+			gw = got
+		}
+	}
 	registry := azure.RegistryName(azuretest.Subscription, "loomplane")
 	if b.ConnectionID != conn.ID || b.Region != "westeurope" || !strings.Contains(b.ExternalID, "/providers/Microsoft.App/containerApps/api-production-") ||
 		!strings.HasPrefix(b.Revision, registry+".azurecr.io/api-") || !strings.HasPrefix(b.URL, az.URL()+"/apps/api-production-") {
@@ -154,17 +162,35 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 	}
 	az.Lock()
 	defer az.Unlock()
-	if len(az.Uploads) != 1 || len(az.Tasks) != 1 || !strings.Contains(az.Tasks[0], "/services/api/Dockerfile") {
+	// The API builds from its Dockerfile and the gateway, which has none,
+	// with buildpacks.
+	if len(az.Uploads) != 2 || len(az.Tasks) != 2 {
 		t.Fatalf("uploads %d, tasks %v", len(az.Uploads), az.Tasks)
 	}
-	var app map[string]any
-	for _, a := range az.Apps {
-		app = a
+	var dockerTasks, packTasks int
+	for _, task := range az.Tasks {
+		switch {
+		case strings.Contains(task, "/services/api/Dockerfile"):
+			dockerTasks++
+		case strings.Contains(task, "cmd: gcr.io/k8s-skaffold/pack"):
+			packTasks++
+		}
 	}
-	props := app["properties"].(map[string]any)
+	if dockerTasks != 1 || packTasks != 1 {
+		t.Fatalf("tasks %v", az.Tasks)
+	}
+	apps := map[string]map[string]any{}
+	for name, a := range az.Apps {
+		apps[strings.SplitN(name, "-production-", 2)[0]] = a
+	}
+	if len(apps) != 2 {
+		t.Fatalf("apps %v", az.Apps)
+	}
+	api, gateway := apps["api"], apps["gateway"]
+	props := api["properties"].(map[string]any)
 	conf := props["configuration"].(map[string]any)
-	if app["location"] != "westeurope" || conf["ingress"].(map[string]any)["external"] != true {
-		t.Fatalf("app %v", app)
+	if api["location"] != "westeurope" || conf["ingress"].(map[string]any)["external"] != true {
+		t.Fatalf("app %v", api)
 	}
 	// The secret variable is an app secret, not a plain value.
 	container := props["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
@@ -172,5 +198,16 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 		if v := e.(map[string]any); v["name"] == "API_TOKEN" && (v["value"] != nil || v["secretRef"] == nil) {
 			t.Fatalf("API_TOKEN %v", v)
 		}
+	}
+	// The gateway reaches the API at the address its binding recorded.
+	var apiURL any
+	gwContainer := gateway["properties"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	for _, e := range gwContainer["env"].([]any) {
+		if v := e.(map[string]any); v["name"] == "API_URL" {
+			apiURL = v["value"]
+		}
+	}
+	if apiURL != b.URL || gw.ConnectionID != conn.ID || !strings.Contains(gw.ExternalID, "/containerApps/gateway-production-") {
+		t.Fatalf("gateway binding %+v, API_URL %v, want %s", gw, apiURL, b.URL)
 	}
 }
