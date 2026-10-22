@@ -988,6 +988,18 @@ func TestRenewalNoticeIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestNoNoticeOnceTheRenewalDatePassed(t *testing.T) {
+	// The registrar still reports 2026-11-30 two days after it.
+	env, notices, _ := newSweepEnv(t, time.Date(2026, 12, 2, 0, 0, 0, 0, time.UTC))
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 0 {
+		t.Fatal("a notice for a date in the past", err, notices.sent)
+	}
+	env.now = time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC)
+	if err := env.svc.SweepRegistrations(t.Context()); err != nil || len(notices.sent) != 0 {
+		t.Fatal("a notice on the renewal date itself", err, notices.sent)
+	}
+}
+
 func TestNoNoticeWhenAutoRenewOffOrTooEarly(t *testing.T) {
 	// 45 days ahead nothing goes out; 25 days ahead it does.
 	env, notices, _ := newSweepEnv(t, time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC))

@@ -115,7 +115,8 @@ func (s *Service) sweepRegistration(ctx context.Context, st RegistrationStore, r
 			reg.RefreshedAt, changed = now, true
 		}
 	}
-	if s.Notices != nil && reg.AutoRenew && !reg.DomainExpiresAt.IsZero() && !now.Before(reg.DomainExpiresAt.Add(-RenewalNoticeLead)) && !reg.NoticeSentFor.Equal(reg.DomainExpiresAt) {
+	// A date already passed would read "renews on" a day in the past.
+	if s.Notices != nil && reg.AutoRenew && !reg.DomainExpiresAt.IsZero() && !now.Before(reg.DomainExpiresAt.Add(-RenewalNoticeLead)) && now.Before(reg.DomainExpiresAt) && !reg.NoticeSentFor.Equal(reg.DomainExpiresAt) {
 		notice := notifications.RenewalNotice{OrgID: reg.OrgID, RegistrationID: reg.ID, Domain: reg.Name, RenewsOn: reg.DomainExpiresAt, Currency: reg.Quote.Currency, RenewalCost: reg.Quote.RenewalCost}
 		if err := s.Notices.EnqueueRenewalNotice(ctx, notice); err != nil {
 			errs = append(errs, err)
