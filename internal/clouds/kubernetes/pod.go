@@ -19,7 +19,7 @@ import (
 // runtimePod keeps workload environment, ports, resource limits and readiness
 // identical across Deployment and StatefulSet runtimes. A workload with its
 // own ServiceAccount runs as it and gets its token; others keep the
-// namespace default.
+// namespace default, and a catalog component doesn't mount its token.
 func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values owned.RuntimeValues, runtimeSecret *corev1.Secret, pulls []corev1.LocalObjectReference, serviceAccount string) (*corev1.PodTemplateSpec, []corev1.ServicePort, error) {
 	env := []corev1.EnvVar{}
 	for _, key := range slices.Sorted(maps.Keys(spec.Env)) {
@@ -83,9 +83,15 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 	if architecture := labels[owned.LabelArchitecture]; architecture != "" {
 		template.Spec.NodeSelector = map[string]string{"kubernetes.io/arch": architecture}
 	}
-	if serviceAccount != "" {
+	switch {
+	case serviceAccount != "":
 		automount := true
 		template.Spec.ServiceAccountName, template.Spec.AutomountServiceAccountToken = serviceAccount, &automount
+	case labels[owned.LabelCatalogComponent] != "":
+		// A catalog component or job without Kubernetes rules has no use
+		// for the namespace default account's token.
+		automount := false
+		template.Spec.AutomountServiceAccountToken = &automount
 	}
 	if raw := labels[owned.LabelFSGroup]; raw != "" {
 		group, err := strconv.ParseInt(raw, 10, 32)

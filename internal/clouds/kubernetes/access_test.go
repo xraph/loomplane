@@ -148,7 +148,7 @@ func TestKubernetesComponentRefusesRulesOutsideDiscovery(t *testing.T) {
 	}
 }
 
-func TestKubernetesComponentWithoutRulesKeepsDefaultAccount(t *testing.T) {
+func TestKubernetesComponentWithoutRulesMountsNoToken(t *testing.T) {
 	runtime, kube, spec := accessFixture()
 	iid := id.New(id.PrefixInstance)
 	if _, err := runtime.Apply(t.Context(), iid, spec, accessLabels("")); err != nil {
@@ -162,7 +162,8 @@ func TestKubernetesComponentWithoutRulesKeepsDefaultAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pod := deployment.Spec.Template.Spec; pod.ServiceAccountName != "" || pod.AutomountServiceAccountToken != nil {
+	// It runs as the namespace default without that account's token.
+	if pod := deployment.Spec.Template.Spec; pod.ServiceAccountName != "" || pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
 		t.Fatalf("pod account %q automount %v", pod.ServiceAccountName, pod.AutomountServiceAccountToken)
 	}
 
@@ -180,7 +181,7 @@ func TestKubernetesComponentWithoutRulesKeepsDefaultAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pod := deployment.Spec.Template.Spec; pod.ServiceAccountName != "" || pod.AutomountServiceAccountToken != nil {
+	if pod := deployment.Spec.Template.Spec; pod.ServiceAccountName != "" || pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
 		t.Fatalf("pod kept account %q automount %v", pod.ServiceAccountName, pod.AutomountServiceAccountToken)
 	}
 }

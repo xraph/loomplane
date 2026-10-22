@@ -145,6 +145,9 @@ func TestKubernetesRunJobCompletes(t *testing.T) {
 	if pod.RestartPolicy != corev1.RestartPolicyNever || pod.NodeSelector["kubernetes.io/arch"] != "arm64" || len(pod.Containers) != 1 || pod.Containers[0].Image != spec.Image || !slices.Equal(pod.Containers[0].Command, spec.Command) {
 		t.Fatalf("job pod: %+v", pod)
 	}
+	if pod.ServiceAccountName != "" || pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+		t.Fatalf("job pod account %q automount %v", pod.ServiceAccountName, pod.AutomountServiceAccountToken)
+	}
 	for _, labelled := range []map[string]string{job.Labels, s.Template.Labels} {
 		for key, want := range map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", labelJob: jobFixtureName} {
 			if labelled[key] != want {

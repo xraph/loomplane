@@ -43,6 +43,11 @@ func TestRuntime_namespaceSecretsAndFixedReplicas(t *testing.T) {
 	if *deployment.Spec.Replicas != 2 || deployment.Spec.Template.Spec.Containers[0].ReadinessProbe.HTTPGet.Path != "/_/health" {
 		t.Fatalf("workload: %+v", deployment.Spec)
 	}
+	// An app service's pod template stays as it was: the namespace default
+	// account, with the cluster's own token default.
+	if pod := deployment.Spec.Template.Spec; pod.ServiceAccountName != "" || pod.AutomountServiceAccountToken != nil {
+		t.Fatalf("app service account %q automount %v", pod.ServiceAccountName, pod.AutomountServiceAccountToken)
+	}
 	secret, err := kube.CoreV1().Secrets("selected").Get(t.Context(), name+"-runtime", metav1.GetOptions{})
 	if err != nil || string(secret.Data["TOKEN"]) != "runtime-private-value" {
 		t.Fatalf("runtime secret: %+v %v", secret, err)
