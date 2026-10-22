@@ -34,9 +34,9 @@ require (
 	github.com/xraph/confy v1.1.0
 	github.com/xraph/ctrlplane v1.8.0
 	github.com/xraph/dispatch v1.9.1
-	github.com/xraph/forge v1.12.9
-	github.com/xraph/forge/extensions/conduit v1.12.9
-	github.com/xraph/go-utils v1.4.1
+	github.com/xraph/forge v1.13.0
+	github.com/xraph/forge/extensions/conduit v1.13.0
+	github.com/xraph/go-utils v1.5.0
 	github.com/xraph/grove v1.8.0
 	github.com/xraph/grove/drivers/pgdriver v1.8.0
 	github.com/xraph/grove/drivers/sqlitedriver v1.8.0
@@ -190,8 +190,8 @@ require (
 	github.com/xlab/treeprint v1.2.0 // indirect
 	github.com/xraph/farp v1.3.1 // indirect
 	github.com/xraph/farp/discovery v1.3.1 // indirect
-	github.com/xraph/forge/extensions/auth v1.12.9 // indirect
-	github.com/xraph/forge/extensions/discovery v1.12.9 // indirect
+	github.com/xraph/forge/extensions/auth v1.13.0 // indirect
+	github.com/xraph/forge/extensions/discovery v1.13.0 // indirect
 	github.com/xraph/grove/drivers/mongodriver v1.8.0 // indirect
 	github.com/xraph/grove/kv v1.8.0 // indirect
 	github.com/xraph/ledger v1.7.0 // indirect
@@ -207,12 +207,14 @@ require (
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.70.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.21.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.46.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
+	go.opentelemetry.io/otel/sdk/log v0.21.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
