@@ -16,10 +16,11 @@ const (
 )
 
 // Actions are what a service principal needs for Loomplane to build a
-// service with ACR Tasks and run it on Container Apps, in the resource
-// group it deploys to. Each is checked before a connection counts as
-// ready. The Contributor role on the resource group or the subscription
-// has them all.
+// service with ACR Tasks and run it on Container Apps, and to make
+// Postgres and MySQL flexible servers, in the resource group it deploys
+// to. Each is checked before a connection counts as ready. The
+// Contributor role on the resource group or the subscription has them
+// all.
 var Actions = []string{
 	"Microsoft.Resources/subscriptions/resourceGroups/read",
 	"Microsoft.ContainerRegistry/registries/read",
@@ -34,6 +35,14 @@ var Actions = []string{
 	"Microsoft.App/containerApps/read",
 	"Microsoft.App/containerApps/write",
 	"Microsoft.App/containerApps/delete",
+	"Microsoft.DBforPostgreSQL/flexibleServers/read",
+	"Microsoft.DBforPostgreSQL/flexibleServers/write",
+	"Microsoft.DBforPostgreSQL/flexibleServers/delete",
+	"Microsoft.DBforPostgreSQL/flexibleServers/firewallRules/write",
+	"Microsoft.DBforMySQL/flexibleServers/read",
+	"Microsoft.DBforMySQL/flexibleServers/write",
+	"Microsoft.DBforMySQL/flexibleServers/delete",
+	"Microsoft.DBforMySQL/flexibleServers/firewallRules/write",
 }
 
 // createGroup is what making the resource group takes, needed only while
@@ -42,7 +51,9 @@ const createGroup = "Microsoft.Resources/subscriptions/resourceGroups/write"
 
 // Namespaces are the resource providers a subscription must have
 // registered. Loomplane registers one that isn't, which takes the
-// namespace's register action.
+// namespace's register action. A database's namespace isn't one of
+// them: it's registered when a deployment first makes that database, so
+// a subscription that only runs apps needn't have it.
 var Namespaces = []string{"Microsoft.App", "Microsoft.ContainerRegistry"}
 
 // Subscription is the subscription a principal deploys to.

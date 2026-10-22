@@ -1,13 +1,15 @@
 // Package azuretest is a fake of the parts of Microsoft Entra ID and
 // Azure Resource Manager that Loomplane uses, for tests: one tenant, one
 // subscription, and the resource group's registry, Container Apps
-// environments and container apps. Everything it makes reports
-// provisioning once before it succeeds, so pollers are exercised.
+// environments, container apps and Postgres and MySQL flexible servers.
+// Everything it makes reports provisioning once before it succeeds, so
+// pollers are exercised.
 //
 //nolint:errcheck,gosec // A test fake: its secret is fake, and a request it can't read fails the test that sent it.
 package azuretest
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -76,6 +78,14 @@ type Fake struct {
 	RoleAssignments []RoleAssignment
 	// IdentityPuts counts the requests that made a managed identity.
 	IdentityPuts int
+	// ServerPuts are the flexible server bodies Loomplane PUT, in order,
+	// passwords included. FirewallRules are the rules PUT, by server and
+	// rule name, as "server/rule".
+	ServerPuts    []map[string]any
+	FirewallRules map[string]map[string]any
+	// ServerState is the state a flexible server settles in once it's
+	// done provisioning: Ready unless it's set.
+	ServerState string
 }
 
 // New starts a fake.
@@ -85,7 +95,7 @@ func New(t *testing.T) *Fake {
 		Actions: []string{"*"}, NotActions: []string{"Microsoft.Authorization/*/Write", "Microsoft.Authorization/*/Delete"},
 		groups: map[string]string{}, registered: map[string]bool{}, resources: map[string]map[string]any{},
 		polls: map[string]int{}, Uploads: map[string][]byte{}, Apps: map[string]map[string]any{},
-		pullDenied: map[string]bool{},
+		pullDenied: map[string]bool{}, FirewallRules: map[string]map[string]any{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Server.Close)
@@ -205,6 +215,13 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 				props["latestReadyRevisionName"] = latest
 			}
 		}
+		if isServer(kind) {
+			if f.polls[id] == 0 {
+				props["state"] = "Provisioning"
+			} else if props["state"] == "Provisioning" {
+				props["state"] = cmp.Or(f.ServerState, "Ready")
+			}
+		}
 		f.polls[id]++
 		reply(http.StatusOK, res)
 	}
@@ -228,6 +245,15 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			props["loginServer"] = name + ".azurecr.io"
 		case "microsoft.app/managedenvironments":
 			props["defaultDomain"] = "fake.azurecontainerapps.io"
+		case "microsoft.dbforpostgresql/flexibleservers", "microsoft.dbformysql/flexibleservers":
+			var record map[string]any
+			data, _ := json.Marshal(body)
+			_ = json.Unmarshal(data, &record)
+			f.ServerPuts = append(f.ServerPuts, record)
+			// Azure never shows the password again.
+			delete(props, "administratorLoginPassword")
+			engine := map[bool]string{true: "postgres", false: "mysql"}[kind == "microsoft.dbforpostgresql/flexibleservers"]
+			props["fullyQualifiedDomainName"] = strings.ToLower(name) + "." + engine + ".database.azure.com"
 		case "microsoft.app/containerapps":
 			f.Apps[name] = body
 			f.AppPuts = append(f.AppPuts, body)
@@ -254,6 +280,11 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		}
 		delete(f.resources, id)
 		f.Deleted = append(f.Deleted, name)
+		for rule := range f.FirewallRules {
+			if strings.HasPrefix(rule, name+"/") {
+				delete(f.FirewallRules, rule)
+			}
+		}
 		w.WriteHeader(http.StatusAccepted)
 	case kind == "microsoft.containerregistry/registries" && len(rest) == 1 && rest[0] == "listcredentials":
 		reply(http.StatusOK, map[string]any{"username": name, "passwords": []any{map[string]string{"name": "password", "value": "registry-pw"}}})
@@ -304,6 +335,13 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			RoleDefinitionID: str("roleDefinitionId"), PrincipalID: str("principalId"), PrincipalType: str("principalType"),
 		})
 		reply(http.StatusCreated, map[string]any{"properties": props})
+	case isServer(kind) && len(rest) == 2 && rest[0] == "firewallrules" && r.Method == http.MethodPut:
+		if f.resources[id] == nil {
+			notFound("ParentResourceNotFound")
+			return
+		}
+		f.FirewallRules[name+"/"+strings.Split(strings.Trim(p, "/"), "/")[9]] = body
+		reply(http.StatusAccepted, body)
 	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions" && f.pullDenied[rest[1]]:
 		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioned", "runningState": "Failed",
 			"runningStateDetails": "Failed to pull image: UNAUTHORIZED: authentication required"}})
@@ -312,6 +350,11 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 	default:
 		notFound("NotFound")
 	}
+}
+
+// isServer reports whether kind is a Postgres or MySQL flexible server.
+func isServer(kind string) bool {
+	return kind == "microsoft.dbforpostgresql/flexibleservers" || kind == "microsoft.dbformysql/flexibleservers"
 }
 
 // newRevision numbers a container app's new revision, or names it with

@@ -45,7 +45,13 @@ func (s *Session) EnsureGroup(ctx context.Context, location string) error {
 // EnsureRegistered registers each of Namespaces the subscription hasn't,
 // and waits until they are.
 func (s *Session) EnsureRegistered(ctx context.Context) error {
-	for _, ns := range Namespaces {
+	return s.register(ctx, Namespaces...)
+}
+
+// register registers each of namespaces the subscription hasn't, and
+// waits until they are.
+func (s *Session) register(ctx context.Context, namespaces ...string) error {
+	for _, ns := range namespaces {
 		ok, err := s.registered(ctx, ns)
 		if err != nil {
 			return err
@@ -71,16 +77,17 @@ func (s *Session) EnsureRegistered(ctx context.Context) error {
 
 // provisioned waits for the resource at path to finish provisioning, and
 // fails if it didn't succeed. state reads the resource's state from what
-// GET returns into out.
+// GET returns into out: its provisioningState, or for a flexible server,
+// which reports Ready instead, its state.
 func (s *Session) provisioned(ctx context.Context, path, version, what string, out any, state func() string) error {
 	for {
 		if _, err := s.do(ctx, http.MethodGet, path, version, nil, out); err != nil {
 			return err
 		}
 		switch st := state(); strings.ToLower(st) {
-		case "succeeded":
+		case "succeeded", "ready":
 			return nil
-		case "failed", "canceled", "cancelled", "upgradefailed":
+		case "failed", "canceled", "cancelled", "upgradefailed", "disabled", "dropping":
 			return fmt.Errorf("azure couldn't make %s: provisioning %s", what, strings.ToLower(st))
 		default:
 			progress(ctx, "Waiting for Azure to make "+what+" ("+st+")")

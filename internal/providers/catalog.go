@@ -215,6 +215,20 @@ func Catalog() []provider.Provider {
 			Available: true,
 		},
 		{
+			Name: "azure-database", Title: "Azure Database for PostgreSQL and MySQL", Cloud: "azure",
+			Description: "Managed Postgres and MySQL flexible servers on Azure, reached over TLS from Azure's services.",
+			Model:       provider.Managed,
+			Provisions: []provider.Provisions{
+				{Kind: "postgres", Creates: "Azure Database for PostgreSQL flexible server", Versions: []string{"17", "16", "15"}},
+				{Kind: "mysql", Creates: "Azure Database for MySQL flexible server", Versions: []string{"8.4", "8.0.21"}},
+			},
+			Regions: azureRegions,
+			// Provisioned by Loomplane with public access and a firewall
+			// rule that lets in Azure's services (internal/deployments,
+			// internal/clouds/azure).
+			Available: true,
+		},
+		{
 			Name: "server", Title: "Existing server", Cloud: "server",
 			BuildLogs:   "streamed",
 			Description: "Runs a service container on the Docker daemon of the SSH server you choose.",

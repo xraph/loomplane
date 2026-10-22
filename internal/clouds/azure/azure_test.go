@@ -198,7 +198,15 @@ func TestMissing(t *testing.T) {
 			t.Fatal(err)
 		}
 		missing, err := s.Missing(t.Context())
-		want := []string{createGroup, "Microsoft.ContainerRegistry/registries/scheduleRun/action", "Microsoft.App/register/action"}
+		// Nor may it make databases.
+		want := make([]string, 0, 11)
+		want = append(want, createGroup, "Microsoft.ContainerRegistry/registries/scheduleRun/action")
+		for _, ns := range []string{"Microsoft.DBforPostgreSQL", "Microsoft.DBforMySQL"} {
+			for _, a := range []string{"read", "write", "delete", "firewallRules/write"} {
+				want = append(want, ns+"/flexibleServers/"+a)
+			}
+		}
+		want = append(want, "Microsoft.App/register/action")
 		if err != nil || !slices.Equal(missing, want) {
 			t.Fatalf("missing %v, want %v (%v)", missing, want, err)
 		}
@@ -408,5 +416,95 @@ func TestPullIdentityAndGrant(t *testing.T) {
 	if got[0].RoleDefinitionID != want || got[0].PrincipalID != id.PrincipalID || got[0].PrincipalType != "ServicePrincipal" ||
 		!strings.EqualFold(got[0].Scope, reg.ID) || got[0].Name != RoleAssignmentName(reg.ID, id.PrincipalID) {
 		t.Fatalf("assignment %+v, want role %s on %s", got[0], want, reg.ID)
+	}
+}
+
+func TestFlexibleServer(t *testing.T) {
+	f := azuretest.New(t)
+	s := fakeSession(t, f)
+	ctx := t.Context()
+	if err := s.EnsureGroup(ctx, "westeurope"); err != nil {
+		t.Fatal(err)
+	}
+	fqdn, err := s.EnsureFlexibleServer(ctx, FlexibleServer{Engine: "postgres", Name: "db-production-a1b2c3", Location: "westeurope", Version: "16", Login: "loomplane", Password: "Pw-1"})
+	if err != nil || fqdn != "db-production-a1b2c3.postgres.database.azure.com" {
+		t.Fatalf("%q, %v", fqdn, err)
+	}
+	// The database namespace is registered on first use.
+	if !f.Registered("Microsoft.DBforPostgreSQL") || f.Registered("Microsoft.DBforMySQL") {
+		t.Fatal("the postgres namespace wasn't registered on its own")
+	}
+	f.Lock()
+	puts := slices.Clone(f.ServerPuts)
+	rule := f.FirewallRules["db-production-a1b2c3/AllowAllAzureServicesAndResourcesWithinAzureIps"]
+	f.Unlock()
+	if len(puts) != 1 {
+		t.Fatalf("puts %v", puts)
+	}
+	put := puts[0]
+	props := put["properties"].(map[string]any)
+	sku := put["sku"].(map[string]any)
+	storage := props["storage"].(map[string]any)
+	network := props["network"].(map[string]any)
+	if put["location"] != "westeurope" || sku["name"] != "Standard_B1ms" || sku["tier"] != "Burstable" || storage["storageSizeGB"] != float64(32) ||
+		props["version"] != "16" || props["administratorLogin"] != "loomplane" || props["administratorLoginPassword"] != "Pw-1" ||
+		network["publicNetworkAccess"] != "Enabled" {
+		t.Fatalf("server %v", put)
+	}
+	rp, _ := rule["properties"].(map[string]any)
+	if rp["startIpAddress"] != "0.0.0.0" || rp["endIpAddress"] != "0.0.0.0" {
+		t.Fatalf("firewall rule %v", rule)
+	}
+	id := s.FlexibleServerPath("postgres", "db-production-a1b2c3")
+	if !strings.HasSuffix(id, "/resourceGroups/loomplane/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-production-a1b2c3") || FlexibleServerEngine(id) != "postgres" {
+		t.Fatalf("id %s", id)
+	}
+	srv, err := s.GetFlexibleServer(ctx, id)
+	if err != nil || !strings.EqualFold(srv.Properties.State, "Ready") {
+		t.Fatalf("%+v, %v", srv, err)
+	}
+
+	// MySQL gets its own namespace, API and storage.
+	fqdn, err = s.EnsureFlexibleServer(ctx, FlexibleServer{Engine: "mysql", Name: "my-production-a1b2c3", Location: "westeurope", Version: "8.0.21", Login: "loomplane", Password: "Pw-2"})
+	if err != nil || fqdn != "my-production-a1b2c3.mysql.database.azure.com" || !f.Registered("Microsoft.DBforMySQL") {
+		t.Fatalf("%q, %v", fqdn, err)
+	}
+	f.Lock()
+	mysql := f.ServerPuts[1]
+	f.Unlock()
+	if mysql["properties"].(map[string]any)["storage"].(map[string]any)["storageSizeGB"] != float64(20) {
+		t.Fatalf("mysql %v", mysql)
+	}
+
+	if err := s.DeleteFlexibleServer(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetFlexibleServer(ctx, id); !IsNotFound(err) {
+		t.Fatalf("after delete: %v", err)
+	}
+	if err := s.DeleteFlexibleServer(ctx, id); err != nil {
+		t.Fatalf("deleting it again: %v", err)
+	}
+	// Nothing outside the subscription's flexible servers goes through it.
+	for _, other := range []string{s.AppPath("api"), "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/loomplane/providers/Microsoft.DBforPostgreSQL/flexibleServers/x"} {
+		if err := s.DeleteFlexibleServer(ctx, other); err == nil {
+			t.Errorf("deleted %s", other)
+		}
+	}
+	if _, err := s.EnsureFlexibleServer(ctx, FlexibleServer{Engine: "redis", Name: "x"}); err == nil {
+		t.Fatal("made a redis flexible server")
+	}
+}
+
+func TestFlexibleServer_aDisabledServerFails(t *testing.T) {
+	f := azuretest.New(t)
+	f.ServerState = "Disabled"
+	s := fakeSession(t, f)
+	if err := s.EnsureGroup(t.Context(), "eastus"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.EnsureFlexibleServer(t.Context(), FlexibleServer{Engine: "postgres", Name: "db", Location: "eastus", Version: "16", Login: "loomplane", Password: "Pw-1"})
+	if err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("%v", err)
 	}
 }
