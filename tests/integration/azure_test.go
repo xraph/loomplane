@@ -18,7 +18,9 @@ import (
 // TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget connects an
 // Azure subscription, puts it in a Cloud as a target, and deploys the
 // API's Dockerfile through it: built with ACR Tasks from the approved
-// commit, and run as a public container app in the target's region.
+// commit, and run as container apps in the target's region. The API is
+// private, so it takes internal ingress and the gateway in the same
+// environment reaches it at the address its binding recorded.
 func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 	az := azuretest.New(t)
 	cfg, r, c, _, project := cloudAPISetup(t)
@@ -126,7 +128,7 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 		t.Fatalf("assignment %+v", got)
 	}
 
-	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 1\nservices:\n  api:\n    source: go:services/api\n    cloud_target: backend\n  gateway:\n    source: apps/gateway\n    needs: [api]\n    cloud_target: backend\nignore:\n  resources: [postgres, redis, kafka]\n"}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 1\nservices:\n  api:\n    source: go:services/api\n    public: false\n    cloud_target: backend\n  gateway:\n    source: apps/gateway\n    needs: [api]\n    cloud_target: backend\nignore:\n  resources: [postgres, redis, kafka]\n"}, nil)
 	c.must(http.StatusCreated, http.MethodPost, base+"/variables", map[string]any{"key": "API_TOKEN", "value": "kept-in-azure", "secret": true, "environment": "production"}, nil)
 	var plan planBody
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
@@ -189,7 +191,7 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 	api, gateway := apps["api"], apps["gateway"]
 	props := api["properties"].(map[string]any)
 	conf := props["configuration"].(map[string]any)
-	if api["location"] != "westeurope" || conf["ingress"].(map[string]any)["external"] != true {
+	if api["location"] != "westeurope" || conf["ingress"].(map[string]any)["external"] != false {
 		t.Fatalf("app %v", api)
 	}
 	// The secret variable is an app secret, not a plain value.
@@ -199,7 +201,8 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 			t.Fatalf("API_TOKEN %v", v)
 		}
 	}
-	// The gateway reaches the API at the address its binding recorded.
+	// The gateway reaches the private API at the address its binding
+	// recorded, which is the API's internal ingress address.
 	var apiURL any
 	gwContainer := gateway["properties"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
 	for _, e := range gwContainer["env"].([]any) {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/providers"
@@ -271,6 +272,80 @@ func TestCompute_azureBuildsWithoutADockerfile(t *testing.T) {
 		if f.Code == "azure-needs-dockerfile" {
 			t.Fatalf("problems %v", codes(r.Problems))
 		}
+	}
+}
+
+// azureConnection is a ready connection to one Azure resource group, which
+// is one Container Apps environment per region.
+func azureConnection(id, group string) ConnectionOption {
+	return ConnectionOption{ID: id, Name: id, Cloud: "azure", Account: "sub", Ready: true, Details: map[string]string{"tenant_id": "tenant", "subscription_id": "sub", "resource_group": group}}
+}
+
+// A private Azure app takes traffic from the other apps in its Container
+// Apps environment, at the internal address the runner reads from its
+// binding.
+func TestCompute_azureAppsReachPrivateAppsInTheirEnvironment(t *testing.T) {
+	r := Compute(Input{
+		Environment: "production", Graph: polyglot(t), Providers: providers.Registry(),
+		Connections: append([]ConnectionOption{azureConnection("conn_azure", "rg")}, connected...),
+		Manifest:    parse(t, "version: 1\nservices:\n  web: {source: apps/web, provider: azure-container-apps, needs: [api]}\n  api: {source: services/api, provider: azure-container-apps, public: false}"),
+	})
+	if len(r.Problems) > 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	web := action(t, r, "service:web")
+	if !slices.Contains(web.DependsOn, "service:api") {
+		t.Errorf("web depends on %v, not api", web.DependsOn)
+	}
+	var link *EnvLink
+	for i := range web.Service.Env {
+		if web.Service.Env[i].From == "api" {
+			link = &web.Service.Env[i]
+		}
+	}
+	if link == nil || link.Key != "API_URL" || link.Address != "" {
+		t.Fatalf("web's link to api is %+v, want API_URL with the address left to its binding", link)
+	}
+}
+
+// Container Apps environments are per resource group and region, so a
+// private app in another region or another connection's resource group is
+// out of reach.
+func TestCompute_azureAppsCantReachPrivateAppsElsewhere(t *testing.T) {
+	for _, tt := range []struct {
+		name, apiTarget, webTarget string
+	}{
+		{"another region", "west", "east"},
+		{"another resource group", "other", "east"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assigned := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, Targets: []cloudprofiles.Target{
+				{ID: "t-east", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "east", Provider: "azure-container-apps", ConnectionID: "conn_a", Region: "eastus", Revision: 1},
+				{ID: "t-west", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "west", Provider: "azure-container-apps", ConnectionID: "conn_a", Region: "westeurope", Revision: 1},
+				{ID: "t-other", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "other", Provider: "azure-container-apps", ConnectionID: "conn_b", Region: "eastus", Revision: 1},
+			}}
+			conns := []ConnectionOption{azureConnection("conn_a", "rg-a"), azureConnection("conn_b", "rg-b")}
+			m, pins, err := ResolveCloudTargets(parse(t, "version: 1\nservices:\n  web: {source: apps/web, cloud_target: "+tt.webTarget+", needs: [api]}\n  api: {source: services/api, cloud_target: "+tt.apiTarget+", public: false}"), "production", assigned, conns)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := Compute(Input{Environment: "production", Graph: polyglot(t), Manifest: m, Providers: providers.Registry(), Connections: conns, CloudPlacements: pins})
+			if got := codes(r.Problems); !slices.Contains(got, "private-across-accounts:web") {
+				t.Fatalf("problems %v, want private-across-accounts:web", got)
+			}
+		})
+	}
+}
+
+// A private Azure app is as out of reach of another cloud as any other.
+func TestCompute_azurePrivateAppsStayOffOtherClouds(t *testing.T) {
+	r := Compute(Input{
+		Environment: "production", Graph: polyglot(t), Providers: providers.Registry(),
+		Connections: append([]ConnectionOption{azureConnection("conn_azure", "rg")}, connected...),
+		Manifest:    parse(t, "version: 1\nservices:\n  web: {source: apps/web, provider: vercel, needs: [api]}\n  api: {source: services/api, provider: azure-container-apps, public: false}"),
+	})
+	if got := codes(r.Problems); !slices.Contains(got, "private-across-clouds:web") {
+		t.Fatalf("problems %v, want private-across-clouds:web", got)
 	}
 }
 

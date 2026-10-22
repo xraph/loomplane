@@ -1601,7 +1601,7 @@ func (p *planner) link(name string, a *Action) {
 					Message: fmt.Sprintf("%s needs private service %s on another server or cluster namespace. Choose the same target or configure an externally reachable address through variables.", name, need)})
 				continue
 			}
-		case !dep.Service.Public && !OwnedCloud(p.cloud(dep.Provider)) && p.cloud(dep.Provider) == p.cloud(a.Provider) && (a.Service.CloudPlacement != nil || dep.Service.CloudPlacement != nil) && (!p.sameDeploymentAccount(a, dep) || a.Region != dep.Region && dep.Provider == ecsFargate):
+		case !dep.Service.Public && !OwnedCloud(p.cloud(dep.Provider)) && p.cloud(dep.Provider) == p.cloud(a.Provider) && (a.Service.CloudPlacement != nil || dep.Service.CloudPlacement != nil) && (!p.sameDeploymentAccount(a, dep) || a.Region != dep.Region && (dep.Provider == ecsFargate || dep.Provider == azureApps)):
 			p.problem(Finding{Code: "private-across-accounts", Subject: ServiceSubject, Name: name, Path: base, Message: fmt.Sprintf("%s needs private service %s in another deployment account or network. Choose the same account and region, or expose a reachable endpoint.", name, need)})
 			continue
 		case dep.Provider == ecsFargate && a.Provider == ecsFargate && ((a.Service.CloudPlacement == nil && dep.Service.CloudPlacement == nil) || p.sameDeploymentAccount(a, dep) && a.Region == dep.Region):
@@ -1622,6 +1622,11 @@ func (p *planner) link(name string, a *Action) {
 			// Render's private network: the dependency's address is its
 			// name there, which Render gives it when it's made, so the
 			// runner takes it from the dependency's binding.
+		case !dep.Service.Public && dep.Provider == azureApps && a.Provider == azureApps && p.sameDeploymentAccount(a, dep) && a.Region == dep.Region:
+			// Internal ingress reaches the apps in the same Container Apps
+			// environment, which is one per connection and region. The
+			// dependency's address is its internal FQDN, which Azure gives
+			// it when it's made, so the runner takes it from the binding.
 		case !dep.Service.Public && dep.Provider == cloudRun:
 			p.warn(Finding{
 				Code: "authenticated-call", Subject: ServiceSubject, Name: name, Path: base,
