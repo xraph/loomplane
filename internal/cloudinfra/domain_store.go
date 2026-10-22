@@ -22,8 +22,8 @@ import (
 var _ DomainStore = (*PgStore)(nil)
 
 func (s *PgStore) DomainProject(ctx context.Context, org, project string) error {
-	var id string
-	return storeError(s.db.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2`, org, project).Scan(&id))
+	var found string
+	return storeError(s.db.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2`, org, project).Scan(&found))
 }
 
 func (s *PgStore) CreateZone(ctx context.Context, zone *Zone) error {
@@ -35,9 +35,9 @@ func (s *PgStore) CreateZone(ctx context.Context, zone *Zone) error {
 	return storeError(err)
 }
 
-func (s *PgStore) Zone(ctx context.Context, org, id string) (*Zone, error) {
+func (s *PgStore) Zone(ctx context.Context, org, zoneID string) (*Zone, error) {
 	var raw []byte
-	if err := s.db.QueryRow(ctx, `SELECT body FROM loomplane_dns_zones WHERE org_id=$1 AND id=$2`, org, id).Scan(&raw); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT body FROM loomplane_dns_zones WHERE org_id=$1 AND id=$2`, org, zoneID).Scan(&raw); err != nil {
 		return nil, storeError(err)
 	}
 	var out Zone
@@ -376,8 +376,8 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 	return tx.Commit()
 }
 
-func (s *PgStore) RouteOperation(ctx context.Context, org, id string) (*RouteOperation, error) {
-	return scanRouteOperation(s.db.QueryRow(ctx, `SELECT body,principal,checkpoint FROM loomplane_route_operations WHERE org_id=$1 AND id=$2`, org, id))
+func (s *PgStore) RouteOperation(ctx context.Context, org, operationID string) (*RouteOperation, error) {
+	return scanRouteOperation(s.db.QueryRow(ctx, `SELECT body,principal,checkpoint FROM loomplane_route_operations WHERE org_id=$1 AND id=$2`, org, operationID))
 }
 
 func (s *PgStore) SaveRouteOperation(ctx context.Context, op *RouteOperation) error {
@@ -395,9 +395,9 @@ func (s *PgStore) SaveRouteOperation(ctx context.Context, op *RouteOperation) er
 	return nil
 }
 
-func (s *PgStore) Route(ctx context.Context, org, project, id string) (*Route, error) {
+func (s *PgStore) Route(ctx context.Context, org, project, routeID string) (*Route, error) {
 	var raw []byte
-	if err := s.db.QueryRow(ctx, `SELECT body FROM loomplane_domain_routes WHERE org_id=$1 AND project_id=$2 AND id=$3`, org, project, id).Scan(&raw); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT body FROM loomplane_domain_routes WHERE org_id=$1 AND project_id=$2 AND id=$3`, org, project, routeID).Scan(&raw); err != nil {
 		return nil, storeError(err)
 	}
 	var route Route
@@ -543,7 +543,7 @@ const retainedRoutedService = ` LEFT JOIN loomplane_bindings b ON b.org_id=i.ten
  WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(svc->'ports') p WHERE (p->>'container')::int=$16) ORDER BY svc->>'name' LIMIT 1) END AS name) routed`
 
 func (s *PgStore) validateRetainedRoute(ctx context.Context, r Route, cleanup bool) error {
-	var id string
+	var instance string
 	return storeError(s.db.QueryRow(ctx, `SELECT i.id FROM cp_instances i`+routeRuntimeJoin+retainedRoutedService+`
  JOIN loomplane_cloud_servers s ON s.org_id=i.tenant_id AND s.id=$3 AND s.cloud_id=$4 AND s.runtime_connection_id=$5 AND s.status='ready'
  JOIN loomplane_cloud_connections c ON c.org_id=s.org_id AND c.id=s.runtime_connection_id AND ($11 OR c.generation=$6) AND c.status='ready'
@@ -551,7 +551,7 @@ func (s *PgStore) validateRetainedRoute(ctx context.Context, r Route, cleanup bo
  AND (b.id IS NULL OR $11 OR b.config->'routable_ports' @> jsonb_build_array($16::int))
  AND ($11 OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=s.org_id AND g.cloud_id=s.cloud_id AND g.project_id=$7 AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR $8=ANY(g.target_ids))))
  AND $12<>'' AND c.details->>'docker_id'=$12`, r.OrgID, r.Binding.InstanceID, r.Binding.ServerID, r.Input.CloudID, r.Binding.ConnectionID, r.Binding.ConnectionGeneration, r.ProjectID, r.Binding.TargetID, r.Binding.ReleaseID, r.Binding.ContainerID, cleanup, r.Binding.RuntimeID,
-		r.Binding.BindingID, r.Input.EnvironmentID, r.Input.Service, r.Input.Port).Scan(&id))
+		r.Binding.BindingID, r.Input.EnvironmentID, r.Input.Service, r.Input.Port).Scan(&instance))
 }
 
 func (s *PgStore) PendingRoutes(ctx context.Context) ([]*RouteOperation, error) {
@@ -571,8 +571,8 @@ func (s *PgStore) PendingRoutes(ctx context.Context) ([]*RouteOperation, error) 
 	return result, rows.Err()
 }
 
-func (s *PgStore) RemoveZone(ctx context.Context, org, id string, revision int64) error {
-	err := s.db.QueryRow(ctx, `DELETE FROM loomplane_dns_zones WHERE org_id=$1 AND id=$2 AND revision=$3 RETURNING id`, org, id, revision).Scan(new(string))
+func (s *PgStore) RemoveZone(ctx context.Context, org, zoneID string, revision int64) error {
+	err := s.db.QueryRow(ctx, `DELETE FROM loomplane_dns_zones WHERE org_id=$1 AND id=$2 AND revision=$3 RETURNING id`, org, zoneID, revision).Scan(new(string))
 	return storeError(err)
 }
 
@@ -582,8 +582,7 @@ func (s *PgStore) CompleteHandoff(ctx context.Context, op *RouteOperation) error
 		return err
 	}
 	defer rollback(tx)
-	var id string
-	if checkErr := tx.QueryRow(ctx, `UPDATE loomplane_route_handoffs SET released=true WHERE org_id=$1 AND id=$2 AND route_id=$3 RETURNING id`, op.Route.OrgID, op.HandoffID, op.Route.ID).Scan(&id); checkErr != nil {
+	if checkErr := tx.QueryRow(ctx, `UPDATE loomplane_route_handoffs SET released=true WHERE org_id=$1 AND id=$2 AND route_id=$3 RETURNING id`, op.Route.OrgID, op.HandoffID, op.Route.ID).Scan(new(string)); checkErr != nil {
 		return storeError(checkErr)
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM loomplane_connection_uses WHERE org_id=$1 AND kind='route_handoff' AND owner_id=$2`, op.Route.OrgID, op.HandoffID); err != nil {
@@ -666,11 +665,11 @@ func (s *PgStore) names(ctx context.Context, query, org string) (map[string]stri
 	defer rows.Close()
 	out := map[string]string{}
 	for rows.Next() {
-		var id, name string
-		if checkErr := rows.Scan(&id, &name); checkErr != nil {
+		var key, name string
+		if checkErr := rows.Scan(&key, &name); checkErr != nil {
 			return nil, checkErr
 		}
-		out[id] = name
+		out[key] = name
 	}
 	return out, rows.Err()
 }

@@ -253,8 +253,8 @@ func TestCloudflareDNSWritesSendUnproxiedOwnedRecordsAndPatchInPlace(t *testing.
 	}
 	again := upsert(zone, "app")
 	again.ReconcileOnly = true
-	if got, err := c.UpsertRecord(t.Context(), cred, again); err != nil || got != created || f.writes != 1 {
-		t.Fatalf("reconcile: %+v %v writes=%d", got, err, f.writes)
+	if got, againErr := c.UpsertRecord(t.Context(), cred, again); againErr != nil || got != created || f.writes != 1 {
+		t.Fatalf("reconcile: %+v %v writes=%d", got, againErr, f.writes)
 	}
 	desired := created
 	desired.Value = "192.0.2.2"

@@ -113,13 +113,13 @@ func TestKubernetesRouteBindingQuery(t *testing.T) {
 
 	// A placement left over from another Cloud, whose targets run on a
 	// different connection, doesn't route through this binding's connection.
-	if err := connections.NewPgStore(pg).CreateConnection(ctx, &connections.Connection{ID: "conn_other", OrgID: "org", Cloud: "kubernetes", Name: "Other", Status: connections.StatusReady, Details: details, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err = connections.NewPgStore(pg).CreateConnection(ctx, &connections.Connection{ID: "conn_other", OrgID: "org", Cloud: "kubernetes", Name: "Other", Status: connections.StatusReady, Details: details, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := profiles.CreateProfile(ctx, &cloudprofiles.Profile{ID: "cloud_2", OrgID: "org", ProjectID: "shop", Name: "cloud_2", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err = profiles.CreateProfile(ctx, &cloudprofiles.Profile{ID: "cloud_2", OrgID: "org", ProjectID: "shop", Name: "cloud_2", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := profiles.CreateTarget(ctx, &cloudprofiles.Target{ID: "target_other", OrgID: "org", ProjectID: "shop", CloudID: "cloud_2", Name: "other", DisplayName: "Other", Provider: "kubernetes", ConnectionID: "conn_other", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err = profiles.CreateTarget(ctx, &cloudprofiles.Target{ID: "target_other", OrgID: "org", ProjectID: "shop", CloudID: "cloud_2", Name: "other", DisplayName: "Other", Provider: "kubernetes", ConnectionID: "conn_other", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	staleTarget, staleDefault := id.New(id.PrefixInstance), id.New(id.PrefixInstance)

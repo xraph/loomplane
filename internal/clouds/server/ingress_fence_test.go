@@ -100,7 +100,7 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 			run := func(mode string, generation int) string {
 				q, _ := json.Marshal(map[string]any{"Headers": map[string][]string{}, "Mode": mode, "Daemon": daemon, "Socket": socket, "Method": "POST", "Path": "/exec/" + execution + "/start", "Fence": EffectFence{Operation: "org/ingress/server", Generation: int64(generation)}})
 				body, _ := json.Marshal(map[string]bool{"Detach": tc.detach, "Tty": false})
-				cmd := exec.CommandContext(t.Context(), python, "-c", strings.Replace(strings.Replace(fenceScript(), "range(120)", "range(2)", 1), "except Exception: fail()", "except Exception:\n import traceback;traceback.print_exc();fail()", 1))
+				cmd := exec.CommandContext(t.Context(), python, "-c", strings.Replace(strings.Replace(testFenceScript(t), "range(120)", "range(2)", 1), "except Exception: fail()", "except Exception:\n import traceback;traceback.print_exc();fail()", 1))
 				cmd.Stderr = &diagnostics
 				cmd.Stdin = bytes.NewReader(append(append(q, '\n'), body...))
 				if tc.lostCaller && mode == "ingress-exec" && generation == 1 && starts.Load() == 0 {

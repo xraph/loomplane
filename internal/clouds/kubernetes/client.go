@@ -137,14 +137,14 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 			out.Details[optional.detail] = "ready"
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
 	}
-	if err := c.checkPersistentStorage(ctx, out); err != nil {
-		return nil, err
+	if storageErr := c.checkPersistentStorage(ctx, out); storageErr != nil {
+		return nil, storageErr
 	}
-	if err := c.checkPostgresPermissions(ctx, out); err != nil {
-		return nil, err
+	if postgresErr := c.checkPostgresPermissions(ctx, out); postgresErr != nil {
+		return nil, postgresErr
 	}
 	// Routes are optional, so what they need is a detail and never Missing.
 	routes, err := c.CheckRoutePrerequisites(ctx)

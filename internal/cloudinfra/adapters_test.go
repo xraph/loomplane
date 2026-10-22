@@ -551,9 +551,9 @@ func TestDNSAdapterConformance(t *testing.T) {
 				t.Fatalf("create: %+v %v", created, err)
 			}
 			if owned {
-				again, err := adapter.UpsertRecord(t.Context(), cred, provider.DNSUpsertRequest{Zone: zone, Record: record, ReconcileOnly: true})
-				if err != nil || again != created {
-					t.Fatalf("reconcile: %+v %v", again, err)
+				again, againErr := adapter.UpsertRecord(t.Context(), cred, provider.DNSUpsertRequest{Zone: zone, Record: record, ReconcileOnly: true})
+				if againErr != nil || again != created {
+					t.Fatalf("reconcile: %+v %v", again, againErr)
 				}
 			}
 			desired := created

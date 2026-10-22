@@ -252,7 +252,7 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	return op, nil
 }
 
-const unpublishedProxyImage = wildcardRefusal("Wildcard routes on servers need Loomplane's DNS-capable proxy image, which isn't published yet.")
+const errUnpublishedProxyImage = wildcardRefusalError("Wildcard routes on servers need Loomplane's DNS-capable proxy image, which isn't published yet.")
 
 // wildcardNotices says what a wildcard route on a server costs: a proxy
 // still on the stock image restarts on the DNS-capable one.
@@ -262,7 +262,7 @@ func (s *Service) wildcardNotices(ctx context.Context, st DomainStore, route Rou
 		return nil, nil
 	}
 	if !s.ingressImagePinned() {
-		return nil, unpublishedProxyImage
+		return nil, errUnpublishedProxyImage
 	}
 	upgrade, err := s.ingressNeedsUpgrade(ctx, route)
 	if err != nil || !upgrade {

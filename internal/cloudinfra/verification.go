@@ -325,8 +325,8 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 	if err != nil {
 		return err
 	}
-	if err = adoptUpgradedIngress(ctx, st, c, op, state, actual); err != nil {
-		return err
+	if adoptErr := adoptUpgradedIngress(ctx, st, c, op, state, actual); adoptErr != nil {
+		return adoptErr
 	}
 	desired, err := op.DesiredConfig.JSON()
 	if err != nil {
@@ -356,7 +356,7 @@ func (s *Service) prepareWildcardIngress(ctx context.Context, st DomainStore, c 
 	}
 	if upgrade {
 		if !server.IngressImagePinned() {
-			return &routeNoticeError{err: unpublishedProxyImage, message: unpublishedProxyImage.Error()}
+			return &routeNoticeError{err: errUnpublishedProxyImage, message: errUnpublishedProxyImage.Error()}
 		}
 		upgraded, upgradeErr := server.UpgradeIngress(ctx, c, route.OrgID, route.Binding.ServerID, op.PreviousConfig)
 		if upgradeErr != nil {
@@ -389,8 +389,8 @@ func (s *Service) syncZoneToken(ctx context.Context, c *server.Client, route Rou
 	if err != nil {
 		return false, &routeNoticeError{err: err, message: "The DNS challenge connection for " + zone.Name + " failed its checks, so Loomplane didn't put its token on the server: " + err.Error()}
 	}
-	if err = s.writeDNSToken(ctx, c, route.OrgID, route.Binding.ServerID, zone.ID, token); err != nil {
-		return false, err
+	if writeErr := s.writeDNSToken(ctx, c, route.OrgID, route.Binding.ServerID, zone.ID, token); writeErr != nil {
+		return false, writeErr
 	}
 	if state.DNSTokens == nil {
 		state.DNSTokens = map[string]int64{}

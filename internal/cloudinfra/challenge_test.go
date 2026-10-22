@@ -252,7 +252,7 @@ func TestZoneTokenIsRecheckedBeforeEveryWrite(t *testing.T) {
 	zone.ChallengeConnectionID = "cf-dns"
 	conns := svc.Connections.(challengeConnections)
 	var written []string
-	svc.writeDNSToken = func(_ context.Context, _ *server.Client, org, serverID, zoneID string, token []byte) error {
+	svc.writeDNSToken = func(_ context.Context, _ *server.Client, _, serverID, zoneID string, token []byte) error {
 		written = append(written, serverID+"/"+zoneID+"="+string(token))
 		return nil
 	}

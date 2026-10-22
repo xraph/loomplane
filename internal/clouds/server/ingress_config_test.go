@@ -102,8 +102,9 @@ func backendFor(project string) IngressBackend {
 // routeHosts lists the first host each route of a server matches, in order.
 func routeHosts(t *testing.T, raw []byte, server string) []string {
 	t.Helper()
-	out := []string{}
-	for _, r := range gjsonRoutes(t, raw, server) {
+	routes := gjsonRoutes(t, raw, server)
+	out := make([]string, 0, len(routes))
+	for _, r := range routes {
 		out = append(out, r.Hosts[0])
 	}
 	return out

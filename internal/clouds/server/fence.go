@@ -68,9 +68,14 @@ func (c *Client) fencedRequest(ctx context.Context, mode string, f EffectFence, 
 		_ = session.Close()
 		return nil, err
 	}
+	script, err := fenceScript()
+	if err != nil {
+		_ = session.Close()
+		return nil, err
+	}
 	// The constant script contains no credentials. Request headers and bodies use
 	// stdin only and never enter a shell command, file log or error response.
-	if err = session.Start("python3 -c '" + strings.ReplaceAll(fenceScript(), "'", "'\"'\"'") + "'"); err != nil {
+	if err = session.Start("python3 -c '" + strings.ReplaceAll(script, "'", "'\"'\"'") + "'"); err != nil {
 		_ = session.Close()
 		return nil, err
 	}
@@ -103,9 +108,12 @@ func (c *Client) fencedRequest(ctx context.Context, mode string, f EffectFence, 
 }
 
 // fenceScript is effectFenceScript naming the images an owned proxy may run.
-func fenceScript() string {
-	images, _ := json.Marshal(ingressImages())
-	return strings.Replace(effectFenceScript, "INGRESS_IMAGES", string(images), 1)
+func fenceScript() (string, error) {
+	images, err := json.Marshal(ingressImages())
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(effectFenceScript, "INGRESS_IMAGES", string(images), 1), nil
 }
 
 const effectFenceScript = `import os,sys,json,hashlib,fcntl,socket,http.client,signal,tempfile,stat,re,time,struct

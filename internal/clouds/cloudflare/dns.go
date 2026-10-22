@@ -276,8 +276,8 @@ func (r infrastructureRecord) record(zone provider.DNSZone, receiptID string) (p
 // that may be owned although proxied. proxied holds the IDs of every
 // proxied record, which the contract's records can't show.
 func (c *Client) listRecords(ctx context.Context, credential provider.InfrastructureCredential, zone provider.DNSZone, receiptID string) (result []provider.DNSRecord, proxied map[string]bool, err error) {
-	if err = c.checkZone(ctx, credential, zone); err != nil {
-		return nil, nil, err
+	if zoneErr := c.checkZone(ctx, credential, zone); zoneErr != nil {
+		return nil, nil, zoneErr
 	}
 	result = []provider.DNSRecord{}
 	proxied = map[string]bool{}
@@ -289,9 +289,9 @@ func (c *Client) listRecords(ctx context.Context, credential provider.Infrastruc
 			}
 			seen[r.ID] = true
 			proxied[r.ID] = r.Proxied
-			record, err := r.record(zone, receiptID)
-			if err != nil {
-				return err
+			record, recordErr := r.record(zone, receiptID)
+			if recordErr != nil {
+				return recordErr
 			}
 			result = append(result, record)
 		}
@@ -356,7 +356,7 @@ func (c *Client) UpsertRecord(ctx context.Context, credential provider.Infrastru
 		return prior, err
 	}
 	// Loomplane writes records unproxied; one flipped to proxied is not done.
-	if done && !(req.Expected != nil && proxied[prior.ID]) {
+	if done && (req.Expected == nil || !proxied[prior.ID]) {
 		return prior, nil
 	}
 	in := struct {

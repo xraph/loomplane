@@ -11,11 +11,11 @@ import (
 // certificate for.
 var ErrWildcardUnsupported = errors.New("wildcard routes need a verified Cloudflare zone with a DNS challenge credential")
 
-// wildcardRefusal is ErrWildcardUnsupported with the reason a person reads.
-type wildcardRefusal string
+// wildcardRefusalError is ErrWildcardUnsupported with the reason a person reads.
+type wildcardRefusalError string
 
-func (e wildcardRefusal) Error() string { return string(e) }
-func (wildcardRefusal) Unwrap() error   { return ErrWildcardUnsupported }
+func (e wildcardRefusalError) Error() string { return string(e) }
+func (wildcardRefusalError) Unwrap() error   { return ErrWildcardUnsupported }
 
 // RouteHostname is a route's hostname once validated. Base is the name a
 // wildcard covers the labels of, or the hostname itself.

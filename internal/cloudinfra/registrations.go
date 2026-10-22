@@ -334,7 +334,7 @@ func (s *Service) PreviewRegistration(ctx context.Context, p security.Principal,
 	// the two must agree before anyone is told whether they'll be charged.
 	sandbox := registrarSandbox(adapter)
 	if details["registrar_mode"] != registrarMode(sandbox) {
-		return nil, fmt.Errorf("%w: Check the Cloudflare connection again: its registrar mode changed.", ErrConflict)
+		return nil, fmt.Errorf("%w: Check the Cloudflare connection again: its registrar mode changed", ErrConflict)
 	}
 	tlds, err := adapter.RegistrationExtensions(ctx, cred)
 	if err != nil {

@@ -372,7 +372,11 @@ func TestWildcardCertificateThroughDNSChallenge(t *testing.T) {
 		t.Fatalf("no trusted *.example.test certificate through DNS-01: %v %q", leaf, body)
 	}
 	var seen struct{ Authorized, Rejected, Created int }
-	resp, err := http.Get("http://" + ingressDocker(t, "port", cfName, "8080/tcp") + "/status")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+ingressDocker(t, "port", cfName, "8080/tcp")+"/status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

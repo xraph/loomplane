@@ -502,7 +502,7 @@ func TestPreviewSandboxFollowsTheLiveRegistrar(t *testing.T) {
 	// against the production registrar.
 	env = newRegistrationEnv(t)
 	env.storedMode = "sandbox"
-	if _, err = env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.dev"}); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "Check the Cloudflare connection again: its registrar mode changed.") {
+	if _, err = env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.dev"}); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "Check the Cloudflare connection again: its registrar mode changed") {
 		t.Fatal("stale sandbox detail", err)
 	}
 	if len(env.store.bodies) != 0 {

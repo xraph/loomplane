@@ -150,7 +150,7 @@ func (s *Service) zoneChallengeToken(ctx context.Context, zone *Zone) ([]byte, e
 
 // zoneChallengeCredential is the token with the connection generation it
 // came from, once the connection is ready and passes checkChallengeScope.
-func (s *Service) zoneChallengeCredential(ctx context.Context, zone *Zone) ([]byte, int64, error) {
+func (s *Service) zoneChallengeCredential(ctx context.Context, zone *Zone) (token []byte, generation int64, err error) {
 	if zone.ChallengeConnectionID == "" || !zone.Wildcards() {
 		return nil, 0, ErrWildcardUnsupported
 	}

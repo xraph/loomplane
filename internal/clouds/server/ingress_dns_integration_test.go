@@ -39,9 +39,10 @@ func testIngressImage(t *testing.T, host string) string {
 	return testIngressTag
 }
 
-func proxyLogs(t *testing.T, host, server string) string {
+// proxyLogs reads the logs of the proxy for server "server".
+func proxyLogs(t *testing.T, host string) string {
 	t.Helper()
-	out, _ := exec.CommandContext(context.Background(), "docker", "exec", host, "docker", "logs", IngressName("org", server)).CombinedOutput()
+	out, _ := exec.CommandContext(context.Background(), "docker", "exec", host, "docker", "logs", IngressName("org", "server")).CombinedOutput()
 	return string(out)
 }
 
@@ -50,7 +51,7 @@ func TestIngressConfigNeverEmbedsDNSToken(t *testing.T) {
 	pinIngressImageForTest(t, testIngressImage(t, host))
 	t.Cleanup(func() {
 		if t.Failed() {
-			t.Logf("Caddy diagnostics: %s", proxyLogs(t, host, "server"))
+			t.Logf("Caddy diagnostics: %s", proxyLogs(t, host))
 		}
 	})
 	ctx := WithEffectFence(t.Context(), EffectFence{Operation: "org/ingress/server", Generation: 1})
@@ -93,7 +94,7 @@ func TestIngressConfigNeverEmbedsDNSToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, v := range map[string]string{"config": string(raw), "readback": string(read.Config), "persisted state": string(persisted), "Caddy log": proxyLogs(t, host, "server")} {
+	for name, v := range map[string]string{"config": string(raw), "readback": string(read.Config), "persisted state": string(persisted), "Caddy log": proxyLogs(t, host)} {
 		if strings.Contains(v, secret) {
 			t.Fatalf("the %s holds the token", name)
 		}
@@ -123,7 +124,7 @@ func TestIngressConfigNeverEmbedsDNSToken(t *testing.T) {
 	if kept, readErr := ReadIngress(ctx, c, "org", "server"); readErr != nil || kept.ETag != read.ETag {
 		t.Fatal("a failed reload changed the config", readErr)
 	}
-	if logs := proxyLogs(t, host, "server"); strings.Contains(logs, "cf-rotated-token") {
+	if logs := proxyLogs(t, host); strings.Contains(logs, "cf-rotated-token") {
 		t.Fatal("Caddy's log holds the rotated token")
 	}
 	if err = RemoveIngressDNSToken(ctx, c, "org", "server", "zone_1"); err != nil {
@@ -135,7 +136,7 @@ func TestIngressUpgradeKeepsConfigAndRoutes(t *testing.T) {
 	c, host := ingressFixture(t)
 	t.Cleanup(func() {
 		if t.Failed() {
-			t.Logf("Caddy diagnostics: %s", proxyLogs(t, host, "server"))
+			t.Logf("Caddy diagnostics: %s", proxyLogs(t, host))
 		}
 	})
 	ctx := WithEffectFence(t.Context(), EffectFence{Operation: "org/ingress/server", Generation: 1})
@@ -226,7 +227,7 @@ func TestIngressUpgradeRecoversFromAnInterruptedStop(t *testing.T) {
 	c, host := ingressFixture(t)
 	t.Cleanup(func() {
 		if t.Failed() {
-			t.Logf("Caddy diagnostics: %s", proxyLogs(t, host, "server"))
+			t.Logf("Caddy diagnostics: %s", proxyLogs(t, host))
 		}
 	})
 	ctx := WithEffectFence(t.Context(), EffectFence{Operation: "org/ingress/server", Generation: 1})

@@ -96,8 +96,8 @@ func EnsureIngress(ctx context.Context, c *Client, org, server string) (*Ingress
 				return nil, err
 			}
 		}
-		if err = createIngress(ctx, c, org, server, image); err != nil {
-			return nil, err
+		if createErr := createIngress(ctx, c, org, server, image); createErr != nil {
+			return nil, createErr
 		}
 		container, err = ingressContainer(ctx, c, org, server)
 	}
@@ -516,8 +516,8 @@ func UpgradeIngress(ctx context.Context, c *Client, org, server string, current 
 		if _, err = ingressContainerNamed(ctx, c, org, server, previous); err != nil {
 			return nil, err
 		}
-		if err = dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(proxy.ID), nil, nil); err != nil {
-			return nil, err
+		if removeErr := dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(proxy.ID), nil, nil); removeErr != nil {
+			return nil, removeErr
 		}
 		err = ErrMissing
 	}
@@ -549,8 +549,8 @@ func UpgradeIngress(ctx context.Context, c *Client, org, server string, current 
 	if err != nil {
 		return nil, err
 	}
-	if err = (&Runtime{}).pull(ctx, c, image, ""); err != nil {
-		return nil, err
+	if pullErr := (&Runtime{}).pull(ctx, c, image, ""); pullErr != nil {
+		return nil, pullErr
 	}
 	if old.State.Running {
 		err = dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/stop?t=10", nil, nil)
@@ -576,8 +576,8 @@ func UpgradeIngress(ctx context.Context, c *Client, org, server string, current 
 		return nil, errors.Join(err, restoreIngress(ctx, c, org, server, old.ID, created))
 	}
 	// The new proxy serves from here; a retry removes an old one left behind.
-	if err = upgradeStep("started"); err != nil {
-		return nil, err
+	if stepErr := upgradeStep("started"); stepErr != nil {
+		return nil, stepErr
 	}
 	if err = dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(old.ID), nil, nil); err != nil && !errors.Is(err, ErrMissing) {
 		return nil, err
@@ -626,12 +626,12 @@ func startUpgradedIngress(ctx context.Context, c *Client, org, server, image str
 		return nil, ErrOwned
 	}
 	for _, network := range networks {
-		if err = dockerJSON(ctx, c, http.MethodPost, "/networks/"+network+"/connect", map[string]any{"Container": proxy.ID}, nil); err != nil {
-			return nil, err
+		if connectErr := dockerJSON(ctx, c, http.MethodPost, "/networks/"+network+"/connect", map[string]any{"Container": proxy.ID}, nil); connectErr != nil {
+			return nil, connectErr
 		}
 	}
-	if err = dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(proxy.ID)+"/start", nil, nil); err != nil {
-		return nil, err
+	if startErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(proxy.ID)+"/start", nil, nil); startErr != nil {
+		return nil, startErr
 	}
 	return waitIngressConfig(ctx, c, proxy.ID, current)
 }
@@ -726,25 +726,34 @@ func WriteIngressDNSToken(ctx context.Context, c *Client, org, server, zoneID st
 	if err != nil {
 		return err
 	}
+	body, err := dnsTokenArchive(zoneID, token)
+	if err != nil {
+		return err
+	}
+	return ingressArchive(ctx, c, container.ID, body)
+}
+
+// dnsTokenArchive is the tar that puts one zone's token under /config/dns.
+func dnsTokenArchive(zoneID string, token []byte) (*bytes.Buffer, error) {
 	var body bytes.Buffer
 	w := tar.NewWriter(&body)
-	if err = w.WriteHeader(&tar.Header{Name: "dns/", Typeflag: tar.TypeDir, Mode: 0o700}); err != nil {
-		return err
+	if err := w.WriteHeader(&tar.Header{Name: "dns/", Typeflag: tar.TypeDir, Mode: 0o700}); err != nil {
+		return nil, err
 	}
-	if err = w.WriteHeader(&tar.Header{Name: "dns/" + zoneID + ".token", Mode: 0o400, Size: int64(len(token))}); err != nil {
-		return err
+	if err := w.WriteHeader(&tar.Header{Name: "dns/" + zoneID + ".token", Mode: 0o400, Size: int64(len(token))}); err != nil {
+		return nil, err
 	}
-	if _, err = w.Write(token); err != nil {
-		return err
+	if _, err := w.Write(token); err != nil {
+		return nil, err
 	}
-	if err = w.Close(); err != nil {
-		return err
+	if err := w.Close(); err != nil {
+		return nil, err
 	}
-	return ingressArchive(ctx, c, container.ID, &body)
+	return &body, nil
 }
 
 // The fixed script removes one token file; the fence checks the zone ID.
-const ingressTokenScript = `rm -f /config/dns/"$1".token`
+const ingressTokenScript = `rm -f /config/dns/"$1".token` //nolint:gosec // G101: a shell command naming a token file, not a credential
 
 // RemoveIngressDNSToken deletes a zone's token once no wildcard route on
 // the server needs it.
