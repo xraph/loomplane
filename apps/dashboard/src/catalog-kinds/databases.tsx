@@ -1,0 +1,74 @@
+// The five engines the catalog has always run. Each keeps its backups,
+// test restores and recovery copies on a Recovery panel.
+import {
+  defineCatalogKind,
+  type CatalogKindModule,
+  type CatalogPanel,
+} from "@/lib/catalog-kinds"
+import { ServiceRecovery } from "@/pages/service-catalog"
+
+const recovery: CatalogPanel = {
+  id: "recovery",
+  title: "Recovery",
+  component: (props) => (
+    <ServiceRecovery
+      project={props.projectId}
+      environment={props.environmentId}
+      resource={props.resource}
+    />
+  ),
+}
+
+const databaseFeatures = ["Retained volume", "Daily backups", "Test restores"]
+const cacheFeatures = ["AOF every second", "RDB snapshots", "Up to 128 MiB"]
+
+const engines: Omit<CatalogKindModule, "panels">[] = [
+  {
+    kind: "postgres",
+    title: "PostgreSQL",
+    logo: "postgresql",
+    group: "database",
+    blurb:
+      "The relational database most apps reach for, with a restricted application role and backups you can test-restore.",
+    features: databaseFeatures,
+  },
+  {
+    kind: "mysql",
+    title: "MySQL",
+    logo: "mysql",
+    group: "database",
+    blurb:
+      "Relational database with a restricted application role and native backups you can test-restore.",
+    features: databaseFeatures,
+  },
+  {
+    kind: "mariadb",
+    title: "MariaDB",
+    logo: "mariadb",
+    group: "database",
+    blurb:
+      "MySQL-compatible relational database, with the same role, volume and backup setup.",
+    features: databaseFeatures,
+  },
+  {
+    kind: "redis",
+    title: "Redis",
+    logo: "redis",
+    group: "cache",
+    blurb:
+      "In-memory cache with AOF persistence every second and native RDB snapshots. No failover in this profile.",
+    features: cacheFeatures,
+  },
+  {
+    kind: "valkey",
+    title: "Valkey",
+    group: "cache",
+    blurb:
+      "Open source, Redis-compatible cache with the same persistence and snapshot setup.",
+    features: cacheFeatures,
+  },
+]
+
+export default engines.map((engine) =>
+  defineCatalogKind({ ...engine, panels: [recovery] })
+)

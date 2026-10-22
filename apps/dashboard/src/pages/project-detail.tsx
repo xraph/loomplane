@@ -1,4 +1,6 @@
 import {
+  BoxIcon,
+  ChevronRightIcon,
   CopyIcon,
   FolderGit2Icon,
   GitBranchIcon,
@@ -6,11 +8,12 @@ import {
   RocketIcon,
   SparklesIcon,
 } from "lucide-react"
-import { type ReactNode, useEffect, useRef, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useBindingsList,
   useEnvironmentsList,
   useProjectsDelete,
   useProjectsGet,
@@ -18,12 +21,14 @@ import {
   useProjectsUpdate,
 } from "@/client/forge/loomplane/hooks"
 import type {
+  Binding,
   Environment,
   Graph,
   Project,
   ProjectView,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
+import { useQueries } from "@/client/queries"
 import {
   AnalysisBanner,
   AnalysisHistory,
@@ -38,6 +43,7 @@ import {
   useAnalyses,
 } from "@/components/architecture"
 import { DeployTab } from "@/components/deploy"
+import { ProductIcon } from "@/components/product-icon"
 import { EnvironmentCards } from "@/components/environment-manager"
 import { Page, PageHeading } from "@/components/page"
 import { ProjectStylePopover } from "@/components/project-style-picker"
@@ -96,6 +102,11 @@ import {
   resourceLabel,
   shortSHA,
 } from "@/lib/architecture"
+import {
+  catalogKind,
+  catalogResources,
+  parseResourceConfig,
+} from "@/lib/catalog-kinds"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ServiceRecovery } from "@/pages/service-catalog"
@@ -449,6 +460,7 @@ function Body({
           </Discovered>
         </TabsContent>
         <TabsContent value="services" className="grid gap-4">
+          <Resources project={project} environments={environments} />
           <Discovered
             project={project}
             analyses={analyses}
@@ -528,6 +540,93 @@ function Body({
         </SheetContent>
       </Sheet>
     </>
+  )
+}
+
+/**
+ * Resources lists what runs as a resource in each environment, each row
+ * opening its service page. It shows nothing until something is deployed.
+ */
+function Resources({
+  project,
+  environments,
+}: {
+  project: Project
+  environments?: Environment[]
+}) {
+  const args = useMemo(
+    () =>
+      (environments ?? []).map((e) => ({
+        path: { id: project.id },
+        query: { environment: e.name },
+      })),
+    [environments, project.id]
+  )
+  const { states } = useQueries(useBindingsList, args)
+  const rows = (environments ?? []).flatMap((environment, i) =>
+    catalogResources(states[i]?.data?.bindings ?? []).map((binding) => ({
+      environment,
+      binding,
+    }))
+  )
+  if (rows.length === 0) return null
+  return (
+    <section aria-label="Resources" className="grid gap-2">
+      <h2 className="text-[15px] font-semibold">
+        Resources{" "}
+        <span className="font-mono text-xs font-normal text-muted-foreground">
+          {rows.length}
+        </span>
+      </h2>
+      <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
+        {rows.map(({ environment, binding }) => (
+          <ResourceRow
+            key={`${environment.id}:${binding.id}`}
+            project={project}
+            environment={environment}
+            binding={binding}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function ResourceRow({
+  project,
+  environment,
+  binding,
+}: {
+  project: Project
+  environment: Environment
+  binding: Binding
+}) {
+  const config = parseResourceConfig(binding)
+  const kind = config?.composition?.kind ?? config?.kind ?? binding.engine
+  const module = catalogKind(kind)
+  const title = module?.title ?? (kind ? resourceLabel(kind) : "Resource")
+  return (
+    <Link
+      to="/projects/$id/catalog/$resource"
+      params={{ id: project.id, resource: binding.name }}
+      search={{ environment: environment.id }}
+      className="group flex items-center gap-3 border-t px-4 py-2.5 text-foreground transition-colors first:border-t-0 hover:bg-subtle"
+    >
+      <ProductIcon
+        product={module?.logo}
+        fallback={BoxIcon}
+        label={title}
+        size="sm"
+      />
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className="truncate text-sm font-semibold">{binding.name}</span>
+        <span className="truncate text-xs text-muted-foreground">{title}</span>
+      </span>
+      <Badge variant="outline" className="h-5 shrink-0 font-normal capitalize">
+        {environment.name}
+      </Badge>
+      <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5" />
+    </Link>
   )
 }
 

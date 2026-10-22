@@ -213,6 +213,78 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly catalogEndpoints = {
+    /**
+     * Register an external Postgres or Redis; its DSN is kept in Vault and never returned
+     */
+    create: async (body: types.CatalogconnectCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CatalogconnectCreateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The external databases and caches a catalog service can connect to, without their DSNs
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EndpointList> => {
+      let __path = `/api/v1/catalog/endpoints`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EndpointList"],
+      };
+
+      return this.request<types.EndpointList>(config);
+    },
+
+  };
+
+  public readonly catalogKinds = {
+    /**
+     * The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogKindList> => {
+      let __path = `/api/v1/catalog/kinds`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogKindList"],
+      };
+
+      return this.request<types.CatalogKindList>(config);
+    },
+
+  };
+
   public readonly cloudChanges = {
     /**
      * cloudChanges.apply
@@ -1375,6 +1447,24 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.RouteOperation>(config);
+    },
+
+    /**
+     * domainRoutes.updateTTL
+     */
+    updateTTL: async (projectId: string, routeId: string, body: types.RouteTTLInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudinfraRoute> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/ttl`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RouteTTLInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudinfraRoute"],
+      };
+
+      return this.request<types.CloudinfraRoute>(config);
     },
 
     /**

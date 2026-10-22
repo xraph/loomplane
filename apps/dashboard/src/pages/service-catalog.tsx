@@ -537,11 +537,84 @@ function DatabaseDeployment({
   )
 }
 
-export function ServiceRecovery({ project }: { project: string }) {
+/**
+ * ServiceRecovery is a project's database recovery. It opens on production
+ * and the first database there, unless environment (an environment ID) and
+ * resource choose where it starts; both can still be changed.
+ */
+export function ServiceRecovery({
+  project,
+  environment,
+  resource,
+}: {
+  project: string
+  environment?: string
+  resource?: string
+}) {
+  if (!environment)
+    return (
+      <Recovery
+        project={project}
+        initialEnvironment="production"
+        initialResource={resource ?? ""}
+      />
+    )
+  return (
+    <PreselectedRecovery
+      project={project}
+      environment={environment}
+      resource={resource ?? ""}
+    />
+  )
+}
+
+// The recovery controls key environments by name, so a preselected ID waits
+// for the environments to say which name it is.
+function PreselectedRecovery({
+  project,
+  environment,
+  resource,
+}: {
+  project: string
+  environment: string
+  resource: string
+}) {
+  const environments = useQuery(useEnvironmentsList, { path: { id: project } })
+  if (environments.status === "error")
+    return (
+      <QueryError
+        error={environments.error}
+        fallback="Could not load recovery state"
+        retry={environments.refetch}
+      />
+    )
+  if (!environments.data) return <p role="status">Loading recovery state…</p>
+  const name =
+    environments.data.environments.find((e) => e.id === environment)?.name ??
+    "production"
+  return (
+    <Recovery
+      key={`${environment}:${resource}`}
+      project={project}
+      initialEnvironment={name}
+      initialResource={resource}
+    />
+  )
+}
+
+function Recovery({
+  project,
+  initialEnvironment,
+  initialResource,
+}: {
+  project: string
+  initialEnvironment: string
+  initialResource: string
+}) {
   const [showNative, setShowNative] = useState(false)
   const { can } = useOrganization()
   const environments = useQuery(useEnvironmentsList, { path: { id: project } })
-  const [environment, setEnvironment] = useState("production")
+  const [environment, setEnvironment] = useState(initialEnvironment)
   const bindings = useQuery(useBindingsList, {
     path: { id: project },
     query: { environment },
@@ -557,7 +630,7 @@ export function ServiceRecovery({ project }: { project: string }) {
   const [deleting, setDeleting] = useState<Restore | null>(null)
   const { busy, onPendingChange } = useDeploymentWrites(project)
   const requests = useRef<Record<string, string>>({})
-  const [resource, setResource] = useState("")
+  const [resource, setResource] = useState(initialResource)
   const environmentID = environments.data?.environments.find(
     (e) => e.name === environment
   )?.id
