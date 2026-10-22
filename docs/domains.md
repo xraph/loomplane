@@ -248,5 +248,7 @@ LOOMPLANE_TEST_DATABASE_URL='postgres://loomplane:loomplane@localhost:55532/loom
 LOOMPLANE_CF_SANDBOX_TOKEN=... LOOMPLANE_CF_ACCOUNT_ID=... \
 LOOMPLANE_ACCEPTANCE_ZONE=acceptance.example.com LOOMPLANE_ACCEPTANCE_KUBECONFIG=$PWD/kind.kubeconfig \
 LOOMPLANE_ACCEPTANCE_CF_CHALLENGE_TOKEN=... LOOMPLANE_ACCEPTANCE_INGRESS_ADDRESS=203.0.113.10 \
-  go test -tags='integration acceptance' -count=1 -timeout=90m -v -run '^TestAcceptanceDomains$' ./tests/integration
+  go test -tags='integration acceptance' -count=1 -timeout=120m -v -run '^TestAcceptanceDomains$' ./tests/integration
 ```
+
+Give `go test` a `-timeout` longer than three times `LOOMPLANE_ACCEPTANCE_TIMEOUT` plus the registrar's 10-minute poll: 120m covers the 30m default. When go test runs out of time it panics, and a panic skips the cleanups, which leaves records in your real zone. So the run also stops its own waits 15 minutes before that deadline, and the cleanups get what's left.

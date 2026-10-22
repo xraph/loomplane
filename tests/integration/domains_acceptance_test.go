@@ -265,6 +265,45 @@ func domainsTimeout(t *testing.T) time.Duration {
 	return timeout
 }
 
+// A go test timeout panics and skips t.Cleanup, which would leave records
+// in the real zone. So the run's own waits end cleanupMargin before the go
+// test deadline, and the cleanups' waits cleanupGrace before it.
+const (
+	cleanupMargin = 15 * time.Minute
+	cleanupGrace  = time.Minute
+)
+
+// capped shortens timeout so a wait ends margin before the go test deadline.
+func capped(t *testing.T, timeout, margin time.Duration) time.Duration {
+	t.Helper()
+	if end, ok := t.Deadline(); ok {
+		if left := time.Until(end) - margin; left < timeout {
+			return max(left, 0)
+		}
+	}
+	return timeout
+}
+
+func TestCappedWaitsEndBeforeTheDeadline(t *testing.T) {
+	end, ok := t.Deadline()
+	if !ok {
+		if capped(t, time.Hour, cleanupMargin) != time.Hour {
+			t.Fatal("capped a wait with no deadline")
+		}
+		return
+	}
+	limit := time.Until(end) - time.Minute
+	if got := capped(t, 1000*time.Hour, time.Minute); got > limit {
+		t.Fatalf("a wait of %s runs into the cleanups", got)
+	}
+	if got := capped(t, time.Second, 0); got != time.Second {
+		t.Fatalf("a short wait became %s", got)
+	}
+	if got := capped(t, time.Hour, 1000*time.Hour); got != 0 {
+		t.Fatalf("a wait past the deadline became %s", got)
+	}
+}
+
 // acceptanceRegistrar registers a .com in the Cloudflare Registrar sandbox,
 // which never charges anyone and creates no zone.
 func acceptanceRegistrar(t *testing.T) {
@@ -325,7 +364,7 @@ func acceptanceRegistrar(t *testing.T) {
 
 	domainsCall(t, c, http.StatusAccepted, http.MethodPost, "/api/v1/domain-registrations/"+reg.ID+"/approve",
 		cloudinfra.RegistrationApproval{Review: reg.Review, Currency: reg.Quote.Currency, RegistrationCost: reg.Quote.RegistrationCost}, &reg)
-	for deadline := time.Now().Add(10 * time.Minute); reg.Status != cloudinfra.RegistrationSucceededStatus && reg.Status != cloudinfra.RegistrationZonePending; {
+	for deadline := time.Now().Add(capped(t, 10*time.Minute, cleanupMargin)); reg.Status != cloudinfra.RegistrationSucceededStatus && reg.Status != cloudinfra.RegistrationZonePending; {
 		switch reg.Status {
 		case cloudinfra.RegistrationApproved, cloudinfra.RegistrationRegistering:
 		default:
@@ -394,7 +433,7 @@ func acceptanceRoutes(t *testing.T) {
 	c, cfg := domainsApp(t, guard, func(cfg *config.Config) { cfg.GitHub.APIURL = gh.URL })
 	token, account := vars["LOOMPLANE_CF_SANDBOX_TOKEN"], vars["LOOMPLANE_CF_ACCOUNT_ID"]
 	cleanupContext := func() context.CancelFunc {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), timeout)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), capped(t, timeout, cleanupGrace))
 		c.ctx = ctx
 		return cancel
 	}
@@ -456,12 +495,12 @@ services:
     scale: {min: 1, max: 1}
     build: {image: %s}
 `, cluster.ID, server.LegacyIngressImage)
-	if d := domainsDeploy(t, c, base, manifest, timeout); d.Status != "succeeded" {
+	if d := domainsDeploy(t, c, base, manifest, capped(t, timeout, cleanupMargin)); d.Status != "succeeded" {
 		t.Fatalf("the deployment %s: %s", d.Status, d.Error)
 	}
 	t.Cleanup(func() {
 		defer cleanupContext()()
-		if d := domainsDeploy(t, c, base, "version: 1\n", timeout); d.Status != "succeeded" {
+		if d := domainsDeploy(t, c, base, "version: 1\n", capped(t, timeout, cleanupGrace)); d.Status != "succeeded" {
 			t.Errorf("the teardown %s: %s. Check the namespace for what's left", d.Status, d.Error)
 		}
 	})
@@ -476,7 +515,7 @@ services:
 				t.Logf("removing %s after a failed run", hostname)
 				var op cloudinfra.RouteOperation
 				domainsCall(t, c, http.StatusAccepted, http.MethodPost, base+"/domain-routes/"+id+"/remove", map[string]int64{"revision": route.Revision}, &op)
-				waitRouteOperation(t, c, base, op.ID, timeout)
+				waitRouteOperation(t, c, base, op.ID, capped(t, timeout, cleanupGrace))
 			}
 		}
 	})
@@ -492,7 +531,7 @@ services:
 		routes[hostname] = op.Route.ID
 	}
 	for hostname, id := range routes {
-		status := waitRouteReady(t, c, base, id, timeout)
+		status := waitRouteReady(t, c, base, id, capped(t, timeout, cleanupMargin))
 		t.Logf("%s is ready, certificate until %s", hostname, status.CertificateExpiresAt.Format(time.DateOnly))
 	}
 
@@ -503,7 +542,7 @@ services:
 		}
 		var op cloudinfra.RouteOperation
 		domainsCall(t, c, http.StatusAccepted, http.MethodPost, base+"/domain-routes/"+id+"/remove", map[string]int64{"revision": route.Revision}, &op)
-		waitRouteOperation(t, c, base, op.ID, timeout)
+		waitRouteOperation(t, c, base, op.ID, capped(t, timeout, cleanupMargin))
 		t.Logf("removed %s", hostname)
 	}
 
