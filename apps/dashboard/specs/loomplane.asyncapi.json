@@ -1869,6 +1869,9 @@
           "address": {
             "type": "string"
           },
+          "backend": {
+            "type": "string"
+          },
           "binding_id": {
             "type": "string"
           },
@@ -1912,11 +1915,20 @@
           "port"
         ],
         "properties": {
+          "blocked_path_prefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cloud_id": {
             "type": "string"
           },
           "environment_id": {
             "type": "string"
+          },
+          "external_ttl_seconds": {
+            "type": "integer"
           },
           "hostname": {
             "type": "string"
@@ -1951,6 +1963,9 @@
           "cert_expires": {
             "type": "string",
             "format": "date-time"
+          },
+          "cert_state": {
+            "type": "string"
           },
           "checked_at": {
             "type": "string",

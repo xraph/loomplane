@@ -86,6 +86,7 @@ export const cloudPurposes: Record<string, string> = {
   vercel: "Web apps and static sites",
   render: "Web services, workers, Postgres and Key Value",
   digitalocean: "App Platform, Managed PostgreSQL, MySQL and Valkey",
+  cloudflare: "DNS zones and domain registration",
 }
 
 // The built-in clouds, for while the API's list is on its way.

@@ -9,6 +9,7 @@ import {
   DatabaseIcon,
   CopyIcon,
   FolderGit2Icon,
+  GlobeIcon,
   KeyboardIcon,
   LayoutDashboardIcon,
   LayoutGridIcon,
@@ -133,6 +134,16 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       link: <Link to="/services" />,
       isActive: path === "/services",
     },
+    ...(can("organization_cloud:manage")
+      ? [
+          {
+            title: "Domains",
+            icon: <GlobeIcon />,
+            link: <Link to="/domains" />,
+            isActive: path.startsWith("/domains"),
+          },
+        ]
+      : []),
     {
       title: "Clouds",
       icon: <CloudIcon />,
