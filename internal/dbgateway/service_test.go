@@ -344,7 +344,7 @@ func TestPausedRouteInSnapshot(t *testing.T) {
 	}
 }
 
-// R71: when another writer's digest is stored, the service compiles again
+// When another writer's digest is stored, the service compiles again
 // rather than signing its content under the other writer's version.
 func TestSnapshotRecompilesWhenAnotherWriterWins(t *testing.T) {
 	h := newServiceHarness(t)
@@ -554,7 +554,7 @@ func countDerivations(svc *Service) *int {
 	return n
 }
 
-// R74: a poll that finds nothing changed derives no verifier, and a new
+// A poll that finds nothing changed derives no verifier, and a new
 // password does.
 func TestSnapshotCachesVerifiers(t *testing.T) {
 	h := newServiceHarness(t)
@@ -626,7 +626,7 @@ func TestVerifierCacheIsBounded(t *testing.T) {
 	}
 }
 
-// R75: a gateway ahead of the stored version gets a snapshot past it.
+// A gateway ahead of the stored version gets a snapshot past it.
 func TestSnapshotRaisesAStaleStoredVersion(t *testing.T) {
 	h := newServiceHarness(t)
 	if s, err := h.snapshot(t, 0); err != nil || s.Version != 1 {
@@ -647,7 +647,7 @@ func TestSnapshotRaisesAStaleStoredVersion(t *testing.T) {
 	}
 }
 
-// R1: deployments will import this package, so this package can't import it.
+// internal/deployments imports this package, so this package can't import it.
 func TestDoesNotImportDeployments(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs go list")

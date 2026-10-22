@@ -440,7 +440,7 @@ func TestResourceAddressGateway(t *testing.T) {
 	}
 }
 
-// R83: nothing in the DSN's query can point the app past the gateway.
+// Nothing in the DSN's query can point the app past the gateway.
 func TestResourceAddressGatewayDropsHostOverrides(t *testing.T) {
 	dsn := "postgres://app:pw@db.do.example:25060/orders?sslmode=require&host=evil.example&hostaddr=10.0.0.1&port=6543"
 	r := NewRunner(RunnerDeps{Resources: snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(dsn)}})
@@ -451,7 +451,7 @@ func TestResourceAddressGatewayDropsHostOverrides(t *testing.T) {
 	}
 }
 
-// R82: each deploy keeps the gateway's routes and recorded placement in
+// Each deploy keeps the gateway's routes and recorded placement in
 // step with the plan, and never its keys.
 func TestEnsureDatabaseGatewayKeepsRoutesAndPlacementCurrent(t *testing.T) {
 	store, secrets := &fakeDBGateways{}, snapshotSecrets{}
@@ -515,7 +515,7 @@ func (e *removing) Remove(_ context.Context, job *Job, _ *planning.Binding) erro
 	return e.fail
 }
 
-// R81: deleting the database gateway removes its cloud service, then its
+// Deleting the database gateway removes its cloud service, then its
 // record and keys, so deploying it again starts afresh.
 func TestRunDeletingTheDatabaseGatewayRemovesItsRecordAndKeys(t *testing.T) {
 	secrets := snapshotSecrets{}
@@ -795,7 +795,7 @@ func tlsAnswering(t *testing.T) (string, *http.Client) {
 	return srv.URL, srv.Client()
 }
 
-// R86: a gateway whose Apply fails keeps the routes and placement it was
+// A gateway whose Apply fails keeps the routes and placement it was
 // recorded with, and the retry that applies it moves them.
 func TestRunAFailedApplyLeavesTheGatewayRecordAlone(t *testing.T) {
 	ctx := t.Context()
@@ -848,7 +848,7 @@ func TestRunAFailedApplyLeavesTheGatewayRecordAlone(t *testing.T) {
 	}
 }
 
-// R86: which gateway serves a resource doesn't depend on map order, and
+// Which gateway serves a resource doesn't depend on map order, and
 // only a service binding can be one.
 func TestServingGatewayIsDeterministic(t *testing.T) {
 	asResource := gatewayBinding(t, "https://resource.example")
@@ -866,7 +866,7 @@ func TestServingGatewayIsDeterministic(t *testing.T) {
 	}
 }
 
-// R86: a delete that removed the keys but not the record is finished by its
+// A delete that removed the keys but not the record is finished by its
 // retry, which deletes the record and then the binding.
 func TestRunRetriesAPartialDatabaseGatewayDelete(t *testing.T) {
 	ctx := t.Context()
@@ -915,7 +915,7 @@ func TestRunRetriesAPartialDatabaseGatewayDelete(t *testing.T) {
 	}
 }
 
-// R92: an app linked to a gateway-served database also gets the database's
+// An app linked to a gateway-served database also gets the database's
 // own address in <KEY>_DIRECT, for what speaks Postgres over TCP, such as a
 // migration, which the gateway doesn't serve yet. It holds the credentials,
 // so it's secret, and a variable someone set of that name wins.

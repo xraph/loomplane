@@ -165,7 +165,7 @@ func TestEnsureGatewayRejectsBadInput(t *testing.T) {
 	}
 }
 
-// R72: the deploy path tells a missing environment from a taken id.
+// The deploy path tells a missing environment from a taken id.
 func TestEnsureGatewayMapsConstraintErrors(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -632,7 +632,7 @@ func TestDeletingTheEnvironmentRemovesItsGateways(t *testing.T) {
 	}
 }
 
-// R81: deleting a gateway takes its routes, snapshot and instances with it,
+// Deleting a gateway takes its routes, snapshot and instances with it,
 // and leaves every other gateway alone. Deleting it again is no error.
 func TestDeleteGateway(t *testing.T) {
 	s := testStore(t)
@@ -685,7 +685,7 @@ func TestDeleteGateway(t *testing.T) {
 	}
 }
 
-// R82: a deploy drops the routes of resources no longer behind the gateway,
+// A deploy drops the routes of resources no longer behind the gateway,
 // keeping the salt of the ones that stay.
 func TestDeleteRoutesExcept(t *testing.T) {
 	s := testStore(t)
@@ -727,7 +727,7 @@ func TestDeleteRoutesExcept(t *testing.T) {
 	}
 }
 
-// R82: a deploy moves the gateway's recorded placement and never its keys.
+// A deploy moves the gateway's recorded placement and never its keys.
 func TestUpdateGatewayPlacement(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

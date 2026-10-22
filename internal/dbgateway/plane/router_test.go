@@ -900,7 +900,7 @@ func TestRouterApplyRejects(t *testing.T) {
 	}
 }
 
-// R51: only a branch of a database the gateway routes is held, so a client
+// Only a branch of a database the gateway routes is held, so a client
 // can't make it ask the control plane about any label it likes.
 func TestRouterHoldNeedsParentRoute(t *testing.T) {
 	holder := &fakeHolder{}
@@ -1095,7 +1095,7 @@ func (d *gatedDialer) Dial(ctx context.Context, b Backend, s BackendSecret, para
 	return d.fakeDialer.Dial(ctx, b, s, params)
 }
 
-// R52.4: retiring a route doesn't make Apply wait for its hub to wind down.
+// Retiring a route doesn't make Apply wait for its hub to wind down.
 func TestRouterApplyDoesNotWaitForHubClose(t *testing.T) {
 	d := &gatedDialer{fakeDialer: &fakeDialer{}, release: make(chan struct{})}
 	h := newRouterHarness(t, d, nil)

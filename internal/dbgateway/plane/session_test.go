@@ -1691,7 +1691,7 @@ func TestSessionTwoClientsOneConnection(t *testing.T) {
 	b.terminate()
 }
 
-// R46: a pinned session holds its connection between transactions, so it
+// A pinned session holds its connection between transactions, so it
 // ends at the first point where it owes the client nothing, and the pool
 // gets the connection back through DISCARD ALL.
 func TestSessionRemovedWhilePinned(t *testing.T) {

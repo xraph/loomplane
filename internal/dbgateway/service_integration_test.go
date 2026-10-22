@@ -12,7 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
 )
 
-// R75 over the real store: after a restore from an older backup the stored
+// Over the real store: after a restore from an older backup the stored
 // version is behind what the gateway holds, and its next poll gets a
 // snapshot past its own version that it will accept.
 func TestSnapshotRecoversAfterARestore(t *testing.T) {

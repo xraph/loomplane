@@ -93,7 +93,8 @@ type Service struct {
 	key   ed25519.PrivateKey
 	trust plane.TrustKey
 	now   func() time.Time
-	// verifiers caches route verifiers between compiles (R74).
+	// verifiers caches route verifiers between compiles, so a poll that
+	// finds nothing changed derives no key.
 	verifiers *verifierCache
 
 	// OnSkip, when set, hears about the routes a snapshot left out each
@@ -163,7 +164,7 @@ func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*pla
 	if after >= math.MaxInt64 {
 		return nil, fmt.Errorf("%w: snapshot version %d", ErrInvalid, after)
 	}
-	// R71: sign only a version whose stored digest is the one compiled
+	// Sign only a version whose stored digest is the one compiled
 	// here. A concurrent writer that stored other content gets one more
 	// compile and bump; after that the stored pair is used only if a fresh
 	// compile matches it.
@@ -189,7 +190,7 @@ func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*pla
 			continue
 		}
 		if after > version {
-			// R75: the gateway holds a version this store never reached,
+			// The gateway holds a version this store never reached,
 			// as after a database restore. Raise the stored version past
 			// it, so the gateway takes the snapshot rather than refusing
 			// it as stale.
