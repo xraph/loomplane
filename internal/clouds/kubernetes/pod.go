@@ -49,11 +49,30 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		container.Resources = corev1.ResourceRequirements{Requests: limits.DeepCopy(), Limits: limits}
 	}
 	if health := labels[owned.LabelHealth]; health != "" && len(ports) > 0 {
-		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(int(ports[0].ContainerPort))}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}
+		port, err := healthPort(spec, labels)
+		if err != nil {
+			return nil, nil, err
+		}
+		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}
 	}
 	template := &corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{owned.LabelRevision: labels[owned.LabelRevision]}}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}, ImagePullSecrets: pulls}}
 	if architecture := labels[owned.LabelArchitecture]; architecture != "" {
 		template.Spec.NodeSelector = map[string]string{"kubernetes.io/arch": architecture}
 	}
 	return template, servicePorts, nil
+}
+
+// healthPort is the container port readiness probes: the one LabelHealthPort
+// names, which the workload must declare, otherwise its first port.
+func healthPort(spec cpprovider.ServiceSpec, labels map[string]string) (int, error) {
+	declared := labels[owned.LabelHealthPort]
+	if declared == "" {
+		return spec.Ports[0].Container, nil
+	}
+	for _, port := range spec.Ports {
+		if strconv.Itoa(port.Container) == declared {
+			return port.Container, nil
+		}
+	}
+	return 0, errors.New("the readiness port isn't one of the workload's ports")
 }

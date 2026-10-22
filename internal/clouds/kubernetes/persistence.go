@@ -236,9 +236,17 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	template.Spec.Containers[0].Env = append(template.Spec.Containers[0].Env, podIdentityEnv())
 	automount := false
 	template.Spec.AutomountServiceAccountToken = &automount
-	template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(spec.Ports[0].Container)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
-	if database := labels[nativepg.LabelDatabase]; database != "" {
+	port, err := healthPort(spec, labels)
+	if err != nil {
+		return nil, err
+	}
+	template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
+	switch database, health := labels[nativepg.LabelDatabase], labels[owned.LabelHealth]; {
+	case database != "":
 		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
+	case health != "":
+		// A catalog component declares an HTTP readiness probe.
+		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}
 	}
 	for i, v := range spec.Volumes {
 		template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{Name: v.Name, VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claims[i].Name}}})

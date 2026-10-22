@@ -344,14 +344,106 @@ func TestCompositionRecipeDriftNeedsReplan(t *testing.T) {
 	}
 }
 
-func TestCompositionOnKubernetesIsUnsupportedForNow(t *testing.T) {
-	r := Compute(Input{
-		Environment: "production", Graph: &graph.Graph{}, Providers: providers.Registry(), Kinds: recipestest.Registry(t),
-		Manifest:    parse(t, "version: 1\nresources:\n  app: {kind: sample, provider: kubernetes, target: "+targetA+"}\n"),
-		Connections: []ConnectionOption{clusterCatalogConnection(t)},
+const clusterApp = "version: 1\nresources:\n  app: {kind: sample, provider: kubernetes, target: " + targetA + "}\n"
+
+// clusterWorkloadConnection is a checked cluster namespace with no
+// storage class and no database recovery permissions.
+func clusterWorkloadConnection(t *testing.T) ConnectionOption {
+	t.Helper()
+	return infrastructureConnection(t, targetA, "kubernetes", map[string]string{"endpoint": "https://cluster.example", "cluster_ca": "checked-ca", "namespace": "apps", "namespace_uid": "namespace-identity", "architecture": "arm64"})
+}
+
+func clusterComposedPlan(t *testing.T, kinds *recipes.Registry, c ConnectionOption) *Result {
+	t.Helper()
+	return Compute(Input{
+		Environment: "production", Graph: &graph.Graph{}, Providers: providers.Registry(), Kinds: kinds,
+		Manifest: parse(t, clusterApp), Connections: []ConnectionOption{c},
 	})
+}
+
+// statelessSample is Sample without its job and dependencies: an API and
+// a worker, neither with a volume.
+func statelessSample(t *testing.T) recipes.Kind {
+	t.Helper()
+	kind := recipestest.Sample()
+	kind.Dependencies = nil
+	delete(kind.Releases[0].Images, "migrate")
+	api, worker := kind.Components[1], kind.Components[2]
+	api.After = nil
+	api.Env = []recipes.EnvVar{{Name: "ADMIN_PASSWORD", Secret: "admin-password"}}
+	kind.Components = []recipes.Component{api, worker}
+	return kind
+}
+
+func registryOf(t *testing.T, kind recipes.Kind) *recipes.Registry {
+	t.Helper()
+	kinds := recipes.NewRegistry()
+	if err := kinds.Register(kind); err != nil {
+		t.Fatal(err)
+	}
+	return kinds
+}
+
+func TestCompositionOnKubernetesNeedsNamespaceNotStorage(t *testing.T) {
+	r := clusterComposedPlan(t, registryOf(t, statelessSample(t)), clusterWorkloadConnection(t))
+	if !r.Executable {
+		t.Fatalf("stateless composition on a cluster blocked: %+v", r.Problems)
+	}
+	api := findAction(r, "resource:app--api")
+	if api == nil || api.ConnectionID != targetA || api.Resource.TargetSettings["namespace_uid"] != "namespace-identity" || api.Resource.Component == nil || !strings.Contains(api.Resource.Component.Component.Image, "sample-api@sha256:01873eef") {
+		t.Fatalf("api on the cluster: %+v", api)
+	}
+	for _, key := range []string{"architecture", "namespace", "namespace_uid"} {
+		t.Run(key, func(t *testing.T) {
+			c := clusterWorkloadConnection(t)
+			delete(c.Details, key)
+			if r := clusterComposedPlan(t, registryOf(t, statelessSample(t)), c); r.Executable {
+				t.Fatalf("composition accepted an unchecked %s", key)
+			}
+		})
+	}
+	c := clusterWorkloadConnection(t)
+	c.Details["namespace"] = "Not_A_Label"
+	if r := clusterComposedPlan(t, registryOf(t, statelessSample(t)), c); r.Executable {
+		t.Fatal("composition accepted an invalid namespace")
+	}
+}
+
+func TestCompositionOnKubernetesWithVolumeNeedsRetainedStorage(t *testing.T) {
+	kind := statelessSample(t)
+	kind.Components[1].Volume = &recipes.Volume{MountPath: "/var/lib/worker", KubernetesSizeMB: 1024}
+	r := clusterComposedPlan(t, registryOf(t, kind), clusterWorkloadConnection(t))
+	if r.Executable || !hasCode(r.Problems, "catalog-storage-unavailable") {
+		t.Fatalf("volume accepted without retained storage: %+v", r.Problems)
+	}
+	c := clusterCatalogConnection(t)
+	delete(c.Details, "postgres_recovery_permissions")
+	if r := clusterComposedPlan(t, registryOf(t, kind), c); !r.Executable {
+		t.Fatalf("volume on retained storage blocked: %+v", r.Problems)
+	}
+}
+
+func TestCompositionOnKubernetesWithJobNeedsJobPermission(t *testing.T) {
+	c := clusterCatalogConnection(t)
+	r := clusterComposedPlan(t, recipestest.Registry(t), c)
+	if r.Executable || !hasCode(r.Problems, "catalog-jobs-unavailable") {
+		t.Fatalf("job accepted without job permission: %+v", r.Problems)
+	}
+	c.Details["jobs"] = "ready"
+	if r := clusterComposedPlan(t, recipestest.Registry(t), c); !r.Executable {
+		t.Fatalf("job with job permission blocked: %+v", r.Problems)
+	}
+	if r := clusterComposedPlan(t, registryOf(t, statelessSample(t)), clusterWorkloadConnection(t)); hasCode(r.Problems, "catalog-jobs-unavailable") {
+		t.Fatalf("job permission required without a job: %+v", r.Problems)
+	}
+}
+
+func TestCompositionOnKubernetesNeedsAKindThatTargetsIt(t *testing.T) {
+	kind := statelessSample(t)
+	kind.Targets = []string{"server"}
+	r := clusterComposedPlan(t, registryOf(t, kind), clusterWorkloadConnection(t))
 	if r.Executable || !hasCode(r.Problems, "catalog-target-unsupported") {
-		t.Fatalf("kubernetes composition accepted: %+v", r.Problems)
+		t.Fatalf("server-only kind accepted on a cluster: %+v", r.Problems)
 	}
 }
 

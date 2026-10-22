@@ -29,6 +29,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
@@ -899,5 +900,27 @@ func TestRunJobSucceededIsNotRerunOnResume(t *testing.T) {
 	}
 	if observed, err := f.target.Observe(t.Context(), job.Connection, nil, b); err != nil || !observed.Exists {
 		t.Fatalf("observe: %+v %v", observed, err)
+	}
+}
+
+func TestKubernetesComponentAddressIsItsServiceHost(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	c := recipestest.Sample().Components[1]
+	cfg := &planning.ResourceConfig{Provider: "kubernetes", TargetSettings: map[string]string{"namespace": "apps"}, Component: &planning.ComponentConfig{Component: recipes.ResolvedComponent{Component: c}}}
+	raw, err := componentAddress(cfg, iid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := kubernetes.WorkloadName(iid) + ".apps.svc"
+	var got map[string]string
+	if err = json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"http": "http://" + host + ":8080", "admin": "http://" + host + ":9090"}; !maps.Equal(got, want) {
+		t.Fatalf("component addresses: %v, want %v", got, want)
+	}
+	cfg.TargetSettings["namespace"] = "Not_A_Label"
+	if _, err = componentAddress(cfg, iid); err == nil {
+		t.Fatal("address in an invalid namespace")
 	}
 }

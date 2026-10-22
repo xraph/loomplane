@@ -109,12 +109,8 @@ func (p *planner) planComposed(name string) {
 // each component (step 2 plus its start rank), and one for the resource
 // itself, after its last component, which publishes its outputs.
 func (p *planner) planComposition(name, base string, r manifest.Resource, kind recipes.Kind, prov *provider.Provider, set manifest.ResourceSettings) {
-	if !OwnedCloud(prov.Cloud) || !slices.Contains(kind.Targets, prov.Cloud) || prov.Cloud == "kubernetes" {
-		message := fmt.Sprintf("%s can't run %s. Choose an existing server.", prov.Title, kind.Title)
-		if prov.Cloud == "kubernetes" && slices.Contains(kind.Targets, prov.Cloud) {
-			message = fmt.Sprintf("%s can't run %s yet. Choose an existing server.", prov.Title, kind.Title)
-		}
-		p.problem(Finding{Code: "catalog-target-unsupported", Subject: ResourceSubject, Name: name, Path: base + ".provider", Message: message})
+	if !OwnedCloud(prov.Cloud) || !slices.Contains(kind.Targets, prov.Cloud) {
+		p.problem(Finding{Code: "catalog-target-unsupported", Subject: ResourceSubject, Name: name, Path: base + ".provider", Message: fmt.Sprintf("%s can't run %s. Choose an existing server.", prov.Title, kind.Title)})
 		return
 	}
 	version := r.Version
@@ -136,9 +132,18 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 	if connection == nil {
 		return
 	}
+	if prov.Cloud == "kubernetes" {
+		if err := ValidateKubernetesWorkloadSettings(connection.Details); err != nil {
+			p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target", Message: err.Error()})
+			return
+		}
+	}
 	composition, err := p.kinds().Resolve(kind.Name, version, connection.Details["architecture"], prov.Cloud)
 	if err != nil {
 		p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: base, Message: err.Error()})
+		return
+	}
+	if prov.Cloud == "kubernetes" && !p.clusterRuns(name, base, kind, composition, connection) {
 		return
 	}
 	region := p.place(ResourceSubject, name, base+".region", prov, set.Region)
@@ -199,6 +204,29 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 	p.namedChanges(a)
 	p.resources[name] = a
 	p.actions = append(p.actions, a)
+}
+
+// clusterRuns reports, as problems, what a cluster connection lacks to run
+// a composition: retained storage when a component keeps a volume, and Job
+// permissions when one is a job. A composition never needs the database
+// recovery permissions; a dependency it provisions checks its own.
+func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition *recipes.Composition, connection *ConnectionOption) bool {
+	ok := true
+	if i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Volume != nil }); i >= 0 && ValidateKubernetesDatabaseSettings(connection.Details) != nil {
+		p.problem(Finding{
+			Code: "catalog-storage-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target",
+			Message: fmt.Sprintf("%s's %s keeps data on a volume. Select and check a retained filesystem storage class for this cluster connection.", kind.Title, composition.Components[i].Name),
+		})
+		ok = false
+	}
+	if i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Role == recipes.RoleJob }); i >= 0 && connection.Details["jobs"] != "ready" {
+		p.problem(Finding{
+			Code: "catalog-jobs-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target",
+			Message: fmt.Sprintf("This connection needs namespace Job and pod log permissions to run %s's %s job. Check the connection after granting them.", kind.Title, composition.Components[i].Name),
+		})
+		ok = false
+	}
+	return ok
 }
 
 // dependencies settles where a composed resource gets each dependency,

@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kuberuntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 	kubetesting "k8s.io/client-go/testing"
 
@@ -174,5 +175,49 @@ func TestRuntime_stopsAutoscalingAndRestoresItOnStart(t *testing.T) {
 	}
 	if _, err = kube.AutoscalingV2().HorizontalPodAutoscalers("selected").Get(t.Context(), name, metav1.GetOptions{}); err != nil {
 		t.Fatal("autoscaler not restored", err)
+	}
+}
+
+func TestKubernetesStatelessComponentIsADeployment(t *testing.T) {
+	kube := fake.NewClientset()
+	client := &Client{Config: &Config{Namespace: "selected"}, Kube: kube}
+	runtime := &Runtime{WaitReady: func(context.Context, *Client, string) error { return nil }, Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }}
+	component := func(health string) map[string]string {
+		return map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelPublic: "false", owned.LabelHealth: "/readyz", owned.LabelCatalogKind: "sample", owned.LabelCatalogResource: "app", owned.LabelCatalogComponent: "api", owned.LabelHealthPort: health}
+	}
+	spec := cpprovider.ServiceSpec{Name: "api", Image: "registry.example/sample-api@sha256:fixture", Ports: []cpprovider.PortSpec{{Container: 8080, Protocol: "tcp"}, {Container: 9090, Protocol: "tcp"}}}
+	probed := func(health string) (*appsv1.Deployment, *corev1.Service) {
+		t.Helper()
+		iid := id.New(id.PrefixInstance)
+		if _, err := runtime.Apply(t.Context(), iid, spec, component(health)); err != nil {
+			t.Fatal(err)
+		}
+		deployment, err := kube.AppsV1().Deployments("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		service, err := kube.CoreV1().Services("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return deployment, service
+	}
+
+	deployment, service := probed("8080")
+	want := []corev1.ServicePort{{Name: "http-0", Port: 8080, TargetPort: intstr.FromInt(8080)}, {Name: "http-1", Port: 9090, TargetPort: intstr.FromInt(9090)}}
+	if service.Spec.Type != corev1.ServiceTypeClusterIP || service.Spec.ClusterIP == corev1.ClusterIPNone || !reflect.DeepEqual(service.Spec.Ports, want) {
+		t.Fatalf("component service: %+v", service.Spec)
+	}
+	probe := deployment.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/readyz" || probe.HTTPGet.Port.IntValue() != 8080 {
+		t.Fatalf("component readiness: %+v", probe)
+	}
+
+	deployment, _ = probed("9090")
+	if probe = deployment.Spec.Template.Spec.Containers[0].ReadinessProbe; probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Port.IntValue() != 9090 {
+		t.Fatalf("readiness ignored the declared health port: %+v", probe)
+	}
+	if _, err := runtime.Apply(t.Context(), id.New(id.PrefixInstance), spec, component("7070")); err == nil {
+		t.Fatal("readiness on a port the workload doesn't declare")
 	}
 }
