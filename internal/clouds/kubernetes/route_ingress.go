@@ -145,6 +145,7 @@ func (c *Client) EnsureHTTPIssuer(ctx context.Context, ingressClass, acmeDirecto
 	if u, err := url.Parse(acmeDirectory); err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
 		return "", fmt.Errorf("%w: the ACME directory must be an https URL", ErrInvalid)
 	}
+	// http01.ingress.ingressClassName needs cert-manager 1.12 or later.
 	ingress := map[string]any{}
 	if ingressClass != "" {
 		ingress["ingressClassName"] = ingressClass
@@ -239,7 +240,8 @@ func (c *Client) ApplyRouteIngress(ctx context.Context, in RouteIngress) error {
 			"secretName": name + "-tls",
 			"dnsNames":   []any{in.Hostname},
 			"issuerRef":  map[string]any{"name": in.Issuer, "kind": "Issuer", "group": "cert-manager.io"},
-			// The issued Secret carries the route label so deletes can prove ownership.
+			// The issued Secret carries the route label so deletes can prove
+			// ownership. secretTemplate needs cert-manager 1.5 or later.
 			"secretTemplate": map[string]any{"labels": secretLabels},
 		},
 	}}
@@ -338,12 +340,16 @@ func (c *Client) RouteIngressStatus(ctx context.Context, routeID, serviceName st
 	return out, nil
 }
 
+// certificateStatus follows cert-manager v1: Ready reports the Secret, and a
+// failed issuance shows on Issuing (False, reason Failed) with lastFailureTime.
 func certificateStatus(u *unstructured.Unstructured) CertificateStatus {
 	out := CertificateStatus{}
 	conditions, _, err := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if err != nil {
 		conditions = nil
 	}
+	issuingFailed := false
+	issuingReason, issuingMessage := "", ""
 	for _, raw := range conditions {
 		condition, ok := raw.(map[string]any)
 		if !ok {
@@ -354,10 +360,22 @@ func certificateStatus(u *unstructured.Unstructured) CertificateStatus {
 		case "Ready":
 			out.Reason, out.Message = field(condition, "reason"), field(condition, "message")
 			out.Ready = status == "True"
-			out.Failed = status == "False" && out.Reason != "DoesNotExist" && out.Reason != "InProgress"
 		case "Issuing":
 			out.Issuing = status == "True"
+			issuingReason, issuingMessage = field(condition, "reason"), field(condition, "message")
+			issuingFailed = status == "False" && issuingReason == "Failed"
 		}
+	}
+	lastFailure := field(u.Object, "status", "lastFailureTime") != ""
+	switch {
+	case !out.Ready && (issuingFailed || lastFailure && !out.Issuing):
+		out.Failed = true
+		if issuingReason != "" {
+			out.Reason, out.Message = issuingReason, issuingMessage
+		}
+	case out.Ready && issuingFailed:
+		// The current certificate still serves while its reissue fails.
+		out.Message = issuingMessage
 	}
 	for name, target := range map[string]*time.Time{"notAfter": &out.NotAfter, "renewalTime": &out.RenewalTime} {
 		if parsed, err := time.Parse(time.RFC3339, field(u.Object, "status", name)); err == nil {

@@ -252,7 +252,7 @@ func TestEnsureHTTPIssuerUsesIngressClassWithoutEmail(t *testing.T) {
 	}
 }
 
-func certificateObject(name, host string, conditions ...map[string]any) *unstructured.Unstructured {
+func certificateObject(name string, conditions ...map[string]any) *unstructured.Unstructured {
 	list := make([]any, 0, len(conditions))
 	for _, c := range conditions {
 		list = append(list, c)
@@ -260,7 +260,7 @@ func certificateObject(name, host string, conditions ...map[string]any) *unstruc
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "cert-manager.io/v1", "kind": "Certificate",
 		"metadata": map[string]any{"name": name, "namespace": "selected", "labels": map[string]any{LabelRoute: "route_1"}},
-		"spec":     map[string]any{"dnsNames": []any{host}},
+		"spec":     map[string]any{"dnsNames": []any{"api.acme.dev"}},
 		"status":   map[string]any{"conditions": list, "notAfter": "2027-01-20T00:00:00Z", "renewalTime": "2026-12-21T00:00:00Z"},
 	}}
 }
@@ -281,7 +281,7 @@ func TestRouteIngressStatusReadsCertManagerConditions(t *testing.T) {
 	slice := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "lp-inst-abc", Namespace: "selected", Labels: map[string]string{discoveryv1.LabelServiceName: "lp-inst"}}, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.0.0.4"}, Conditions: discoveryv1.EndpointConditions{Ready: &notReady}}, {Addresses: []string{"10.0.0.5"}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}}}}
 	other := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "lp-other-abc", Namespace: "selected", Labels: map[string]string{discoveryv1.LabelServiceName: "lp-other"}}, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.0.0.6"}}}}
 
-	issuing := certificateObject(name, "api.acme.dev",
+	issuing := certificateObject(name,
 		map[string]any{"type": "Ready", "status": "True", "reason": "Ready", "message": "Certificate is up to date and has not expired"},
 		map[string]any{"type": "Issuing", "status": "True", "reason": "Renewing", "message": "Renewing certificate as renewal was scheduled"})
 	c := fakeRouteClient(t, ing, slice, other, issuing)
@@ -296,7 +296,13 @@ func TestRouteIngressStatusReadsCertManagerConditions(t *testing.T) {
 		t.Fatalf("certificate times %+v", status.Certificate)
 	}
 
-	failed := certificateObject(name, "api.acme.dev", map[string]any{"type": "Ready", "status": "False", "reason": "Failed", "message": "The certificate request has failed to complete"})
+	// A first issuance that failed: the Secret still does not exist, and the
+	// failure shows on Issuing with lastFailureTime.
+	retried := "The certificate request has failed to complete and will be retried: Failed to wait for order resource \"lp-route-1\" to become ready: order is in \"invalid\" state"
+	failed := certificateObject(name,
+		map[string]any{"type": "Ready", "status": "False", "reason": "DoesNotExist", "message": "Issuing certificate as Secret does not exist"},
+		map[string]any{"type": "Issuing", "status": "False", "reason": "Failed", "message": retried})
+	failed.Object["status"].(map[string]any)["lastFailureTime"] = "2026-10-22T10:00:00Z"
 	now := time.Now()
 	c = fakeRouteClient(t, ing, other, failed,
 		challengeObject("old", "api.acme.dev", "invalid", "old failure", now.Add(-time.Hour)),
@@ -306,15 +312,57 @@ func TestRouteIngressStatusReadsCertManagerConditions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.Certificate.Failed || status.Certificate.Ready || status.Certificate.Reason != "Failed" || !strings.Contains(status.Certificate.Message, "wrong status code '404'") || status.BackendReady {
+	if !status.Certificate.Failed || status.Certificate.Ready || status.Certificate.Issuing || status.Certificate.Reason != "Failed" || !strings.Contains(status.Certificate.Message, "wrong status code '404'") || status.BackendReady {
 		t.Fatalf("%+v", status)
 	}
+	// Without a Challenge the Issuing message is the reason given.
+	c = fakeRouteClient(t, ing, failed)
+	if status, err = c.RouteIngressStatus(t.Context(), "route_1", "lp-inst"); err != nil || !status.Certificate.Failed || status.Certificate.Message != retried {
+		t.Fatalf("%+v %v", status, err)
+	}
 
-	// A Certificate still waiting for its first issue has not failed.
-	pending := certificateObject(name, "api.acme.dev", map[string]any{"type": "Ready", "status": "False", "reason": "DoesNotExist", "message": "Issuing certificate as Secret does not exist"})
+	// lastFailureTime alone marks a failure while no issuance is running.
+	backoff := certificateObject(name, map[string]any{"type": "Ready", "status": "False", "reason": "DoesNotExist", "message": "Issuing certificate as Secret does not exist"})
+	backoff.Object["status"].(map[string]any)["lastFailureTime"] = "2026-10-22T10:00:00Z"
+	c = fakeRouteClient(t, ing, backoff)
+	if status, err = c.RouteIngressStatus(t.Context(), "route_1", "lp-inst"); err != nil || !status.Certificate.Failed {
+		t.Fatalf("%+v %v", status, err)
+	}
+
+	// A routine reissue (the request changed) is issuing, not failed.
+	reissue := certificateObject(name,
+		map[string]any{"type": "Ready", "status": "False", "reason": "RequestChanged", "message": "Fields on existing CertificateRequest resource not up to date: [spec.dnsNames]"},
+		map[string]any{"type": "Issuing", "status": "True", "reason": "RequestChanged", "message": "Fields on existing CertificateRequest resource not up to date: [spec.dnsNames]"})
+	reissue.Object["status"].(map[string]any)["lastFailureTime"] = "2026-10-01T10:00:00Z"
+	c = fakeRouteClient(t, ing, reissue)
+	if status, err = c.RouteIngressStatus(t.Context(), "route_1", "lp-inst"); err != nil || status.Certificate.Failed || status.Certificate.Ready || !status.Certificate.Issuing {
+		t.Fatalf("%+v %v", status, err)
+	}
+
+	// Ready with its renewal still ahead.
+	renewalPending := certificateObject(name, map[string]any{"type": "Ready", "status": "True", "reason": "Ready", "message": "Certificate is up to date and has not expired"})
+	c = fakeRouteClient(t, ing, renewalPending)
+	if status, err = c.RouteIngressStatus(t.Context(), "route_1", "lp-inst"); err != nil || !status.Certificate.Ready || status.Certificate.Issuing || status.Certificate.Failed {
+		t.Fatalf("%+v %v", status, err)
+	}
+
+	// A failing renewal leaves the served certificate Ready but says why.
+	renewalFailing := certificateObject(name,
+		map[string]any{"type": "Ready", "status": "True", "reason": "Ready", "message": "Certificate is up to date and has not expired"},
+		map[string]any{"type": "Issuing", "status": "False", "reason": "Failed", "message": retried})
+	renewalFailing.Object["status"].(map[string]any)["lastFailureTime"] = "2026-10-22T10:00:00Z"
+	c = fakeRouteClient(t, ing, renewalFailing)
+	if status, err = c.RouteIngressStatus(t.Context(), "route_1", "lp-inst"); err != nil || !status.Certificate.Ready || status.Certificate.Failed || status.Certificate.Message != retried {
+		t.Fatalf("%+v %v", status, err)
+	}
+
+	// A first issuance still running has not failed.
+	pending := certificateObject(name,
+		map[string]any{"type": "Ready", "status": "False", "reason": "DoesNotExist", "message": "Issuing certificate as Secret does not exist"},
+		map[string]any{"type": "Issuing", "status": "True", "reason": "DoesNotExist", "message": "Issuing certificate as Secret does not exist"})
 	starting := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "lp-inst-abc", Namespace: "selected", Labels: map[string]string{discoveryv1.LabelServiceName: "lp-inst"}}, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.0.0.4"}, Conditions: discoveryv1.EndpointConditions{Ready: &notReady}}}}
 	c = fakeRouteClient(t, ing, starting, pending)
-	if status, err = c.RouteIngressStatus(t.Context(), "route_1", "lp-inst"); err != nil || status.Certificate.Failed || status.Certificate.Ready || status.BackendReady {
+	if status, err = c.RouteIngressStatus(t.Context(), "route_1", "lp-inst"); err != nil || status.Certificate.Failed || status.Certificate.Ready || !status.Certificate.Issuing || status.BackendReady {
 		t.Fatalf("%+v %v", status, err)
 	}
 
