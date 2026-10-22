@@ -733,9 +733,16 @@ func TestRunnerEnvReadsLinkField(t *testing.T) {
 		t.Fatalf("env %v, secret %v", env, secret)
 	}
 
-	a.Service.Env = []planning.EnvLink{{Key: "SAMPLE_TOKEN", From: "app", Subject: planning.ResourceSubject, Field: "consumer:x"}}
+	a.Service.Env = []planning.EnvLink{{Key: "SAMPLE_TOKEN", From: "app", Subject: planning.ResourceSubject, Field: "bogus:x"}}
 	if _, _, err = r.env(t.Context(), d, a, nil, resources); err == nil || !strings.Contains(err.Error(), "can't give it yet") {
 		t.Fatalf("unsupported field: %v", err)
+	}
+
+	// A per-consumer output is issued as variables are captured, never
+	// read from what the resource kept.
+	a.Service.Env[0].Field = "consumer:x"
+	if _, _, err = r.env(t.Context(), d, a, nil, resources); err == nil || !strings.Contains(err.Error(), "is issued when its variables are captured") {
+		t.Fatalf("per-consumer output without a snapshot: %v", err)
 	}
 }
 

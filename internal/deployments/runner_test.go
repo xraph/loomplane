@@ -2,10 +2,12 @@ package deployments
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -1449,5 +1452,201 @@ func TestRunner_aServiceDeletedOnAnotherConnectionIsCreatedAgain(t *testing.T) {
 	}
 	if got := log2.list(); len(got) != 0 {
 		t.Fatalf("events %v", got)
+	}
+}
+
+// binderHooks is a kind's hooks that issue a value per consuming service.
+type binderHooks struct {
+	NoHooks
+	mu         sync.Mutex
+	bound      []Consumer
+	released   []Consumer
+	releaseErr error
+}
+
+func (h *binderHooks) BindConsumer(_ context.Context, c Consumer) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.bound = append(h.bound, c)
+	return "key-for-" + c.Service, nil
+}
+
+func (h *binderHooks) ReleaseConsumer(_ context.Context, c Consumer) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.released = append(h.released, c)
+	return h.releaseErr
+}
+
+// consumerLink is the variable a service gets from the per-consumer
+// output "key" of the composed resource app.
+var consumerLink = planning.EnvLink{Key: "SAMPLE_KEY", From: "app", Subject: planning.ResourceSubject, Field: "consumer:key"}
+
+// consumerApp is the composed resource app, of a test kind with a
+// per-consumer output.
+func consumerApp(t *testing.T) *planning.Binding {
+	t.Helper()
+	raw, err := json.Marshal(planning.ResourceConfig{Provider: "server", Kind: "sample", Composition: &planning.CompositionConfig{
+		Kind: "sample", Outputs: []recipes.Output{{Name: "url", EnvKey: "SAMPLE_URL"}, {Name: "key", EnvKey: "SAMPLE_KEY", PerConsumer: true}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &planning.Binding{ID: "bind_app", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ResourceSubject,
+		Name: "app", Provider: "server", ExternalID: "catalog/app", Config: raw}
+}
+
+// consumerService is a private service on Cloud Run with env.
+func consumerService(op planning.Op, name string, env ...planning.EnvLink) planning.Action {
+	a := planning.Action{ID: "service:" + name, Op: op, Subject: planning.ServiceSubject, Name: name, Provider: "cloud-run", Step: 1}
+	if op != planning.Delete {
+		a.Service = &planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:services/" + name, Env: env}
+	}
+	return a
+}
+
+// consumerRunner is a runner for plan, with the composed resource app and
+// any other bindings bound, and hooks serving the kind sample.
+func consumerRunner(t *testing.T, plan *planning.Plan, hooks CatalogHooks, others ...*planning.Binding) (*Runner, *memStore, *fakePlans, *recorder) {
+	t.Helper()
+	exec := &recorder{url: answering(t, http.StatusOK)}
+	r, store, plans, _ := moveRunner(t, plan, consumerApp(t), map[string]Executor{"cloud-run": exec})
+	for _, b := range others {
+		plans.bindings[string(b.Subject)+":"+b.Name] = b
+	}
+	r.catalogHooks = map[string]CatalogHooks{"sample": hooks}
+	return r, store, plans, exec
+}
+
+// boundService is a service already deployed with env.
+func boundService(t *testing.T, name string, env ...planning.EnvLink) *planning.Binding {
+	t.Helper()
+	raw, err := json.Marshal(planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:services/" + name, Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &planning.Binding{ID: "bind_" + name, OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject,
+		Name: name, Provider: "cloud-run", ExternalID: "ext-" + name, ConnectionID: "conn_g", Config: raw}
+}
+
+func consumerPlan(actions ...planning.Action) *planning.Plan {
+	plan := webAndAPI()
+	plan.Actions = actions
+	return plan
+}
+
+func TestPerConsumerOutputIsIssuedPerService(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Create, "web", consumerLink), consumerService(planning.Create, "jobs", consumerLink))
+	plan.Actions[1].Step = 2
+	hooks := &binderHooks{}
+	r, store, _, exec := consumerRunner(t, plan, hooks)
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if len(hooks.bound) != 2 {
+		t.Fatalf("bound %d consumers: %+v", len(hooks.bound), hooks.bound)
+	}
+	for i, service := range []string{"web", "jobs"} {
+		c := hooks.bound[i]
+		channel := c.Channel
+		c.Channel = nil
+		want := Consumer{OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production", Resource: "app", Kind: "sample", Output: "key", Service: service}
+		if !reflect.DeepEqual(c, want) || channel == nil {
+			t.Fatalf("consumer %d is %+v, channel %v; want %+v with a channel", i, c, channel != nil, want)
+		}
+		job := exec.jobs[i]
+		if job.Action.Name != service || job.Env["SAMPLE_KEY"] != "key-for-"+service || !job.Secrets["SAMPLE_KEY"] {
+			t.Fatalf("%s got %q, secret %v", service, job.Env["SAMPLE_KEY"], job.Secrets["SAMPLE_KEY"])
+		}
+	}
+}
+
+func TestPerConsumerOutputWithoutBinderFails(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Create, "web", consumerLink))
+	r, store, plans, exec := consumerRunner(t, plan, NoHooks{})
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	if d.Status != StatusFailed || !strings.Contains(d.Error, "sample has no consumer binder for output key") {
+		t.Fatalf("deployment %s: %q", d.Status, d.Error)
+	}
+	if len(exec.jobs) != 0 || plans.bindings["service:web"] != nil {
+		t.Fatalf("web was deployed anyway: %d jobs", len(exec.jobs))
+	}
+}
+
+// runStep runs one action of plan the way the workflow does, without the
+// checkpoint an executor that deploys nothing never saves.
+func runStep(t *testing.T, r *Runner, plan *planning.Plan, store *memStore, action string) *Step {
+	t.Helper()
+	ctx := t.Context()
+	id := startMove(t, r, plan)
+	if err := r.Run(ctx, plan.OrgID, id, action, nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Finish(ctx, plan.OrgID, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(ctx, plan.OrgID, id)
+	return d.Step(action)
+}
+
+func TestRemovingConsumerReleasesItsValue(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Delete, "web"))
+	hooks := &binderHooks{}
+	r, store, plans, _ := consumerRunner(t, plan, hooks, boundService(t, "web", consumerLink), boundService(t, "jobs", consumerLink))
+
+	step := runStep(t, r, plan, store, "service:web")
+	if len(hooks.released) != 1 || hooks.released[0].Service != "web" || hooks.released[0].Resource != "app" || hooks.released[0].Output != "key" || hooks.released[0].Kind != "sample" {
+		t.Fatalf("released %+v", hooks.released)
+	}
+	if len(step.Warnings) != 0 || len(hooks.bound) != 0 {
+		t.Fatalf("warnings %q, bound %+v", step.Warnings, hooks.bound)
+	}
+	if plans.bindings["service:web"] != nil || plans.bindings["service:jobs"] == nil {
+		t.Fatalf("bindings %v", plans.bindings)
+	}
+}
+
+func TestDroppingTheNeedReleasesItsValue(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Update, "web"), consumerService(planning.Update, "jobs", consumerLink))
+	plan.Actions[1].Step = 2
+	hooks := &binderHooks{}
+	r, store, plans, _ := consumerRunner(t, plan, hooks, boundService(t, "web", consumerLink), boundService(t, "jobs", consumerLink))
+
+	runStep(t, r, plan, store, "service:web")
+	if len(hooks.released) != 1 || hooks.released[0].Service != "web" {
+		t.Fatalf("released %+v", hooks.released)
+	}
+	if plans.bindings["service:web"] == nil {
+		t.Fatal("web is gone")
+	}
+	// A service that still needs it keeps its value.
+	hooks.released = nil
+	runStep(t, r, plan, store, "service:jobs")
+	if len(hooks.released) != 0 || len(hooks.bound) != 1 || hooks.bound[0].Service != "jobs" {
+		t.Fatalf("released %+v, bound %+v", hooks.released, hooks.bound)
+	}
+}
+
+func TestFailingToReleaseAConsumerWarns(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Delete, "web"))
+	hooks := &binderHooks{releaseErr: errors.New("fabriq is down")}
+	r, store, plans, _ := consumerRunner(t, plan, hooks, boundService(t, "web", consumerLink))
+
+	step := runStep(t, r, plan, store, "service:web")
+	if len(step.Warnings) != 1 || !strings.Contains(step.Warnings[0], "web") || !strings.Contains(step.Warnings[0], "fabriq is down") {
+		t.Fatalf("warnings %q", step.Warnings)
+	}
+	if plans.bindings["service:web"] != nil {
+		t.Fatal("the binding is still there")
 	}
 }

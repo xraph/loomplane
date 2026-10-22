@@ -62,6 +62,36 @@ type ComponentRun struct {
 	Channel func(ctx context.Context, component, port string) (*ComponentChannel, error)
 }
 
+// ConsumerBinder is implemented by the hooks of a kind with an Output that
+// is PerConsumer. The runner type-asserts it on the kind's CatalogHooks.
+type ConsumerBinder interface {
+	// BindConsumer issues the value one consuming service gets. The
+	// runner calls it on every release of the service and keeps the
+	// value only in the service's applied variables, so it must give the
+	// same consumer the same credential each time.
+	BindConsumer(ctx context.Context, c Consumer) (string, error)
+	// ReleaseConsumer revokes what BindConsumer issued, once the service
+	// is deleted or no longer needs the resource. Releasing a consumer
+	// that was never bound, or twice, is not an error.
+	ReleaseConsumer(ctx context.Context, c Consumer) error
+}
+
+// Consumer is one service that needs an Output of a composed resource.
+type Consumer struct {
+	OrgID, ProjectID, EnvironmentID, Environment string
+	// Resource is the composed resource's manifest name.
+	Resource string
+	Kind     string
+	// Output is the name of the Output being issued.
+	Output string
+	// Service is the consuming service's manifest name.
+	Service string
+	// Channel reaches a control port of a component of the composed
+	// resource, which is already running. Requests can't carry an
+	// Authorization header (see ComponentChannel).
+	Channel func(ctx context.Context, component, port string) (*ComponentChannel, error)
+}
+
 // ComposedResource is a composed resource being deleted.
 type ComposedResource struct{ OrgID, ProjectID, EnvironmentID, Resource, Kind string }
 

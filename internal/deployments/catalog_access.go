@@ -115,11 +115,18 @@ func (a *CatalogAccess) Channel(ctx context.Context, p security.Principal, need 
 	if err != nil {
 		return nil, err
 	}
+	return openComponentChannel(ctx, a.d.Executors, bindings, p, ref)
+}
+
+// openComponentChannel finds a running component's control port among an
+// environment's bindings and reaches it through the dialer of the target
+// it runs on, acting as p. It checks no permission: callers do.
+func openComponentChannel(ctx context.Context, executors map[string]Executor, bindings []*planning.Binding, p security.Principal, ref ComponentRef) (*ComponentChannel, error) {
 	b, port, err := controlPort(bindings, p.OrgID, ref)
 	if err != nil {
 		return nil, err
 	}
-	dialer, ok := a.d.Executors[b.Provider].(ComponentDialer)
+	dialer, ok := executors[b.Provider].(ComponentDialer)
 	if !ok {
 		return nil, fmt.Errorf("%s runs on %s, which Loomplane can't reach privately", b.Name, b.Provider)
 	}

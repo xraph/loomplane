@@ -129,7 +129,8 @@ const ResourceURL = "url"
 
 // linkField is the field of a resource a service's variable reads: its
 // address, or one of a composed resource's outputs, which it keeps as
-// "output:<name>".
+// "output:<name>". A "consumer:<name>" output isn't kept: it's issued to
+// the service as its variables are captured.
 func linkField(link planning.EnvLink) (string, error) {
 	switch {
 	case link.Field == "":
@@ -617,7 +618,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
 	}
-	if captureErr := r.captureAppliedVariables(ctx, d, &a); captureErr != nil {
+	if captureErr := r.captureAppliedVariables(ctx, d, &a, resources); captureErr != nil {
 		return captureErr
 	}
 	pinAppliedSource(d, plan, &a)
@@ -670,7 +671,12 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	rc := readReplaceCheckpoint(resume)
 	job.Resume = rc.Apply
 	if deleting {
-		return r.deleteBound(ctx, job, exec, current, unreachable, step, rc, heartbeat)
+		if derr := r.deleteBound(ctx, job, exec, current, unreachable, step, rc, heartbeat); derr != nil {
+			return derr
+		}
+		// What the service was issued goes with it, once it's gone.
+		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, nil, resources)...)
+		return nil
 	}
 	// A failure removing what an earlier move left only warns: the plan
 	// keeps warning about it, and a permanent one, such as a revoked
@@ -808,6 +814,10 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	bound, err := r.bind(ctx, d, a, current, out, connID, old)
 	if err != nil {
 		return err
+	}
+	// A service that no longer needs a per-consumer output gives it back.
+	if a.Service != nil {
+		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, a.Service, resources)...)
 	}
 	if plan.CloudSyncID != "" || len(a.Routes) > 0 {
 		return nil
@@ -1172,6 +1182,9 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			// A resource's address holds its credentials, so it's secret.
 			if resources[link.From] == nil || r.resources == nil {
 				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
+			}
+			if _, consumer := consumerOutput(link); consumer {
+				return nil, nil, fmt.Errorf("%s's %s for %s is issued when its variables are captured, and none was", link.From, link.Field, a.Name)
 			}
 			field, err := linkField(link)
 			if err != nil {
