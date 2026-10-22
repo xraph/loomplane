@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -92,6 +93,16 @@ func (m *memStore) LatestSnapshot(_ context.Context, _, gatewayID string) (uint6
 		return 0, "", fmt.Errorf("%w: no snapshot for gateway %s", ErrNotFound, gatewayID)
 	}
 	return m.version, m.digest, nil
+}
+
+func (m *memStore) RaiseSnapshotVersion(_ context.Context, _, gatewayID, digest string, atLeast uint64) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.version == 0 || digest != m.digest {
+		return 0, fmt.Errorf("%w: no snapshot of gateway %s with that digest", ErrNotFound, gatewayID)
+	}
+	m.version = max(m.version, atLeast)
+	return m.version, nil
 }
 
 func (m *memStore) Report(_ context.Context, _, _ string, r plane.Report, _ time.Time) (int, error) {
@@ -434,6 +445,114 @@ func TestVerifyRequest(t *testing.T) {
 				t.Fatalf("error %q says more than the fixed message", err)
 			}
 		})
+	}
+}
+
+// countDerivations makes the service's verifier cache count its PBKDF2 runs.
+func countDerivations(svc *Service) *int {
+	n := new(int)
+	svc.verifiers.derive = func(role, password string, salt []byte, iterations int) plane.Verifier {
+		*n++
+		return plane.NewVerifier(role, password, salt, iterations)
+	}
+	return n
+}
+
+// R74: a poll that finds nothing changed derives no verifier, and a new
+// password does.
+func TestSnapshotCachesVerifiers(t *testing.T) {
+	h := newServiceHarness(t)
+	ctx := t.Context()
+	derived := countDerivations(h.svc)
+	first, err := h.svc.Snapshot(ctx, &h.gw, 0)
+	if err != nil || *derived != 2 {
+		t.Fatalf("first snapshot derived %d verifiers: %v", *derived, err)
+	}
+	again, err := h.svc.Snapshot(ctx, &h.gw, 0)
+	if err != nil || *derived != 2 {
+		t.Fatalf("an unchanged snapshot derived %d verifiers, want still 2: %v", *derived, err)
+	}
+	if again.Version != first.Version {
+		t.Fatalf("cached verifiers moved the version: %d then %d", first.Version, again.Version)
+	}
+	if err = cleartextLogin(t, again.Routes[0].Verifiers[0], "pw"); err != nil {
+		t.Fatalf("a cached verifier doesn't log in: %v", err)
+	}
+
+	h.urls.mu.Lock()
+	h.urls.urls["orders"] = "postgres://app:rotated@db.do.example:25060/orders?sslmode=require"
+	h.urls.mu.Unlock()
+	rotated, err := h.svc.Snapshot(ctx, &h.gw, first.Version)
+	if err != nil || rotated == nil || *derived != 3 {
+		t.Fatalf("a new password derived %d verifiers, want 3: %+v %v", *derived, rotated, err)
+	}
+	if err = cleartextLogin(t, rotated.Routes[0].Verifiers[0], "rotated"); err != nil {
+		t.Fatalf("the new password doesn't log in: %v", err)
+	}
+	// The old password's entry went with the compile that stopped using it.
+	if n := h.svc.verifiers.size(); n != 2 {
+		t.Fatalf("cache holds %d verifiers, want 2", n)
+	}
+	// So does a route that's gone.
+	h.store.mu.Lock()
+	h.store.routes[h.gw.ID] = h.store.routes[h.gw.ID][:1]
+	h.store.mu.Unlock()
+	if _, err := h.svc.Snapshot(ctx, &h.gw, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.svc.verifiers.size(); n != 1 {
+		t.Fatalf("cache holds %d verifiers after a route went, want 1", n)
+	}
+}
+
+func TestVerifierCacheIsBounded(t *testing.T) {
+	c := newVerifierCache()
+	c.derive = func(role, _ string, _ []byte, _ int) plane.Verifier {
+		return plane.Verifier{Role: role, StoredKey: []byte{1}}
+	}
+	fill := func(gatewayID string, n int) {
+		verify, done := c.compileFor(gatewayID)
+		for i := range n {
+			verify(RouteRecord{ID: fmt.Sprintf("%s-r%d", gatewayID, i), Salt: testSalt}, "app", "pw")
+		}
+		done()
+	}
+	fill("dbgw_a", 6000)
+	fill("dbgw_b", 6000)
+	if n := c.size(); n != maxCachedVerifiers {
+		t.Fatalf("cache holds %d, want the cap %d", n, maxCachedVerifiers)
+	}
+	if n := len(c.byGateway["dbgw_b"]); n != 6000 {
+		t.Fatalf("the gateway just compiled kept %d, want all 6000", n)
+	}
+	fill("dbgw_c", maxCachedVerifiers+1)
+	if n := len(c.byGateway["dbgw_c"]); n != 0 || c.size() > maxCachedVerifiers {
+		t.Fatalf("a gateway over the cap alone kept %d; cache %d", n, c.size())
+	}
+}
+
+// R75: a gateway ahead of the stored version gets a snapshot past it.
+func TestSnapshotRaisesAStaleStoredVersion(t *testing.T) {
+	h := newServiceHarness(t)
+	ctx := t.Context()
+	if s, err := h.svc.Snapshot(ctx, &h.gw, 0); err != nil || s.Version != 1 {
+		t.Fatalf("first: %+v %v", s, err)
+	}
+	s, err := h.svc.Snapshot(ctx, &h.gw, 7)
+	if err != nil || s == nil || s.Version != 8 {
+		t.Fatalf("a gateway at 7 got %+v %v, want version 8", s, err)
+	}
+	if err := plane.VerifySnapshot(*s, h.svc.TrustKeys(), h.gw.ID, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if h.store.version != 8 {
+		t.Fatalf("stored version %d, want 8", h.store.version)
+	}
+	if s, err := h.svc.Snapshot(ctx, &h.gw, 8); err != nil || s != nil {
+		t.Fatalf("at 8 with nothing new: %+v %v", s, err)
+	}
+	if _, err := h.svc.Snapshot(ctx, &h.gw, math.MaxInt64); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("after past the version range: %v, want ErrInvalid", err)
 	}
 }
 

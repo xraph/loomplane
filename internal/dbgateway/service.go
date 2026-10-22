@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ type storage interface {
 	Routes(ctx context.Context, org, gatewayID string) ([]RouteRecord, error)
 	BumpSnapshot(ctx context.Context, org, gatewayID, digest string) (uint64, bool, error)
 	LatestSnapshot(ctx context.Context, org, gatewayID string) (uint64, string, error)
+	RaiseSnapshotVersion(ctx context.Context, org, gatewayID, digest string, atLeast uint64) (uint64, error)
 	Report(ctx context.Context, org, gatewayID string, r plane.Report, now time.Time) (int, error)
 }
 
@@ -67,6 +69,8 @@ type Service struct {
 	key   ed25519.PrivateKey
 	trust plane.TrustKey
 	now   func() time.Time
+	// verifiers caches route verifiers between compiles (R74).
+	verifiers *verifierCache
 
 	// OnSkip, when set, hears about the routes a snapshot left out each
 	// time a gateway's snapshot changes.
@@ -83,7 +87,7 @@ func newService(store storage, urls ResourceURLs, key ed25519.PrivateKey, trust 
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: store, urls: urls, key: key, trust: trust, now: now}
+	return &Service{store: store, urls: urls, key: key, trust: trust, now: now, verifiers: newVerifierCache()}
 }
 
 // Configured reports whether the service has a key to sign snapshots with.
@@ -107,42 +111,50 @@ func (s *Service) Snapshot(ctx context.Context, gw *Gateway, after uint64) (*pla
 	if !s.Configured() {
 		return nil, ErrNotConfigured
 	}
+	if after >= math.MaxInt64 {
+		return nil, fmt.Errorf("%w: snapshot version %d", ErrInvalid, after)
+	}
 	// R71: sign only a version whose stored digest is the one compiled
 	// here. A concurrent writer that stored other content gets one more
 	// compile and bump; after that the stored pair is used only if a fresh
 	// compile matches it.
-	for range 2 {
+	for attempt := range 3 {
 		snap, skipped, digest, err := s.compile(ctx, gw)
 		if err != nil {
 			return nil, err
 		}
-		_, changed, err := s.store.BumpSnapshot(ctx, gw.OrgID, gw.ID, digest)
-		if err != nil {
-			return nil, err
-		}
-		if changed && len(skipped) > 0 && s.OnSkip != nil {
-			s.OnSkip(gw.ID, skipped)
+		if attempt < 2 {
+			_, changed, berr := s.store.BumpSnapshot(ctx, gw.OrgID, gw.ID, digest)
+			if berr != nil {
+				return nil, berr
+			}
+			if changed && len(skipped) > 0 && s.OnSkip != nil {
+				s.OnSkip(gw.ID, skipped)
+			}
 		}
 		version, stored, err := s.store.LatestSnapshot(ctx, gw.OrgID, gw.ID)
 		if err != nil {
 			return nil, err
 		}
-		if stored == digest {
-			return s.sign(snap, version, after)
+		if stored != digest {
+			continue
 		}
+		if after > version {
+			// R75: the gateway holds a version this store never reached,
+			// as after a database restore. Raise the stored version past
+			// it, so the gateway takes the snapshot rather than refusing
+			// it as stale.
+			version, err = s.store.RaiseSnapshotVersion(ctx, gw.OrgID, gw.ID, digest, after+1)
+			if errors.Is(err, ErrNotFound) {
+				continue // another writer stored other content meanwhile
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		return s.sign(snap, version, after)
 	}
-	snap, _, digest, err := s.compile(ctx, gw)
-	if err != nil {
-		return nil, err
-	}
-	version, stored, err := s.store.LatestSnapshot(ctx, gw.OrgID, gw.ID)
-	if err != nil {
-		return nil, err
-	}
-	if stored != digest {
-		return nil, fmt.Errorf("gateway %s: its stored snapshot keeps changing under another writer", gw.ID)
-	}
-	return s.sign(snap, version, after)
+	return nil, fmt.Errorf("gateway %s: its stored snapshot keeps changing under another writer", gw.ID)
 }
 
 // compile builds gw's snapshot from its routes and their addresses and
@@ -165,7 +177,9 @@ func (s *Service) compile(ctx context.Context, gw *Gateway) (plane.Snapshot, []S
 		}
 		urls[r.Resource] = u
 	}
-	snap, skipped, err := Compile(*gw, routes, urls)
+	verify, done := s.verifiers.compileFor(gw.ID)
+	snap, skipped, err := compile(*gw, routes, urls, verify)
+	done()
 	if err != nil {
 		return plane.Snapshot{}, nil, "", err
 	}

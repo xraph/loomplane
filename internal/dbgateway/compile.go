@@ -45,6 +45,19 @@ type backend struct {
 // can't serve is left out and listed in the result. The snapshot has no
 // version, issue time or signature: the service adds those.
 func Compile(g Gateway, routes []RouteRecord, urls map[string]string) (plane.Snapshot, []Skipped, error) {
+	return compile(g, routes, urls, deriveVerifier)
+}
+
+// verifierFunc returns route r's verifier for the backend's user and
+// password: plane.NewVerifier over r's salt with scramIterations. The
+// service passes one that caches.
+type verifierFunc func(r RouteRecord, user, password string) plane.Verifier
+
+func deriveVerifier(r RouteRecord, user, password string) plane.Verifier {
+	return plane.NewVerifier(user, password, r.Salt, scramIterations)
+}
+
+func compile(g Gateway, routes []RouteRecord, urls map[string]string, verify verifierFunc) (plane.Snapshot, []Skipped, error) {
 	s := plane.Snapshot{GatewayID: g.ID, Routes: []plane.Route{}}
 	var skipped []Skipped
 	for _, r := range routes {
@@ -53,7 +66,7 @@ func Compile(g Gateway, routes []RouteRecord, urls map[string]string) (plane.Sna
 			skipped = append(skipped, Skipped{Resource: r.Resource, Reason: noAddress})
 			continue
 		}
-		rt, reason, err := compileRoute(g, r, raw)
+		rt, reason, err := compileRoute(g, r, raw, verify)
 		if err != nil {
 			return plane.Snapshot{}, nil, err
 		}
@@ -69,7 +82,7 @@ func Compile(g Gateway, routes []RouteRecord, urls map[string]string) (plane.Sna
 
 // compileRoute returns the route, or the reason it is skipped. Only sealing
 // fails with an error.
-func compileRoute(g Gateway, r RouteRecord, raw string) (rt plane.Route, reason string, err error) {
+func compileRoute(g Gateway, r RouteRecord, raw string, verify verifierFunc) (rt plane.Route, reason string, err error) {
 	label, err := plane.ParseLabel(r.Resource)
 	if err != nil || label.Branch != "" {
 		return plane.Route{}, "its name can't be a route label: lowercase letters, digits and single hyphens, starting with a letter", nil
@@ -103,7 +116,7 @@ func compileRoute(g Gateway, r RouteRecord, raw string) (rt plane.Route, reason 
 			Kind: "postgres", Host: b.host, Port: b.port, Database: b.database,
 			SNI: b.host, SSLMode: b.sslmode, Credential: sealed,
 		},
-		Verifiers:   []plane.Verifier{plane.NewVerifier(b.user, b.password, r.Salt, scramIterations)},
+		Verifiers:   []plane.Verifier{verify(r, b.user, b.password)},
 		Params:      map[string]string{},
 		IdleTimeout: idleTimeout,
 	}, "", nil

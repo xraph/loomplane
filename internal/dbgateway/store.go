@@ -329,6 +329,30 @@ func (s *Store) LatestSnapshot(ctx context.Context, org, gatewayID string) (vers
 	return uint64(v), digest, nil //nolint:gosec // G115: the column is checked positive
 }
 
+// RaiseSnapshotVersion makes the gateway's stored version at least atLeast,
+// provided its stored digest is still digest, and returns the version. It is
+// one conditional update, so it never lowers a version another writer raised
+// further, and a digest that changed meanwhile gives ErrNotFound. A gateway
+// that holds a version this store never reached, as after a restore from an
+// older backup, uses it to get past its own version.
+func (s *Store) RaiseSnapshotVersion(ctx context.Context, org, gatewayID, digest string, atLeast uint64) (uint64, error) {
+	if atLeast == 0 || atLeast > math.MaxInt64 {
+		return 0, fmt.Errorf("%w: snapshot version %d", ErrInvalid, atLeast)
+	}
+	var v int64
+	err := s.db.QueryRow(ctx, `UPDATE loomplane_db_gateway_snapshots
+		SET version = GREATEST(version, $4), created_at = now()
+		WHERE org_id = $1 AND gateway_id = $2 AND digest = $3
+		RETURNING version`, org, gatewayID, digest, int64(atLeast)).Scan(&v)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("%w: no snapshot of gateway %s with that digest", ErrNotFound, gatewayID)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("raise database gateway snapshot version: %w", err)
+	}
+	return uint64(v), nil //nolint:gosec // G115: the column is checked positive
+}
+
 // Report stores an instance's report, replacing its last one, and returns how
 // many of the gateway's instances reported in the 30 seconds up to now. now is
 // the report's time and the clock the window is measured against, so a caller

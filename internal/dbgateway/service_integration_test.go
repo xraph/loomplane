@@ -12,6 +12,60 @@ import (
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
 )
 
+// R75 over the real store: after a restore from an older backup the stored
+// version is behind what the gateway holds, and its next poll gets a
+// snapshot past its own version that it will accept.
+func TestSnapshotRecoversAfterARestore(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	gw, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := s.EnsureRoute(ctx, "org_1", gw.ID, "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	urls := &memURLs{urls: map[string]string{"orders": "postgres://app:pw@db.do.example:25060/orders"}}
+	now := time.Now()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(s, urls, priv, plane.TrustKey{PublicKey: pub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}, time.Now)
+	if first, ferr := svc.Snapshot(ctx, &gw, 0); ferr != nil || first.Version != 1 {
+		t.Fatalf("first: %+v %v", first, ferr)
+	}
+
+	// The gateway served version 41 before the restore.
+	held := &plane.Store{}
+	if err = held.Swap(plane.Snapshot{GatewayID: gw.ID, Version: 41}); err != nil {
+		t.Fatal(err)
+	}
+	next, err := svc.Snapshot(ctx, &gw, 41)
+	if err != nil || next == nil || next.Version != 42 {
+		t.Fatalf("a gateway at 41 got %+v %v, want version 42", next, err)
+	}
+	if err = plane.VerifySnapshot(*next, svc.TrustKeys(), gw.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err = held.Swap(*next); err != nil {
+		t.Fatalf("the gateway refuses the snapshot: %v", err)
+	}
+	if v, _, lerr := s.LatestSnapshot(ctx, "org_1", gw.ID); lerr != nil || v != 42 {
+		t.Fatalf("stored version %d %v, want 42", v, lerr)
+	}
+	if none, nerr := svc.Snapshot(ctx, &gw, 42); nerr != nil || none != nil {
+		t.Fatalf("at 42 with nothing new: %+v %v", none, nerr)
+	}
+	if err = s.SetRouteState(ctx, "org_1", gw.ID, route.ID, "paused"); err != nil {
+		t.Fatal(err)
+	}
+	if paused, perr := svc.Snapshot(ctx, &gw, 42); perr != nil || paused == nil || paused.Version != 43 {
+		t.Fatalf("a change after the raise: %+v %v, want 43", paused, perr)
+	}
+}
+
 // The service over the real store: versions follow content, pausing shows in
 // the next snapshot, and a gateway's request is checked against its stored key.
 func TestServiceOverTheStore(t *testing.T) {

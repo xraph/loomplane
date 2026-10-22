@@ -164,8 +164,18 @@ func TestControlClientAgainstTheRoutes(t *testing.T) {
 	if err != nil || resp.LiveInstances != 1 {
 		t.Fatalf("Report: %+v %v", resp, err)
 	}
-	if err := client.Hold(ctx, plane.Label{DB: "orders", Branch: "dev"}); err == nil {
+	if err = client.Hold(ctx, plane.Label{DB: "orders", Branch: "dev"}); err == nil {
 		t.Fatal("Hold succeeded with no hold handler")
+	}
+
+	// A gateway ahead of the store, as after a restore, gets a version past
+	// its own straight away.
+	ahead, err := client.Poll(ctx, 100)
+	if err != nil || ahead == nil || ahead.Version != 101 {
+		t.Fatalf("a poll after 100: %+v %v, want version 101", ahead, err)
+	}
+	if err = router.Apply(*ahead); err != nil {
+		t.Fatalf("Apply after the raise: %v", err)
 	}
 
 	// Another key can't speak for this gateway.

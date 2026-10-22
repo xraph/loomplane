@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,6 +52,9 @@ func (f *fakeGateways) Snapshot(_ context.Context, gw *dbgateway.Gateway, after 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.polls++
+	if after >= math.MaxInt64 {
+		return nil, dbgateway.ErrInvalid
+	}
 	if f.version <= after {
 		return nil, nil
 	}
@@ -168,6 +172,9 @@ func TestSnapshotLongPoll(t *testing.T) {
 	}
 	if out = call(t, r, http.MethodGet, "/api/v1/db-gateways/dbgw_1/snapshot?after=soon", "dbgw_1", nil); out.Code != http.StatusBadRequest {
 		t.Fatalf("a bad after: %d", out.Code)
+	}
+	if out = call(t, r, http.MethodGet, "/api/v1/db-gateways/dbgw_1/snapshot?after=18446744073709551615", "dbgw_1", nil); out.Code != http.StatusBadRequest {
+		t.Fatalf("an after the service refuses: %d", out.Code)
 	}
 }
 

@@ -318,6 +318,57 @@ func TestLatestSnapshot(t *testing.T) {
 	}
 }
 
+func TestRaiseSnapshotVersion(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	gw, _, err := s.EnsureGateway(ctx, newGateway(t, "env_1", "main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RaiseSnapshotVersion(ctx, "org_1", gw.ID, "aaa", 5); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("before any snapshot: %v", err)
+	}
+	if _, _, err = s.BumpSnapshot(ctx, "org_1", gw.ID, "aaa"); err != nil {
+		t.Fatal(err)
+	}
+	// Raised concurrently to 5 and to 9, the version ends at 9.
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, to := range []uint64{5, 9} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, rerr := s.RaiseSnapshotVersion(ctx, "org_1", gw.ID, "aaa", to)
+			errs <- rerr
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for rerr := range errs {
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+	}
+	v, d, err := s.LatestSnapshot(ctx, "org_1", gw.ID)
+	if err != nil || v != 9 || d != "aaa" {
+		t.Fatalf("after raising to 5 and 9: %d %q %v", v, d, err)
+	}
+	// It never lowers, and it raises only the content it was asked about.
+	if v, err = s.RaiseSnapshotVersion(ctx, "org_1", gw.ID, "aaa", 3); err != nil || v != 9 {
+		t.Fatalf("raise to 3: %d %v, want 9", v, err)
+	}
+	if _, err = s.RaiseSnapshotVersion(ctx, "org_1", gw.ID, "bbb", 20); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("raise under another digest: %v", err)
+	}
+	if _, err = s.RaiseSnapshotVersion(ctx, "org_1", gw.ID, "aaa", 0); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("raise to 0: %v", err)
+	}
+	// The next change still bumps by one from there.
+	if v, _, err = s.BumpSnapshot(ctx, "org_1", gw.ID, "bbb"); err != nil || v != 10 {
+		t.Fatalf("bump after a raise: %d %v, want 10", v, err)
+	}
+}
+
 func TestGatewayByID(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

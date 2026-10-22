@@ -119,6 +119,9 @@ func (h *handlers) snapshot(c forge.Context) error {
 			if ctx.Err() != nil {
 				return nil // the gateway hung up
 			}
+			if errors.Is(err, dbgateway.ErrInvalid) {
+				return reply(c, http.StatusBadRequest, "after must be a snapshot version")
+			}
 			h.warn("compile a database gateway snapshot", err)
 			return reply(c, http.StatusInternalServerError, "the snapshot couldn't be compiled")
 		}
