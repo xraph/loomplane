@@ -17,6 +17,9 @@ type Recipe struct {
 	MountPath      string `json:"mount_path"`
 	BackupFormat   string `json:"backup_format"`
 	VolumeSizeMB   int    `json:"volume_size_mb,omitempty"`
+	// Family is the native adapter family of a registered engine. It is
+	// empty for the five built-in engines, whose ID names the family.
+	Family string `json:"family,omitempty"`
 }
 
 func DefaultVersion(kind string) string {
@@ -32,7 +35,7 @@ func DefaultVersion(kind string) string {
 	case "valkey":
 		return "8.1"
 	default:
-		return ""
+		return Default().defaultVersion(kind)
 	}
 }
 
@@ -66,6 +69,9 @@ func Lookup(kind, version, architecture string) (*Recipe, error) {
 func (r *Recipe) Engine() string {
 	if r == nil {
 		return ""
+	}
+	if r.Family != "" {
+		return r.Family
 	}
 	switch {
 	case strings.HasPrefix(r.ID, "postgresql-"):
