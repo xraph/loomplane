@@ -350,13 +350,25 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 		return nil, saveErr
 	}
 	job.Progress(StepDeploying, "Running the "+component.Name+" job")
+	// The target redacts what the job got as variables. A rendered file
+	// can hold any of the composition's generated secrets, which the
+	// target never sees, so they're redacted here too.
+	redact := maps.Clone(values)
+	if len(files) > 0 {
+		for secretName, value := range run.Secrets {
+			redact["secret:"+secretName] = string(value)
+		}
+	}
 	result, err := jobs.RunJob(ctx, name, sp, labels, cmp.Or(component.Timeout, defaultJobTimeout))
 	if err != nil {
+		if redacted := owned.JobOutput([]byte(err.Error()), redact); redacted != err.Error() {
+			return nil, errors.New(redacted)
+		}
 		return nil, err
 	}
 	if result.ExitCode != 0 {
 		// The target redacted the output; this catches anything it missed.
-		if output := owned.JobOutput([]byte(result.Output), values); output != "" {
+		if output := owned.JobOutput([]byte(result.Output), redact); output != "" {
 			return nil, fmt.Errorf("%s exited with code %d: %s", component.Name, result.ExitCode, output)
 		}
 		return nil, fmt.Errorf("%s exited with code %d", component.Name, result.ExitCode)

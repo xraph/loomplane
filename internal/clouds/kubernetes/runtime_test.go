@@ -274,3 +274,24 @@ func TestKubernetesMountsFilesFromTheRuntimeSecret(t *testing.T) {
 		}
 	}
 }
+
+func TestKubernetesFileKeyClashWritesNothing(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}
+	name := WorkloadName(iid)
+	prior := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-runtime", Namespace: "selected", Labels: objectLabels(iid, labels)}, Data: map[string][]byte{"TOKEN": []byte("prior-value")}}
+	kube := fake.NewClientset(prior)
+	runtime := &Runtime{WaitReady: func(context.Context, *Client, string) error { return nil }, Session: func(context.Context, map[string]string) (*Client, error) {
+		return &Client{Config: &Config{Namespace: "selected"}, Kube: kube}, nil
+	}, Values: func(context.Context, map[string]string) (owned.RuntimeValues, error) {
+		return owned.RuntimeValues{Env: map[string]string{"file-0": "clash"}, Files: map[string][]byte{"/etc/sample/config.yaml": []byte("x")}}, nil
+	}}
+	if _, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "image", Ports: []cpprovider.PortSpec{{Container: 8080}}}, labels); err == nil || !strings.Contains(err.Error(), "clashes") {
+		t.Fatalf("clash: %v", err)
+	}
+	for _, action := range kube.Actions() {
+		if action.GetVerb() != "get" {
+			t.Fatalf("a clash wrote %s %s", action.GetVerb(), action.GetResource().Resource)
+		}
+	}
+}

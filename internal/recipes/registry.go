@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path"
 	"regexp"
 	"slices"
@@ -547,6 +548,13 @@ func validateComponent(f *findings, c *Component, components map[string]*Compone
 		files[p] = true
 		if file.Mode&^fs.ModePerm != 0 {
 			f.add("%s file %q mode %s has more than permission bits", what, p, file.Mode)
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(files)) {
+		for q := range files {
+			if strings.HasPrefix(p, q+"/") {
+				f.add("%s file %q sits under file %q", what, p, q)
+			}
 		}
 	}
 

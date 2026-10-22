@@ -1104,3 +1104,47 @@ func (b *filesJobBackend) RunJob(ctx context.Context, _ string, _ cpprovider.Ser
 	b.labels = labels
 	return owned.JobResult{}, b.run(ctx, labels)
 }
+
+// secretFileHooks render the composition's admin password into the
+// declared config file.
+type secretFileHooks struct{ NoHooks }
+
+func (secretFileHooks) Files(_ context.Context, run ComponentRun) (map[string][]byte, error) {
+	return map[string][]byte{sampleConfig: []byte("admin_password: " + string(run.Secrets["admin-password"]) + "\n")}, nil
+}
+
+// echoJobBackend runs a job that prints the secret it was handed, by
+// failing or by not finishing.
+type echoJobBackend struct {
+	*componentBackend
+	secret func() string
+	late   bool
+}
+
+func (b *echoJobBackend) RunJob(context.Context, string, cpprovider.ServiceSpec, map[string]string, time.Duration) (owned.JobResult, error) {
+	output := "loaded config: admin_password: " + b.secret() + "\nmigration failed"
+	if b.late {
+		return owned.JobResult{}, errors.New("migrate did not finish within 10m0s: " + output)
+	}
+	return owned.JobResult{ExitCode: 1, Output: output}, nil
+}
+
+func TestComponentJobOutputRedactsSecretsOnlyInFiles(t *testing.T) {
+	f := newComponentFixture(t, sampleWithFiles(t))
+	f.target.Hooks["sample"] = secretFileHooks{}
+	f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	key := resourceKey("org", "env", "app", "secret:admin-password")
+	f.secrets.m[key] = []byte("Generated-admin-Secret-1")
+	migrate := f.componentJob(t, "migrate", newPostgres)
+	if slices.ContainsFunc(migrate.Action.Resource.Component.Component.Env, func(v recipes.EnvVar) bool { return v.Secret == "admin-password" }) {
+		t.Fatal("the fixture's migrate reads the admin password through its env")
+	}
+	for _, late := range []bool{false, true} {
+		jobs := &echoJobBackend{componentBackend: f.backend, late: late, secret: func() string { return string(f.secrets.m[key]) }}
+		f.target.Backend = func(string, string) owned.Backend { return jobs }
+		_, err := f.target.Apply(t.Context(), f.componentJob(t, "migrate", newPostgres))
+		if err == nil || strings.Contains(err.Error(), "Generated-admin") || strings.Contains(err.Error(), "Secret-1") || !strings.Contains(err.Error(), "[redacted]") {
+			t.Fatalf("late %v: %v", late, err)
+		}
+	}
+}

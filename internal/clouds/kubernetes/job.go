@@ -124,7 +124,11 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 	meta := func(name string) metav1.ObjectMeta {
 		return metav1.ObjectMeta{Name: name, Namespace: ns, Labels: maps.Clone(identity)}
 	}
-	runtimeSecret := &corev1.Secret{ObjectMeta: meta(name + "-runtime"), Type: corev1.SecretTypeOpaque, Data: runtimeSecretData(values)}
+	data, err := runtimeSecretData(values)
+	if err != nil {
+		return result, err
+	}
+	runtimeSecret := &corev1.Secret{ObjectMeta: meta(name + "-runtime"), Type: corev1.SecretTypeOpaque, Data: data}
 	old, err := secrets.Get(ctx, runtimeSecret.Name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):

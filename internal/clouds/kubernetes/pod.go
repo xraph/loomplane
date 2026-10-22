@@ -61,9 +61,6 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		fallback := int32(owned.DefaultFileMode)
 		source := &corev1.SecretVolumeSource{SecretName: runtimeSecret.Name, DefaultMode: &fallback}
 		for i, p := range slices.Sorted(maps.Keys(values.Files)) {
-			if _, clash := values.Env[fileKey(i)]; clash {
-				return nil, nil, fmt.Errorf("the variable %s clashes with a rendered file's key", fileKey(i))
-			}
 			mode := int32(values.FileMode(p)) //nolint:gosec // permission bits, at most 0o777
 			source.Items = append(source.Items, corev1.KeyToPath{Key: fileKey(i), Path: fileKey(i), Mode: &mode})
 			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: runtimeFilesVolume, MountPath: p, SubPath: fileKey(i), ReadOnly: true})
@@ -87,17 +84,20 @@ func fileKey(i int) string { return "file-" + strconv.Itoa(i) }
 
 // runtimeSecretData is what a workload's runtime Secret holds: its secret
 // variables by name, and its rendered files as file-0, file-1 and on in
-// path order. A catalog component's variable names have no "-", and
-// runtimePod refuses one that clashes anyway.
-func runtimeSecretData(values owned.RuntimeValues) map[string][]byte {
+// path order. A catalog component's variable names have no "-"; one
+// that clashes anyway is refused before anything is written.
+func runtimeSecretData(values owned.RuntimeValues) (map[string][]byte, error) {
 	data := map[string][]byte{}
 	for key, value := range values.Env {
 		data[key] = []byte(value)
 	}
 	for i, p := range slices.Sorted(maps.Keys(values.Files)) {
+		if _, clash := data[fileKey(i)]; clash {
+			return nil, fmt.Errorf("the variable %s clashes with a rendered file's key", fileKey(i))
+		}
 		data[fileKey(i)] = values.Files[p]
 	}
-	return data
+	return data, nil
 }
 
 // healthPort is the container port readiness probes: the one LabelHealthPort

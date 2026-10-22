@@ -444,3 +444,26 @@ func TestFilesRejectUnsafePaths(t *testing.T) {
 		t.Fatalf("a path that only starts like /proc: %v", err)
 	}
 }
+
+func TestFilesRejectNestedAndRepeatedPaths(t *testing.T) {
+	for _, test := range []struct {
+		files []recipes.File
+		want  string
+	}{
+		{[]recipes.File{{Path: "/etc/a"}, {Path: "/etc/a/b"}}, `file "/etc/a/b" sits under file "/etc/a"`},
+		{[]recipes.File{{Path: "/etc/a/b"}, {Path: "/etc/a"}}, `file "/etc/a/b" sits under file "/etc/a"`},
+		{[]recipes.File{{Path: "/etc/a"}, {Path: "/etc/a"}}, `declares file "/etc/a" more than once`},
+	} {
+		k := recipestest.Sample()
+		k.Components[1].Files = test.files
+		err := recipes.NewRegistry().Register(k)
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("files %v: %v", test.files, err)
+		}
+	}
+	k := recipestest.Sample()
+	k.Components[1].Files = []recipes.File{{Path: "/etc/a"}, {Path: "/etc/ab/c"}}
+	if err := recipes.NewRegistry().Register(k); err != nil {
+		t.Fatalf("siblings that share a prefix: %v", err)
+	}
+}

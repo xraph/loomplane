@@ -215,7 +215,11 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	if values.PullAuth != "" {
 		return nil, errors.New("private Kubernetes registry credentials require an existing image_pull_secret")
 	}
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-runtime", Namespace: ns, Labels: maps.Clone(identity), Annotations: map[string]string{owned.LabelStateful: "true"}}, Type: corev1.SecretTypeOpaque, Data: runtimeSecretData(values)}
+	data, err := runtimeSecretData(values)
+	if err != nil {
+		return nil, err
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-runtime", Namespace: ns, Labels: maps.Clone(identity), Annotations: map[string]string{owned.LabelStateful: "true"}}, Type: corev1.SecretTypeOpaque, Data: data}
 	pulls := []corev1.LocalObjectReference{}
 	if pull := c.Config.Details["image_pull_secret"]; pull != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: pull})
