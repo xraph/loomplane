@@ -247,7 +247,7 @@ func TestSnapshotVerifiesAndAppliesInThePlane(t *testing.T) {
 		t.Fatal(err)
 	}
 	var back plane.SignedSnapshot
-	if err := json.Unmarshal(raw, &back); err != nil {
+	if err = json.Unmarshal(raw, &back); err != nil {
 		t.Fatal(err)
 	}
 	got, err := plane.VerifySnapshot(back, h.svc.TrustKeys(), h.gw.ID, h.now)
