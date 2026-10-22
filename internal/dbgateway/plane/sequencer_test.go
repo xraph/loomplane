@@ -116,8 +116,8 @@ func TestSequencerFIFO(t *testing.T) {
 
 func TestStatementName(t *testing.T) {
 	a := statementName("SELECT $1", []uint32{23})
-	if len(a) != len("lp_")+12 || a[:3] != "lp_" {
-		t.Fatalf("statementName = %q, want lp_ and 12 hex characters", a)
+	if len(a) != len("lp_")+40 || a[:3] != "lp_" {
+		t.Fatalf("statementName = %q, want lp_ and 40 hex characters", a)
 	}
 	if a != statementName("SELECT $1", []uint32{23}) {
 		t.Fatal("statementName is not stable")

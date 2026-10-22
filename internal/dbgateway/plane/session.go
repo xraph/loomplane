@@ -310,6 +310,12 @@ func (s *session) skipping() bool {
 func (s *session) query(m *pgproto3.Query) (bool, error) {
 	class := classifyStatement(m.String)
 	s.mu.Lock()
+	// handle checked skip without the lock; a backend error may have set it
+	// since, and then Postgres ignores this Query.
+	if s.skip {
+		s.mu.Unlock()
+		return false, nil
+	}
 	// A simple Query destroys the unnamed statement.
 	s.unnamed = nil
 	if class.Effect == EffectDeallocate && s.deallocateLocked(class) {
@@ -543,6 +549,11 @@ func (s *session) endLease() {
 	case s.writeFailed || !s.seq.empty() || !s.idleAtSync:
 		// Replies are still owed, or the backend is part way through an
 		// extended-protocol exchange.
+		state = LeaseBroken
+	case s.pinned && s.status != 'I':
+		// Session state inside an open transaction. ROLLBACK would hand the
+		// state to the next client, and DISCARD ALL can't run inside a
+		// transaction, so the connection goes.
 		state = LeaseBroken
 	case s.status != 'I':
 		state = LeaseDirtyTxn

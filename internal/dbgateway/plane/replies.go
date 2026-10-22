@@ -46,15 +46,13 @@ func (s *session) readBackend(l *Lease, done chan struct{}) {
 func (s *session) fromBackend(l *Lease, msg pgproto3.BackendMessage) bool {
 	s.mu.Lock()
 	_, ready := msg.(*pgproto3.ReadyForQuery)
-	if ready {
-		// If nothing real is queued behind the head, the lease may go back
-		// to the pool here, so the session goroutine must be done writing to
-		// the connection first. With more queued, it can't, and waiting
-		// could deadlock: the session goroutine may be blocked writing to a
-		// backend that is itself blocked writing replies to this reader.
-		for s.writing > 0 && !s.stopping && s.seq.onlyHead() {
-			s.cond.Wait()
-		}
+	// If this message can leave the backend with nothing to answer, the lease
+	// may go back to the pool here, so the session goroutine must be done
+	// writing to the connection first. Otherwise it can't, and waiting could
+	// deadlock: the session goroutine may be blocked writing to a backend
+	// that is itself blocked writing replies to this reader.
+	for s.writing > 0 && !s.stopping && s.mayGoIdle(ready) {
+		s.cond.Wait()
 	}
 	out, ok := s.dispatch(l, msg)
 	if !ok {
@@ -68,9 +66,13 @@ func (s *session) fromBackend(l *Lease, msg pgproto3.BackendMessage) bool {
 	if ready && s.seq.empty() {
 		s.idleAtSync = true
 	}
-	release := ready && !s.stopping && !s.pinned && !s.writeFailed && s.status == 'I' &&
-		s.seq.empty() && s.writing == 0
+	// Bytes still buffered after ReadyForQuery are an asynchronous message,
+	// such as a notice, that belongs to this client. The lease stays until
+	// they have been read and forwarded, or the next holder's reader would
+	// pass them to its own client.
 	drained := l.Conn().Frontend.ReadBufferLen() == 0
+	release := s.idleAtSync && drained && !s.stopping && !s.pinned && !s.writeFailed &&
+		s.status == 'I' && s.seq.empty() && s.writing == 0
 
 	// Encode the reply before the lease goes back: msg belongs to the
 	// connection's Frontend, which the next holder reads into.
@@ -90,6 +92,16 @@ func (s *session) fromBackend(l *Lease, msg pgproto3.BackendMessage) bool {
 		s.signal()
 	}
 	return exit
+}
+
+// mayGoIdle reports whether handling the message can leave the backend with
+// nothing to answer: a ReadyForQuery with nothing real queued behind its
+// entry, or an asynchronous message after the last ReadyForQuery.
+func (s *session) mayGoIdle(ready bool) bool {
+	if ready {
+		return s.seq.onlyHead()
+	}
+	return s.idleAtSync && s.seq.empty()
 }
 
 // loseLocked handles a backend that failed or broke the protocol: the lease

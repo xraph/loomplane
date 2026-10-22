@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgproto3"
 )
@@ -32,13 +33,14 @@ type prepared struct {
 	seq     uint64 // registry order, for DEALLOCATE ALL in a pipeline
 }
 
-// missingUnnamed is what the session binds when the client uses the unnamed
-// statement without having one. It is never prepared anywhere, so the
+// missingStatement is what the session binds or describes when the client
+// names a statement it doesn't have: the unnamed statement when it has none,
+// or an lp_ name it never prepared. It is never prepared anywhere, so the
 // backend fails the way Postgres would rather than run a statement another
-// client left on the connection.
-const missingUnnamed = "lp_none"
+// session left on the connection.
+const missingStatement = "lp_none"
 
-// statementName is the backend name of a statement: lp_ and the first 12 hex
+// statementName is the backend name of a statement: lp_ and the first 40 hex
 // characters of the SHA-256 of its text, a zero byte, and its parameter type
 // OIDs as 4-byte big-endian integers.
 func statementName(query string, oids []uint32) string {
@@ -50,7 +52,7 @@ func statementName(query string, oids []uint32) string {
 		binary.BigEndian.PutUint32(b[:], oid)
 		h.Write(b[:])
 	}
-	return "lp_" + hex.EncodeToString(h.Sum(nil))[:12]
+	return "lp_" + hex.EncodeToString(h.Sum(nil))[:40]
 }
 
 // parse registers the client's statement and prepares it on the leased
@@ -189,12 +191,17 @@ func (s *session) closeObject(m *pgproto3.Close) (bool, error) {
 func (s *session) resolve(name string) (p *prepared, backend string) {
 	if name == "" {
 		if s.unnamed == nil {
-			return nil, missingUnnamed
+			return nil, missingStatement
 		}
 		return s.unnamed, ""
 	}
 	if p := s.stmts[name]; p != nil {
 		return p, p.backend
+	}
+	if strings.HasPrefix(name, "lp_") {
+		// The gateway's own namespace: the connection may hold that name for
+		// another session.
+		return nil, missingStatement
 	}
 	// Not the gateway's: the backend says it doesn't exist.
 	return nil, name

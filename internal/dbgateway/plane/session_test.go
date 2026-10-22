@@ -102,6 +102,11 @@ func (f *fakePG) serve(conn net.Conn) {
 				return
 			}
 			b.Send(&pgproto3.ReadyForQuery{TxStatus: st.status})
+			if strings.Contains(m.String, "notice") {
+				// An asynchronous message right behind ReadyForQuery, in the
+				// same write.
+				b.Send(&pgproto3.NoticeResponse{Severity: "NOTICE", Code: "00000", Message: "late notice"})
+			}
 			if b.Flush() != nil {
 				return
 			}
@@ -709,8 +714,8 @@ func TestSessionPreparedAcrossLeases(t *testing.T) {
 		t.Fatalf("conn 1 got %q, want the statement under its lp_ name", first)
 	}
 	name := strings.Fields(first[0])[1]
-	if len(name) != len("lp_")+12 || name != statementName("SELECT 7", nil) {
-		t.Fatalf("backend name %q, want lp_ and 12 hex characters of the statement hash", name)
+	if len(name) != len("lp_")+40 || name != statementName("SELECT 7", nil) {
+		t.Fatalf("backend name %q, want lp_ and 40 hex characters of the statement hash", name)
 	}
 	want(t, "conn 2", h.dialer.server(1).received(), []string{
 		"Parse " + name + " SELECT 7", "Bind " + name, "Execute", "Sync",
@@ -1394,4 +1399,136 @@ func TestSessionDeallocateInternalName(t *testing.T) {
 	c.send(&pgproto3.Bind{PreparedStatement: "s"}, &pgproto3.Execute{}, &pgproto3.Sync{})
 	want(t, "execute", c.read(4), []string{"BindComplete", "DataRow 1", "CommandComplete SELECT 1", "ReadyForQuery I"})
 	c.terminate()
+}
+
+// TestSessionPinnedMidTxnDisconnectClosesConn: a pinned session that leaves
+// inside a transaction can't be cleaned up. ROLLBACK would leave its session
+// state behind, and DISCARD ALL can't run inside a transaction, so the
+// connection is closed.
+func TestSessionPinnedMidTxnDisconnectClosesConn(t *testing.T) {
+	h := newHarness(t, 1, time.Second)
+	c := h.connect(nil)
+	c.query("SELECT pg_advisory_lock(1)")
+	c.query("BEGIN")
+	_ = c.conn.Close()
+	if err := c.wait(); err != nil {
+		t.Fatalf("ServeSession = %v", err)
+	}
+	waitFor(t, "the pinned connection to close", func() bool { return isClosedPG(h.dialer.server(0)) })
+	if s := h.pool.Stats(); s.Open != 0 || s.Idle != 0 {
+		t.Fatalf("stats = %+v, want the connection dropped", s)
+	}
+	for _, q := range h.dialer.server(0).queries() {
+		if q == "ROLLBACK" || q == "DISCARD ALL" {
+			t.Fatalf("the pool reset the connection with %s instead of closing it", q)
+		}
+	}
+}
+
+func TestSessionSetInTxnPinThenDisconnectMidTxn(t *testing.T) {
+	h := newHarness(t, 1, time.Second)
+	c := h.connect(nil)
+	c.query("BEGIN")
+	c.query("SET search_path TO other")
+	c.query("COMMIT") // pinned: the SET is now session state
+	c.query("BEGIN")
+	c.query("SELECT 1")
+	_ = c.conn.Close()
+	if err := c.wait(); err != nil {
+		t.Fatalf("ServeSession = %v", err)
+	}
+	// The next holder must not inherit search_path = other.
+	l := mustAcquire(t, h.pool, nil)
+	defer l.Release(LeaseClean)
+	if n := h.dialer.dials(); n != 2 {
+		t.Fatalf("dials = %d, want a fresh connection for the next client", n)
+	}
+	if q := h.dialer.server(1).queries(); len(q) != 0 {
+		t.Fatalf("fresh connection got %q", q)
+	}
+}
+
+// TestSessionUnregisteredInternalNameIsMissing: a client can't reach another
+// session's cached statement by guessing its lp_ name.
+func TestSessionUnregisteredInternalNameIsMissing(t *testing.T) {
+	h := newHarness(t, 1, time.Second)
+	a := h.connect(nil)
+	a.send(&pgproto3.Parse{Name: "s", Query: "SELECT 42"}, &pgproto3.Sync{})
+	a.read(2)
+	name := statementName("SELECT 42", nil)
+
+	b := h.connect(nil)
+	b.send(&pgproto3.Bind{PreparedStatement: name}, &pgproto3.Execute{}, &pgproto3.Sync{})
+	if got := b.read(2); !strings.HasPrefix(got[0], "ErrorResponse ERROR 26000") || got[1] != "ReadyForQuery I" {
+		t.Fatalf("Bind of another session's statement = %q, want 26000", got)
+	}
+	b.send(&pgproto3.Describe{ObjectType: 'S', Name: name}, &pgproto3.Sync{})
+	if got := b.read(2); !strings.HasPrefix(got[0], "ErrorResponse ERROR 26000") {
+		t.Fatalf("Describe of another session's statement = %q, want 26000", got)
+	}
+	for _, m := range h.dialer.server(0).received() {
+		if m == "Bind "+name || m == "Describe S "+name {
+			t.Fatalf("backend got %q from a session that never prepared it", m)
+		}
+	}
+	a.terminate()
+	b.terminate()
+}
+
+// TestSessionAsyncAfterReadyStaysWithItsClient: a notice that arrives right
+// behind ReadyForQuery goes to the client it belongs to, not to whichever
+// session leases the connection next.
+func TestSessionAsyncAfterReadyStaysWithItsClient(t *testing.T) {
+	h := newHarness(t, 1, time.Second)
+	a := h.connect(nil)
+	a.send(&pgproto3.Query{String: "SELECT notice"})
+	want(t, "A", a.read(5), []string{"RowDescription", "DataRow notice", "CommandComplete SELECT 1", "ReadyForQuery I", "NoticeResponse"})
+	if s := h.pool.Stats(); s.Idle != 1 {
+		t.Fatalf("stats = %+v, want the lease released once the notice is through", s)
+	}
+	b := h.connect(nil)
+	want(t, "B", b.query("SELECT 1"), selectOne)
+	a.terminate()
+	b.terminate()
+}
+
+// TestSessionTwoClientsOneConnection is Review Focus 5 across clients: A
+// pipelines two transactions without reading while B waits for the only
+// connection. B's query reaches the backend only between A's transactions,
+// and nobody sees anyone else's rows.
+func TestSessionTwoClientsOneConnection(t *testing.T) {
+	h := newHarness(t, 1, 2*time.Second)
+	a := h.connect(nil)
+	b := h.connect(nil)
+	a.send(
+		&pgproto3.Parse{Query: "SELECT a1"}, &pgproto3.Bind{}, &pgproto3.Execute{}, &pgproto3.Sync{},
+		&pgproto3.Parse{Query: "SELECT a2"}, &pgproto3.Bind{}, &pgproto3.Execute{}, &pgproto3.Sync{},
+	)
+	waitFor(t, "A's first transaction to reach the backend", func() bool { return h.dialer.dials() == 1 && h.dialer.server(0).saw("Sync") })
+	b.send(&pgproto3.Query{String: "SELECT b1"})
+	waitFor(t, "B to queue for the connection or run", func() bool {
+		return h.pool.Stats().Waiting == 1 || h.dialer.server(0).saw("Query SELECT b1")
+	})
+
+	want(t, "A", a.read(10), []string{
+		"ParseComplete", "BindComplete", "DataRow a1", "CommandComplete SELECT 1", "ReadyForQuery I",
+		"ParseComplete", "BindComplete", "DataRow a2", "CommandComplete SELECT 1", "ReadyForQuery I",
+	})
+	want(t, "B", b.readUntilReady(), []string{"RowDescription", "DataRow b1", "CommandComplete SELECT 1", "ReadyForQuery I"})
+
+	log := h.dialer.server(0).received()
+	at := -1
+	for i, m := range log {
+		if m == "Query SELECT b1" {
+			at = i
+		}
+	}
+	if at < 1 || log[at-1] != "Sync" {
+		t.Fatalf("backend log %q: B's query must land between A's transactions", log)
+	}
+	if h.dialer.dials() != 1 {
+		t.Fatalf("dials = %d, want everything on the one connection", h.dialer.dials())
+	}
+	a.terminate()
+	b.terminate()
 }
