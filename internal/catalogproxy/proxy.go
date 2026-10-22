@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/xraph/loomplane/internal/deployments"
@@ -25,6 +26,9 @@ const (
 	msgTimeout    = "The admin didn't answer in time."
 	msgLookup     = "Loomplane couldn't look up this admin link. Try again."
 	msgPermission = "Loomplane couldn't check your permission. Try again."
+	msgSignIn     = "Loomplane couldn't sign in to this admin. Check the service in Loomplane, then try again."
+	msgReach      = "Loomplane couldn't reach this admin. Check that the service is running, then try again."
+	msgRead       = "Loomplane couldn't read this admin's answer. Try again."
 )
 
 // sandboxPolicy runs every page the proxy serves in an opaque origin: its
@@ -85,6 +89,7 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(w, status, msg)
 		return
 	}
+	fmt.Println("serve", r.Method, now)
 	if now.Sub(rec.LastUsedAt) >= touchEvery {
 		// A failed write only shortens the session; this request is
 		// still the creator's.
@@ -158,7 +163,11 @@ func upstreamPath(rest string, t Target) (decodedPath, escapedPath string, ok bo
 			return "", "", false
 		}
 		d, err := url.PathUnescape(seg)
-		if err != nil || d == "." || d == ".." || strings.ContainsFunc(d, func(c rune) bool { return c < 0x20 || c == 0x7f || c == '\\' }) {
+		if err != nil || strings.ContainsFunc(d, func(c rune) bool { return c < 0x20 || c == 0x7f || c == '\\' }) {
+			return "", "", false
+		}
+		// A servlet-style server reads "..;x" as "..".
+		if name, _, _ := strings.Cut(d, ";"); name == "." || name == ".." {
 			return "", "", false
 		}
 		decoded, raw = append(decoded, d), append(raw, seg)
@@ -230,13 +239,15 @@ func (s *Service) forward(ctx context.Context, cancel context.CancelFunc, w http
 			return s.d.Access.InternalSecret(ctx, rec.OrgID, ref, name)
 		})
 		if err != nil {
-			refuse(w, http.StatusBadGateway, "Loomplane couldn't sign in to this admin: "+err.Error())
+			s.warn("build the admin credential", rec, err)
+			refuse(w, http.StatusBadGateway, msgSignIn)
 			return
 		}
 	}
 	ch, err := s.d.Access.InternalChannel(ctx, rec.OrgID, deployments.ComponentRef{ResourceRef: ref, Component: t.Component, Port: t.Port})
 	if err != nil {
-		refuse(w, http.StatusBadGateway, "Loomplane couldn't reach this admin: "+err.Error())
+		s.warn("open the admin's channel", rec, err)
+		refuse(w, http.StatusBadGateway, msgReach)
 		return
 	}
 	defer func() { _ = ch.Close() }() //nolint:errcheck // the response is already out
@@ -271,21 +282,109 @@ func (s *Service) forward(ctx context.Context, cancel context.CancelFunc, w http
 		refuse(w, http.StatusGatewayTimeout, msgTimeout)
 		return
 	case err != nil:
-		refuse(w, http.StatusBadGateway, "Loomplane couldn't reach this admin: "+err.Error())
+		s.warn("send to the admin", rec, err)
+		refuse(w, http.StatusBadGateway, msgReach)
 		return
 	}
+	// Once the answer starts, it may stream or stay switched for as long
+	// as the session lasts. A watcher ends it when the session does.
+	var active atomic.Bool
+	unwatch := s.watch(ctx, func() { cancel(); _ = res.Body.Close() }, rec.TokenHash, rec.CreatedAt.Add(MaxTTL), &active)
+	defer unwatch()
 	if upgrade {
-		s.switchProtocols(ctx, w, res)
+		s.switchProtocols(ctx, w, res, credential, &active)
 		return
 	}
 	defer func() { _ = res.Body.Close() }() // read-only
-	respond(w, r, res, t.AllowedPrefixes, sessionPrefix(token))
+	s.respond(w, r, res, rec, t.AllowedPrefixes, sessionPrefix(token), credential, &active)
+}
+
+// watch checks, every RecheckEvery while a response is still going, that
+// its session still stands: still kept (RevokeResource deletes it), not
+// idle or past its lifetime, and its creator still allowed. Bytes moving
+// either way since the last check count as use, so a busy stream stays
+// open; a quiet one ends IdleTTL after its session was last used. When the
+// session no longer stands, stop ends the response. The returned func
+// stops watching.
+func (s *Service) watch(ctx context.Context, stop func(), hash string, end time.Time, active *atomic.Bool) func() {
+	ticks, stopTicker := s.ticker()
+	quit := make(chan struct{})
+	go func() {
+		defer stopTicker()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticks:
+				open := s.stillOpen(ctx, hash, end, active.Swap(false))
+				if !open {
+					stop()
+				}
+				if s.checkedStream != nil {
+					s.checkedStream()
+				}
+				if !open {
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(quit) }
+}
+
+// stillOpen reports whether a streaming response's session still stands,
+// recording its use when used is true.
+func (s *Service) stillOpen(ctx context.Context, hash string, end time.Time, used bool) (ok bool) {
+	defer func() { fmt.Println("stillOpen", s.d.Now(), used, ok) }()
+	rec, err := s.d.Store.Get(ctx, hash)
+	if err != nil {
+		// Gone, or Loomplane can't tell: either way the stream ends.
+		s.forget(hash)
+		return false
+	}
+	now := s.d.Now().UTC()
+	if used && now.Before(end) {
+		expires := minTime(now.Add(IdleTTL), end)
+		// A failed write only shortens the session.
+		_ = s.d.Store.Touch(ctx, hash, now, expires) //nolint:errcheck // see above
+		rec.LastUsedAt, rec.ExpiresAt = now, expires
+	}
+	if !now.Before(rec.ExpiresAt) || !now.Before(end) {
+		s.forget(hash)
+		return false
+	}
+	status, _ := s.recheck(ctx, rec, now)
+	return status == 0
+}
+
+// warn tells the operator why an admin couldn't be reached or read,
+// naming the session's resource but never its token or credential.
+func (s *Service) warn(what string, rec *Record, err error) {
+	if s.d.Warn != nil {
+		s.d.Warn(fmt.Sprintf("catalog admin proxy: %s (organization %s, environment %s, resource %s)", what, rec.OrgID, rec.EnvironmentID, rec.Resource), err)
+	}
+}
+
+// activity marks a watched response as used whenever bytes pass.
+type activity struct {
+	w      io.Writer
+	active *atomic.Bool
+}
+
+func (a activity) Write(p []byte) (int, error) {
+	n, err := a.w.Write(p)
+	if n > 0 {
+		a.active.Store(true)
+	}
+	return n, err
 }
 
 // switchProtocols joins the browser's connection to the component's once
 // the component has switched to WebSocket, until either side closes or
 // the session's absolute lifetime ends.
-func (s *Service) switchProtocols(ctx context.Context, w http.ResponseWriter, res *http.Response) {
+func (s *Service) switchProtocols(ctx context.Context, w http.ResponseWriter, res *http.Response, credential http.Header, active *atomic.Bool) {
 	upstream, ok := res.Body.(io.ReadWriteCloser)
 	if res.StatusCode != http.StatusSwitchingProtocols || !ok {
 		_ = res.Body.Close() // refused
@@ -300,7 +399,8 @@ func (s *Service) switchProtocols(ctx context.Context, w http.ResponseWriter, re
 	}
 	defer func() { _ = conn.Close() }()
 	defer func() { _ = upstream.Close() }()
-	h := responseHeader(res.Header, true)
+	h := responseHeader(res.Header, credential, true)
+	sandbox(h)
 	if _, err = fmt.Fprintf(brw, "HTTP/1.1 101 Switching Protocols\r\n"); err != nil {
 		return
 	}
@@ -311,8 +411,8 @@ func (s *Service) switchProtocols(ctx context.Context, w http.ResponseWriter, re
 		return
 	}
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstream, brw); done <- struct{}{} }()  //nolint:errcheck // either side may close
-	go func() { _, _ = io.Copy(conn, upstream); done <- struct{}{} }() //nolint:errcheck // either side may close
+	go func() { _, _ = io.Copy(activity{upstream, active}, brw); done <- struct{}{} }()  //nolint:errcheck // either side may close
+	go func() { _, _ = io.Copy(activity{conn, active}, upstream); done <- struct{}{} }() //nolint:errcheck // either side may close
 	select {
 	case <-done:
 	case <-ctx.Done():
@@ -321,16 +421,16 @@ func (s *Service) switchProtocols(ctx context.Context, w http.ResponseWriter, re
 
 // respond writes the component's response, sandboxed, with its admin
 // paths moved under the session's prefix.
-func respond(w http.ResponseWriter, r *http.Request, res *http.Response, prefixes []string, sp string) {
+func (s *Service) respond(w http.ResponseWriter, r *http.Request, res *http.Response, rec *Record, prefixes []string, sp string, credential http.Header, active *atomic.Bool) {
 	h := w.Header()
-	for k, v := range responseHeader(res.Header, false) {
+	for k, v := range responseHeader(res.Header, credential, false) {
 		h[k] = v
 	}
 	rewriteHeaders(h, prefixes, sp)
 	sandbox(h)
 	if !rewritable(res) {
 		w.WriteHeader(res.StatusCode)
-		copyBody(w, res)
+		copyBody(w, res, active)
 		return
 	}
 	if r.Method == http.MethodHead {
@@ -343,14 +443,15 @@ func respond(w http.ResponseWriter, r *http.Request, res *http.Response, prefixe
 		for k := range h {
 			delete(h, k)
 		}
-		refuse(w, http.StatusBadGateway, "Loomplane couldn't read this admin's answer: "+err.Error())
+		s.warn("read the admin's answer", rec, err)
+		refuse(w, http.StatusBadGateway, msgRead)
 		return
 	}
 	if len(body) > maxRewrite {
 		// Too large to rewrite: it goes as it came, still sandboxed.
 		w.WriteHeader(res.StatusCode)
-		if _, err = w.Write(body); err == nil {
-			copyBody(w, res)
+		if _, err = (activity{w, active}).Write(body); err == nil {
+			copyBody(w, res, active)
 		}
 		return
 	}
@@ -368,9 +469,10 @@ func respond(w http.ResponseWriter, r *http.Request, res *http.Response, prefixe
 
 // copyBody streams the rest of a response, flushing as it goes for an
 // event stream.
-func copyBody(w http.ResponseWriter, res *http.Response) {
+func copyBody(w http.ResponseWriter, res *http.Response, active *atomic.Bool) {
+	out := activity{w, active}
 	if !strings.HasPrefix(strings.ToLower(res.Header.Get("Content-Type")), "text/event-stream") {
-		_, _ = io.Copy(w, res.Body) //nolint:errcheck // either side went away
+		_, _ = io.Copy(out, res.Body) //nolint:errcheck // either side went away
 		return
 	}
 	rc := http.NewResponseController(w)
@@ -378,7 +480,7 @@ func copyBody(w http.ResponseWriter, res *http.Response) {
 	for {
 		n, err := res.Body.Read(buf)
 		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
+			if _, werr := out.Write(buf[:n]); werr != nil {
 				return
 			}
 			_ = rc.Flush() // a writer that can't flush still gets the bytes
@@ -418,7 +520,7 @@ func refuse(w http.ResponseWriter, status int, msg string) {
 	h.Set("Content-Type", "text/plain; charset=utf-8")
 	h.Del("Content-Length")
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, msg+"\n") //nolint:errcheck,gosec // the browser went away; plain text, never sniffed
+	_, _ = io.WriteString(w, msg+"\n") //nolint:errcheck // the browser went away
 }
 
 // hopByHop are headers for one connection, never passed on.
@@ -468,9 +570,10 @@ var droppedResponse = []string{
 	"Www-Authenticate", "Origin-Agent-Cluster",
 }
 
-// responseHeader is what the browser gets of the component's headers.
-// switched keeps the headers of a protocol switch.
-func responseHeader(in http.Header, switched bool) http.Header {
+// responseHeader is what the browser gets of the component's headers:
+// never one named like a header of the proxy's credential, should the
+// admin echo it. switched keeps the headers of a protocol switch.
+func responseHeader(in, credential http.Header, switched bool) http.Header {
 	h := in.Clone()
 	if h == nil {
 		h = http.Header{}
@@ -478,6 +581,9 @@ func responseHeader(in http.Header, switched bool) http.Header {
 	upgradeTo := h.Get("Upgrade")
 	dropHopByHop(h)
 	for _, k := range droppedResponse {
+		h.Del(k)
+	}
+	for k := range credential {
 		h.Del(k)
 	}
 	for k := range h {

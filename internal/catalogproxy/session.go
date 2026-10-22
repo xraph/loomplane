@@ -70,12 +70,18 @@ type Target struct {
 	// Root is the admin's landing path, such as "/admin". A session opens
 	// there.
 	Root string
-	// AllowedPrefixes are the upstream paths the proxy may reach. Any
-	// other path is a 404 that never reaches the component.
+	// AllowedPrefixes are the paths, as the browser asks for them under
+	// the session, that the proxy sends on. Any other path is a 404 that
+	// never reaches the component. They're checked before StripPrefix is
+	// removed.
 	AllowedPrefixes []string
 	// StripPrefix is removed from the path after the allowed-prefix
 	// check, for an admin that's served under a prefix the component
-	// itself doesn't use.
+	// itself doesn't use. When it is a whole allowed prefix, such as
+	// "/fabriq" for "/fabriq/", every path on the port is reachable: the
+	// allowed prefix then limits nothing upstream. A kind may only do that
+	// when the port serves nothing but its admin. The proxy only ever
+	// reaches a control port, never a routable one.
 	StripPrefix string
 	// Header builds the headers that authenticate the proxy to the admin,
 	// from the composition's generated secrets. A component channel never
@@ -90,8 +96,13 @@ var (
 )
 
 // Register makes kind's admin openable through the proxy. Call it from
-// init() in the kind's own package. It panics on a target the proxy can't
-// keep inside the admin, or a kind registered twice.
+// init() in the kind's own package. It panics on a malformed target (see
+// validTarget) or a kind registered twice.
+//
+// What a session can reach on the component is the allowed prefixes,
+// less StripPrefix. A target that strips a whole allowed prefix exposes
+// its entire control port to whoever holds a session, so register one
+// only for a port that serves nothing but the admin.
 func Register(kind string, t Target) {
 	if err := validTarget(t); err != nil {
 		panic(fmt.Sprintf("catalogproxy: %s's admin target: %v", kind, err))
@@ -112,9 +123,11 @@ func targetOf(kind string) (Target, bool) {
 	return t, ok
 }
 
-// validTarget refuses a target whose paths aren't clean absolute paths, an
-// admin that is the whole component, a root outside the allowed prefixes,
-// and a strip prefix that isn't a leading part of every allowed prefix.
+// validTarget refuses a target whose paths aren't clean absolute paths,
+// "/" as an allowed prefix, a root outside the allowed prefixes, and a
+// strip prefix that isn't a leading part of every allowed prefix. It
+// can't tell what a port serves, so it allows a strip prefix that is a
+// whole allowed prefix (see Target.StripPrefix).
 func validTarget(t Target) error {
 	if t.Component == "" || t.Port == "" {
 		return errors.New("name the component and its control port")
@@ -192,6 +205,9 @@ type Deps struct {
 	Bindings func(ctx context.Context, orgID, environmentID string) ([]*planning.Binding, error)
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Warn hears why the proxy couldn't reach or read an admin. The
+	// browser gets a fixed message. Nil drops it.
+	Warn func(msg string, err error)
 }
 
 // Service opens admin sessions and serves them.
@@ -202,6 +218,11 @@ type Service struct {
 	// replica rechecks a session the first time it serves it.
 	mu      sync.Mutex
 	checked map[string]time.Time
+	// ticker paces the checks of a response that's still streaming; a
+	// test replaces it.
+	ticker func() (<-chan time.Time, func())
+	// checkedStream, when set, hears that a tick's check is done.
+	checkedStream func()
 }
 
 // NewService returns a Service.
@@ -209,7 +230,10 @@ func NewService(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Service{d: d, checked: map[string]time.Time{}}
+	return &Service{d: d, checked: map[string]time.Time{}, ticker: func() (<-chan time.Time, func()) {
+		t := time.NewTicker(RecheckEvery)
+		return t.C, t.Stop
+	}}
 }
 
 // prunedAfter is how long an expired session is kept, so its link still

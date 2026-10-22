@@ -144,6 +144,51 @@ func rewriteHeaders(h http.Header, prefixes []string, sp string) {
 			values[i] = v
 		}
 	}
+	refresh := h["Refresh"]
+	for i, v := range refresh {
+		refresh[i] = rewriteRefresh(v, prefixes, sp)
+	}
+	links := h["Link"]
+	for i, v := range links {
+		links[i] = rewriteLink(v, prefixes, sp)
+	}
+}
+
+// rewriteRefresh moves the URL of a Refresh header, "5; url=/admin/x",
+// under the session like a Location.
+func rewriteRefresh(v string, prefixes []string, sp string) string {
+	i := indexFold([]byte(v), []byte("url="))
+	if i < 0 {
+		return v
+	}
+	start := i + len("url=")
+	if start < len(v) && (v[start] == '"' || v[start] == '\'') {
+		start++
+	}
+	return v[:start] + rewriteLocation(v[start:], prefixes, sp)
+}
+
+// rewriteLink moves each <URL> of a Link header under the session like a
+// Location.
+func rewriteLink(v string, prefixes []string, sp string) string {
+	var out strings.Builder
+	for {
+		open := strings.IndexByte(v, '<')
+		if open < 0 {
+			break
+		}
+		closing := strings.IndexByte(v[open:], '>')
+		if closing < 0 {
+			break
+		}
+		closing += open
+		out.WriteString(v[:open+1])
+		out.WriteString(rewriteLocation(v[open+1:closing], prefixes, sp))
+		out.WriteByte('>')
+		v = v[closing+1:]
+	}
+	out.WriteString(v)
+	return out.String()
 }
 
 // shimScript is the <script> that installs the shim in a page of the
@@ -161,15 +206,27 @@ func shimScript(sp string, prefixes []string) (string, error) {
 }
 
 // injectShim puts tag right after the page's <head>, or at the top of its
-// <body> when it has no head. A fragment with neither, such as an htmx
-// partial, gets none: the page it lands in already has it.
+// <body> when it has no head. A <meta charset> that opens the head stays
+// first, so the browser's prescan of the first 1024 bytes still finds it.
+// Tags are found the way a browser would, near enough: not inside
+// comments, other tags' attributes, or script, style, textarea and title
+// text. A fragment with neither head nor body, such as an htmx partial,
+// gets no shim: the page it lands in already has it.
 func injectShim(b []byte, tag string) []byte {
-	at := afterOpenTag(b, "head")
-	if at < 0 {
-		at = afterOpenTag(b, "body")
-	}
+	name, at := firstTag(b, 0, "head", "body")
 	if at < 0 {
 		return b
+	}
+	if name == "head" {
+		next := at
+		for next < len(b) && isHTMLSpace(b[next]) {
+			next++
+		}
+		if startsTag(b[next:], "meta") {
+			if end := tagEnd(b, next+len("<meta")); end > 0 && indexFold(b[next:end], []byte("charset")) >= 0 {
+				at = end
+			}
+		}
 	}
 	out := make([]byte, 0, len(b)+len(tag))
 	out = append(out, b[:at]...)
@@ -177,33 +234,107 @@ func injectShim(b []byte, tag string) []byte {
 	return append(out, b[at:]...)
 }
 
-// afterOpenTag is the offset just past the first <name ...> tag in b,
-// case-insensitively, or -1.
-func afterOpenTag(b []byte, name string) int {
-	open := []byte("<" + name)
-	for from := 0; from < len(b); {
-		i := indexFold(b[from:], open)
-		if i < 0 {
-			return -1
+// rawText are elements whose content is text, not markup.
+var rawText = map[string]bool{"script": true, "style": true, "textarea": true, "title": true}
+
+// firstTag finds, from offset from, the first start tag named one of
+// names, and returns its name and the offset just past its ">"; or "" and
+// -1.
+func firstTag(b []byte, from int, names ...string) (name string, end int) {
+	for i := from; i < len(b); {
+		lt := bytes.IndexByte(b[i:], '<')
+		if lt < 0 {
+			return "", -1
 		}
-		i += from
-		next := i + len(open)
-		if next < len(b) && strings.IndexByte(">/ \t\r\n\f", b[next]) >= 0 {
-			end := bytes.IndexByte(b[next:], '>')
+		i += lt
+		rest := b[i:]
+		switch {
+		case bytes.HasPrefix(rest, []byte("<!--")):
+			end := bytes.Index(rest[4:], []byte("-->"))
 			if end < 0 {
-				return -1
+				return "", -1
 			}
-			return next + end + 1
+			i += 4 + end + 3
+			continue
+		case len(rest) > 1 && (rest[1] == '!' || rest[1] == '?' || rest[1] == '/'):
+			// A doctype, processing instruction or end tag.
+			end := bytes.IndexByte(rest, '>')
+			if end < 0 {
+				return "", -1
+			}
+			i += end + 1
+			continue
+		case len(rest) < 2 || !isASCIILetter(rest[1]):
+			i++
+			continue
 		}
-		from = i + 1
+		j := i + 1
+		for j < len(b) && !isHTMLSpace(b[j]) && b[j] != '>' && b[j] != '/' {
+			j++
+		}
+		name := strings.ToLower(string(b[i+1 : j]))
+		end := tagEnd(b, j)
+		if end < 0 {
+			return "", -1
+		}
+		for _, n := range names {
+			if name == n {
+				return name, end
+			}
+		}
+		i = end
+		if rawText[name] {
+			closing := indexFold(b[end:], []byte("</"+name))
+			if closing < 0 {
+				return "", -1
+			}
+			i = end + closing
+		}
+	}
+	return "", -1
+}
+
+// tagEnd is the offset just past the ">" that ends a tag whose attributes
+// start at j, skipping quoted attribute values; or -1.
+func tagEnd(b []byte, j int) int {
+	var quote byte
+	for k := j; k < len(b); k++ {
+		c := b[k]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '>':
+			return k + 1
+		}
 	}
 	return -1
 }
 
+// startsTag reports whether b starts with the start tag <name.
+func startsTag(b []byte, name string) bool {
+	n := len(name) + 1
+	return len(b) > n && b[0] == '<' && bytes.EqualFold(b[1:n], []byte(name)) && (isHTMLSpace(b[n]) || b[n] == '>' || b[n] == '/')
+}
+
+func isHTMLSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' }
+
+func lowerASCII(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
+}
+
+func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
 // indexFold is bytes.Index, ignoring ASCII case.
 func indexFold(b, sub []byte) int {
 	for i := 0; i+len(sub) <= len(b); i++ {
-		if b[i] == sub[0] && bytes.EqualFold(b[i:i+len(sub)], sub) {
+		if lowerASCII(b[i]) == lowerASCII(sub[0]) && bytes.EqualFold(b[i:i+len(sub)], sub) {
 			return i
 		}
 	}

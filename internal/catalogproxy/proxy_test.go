@@ -263,12 +263,17 @@ func useTarget(t *testing.T, target Target) {
 }
 
 type harness struct {
-	svc     *Service
-	store   *memStore
-	authz   *fakeAuthz
-	clock   *fakeClock
-	up      *upstream
-	handler http.Handler
+	// tick paces the checks of streaming responses.
+	tick     chan time.Time
+	checked  chan struct{}
+	warnMu   sync.Mutex
+	warnings []string
+	svc      *Service
+	store    *memStore
+	authz    *fakeAuthz
+	clock    *fakeClock
+	up       *upstream
+	handler  http.Handler
 }
 
 func newHarness(t *testing.T, target Target) *harness {
@@ -290,7 +295,15 @@ func newHarness(t *testing.T, target Target) *harness {
 		Executors: map[string]deployments.Executor{"server": componentDialer{up: h.up}},
 		Secrets:   fakeSecrets{deployments.ResourceKey("org", "env", "app", "secret:admin-password"): []byte(adminToken)},
 	})
-	h.svc = NewService(Deps{Store: h.store, Access: access, Authz: h.authz, Bindings: list, Now: h.clock.Now})
+	h.svc = NewService(Deps{Store: h.store, Access: access, Authz: h.authz, Bindings: list, Now: h.clock.Now, Warn: func(msg string, err error) {
+		h.warnMu.Lock()
+		defer h.warnMu.Unlock()
+		h.warnings = append(h.warnings, msg+": "+err.Error())
+	}})
+	h.tick = make(chan time.Time)
+	h.svc.ticker = func() (<-chan time.Time, func()) { return h.tick, func() {} }
+	h.checked = make(chan struct{}, 1)
+	h.svc.checkedStream = func() { h.checked <- struct{}{} }
 	h.handler = h.svc.Handler()
 	return h
 }
@@ -385,6 +398,7 @@ func TestProxyResponsesAreSandboxed(t *testing.T) {
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Octopus-Version", "1.0")
+		w.Header().Set("X-Octopus-Admin-Token", adminToken)
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}
 	base := h.open(t)
@@ -406,7 +420,7 @@ func TestProxyResponsesAreSandboxed(t *testing.T) {
 			t.Errorf("%s: %q, want %q", k, got, v)
 		}
 	}
-	for _, k := range []string{"Set-Cookie", "Content-Security-Policy-Report-Only", "Access-Control-Allow-Credentials", "Strict-Transport-Security", "Clear-Site-Data"} {
+	for _, k := range []string{"X-Octopus-Admin-Token", "Set-Cookie", "Content-Security-Policy-Report-Only", "Access-Control-Allow-Credentials", "Strict-Transport-Security", "Clear-Site-Data"} {
 		if got := w.Header().Values(k); len(got) != 0 {
 			t.Errorf("%s passed through: %q", k, got)
 		}
@@ -425,6 +439,7 @@ func TestProxyRefusesPathsOutsideAllowedPrefixes(t *testing.T) {
 		"/_farp/v1/register", "/metrics", "/__farp/x", "/administrator", "/admin/../metrics",
 		"/admin/%2e%2e/metrics", "/admin/%2E%2E/%2E%2E/metrics", "/admin%2f..%2fmetrics", "/admin/x%2Fy",
 		"/admin/./x", "/admin/%2e/x", "/admin/%00", "/admin/a%5cb",
+		"/admin/..;/metrics", "/admin/..;jsessionid=x/metrics", "/admin/%2e%2e;x/metrics", "/admin/.;/x",
 	} {
 		if w := h.do(http.MethodGet, base+p, nil); w.Code != http.StatusNotFound {
 			t.Errorf("%s: %d %q", p, w.Code, w.Body.String())
@@ -608,7 +623,8 @@ func TestProxyWebSocketPassesThroughWhenTheChannelSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusSwitchingProtocols || res.Header.Get("Sec-Websocket-Accept") == "" || res.Header.Get("Set-Cookie") != "" {
+	if res.StatusCode != http.StatusSwitchingProtocols || res.Header.Get("Sec-Websocket-Accept") == "" || res.Header.Get("Set-Cookie") != "" ||
+		res.Header.Get("Content-Security-Policy") != sandboxPolicy || res.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("switch: %d %v", res.StatusCode, res.Header)
 	}
 	_, _ = io.WriteString(conn, "hello\n")
@@ -622,8 +638,33 @@ func TestProxyChannelFailureIs502(t *testing.T) {
 	h := newHarness(t, sampleTarget())
 	h.up.transport = errTransport{}
 	base := h.open(t)
-	if w := h.do(http.MethodGet, base+"/admin", nil); w.Code != http.StatusBadGateway {
+	w := h.do(http.MethodGet, base+"/admin", nil)
+	if w.Code != http.StatusBadGateway || strings.TrimSpace(w.Body.String()) != msgReach {
 		t.Fatalf("got %d %q", w.Code, w.Body.String())
+	}
+	// The detail goes to the operator, without the token.
+	h.warnMu.Lock()
+	defer h.warnMu.Unlock()
+	token := strings.TrimPrefix(base, "/catalog-admin/")
+	if len(h.warnings) != 1 || !strings.Contains(h.warnings[0], "connection refused") || !strings.Contains(h.warnings[0], "resource app") || strings.Contains(h.warnings[0], token) {
+		t.Fatalf("warnings: %q", h.warnings)
+	}
+}
+
+func TestProxySecretFailureIsAFixedMessage(t *testing.T) {
+	target := sampleTarget()
+	target.Header = func(_ context.Context, secret func(string) ([]byte, error)) (http.Header, error) {
+		_, err := secret("no-such-secret")
+		return nil, err
+	}
+	h := newHarness(t, target)
+	base := h.open(t)
+	w := h.do(http.MethodGet, base+"/admin", nil)
+	if w.Code != http.StatusBadGateway || strings.TrimSpace(w.Body.String()) != msgSignIn {
+		t.Fatalf("got %d %q", w.Code, w.Body.String())
+	}
+	if n := len(h.up.seen()); n != 0 {
+		t.Fatalf("the component got %d requests", n)
 	}
 }
 

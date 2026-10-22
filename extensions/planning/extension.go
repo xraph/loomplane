@@ -294,6 +294,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	// is the credential.
 	e.catalogAdmin = catalogproxy.NewService(catalogproxy.Deps{
 		Store: catalogproxy.NewPgStore(pg), Access: catalogAccess, Authz: authz, Bindings: planStore.ListBindings,
+		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})
 	if err := forge.ProvideValue(c, e.catalogAdmin); err != nil {
 		return err
