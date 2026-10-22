@@ -561,3 +561,42 @@ func TestCatalogAccessComponentsListsTheComposition(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogAccessComponentsIncludeDependencyOnlyDependencies(t *testing.T) {
+	log := &accessLog{}
+	bindings := composedBindings(t)
+	// app provisioned app--falkordb, a dependency-only kind that runs as
+	// its own resource.
+	for _, b := range bindings {
+		if b.Name == "app" {
+			cfg := boundResource(b)
+			cfg.Composition.Dependencies = map[string]planning.DependencyChoice{"falkordb": {Mode: planning.DependencyNew, Resource: "app--falkordb", Kind: "graph"}}
+			b.Config, _ = json.Marshal(cfg)
+		}
+	}
+	component := func(name, resource string) *planning.Binding {
+		raw, _ := json.Marshal(planning.ResourceConfig{Provider: "server", Target: "conn", Kind: "graph", Version: "1", Component: &planning.ComponentConfig{Kind: "graph", Resource: resource}})
+		return &planning.Binding{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Subject: planning.ResourceSubject, Name: name, Provider: "server", ExternalID: "inst_" + name, Config: raw}
+	}
+	bindings = append(bindings,
+		component("app--falkordb", "app--falkordb"),
+		// One app didn't provision, and one of another resource, aren't app's.
+		component("app--search", "app--search"),
+		component("app--cron", "other"),
+	)
+	access := NewCatalogAccess(CatalogAccessDeps{
+		Authz:    accessAuthz{log},
+		Bindings: func(context.Context, string, string) ([]*planning.Binding, error) { return bindings, nil },
+	})
+	got, err := access.Components(t.Context(), security.Principal{OrgID: "org", UserID: "usr"}, security.DeploymentRead, ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(got))
+	for _, b := range got {
+		names = append(names, b.Name)
+	}
+	if want := []string{"app", "app--api", "app--falkordb", "app--migrate", "app--worker"}; !slices.Equal(names, want) {
+		t.Fatalf("components %v, want %v", names, want)
+	}
+}

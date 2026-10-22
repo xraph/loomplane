@@ -1697,7 +1697,15 @@ func TestReleaseObserverNeverFailsTheDeployment(t *testing.T) {
 	failing := &releaseLog{err: errors.New("the catalog is down")}
 	fine := &releaseLog{}
 	r, store, plans, _ := consumerRunner(t, plan, NoHooks{})
-	r.observers = []ReleaseObserver{failing, fine}
+	// What an observer does with its binding changes nothing else.
+	scribbler := observerFunc(func(_ context.Context, rel Release) error {
+		for i := range rel.Binding.Config {
+			rel.Binding.Config[i] = 'x'
+		}
+		rel.Binding.Name = "scribbled"
+		return nil
+	})
+	r.observers = []ReleaseObserver{scribbler, failing, fine}
 
 	id, err := runAll(t, r, plan)
 	if err != nil {
@@ -1710,6 +1718,9 @@ func TestReleaseObserverNeverFailsTheDeployment(t *testing.T) {
 	web := d.Step("service:web")
 	if web.Status != StepSucceeded || !slices.Equal(web.Warnings, []string{"web: the catalog is down"}) {
 		t.Fatalf("web step %s, warnings %q", web.Status, web.Warnings)
+	}
+	if b := plans.bindings["service:web"]; b.Name != "web" || !json.Valid(b.Config) {
+		t.Fatalf("an observer changed the bound web: %s %q", b.Name, b.Config)
 	}
 	if cache := d.Step("resource:cache"); len(cache.Warnings) != 0 {
 		t.Fatalf("cache warnings %q", cache.Warnings)
@@ -1793,5 +1804,19 @@ func TestConsumerCarriesOptionsAndAddress(t *testing.T) {
 	}
 	if _, err = c.Address("worker", "api"); err == nil {
 		t.Fatal("a component that hasn't started has an address")
+	}
+}
+
+func TestReleaseCopiesTheBinding(t *testing.T) {
+	at := time.Now()
+	b := &planning.Binding{Name: "web", Config: json.RawMessage(`{"a":1}`), ObservedAt: &at,
+		Replaced: []planning.Binding{{Name: "web", ExternalID: "old", Config: json.RawMessage(`{"b":2}`)}}}
+	c := cloneBinding(b)
+	c.Config[2] = 'z'
+	c.Replaced[0].Config[2] = 'z'
+	c.Replaced[0].ExternalID = "changed"
+	*c.ObservedAt = at.Add(time.Hour)
+	if string(b.Config) != `{"a":1}` || string(b.Replaced[0].Config) != `{"b":2}` || b.Replaced[0].ExternalID != "old" || !b.ObservedAt.Equal(at) {
+		t.Fatalf("the copy shares with the binding: %+v", b)
 	}
 }

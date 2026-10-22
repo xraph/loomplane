@@ -121,6 +121,9 @@ type Job struct {
 	// files are a catalog component's rendered files, which an owned
 	// target keeps in Vault beside its runtime values.
 	files []runtimeFile
+	// replacing is a Remove of what an action ran as before it moved.
+	// What's kept under the action's name is the replacement's then.
+	replacing bool
 }
 
 // ResourceURL is the field a resource executor keeps its address under,
@@ -251,7 +254,11 @@ type Release struct {
 // ReleaseObserver hears of each service binding a deployment step writes
 // or deletes, once that's done. Each call has 10 seconds; an error never
 // fails the step, and lands on it as a warning naming the service.
-// Resource bindings aren't observed.
+// Resource bindings aren't observed, and neither are writes that only
+// record metadata about what's already deployed: adopting a Cloud
+// placement, or recording that another connection deployed it (see
+// Runner.deployedElsewhere). Each observer gets its own copy of the
+// binding.
 type ReleaseObserver interface {
 	Released(ctx context.Context, r Release) error
 }
@@ -1111,6 +1118,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	// What's kept under the action's name, such as a database's address,
 	// is the replacement's now.
 	gone.Forget = func(context.Context) error { return nil }
+	gone.replacing = true
 	job.Progress(StepDeploying, "Removing the one it replaces on "+placement(old.Provider, old.Region))
 	if authErr := r.authorizeCloudRemoval(ctx, job); authErr != nil {
 		return false, authErr
@@ -1277,14 +1285,29 @@ func (r *Runner) released(ctx context.Context, d *Deployment, b *planning.Bindin
 	var warnings []string
 	for _, observer := range r.observers {
 		observed, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseObserverTimeout)
-		binding := *b
-		err := observer.Released(observed, Release{OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Binding: &binding, Removed: removed})
+		err := observer.Released(observed, Release{OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Binding: cloneBinding(b), Removed: removed})
 		cancel()
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: %v", b.Name, err))
 		}
 	}
 	return warnings
+}
+
+// cloneBinding is a copy of b that shares nothing with it, so an observer
+// can't change what the step holds.
+func cloneBinding(b *planning.Binding) *planning.Binding {
+	c := *b
+	c.Config = slices.Clone(b.Config)
+	if b.ObservedAt != nil {
+		at := *b.ObservedAt
+		c.ObservedAt = &at
+	}
+	c.Replaced = nil
+	for _, old := range b.Replaced {
+		c.Replaced = append(c.Replaced, *cloneBinding(&old))
+	}
+	return &c
 }
 
 // bind records what runs an action now, with what it ran as before it

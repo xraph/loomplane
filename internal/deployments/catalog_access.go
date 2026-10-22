@@ -33,7 +33,9 @@ var (
 )
 
 // JobRunner runs a bound job component again. *OwnedTarget is the real
-// one (see OwnedTarget.RerunJob).
+// one (see OwnedTarget.RerunJob). A rerun belongs to no deployment, so the
+// ComponentRun its kind's hooks see, in Files, has an empty DeploymentID
+// and Environment.
 type JobRunner interface {
 	RerunJob(ctx context.Context, b *planning.Binding, name string) (owned.JobResult, error)
 }
@@ -204,7 +206,9 @@ func (a *CatalogAccess) keptSecret(ctx context.Context, orgID string, ref Resour
 // RunJob runs a bound job component of a composed resource again, now,
 // as name, through the target it runs on (see JobRunner), for Loomplane's
 // own background work. It records nothing, and checks no permission: an
-// HTTP handler checks the caller's first. A process is ErrNotAJob.
+// HTTP handler checks the caller's first. A process is ErrNotAJob. The
+// rerun belongs to no deployment: its ComponentRun has an empty
+// DeploymentID and Environment.
 func (a *CatalogAccess) RunJob(ctx context.Context, orgID string, ref ResourceRef, component, name string) (owned.JobResult, error) {
 	bindings, err := a.d.Bindings(ctx, orgID, ref.EnvironmentID)
 	if err != nil {

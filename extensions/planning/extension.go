@@ -266,6 +266,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	// catalogHooks are what composed catalog kinds do beyond their
 	// recipes, by kind. A kind registers its own here.
 	catalogHooks := map[string]deployments.CatalogHooks{}
+	// observers hear of each service binding a deployment writes or
+	// deletes. A kind that tracks its consumers registers its own here.
+	observers := []deployments.ReleaseObserver{}
 	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
 	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
@@ -325,6 +328,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Resources:    resourceSecrets,
 		Telemetry:    metrics,
 		CatalogHooks: catalogHooks,
+		Observers:    observers,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err

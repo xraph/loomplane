@@ -604,8 +604,19 @@ func TestComponentEnvResolvesSiblingAddress(t *testing.T) {
 		t.Fatalf("worker run secrets: %v", run.Secrets)
 	}
 
-	// Removing a component forgets its address with its runtime values.
+	// Removing what the api ran as before it moved leaves the address to
+	// its replacement, under the same name.
 	apiJob := f.componentJob(t, "api", newPostgres)
+	apiJob.Action.Op = planning.Replace
+	if err = f.target.Remove(t.Context(), apiJob, bound(apiJob, api)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.secrets.m[resourceKey("org", "env", "app--api", "address")]; !ok {
+		t.Fatal("removing a replaced component forgot its replacement's address")
+	}
+
+	// Deleting a component forgets its address with its runtime values.
+	apiJob.Action.Op = planning.Delete
 	if err = f.target.Remove(t.Context(), apiJob, bound(apiJob, api)); err != nil {
 		t.Fatal(err)
 	}
@@ -694,6 +705,22 @@ func TestCompositionPublishesOutputs(t *testing.T) {
 
 	f.secrets.m[resourceKey("org", "env", "app", "secret:admin-password")] = []byte("generated")
 	f.secrets.m[resourceKey("org", "env", "app--api", "url")] = []byte("kept")
+	// Removing what it was before it moved leaves everything to its
+	// replacement, under the same name, and the kind hears nothing.
+	moved := *job
+	moved.Action.Op = planning.Replace
+	if err := f.target.Remove(t.Context(), &moved, b); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.hooks.removed) != 0 {
+		t.Fatalf("removing a replaced composition ran the removed hook: %+v", f.hooks.removed)
+	}
+	for _, field := range []string{"url", "output:admin", "secret:admin-password"} {
+		if _, ok := f.secrets.m[resourceKey("org", "env", "app", field)]; !ok {
+			t.Fatalf("removing a replaced composition forgot %s", field)
+		}
+	}
+	job.Action.Op = planning.Delete
 	if err := f.target.Remove(t.Context(), job, b); err != nil {
 		t.Fatal(err)
 	}
@@ -1442,11 +1469,31 @@ func TestDependencyOnlyActionPublishesItsOwnOutputs(t *testing.T) {
 		}
 	}
 
-	// Removing it forgets what it published with its address.
+	// Removing what it ran as before it moved, in a replace or in a delete
+	// of what's bound now, leaves what it published to its replacement.
+	published := []string{"url", "output:host", "secret:password", "address"}
+	for name, edit := range map[string]func(*Job){
+		"replace":      func(j *Job) { j.Action.Op = planning.Replace },
+		"older, moved": func(j *Job) { j.Action.Op, j.replacing = planning.Delete, true },
+	} {
+		replaced := *job
+		edit(&replaced)
+		if err = f.target.Remove(t.Context(), &replaced, bound(job, out)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, field := range published {
+			if _, ok := f.secrets.m[ResourceKey("org", "env", "app--falkordb", field)]; !ok {
+				t.Fatalf("%s: removing a replaced dependency forgot its replacement's %s", name, field)
+			}
+		}
+	}
+
+	// Deleting it forgets what it published with its address.
+	job.Action.Op = planning.Delete
 	if err = f.target.Remove(t.Context(), job, bound(job, out)); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"url", "output:host", "secret:password", "address"} {
+	for _, field := range published {
 		if _, ok := f.secrets.m[ResourceKey("org", "env", "app--falkordb", field)]; ok {
 			t.Fatalf("%s survived removing the dependency", field)
 		}

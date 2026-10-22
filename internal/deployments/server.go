@@ -676,7 +676,7 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 	if err := e.removeInstance(ctx, job, b); err != nil {
 		return err
 	}
-	if resource != nil && resource.Component != nil && job.Deployment != nil && job.Deployment.OrgID == b.OrgID {
+	if resource != nil && resource.Component != nil && job.Deployment != nil && job.Deployment.OrgID == b.OrgID && forgetsKept(job) {
 		if e.Secrets == nil {
 			return ErrNoCredential
 		}

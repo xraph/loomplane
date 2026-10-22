@@ -438,7 +438,9 @@ func (e *OwnedTarget) runJob(ctx context.Context, job *Job, kind recipes.Kind, j
 // nothing: no binding, checkpoint or kept value changes, and its runtime
 // values are kept only while it runs. The result's output has what it
 // was handed redacted; a job that exits with anything but 0 isn't an
-// error, so check ExitCode. A process component is ErrNotAJob.
+// error, so check ExitCode. A process component is ErrNotAJob. It belongs
+// to no deployment, so its ComponentRun has an empty DeploymentID and
+// Environment.
 func (e *OwnedTarget) RerunJob(ctx context.Context, b *planning.Binding, name string) (owned.JobResult, error) {
 	cfg := boundResource(b)
 	if cfg == nil || cfg.Component == nil {
@@ -612,7 +614,7 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 		if reads.off(v.Requires) {
 			continue
 		}
-		dependencies := placeholderNames(v.Template, "dep")
+		dependencies := templateDependencies(v.Template)
 		if v.From != nil && v.From.Dependency != "" {
 			dependencies = append(dependencies, v.From.Dependency)
 		}
@@ -835,58 +837,54 @@ func (r *compositionReads) secret(ctx context.Context, name string) (string, err
 // verbatim. on is false when one reads an optional dependency that's
 // off.
 func (r *compositionReads) expand(ctx context.Context, template string) (value string, on bool, err error) {
+	parts, problems := recipes.ParseTemplate(template)
+	if len(problems) > 0 {
+		return "", false, fmt.Errorf("the template %s", problems[0])
+	}
 	var b strings.Builder
-	rest := template
-	for {
-		start := strings.Index(rest, "${")
-		if start < 0 {
-			b.WriteString(rest)
-			return b.String(), true, nil
-		}
-		end := strings.IndexByte(rest[start:], '}')
-		if end < 0 {
-			return "", false, errors.New("a template has an unterminated placeholder")
-		}
-		b.WriteString(rest[:start])
-		inner := rest[start+2 : start+end]
-		rest = rest[start+end+1:]
-		parts := strings.SplitN(inner, ":", 3)
-		var read string
+	for _, part := range parts {
+		read := part.Text
+		on = true
 		switch {
-		case len(parts) == 3 && parts[0] == "dep":
-			read, on, err = r.dependency(ctx, parts[1], parts[2])
-		case len(parts) == 3 && parts[0] == "component":
-			read, err = r.component(ctx, recipes.Ref{Component: parts[1], Field: parts[2]})
-			on = true
-		case len(parts) == 2 && parts[0] == "secret":
-			read, err = r.secret(ctx, parts[1])
-			on = true
-		default:
-			return "", false, fmt.Errorf("a template's placeholder %q isn't one this Loomplane knows", "${"+inner+"}")
+		case part.Ref != nil && part.Ref.Dependency != "":
+			read, on, err = r.dependency(ctx, part.Ref.Dependency, part.Ref.Field)
+		case part.Ref != nil:
+			read, err = r.component(ctx, *part.Ref)
+		case part.Placeholder:
+			read, err = r.secret(ctx, part.Secret)
 		}
 		if err != nil || !on {
 			return "", on, err
 		}
 		b.WriteString(read)
 	}
+	return b.String(), true, nil
 }
 
-// placeholderNames are the names a template's ${<form>:<name>...}
-// placeholders read: the dependencies of form "dep", the secrets of form
-// "secret".
-func placeholderNames(template, form string) []string {
+// templateDependencies are the dependencies a template's placeholders
+// read.
+func templateDependencies(template string) []string {
+	parts, _ := recipes.ParseTemplate(template)
 	var names []string
-	prefix := "${" + form + ":"
-	for rest := template; ; {
-		start := strings.Index(rest, prefix)
-		if start < 0 {
-			return names
+	for _, part := range parts {
+		if part.Ref != nil && part.Ref.Dependency != "" {
+			names = append(names, part.Ref.Dependency)
 		}
-		rest = rest[start+len(prefix):]
-		inner, _, _ := strings.Cut(rest, "}")
-		name, _, _ := strings.Cut(inner, ":")
-		names = append(names, name)
 	}
+	return names
+}
+
+// templateSecrets are the generated secrets a template's placeholders
+// read.
+func templateSecrets(template string) []string {
+	parts, _ := recipes.ParseTemplate(template)
+	var names []string
+	for _, part := range parts {
+		if part.Placeholder && part.Ref == nil {
+			names = append(names, part.Secret)
+		}
+	}
+	return names
 }
 
 // cutPrefix cuts the first of prefixes s starts with.
@@ -1070,7 +1068,7 @@ func hadSecret(job *Job, name string) bool {
 		return true
 	}
 	return slices.ContainsFunc(was.Component.Component.Env, func(v recipes.EnvVar) bool {
-		return v.Secret == name || slices.Contains(placeholderNames(v.Template, "secret"), name)
+		return v.Secret == name || slices.Contains(templateSecrets(v.Template), name)
 	})
 }
 
@@ -1240,9 +1238,15 @@ func (e *OwnedTarget) applyComposition(ctx context.Context, job *Job) (*Outcome,
 
 // removeComposition forgets a composed resource once its components are
 // gone: its kind's hooks first, then its outputs and generated secrets.
+// Removing what it was before it moved forgets nothing (see forgetsKept).
 func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planning.Binding, c *planning.CompositionConfig) error {
 	if job.Deployment == nil || job.Deployment.OrgID != b.OrgID {
 		return ctrlplane.ErrForbidden
+	}
+	if !forgetsKept(job) {
+		// It runs nothing, and the composed resource it moved from lives
+		// on as its replacement, under the same name.
+		return nil
 	}
 	if e.Secrets == nil {
 		return ErrNoCredential
@@ -1263,6 +1267,14 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 		}
 	}
 	return nil
+}
+
+// forgetsKept reports whether removing what a job's action names forgets
+// what's kept under its name: only a delete of the action does. Removing
+// what it ran as before it moved, during a replace or a delete, leaves
+// what's kept to the replacement, or to the delete of what's bound.
+func forgetsKept(job *Job) bool {
+	return job.Action.Op == planning.Delete && !job.replacing
 }
 
 // forgetPublished forgets what a dependency-only kind's component

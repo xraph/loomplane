@@ -687,33 +687,19 @@ func validateRule(f *findings, what string, rule KubernetesRule) {
 }
 
 // templateReads parses a template's ${...} placeholders into the refs and
-// secrets they read. Text outside a placeholder is literal. problems
-// describes each placeholder that isn't one of the three forms.
+// secrets they read. problems describes each placeholder that isn't one of
+// the three forms.
 func templateReads(template string) (refs []*Ref, secrets, problems []string) {
-	rest := template
-	for {
-		start := strings.Index(rest, "${")
-		if start < 0 {
-			return refs, secrets, problems
-		}
-		end := strings.IndexByte(rest[start:], '}')
-		if end < 0 {
-			return refs, secrets, append(problems, fmt.Sprintf("has an unterminated placeholder %q", rest[start:]))
-		}
-		inner := rest[start+2 : start+end]
-		rest = rest[start+end+1:]
-		parts := strings.SplitN(inner, ":", 3)
+	parts, problems := ParseTemplate(template)
+	for _, part := range parts {
 		switch {
-		case len(parts) == 3 && parts[0] == "dep":
-			refs = append(refs, &Ref{Dependency: parts[1], Field: parts[2]})
-		case len(parts) == 3 && parts[0] == "component":
-			refs = append(refs, &Ref{Component: parts[1], Field: parts[2]})
-		case len(parts) == 2 && parts[0] == "secret":
-			secrets = append(secrets, parts[1])
-		default:
-			problems = append(problems, fmt.Sprintf("placeholder %q is not ${dep:<dependency>:<field>}, ${secret:<name>} or ${component:<name>:<field>}", "${"+inner+"}"))
+		case part.Ref != nil:
+			refs = append(refs, part.Ref)
+		case part.Placeholder:
+			secrets = append(secrets, part.Secret)
 		}
 	}
+	return refs, secrets, problems
 }
 
 // validateReads checks what an env var or output reads, through from and
