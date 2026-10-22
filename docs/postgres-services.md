@@ -408,6 +408,8 @@ Phase 1 speaks Postgres to clients over WebSocket and HTTP only. There is no TCP
 
 Anything else that opens a TCP connection, a migration step for example, should read `DATABASE_URL_DIRECT`. Prisma's `directUrl` is the usual place for it. That's the database's own address, so it works only from somewhere that can reach the database itself: a DigitalOcean database is public, but RDS is private to its VPC, and a Vercel build can't get into it. If your migrations run from Vercel against RDS, run them from a machine inside the VPC instead.
 
+Putting a database behind the gateway makes it reachable from the internet. The gateway's endpoint is public, so anyone who has a database's host name and its user and password can connect through it. That includes RDS, which is otherwise private to its VPC: once it's behind a gateway on ECS, its password is all that stands between it and the internet. Phase 1 doesn't rate-limit failed logins either, so nothing slows down someone guessing. Keep the database passwords long and random, and leave a database off the gateway if nothing outside its network needs it.
+
 `currval()` and `lastval()` don't work across transactions. The sequence value belongs to a connection, and your next transaction may run on another one. Get the value in the same statement with `INSERT ... RETURNING id`. PgBouncer in transaction mode has the same limit.
 
 `LISTEN` and `NOTIFY` go through a listener shared by every session on the route. If that listener loses its connection and redials, or a `LISTEN` is refused on the way back, notifications sent in the gap can be dropped. Postgres doesn't keep notifications for absent listeners anyway, so don't rely on a notification as your only signal. Read the table again after a reconnect.
