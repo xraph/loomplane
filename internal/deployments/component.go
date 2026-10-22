@@ -341,7 +341,10 @@ func (e *OwnedTarget) runComponentJob(ctx context.Context, job *Job, kind recipe
 	}
 	if result.ExitCode != 0 {
 		// The target redacted the output; this catches anything it missed.
-		return nil, fmt.Errorf("%s exited with code %d: %s", component.Name, result.ExitCode, owned.JobOutput([]byte(result.Output), values))
+		if output := owned.JobOutput([]byte(result.Output), values); output != "" {
+			return nil, fmt.Errorf("%s exited with code %d: %s", component.Name, result.ExitCode, output)
+		}
+		return nil, fmt.Errorf("%s exited with code %d", component.Name, result.ExitCode)
 	}
 	if saveErr := save(jobSucceeded); saveErr != nil {
 		return nil, saveErr

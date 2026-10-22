@@ -28,6 +28,9 @@ const labelJob = "loomplane.job"
 // jobName is a job's name: "lp-job-" and twelve hex digits.
 var jobName = regexp.MustCompile(`^lp-job-[0-9a-f]{12}$`)
 
+// jobGrace is how long after a job's timeout the cluster stops it.
+const jobGrace = 30 * time.Second
+
 // jobTTL is how long the cluster keeps a finished Job that Loomplane
 // couldn't delete, in seconds.
 const jobTTL = 3600
@@ -170,7 +173,10 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 	template.Labels = maps.Clone(identity)
 	template.Spec.RestartPolicy = corev1.RestartPolicyNever
 	backoff, ttl := int32(0), int32(jobTTL)
-	deadline := int64(math.Ceil(timeout.Seconds()))
+	// Loomplane stops waiting at timeout and reads the pod's log while
+	// it's still there; the cluster's deadline, a little later, stops the
+	// pod even if Loomplane can't.
+	deadline := int64(math.Ceil((timeout + jobGrace).Seconds()))
 	job := &batchv1.Job{ObjectMeta: meta(name), Spec: batchv1.JobSpec{BackoffLimit: &backoff, ActiveDeadlineSeconds: &deadline, TTLSecondsAfterFinished: &ttl, Template: *template}}
 	if created, err = jobs.Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		created = nil
@@ -221,10 +227,10 @@ func succeeded(job *batchv1.Job) bool {
 }
 
 // waitJob polls a Job each second until it succeeds or fails. late is a
-// Job the cluster stopped at its deadline, or still running well past it.
-// A failed read is tried again until then.
+// Job still running at timeout, or one the cluster stopped at its
+// deadline. A failed read is tried again until timeout.
 func (r *Runtime) waitJob(ctx context.Context, c *Client, created *batchv1.Job, component string, timeout time.Duration) (job *batchv1.Job, late bool, err error) {
-	deadline := time.Now().Add(timeout + time.Minute)
+	deadline := time.Now().Add(timeout)
 	for {
 		job, err = c.Kube.BatchV1().Jobs(created.Namespace).Get(ctx, created.Name, metav1.GetOptions{})
 		switch {
@@ -252,7 +258,7 @@ func (r *Runtime) waitJob(ctx context.Context, c *Client, created *batchv1.Job, 
 		select {
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
-		case <-time.After(time.Second):
+		case <-time.After(min(time.Second, max(time.Until(deadline), time.Millisecond))):
 		}
 	}
 }

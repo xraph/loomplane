@@ -85,3 +85,52 @@ func TestJobOutputHidesAMultiLineSecretTheLineTailCuts(t *testing.T) {
 		t.Fatalf("whole key: %q", output)
 	}
 }
+
+func TestJobOutputDropsTheFirstLineOfATailedStream(t *testing.T) {
+	// A daemon's tail counts log entries, and a long line is several, so
+	// what it returns can start inside a secret even when JobTail cut
+	// nothing.
+	secret := strings.Repeat("Qx4", 24)
+	secrets := map[string]string{"TOKEN": secret}
+	tail := NewJobTail(secrets)
+	_, _ = tail.Write([]byte(secret[4:] + "\n"))
+	_, _ = tail.Write([]byte("ok\nok\n"))
+	if output := tail.Output(secrets); output != "ok\nok\n" {
+		t.Fatalf("output: %q", output)
+	}
+	if piece := leaks(tail.Output(secrets), secrets); piece != "" {
+		t.Fatalf("output shows %q of the secret", piece)
+	}
+}
+
+func TestJobTailKeepsEachStreamsLinesWhole(t *testing.T) {
+	secret := "pw-" + strings.Repeat("T8", 12)
+	secrets := map[string]string{"PASSWORD": secret}
+	tail := NewJobTail(secrets)
+	// Each stream's first line can start anywhere, so it's dropped.
+	tail.WriteStream(1, []byte(secret[6:]+"\n"))
+	tail.WriteStream(2, []byte("tail of an earlier warning\n"))
+	// A secret written to stdout in two frames, with stderr between them,
+	// is still found whole.
+	tail.WriteStream(1, []byte("login "+secret[:9]))
+	tail.WriteStream(2, []byte("warning: slow\n"))
+	tail.WriteStream(1, []byte(secret[9:]+"\n"))
+	// A line too long to keep isn't shown, rather than shown from its
+	// middle.
+	tail.WriteStream(2, []byte(strings.Repeat("a", tail.keep+1)))
+	tail.WriteStream(2, []byte(secret+"\nlast\n"))
+	// The end of a stream with no line break is still the end of a line.
+	tail.WriteStream(1, []byte("exiting"))
+	want := "warning: slow\nlogin [redacted]\n[a line too long to show]\nlast\nexiting"
+	if output := tail.Output(secrets); output != want {
+		t.Fatalf("output: %q", output)
+	}
+}
+
+func TestJobOutputRedactsAcrossInvalidBytes(t *testing.T) {
+	secrets := map[string]string{"PASSWORD": "pw-" + strings.Repeat("V3", 10)}
+	output := JobOutput([]byte("login pw-V3V3V3\xffV3V3V3V3V3V3V3\n"), secrets)
+	if output != "login [redacted]\n" {
+		t.Fatalf("output: %q", output)
+	}
+}

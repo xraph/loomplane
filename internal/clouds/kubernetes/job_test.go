@@ -65,7 +65,9 @@ func newJobCluster(t *testing.T, exitCode int32, finish func(*batchv1.Job)) (*jo
 		if action.GetSubresource() != "log" {
 			return false, nil, nil
 		}
-		return true, &kuberuntime.Unknown{Raw: []byte("connecting with s3cret-Generated-value\nmigration 0003 finished\n")}, nil
+		// TailLines counts log entries, and a long line is several, so the
+		// log can start inside a secret.
+		return true, &kuberuntime.Unknown{Raw: []byte("Generated-value\nconnecting with s3cret-Generated-value\nmigration 0003 finished\n")}, nil
 	})
 	client := &Client{Config: &Config{Namespace: "selected", Details: map[string]string{"jobs": "ready"}}, Kube: cluster.kube}
 	runtime := &Runtime{Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }, Values: func(context.Context, map[string]string) (owned.RuntimeValues, error) {
@@ -135,7 +137,7 @@ func TestKubernetesRunJobCompletes(t *testing.T) {
 		t.Fatalf("job: %+v", job)
 	}
 	s := job.Spec
-	if s.BackoffLimit == nil || *s.BackoffLimit != 0 || s.ActiveDeadlineSeconds == nil || *s.ActiveDeadlineSeconds != 600 || s.TTLSecondsAfterFinished == nil || *s.TTLSecondsAfterFinished != 3600 {
+	if s.BackoffLimit == nil || *s.BackoffLimit != 0 || s.ActiveDeadlineSeconds == nil || *s.ActiveDeadlineSeconds != 630 || s.TTLSecondsAfterFinished == nil || *s.TTLSecondsAfterFinished != 3600 {
 		t.Fatalf("job limits: %+v", s)
 	}
 	pod := s.Template.Spec
@@ -196,6 +198,19 @@ func TestKubernetesRunJobDeletesFailedJob(t *testing.T) {
 	})
 	if _, err = runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 10*time.Minute); err == nil || err.Error() != "migrate did not finish within 10m0s: connecting with [redacted]\nmigration 0003 finished\n" {
 		t.Fatalf("deadline: %v", err)
+	}
+	if !cluster.deletedInBackground() || !cluster.secretRemoved(t) {
+		t.Fatal("a job that ran out of time was left behind")
+	}
+
+	// Loomplane stops waiting at timeout, before the cluster's deadline
+	// deletes the pod, so the error still shows what it wrote.
+	cluster, runtime = newJobCluster(t, 0, func(*batchv1.Job) {})
+	if _, err = runtime.RunJob(t.Context(), jobFixtureName, spec, labels, 50*time.Millisecond); err == nil || err.Error() != "migrate did not finish within 50ms: connecting with [redacted]\nmigration 0003 finished\n" {
+		t.Fatalf("local timeout: %v", err)
+	}
+	if deadline := cluster.created.Spec.ActiveDeadlineSeconds; deadline == nil || *deadline != 31 {
+		t.Fatalf("the cluster's deadline isn't 30 s after the timeout: %v", deadline)
 	}
 	if !cluster.deletedInBackground() || !cluster.secretRemoved(t) {
 		t.Fatal("a job that ran out of time was left behind")
