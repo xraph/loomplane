@@ -133,8 +133,11 @@ func (s *Service) Create(ctx context.Context, p security.Principal, project stri
 		return nil, ErrNotFound
 	}
 	var cfg planning.ResourceConfig
-	if json.Unmarshal(source.Config, &cfg) != nil || !supportsRecovery(&cfg) {
+	if json.Unmarshal(source.Config, &cfg) != nil {
 		return nil, fmt.Errorf("%w: the resource has no supported database backup adapter", ErrInvalid)
+	}
+	if refused := refuseRecovery(source.Name, &cfg); refused != nil {
+		return nil, refused
 	}
 	key, err := typeid.Generate("backup")
 	if err != nil {

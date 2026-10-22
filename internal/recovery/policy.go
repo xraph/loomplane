@@ -70,15 +70,21 @@ func (s *Service) SetPolicy(ctx context.Context, p security.Principal, project s
 		return nil, err
 	}
 	found := false
+	var refused error
 	for _, b := range bindings {
 		if b.ProjectID == project && b.Subject == planning.ResourceSubject && b.Name == in.Resource {
 			var cfg planning.ResourceConfig
-			if json.Unmarshal(b.Config, &cfg) == nil && supportsRecovery(&cfg) {
-				found = true
+			if json.Unmarshal(b.Config, &cfg) == nil {
+				if refused = refuseRecovery(b.Name, &cfg); refused == nil {
+					found = true
+				}
 			}
 		}
 	}
 	if !found {
+		if refused != nil {
+			return nil, refused
+		}
 		return nil, ErrInvalid
 	}
 	key, err := typeid.Generate("policy")
