@@ -1,11 +1,15 @@
 package planning
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/recipes"
 )
 
@@ -76,4 +80,65 @@ func (e *Extension) deleteCatalogEndpoint(c forge.Context) error {
 		return fail(err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (e *Extension) checkCatalogEndpoint(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in catalogconnect.CheckInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"engine": "postgres", "dsn": "postgres://...", "target": "...", "kind": "...", "dependency": "..."}`)
+	}
+	ctx := c.Request().Context()
+	if err = e.endpoints.AuthorizeCheck(ctx, p); err != nil {
+		return fail(err)
+	}
+	kinds := e.catalogKinds
+	if kinds == nil {
+		kinds = recipes.Default()
+	}
+	kind, ok := kinds.Kind(in.Kind)
+	if !ok {
+		return fail(fmt.Errorf("%w: Loomplane has no catalog kind %q", catalogconnect.ErrInvalid, in.Kind))
+	}
+	i := slices.IndexFunc(kind.Dependencies, func(d recipes.Dependency) bool { return d.Name == in.Dependency })
+	if i < 0 {
+		return fail(fmt.Errorf("%w: %s has no %q dependency", catalogconnect.ErrInvalid, kind.Title, in.Dependency))
+	}
+	dep := kind.Dependencies[i]
+	if dep.External == nil {
+		return fail(fmt.Errorf("%w: %s can't connect %s to an external endpoint", catalogconnect.ErrInvalid, kind.Title, dep.Title))
+	}
+	req := *dep.External
+	if in.Target == "" {
+		return fail(fmt.Errorf("%w: name the target connection the endpoint is checked from", catalogconnect.ErrInvalid))
+	}
+	if in.Engine != "" && in.Engine != req.Engine {
+		return c.JSON(http.StatusOK, catalogconnect.CheckResult{Problems: []string{
+			fmt.Sprintf("this is a %s endpoint, and %s's %s dependency needs %s", catalogconnect.EngineTitle(in.Engine), kind.Title, dep.Name, catalogconnect.EngineTitle(req.Engine)),
+		}})
+	}
+	dial, closer, err := e.endpointDialer.TargetDial(ctx, p.OrgID, in.Target)
+	if errors.Is(err, connections.ErrNotFound) {
+		return fail(err)
+	}
+	if err != nil {
+		return c.JSON(http.StatusOK, catalogconnect.CheckResult{Problems: []string{"the target connection failed: " + err.Error()}})
+	}
+	if closer != nil {
+		defer func() { _ = closer.Close() }() // a check only reads
+	}
+	report, err := e.endpointChecks.CheckDSN(catalogconnect.WithConsumer(ctx, catalogconnect.ConsumerOf(kind, dep.Name)), in.DSN, req, dial)
+	if err != nil {
+		return fail(err)
+	}
+	result := report.Result()
+	// A cluster has nothing inside it to dial from, so its check runs from
+	// Loomplane, as a plan's does.
+	if cloud, cerr := e.endpointDialer.TargetCloud(ctx, p.OrgID, in.Target); cerr == nil && cloud == connections.Kubernetes {
+		result.Notes = append(result.Notes, "Checked from Loomplane, not from inside the cluster.")
+	}
+	return c.JSON(http.StatusOK, result)
 }

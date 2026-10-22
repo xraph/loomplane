@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,7 +45,9 @@ type Checker struct {
 
 var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis"}
 
-func engineTitle(engine string) string {
+// EngineTitle names an engine the way checks word it: "PostgreSQL",
+// "Redis".
+func EngineTitle(engine string) string {
 	if t, ok := engineTitles[engine]; ok {
 		return t
 	}
@@ -60,7 +63,8 @@ func (c *Checker) Endpoint(ctx context.Context, orgID, id string) (*Endpoint, er
 // Check probes an endpoint through dial. An endpoint that can't be reached
 // or refuses the check is a Report problem naming its host and port, never
 // an error; errors are an endpoint that isn't there (ErrNotFound) or a
-// check that can't start.
+// check that can't start. A problem that names the kind the endpoint is
+// for takes it from the context's Consumer.
 func (c *Checker) Check(ctx context.Context, orgID, endpointID string, req recipes.Requirement, dial DialFunc) (*Report, error) {
 	if dial == nil {
 		return nil, errors.New("check an endpoint: no dialer")
@@ -70,17 +74,171 @@ func (c *Checker) Check(ctx context.Context, orgID, endpointID string, req recip
 		return nil, err
 	}
 	if req.Engine != "" && req.Engine != e.Engine {
-		return &Report{Problems: []string{fmt.Sprintf("%s is a %s endpoint, and this needs %s", e.Name, engineTitle(e.Engine), engineTitle(req.Engine))}}, nil
+		return &Report{Problems: []string{fmt.Sprintf("%s is a %s endpoint, and this needs %s", e.Name, EngineTitle(e.Engine), EngineTitle(req.Engine))}}, nil
 	}
+	return c.probe(ctx, e, dsn, req, dial)
+}
+
+// CheckDSN checks a DSN that isn't stored, such as one about to be: it
+// reads the DSN as an endpoint of req's engine and probes it through dial,
+// touching neither the store nor Vault. A DSN that can't be read is
+// ErrInvalid. The report and errors never hold the DSN.
+func (c *Checker) CheckDSN(ctx context.Context, dsn string, req recipes.Requirement, dial DialFunc) (*Report, error) {
+	if dial == nil {
+		return nil, errors.New("check a DSN: no dialer")
+	}
+	if req.Engine != EnginePostgres && req.Engine != EngineRedis {
+		return nil, fmt.Errorf("%w: Loomplane checks postgres and redis endpoints, not %q", ErrInvalid, req.Engine)
+	}
+	dsn = strings.TrimSpace(dsn)
+	e := &Endpoint{Engine: req.Engine}
+	if err := parseDSN(e, dsn); err != nil {
+		return nil, err
+	}
+	return c.probe(ctx, e, dsn, req, dial)
+}
+
+// probe runs the engine's prober, then the rules that read the endpoint
+// itself rather than the server.
+func (c *Checker) probe(ctx context.Context, e *Endpoint, dsn string, req recipes.Requirement, dial DialFunc) (*Report, error) {
 	prober, ok := c.Probers[e.Engine]
 	if !ok {
 		return nil, fmt.Errorf("check an endpoint: Loomplane has no prober for %s", e.Engine)
 	}
 	report, err := prober.Probe(ctx, dial, dsn, req)
 	if err != nil {
-		return &Report{Problems: []string{problem(e.address(), dsn, err)}}, nil
+		report = &Report{Problems: []string{problem(e.address(), dsn, err)}}
+	}
+	if p := tlsProblem(ctx, e, req); p != "" {
+		report.Problems = append(report.Problems, p)
+	}
+	for i, p := range report.Problems {
+		report.Problems[i] = redact(p, dsn)
 	}
 	return report, nil
+}
+
+// tlsProblem is why the kind can't use the endpoint's TLS mode, or "".
+func tlsProblem(ctx context.Context, e *Endpoint, req recipes.Requirement) string {
+	if len(req.TLS) == 0 || slices.Contains(req.TLS, e.TLS) {
+		return ""
+	}
+	who := ConsumerFrom(ctx).title()
+	if e.TLS != TLSDisable && !slices.Contains(req.TLS, TLSRequire) && !slices.Contains(req.TLS, TLSVerifyFull) {
+		return fmt.Sprintf("%s can't reach %s over TLS yet", who, EngineTitle(e.Engine))
+	}
+	return fmt.Sprintf("%s reaches %s with TLS %s, and this endpoint uses %s", who, EngineTitle(e.Engine), strings.Join(req.TLS, " or "), e.TLS)
+}
+
+// Consumer is the catalog kind an endpoint is checked for, so a problem
+// can say who needs what.
+type Consumer struct {
+	Title string // "Fabriq"
+	// Role is the role the kind creates on the endpoint, "fabriq_app", or
+	// "" when its recipe doesn't name one.
+	Role string
+}
+
+// title is how a problem names the consumer.
+func (c Consumer) title() string {
+	if c.Title == "" {
+		return "This service"
+	}
+	return c.Title
+}
+
+// ConsumerOf is the consumer a kind's dependency is checked for. The role
+// is the user in the kind's own connection template for the dependency,
+// fabriq_app in
+// "postgres://fabriq_app:${secret:app-password}@${dep:postgres:hostport}/...".
+func ConsumerOf(kind recipes.Kind, dependency string) Consumer {
+	c := Consumer{Title: kind.Title}
+	if c.Title == "" {
+		c.Title = kind.Name
+	}
+	var templates []string
+	for _, component := range kind.Components {
+		for _, env := range component.Env {
+			templates = append(templates, env.Template)
+		}
+	}
+	for _, out := range kind.Outputs {
+		templates = append(templates, out.Template)
+	}
+	for _, t := range templates {
+		if role := templateUser(t, dependency); role != "" {
+			c.Role = role
+			break
+		}
+	}
+	return c
+}
+
+// templateUser is the literal user of a URL template whose host is the
+// dependency's, or "".
+func templateUser(template, dependency string) string {
+	_, rest, ok := strings.Cut(template, "://")
+	if !ok {
+		return ""
+	}
+	userinfo, host, ok := strings.Cut(rest, "@")
+	if !ok || strings.Contains(userinfo, "/") || !strings.HasPrefix(host, "${dep:"+dependency+":") {
+		return ""
+	}
+	user, _, _ := strings.Cut(userinfo, ":")
+	if user == "" || strings.ContainsAny(user, "${}") {
+		return ""
+	}
+	return user
+}
+
+type consumerKey struct{}
+
+// WithConsumer returns a context whose checks are for c.
+func WithConsumer(ctx context.Context, c Consumer) context.Context {
+	return context.WithValue(ctx, consumerKey{}, c)
+}
+
+// ConsumerFrom is the consumer WithConsumer set, or the zero Consumer.
+func ConsumerFrom(ctx context.Context) Consumer {
+	if c, ok := ctx.Value(consumerKey{}).(Consumer); ok {
+		return c
+	}
+	return Consumer{}
+}
+
+// CheckInput is a DSN to check before it's stored: the endpoint, the
+// target it's reached from, and the kind and dependency that would use it.
+type CheckInput struct {
+	Engine string `json:"engine"` // "postgres" or "redis"
+	// DSN is checked and dropped. It's never stored or returned.
+	DSN        string `json:"dsn"`
+	Target     string `json:"target"` // the connection the check dials from
+	Kind       string `json:"kind"`
+	Dependency string `json:"dependency"`
+}
+
+// CheckResult is what checking a DSN found. OK is true when nothing is
+// missing and there are no problems.
+type CheckResult struct {
+	OK       bool     `json:"ok"`
+	Version  string   `json:"version,omitempty"`
+	Missing  []string `json:"missing,omitempty"`
+	Problems []string `json:"problems,omitempty"`
+	// Notes are caveats that don't fail the check, such as a cluster's
+	// check running from Loomplane.
+	Notes []string `json:"notes,omitempty"`
+}
+
+// Result is the report as a CheckResult. A report that found no version
+// and nothing wrong never reached a usable endpoint, so it fails.
+func (r *Report) Result() CheckResult {
+	out := CheckResult{Version: r.Version, Missing: slices.Clone(r.Missing), Problems: slices.Clone(r.Problems)}
+	if r.Version == "" && len(r.Problems) == 0 && len(r.Missing) == 0 {
+		out.Problems = []string{"the endpoint didn't say which version it runs"}
+	}
+	out.OK = len(out.Missing) == 0 && len(out.Problems) == 0
+	return out
 }
 
 // probeError is a probe that didn't finish. Its message is safe to show:
@@ -192,8 +350,8 @@ func checkVersion(r *Report, engine string, req recipes.Requirement) {
 	old, err := olderThan(r.Version, req.MinVersion)
 	switch {
 	case err != nil:
-		r.Problems = append(r.Problems, fmt.Sprintf("%s reports version %q, which can't be compared with %s", engineTitle(engine), r.Version, req.MinVersion))
+		r.Problems = append(r.Problems, fmt.Sprintf("%s reports version %q, which can't be compared with %s", EngineTitle(engine), r.Version, req.MinVersion))
 	case old:
-		r.Problems = append(r.Problems, fmt.Sprintf("%s %s is older than %s", engineTitle(engine), r.Version, req.MinVersion))
+		r.Problems = append(r.Problems, fmt.Sprintf("%s %s is older than %s", EngineTitle(engine), r.Version, req.MinVersion))
 	}
 }

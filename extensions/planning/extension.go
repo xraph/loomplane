@@ -64,6 +64,7 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recovery"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
@@ -92,6 +93,9 @@ type Extension struct {
 	restoreTargets      func(context.Context) error
 	cloudProfiles       *cloudprofiles.Service
 	endpoints           *catalogconnect.Service
+	endpointChecks      *catalogconnect.Checker
+	endpointDialer      endpointDialer
+	catalogKinds        *recipes.Registry // nil is recipes.Default()
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
 	cloudRecoveryDone   chan struct{}
@@ -263,6 +267,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	checker := &catalogconnect.Checker{Endpoints: e.endpoints, Probers: map[string]catalogconnect.Prober{
 		catalogconnect.EnginePostgres: catalogconnect.PostgresProber{}, catalogconnect.EngineRedis: catalogconnect.RedisProber{},
 	}}
+	e.endpointChecks = checker
 	// catalogHooks are what composed catalog kinds do beyond their
 	// recipes, by kind. A kind registers its own here.
 	catalogHooks := map[string]deployments.CatalogHooks{}
@@ -273,6 +278,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
+	dialer := ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}}
+	e.endpointDialer = dialer
 	// A kind's own API reaches its running components and generated
 	// secrets through CatalogAccess, which it resolves from the container.
 	catalogAccess := deployments.NewCatalogAccess(deployments.CatalogAccessDeps{Authz: authz, Bindings: planStore.ListBindings, Executors: executors, Secrets: resourceSecrets})
@@ -286,7 +293,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
 		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 		Endpoints: checker,
-		Dialer:    ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}},
+		Dialer:    dialer,
 	})
 	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Credentials: clouds}, auditor); err != nil {
 		return err
@@ -400,6 +407,25 @@ func (e *Extension) Stop(ctx context.Context) error {
 type ownedDialer struct {
 	credentials deployments.Credentials
 	targets     map[string]*deployments.OwnedTarget
+}
+
+// endpointDialer dials from a target for an endpoint check, and says
+// which cloud the target is.
+type endpointDialer interface {
+	planning.TargetDialer
+	TargetCloud(ctx context.Context, orgID, connectionID string) (string, error)
+}
+
+var _ endpointDialer = ownedDialer{}
+
+// TargetCloud is the cloud of a target connection: "server" or
+// "kubernetes".
+func (d ownedDialer) TargetCloud(ctx context.Context, orgID, connectionID string) (string, error) {
+	c, _, err := d.credentials.Credential(ctx, orgID, connectionID)
+	if err != nil {
+		return "", err
+	}
+	return c.Cloud, nil
 }
 
 func (d ownedDialer) TargetDial(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error) {

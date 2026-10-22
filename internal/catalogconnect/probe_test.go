@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/xraph/loomplane/internal/recipes"
 )
@@ -34,6 +35,13 @@ type fakePg struct {
 	available []string
 	asked     []string
 	closed    bool
+	// preload is SHOW shared_preload_libraries; preloadErr refuses it.
+	preload    string
+	preloadErr error
+	// super and createRole are the connection role's rolsuper and
+	// rolcreaterole.
+	super, createRole bool
+	queried           []string
 }
 
 func (f *fakePg) ServerVersion(context.Context) (string, error) { return f.version, nil }
@@ -47,6 +55,16 @@ func (f *fakePg) AvailableExtensions(_ context.Context, names []string) ([]strin
 		}
 	}
 	return out, nil
+}
+
+func (f *fakePg) PreloadLibraries(context.Context) (string, error) {
+	f.queried = append(f.queried, "preload")
+	return f.preload, f.preloadErr
+}
+
+func (f *fakePg) RoleRights(context.Context) (bool, bool, error) {
+	f.queried = append(f.queried, "role")
+	return f.super, f.createRole, nil
 }
 
 func (f *fakePg) Close(context.Context) error {
@@ -358,5 +376,243 @@ func TestCheckerLooksUpEndpointsWithoutTheDSN(t *testing.T) {
 	}
 	if _, err = checker.Endpoint(t.Context(), "other-org", pg.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another organization's endpoint: %v", err)
+	}
+}
+
+// fabriqLike is a kind that connects Postgres as its own role, the way
+// Fabriq's server DSN does.
+func fabriqLike() recipes.Kind {
+	return recipes.Kind{Name: "fabriq", Title: "Fabriq", Components: []recipes.Component{{
+		Name: "server",
+		Env: []recipes.EnvVar{
+			{Name: "FABRIQ_HTTP_ADDR", Value: ":8081"},
+			{Name: "FABRIQ_POSTGRES_DSN", Template: "postgres://fabriq_app:${secret:app-password}@${dep:postgres:hostport}/${dep:postgres:database}?${dep:postgres:query}"},
+		},
+	}}}
+}
+
+func TestPostgresProberChecksPreloadAndRole(t *testing.T) {
+	ctx := WithConsumer(t.Context(), ConsumerOf(fabriqLike(), "postgres"))
+	req := recipes.Requirement{Engine: "postgres", MinVersion: "16", Preload: []string{"timescaledb"}, CreateRole: true}
+	probe := func(pg *fakePg, req recipes.Requirement) *Report {
+		t.Helper()
+		prober := PostgresProber{connect: func(context.Context, *pgx.ConnConfig) (pgConn, error) { return pg, nil }}
+		got, err := prober.Probe(ctx, refuse, testDSN, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	got := probe(&fakePg{version: "16.4", preload: "pg_stat_statements"}, req)
+	want := []string{"timescaledb isn't in shared_preload_libraries", "the connection's role can't create roles, and Fabriq creates fabriq_app"}
+	if got.Version != "16.4" || !slices.Equal(got.Problems, want) || len(got.Missing) != 0 {
+		t.Fatalf("report: %+v", *got)
+	}
+
+	// The setting is a list, quoted or not, and either right lets the
+	// role create roles.
+	for _, pg := range []*fakePg{
+		{version: "16.4", preload: `pg_stat_statements, "timescaledb"`, super: true},
+		{version: "16.4", preload: "timescaledb", createRole: true},
+	} {
+		if got = probe(pg, req); len(got.Problems) != 0 {
+			t.Fatalf("%q: %+v", pg.preload, *got)
+		}
+	}
+
+	// A role that can't read the setting can't show the library is there.
+	denied := &pgconn.PgError{Code: "42501", Message: `permission denied to examine "shared_preload_libraries"`}
+	got = probe(&fakePg{version: "16.4", preloadErr: denied, createRole: true}, req)
+	if !slices.Equal(got.Problems, []string{"the connection's role can't read shared_preload_libraries, so Loomplane can't tell whether timescaledb is there; grant it pg_read_all_settings"}) {
+		t.Fatalf("unreadable setting: %+v", *got)
+	}
+
+	// Without either requirement neither is asked.
+	pg := &fakePg{version: "16.4"}
+	if got = probe(pg, recipes.Requirement{Engine: "postgres"}); len(got.Problems) != 0 || len(pg.queried) != 0 {
+		t.Fatalf("asked %v: %+v", pg.queried, *got)
+	}
+
+	// A kind whose own DSN doesn't name its role is named by its title.
+	ctx = WithConsumer(t.Context(), ConsumerOf(recipes.Kind{Name: "other", Title: "Other"}, "postgres"))
+	if got = probe(&fakePg{version: "16.4"}, recipes.Requirement{Engine: "postgres", CreateRole: true}); !slices.Equal(got.Problems, []string{"the connection's role can't create roles, and Other creates a role of its own"}) {
+		t.Fatalf("no template role: %+v", *got)
+	}
+}
+
+func TestProbersRefuseDisallowedTLS(t *testing.T) {
+	ctx := WithConsumer(t.Context(), ConsumerOf(fabriqLike(), "redis"))
+	store, secrets := newMemStore(), memSecrets{}
+	svc := NewService(store, secrets, roleAuthz{})
+	checker := &Checker{Endpoints: svc, Probers: map[string]Prober{"postgres": PostgresProber{}, "redis": RedisProber{}}}
+
+	// rediss:// is stored as verify-full, so the require endpoint is
+	// written to the store directly.
+	store.rows["endpoint_tls"] = Endpoint{ID: "endpoint_tls", OrgID: "org", Name: "cache", Engine: "redis", Host: "cache.example", Port: 6379, TLS: TLSRequire}
+	secrets[DSNKey("org", "endpoint_tls")] = []byte("redis://:hunter2@cache.example")
+	dial, _, _ := fakeRedis(t, "hunter2", "7.2.5")
+	redisOnly := recipes.Requirement{Engine: "redis", MinVersion: "7", TLS: []string{TLSDisable}}
+	got, err := checker.Check(ctx, "org", "endpoint_tls", redisOnly, dial)
+	if err != nil || got.Version != "7.2.5" || !slices.Equal(got.Problems, []string{"Fabriq can't reach Redis over TLS yet"}) {
+		t.Fatalf("redis over TLS: %+v %v", got, err)
+	}
+	// A verify-full endpoint is refused the same way, and one without TLS
+	// passes.
+	got, err = checker.CheckDSN(ctx, "rediss://:hunter2@cache.example", redisOnly, refuse)
+	if err != nil || !slices.Contains(got.Problems, "Fabriq can't reach Redis over TLS yet") {
+		t.Fatalf("rediss: %+v %v", got, err)
+	}
+	got, err = checker.CheckDSN(ctx, "redis://:hunter2@cache.example", redisOnly, dial)
+	if err != nil || len(got.Problems) != 0 {
+		t.Fatalf("plain redis: %+v %v", got, err)
+	}
+
+	// Postgres reads its mode from sslmode, and an empty list allows all.
+	pg := &fakePg{version: "17.2"}
+	checker.Probers["postgres"] = PostgresProber{connect: func(context.Context, *pgx.ConnConfig) (pgConn, error) { return pg, nil }}
+	ctx = WithConsumer(t.Context(), ConsumerOf(fabriqLike(), "postgres"))
+	verified := recipes.Requirement{Engine: "postgres", TLS: []string{TLSVerifyFull}}
+	got, err = checker.CheckDSN(ctx, "postgres://u@db.example/app?sslmode=disable", verified, refuse)
+	if err != nil || !slices.Equal(got.Problems, []string{"Fabriq reaches PostgreSQL with TLS verify-full, and this endpoint uses disable"}) {
+		t.Fatalf("postgres without TLS: %+v %v", got, err)
+	}
+	for _, mode := range []string{TLSDisable, TLSRequire, TLSVerifyFull} {
+		got, err = checker.CheckDSN(ctx, "postgres://u@db.example/app?sslmode="+mode, recipes.Requirement{Engine: "postgres"}, refuse)
+		if err != nil || len(got.Problems) != 0 {
+			t.Fatalf("%s with no TLS rule: %+v %v", mode, got, err)
+		}
+	}
+}
+
+// countingStore and countingSecrets fail the test on any call.
+type countingStore struct{ t *testing.T }
+
+func (s countingStore) Create(context.Context, *Endpoint) error {
+	s.t.Error("store: Create")
+	return nil
+}
+
+func (s countingStore) Get(context.Context, string, string) (*Endpoint, error) {
+	s.t.Error("store: Get")
+	return nil, ErrNotFound
+}
+
+func (s countingStore) List(context.Context, string) ([]*Endpoint, error) {
+	s.t.Error("store: List")
+	return nil, nil
+}
+
+func (s countingStore) Delete(context.Context, string, string) error {
+	s.t.Error("store: Delete")
+	return nil
+}
+
+type countingSecrets struct{ t *testing.T }
+
+func (s countingSecrets) Put(context.Context, string, []byte) error {
+	s.t.Error("secrets: Put")
+	return nil
+}
+
+func (s countingSecrets) Get(context.Context, string) ([]byte, error) {
+	s.t.Error("secrets: Get")
+	return nil, nil
+}
+
+func (s countingSecrets) Delete(context.Context, string) error {
+	s.t.Error("secrets: Delete")
+	return nil
+}
+
+func TestCheckDSNNeverStores(t *testing.T) {
+	checker := &Checker{
+		Endpoints: NewService(countingStore{t}, countingSecrets{t}, roleAuthz{}),
+		Probers:   map[string]Prober{"postgres": PostgresProber{}, "redis": RedisProber{}},
+	}
+	const dsn = "postgres://app:hunter2-Secret@db.example:5432/app?sslmode=require"
+	leaks := func(v any) bool {
+		text := fmt.Sprintf("%+v", v)
+		return strings.Contains(text, "hunter2") || strings.Contains(text, dsn)
+	}
+
+	// An unreachable endpoint is a problem naming its address.
+	var dialed []string
+	dial := func(_ context.Context, network, address string) (net.Conn, error) {
+		dialed = append(dialed, network+" "+address)
+		return nil, errors.New("dial " + address + " for postgres://app:hunter2-Secret@db.example: connection refused")
+	}
+	got, err := checker.CheckDSN(t.Context(), dsn, recipes.Requirement{Engine: "postgres", MinVersion: "16"}, dial)
+	if err != nil || len(got.Problems) != 1 || !strings.HasPrefix(got.Problems[0], "db.example:5432 isn't reachable from the target") || leaks(got) {
+		t.Fatalf("unreachable: %+v %v", got, err)
+	}
+	if len(dialed) == 0 || dialed[0] != "tcp db.example:5432" {
+		t.Fatalf("dialed: %q", dialed)
+	}
+
+	// A refused password is the server's answer, without the password.
+	redisDial, _, _ := fakeRedis(t, "right", "7.2.5")
+	got, err = checker.CheckDSN(t.Context(), "redis://:hunter2-Secret@cache.example", recipes.Requirement{Engine: "redis"}, redisDial)
+	if err != nil || len(got.Problems) != 1 || !strings.Contains(got.Problems[0], "WRONGPASS") || leaks(got) {
+		t.Fatalf("refused: %+v %v", got, err)
+	}
+
+	// A DSN that can't be read, or isn't the engine's, is ErrInvalid and
+	// isn't repeated.
+	for _, tc := range []struct {
+		dsn    string
+		engine string
+	}{
+		{"postgres://app:hunter2-Secret@db.example/app", "postgres"},
+		{"mysql://app:hunter2-Secret@db.example/app", "postgres"},
+		{"postgres://app:hunter2-Secret@db.example/app?sslmode=require", "redis"},
+	} {
+		_, err = checker.CheckDSN(t.Context(), tc.dsn, recipes.Requirement{Engine: tc.engine}, dial)
+		if !errors.Is(err, ErrInvalid) || leaks(err) {
+			t.Fatalf("%s as %s: %v", tc.dsn, tc.engine, err)
+		}
+	}
+	if _, err = checker.CheckDSN(t.Context(), dsn, recipes.Requirement{Engine: "mysql"}, dial); !errors.Is(err, ErrInvalid) || leaks(err) {
+		t.Fatalf("mysql requirement: %v", err)
+	}
+	if _, err = checker.CheckDSN(t.Context(), dsn, recipes.Requirement{Engine: "postgres"}, nil); err == nil || leaks(err) {
+		t.Fatalf("no dialer: %v", err)
+	}
+}
+
+func TestPostgresRequireSendsTheHostName(t *testing.T) {
+	for _, tc := range []struct{ dsn, serverName string }{
+		{"postgres://u@ep-cool-name.neon.example/app?sslmode=require", "ep-cool-name.neon.example"},
+		{"postgres://u@10.0.0.5/app?sslmode=require", ""},
+		{"postgres://u@[2001:db8::5]/app?sslmode=require", ""},
+	} {
+		var cfg *pgx.ConnConfig
+		prober := PostgresProber{connect: func(_ context.Context, c *pgx.ConnConfig) (pgConn, error) {
+			cfg = c
+			return &fakePg{version: "17.2"}, nil
+		}}
+		if _, err := prober.Probe(t.Context(), refuse, tc.dsn, recipes.Requirement{}); err != nil {
+			t.Fatalf("%s: %v", tc.dsn, err)
+		}
+		if c := cfg.TLSConfig; c == nil || !c.InsecureSkipVerify || c.ServerName != tc.serverName {
+			t.Fatalf("%s: TLS config %+v", tc.dsn, c)
+		}
+	}
+}
+
+func TestReportResult(t *testing.T) {
+	for _, tc := range []struct {
+		report Report
+		want   CheckResult
+	}{
+		{Report{Version: "16.4"}, CheckResult{OK: true, Version: "16.4"}},
+		{Report{Version: "16.4", Missing: []string{"vector"}}, CheckResult{Version: "16.4", Missing: []string{"vector"}}},
+		{Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}, CheckResult{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
+		// A check that found nothing at all didn't reach a usable endpoint.
+		{Report{}, CheckResult{Problems: []string{"the endpoint didn't say which version it runs"}}},
+	} {
+		if got := tc.report.Result(); !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%+v: got %+v, want %+v", tc.report, got, tc.want)
+		}
 	}
 }

@@ -698,6 +698,7 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 	type use struct {
 		id, connection string
 		req            recipes.Requirement
+		consumer       catalogconnect.Consumer
 	}
 	uses := map[string]use{} // by endpointKey
 	for _, name := range slices.Sorted(maps.Keys(m.Resources)) {
@@ -711,7 +712,8 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 			if id == "" || dep.External == nil {
 				continue
 			}
-			uses[endpointKey(id, r.Target, *dep.External)] = use{id: id, connection: r.Target, req: *dep.External}
+			consumer := catalogconnect.ConsumerOf(kind, dep.Name)
+			uses[endpointKey(id, r.Target, *dep.External, consumer)] = use{id: id, connection: r.Target, req: *dep.External, consumer: consumer}
 		}
 	}
 	if len(uses) == 0 {
@@ -749,7 +751,7 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 				checks[key] = c
 				continue
 			}
-			report, checkErr := s.endpoints.Check(ctx, orgID, u.id, u.req, dial)
+			report, checkErr := s.endpoints.Check(catalogconnect.WithConsumer(ctx, u.consumer), orgID, u.id, u.req, dial)
 			switch {
 			case errors.Is(checkErr, catalogconnect.ErrNotFound):
 				c = EndpointCheck{ID: u.id}

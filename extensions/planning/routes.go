@@ -261,6 +261,12 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithRequestSchema(catalogconnect.CreateInput{}),
 			forge.WithResponseSchema(http.StatusCreated, "The endpoint", catalogconnect.Endpoint{}),
 		}},
+		{http.MethodPost, "/catalog/endpoints/checks", e.checkCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.check"),
+			forge.WithSummary("Check a Postgres or Redis DSN from a target against what a kind's dependency needs, before storing it; the DSN isn't stored or returned"),
+			forge.WithRequestSchema(catalogconnect.CheckInput{}),
+			forge.WithResponseSchema(http.StatusOK, "What the check found", catalogconnect.CheckResult{}),
+		}},
 		{http.MethodDelete, "/catalog/endpoints/:id", e.deleteCatalogEndpoint, []forge.RouteOption{
 			forge.WithName("catalogEndpoints.delete"),
 			forge.WithSummary("Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes"),

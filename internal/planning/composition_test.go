@@ -603,6 +603,45 @@ func firstOf(r *catalogconnect.Report) string {
 	return r.Problems[0]
 }
 
+func TestExternalCheckThatFoundNothingIsUnavailable(t *testing.T) {
+	r := externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{}}})
+	p := findCode(r.Problems, "catalog-endpoint-unavailable")
+	if r.Executable || p == nil || p.Message != "endpoint prod-pg didn't say which version it runs, so app can't use it. Plan again." {
+		t.Fatalf("an empty report passed: %+v", r.Problems)
+	}
+
+	// The stricter rules arrive as problems and block the plan.
+	r = externalPlan(t, externalApp, map[string]EndpointCheck{prodPG: {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4", Problems: []string{"timescaledb isn't in shared_preload_libraries"}}}})
+	if p = findCode(r.Problems, "catalog-endpoint-incompatible"); r.Executable || p == nil || p.Message != "endpoint prod-pg can't be used: timescaledb isn't in shared_preload_libraries" {
+		t.Fatalf("missing preload accepted: %+v", r.Problems)
+	}
+}
+
+func TestEndpointKeySeparatesWhatTheCheckDependsOn(t *testing.T) {
+	sample, other := catalogconnect.Consumer{Title: "Sample"}, catalogconnect.Consumer{Title: "Other", Role: "other_app"}
+	base := recipes.Requirement{Engine: "postgres", MinVersion: "16", Extensions: []string{"vector", "postgis"}}
+	// Keys made before the stricter rules don't change, and the consumer
+	// only counts where a problem names it.
+	if got := endpointKey(prodPG, targetA, base, sample); got != prodPG+"@"+targetA+"/postgres/16/postgis,vector" || got != endpointKey(prodPG, targetA, base, other) {
+		t.Fatalf("base key %q", got)
+	}
+	keys := map[string]bool{endpointKey(prodPG, targetA, base, sample): true}
+	for _, req := range []recipes.Requirement{
+		{Engine: "postgres", MinVersion: "16", Extensions: []string{"vector", "postgis"}, Preload: []string{"timescaledb"}},
+		{Engine: "postgres", MinVersion: "16", Extensions: []string{"vector", "postgis"}, CreateRole: true},
+		{Engine: "postgres", MinVersion: "16", Extensions: []string{"vector", "postgis"}, TLS: []string{"verify-full"}},
+	} {
+		for _, c := range []catalogconnect.Consumer{sample, other} {
+			keys[endpointKey(prodPG, targetA, req, c)] = true
+		}
+	}
+	// The base, one for the preload rule, and one per consumer for each
+	// rule whose problem names the consumer.
+	if len(keys) != 6 {
+		t.Fatalf("keys: %v", keys)
+	}
+}
+
 func TestExternalRefusedWhenDependencyTakesNone(t *testing.T) {
 	doc := "version: 1\nresources:\n  app: {kind: sample, provider: server, target: " + targetA + ", uses: {cache: {external: " + otherPG + "}}}\n"
 	r := externalPlan(t, doc, map[string]EndpointCheck{otherPG: {ID: otherPG, Found: true, Engine: "redis", Report: &catalogconnect.Report{Version: "8.2.1"}}})
@@ -619,10 +658,10 @@ func TestExternalChecksLandOnTheirTarget(t *testing.T) {
 	doc := "version: 1\nresources:\n" +
 		"  near: {kind: sample, provider: server, target: " + targetA + ", uses: {postgres: {external: " + prodPG + "}}}\n" +
 		"  far: {kind: sample, provider: server, target: " + targetB + ", uses: {postgres: {external: " + prodPG + "}}}\n"
-	req := *recipestest.Sample().Dependencies[0].External
+	req, consumer := *recipestest.Sample().Dependencies[0].External, catalogconnect.ConsumerOf(recipestest.Sample(), "postgres")
 	r := externalPlan(t, doc, map[string]EndpointCheck{
-		endpointKey(prodPG, targetA, req): {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4"}},
-		endpointKey(prodPG, targetB, req): {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
+		endpointKey(prodPG, targetA, req, consumer): {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Version: "16.4"}},
+		endpointKey(prodPG, targetB, req, consumer): {ID: prodPG, Name: "prod-pg", Found: true, Engine: "postgres", Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
 	})
 	if len(r.Problems) != 1 || r.Problems[0].Code != "catalog-endpoint-unavailable" || r.Problems[0].Name != "far" {
 		t.Fatalf("problems: %+v", r.Problems)

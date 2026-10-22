@@ -113,18 +113,23 @@ func TestRegisterAcceptsSample(t *testing.T) {
 func TestRegisterCopiesTheKind(t *testing.T) {
 	r := recipes.NewRegistry()
 	k := recipestest.Sample()
+	external := k.Dependencies[0].External
+	external.Preload, external.TLS = []string{"timescaledb"}, []string{"disable"}
 	if err := r.Register(k); err != nil {
 		t.Fatal(err)
 	}
 	k.Components[0].Name = "changed"
 	k.Releases[0].Images["api"].Digests["arm64"] = "sha256:changed"
+	external.Preload[0], external.TLS[0] = "changed", "changed"
 	got, _ := r.Kind("sample")
-	if got.Components[0].Name != "migrate" || got.Releases[0].Images["api"].Digests["arm64"] == "sha256:changed" {
+	if got.Components[0].Name != "migrate" || got.Releases[0].Images["api"].Digests["arm64"] == "sha256:changed" ||
+		got.Dependencies[0].External.Preload[0] != "timescaledb" || got.Dependencies[0].External.TLS[0] != "disable" {
 		t.Fatal("registry shares memory with the caller")
 	}
 	got.Components[1].Ports[0].Container = 1
+	got.Dependencies[0].External.Preload[0] = "changed"
 	again, _ := r.Kind("sample")
-	if again.Components[1].Ports[0].Container != 8080 {
+	if again.Components[1].Ports[0].Container != 8080 || again.Dependencies[0].External.Preload[0] != "timescaledb" {
 		t.Fatal("registry shares memory with Kind's result")
 	}
 }
@@ -188,6 +193,13 @@ func TestRegisterRejectsInvalidKinds(t *testing.T) {
 		{"unknown target", "vercel", func(k *recipes.Kind) { k.Targets = []string{"server", "vercel"} }},
 		{"file outside the allowed paths", "/proc", func(k *recipes.Kind) {
 			component(k, "api").Files = []recipes.File{{Path: "/proc/self/environ"}}
+		}},
+		{"unknown external TLS mode", `"prefer"`, func(k *recipes.Kind) { k.Dependencies[0].External.TLS = []string{"prefer"} }},
+		{"preload on a redis endpoint", "postgres", func(k *recipes.Kind) {
+			k.Dependencies[0].External = &recipes.Requirement{Engine: "redis", Preload: []string{"timescaledb"}}
+		}},
+		{"create role on a redis endpoint", "postgres", func(k *recipes.Kind) {
+			k.Dependencies[0].External = &recipes.Requirement{Engine: "redis", CreateRole: true}
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

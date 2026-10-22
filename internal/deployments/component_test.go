@@ -247,15 +247,17 @@ func (f fakeEndpoints) Resolve(_ context.Context, orgID, endpointID string) (*ca
 }
 
 type fakeChecker struct {
-	report *catalogconnect.Report
-	checks []string
-	reqs   []recipes.Requirement
-	dialed bool
+	report    *catalogconnect.Report
+	checks    []string
+	reqs      []recipes.Requirement
+	consumers []catalogconnect.Consumer
+	dialed    bool
 }
 
 func (f *fakeChecker) Check(ctx context.Context, orgID, endpointID string, req recipes.Requirement, dial catalogconnect.DialFunc) (*catalogconnect.Report, error) {
 	f.checks = append(f.checks, orgID+"/"+endpointID)
 	f.reqs = append(f.reqs, req)
+	f.consumers = append(f.consumers, catalogconnect.ConsumerFrom(ctx))
 	if _, err := dial(ctx, "tcp", "db.internal:5432"); err == nil {
 		f.dialed = true
 	}
@@ -656,6 +658,19 @@ func TestComponentRecheckFailsBeforeRuntimeChanges(t *testing.T) {
 	}
 	if dialedFrom != "org/conn" || !checker.dialed || !slices.Equal(checker.checks, []string{"org/endpoint_01k0000000000000000000000a"}) || checker.reqs[0].Engine != "postgres" || checker.reqs[0].MinVersion != "16" {
 		t.Fatalf("check: from %q, %+v", dialedFrom, checker)
+	}
+
+	if checker.consumers[0].Title != "Sample" {
+		t.Fatalf("checked for %+v", checker.consumers[0])
+	}
+
+	// A check that found nothing at all fails closed.
+	checker.report = &catalogconnect.Report{}
+	if _, err = f.target.Apply(t.Context(), f.componentJob(t, "api", external)); err == nil || !strings.Contains(err.Error(), "endpoint prod-pg didn't say which version it runs") {
+		t.Fatalf("empty report: %v", err)
+	}
+	if f.instances.creates != 0 || f.instances.updates != 0 || f.backend.applied != 0 {
+		t.Fatal("runtime changed after an empty check")
 	}
 
 	// A passing check starts the component with the DSN as a secret.

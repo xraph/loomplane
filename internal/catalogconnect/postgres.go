@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"slices"
@@ -18,8 +19,10 @@ import (
 )
 
 // PostgresProber checks a Postgres endpoint: it connects, reads the
-// server's version and looks for the required extensions among the ones
-// the server can install.
+// server's version, looks for the required extensions among the ones the
+// server can install and, when the requirement asks, for libraries in
+// shared_preload_libraries and the connection role's right to create
+// roles.
 type PostgresProber struct {
 	// connect opens the connection; nil connects with pgx. Tests stand in
 	// for a server here.
@@ -30,6 +33,10 @@ type PostgresProber struct {
 type pgConn interface {
 	ServerVersion(ctx context.Context) (string, error)
 	AvailableExtensions(ctx context.Context, names []string) ([]string, error)
+	// PreloadLibraries is SHOW shared_preload_libraries.
+	PreloadLibraries(ctx context.Context) (string, error)
+	// RoleRights are the connection role's rolsuper and rolcreaterole.
+	RoleRights(ctx context.Context) (super, createRole bool, err error)
 	Close(ctx context.Context) error
 }
 
@@ -96,7 +103,76 @@ func (p PostgresProber) Probe(ctx context.Context, dial DialFunc, dsn string, re
 			}
 		}
 	}
+	if len(req.Preload) > 0 {
+		problems, err := checkPreload(ctx, conn, req.Preload)
+		if err != nil {
+			return nil, pgFailure(ctx, err, nil)
+		}
+		report.Problems = append(report.Problems, problems...)
+	}
+	if req.CreateRole {
+		super, createRole, err := conn.RoleRights(ctx)
+		if err != nil {
+			return nil, pgFailure(ctx, err, nil)
+		}
+		if !super && !createRole {
+			report.Problems = append(report.Problems, roleProblem(ConsumerFrom(ctx)))
+		}
+	}
 	return report, nil
+}
+
+// checkPreload words each library in want that shared_preload_libraries
+// lacks. A role that can't read the setting can't show they're there.
+func checkPreload(ctx context.Context, conn pgConn, want []string) ([]string, error) {
+	raw, err := conn.PreloadLibraries(ctx)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == insufficientPrivilege {
+		verb := "are"
+		if len(want) == 1 {
+			verb = "is"
+		}
+		return []string{fmt.Sprintf("the connection's role can't read shared_preload_libraries, so Loomplane can't tell whether %s %s there; grant it pg_read_all_settings", strings.Join(want, " and "), verb)}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	loaded := preloadList(raw)
+	var problems []string
+	for _, name := range want {
+		if !slices.Contains(loaded, name) {
+			problems = append(problems, name+" isn't in shared_preload_libraries")
+		}
+	}
+	return problems, nil
+}
+
+// insufficientPrivilege is the SQLSTATE of a permission error.
+const insufficientPrivilege = "42501"
+
+// preloadList reads shared_preload_libraries: names separated by commas,
+// each maybe quoted.
+func preloadList(raw string) []string {
+	var out []string
+	for name := range strings.SplitSeq(raw, ",") {
+		if name = strings.Trim(strings.TrimSpace(name), `"`); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// roleProblem words a connection role that can't create the role its
+// consumer creates.
+func roleProblem(c Consumer) string {
+	who := c.Title
+	if who == "" {
+		who = "this service"
+	}
+	if c.Role == "" {
+		return fmt.Sprintf("the connection's role can't create roles, and %s creates a role of its own", who)
+	}
+	return fmt.Sprintf("the connection's role can't create roles, and %s creates %s", who, c.Role)
 }
 
 // pinConfig sets every connection setting from the DSN alone.
@@ -140,7 +216,12 @@ func pinConfig(cfg *pgx.ConnConfig, dsn string) error {
 		cfg.TLSConfig = nil
 	case TLSRequire:
 		// Encrypted, certificate unchecked: what sslmode=require means.
+		// The host name still goes out as SNI, which providers that route
+		// by it (Neon, for one) need; libpq sends it too.
 		cfg.TLSConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // sslmode=require doesn't verify, as in libpq
+		if net.ParseIP(cfg.Host) == nil {
+			cfg.TLSConfig.ServerName = cfg.Host
+		}
 	case TLSVerifyFull:
 		cfg.TLSConfig = &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}
 	default:
@@ -190,6 +271,20 @@ func (c pgxConn) AvailableExtensions(ctx context.Context, names []string) ([]str
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+func (c pgxConn) PreloadLibraries(ctx context.Context) (string, error) {
+	var v string
+	err := c.conn.QueryRow(ctx, "SHOW shared_preload_libraries").Scan(&v)
+	return v, err
+}
+
+func (c pgxConn) RoleRights(ctx context.Context) (super, createRole bool, err error) {
+	err = c.conn.QueryRow(ctx, "SELECT rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user").Scan(&super, &createRole)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, nil // a role pg_roles doesn't list has neither right
+	}
+	return super, createRole, err
 }
 
 func (c pgxConn) Close(ctx context.Context) error { return c.conn.Close(ctx) }

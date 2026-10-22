@@ -988,7 +988,7 @@ func (e *OwnedTarget) recheckEndpoint(ctx context.Context, job *Job, kind recipe
 	if err != nil {
 		return "", fmt.Errorf("endpoint %s couldn't be checked: the target connection failed: %w", endpoint.Name, err)
 	}
-	report, err := e.Checker.Check(ctx, org, endpointID, *kind.Dependencies[i].External, dial)
+	report, err := e.Checker.Check(catalogconnect.WithConsumer(ctx, catalogconnect.ConsumerOf(kind, dependency)), org, endpointID, *kind.Dependencies[i].External, dial)
 	if closer != nil {
 		if closeErr := closer.Close(); err == nil && closeErr != nil {
 			err = closeErr

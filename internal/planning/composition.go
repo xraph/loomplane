@@ -30,11 +30,22 @@ type EndpointCheck struct {
 
 // endpointKey is where Input.Endpoints holds the check of an endpoint from
 // one target against one requirement, when the endpoint is checked more
-// than once.
-func endpointKey(id, connection string, req recipes.Requirement) string {
-	extensions := slices.Clone(req.Extensions)
-	slices.Sort(extensions)
-	return id + "@" + connection + "/" + req.Engine + "/" + req.MinVersion + "/" + strings.Join(extensions, ",")
+// than once. The consumer counts only for the rules whose problems name
+// it, so keys of requirements without them stay as they were.
+func endpointKey(id, connection string, req recipes.Requirement, c catalogconnect.Consumer) string {
+	sorted := func(list []string) string {
+		list = slices.Clone(list)
+		slices.Sort(list)
+		return strings.Join(list, ",")
+	}
+	key := id + "@" + connection + "/" + req.Engine + "/" + req.MinVersion + "/" + sorted(req.Extensions)
+	if len(req.Preload) > 0 {
+		key += "/preload:" + sorted(req.Preload)
+	}
+	if req.CreateRole || len(req.TLS) > 0 {
+		key += fmt.Sprintf("/create-role:%t/tls:%s/for:%s:%s", req.CreateRole, sorted(req.TLS), c.Title, c.Role)
+	}
+	return key
 }
 
 // kinds is the catalog the plan reads its engines and composed kinds from.
@@ -437,7 +448,7 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 		p.warn(finding("catalog-endpoint-checked-from-loomplane", "Checked from Loomplane, not from inside the cluster."))
 	}
 	id := choice.External
-	check, ok := p.in.Endpoints[endpointKey(id, connection, *dep.External)]
+	check, ok := p.in.Endpoints[endpointKey(id, connection, *dep.External, catalogconnect.ConsumerOf(kind, dep.Name))]
 	if !ok {
 		check, ok = p.in.Endpoints[id]
 	}
@@ -455,6 +466,9 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 		p.problem(finding(unavailable, fmt.Sprintf("%s isn't in this organization. Connect another endpoint, or provision one.", label)))
 	case check.Engine != "" && check.Engine != dep.External.Engine:
 		p.problem(finding(incompatible, fmt.Sprintf("%s runs %s, and %s's %s dependency needs %s.", label, check.Engine, name, dep.Name, dep.External.Engine)))
+	case check.Report.Version == "" && len(check.Report.Problems) == 0 && len(check.Report.Missing) == 0:
+		// A check that found nothing at all never reached a usable endpoint.
+		p.problem(finding(unavailable, fmt.Sprintf("%s didn't say which version it runs, so %s can't use it. Plan again.", label, name)))
 	default:
 		// A check that got no version never reached a usable endpoint.
 		code := incompatible

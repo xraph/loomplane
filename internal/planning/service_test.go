@@ -85,6 +85,8 @@ func (serverClouds) All(context.Context, string) ([]*connections.Connection, err
 type fakeEndpoints struct {
 	mu     sync.Mutex
 	checks []string
+	// consumers are the titles each check was made for.
+	consumers []string
 	// down is a target the endpoint isn't reachable from.
 	down string
 }
@@ -104,6 +106,7 @@ func (f *fakeEndpoints) Check(ctx context.Context, orgID, id string, req recipes
 	through := strings.TrimPrefix(err.Error(), "through ")
 	f.mu.Lock()
 	f.checks = append(f.checks, id+" "+req.Engine+" "+through)
+	f.consumers = append(f.consumers, catalogconnect.ConsumerFrom(ctx).Title)
 	f.mu.Unlock()
 	if through == f.down {
 		return &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}, nil
@@ -147,7 +150,7 @@ func TestCreatePlanChecksEndpointsThroughTheTarget(t *testing.T) {
 	})
 	plan := &Plan{Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
 
-	req := *recipestest.Sample().Dependencies[0].External
+	req, consumer := *recipestest.Sample().Dependencies[0].External, catalogconnect.ConsumerOf(recipestest.Sample(), "postgres")
 	checks := service.checkEndpoints(t.Context(), plan.OrgID, plan.Environment, parse(t, doc))
 	// Targets are dialed in ID order.
 	if !slices.Equal(dialer.asked, []string{targetB, targetA}) || dialer.closed != 2 {
@@ -156,10 +159,14 @@ func TestCreatePlanChecksEndpointsThroughTheTarget(t *testing.T) {
 	if !slices.Equal(endpoints.checks, []string{prodPG + " postgres " + targetB, prodPG + " postgres " + targetA}) {
 		t.Fatalf("checks: %v", endpoints.checks)
 	}
+	// Each check is made for the kind that connects the endpoint.
+	if !slices.Equal(endpoints.consumers, []string{"Sample", "Sample"}) {
+		t.Fatalf("consumers: %v", endpoints.consumers)
+	}
 	want := map[string]EndpointCheck{
-		endpointKey(prodPG, targetA, req): {ID: prodPG, Name: "prod-pg", Engine: "postgres", Found: true, Report: &catalogconnect.Report{Version: "16.4"}},
-		endpointKey(prodPG, targetB, req): {ID: prodPG, Name: "prod-pg", Engine: "postgres", Found: true, Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
-		otherPG:                           {ID: otherPG},
+		endpointKey(prodPG, targetA, req, consumer): {ID: prodPG, Name: "prod-pg", Engine: "postgres", Found: true, Report: &catalogconnect.Report{Version: "16.4"}},
+		endpointKey(prodPG, targetB, req, consumer): {ID: prodPG, Name: "prod-pg", Engine: "postgres", Found: true, Report: &catalogconnect.Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
+		otherPG: {ID: otherPG},
 	}
 	if !reflect.DeepEqual(checks, want) {
 		t.Fatalf("checks: %+v", checks)

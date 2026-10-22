@@ -90,6 +90,13 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 	return e, nil
 }
 
+// AuthorizeCheck checks p may check a DSN before storing it. That needs
+// SecretManage, as storing one does: the check sends the DSN's
+// credentials to the endpoint.
+func (s *Service) AuthorizeCheck(ctx context.Context, p security.Principal) error {
+	return s.authz.Require(ctx, p, security.SecretManage, "")
+}
+
 // List returns the organization's endpoints. It needs InfrastructureRead.
 func (s *Service) List(ctx context.Context, p security.Principal) ([]*Endpoint, error) {
 	if err := s.authz.Require(ctx, p, security.InfrastructureRead, ""); err != nil {

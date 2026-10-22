@@ -200,7 +200,10 @@ type Dependency struct {
 type Requirement struct {
 	Engine     string   `json:"engine"` // prober name: "postgres" or "redis"
 	MinVersion string   `json:"min_version,omitempty"`
-	Extensions []string `json:"extensions,omitempty"` // postgres: must be in pg_available_extensions
+	Extensions []string `json:"extensions,omitempty"`  // postgres: must be in pg_available_extensions
+	Preload    []string `json:"preload,omitempty"`     // postgres: must be in shared_preload_libraries
+	CreateRole bool     `json:"create_role,omitempty"` // postgres: the connection's role must be able to create roles
+	TLS        []string `json:"tls,omitempty"`         // allowed endpoint TLS modes: "disable", "require", "verify-full"; empty allows all
 }
 
 // GeneratedSecret is a random value Loomplane generates once and keeps
@@ -332,6 +335,8 @@ func (k Kind) clone() Kind {
 		if d.External != nil {
 			ext := *d.External
 			ext.Extensions = slices.Clone(ext.Extensions)
+			ext.Preload = slices.Clone(ext.Preload)
+			ext.TLS = slices.Clone(ext.TLS)
 			d.External = &ext
 		}
 	}

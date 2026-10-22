@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -211,5 +215,153 @@ func TestEndpointChecksDialFromTheConnectionsTarget(t *testing.T) {
 	}
 	if _, _, err = d.TargetDial(t.Context(), "org", "conn_gone"); !errors.Is(err, connections.ErrNotFound) {
 		t.Fatalf("missing connection: %v", err)
+	}
+}
+
+// secretManagers lets only the "admin" user manage secrets.
+type secretManagers struct{}
+
+func (secretManagers) Require(_ context.Context, p security.Principal, perm security.Permission, _ string) error {
+	if perm == security.SecretManage && p.UserID != "admin" {
+		return security.ErrForbidden
+	}
+	return nil
+}
+
+// checkDialer hands out a dial that names the target it's for.
+type checkDialer struct {
+	clouds map[string]string
+	asked  []string
+	closed int
+}
+
+func (d *checkDialer) TargetDial(_ context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error) {
+	if _, ok := d.clouds[connectionID]; !ok || orgID != "org" {
+		return nil, nil, connections.ErrNotFound
+	}
+	d.asked = append(d.asked, connectionID)
+	dial := func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("through " + connectionID)
+	}
+	return dial, closer(func() error { d.closed++; return nil }), nil
+}
+
+func (d *checkDialer) TargetCloud(_ context.Context, _, connectionID string) (string, error) {
+	return d.clouds[connectionID], nil
+}
+
+type closer func() error
+
+func (c closer) Close() error { return c() }
+
+// recordingProber records what it's asked and dials once.
+type recordingProber struct {
+	reqs   []recipes.Requirement
+	dsns   []string
+	dialed []string
+	report catalogconnect.Report
+}
+
+func (p *recordingProber) Probe(ctx context.Context, dial catalogconnect.DialFunc, dsn string, req recipes.Requirement) (*catalogconnect.Report, error) {
+	p.reqs = append(p.reqs, req)
+	p.dsns = append(p.dsns, dsn)
+	_, err := dial(ctx, "tcp", "db.example:5432")
+	p.dialed = append(p.dialed, err.Error())
+	report := p.report
+	return &report, nil
+}
+
+func TestCheckRouteResolvesTheRequirement(t *testing.T) {
+	prober := &recordingProber{report: catalogconnect.Report{Version: "16.4"}}
+	svc := catalogconnect.NewService(&endpointStore{rows: map[string]catalogconnect.Endpoint{}}, endpointSecrets{}, secretManagers{})
+	dialer := &checkDialer{clouds: map[string]string{"conn_server": connections.Server, "conn_cluster": connections.Kubernetes}}
+	ext := &Extension{
+		endpoints:      svc,
+		endpointChecks: &catalogconnect.Checker{Endpoints: svc, Probers: map[string]catalogconnect.Prober{"postgres": prober}},
+		endpointDialer: dialer,
+		catalogKinds:   recipestest.Registry(t),
+	}
+	r := forge.NewRouter()
+	if err := ext.routes(r, nil); err != nil {
+		t.Fatal(err)
+	}
+	const dsn = "postgres://u:hunter2-Secret@db.example:5432/app?sslmode=require"
+	body := func(kind, dependency, target string) string {
+		return `{"engine":"postgres","dsn":"` + dsn + `","target":"` + target + `","kind":"` + kind + `","dependency":"` + dependency + `"}`
+	}
+	send := func(user, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/catalog/endpoints/checks", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if user != "" {
+			req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org", UserID: user}))
+		}
+		out := httptest.NewRecorder()
+		r.ServeHTTP(out, req)
+		if strings.Contains(out.Body.String(), "hunter2") {
+			t.Fatalf("the response shows the DSN: %s", out.Body.String())
+		}
+		return out
+	}
+	result := func(out *httptest.ResponseRecorder) catalogconnect.CheckResult {
+		t.Helper()
+		var got catalogconnect.CheckResult
+		if out.Code != http.StatusOK {
+			t.Fatalf("check: %d %s", out.Code, out.Body.String())
+		}
+		if err := json.Unmarshal(out.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	got := result(send("admin", body("sample", "postgres", "conn_server")))
+	if !got.OK || got.Version != "16.4" || len(got.Problems) != 0 || len(got.Notes) != 0 {
+		t.Fatalf("result: %+v", got)
+	}
+	want := *recipestest.Sample().Dependencies[0].External
+	if len(prober.reqs) != 1 || !reflect.DeepEqual(prober.reqs[0], want) || prober.dsns[0] != dsn {
+		t.Fatalf("probed %+v", prober.reqs)
+	}
+	if !slices.Equal(dialer.asked, []string{"conn_server"}) || !slices.Equal(prober.dialed, []string{"through conn_server"}) || dialer.closed != 1 {
+		t.Fatalf("dialed %v through %v, closed %d", dialer.asked, prober.dialed, dialer.closed)
+	}
+
+	// A cluster's check runs from Loomplane, and says so.
+	got = result(send("admin", body("sample", "postgres", "conn_cluster")))
+	if !got.OK || !slices.Equal(got.Notes, []string{"Checked from Loomplane, not from inside the cluster."}) {
+		t.Fatalf("cluster result: %+v", got)
+	}
+
+	// What the endpoint lacks fails the check.
+	prober.report = catalogconnect.Report{Version: "15.2", Problems: []string{"PostgreSQL 15.2 is older than 16"}}
+	if got = result(send("admin", body("sample", "postgres", "conn_server"))); got.OK || !slices.Equal(got.Problems, prober.report.Problems) {
+		t.Fatalf("old endpoint: %+v", got)
+	}
+	// A Redis DSN for a Postgres dependency fails without a probe.
+	probes := len(prober.reqs)
+	out := send("admin", strings.Replace(body("sample", "postgres", "conn_server"), `"engine":"postgres"`, `"engine":"redis"`, 1))
+	if got = result(out); got.OK || !slices.Equal(got.Problems, []string{"this is a Redis endpoint, and Sample's postgres dependency needs PostgreSQL"}) || len(prober.reqs) != probes {
+		t.Fatalf("engine mismatch: %+v", got)
+	}
+
+	for _, tc := range []struct {
+		name, user, body string
+		code             int
+	}{
+		{"anonymous", "", body("sample", "postgres", "conn_server"), http.StatusUnauthorized},
+		{"no SecretManage", "viewer", body("sample", "postgres", "conn_server"), http.StatusForbidden},
+		{"dependency takes no external endpoint", "admin", body("sample", "cache", "conn_server"), http.StatusUnprocessableEntity},
+		{"unknown dependency", "admin", body("sample", "search", "conn_server"), http.StatusUnprocessableEntity},
+		{"unknown kind", "admin", body("nope", "postgres", "conn_server"), http.StatusUnprocessableEntity},
+		{"no target", "admin", body("sample", "postgres", ""), http.StatusUnprocessableEntity},
+		{"unknown target", "admin", body("sample", "postgres", "conn_gone"), http.StatusNotFound},
+		{"unreadable DSN", "admin", strings.Replace(body("sample", "postgres", "conn_server"), "?sslmode=require", "", 1), http.StatusUnprocessableEntity},
+		{"not JSON", "admin", "not json", http.StatusBadRequest},
+	} {
+		probes = len(prober.reqs)
+		if out = send(tc.user, tc.body); out.Code != tc.code || len(prober.reqs) != probes {
+			t.Fatalf("%s: %d %s (probes %d)", tc.name, out.Code, out.Body.String(), len(prober.reqs)-probes)
+		}
 	}
 }

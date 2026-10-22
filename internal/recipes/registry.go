@@ -365,8 +365,8 @@ func validateKind(k Kind) []error {
 		if d.Default && !d.Optional {
 			f.add("dependency %q is on by default but not optional", d.Name)
 		}
-		if d.External != nil && d.External.Engine != "postgres" && d.External.Engine != "redis" {
-			f.add("dependency %q accepts external %q endpoints; only postgres and redis can be checked", d.Name, d.External.Engine)
+		if d.External != nil {
+			validateRequirement(f, d.Name, *d.External)
 		}
 	}
 
@@ -964,6 +964,22 @@ func afterCycle(list []Component, components map[string]*Component) []string {
 		}
 	}
 	return nil
+}
+
+// validateRequirement checks what a dependency asks of an external
+// endpoint: an engine Loomplane can check, and rules that engine has.
+func validateRequirement(f *findings, dependency string, req Requirement) {
+	if req.Engine != "postgres" && req.Engine != "redis" {
+		f.add("dependency %q accepts external %q endpoints; only postgres and redis can be checked", dependency, req.Engine)
+	}
+	if req.Engine != "postgres" && (len(req.Preload) > 0 || req.CreateRole) {
+		f.add("dependency %q checks preload libraries or role rights, which only postgres endpoints have", dependency)
+	}
+	for _, mode := range req.TLS {
+		if mode != "disable" && mode != "require" && mode != "verify-full" {
+			f.add("dependency %q allows TLS mode %q; the modes are disable, require and verify-full", dependency, mode)
+		}
+	}
 }
 
 func validateName(f *findings, what, name string) {
