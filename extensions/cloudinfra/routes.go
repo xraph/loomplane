@@ -103,6 +103,12 @@ func result(c forge.Context, status int, value any, err error) error {
 		code = http.StatusForbidden
 	case errors.Is(err, provider.ErrInfrastructureUnsupported):
 		code = http.StatusUnprocessableEntity
+	// A write whose outcome is unknown stays a server error whatever it wraps.
+	case errors.Is(err, provider.ErrInfrastructureAmbiguous):
+	case errors.Is(err, provider.ErrInfrastructureNotFound):
+		code = http.StatusNotFound
+	case errors.Is(err, provider.ErrInfrastructureIdentity):
+		code = http.StatusUnprocessableEntity
 	}
 	if code == http.StatusInternalServerError {
 		return forge.NewHTTPError(code, "Infrastructure operation failed")

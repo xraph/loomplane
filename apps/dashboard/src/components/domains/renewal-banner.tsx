@@ -49,6 +49,7 @@ export function RenewalBanner({
         })
       )
     } catch (err) {
+      // Not in the mock: what a failed switch says.
       setError(
         statusOf(err) === 409
           ? "This registration changed. Check it and try again."

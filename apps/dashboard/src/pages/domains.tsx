@@ -316,6 +316,7 @@ function DomainsList({
                 })}
               </div>
               <span className="text-[12.5px] text-muted-foreground">
+                {/* Not in the mock: pluralized. */}
                 {plural(items.length, "domain")} ·{" "}
                 {plural(hostnames, "hostname")} in use
               </span>
@@ -357,6 +358,7 @@ function DomainsList({
   )
 }
 
+// Not in the mock, whose sample only ever had several: "1 domain".
 function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`
 }

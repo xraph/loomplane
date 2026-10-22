@@ -124,6 +124,8 @@ export function providerLabel(z: ZoneOverview): string {
 
 export function zoneDNSLabel(z: ZoneOverview): string {
   if (z.state !== "ready") {
+    // Not in the mock: "Awaiting verification" for a managed zone that
+    // isn't verified, which the API shouldn't produce.
     return z.zone?.mode === "external"
       ? "Awaiting TXT record"
       : "Awaiting verification"
@@ -139,11 +141,13 @@ export function zoneDNSTone(z: ZoneOverview): PillTone {
 
 export function registrationLine(z: ZoneOverview, r?: Registration): string {
   if (!r) {
-    // The zone names a registration the list doesn't hold yet.
+    // Not in the mock, nor the dateless line below: the zone names a
+    // registration the list doesn't hold yet.
     return z.registrationId || z.zone?.registrationId
       ? "Registered through Loomplane"
       : "Registered elsewhere"
   }
+  // Not in the mock: Cloudflare hasn't reported the expiry yet.
   if (!isSet(r.domainExpiresAt)) return "Registered through Loomplane"
   const day = formatDay(r.domainExpiresAt)
   return `Registered through Loomplane · ${r.autoRenew ? "renews" : "expires"} ${day}`
