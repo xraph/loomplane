@@ -186,6 +186,21 @@ func (s *Service) registrar(ctx context.Context, org, connectionID string) (prov
 	return adapter, cred, conn.Details, nil
 }
 
+// registrarSandbox says whether the adapter calls the registrar sandbox. It
+// asks the adapter itself, never a stored detail, and an adapter that can't
+// say counts as production.
+func registrarSandbox(adapter provider.DomainRegistrar) bool {
+	moded, ok := adapter.(interface{ RegistrarMode() string })
+	return ok && moded.RegistrarMode() == "sandbox"
+}
+
+func registrarMode(sandbox bool) string {
+	if sandbox {
+		return "sandbox"
+	}
+	return "production"
+}
+
 // RegistrationExtensions lists the TLDs the connection's registrar sells.
 func (s *Service) RegistrationExtensions(ctx context.Context, p security.Principal, connectionID string) (*RegistrationExtensionList, error) {
 	if err := s.domainScope(ctx, p, "", false); err != nil {
@@ -314,6 +329,12 @@ func (s *Service) PreviewRegistration(ctx context.Context, p security.Principal,
 	if err != nil {
 		return nil, err
 	}
+	// The dialog shows the connection's mode until the preview answers, so
+	// the two must agree before anyone is told whether they'll be charged.
+	sandbox := registrarSandbox(adapter)
+	if details["registrar_mode"] != registrarMode(sandbox) {
+		return nil, fmt.Errorf("%w: Check the Cloudflare connection again: its registrar mode changed.", ErrConflict)
+	}
 	tlds, err := adapter.RegistrationExtensions(ctx, cred)
 	if err != nil {
 		return nil, err
@@ -347,7 +368,7 @@ func (s *Service) PreviewRegistration(ctx context.Context, p security.Principal,
 	reg := &Registration{ID: id, OrgID: p.OrgID, ConnectionID: in.ConnectionID, Provider: cred.Provider, AccountID: cred.AccountID, Name: name,
 		AutoRenew: in.AutoRenew == nil || *in.AutoRenew, PrivacyMode: privacy, CustomRegistrant: in.Registrant != nil, ProjectIDs: append([]string{}, in.ProjectIDs...),
 		Quote: *offer.Price, Status: RegistrationPreview, Review: review, ReviewExpiresAt: now.Add(registrationReviewWindow),
-		Sandbox: details["registrar_mode"] == "sandbox", Revision: 1, CreatedAt: now, UpdatedAt: now, Principal: p}
+		Sandbox: sandbox, Revision: 1, CreatedAt: now, UpdatedAt: now, Principal: p}
 	if in.Registrant != nil {
 		raw, encodeErr := json.Marshal(in.Registrant)
 		if encodeErr != nil {
@@ -622,6 +643,11 @@ func (s *Service) prepareRegistration(ctx context.Context, reg *Registration) (a
 	}
 	if adapter, cred, err = s.registrationCredential(ctx, reg); err != nil {
 		return
+	}
+	if live := registrarSandbox(adapter); live != reg.Sandbox {
+		reg.Status = RegistrationFailedStatus
+		reg.Message = fmt.Sprintf("The registrar mode changed from %s to %s since the preview. Nothing was bought. Check the Cloudflare connection again and preview the registration again.", registrarMode(reg.Sandbox), registrarMode(live))
+		return adapter, cred, spec, true, nil
 	}
 	offers, err := adapter.CheckDomains(ctx, cred, []string{reg.Name})
 	if err != nil {

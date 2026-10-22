@@ -150,7 +150,7 @@ function Flow({ onClose }: { onClose: () => void }) {
   // Only the latest preview counts, and one approval is in flight at most.
   const previewSeq = useRef(0)
   const approving = useRef(false)
-  // The price the consent line last named.
+  // The price, and whether it's charged, the consent line last named.
   const shownPrice = useRef("")
   // Ticks every second, so Buy turns off when the review window closes.
   const now = useClock(1000)
@@ -190,9 +190,11 @@ function Flow({ onClose }: { onClose: () => void }) {
         },
       })
       if (n !== previewSeq.current) return
-      // Not in the mock: consent is to a price, so a new price needs it again.
-      if (priceOf(reg.quote) !== shownPrice.current) setAgree(false)
-      shownPrice.current = priceOf(reg.quote)
+      // Not in the mock: consent is to a price and a charge, so a new price
+      // or a switch out of the sandbox needs it again.
+      const terms = `${priceOf(reg.quote)}${reg.sandbox ? " sandbox" : ""}`
+      if (terms !== shownPrice.current) setAgree(false)
+      shownPrice.current = terms
       setQuoted(reg)
     } catch (err) {
       if (n !== previewSeq.current) return
@@ -328,7 +330,9 @@ function Flow({ onClose }: { onClose: () => void }) {
         "Price",
         // Not in the mock: the lines before a price arrives, or without one.
         price
-          ? `${price} for the first year, charged now`
+          ? quoted?.sandbox
+            ? `${price} for the first year, not charged in the sandbox`
+            : `${price} for the first year, charged now`
           : previewing
             ? "Checking the price with Cloudflare…"
             : "No price yet",
@@ -391,6 +395,14 @@ function Flow({ onClose }: { onClose: () => void }) {
               </span>
             </span>
           </label>
+          {quoted?.sandbox && price && (
+            // Not in the mock: the preview, not the connection, says whether
+            // this registrar charges anyone.
+            <span className="flex flex-wrap items-center gap-2 text-[12px] leading-normal text-muted-foreground">
+              <DomainStatePill tone="warn">Sandbox</DomainStatePill>
+              Sandbox registrations are test records. Nothing is charged.
+            </span>
+          )}
           {quoted && price && (
             <label
               className={cn(option, "rounded-[10px] bg-muted px-3 py-2.5")}
@@ -402,11 +414,19 @@ function Flow({ onClose }: { onClose: () => void }) {
                 disabled={buying}
                 className={box}
               />
-              <span>
-                I understand Cloudflare charges{" "}
-                <b className="font-semibold">{price}</b> to the default payment
-                method on this account now.
-              </span>
+              {quoted.sandbox ? (
+                // Not in the mock.
+                <span>
+                  I understand this is a sandbox registration at{" "}
+                  <b className="font-semibold">{price}</b>. Nothing is charged.
+                </span>
+              ) : (
+                <span>
+                  I understand Cloudflare charges{" "}
+                  <b className="font-semibold">{price}</b> to the default
+                  payment method on this account now.
+                </span>
+              )}
             </label>
           )}
           {quoted && lapsed && !previewing && (
@@ -498,7 +518,8 @@ function Flow({ onClose }: { onClose: () => void }) {
                 </select>
               </label>
               {account.details?.registrar_mode === "sandbox" && (
-                // Not in the mock.
+                // Not in the mock. Only a hint: the review follows the
+                // preview's own answer.
                 <span className="flex flex-wrap items-center gap-2 text-[12px] leading-normal text-muted-foreground">
                   <DomainStatePill tone="warn">Sandbox</DomainStatePill>
                   Sandbox registrations are test records. Nothing is charged.

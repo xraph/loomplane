@@ -73,6 +73,7 @@ function stubRegistration(
     quote?: ReturnType<typeof usd> | ((n: number) => ReturnType<typeof usd>)
     reviewExpiresAt?: string
     approve?: (n: number) => Response
+    sandbox?: (n: number) => boolean
   } = {}
 ): Calls {
   const calls: Calls = []
@@ -153,7 +154,7 @@ function registration(
   body: unknown,
   quote: ReturnType<typeof usd>,
   n: number,
-  options: { reviewExpiresAt?: string }
+  options: { reviewExpiresAt?: string; sandbox?: (n: number) => boolean }
 ) {
   const b = body as {
     name: string
@@ -187,7 +188,7 @@ function registration(
     refreshed_at: zero,
     notice_sent_for: zero,
     result_notified_for: "",
-    sandbox: false,
+    sandbox: options.sandbox?.(n) ?? false,
     revision: 1,
     created_at: zero,
     updated_at: zero,
@@ -606,6 +607,49 @@ it("marks a sandbox account", async () => {
       "Sandbox registrations are test records. Nothing is charged."
     )
   ).toBeTruthy()
+})
+
+it("names the charge the preview reports, not the connection's mode", async () => {
+  // The connection was checked in the sandbox; the registrar now isn't.
+  stubRegistration({
+    connections: [
+      cloudflare("cf", { registrar: "granted", registrar_mode: "sandbox" }),
+    ],
+    sandbox: () => false,
+  })
+  mount()
+  await searchAndSelect("acmeshop.app")
+  expect(await screen.findByRole("checkbox", { name: consent })).toBeTruthy()
+  expect(screen.queryByText("Sandbox")).toBeNull()
+  expect(screen.queryByText(/Nothing is charged/)).toBeNull()
+})
+
+it("follows each preview's sandbox answer in the consent line", async () => {
+  const calls = stubRegistration({ sandbox: (n) => n === 1 })
+  mount()
+  await searchAndSelect("acmeshop.app")
+  const sandboxConsent = await screen.findByRole("checkbox", {
+    name: "I understand this is a sandbox registration at USD 10.11. Nothing is charged.",
+  })
+  expect(screen.getByText("Sandbox")).toBeTruthy()
+  expect(
+    screen.getByText("USD 10.11 for the first year, not charged in the sandbox")
+  ).toBeTruthy()
+  expect(screen.queryByRole("checkbox", { name: consent })).toBeNull()
+  await userEvent.click(sandboxConsent)
+
+  // The next preview answers from the production registrar.
+  await userEvent.click(
+    screen.getByRole("checkbox", { name: /Hide my contact details in WHOIS/ })
+  )
+  await waitFor(() => expect(posts(calls, "/preview")).toHaveLength(2))
+  const charged = await screen.findByRole("checkbox", { name: consent })
+  expect(charged).toHaveProperty("checked", false)
+  expect(
+    screen.getByText("USD 10.11 for the first year, charged now")
+  ).toBeTruthy()
+  expect(screen.queryByText("Sandbox")).toBeNull()
+  expect(screen.queryByText(/Nothing is charged/)).toBeNull()
 })
 
 it("asks for a Cloudflare connection with Registrar permission", async () => {

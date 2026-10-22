@@ -37,7 +37,10 @@ type fakeRegistrar struct {
 	reconcileOnlyCalls int
 	specs              []provider.DomainRegistrationSpec
 	autoRenew          []bool
+	mode               string
 }
+
+func (r *fakeRegistrar) RegistrarMode() string { return r.mode }
 
 func (r *fakeRegistrar) RegistrationExtensions(context.Context, provider.InfrastructureCredential) ([]string, error) {
 	return r.extensions, nil
@@ -137,13 +140,15 @@ func (d *registrationDNS) CreateZone(_ context.Context, _ provider.Infrastructur
 	return *d.zone, nil
 }
 
-type registrationCredentials struct{}
+// registrationCredentials stores the registrar mode the last connection
+// check recorded.
+type registrationCredentials struct{ mode *string }
 
-func (registrationCredentials) Credential(_ context.Context, org, id string) (*connections.Connection, []byte, error) {
+func (c registrationCredentials) Credential(_ context.Context, org, id string) (*connections.Connection, []byte, error) {
 	if org != "org" || id != "cf" {
 		return nil, nil, connections.ErrNotFound
 	}
-	return &connections.Connection{ID: id, OrgID: org, Cloud: "cloudflare", Generation: 1, Details: map[string]string{"account_id": "account", "registrar_mode": "sandbox"}}, []byte("token"), nil
+	return &connections.Connection{ID: id, OrgID: org, Cloud: "cloudflare", Generation: 1, Details: map[string]string{"account_id": "account", "registrar_mode": *c.mode}}, []byte("token"), nil
 }
 
 type memorySecrets map[string][]byte
@@ -267,18 +272,27 @@ type registrationEnv struct {
 	secrets   memorySecrets
 	workflow  *registrationStarts
 	now       time.Time
+	// storedMode is the connection's registrar_mode detail.
+	storedMode string
+}
+
+// sandbox points the registrar and the stored connection detail at the
+// registrar sandbox.
+func (env *registrationEnv) sandbox() {
+	env.registrar.mode, env.storedMode = "sandbox", "sandbox"
 }
 
 func newRegistrationEnv(t *testing.T) *registrationEnv {
 	t.Helper()
 	env := &registrationEnv{
-		registrar: &fakeRegistrar{extensions: []string{"co.uk", "dev", "uk"}, price: provider.DomainPrice{Currency: "USD", RegistrationCost: "10.11", RenewalCost: "10.11"}, expires: time.Date(2027, 11, 5, 0, 0, 0, 0, time.UTC)},
-		dns:       &registrationDNS{},
-		store:     &memoryRegistrations{bodies: map[string][]byte{}},
-		domains:   &overviewStore{projects: map[string]map[string]string{"org": {"shop": "Shop", "docs": "Docs"}}},
-		secrets:   memorySecrets{},
-		workflow:  &registrationStarts{},
-		now:       time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC),
+		registrar:  &fakeRegistrar{extensions: []string{"co.uk", "dev", "uk"}, price: provider.DomainPrice{Currency: "USD", RegistrationCost: "10.11", RenewalCost: "10.11"}, expires: time.Date(2027, 11, 5, 0, 0, 0, 0, time.UTC), mode: "production"},
+		dns:        &registrationDNS{},
+		store:      &memoryRegistrations{bodies: map[string][]byte{}},
+		domains:    &overviewStore{projects: map[string]map[string]string{"org": {"shop": "Shop", "docs": "Docs"}}},
+		secrets:    memorySecrets{},
+		workflow:   &registrationStarts{},
+		now:        time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC),
+		storedMode: "production",
 	}
 	adapters := NewAdapters()
 	if err := adapters.RegisterDNS("cloudflare", env.dns); err != nil {
@@ -287,7 +301,7 @@ func newRegistrationEnv(t *testing.T) *registrationEnv {
 	if err := adapters.RegisterRegistrar("cloudflare", env.registrar); err != nil {
 		t.Fatal(err)
 	}
-	env.svc = NewService(Deps{Store: registrationLocks{}, Domains: env.domains, Registrations: env.store, Connections: registrationCredentials{}, Secrets: env.secrets, Adapters: adapters, Workflow: env.workflow,
+	env.svc = NewService(Deps{Store: registrationLocks{}, Domains: env.domains, Registrations: env.store, Connections: registrationCredentials{mode: &env.storedMode}, Secrets: env.secrets, Adapters: adapters, Workflow: env.workflow,
 		Authz: overviewAuth{
 			"admin": {{security.OrganizationCloudManage, "org"}},
 			"dev":   {{security.InfrastructureRead, "shop"}, {security.InfrastructureModify, "shop"}},
@@ -476,13 +490,54 @@ func TestRegistrationUnconfirmedAfterAnHour(t *testing.T) {
 	}
 }
 
+func TestPreviewSandboxFollowsTheLiveRegistrar(t *testing.T) {
+	env := newRegistrationEnv(t)
+	env.sandbox()
+	op, err := env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.dev"})
+	if err != nil || !op.Sandbox {
+		t.Fatal("sandbox preview", op, err)
+	}
+
+	// The connection was checked in the sandbox, but Loomplane now runs
+	// against the production registrar.
+	env = newRegistrationEnv(t)
+	env.storedMode = "sandbox"
+	if _, err = env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.dev"}); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "Check the Cloudflare connection again: its registrar mode changed.") {
+		t.Fatal("stale sandbox detail", err)
+	}
+	if len(env.store.bodies) != 0 {
+		t.Fatal("a refused preview was stored")
+	}
+
+	// An adapter that can't say counts as production.
+	if registrarSandbox(struct{ provider.DomainRegistrar }{env.registrar}) {
+		t.Fatal("an adapter without a mode counted as the sandbox")
+	}
+}
+
+func TestRegistrationRefusesAChangedRegistrarMode(t *testing.T) {
+	for _, tc := range []struct{ previewed, live string }{{"sandbox", "production"}, {"production", "sandbox"}} {
+		env := newRegistrationEnv(t)
+		env.registrar.mode, env.storedMode = tc.previewed, tc.previewed
+		op := approvedRegistration(t, env.svc)
+		env.registrar.mode, env.storedMode = tc.live, tc.live
+		if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+			t.Fatal(tc.previewed, err)
+		}
+		got, _ := env.svc.GetRegistration(t.Context(), admin, op.ID)
+		if got.Status != RegistrationFailedStatus || got.Attempted || env.registrar.posts != 0 || !strings.Contains(got.Message, "Nothing was bought.") {
+			t.Fatalf("%s to %s: %+v posts=%d", tc.previewed, tc.live, got, env.registrar.posts)
+		}
+	}
+}
+
 func TestApprovalNeedsExactQuoteAndOpenWindow(t *testing.T) {
 	env := newRegistrationEnv(t)
 	op, err := env.svc.PreviewRegistration(t.Context(), admin, RegistrationInput{ConnectionID: "cf", Name: "acme.dev"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.Review == "" || op.Quote.RegistrationCost != "10.11" || !op.ReviewExpiresAt.Equal(env.now.Add(15*time.Minute)) || !op.Sandbox {
+	if op.Review == "" || op.Quote.RegistrationCost != "10.11" || !op.ReviewExpiresAt.Equal(env.now.Add(15*time.Minute)) || op.Sandbox {
 		t.Fatalf("preview: %+v", op)
 	}
 	for name, in := range map[string]RegistrationApproval{

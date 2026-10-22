@@ -50,6 +50,8 @@ clouds:
 
 Registrar calls then go to `/accounts/{account_id}/registrar-sandbox/...`, and the register dialog marks itself **Sandbox**. Development and CI always use it. Since the sandbox makes no zone, a sandbox registration stays at `zone_pending`, which is as far as it can go.
 
+Loomplane reads the setting when it starts. If you switch it, select **Check again** on each Cloudflare connection before you buy anything. Until you do, a preview won't quote a price, because the connection still records the old mode. The review step takes its **Sandbox** label and "Nothing is charged" from the registrar Loomplane is running against, and a purchase approved under one mode ends `failed` under the other with nothing bought.
+
 Transfers into Cloudflare aren't supported.
 
 ## Cloudflare tokens
