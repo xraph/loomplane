@@ -256,6 +256,13 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		case "microsoft.app/managedenvironments":
 			props["defaultDomain"] = "fake.azurecontainerapps.io"
 		case "microsoft.dbforpostgresql/flexibleservers", "microsoft.dbformysql/flexibleservers":
+			login, _ := props["administratorLogin"].(string)
+			password, _ := props["administratorLoginPassword"].(string)
+			if hasRunOf(password, login) {
+				reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "PasswordNotComplex",
+					"message": "The password must not contain all or part of the login name."}})
+				return
+			}
 			f.ServerPuts = append(f.ServerPuts, record(body))
 			// Azure never shows the password again.
 			delete(props, "administratorLoginPassword")
@@ -411,6 +418,18 @@ func record(body map[string]any) map[string]any {
 	data, _ := json.Marshal(body)
 	_ = json.Unmarshal(data, &out)
 	return out
+}
+
+// hasRunOf reports whether password has three characters in a row of
+// login, in either case, as Azure refuses.
+func hasRunOf(password, login string) bool {
+	password, login = strings.ToLower(password), strings.ToLower(login)
+	for i := 0; i+3 <= len(login); i++ {
+		if strings.Contains(password, login[i:i+3]) {
+			return true
+		}
+	}
+	return false
 }
 
 // isServer reports whether kind is a Postgres or MySQL flexible server.

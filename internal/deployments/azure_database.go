@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"strconv"
@@ -75,21 +76,38 @@ const azurePasswordChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 
 // azurePassword is a new admin password: 32 characters with at least one
 // upper case letter, one lower case letter and one digit, which is three
-// of the four kinds of character Azure asks for.
-func azurePassword() (string, error) {
+// of the four kinds of character Azure asks for, and no three characters
+// in a row of the login, which Azure refuses.
+func azurePassword() (string, error) { return azurePasswordFrom(rand.Reader) }
+
+// azurePasswordFrom is azurePassword, drawn from r.
+func azurePasswordFrom(r io.Reader) (string, error) {
 	buf := make([]byte, 32)
 	for {
-		if _, err := rand.Read(buf); err != nil {
+		if _, err := io.ReadFull(r, buf); err != nil {
 			return "", err
 		}
 		for i, b := range buf {
 			buf[i] = azurePasswordChars[b&63]
 		}
 		p := string(buf)
-		if strings.ContainsAny(p, azurePasswordChars[:26]) && strings.ContainsAny(p, azurePasswordChars[26:52]) && strings.ContainsAny(p, azurePasswordChars[52:62]) {
+		if strings.ContainsAny(p, azurePasswordChars[:26]) && strings.ContainsAny(p, azurePasswordChars[26:52]) && strings.ContainsAny(p, azurePasswordChars[52:62]) &&
+			!hasLoginRun(p) {
 			return p, nil
 		}
 	}
+}
+
+// hasLoginRun reports whether p has three characters in a row of the
+// admin login, in either case.
+func hasLoginRun(p string) bool {
+	lower := strings.ToLower(p)
+	for i := 0; i+3 <= len(azureDatabaseLogin); i++ {
+		if strings.Contains(lower, azureDatabaseLogin[i:i+3]) {
+			return true
+		}
+	}
+	return false
 }
 
 // Apply implements Executor.
@@ -114,6 +132,14 @@ func (a *AzureDatabase) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	password, err := keptPassword(ctx, job, fresh)
 	if err != nil {
 		return nil, err
+	}
+	// Azure refused a kept password with part of the login in it, so no
+	// server has it: keep a fresh one in its place.
+	if hasLoginRun(password) {
+		if kerr := job.Keep(ctx, passwordField, []byte(fresh)); kerr != nil {
+			return nil, kerr
+		}
+		password = fresh
 	}
 	name := a.serverName(s, job, cfg.Kind)
 	state := azureDatabaseState{ServerID: s.FlexibleServerPath(cfg.Kind, name)}

@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -203,6 +204,66 @@ func TestAzurePassword(t *testing.T) {
 			!strings.ContainsAny(p, "abcdefghijklmnopqrstuvwxyz") || !strings.ContainsAny(p, "0123456789") {
 			t.Fatalf("password %q", p)
 		}
+	}
+}
+
+// passwordBytes are the random bytes azurePasswordFrom turns into p.
+func passwordBytes(p string) []byte {
+	out := make([]byte, len(p))
+	for i := range p {
+		out[i] = byte(strings.IndexByte(azurePasswordChars, p[i]))
+	}
+	return out
+}
+
+func TestAzurePassword_keepsClearOfTheLogin(t *testing.T) {
+	// Azure refuses a password with three characters in a row of the
+	// login, in either case, so one is drawn again.
+	withLogin := "AbcdefghijkLOOmnopqrstuvwxyz0123"
+	fine := "Abcdefghijkmnpqrstuvwxyz01234567"
+	r := bytes.NewReader(append(passwordBytes(withLogin), passwordBytes(fine)...))
+	p, err := azurePasswordFrom(r)
+	if err != nil || p != fine {
+		t.Fatalf("password %q, %v", p, err)
+	}
+	for range 5000 {
+		p, err := azurePassword()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run := loginRun(p); run != "" {
+			t.Fatalf("password %q has %q of the login", p, run)
+		}
+	}
+}
+
+// loginRun is the first three characters in a row of the login in p,
+// in either case, or "".
+func loginRun(p string) string {
+	lower := strings.ToLower(p)
+	for i := 0; i+3 <= len(azureDatabaseLogin); i++ {
+		if strings.Contains(lower, azureDatabaseLogin[i:i+3]) {
+			return azureDatabaseLogin[i : i+3]
+		}
+	}
+	return ""
+}
+
+func TestAzureDatabase_replacesAKeptPasswordAzureRefused(t *testing.T) {
+	f := azuretest.New(t)
+	exec := &AzureDatabase{Client: azure.New(f.URL())}
+	refused := "AbcdefghijkLOOmnopqrstuvwxyz0123"
+	kept := map[string]string{passwordField: refused}
+	if _, err := exec.Apply(t.Context(), azureDatabaseJob("postgres", "16", kept)); err != nil {
+		t.Fatal(err)
+	}
+	if kept[passwordField] == refused || len(kept[passwordField]) != 32 || loginRun(kept[passwordField]) != "" {
+		t.Fatalf("kept password %q", kept[passwordField])
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.ServerPuts) != 1 || f.ServerPuts[0]["properties"].(map[string]any)["administratorLoginPassword"] != kept[passwordField] {
+		t.Fatalf("puts %v", f.ServerPuts)
 	}
 }
 
