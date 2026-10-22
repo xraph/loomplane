@@ -44,8 +44,11 @@ func TestE2ENeonDriver(t *testing.T) {
 	g := newE2ERig(t, 0)
 	gw := g.start(filepath.Join(t.TempDir(), "state"))
 
+	// The shape resourceAddress hands an app: the logical host on port
+	// 5432, with the backend's sslmode=require carried over, so the test
+	// proves the driver copes with exactly that.
 	dsn := func(password string) string {
-		u := url.URL{Scheme: "postgres", User: url.UserPassword(g.user, password), Host: e2eHost, Path: "/" + g.database}
+		u := url.URL{Scheme: "postgres", User: url.UserPassword(g.user, password), Host: e2eHost + ":5432", Path: "/" + g.database, RawQuery: "sslmode=require"}
 		return u.String()
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
