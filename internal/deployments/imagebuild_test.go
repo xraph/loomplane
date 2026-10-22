@@ -262,3 +262,23 @@ func TestImageBuild_redactsChunkBoundariesBeforeTruncatingTheLine(t *testing.T) 
 		t.Fatalf("chunked secret or unbounded line: %+v", sink.logs)
 	}
 }
+
+func TestImageBuildMutationsUsePhysicalFence(t *testing.T) {
+	for _, path := range []string{"/build", "/images/team/image/push"} {
+		t.Run(path, func(t *testing.T) {
+			calls := 0
+			client := &server.Client{RequireFence: true, HTTP: &http.Client{Transport: buildRoundTripper(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, errors.New("unfenced transport reached")
+			})}}
+			ctx := server.WithEffectFence(t.Context(), server.EffectFence{Operation: "org/plan/service", Generation: 1})
+			response, err := dockerRequest(ctx, client, http.MethodPost, path, nil, "", nil)
+			if response != nil {
+				response.Body.Close()
+			}
+			if err == nil || calls != 0 {
+				t.Fatal("builder mutation bypassed SSH fence", calls, err)
+			}
+		})
+	}
+}

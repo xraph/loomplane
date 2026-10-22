@@ -129,7 +129,7 @@ func (c *Client) do(ctx context.Context, tok Token, method, path string, query u
 			ae.Code, ae.Message, ae.Missing = e.Error.Code, e.Error.Message, e.Error.Missing
 		}
 		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
-			return fmt.Errorf("%w: %s", ErrRejected, ae.Message)
+			return fmt.Errorf("%w: %w", ErrRejected, ae)
 		}
 		return ae
 	}

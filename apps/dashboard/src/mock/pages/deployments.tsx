@@ -238,7 +238,7 @@ export function DeploymentsPage() {
         </div>
 
         {rows.length === 0 ? (
-          <Empty className="border border-dashed">
+          <Empty>
             <EmptyHeader>
               <EmptyTitle>No deployments match</EmptyTitle>
               <EmptyDescription>

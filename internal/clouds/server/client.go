@@ -18,10 +18,11 @@ import (
 
 // Client forwards HTTP over the selected server's Docker Unix socket.
 type Client struct {
-	Config    *Config
-	HTTP      *http.Client
-	ssh       *ssh.Client
-	transport *http.Transport
+	RequireFence bool
+	Config       *Config
+	HTTP         *http.Client
+	ssh          *ssh.Client
+	transport    *http.Transport
 }
 
 // Dial authenticates without reading SSH config, agents or ambient keys.
@@ -42,7 +43,11 @@ func Dial(ctx context.Context, cfg *Config) (*Client, error) {
 		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	sshConfig := &ssh.ClientConfig{User: cfg.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(cfg.Signer)}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	algorithms := []string{cfg.HostKey.Type()}
+	if cfg.HostKey.Type() == ssh.KeyAlgoRSA {
+		algorithms = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	}
+	sshConfig := &ssh.ClientConfig{HostKeyAlgorithms: algorithms, User: cfg.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(cfg.Signer)}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		if !bytes.Equal(key.Marshal(), cfg.HostKey.Marshal()) {
 			return ErrRejected
 		}
@@ -82,12 +87,33 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// DialContext opens a TCP connection from the server, through the SSH
+// connection Dial pinned to its host key, so what's dialed is reached from
+// the server's network. It dials only TCP: a Unix socket on the server,
+// such as Docker's, isn't for anyone else to reach.
+func (c *Client) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+	default:
+		return nil, fmt.Errorf("%w: the server dials only TCP, not %s", ErrInvalid, network)
+	}
+	if c.ssh == nil {
+		return nil, fmt.Errorf("%w: the server isn't connected", ErrInvalid)
+	}
+	return c.ssh.DialContext(ctx, network, address)
+}
+
 // Request addresses only the configured Docker daemon. The caller owns Body.
 func (c *Client) Request(ctx context.Context, method, resource string, body io.Reader) (*http.Response, error) {
 	return c.RequestHeaders(ctx, method, resource, body, nil)
 }
 
 func (c *Client) RequestHeaders(ctx context.Context, method, resource string, body io.Reader, headers http.Header) (*http.Response, error) {
+	if c.RequireFence && method != http.MethodGet && method != http.MethodHead {
+		if _, ok := EffectFenceFrom(ctx); !ok {
+			return nil, fmt.Errorf("pooled runtime mutation has no effect fence")
+		}
+	}
 	if !strings.HasPrefix(resource, "/") || strings.HasPrefix(resource, "//") {
 		return nil, ErrInvalid
 	}
@@ -100,6 +126,9 @@ func (c *Client) RequestHeaders(ctx context.Context, method, resource string, bo
 	}
 	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if fence, ok := EffectFenceFrom(ctx); ok && method != http.MethodGet && method != http.MethodHead {
+		return c.fencedRequest(ctx, "request", fence, method, resource, body, req.Header)
 	}
 	return c.HTTP.Do(req)
 }

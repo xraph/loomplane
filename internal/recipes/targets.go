@@ -1,16 +1,11 @@
 package recipes
 
-import "fmt"
-
 // LookupForTarget keeps platform-specific storage contracts in the reviewed recipe.
+// Engines registered with Default resolve through it; the five built-in
+// engines keep their original tables.
 func LookupForTarget(kind, version, architecture, target string) (*Recipe, error) {
-	switch target {
-	case "server":
-		return Lookup(kind, version, architecture)
-	case "kubernetes":
-		if kind == "postgres" {
-			return KubernetesPostgres(version, architecture)
-		}
+	if e, ok := Default().engine(kind); ok && !e.builtin {
+		return Default().LookupEngine(kind, version, architecture, target)
 	}
-	return nil, fmt.Errorf("%s has no qualified %s database recipe", target, kind)
+	return builtinLookup(kind, version, architecture, target)
 }

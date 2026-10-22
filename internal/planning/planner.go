@@ -9,7 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/graph"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -21,6 +23,10 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
+	Routes []cloudinfra.Route
+
+	// Catalog requests a standalone service without repository sources.
+	Catalog         bool
 	CloudPlacements map[string]CloudPlacement
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput
@@ -40,10 +46,20 @@ type Input struct {
 	// Held are the aliases of repositories this plan doesn't move: their
 	// services stay as deployed.
 	Held map[string]bool
+	// Kinds are the catalog's engines and composed kinds. Nil means
+	// recipes.Default().
+	Kinds *recipes.Registry
+	// Endpoints are the checks of the external endpoints composed
+	// resources connect, by endpoint ID. An endpoint checked from more
+	// than one target, or against more than one requirement, is under
+	// endpointKey instead. A connected endpoint with no check can't be
+	// used.
+	Endpoints map[string]EndpointCheck
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
 type ConnectionOption struct {
+	Pooled    bool `json:"pooled,omitempty"`
 	Account   string
 	ID        string
 	Name      string
@@ -67,7 +83,7 @@ type ConnectionOption struct {
 var connectionRegions = map[string]bool{"aws": true}
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "azure": "Microsoft Azure", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {
@@ -124,6 +140,10 @@ func Compute(in Input) *Result {
 	p.planServices()
 	p.planGateways()
 	p.checkTargetPlacements()
+	p.readdress()
+	for p.routedReplacements() {
+		p.readdress()
+	}
 	p.readdress()
 	p.heldAddresses()
 	p.gatewayHeld()
@@ -415,12 +435,23 @@ func (p *planner) place(subject Subject, name, path string, prov *provider.Provi
 
 func (p *planner) planResources() {
 	m := p.in.Manifest
+	var composed []string
 	for _, name := range m.ResourceNames() {
 		r := m.Resources[name]
 		base := "resources." + name
 		set := r.For(p.in.Environment, m.Defaults)
 		if !manifest.On(set.Enabled) || p.noLinkKind(name, base, r) {
 			continue
+		}
+		if p.kinds().Composed(r.Kind) {
+			composed = append(composed, name)
+			continue
+		}
+		for _, dep := range slices.Sorted(maps.Keys(r.Uses)) {
+			p.problem(Finding{
+				Code: "catalog-dependency-unknown", Subject: ResourceSubject, Name: name, Path: base + ".uses." + dep,
+				Message: fmt.Sprintf("%s has no dependency called %s.", r.Kind, dep),
+			})
 		}
 		able := p.in.Providers.Provisioning(r.Kind)
 		prov := p.lookup(ResourceSubject, name, base+".provider", set.Provider, able)
@@ -466,6 +497,7 @@ func (p *planner) planResources() {
 		p.resources[name] = a
 		p.actions = append(p.actions, a)
 	}
+	p.planCompositions(composed)
 }
 
 func (p *planner) planServices() {
@@ -557,8 +589,8 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 		})
 		return nil
 	}
-	if set.CloudTarget != "" {
-		p.problem(Finding{Code: "cloud-target-unresolved", Subject: ServiceSubject, Name: name, Path: base + ".cloud_target", Message: "Resolve this service's named Cloud target before planning."})
+	if set.CloudTarget != "" || len(set.CloudTags) > 0 {
+		p.problem(Finding{Code: "cloud-target-unresolved", Subject: ServiceSubject, Name: name, Path: cloudPath(name, set), Message: "Resolve this service's Cloud target before planning."})
 		return nil
 	}
 	workload := provider.Workload(kind)
@@ -583,6 +615,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 		cfg.CloudPlacement = &placement
 	}
 	p.checkRender(name, base, cfg)
+	p.checkAzure(name, base, cfg)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
@@ -1495,6 +1528,47 @@ func (p *planner) buildContext(name, base string, b *manifest.Build, gs *graph.S
 	}
 }
 
+// resourceEnvKey is the conventional variable name for a resource kind, or
+// "" when the kind has none. The plan's recipe registry names the kinds
+// Loomplane runs itself, and envKeys the rest.
+func (p *planner) resourceEnvKey(kind string) string {
+	if key := p.kinds().EnvKey(kind); key != "" {
+		return key
+	}
+	return envKeys[kind]
+}
+
+// linkResource gives a service the variable for a resource it needs. A
+// service that was deployed with the variable this resource used to get
+// (MariaDB's was DB_URL, Valkey's CACHE_URL) keeps it beside the new one, so
+// the next release doesn't break it, and the plan says to move off it.
+func (p *planner) linkResource(name string, a *Action, need, key, path string) {
+	a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+	legacy := envName(need) + "_URL"
+	if legacy == key || !p.deployedWith(a.ID, need, legacy) {
+		return
+	}
+	a.Service.Env = append(a.Service.Env, EnvLink{Key: legacy, From: need, Subject: ResourceSubject})
+	p.warn(Finding{
+		Code: "env-key-renamed", Subject: ServiceSubject, Name: name, Path: path,
+		Message: fmt.Sprintf("%s still gets %s for %s, as it was deployed, and now also gets %s. Move it to %s, then remove the old variable.", name, legacy, need, key, key),
+	})
+}
+
+// deployedWith reports whether the service's last applied config gave it
+// the variable key for the thing it needs.
+func (p *planner) deployedWith(id, need, key string) bool {
+	b := p.bindings[id]
+	if b == nil || len(b.Config) == 0 {
+		return false
+	}
+	var cfg ServiceConfig
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		return false
+	}
+	return slices.ContainsFunc(cfg.Env, func(e EnvLink) bool { return e.From == need && e.Key == key })
+}
+
 // link gives a service the variables for what it needs, and orders it
 // after them.
 func (p *planner) link(name string, a *Action) {
@@ -1502,10 +1576,21 @@ func (p *planner) link(name string, a *Action) {
 	needs := m.Services[name].Needs
 	base := "services." + name + ".needs"
 	keys := make([]string, len(needs))
+	// A composed catalog resource gives a variable for each output.
+	outputs := make([][]recipes.Output, len(needs))
+	takes := make([][]recipes.ConsumerOption, len(needs))
+	composed := make([]bool, len(needs))
 	count := map[string]int{}
 	for i, need := range needs {
 		if r, ok := m.Resources[need]; ok {
-			keys[i] = envKeys[r.Kind]
+			if kind, ok := p.kinds().Kind(r.Kind); ok {
+				outputs[i], takes[i], composed[i] = kind.Outputs, kind.ConsumerOptions, true
+				for _, o := range kind.Outputs {
+					count[o.EnvKey]++
+				}
+				continue
+			}
+			keys[i] = p.resourceEnvKey(r.Kind)
 		}
 		if keys[i] == "" {
 			keys[i] = envName(need) + "_URL"
@@ -1517,6 +1602,7 @@ func (p *planner) link(name string, a *Action) {
 		if count[key] > 1 {
 			key = envName(need) + "_URL"
 		}
+		options := p.consumerOptions(name, need, takes[i])
 		if r, ok := m.Resources[need]; ok {
 			dep := p.resources[need]
 			if dep == nil {
@@ -1528,18 +1614,27 @@ func (p *planner) link(name string, a *Action) {
 				}
 				continue
 			}
-			if dep.Resource != nil && dep.Resource.Catalog != nil {
+			if dep.Resource != nil && (dep.Resource.Catalog != nil || dep.Resource.Composition != nil) {
 				resourceTarget := &ServiceConfig{Target: dep.Resource.Target, TargetSettings: dep.Resource.TargetSettings}
 				if !sameTargetNetwork(a.Service, resourceTarget, p.cloud(a.Provider), p.cloud(dep.Provider)) {
-					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: "The private database and its dependent service must run on the same checked target network."})
+					message := "The private database and its dependent service must run on the same checked target network."
+					if dep.Resource.Composition != nil {
+						message = fmt.Sprintf("%s and %s must run on the same checked target network.", name, need)
+					}
+					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
+			}
+			if composed[i] {
+				p.linkComposition(a, need, outputs[i], options, count)
+				a.DependsOn = append(a.DependsOn, dep.ID)
+				continue
 			}
 			if rc, sc := p.cloud(dep.Provider), p.cloud(a.Provider); rc != sc {
 				if l := p.reachOver(sc, rc); l != nil {
 					// Over the link, the resource's private address works.
 					p.throughLink(a, l)
-					a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+					p.linkResource(name, a, need, key, base)
 					a.DependsOn = append(a.DependsOn, dep.ID)
 					continue
 				}
@@ -1554,7 +1649,7 @@ func (p *planner) link(name string, a *Action) {
 				continue
 			}
 
-			a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+			p.linkResource(name, a, need, key, base)
 			a.DependsOn = append(a.DependsOn, dep.ID)
 			continue
 		}
@@ -1590,7 +1685,7 @@ func (p *planner) link(name string, a *Action) {
 					Message: fmt.Sprintf("%s needs private service %s on another server or cluster namespace. Choose the same target or configure an externally reachable address through variables.", name, need)})
 				continue
 			}
-		case !dep.Service.Public && !OwnedCloud(p.cloud(dep.Provider)) && p.cloud(dep.Provider) == p.cloud(a.Provider) && (a.Service.CloudPlacement != nil || dep.Service.CloudPlacement != nil) && (!p.sameDeploymentAccount(a, dep) || a.Region != dep.Region && dep.Provider == ecsFargate):
+		case !dep.Service.Public && !OwnedCloud(p.cloud(dep.Provider)) && p.cloud(dep.Provider) == p.cloud(a.Provider) && (a.Service.CloudPlacement != nil || dep.Service.CloudPlacement != nil) && (!p.sameDeploymentAccount(a, dep) || a.Region != dep.Region && (dep.Provider == ecsFargate || dep.Provider == azureApps)):
 			p.problem(Finding{Code: "private-across-accounts", Subject: ServiceSubject, Name: name, Path: base, Message: fmt.Sprintf("%s needs private service %s in another deployment account or network. Choose the same account and region, or expose a reachable endpoint.", name, need)})
 			continue
 		case dep.Provider == ecsFargate && a.Provider == ecsFargate && ((a.Service.CloudPlacement == nil && dep.Service.CloudPlacement == nil) || p.sameDeploymentAccount(a, dep) && a.Region == dep.Region):
@@ -1611,6 +1706,11 @@ func (p *planner) link(name string, a *Action) {
 			// Render's private network: the dependency's address is its
 			// name there, which Render gives it when it's made, so the
 			// runner takes it from the dependency's binding.
+		case !dep.Service.Public && dep.Provider == azureApps && a.Provider == azureApps && p.sameDeploymentAccount(a, dep) && a.Region == dep.Region:
+			// Internal ingress reaches the apps in the same Container Apps
+			// environment, which is one per connection and region. The
+			// dependency's address is its internal FQDN, which Azure gives
+			// it when it's made, so the runner takes it from the binding.
 		case !dep.Service.Public && dep.Provider == cloudRun:
 			p.warn(Finding{
 				Code: "authenticated-call", Subject: ServiceSubject, Name: name, Path: base,
@@ -1631,6 +1731,7 @@ func (p *planner) link(name string, a *Action) {
 	// The variables are part of the configuration, so the comparison with
 	// what's deployed has to happen after them.
 	p.diff(a, a.Service, a.Provider, a.Region)
+	p.optionChanges(a)
 }
 
 // Targets the planner knows how services on them reach each other.
@@ -1638,6 +1739,7 @@ const (
 	ecsFargate   = "ecs-fargate"
 	cloudRun     = "cloud-run"
 	renderTarget = "render"
+	azureApps    = "azure-container-apps"
 )
 
 // renderNative are the ecosystems Render builds without a Dockerfile.
@@ -1661,6 +1763,19 @@ func (p *planner) checkRender(name, base string, cfg *ServiceConfig) {
 			Message: fmt.Sprintf("Render starts a Node service with npm start, and %s's package.json has no start script. Add one, or a Dockerfile.", name),
 		})
 	}
+}
+
+// checkAzure reports what Azure can't build: Container Apps runs a static
+// site as a container, and buildpacks don't produce a static file server,
+// so it needs a Dockerfile that serves the built files.
+func (p *planner) checkAzure(name, base string, cfg *ServiceConfig) {
+	if cfg.Provider != azureApps || cfg.Workload != provider.StaticSite || cfg.Image != "" {
+		return
+	}
+	p.problem(Finding{
+		Code: "azure-static-needs-dockerfile", Subject: ServiceSubject, Name: name, Path: base + ".source",
+		Message: fmt.Sprintf("Azure runs a static site as a container, and buildpacks don't make a file server, so %s needs a Dockerfile that serves the built files. Add one, or run %s somewhere else.", name, name),
+	})
 }
 
 func ecosystemTitle(e discovery.Ecosystem) string {
@@ -1701,10 +1816,15 @@ func (p *planner) order() {
 				step = max(step, depth(need, seen)+1)
 			}
 		}
-		// A held service also runs after what's kept only for it.
+		// A held service also runs after what's kept only for it, and
+		// any service after the resources it needs, which is later than
+		// step 1 for a composed catalog resource.
 		for _, id := range a.DependsOn {
 			if r := p.retained[id]; r != nil {
 				step = max(step, r.Step+1)
+			}
+			if name, ok := strings.CutPrefix(id, string(ResourceSubject)+":"); ok && p.resources[name] != nil {
+				step = max(step, p.resources[name].Step+1)
 			}
 		}
 		a.Step = step
@@ -1797,6 +1917,17 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 			var previous ServiceConfig
 			if json.Unmarshal(b.Config, &previous) == nil {
 				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Service.CloudPlacement
+				if a.AdoptCloudPlacement {
+					a.CloudAdoption = ReviewCloudAdoption(b)
+				}
+			}
+		}
+		// A composed resource and its components adopt their placement the
+		// same way. An engine never has one.
+		if a.Resource != nil && a.Resource.CloudPlacement != nil {
+			var previous ResourceConfig
+			if json.Unmarshal(b.Config, &previous) == nil {
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Resource.CloudPlacement
 				if a.AdoptCloudPlacement {
 					a.CloudAdoption = ReviewCloudAdoption(b)
 				}
@@ -2068,6 +2199,7 @@ func (p *planner) planDeletes() {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	composed := p.composedBindings()
 	for _, id := range ids {
 		b := p.bindings[id]
 		if p.planned(b.Subject, b.Name) != nil || p.retained[id] != nil {
@@ -2079,20 +2211,34 @@ func (p *planner) planDeletes() {
 				continue
 			}
 		}
-		reason := fmt.Sprintf("The manifest no longer has %s.", b.Name)
-		if wanted, on := p.wanted(b); wanted {
+		// A part of a composed resource goes with it, or when the
+		// resource no longer has it.
+		of, part := composed[id]
+		owner := b
+		if part {
+			owner = &Binding{Subject: ResourceSubject, Name: of.parent}
+		}
+		reason := fmt.Sprintf("The manifest no longer has %s.", owner.Name)
+		if wanted, on := p.wanted(owner); part && p.resources[of.parent] != nil {
+			reason = fmt.Sprintf("%s no longer has %s.", of.parent, b.Name)
+		} else if wanted {
 			if on {
 				continue // it couldn't be planned, and a problem says why
 			}
-			reason = fmt.Sprintf("%s is off in %s.", b.Name, p.in.Environment)
+			reason = fmt.Sprintf("%s is off in %s.", owner.Name, p.in.Environment)
 		}
 		step := last + 1
 		if b.Subject == ResourceSubject {
 			step = last + 2
-			p.warn(Finding{
-				Code: "data-loss", Subject: ResourceSubject, Name: b.Name, Path: "resources",
-				Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
-			})
+			if of.last {
+				step = last + 3
+			}
+			if !of.stateless {
+				p.warn(Finding{
+					Code: "data-loss", Subject: ResourceSubject, Name: b.Name, Path: "resources",
+					Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
+				})
+			}
 		}
 		connectionID := p.deleteThrough(b)
 		p.actions = append(p.actions, &Action{
@@ -2321,6 +2467,9 @@ func (p *planner) creates(b *Binding) string {
 	if b.Subject == ResourceSubject {
 		var cfg ResourceConfig
 		if json.Unmarshal(b.Config, &cfg) == nil {
+			if creates := p.composedCreates(cfg); creates != "" {
+				return creates
+			}
 			if offer, ok := prov.Provisioning(cfg.Kind); ok {
 				return offer.Creates
 			}

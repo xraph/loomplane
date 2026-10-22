@@ -1,6 +1,6 @@
 module github.com/xraph/loomplane
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -29,13 +29,14 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.9.0
 	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/xraph/authsome v1.7.3-0.20261013045248-b3fd5f9edebc
+	github.com/xraph/bastion v1.2.3-0.20261013131827-23c004a37e64
 	github.com/xraph/chronicle v1.9.0
 	github.com/xraph/confy v1.1.0
 	github.com/xraph/ctrlplane v1.8.0
 	github.com/xraph/dispatch v1.9.1
-	github.com/xraph/forge v1.12.9
-	github.com/xraph/forge/extensions/conduit v1.12.9
-	github.com/xraph/go-utils v1.4.1
+	github.com/xraph/forge v1.13.0
+	github.com/xraph/forge/extensions/conduit v1.13.0
+	github.com/xraph/go-utils v1.5.0
 	github.com/xraph/grove v1.8.0
 	github.com/xraph/grove/drivers/pgdriver v1.8.0
 	github.com/xraph/grove/drivers/sqlitedriver v1.8.0
@@ -51,6 +52,7 @@ require (
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
+	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.23.0
 	google.golang.org/grpc v1.83.2
@@ -59,6 +61,8 @@ require (
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1
 	k8s.io/client-go v0.37.1
+	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -186,8 +190,8 @@ require (
 	github.com/xlab/treeprint v1.2.0 // indirect
 	github.com/xraph/farp v1.3.1 // indirect
 	github.com/xraph/farp/discovery v1.3.1 // indirect
-	github.com/xraph/forge/extensions/auth v1.12.9 // indirect
-	github.com/xraph/forge/extensions/discovery v1.12.9 // indirect
+	github.com/xraph/forge/extensions/auth v1.13.0 // indirect
+	github.com/xraph/forge/extensions/discovery v1.13.0 // indirect
 	github.com/xraph/grove/drivers/mongodriver v1.8.0 // indirect
 	github.com/xraph/grove/kv v1.8.0 // indirect
 	github.com/xraph/ledger v1.7.0 // indirect
@@ -203,12 +207,14 @@ require (
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.70.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.21.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.46.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
+	go.opentelemetry.io/otel/sdk/log v0.21.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
@@ -218,7 +224,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
-	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
@@ -231,7 +236,6 @@ require (
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
 	k8s.io/streaming v0.37.1 // indirect
-	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
 	modernc.org/libc v1.75.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.0 // indirect
@@ -241,5 +245,4 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.21.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )

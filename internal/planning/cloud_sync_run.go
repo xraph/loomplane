@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // CloudSyncDeployer uses the existing runner for both apply and cleanup.
@@ -29,18 +31,23 @@ func (s *Service) ValidateCloudSync(ctx context.Context, plan *Plan) error {
 	if err != nil {
 		return err
 	}
-	sync, snapshot, err := st.GetSync(ctx, plan.OrgID, plan.ProjectID, plan.CloudSyncID)
+	sync, snapshot, err := syncForPlan(ctx, st, plan, plan.CloudSyncID)
 	if err != nil {
 		return err
 	}
 	if sync.Status != cloudprofiles.SyncRunning && sync.Status != cloudprofiles.SyncCleanup {
 		return cloudprofiles.ErrConflict
 	}
-	if err := s.authorizeCloudSync(ctx, snapshot.Actor, plan.ProjectID); err != nil {
-		return err
+	if authErr := s.authorizeStoredCloudSync(ctx, snapshot.Actor, sync, snapshot); authErr != nil {
+		return authErr
+	}
+	if sync.Status != cloudprofiles.SyncCleanup {
+		if grantErr := validateSyncGrants(ctx, st, plan.OrgID, snapshot); grantErr != nil {
+			return grantErr
+		}
 	}
 	for _, env := range snapshot.Environments {
-		if env.EnvironmentID != plan.EnvironmentID {
+		if env.EnvironmentID != plan.EnvironmentID || cloudprofiles.ParticipantProject(env.ProjectID, sync.ProjectID) != plan.ProjectID {
 			continue
 		}
 		var expected Plan
@@ -94,18 +101,29 @@ func (s *Service) reconcileCloudSync(ctx context.Context, st cloudprofiles.SyncS
 		sync.Error = cause.Error()
 		return errors.Join(cause, st.SaveSync(context.WithoutCancel(ctx), sync, snapshot))
 	}
-	if err = s.authorizeCloudSync(ctx, snapshot.Actor, project); err != nil {
+	if err = s.authorizeStoredCloudSync(ctx, snapshot.Actor, sync, snapshot); err != nil {
 		return fail(err)
 	}
 	if err = s.validateSnapshotConnections(ctx, org, snapshot); err != nil {
 		return fail(err)
 	}
+	if slices.ContainsFunc(sync.Environments, func(env cloudprofiles.EnvironmentChange) bool { return env.Status != cloudprofiles.SyncSucceeded }) {
+		if err = validateSyncGrants(ctx, st, org, snapshot); err != nil {
+			return fail(err)
+		}
+	}
 	if s.cloudSyncRunner == nil {
 		return fail(errors.New("the Cloud sync runner is unavailable"))
 	}
-	plans, ok := s.store.(CloudSyncPlanStore)
-	if !ok {
-		return fail(errors.New("the Cloud sync plan storage is unavailable"))
+	// Resolve every participant before the first runtime effect. Legacy pooled
+	// reviews must be reverted and reviewed again if no accepted plan exists.
+	accepted := map[string]*Plan{}
+	for _, env := range snapshot.Environments {
+		plan, planErr := s.acceptedCloudPlan(ctx, sync, env)
+		if planErr != nil {
+			return fail(planErr)
+		}
+		accepted[env.EnvironmentID] = plan
 	}
 	sync.Status = cloudprofiles.SyncRunning
 	if saveErr := st.SaveSync(ctx, sync, snapshot); saveErr != nil {
@@ -116,32 +134,13 @@ func (s *Service) reconcileCloudSync(ctx context.Context, st cloudprofiles.SyncS
 		if env.Status == cloudprofiles.SyncSucceeded {
 			continue
 		}
-		var pinned cloudprofiles.EnvironmentSnapshot
-		for _, candidate := range snapshot.Environments {
-			if candidate.EnvironmentID == env.EnvironmentID {
-				pinned = candidate
-			}
-		}
-		var plan Plan
-		if err = json.Unmarshal(pinned.Plan, &plan); err != nil {
-			return fail(err)
-		}
+		plan := accepted[env.EnvironmentID]
 		if len(env.Services) == 0 {
 			env.Status = cloudprofiles.SyncSucceeded
 			if saveErr := st.SaveSync(ctx, sync, snapshot); saveErr != nil {
 				return saveErr
 			}
 			continue
-		}
-		plan.CloudSyncID = sync.ID
-		plan.ID = migrationPlanID(sync.ID, env.EnvironmentID)
-		plan.DecidedBy = snapshot.Actor.UserID
-		plan.Revision, err = Digest(plan.Actions)
-		if err != nil {
-			return fail(err)
-		}
-		if err = plans.PutCloudSyncPlan(ctx, &plan); err != nil {
-			return fail(err)
 		}
 		env.PlanID = plan.ID
 		if saveErr := st.SaveSync(ctx, sync, snapshot); saveErr != nil {
@@ -244,14 +243,14 @@ func (s *Service) ValidateCloudSyncCleanup(ctx context.Context, plan *Plan, comp
 	if err != nil {
 		return err
 	}
-	compensation, snapshot, err := st.GetSync(ctx, plan.OrgID, plan.ProjectID, compensationID)
+	compensation, snapshot, err := syncForPlan(ctx, st, plan, compensationID)
 	if err != nil {
 		return err
 	}
 	if compensation.Status != cloudprofiles.SyncCleanup || compensation.Reverts != plan.CloudSyncID {
 		return cloudprofiles.ErrConflict
 	}
-	if authErr := s.authorizeCloudSync(ctx, snapshot.Actor, plan.ProjectID); authErr != nil {
+	if authErr := s.authorizeStoredCloudSync(ctx, snapshot.Actor, compensation, snapshot); authErr != nil {
 		return authErr
 	}
 	included := false
@@ -263,7 +262,7 @@ func (s *Service) ValidateCloudSyncCleanup(ctx context.Context, plan *Plan, comp
 	if !included {
 		return cloudprofiles.ErrNotFound
 	}
-	original, retained, err := st.GetSync(ctx, plan.OrgID, plan.ProjectID, plan.CloudSyncID)
+	original, retained, err := syncForPlan(ctx, st, plan, plan.CloudSyncID)
 	if err != nil {
 		return err
 	}
@@ -292,4 +291,80 @@ func (s *Service) ValidateCloudSyncCleanup(ctx context.Context, plan *Plan, comp
 		return s.validateSnapshotConnections(ctx, plan.OrgID, retained)
 	}
 	return cloudprofiles.ErrNotFound
+}
+
+func syncForPlan(ctx context.Context, st cloudprofiles.SyncStore, plan *Plan, id string) (*cloudprofiles.Sync, *cloudprofiles.Snapshot, error) {
+	if reader, ok := st.(interface {
+		SyncForParticipant(context.Context, string, string, string, string) (*cloudprofiles.Sync, *cloudprofiles.Snapshot, error)
+	}); ok {
+		return reader.SyncForParticipant(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, id)
+	}
+	return st.GetSync(ctx, plan.OrgID, plan.ProjectID, id)
+}
+func validateSyncGrants(ctx context.Context, st cloudprofiles.SyncStore, org string, snapshot *cloudprofiles.Snapshot) error {
+	if reader, ok := st.(interface {
+		ValidateGrants(context.Context, string, []cloudprofiles.ProjectGrant) error
+	}); ok {
+		return reader.ValidateGrants(ctx, org, snapshot.Grants)
+	}
+	if len(snapshot.Grants) > 0 {
+		return cloudprofiles.ErrInvalid
+	}
+	return nil
+}
+
+func (s *Service) authorizeStoredCloudSync(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, snapshot *cloudprofiles.Snapshot) error {
+	if sync.TargetID != "" || snapshot.Shared {
+		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
+	}
+	return s.authorizeCloudSync(ctx, p, sync.ProjectID)
+}
+
+// acceptedCloudPlan reuses admission's exact saved plan. Old managed reviews
+// retain their supported recovery path; absent pooled plans need a new review.
+func (s *Service) acceptedCloudPlan(ctx context.Context, sync *cloudprofiles.Sync, env cloudprofiles.EnvironmentSnapshot) (*Plan, error) {
+	var expected Plan
+	if err := json.Unmarshal(env.Plan, &expected); err != nil {
+		return nil, err
+	}
+	if expected.OrgID != sync.OrgID || expected.ProjectID != cloudprofiles.ParticipantProject(env.ProjectID, sync.ProjectID) || expected.EnvironmentID != env.EnvironmentID {
+		return nil, cloudprofiles.ErrConflict
+	}
+	if !slices.ContainsFunc(expected.Actions, func(a Action) bool { return a.Op != Keep || a.AdoptCloudPlacement }) {
+		return &expected, nil
+	}
+	expected.ID = migrationPlanID(sync.ID, env.EnvironmentID)
+	expected.CloudSyncID = sync.ID
+	revision, err := Digest(expected.Actions)
+	if err != nil {
+		return nil, err
+	}
+	expected.Revision = revision
+	saved, err := s.store.GetPlan(ctx, sync.OrgID, expected.ID)
+	if errors.Is(err, ErrNotFound) && env.AcceptedPlan == nil {
+		if slices.ContainsFunc(expected.Actions, func(a Action) bool {
+			return a.Service != nil && a.Service.CloudPlacement != nil && a.Service.CloudPlacement.PoolID != ""
+		}) {
+			return nil, errors.New("this legacy Cloud sync has no accepted pool plan; review and accept a revert before reviewing the target change again")
+		}
+		plans, ok := s.store.(CloudSyncPlanStore)
+		if !ok {
+			return nil, errors.New("the Cloud sync plan storage is unavailable")
+		}
+		if planErr := plans.PutCloudSyncPlan(ctx, &expected); planErr != nil {
+			return nil, planErr
+		}
+		saved, err = s.store.GetPlan(ctx, sync.OrgID, expected.ID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	actual, err := Digest(saved.Actions)
+	if err != nil {
+		return nil, err
+	}
+	if saved.OrgID != sync.OrgID || saved.ProjectID != cloudprofiles.ParticipantProject(env.ProjectID, sync.ProjectID) || saved.EnvironmentID != env.EnvironmentID || saved.ID != expected.ID || saved.CloudSyncID != sync.ID || saved.Revision != revision || actual != revision || saved.ManifestID != expected.ManifestID || saved.ManifestRevision != expected.ManifestRevision || saved.Status != StatusApproved || saved.Executable != expected.Executable {
+		return nil, cloudprofiles.ErrConflict
+	}
+	return saved, nil
 }

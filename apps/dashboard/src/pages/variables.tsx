@@ -85,10 +85,7 @@ export function Variables() {
           description="Organization-wide values every project inherits. A project, or one of its services, can override any of them on its own page."
           actions={
             mayManage && (
-              <Button
-                className="rounded-full"
-                onClick={() => setDialog({ kind: "create" })}
-              >
+              <Button onClick={() => setDialog({ kind: "create" })}>
                 <PlusIcon />
                 Set variable
               </Button>
@@ -107,7 +104,7 @@ export function Variables() {
           <Skeleton className="h-40 w-full rounded-xl" />
         )}
         {list.data && list.data.variables.length === 0 && (
-          <Empty className="border border-dashed">
+          <Empty>
             <EmptyHeader>
               <EmptyTitle>No organization-wide variables yet</EmptyTitle>
               <EmptyDescription>

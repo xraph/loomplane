@@ -1,35 +1,40 @@
-// A cloud's small monochrome tile, the way the mock draws providers.
+// A cloud's tile: the provider's own mark where it has one, a plain icon
+// for SSH servers and registries.
+import { PackageIcon, ServerIcon } from "lucide-react"
+
+import { ProductIcon, type ProductIconSize } from "@/components/product-icon"
+import type { ProductKey } from "@/components/product-logos"
 import { cloudLabel } from "@/lib/clouds"
-import { cn } from "@/lib/utils"
+
+const products: Record<string, ProductKey> = {
+  vercel: "vercel",
+  aws: "aws",
+  gcp: "gcp",
+  render: "render",
+  digitalocean: "digitalocean",
+  kubernetes: "kubernetes",
+}
+
+export function cloudProduct(cloud: string): ProductKey | undefined {
+  return products[cloud]
+}
 
 export function CloudGlyph({
   cloud,
+  size = "xs",
   className,
 }: {
   cloud: string
+  size?: ProductIconSize
   className?: string
 }) {
-  const label = cloudLabel(cloud)
   return (
-    <span
-      title={label}
-      className={cn(
-        "inline-flex size-5 shrink-0 items-center justify-center rounded-[5px] border bg-background text-[9px] leading-none font-semibold tracking-tight text-foreground",
-        className
-      )}
-    >
-      {cloud === "vercel" ? (
-        <svg viewBox="0 0 10 10" className="size-2.5" aria-hidden="true">
-          <path d="M5 1.2 9.2 8.6H.8Z" className="fill-current" />
-        </svg>
-      ) : cloud === "aws" ? (
-        "aws"
-      ) : cloud === "gcp" ? (
-        "G"
-      ) : (
-        (label[0]?.toUpperCase() ?? "?")
-      )}
-      <span className="sr-only">{label}</span>
-    </span>
+    <ProductIcon
+      product={cloudProduct(cloud)}
+      fallback={cloud === "registry" ? PackageIcon : ServerIcon}
+      label={cloudLabel(cloud)}
+      size={size}
+      className={className}
+    />
   )
 }

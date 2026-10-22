@@ -11,9 +11,15 @@ import (
 // ErrBusy identifies an environment or target with unfinished release work.
 var ErrBusy = errors.New("environment has unfinished deployment or Cloud sync work")
 
-// ChangeInput selects either a target placement or an environment assignment.
-// Revision is the target revision, or the assignment generation (zero initially).
+// ChangeInput selects a target placement, a Cloud's default placement or an
+// environment assignment. Revision is the target revision, the Cloud revision
+// for a default switch, or the assignment generation (zero initially). A
+// default switch with no provider clears the default.
 type ChangeInput struct {
+	Runtime string `json:"runtime,omitempty"`
+	PoolID  string `json:"pool_id,omitempty"`
+	Default bool   `json:"default,omitempty"`
+
 	Revision      int64  `json:"revision"`
 	CloudID       string `json:"cloud_id"`
 	TargetID      string `json:"target_id,omitempty"`
@@ -25,6 +31,7 @@ type ChangeInput struct {
 
 // EnvironmentChange describes the reviewed work in one environment.
 type EnvironmentChange struct {
+	ProjectID       string      `json:"project_id,omitempty"`
 	EnvironmentID   string      `json:"environment_id"`
 	Environment     string      `json:"environment"`
 	Services        []string    `json:"services"`
@@ -56,6 +63,8 @@ type Preview struct {
 	Input            ChangeInput         `json:"input"`
 	Before           *Target             `json:"before,omitempty"`
 	After            *Target             `json:"after,omitempty"`
+	BeforeDefault    *DefaultPlacement   `json:"before_default,omitempty"`
+	AfterDefault     *DefaultPlacement   `json:"after_default,omitempty"`
 	BeforeAssignment *Assignment         `json:"before_assignment,omitempty"`
 	AfterAssignment  *Assignment         `json:"after_assignment,omitempty"`
 	Environments     []EnvironmentChange `json:"environments"`
@@ -78,29 +87,35 @@ const (
 
 // Sync tracks deployment and routing checkpoints across all affected environments.
 type Sync struct {
-	ID           string              `json:"id" forge:"id"`
-	OrgID        string              `json:"org_id"`
-	ProjectID    string              `json:"project_id"`
-	CloudID      string              `json:"cloud_id"`
-	TargetID     string              `json:"target_id,omitempty"`
-	PreviewID    string              `json:"preview_id"`
-	Status       string              `json:"status"`
-	CreatedBy    string              `json:"created_by"`
-	Actor        security.Principal  `json:"-"`
-	Before       *Target             `json:"before,omitempty"`
-	After        *Target             `json:"after,omitempty"`
-	Environments []EnvironmentChange `json:"environments"`
-	Attempt      int                 `json:"attempt"`
-	Version      int64               `json:"-"`
-	Error        string              `json:"error,omitempty"`
-	Reverts      string              `json:"reverts,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
-	UpdatedAt    time.Time           `json:"updated_at"`
+	ID        string             `json:"id" forge:"id"`
+	OrgID     string             `json:"org_id"`
+	ProjectID string             `json:"project_id"`
+	CloudID   string             `json:"cloud_id"`
+	TargetID  string             `json:"target_id,omitempty"`
+	Default   bool               `json:"default,omitempty"`
+	PreviewID string             `json:"preview_id"`
+	Status    string             `json:"status"`
+	CreatedBy string             `json:"created_by"`
+	Actor     security.Principal `json:"-"`
+	Before    *Target            `json:"before,omitempty"`
+	After     *Target            `json:"after,omitempty"`
+	// BeforeDefault and AfterDefault record a reviewed default switch.
+	BeforeDefault *DefaultPlacement   `json:"before_default,omitempty"`
+	AfterDefault  *DefaultPlacement   `json:"after_default,omitempty"`
+	Environments  []EnvironmentChange `json:"environments"`
+	Attempt       int                 `json:"attempt"`
+	Version       int64               `json:"-"`
+	Error         string              `json:"error,omitempty"`
+	Reverts       string              `json:"reverts,omitempty"`
+	CreatedAt     time.Time           `json:"created_at"`
+	UpdatedAt     time.Time           `json:"updated_at"`
 }
 
 // Snapshot is stored separately from API JSON. It contains references, never
 // plaintext variables or credentials. Plans hold per-binding applied inputs.
 type Snapshot struct {
+	Shared               bool                  `json:"shared,omitempty"`
+	Grants               []ProjectGrant        `json:"grants,omitempty"`
 	ProfileRevisions     map[string]int64      `json:"profile_revisions,omitempty"`
 	TargetRevisions      map[string]int64      `json:"target_revisions,omitempty"`
 	ConnectionIdentities map[string]string     `json:"connection_identities,omitempty"`
@@ -109,10 +124,35 @@ type Snapshot struct {
 	Connections          []string              `json:"connections"`
 }
 
+// AcceptedPlan is the exact plan materialized by reviewed sync acceptance.
+type AcceptedPlan struct {
+	ID               string          `json:"id"`
+	Revision         string          `json:"revision"`
+	ManifestID       string          `json:"manifest_id"`
+	ManifestRevision int             `json:"manifest_revision"`
+	Result           json.RawMessage `json:"result"`
+}
+
 // EnvironmentSnapshot compares the complete serving set during acceptance.
 type EnvironmentSnapshot struct {
+	Routes       json.RawMessage `json:"routes,omitempty"`
+	AcceptedPlan *AcceptedPlan   `json:"accepted_plan,omitempty"`
+
+	ProjectID          string          `json:"project_id,omitempty"`
 	EnvironmentID      string          `json:"environment_id"`
 	AssignmentRevision int64           `json:"assignment_revision"`
 	Bindings           json.RawMessage `json:"bindings"`
 	Plan               json.RawMessage `json:"plan"`
+}
+
+// Shared reports whether a change reaches every environment using the Cloud,
+// rather than one environment's assignment.
+func (in ChangeInput) Shared() bool { return in.TargetID != "" || in.Default }
+
+// ParticipantProject preserves the original scope of legacy operation snapshots.
+func ParticipantProject(project, original string) string {
+	if project != "" {
+		return project
+	}
+	return original
 }

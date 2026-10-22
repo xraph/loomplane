@@ -1,4 +1,6 @@
 import {
+  BoxIcon,
+  ChevronRightIcon,
   CopyIcon,
   FolderGit2Icon,
   GitBranchIcon,
@@ -6,11 +8,12 @@ import {
   RocketIcon,
   SparklesIcon,
 } from "lucide-react"
-import { type ReactNode, useEffect, useRef, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useBindingsList,
   useEnvironmentsList,
   useProjectsDelete,
   useProjectsGet,
@@ -18,12 +21,14 @@ import {
   useProjectsUpdate,
 } from "@/client/forge/loomplane/hooks"
 import type {
+  Binding,
   Environment,
   Graph,
   Project,
   ProjectView,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
+import { useQueries } from "@/client/queries"
 import {
   AnalysisBanner,
   AnalysisHistory,
@@ -38,6 +43,8 @@ import {
   useAnalyses,
 } from "@/components/architecture"
 import { DeployTab } from "@/components/deploy"
+import { ProductIcon } from "@/components/product-icon"
+import { QueryError } from "@/components/query-error"
 import { EnvironmentCards } from "@/components/environment-manager"
 import { Page, PageHeading } from "@/components/page"
 import { ProjectStylePopover } from "@/components/project-style-picker"
@@ -83,15 +90,27 @@ import {
 import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Tabs,
+  TabsContent,
+  TabsCount,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
 import {
   analysisKey,
   ecosystemLabel,
   resourceLabel,
   shortSHA,
 } from "@/lib/architecture"
+import {
+  catalogKind,
+  catalogResources,
+  parseResourceConfig,
+} from "@/lib/catalog-kinds"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { ServiceRecovery } from "@/pages/service-catalog"
 import { projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -117,7 +136,7 @@ export function ProjectDetail({ id }: { id: string }) {
       <Page>
         {project.status === "error" &&
           (missing ? (
-            <Empty className="border border-dashed">
+            <Empty preview={false}>
               <EmptyHeader>
                 <EmptyTitle>No such project here</EmptyTitle>
                 <EmptyDescription>
@@ -286,10 +305,7 @@ function Body({
               <AnalyzeActions project={project} running={analyses.running} />
             )}
             {can("deployment:create") && isReady(project.status) && (
-              <Button
-                className="rounded-full"
-                onClick={() => openDeploy({ project: project.id })}
-              >
+              <Button onClick={() => openDeploy({ project: project.id })}>
                 <RocketIcon />
                 Deploy
               </Button>
@@ -366,7 +382,7 @@ function Body({
           key={r.id}
           className="items-center gap-y-1 rounded-xl border-dashed border-weld/60 bg-[color-mix(in_oklch,var(--weld)_5%,var(--card))] p-4 has-[>svg]:gap-x-3 md:has-[>svg]:grid-cols-[auto_1fr_auto]"
         >
-          <SparklesIcon className="text-weld-ink size-5!" />
+          <SparklesIcon className="size-5! text-weld-ink" />
           <AlertTitle>
             Loomplane thinks {project.name} needs {needName(r.kind)}, but
             isn&apos;t sure
@@ -380,7 +396,6 @@ function Body({
           <div className="col-start-2 mt-2 flex gap-2 md:col-start-3 md:row-span-2 md:row-start-1 md:mt-0">
             <Button
               variant="outline"
-              className="rounded-full"
               onClick={() => setSelected({ kind: "resource", id: r.id })}
             >
               Review
@@ -389,28 +404,32 @@ function Body({
         </Alert>
       ))}
 
-      <Tabs defaultValue="graph">
-        <TabsList
-          variant="line"
-          className="mb-2 max-w-full justify-start overflow-x-auto"
-        >
+      {/* A service project from the catalog has no repository to graph, so
+          it opens on its backups. */}
+      <Tabs
+        defaultValue={
+          project.icon === "database" &&
+          project.repositories.length === 0 &&
+          can("service_backup:read")
+            ? "backups"
+            : "graph"
+        }
+      >
+        <TabsList variant="line" className="mb-3 max-w-full overflow-x-auto">
           <TabsTrigger value="graph">Graph</TabsTrigger>
           <TabsTrigger value="services">
             Services
-            {graph && (
-              <span className="text-muted-foreground tabular-nums">
-                {graph.services.length}
-              </span>
-            )}
+            {graph && <TabsCount>{graph.services.length}</TabsCount>}
           </TabsTrigger>
           <TabsTrigger value="variables">Variables</TabsTrigger>
           <TabsTrigger value="deploy">Deploy</TabsTrigger>
+          {can("service_backup:read") && (
+            <TabsTrigger value="backups">Backups</TabsTrigger>
+          )}
           <TabsTrigger value="analyses">
             Analyses
             {analyses.list.length > 0 && (
-              <span className="text-muted-foreground tabular-nums">
-                {analyses.list.length}
-              </span>
+              <TabsCount>{analyses.list.length}</TabsCount>
             )}
           </TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -442,6 +461,7 @@ function Body({
           </Discovered>
         </TabsContent>
         <TabsContent value="services" className="grid gap-4">
+          <Resources project={project} environments={environments} />
           <Discovered
             project={project}
             analyses={analyses}
@@ -484,6 +504,11 @@ function Body({
             <AnalysisHistory analyses={analyses.list} />
           )}
         </TabsContent>
+        {can("service_backup:read") && (
+          <TabsContent value="backups" className="grid gap-4">
+            <ServiceRecovery project={project.id} />
+          </TabsContent>
+        )}
         <TabsContent value="settings" className="grid gap-6">
           <Details project={project} />
           {can("project:delete") && <DeleteProject project={project} />}
@@ -516,6 +541,129 @@ function Body({
         </SheetContent>
       </Sheet>
     </>
+  )
+}
+
+/**
+ * Resources lists what runs as a resource in each environment, each row
+ * opening its service page. It shows nothing once every environment has
+ * answered with nothing deployed; an environment that couldn't be read or
+ * can't be seen says so, so it never reads as empty.
+ */
+export function Resources({
+  project,
+  environments,
+}: {
+  project: Project
+  environments?: Environment[]
+}) {
+  const list = useMemo(() => environments ?? [], [environments])
+  const args = useMemo(
+    () =>
+      list.map((e) => ({
+        path: { id: project.id },
+        query: { environment: e.name },
+      })),
+    [list, project.id]
+  )
+  const { states, refetch } = useQueries(useBindingsList, args)
+  const rows = list.flatMap((environment, i) =>
+    catalogResources(states[i]?.data?.bindings ?? []).map((binding) => ({
+      environment,
+      binding,
+    }))
+  )
+  const failures = list.flatMap((environment, i) => {
+    const state = states[i]
+    return state?.status === "error"
+      ? [{ environment, error: state.error }]
+      : []
+  })
+  const forbidden = (error: unknown) => [401, 403].includes(statusOf(error))
+  const denied = failures.filter((f) => forbidden(f.error))
+  const failed = failures.filter((f) => !forbidden(f.error))
+  const loading = !environments || states.some((s) => s?.status === "pending")
+  if (rows.length === 0 && failures.length === 0)
+    return loading ? (
+      <Skeleton
+        role="status"
+        aria-label="Loading resources"
+        className="h-12 w-full rounded-xl"
+      />
+    ) : null
+  const names = (items: { environment: Environment }[]) =>
+    items.map((f) => f.environment.name).join(", ")
+  return (
+    <section aria-label="Resources" className="grid gap-2">
+      <h2 className="text-[15px] font-semibold">
+        Resources{" "}
+        <span className="font-mono text-xs font-normal text-muted-foreground">
+          {rows.length}
+        </span>
+      </h2>
+      {failed.length > 0 && (
+        <QueryError
+          error={failed[0].error}
+          fallback={`What runs in ${names(failed)} couldn't be loaded.`}
+          retry={refetch}
+        />
+      )}
+      {denied.length > 0 && (
+        <p className="text-[13px] text-muted-foreground">
+          Your role can&apos;t see what runs in {names(denied)}.
+        </p>
+      )}
+      {rows.length > 0 && (
+        <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
+          {rows.map(({ environment, binding }) => (
+            <ResourceRow
+              key={`${environment.id}:${binding.id}`}
+              project={project}
+              environment={environment}
+              binding={binding}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ResourceRow({
+  project,
+  environment,
+  binding,
+}: {
+  project: Project
+  environment: Environment
+  binding: Binding
+}) {
+  const config = parseResourceConfig(binding)
+  const kind = config?.composition?.kind ?? config?.kind ?? binding.engine
+  const module = catalogKind(kind)
+  const title = module?.title ?? (kind ? resourceLabel(kind) : "Resource")
+  return (
+    <Link
+      to="/projects/$id/catalog/$resource"
+      params={{ id: project.id, resource: binding.name }}
+      search={{ environment: environment.id }}
+      className="group flex items-center gap-3 border-t px-4 py-2.5 text-foreground transition-colors first:border-t-0 hover:bg-subtle"
+    >
+      <ProductIcon
+        product={module?.logo}
+        fallback={BoxIcon}
+        label={title}
+        size="sm"
+      />
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className="truncate text-sm font-semibold">{binding.name}</span>
+        <span className="truncate text-xs text-muted-foreground">{title}</span>
+      </span>
+      <Badge variant="outline" className="h-5 shrink-0 font-normal capitalize">
+        {environment.name}
+      </Badge>
+      <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5" />
+    </Link>
   )
 }
 
@@ -677,11 +825,7 @@ function DeleteProject({ project }: { project: Project }) {
         <AlertDialog open={open} onOpenChange={setOpen}>
           <AlertDialogTrigger
             render={
-              <Button
-                variant="destructive"
-                className="rounded-full"
-                disabled={remove.isPending}
-              />
+              <Button variant="destructive" disabled={remove.isPending} />
             }
           >
             Delete project

@@ -51,7 +51,7 @@ For hot reload while you work on Loomplane itself, `make dev` serves the dashboa
 1. **New project**, with a GitHub URL. Any public monorepo works; private ones go through a GitHub App ([docs/github-app.md](docs/github-app.md)).
 2. **Analyze**. You get the services it builds, the packages they share and the databases they need, each linked to the line it came from.
 3. Open **Deploy**. Loomplane drafts a `loomplane.yaml`; edit it, and save it. [docs/manifest.md](docs/manifest.md) has every field.
-4. Under **Integrations**, connect the clouds it names: a Google Cloud service account key, a Vercel token, an AWS access key, a Render API key, a DigitalOcean API token. Each is checked with its cloud before it's kept, and Loomplane says which permissions are missing.
+4. Under **Integrations**, connect the clouds it names: a Google Cloud service account key, a Vercel token, an AWS access key, a Render API key, a DigitalOcean API token, an Azure service principal. Each is checked with its cloud before it's kept, and Loomplane says which permissions are missing.
 5. **Plan** an environment. You see every action, step by step, with anything in the way and anything worth knowing.
 6. An admin approves it. You watch each step build, deploy and answer, and the environment shows what runs where.
 
@@ -72,7 +72,7 @@ loomctl approve <plan-id>
 | Repository discovery | Go, Rust, Node, Python and JVM (Maven and Gradle) monorepos, Dockerfiles and Compose files, with Forge layouts, app roles and scoped backend configuration. [Discovery rules](docs/repository-discovery.md) cover examples and development helpers. |
 | `loomplane.yaml` | A versioned manifest, drafted from the analysis: services, resources, gateways, and overrides per environment. |
 | Plans | Every action a deployment would take, in order, with problems that block it. Approval names the revision you reviewed; a plan whose world changed comes back stale. |
-| Targets | Vercel, Cloud Run, ECS on Fargate, Render and DigitalOcean App Platform for services; Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage, S3, Render's Postgres and Key Value, and DigitalOcean's Managed PostgreSQL, MySQL and Valkey for databases, caches and buckets. Builds run on Cloud Build, CodeBuild, Vercel, Render and App Platform, in your accounts. |
+| Targets | Vercel, Cloud Run, ECS on Fargate, Render, DigitalOcean App Platform and Azure Container Apps for services; Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage, S3, Render's Postgres and Key Value, DigitalOcean's Managed PostgreSQL, MySQL and Valkey, and Azure Database for PostgreSQL and MySQL and Azure Managed Redis for databases, caches and buckets. Builds run on Cloud Build, CodeBuild, Vercel, Render, App Platform and ACR Tasks, in your accounts. |
 | Networking | Services find each other through variables. ECS services reach each other privately; private Cloud Run services only take calls from the project's own. |
 | Gateways | One public address routing paths to services, built on Bastion and run on your infrastructure. |
 | Secrets | Variables in layers (organization, project, service, by environment), secrets in Vault and then in each cloud's secret store, never shown again. |
@@ -133,6 +133,7 @@ Start with [config.yaml](config.yaml); your own overrides go in `config.local.ya
 | `LOOMPLANE_STORAGE_URL` | `.loomplane/storage` | Where deployment sources are kept, `file:///path` |
 | `LOOMPLANE_PLANNING_APPROVAL_WINDOW` | `168h` | How long a plan waits for a decision |
 | `LOOMPLANE_DRIFT_INTERVAL` | `30m` | How often deployments are checked for drift; `0` turns it off |
+| `LOOMPLANE_PLANNING_ENDPOINT_DENIED_CIDRS` | unset | Ranges an endpoint check from a Kubernetes target never connects to, such as `10.20.0.0/16`. Loomplane's own host, database and API are always refused |
 | `LOOMPLANE_GITHUB_*` | unset | The GitHub App for private repositories |
 | `LOOMPLANE_WORKER_HTTP_ADDR` | `:8781` | The worker's health checks |
 
@@ -179,7 +180,7 @@ loomplane/
 │   └── loomctl/              The command-line client and MCP server
 ├── internal/
 │   ├── apikeys/              API keys on Keysmith
-│   ├── clouds/               Google Cloud, AWS, Vercel, Render and DigitalOcean clients, and Ctrl Plane providers
+│   ├── clouds/               Google Cloud, AWS, Vercel, Render, DigitalOcean and Azure clients, and Ctrl Plane providers
 │   ├── connections/          Cloud connections, credentials in Vault
 │   ├── ctl/                  loomctl
 │   ├── deployments/          The runner, one executor per target, drift

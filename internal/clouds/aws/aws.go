@@ -36,7 +36,7 @@ var Actions = []string{
 	"iam:AttachRolePolicy", "iam:CreateRole", "iam:GetRole", "iam:PassRole", "iam:PutRolePolicy",
 	"logs:CreateLogGroup",
 	"rds:CreateDBInstance", "rds:CreateDBSubnetGroup", "rds:DeleteDBInstance", "rds:DescribeDBInstances",
-	"rds:ModifyDBInstance",
+	"rds:DescribeDBSnapshots", "rds:AddTagsToResource",
 	"s3:CreateBucket", "s3:DeleteBucket", "s3:DeleteObject", "s3:ListBucket", "s3:PutBucketPublicAccessBlock", "s3:PutObject",
 	"elasticache:CreateCacheSubnetGroup", "elasticache:CreateReplicationGroup", "elasticache:DeleteReplicationGroup",
 	"elasticache:DescribeReplicationGroups",

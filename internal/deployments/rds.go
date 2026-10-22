@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -12,14 +13,6 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
-)
-
-const (
-	// rdsClass is the instance an RDS database runs on: two burstable
-	// vCPUs and 1 GB on Graviton, the smallest class.
-	rdsClass = "db.t4g.micro"
-	// rdsStorageGB is the instance's gp3 disk, RDS's smallest.
-	rdsStorageGB = 20
 )
 
 // rdsEngines maps a resource kind to its RDS engine and port.
@@ -40,6 +33,9 @@ type RDS struct {
 }
 
 var _ Executor = (*RDS)(nil)
+
+// RetainCheckpointOnRetry preserves physical identity and removal proof.
+func (*RDS) RetainCheckpointOnRetry() bool { return true }
 
 func (r *RDS) session(conn *connections.Connection, cred []byte) (*aws.Session, error) {
 	key, err := aws.ParseKey(cred)
@@ -66,9 +62,41 @@ func (r *RDS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: rds provisions databases, not %s", ErrNoExecutor, job.Action.Subject)
 	}
+	request, err := managedDatabaseRequest(job, "rds")
+	if err != nil {
+		return nil, err
+	}
 	eng, ok := rdsEngines[cfg.Kind]
 	if !ok || cfg.Version == "" {
 		return nil, fmt.Errorf("rds doesn't offer %s %s", cfg.Kind, cfg.Version)
+	}
+	instance := SQLInstanceName(job)
+	physical := ""
+	existing := job.Binding != nil
+	if existing {
+		instance = job.Binding.ExternalID
+		physical = job.Binding.PhysicalID
+	}
+	state, err := readRDSState(job, cfg, instance, cfg.Region, physical, "apply")
+	if err != nil {
+		return nil, err
+	}
+	var password string
+	if state.Attempted || state.ResourceID != "" || existing {
+		kept, recallErr := job.Recall(ctx, passwordField)
+		if recallErr != nil && !errors.Is(recallErr, ErrNoCredential) {
+			return nil, recallErr
+		}
+		if len(kept) == 0 {
+			return nil, errors.New("the original RDS database has no kept password; use an explicit credential recovery operation")
+		}
+		password = string(kept)
+	} else {
+		var passwordErr error
+		password, passwordErr = keptPassword(ctx, job, rand.Text())
+		if passwordErr != nil {
+			return nil, passwordErr
+		}
 	}
 	s, err := r.session(job.Connection, job.Credential)
 	if err != nil {
@@ -96,34 +124,26 @@ func (r *RDS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if serr := s.EnsureDBSubnetGroup(ctx, subnets, net.Subnets); serr != nil {
 		return nil, serr
 	}
-	// RDS takes MySQL passwords of up to 41 characters, so one rand.Text
-	// (26, 130 bits) and not Cloud SQL's two.
-	password, isNew, err := keptPassword(ctx, job, rand.Text())
-	if err != nil {
-		return nil, err
-	}
-
 	job.Progress(StepDeploying, "Creating the database instance; this takes several minutes")
 	db := databaseName(job.Action.Name)
-	in, created, err := s.EnsureDBInstance(ctx, aws.DBInstanceSpec{
-		ID: SQLInstanceName(job), Engine: eng.engine, EngineVersion: cfg.Version, Class: rdsClass,
-		StorageGB: rdsStorageGB, Database: db, User: sqlUser, Password: password,
+	in, err := s.EnsureDBInstance(ctx, aws.DBInstanceSpec{
+		ResourceID: state.ResourceID, Intent: state.Intent, Existing: existing,
+		ID: instance, Engine: eng.engine, EngineVersion: cfg.Version, Class: request.ComputeClass,
+		StorageGB: request.StorageGB, Database: db, User: sqlUser, Password: password,
 		SubnetGroup: subnets, Group: group,
-	})
+	}, state.createTrack())
 	if err != nil {
 		return nil, err
 	}
-	// An instance that outlived its kept password gets the new one.
-	if isNew && !created {
-		if perr := s.SetDBPassword(ctx, in.ID, password); perr != nil {
-			return nil, perr
-		}
+	state.Stage = "ready"
+	if saveErr := state.save(); saveErr != nil {
+		return nil, saveErr
 	}
 	addr := rdsURL(cfg.Kind, password, in.Address, in.Port, db)
 	if err := job.Keep(ctx, ResourceURL, []byte(addr)); err != nil {
 		return nil, err
 	}
-	return &Outcome{ExternalID: in.ID, Revision: rdsRevision(in.Engine, in.EngineVersion)}, nil
+	return &Outcome{ExternalID: in.ID, PhysicalID: in.ResourceID, Revision: rdsRevision(in.Engine, in.EngineVersion)}, nil
 }
 
 // rdsURL is how a task reaches the database, over TLS, which RDS for
@@ -140,18 +160,51 @@ func rdsURL(kind, password, host string, port int32, db string) string {
 // Remove retains a final snapshot and automated backups before forgetting
 // the instance credentials. Snapshot failure keeps the binding retryable.
 func (r *RDS) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
-	s, err := r.session(job.Connection, job.Credential)
+	cfg, err := managedDatabaseBindingReview(b, job.Connection, "rds")
 	if err != nil {
 		return err
 	}
-	if err := s.DeleteDBInstance(ctx, b.ExternalID); err != nil {
+	region := b.Region
+	if region == "" {
+		region = job.Connection.Details["region"]
+	}
+	state, err := readRDSState(job, cfg, b.ExternalID, region, b.PhysicalID, "remove")
+	if err != nil {
 		return err
+	}
+	if state.Stage != "removed" {
+		s, sessionErr := r.session(job.Connection, job.Credential)
+		if sessionErr != nil {
+			return sessionErr
+		}
+		ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
+		if state.ResourceID == "" {
+			db, readErr := s.GetDBInstance(ctx, b.ExternalID)
+			if readErr != nil {
+				return readErr
+			}
+			if captureErr := state.capture(db.ResourceID); captureErr != nil {
+				return captureErr
+			}
+		}
+		point, removeErr := s.DeleteDBInstance(ctx, aws.DBRemovalSpec{ID: b.ExternalID, ResourceID: state.ResourceID, SnapshotID: aws.FinalDBSnapshotID(state.ResourceID)}, state.removeTrack())
+		if removeErr != nil {
+			return removeErr
+		}
+		state.Snapshot = point
+		state.Stage = "removed"
+		if saveErr := state.save(); saveErr != nil {
+			return saveErr
+		}
 	}
 	return job.Forget(ctx)
 }
 
 // Observe implements Executor.
 func (r *RDS) Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+	if _, err := managedDatabaseBindingReview(b, conn, "rds"); err != nil {
+		return nil, err
+	}
 	s, err := r.session(conn, credential)
 	if err != nil {
 		return nil, err
@@ -163,8 +216,11 @@ func (r *RDS) Observe(ctx context.Context, conn *connections.Connection, credent
 	if err != nil {
 		return nil, err
 	}
+	if b.PhysicalID != "" && in.ResourceID != b.PhysicalID {
+		return nil, errors.New("RDS database physical identity changed; review its ownership")
+	}
 	if in.Status == "deleting" {
-		return &Observation{}, nil
+		return nil, errors.New("RDS database removal is still in progress")
 	}
 	return &Observation{Exists: true, Revision: rdsRevision(in.Engine, in.EngineVersion)}, nil
 }

@@ -3,11 +3,14 @@ import {
   ActivityIcon,
   BellIcon,
   BracesIcon,
+  CloudIcon,
+  DatabaseIcon,
   FolderGit2Icon,
   FolderPlusIcon,
   LayoutDashboardIcon,
   RocketIcon,
   ShieldCheckIcon,
+  KeyRoundIcon,
   KeyboardIcon,
   MoonIcon,
   PlugIcon,
@@ -15,6 +18,7 @@ import {
   ServerIcon,
   UsersIcon,
 } from "lucide-react"
+import { type ReactNode, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
@@ -26,7 +30,7 @@ import {
   useSourcesList,
 } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { EnvBadge, RunDot } from "@/components/runs"
+import { RunDot } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { useTheme } from "@/components/theme-provider"
 import {
@@ -44,17 +48,72 @@ import { repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { useNavigate, usePath } from "@/lib/router"
-import { commitLabel, type Run } from "@/lib/runs"
+import { changesLine, commitLabel, type Run } from "@/lib/runs"
+import { cn } from "@/lib/utils"
 import { useRuns } from "@/lib/use-runs"
 
-// The newest few runs are worth jumping to; the rest are on Deployments.
+// Typing searches the newest few runs too; the rest are on Deployments.
 const recentShown = 6
 
+/** Glyph is an item's icon on a small tile, like the mock's. */
+function Glyph({
+  children,
+  className,
+}: {
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <span
+      className={cn(
+        "flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground group-data-selected/command-item:bg-background group-data-selected/command-item:text-foreground [&_svg:not([class*='size-'])]:size-3.5",
+        className
+      )}
+    >
+      {children}
+    </span>
+  )
+}
+
+/** Entry is one row: icon, a label that truncates, a hint and its keys. */
+function Entry({
+  icon,
+  label,
+  hint,
+  keys,
+  glyphClassName,
+}: {
+  icon: ReactNode
+  label: ReactNode
+  hint?: ReactNode
+  keys?: string
+  glyphClassName?: string
+}) {
+  return (
+    <>
+      <Glyph className={glyphClassName}>{icon}</Glyph>
+      <span className="grid min-w-0 flex-1 gap-px">
+        <span className="truncate font-medium">{label}</span>
+        {hint && (
+          <span className="truncate text-xs text-muted-foreground">{hint}</span>
+        )}
+      </span>
+      {keys && <CommandShortcut>{keys}</CommandShortcut>}
+    </>
+  )
+}
+
 /**
- * RunGroups offers the plans waiting on someone and the latest runs. Only
- * mounted while the menu is open.
+ * RunGroups offers the plans waiting on someone, and the latest runs once
+ * you type. Only mounted while the menu is open.
  */
-function RunGroups({ go }: { go: (r: Run) => void }) {
+function RunGroups({
+  go,
+  searching,
+}: {
+  go: (r: Run) => void
+  searching: boolean
+}) {
   const { can } = useOrganization()
   const { runs } = useRuns()
   const waiting = runs.filter((r) => r.status === "waiting")
@@ -68,30 +127,36 @@ function RunGroups({ go }: { go: (r: Run) => void }) {
               value={`approve review plan ${r.project?.name ?? ""} ${r.environment} ${r.id}`}
               onSelect={() => go(r)}
             >
-              <ShieldCheckIcon />
-              Review the plan for {r.project?.name ?? "a project"} to{" "}
-              {r.environment}
+              <Entry
+                icon={<ShieldCheckIcon />}
+                glyphClassName="bg-weld-tint text-weld-ink"
+                label={`Review the plan for ${r.project?.name ?? "a project"} to ${r.environment}`}
+                hint={changesLine(r)}
+              />
             </CommandItem>
           ))}
         </CommandGroup>
       )}
-      {runs.length > 0 && (
-        <CommandGroup heading="Recent deployments">
+      {searching && runs.length > 0 && (
+        <CommandGroup heading="Deployments">
           {runs.slice(0, recentShown).map((r) => (
             <CommandItem
               key={r.id}
               value={`deployment ${r.id} ${r.deployment?.id ?? ""} ${r.project?.name ?? ""} ${r.environment} ${commitLabel(r)}`}
               onSelect={() => go(r)}
             >
-              <RunDot status={r.status} />
-              <span className="font-medium">
-                {r.project?.name ?? "A deleted project"}
-              </span>
-              <EnvBadge env={r.environment} />
-              <span className="truncate text-muted-foreground">{r.phase}</span>
-              <CommandShortcut className="font-mono">
-                {commitLabel(r)}
-              </CommandShortcut>
+              <Entry
+                icon={<RunDot status={r.status} />}
+                label={r.project?.name ?? "A deleted project"}
+                hint={[
+                  <span key="env" className="capitalize">
+                    {r.environment}
+                  </span>,
+                  " · ",
+                  r.phase,
+                  commitLabel(r) ? ` · ${commitLabel(r)}` : "",
+                ]}
+              />
             </CommandItem>
           ))}
         </CommandGroup>
@@ -124,14 +189,122 @@ function RepositoryActions({
           value={item.search}
           onSelect={() => onAnalyze(projectID, item.alias)}
         >
-          <ScanSearchIcon />
-          {item.label}
-          <span className="truncate text-muted-foreground">{item.detail}</span>
+          <Entry
+            icon={<ScanSearchIcon />}
+            label={item.label}
+            hint={item.detail}
+          />
         </CommandItem>
       ))}
     </CommandGroup>
   )
 }
+
+type Page = {
+  to:
+    | "/"
+    | "/deployments"
+    | "/projects"
+    | "/services"
+    | "/clouds"
+    | "/infrastructure"
+    | "/activity"
+    | "/variables"
+    | "/members"
+    | "/notifications"
+    | "/integrations"
+    | "/api-keys"
+  label: string
+  icon: ReactNode
+  search: string
+  keys?: string
+}
+
+// The same order and chords as the sidebar and the shortcuts dialog.
+const pages: Page[] = [
+  {
+    to: "/",
+    label: "Overview",
+    icon: <LayoutDashboardIcon />,
+    search: "overview home",
+    keys: "G O",
+  },
+  {
+    to: "/deployments",
+    label: "Deployments",
+    icon: <RocketIcon />,
+    search: "deployments plans runs",
+    keys: "G D",
+  },
+  {
+    to: "/projects",
+    label: "Projects",
+    icon: <FolderGit2Icon />,
+    search: "projects",
+    keys: "G P",
+  },
+  {
+    to: "/services",
+    label: "Services",
+    icon: <DatabaseIcon />,
+    search: "services catalog databases caches postgres redis",
+    keys: "G S",
+  },
+  {
+    to: "/clouds",
+    label: "Clouds",
+    icon: <CloudIcon />,
+    search: "clouds targets accounts",
+    keys: "G C",
+  },
+  {
+    to: "/infrastructure",
+    label: "Infrastructure",
+    icon: <ServerIcon />,
+    search: "infrastructure providers",
+    keys: "G I",
+  },
+  {
+    to: "/activity",
+    label: "Activity",
+    icon: <ActivityIcon />,
+    search: "activity deployments metrics drift",
+    keys: "G A",
+  },
+  {
+    to: "/variables",
+    label: "Variables",
+    icon: <BracesIcon />,
+    search: "variables secrets organization",
+    keys: "G V",
+  },
+  {
+    to: "/members",
+    label: "Members",
+    icon: <UsersIcon />,
+    search: "members invitations people",
+    keys: "G M",
+  },
+  {
+    to: "/notifications",
+    label: "Notifications",
+    icon: <BellIcon />,
+    search: "notifications inbox email webhooks",
+  },
+  {
+    to: "/integrations",
+    label: "Integrations",
+    icon: <PlugIcon />,
+    search: "integrations github catalog",
+  },
+  {
+    to: "/api-keys",
+    label: "API keys",
+    icon: <KeyRoundIcon />,
+    search: "api keys tokens cli",
+    keys: "G K",
+  },
+]
 
 export function CommandMenu({
   open,
@@ -149,6 +322,7 @@ export function CommandMenu({
   const projectID = projectIDFromPath(usePath())
   const start = useMutation(useAnalysesCreate)
   const invalidate = useInvalidate()
+  const [search, setSearch] = useState("")
 
   // The mutation lives here rather than in the group, so it outlasts the
   // menu closing. The toast says how it went.
@@ -179,91 +353,38 @@ export function CommandMenu({
   return (
     <CommandDialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => {
+        if (!next) setSearch("")
+        onOpenChange(next)
+      }}
       title="Command menu"
       description="Go anywhere or run an action"
     >
       <Command>
-        <CommandInput placeholder="Search projects, pages and actions" />
+        <CommandInput
+          placeholder="Search projects, pages and actions"
+          value={search}
+          onValueChange={setSearch}
+        />
         <CommandList>
           <CommandEmpty>Nothing matches. Try a project name.</CommandEmpty>
           <RunGroups
+            searching={search.trim() !== ""}
             go={(r) => {
               onOpenChange(false)
               void navigate({ to: "/deployments/$id", params: { id: r.id } })
             }}
           />
           <CommandGroup heading="Go to">
-            <CommandItem
-              value="overview home"
-              onSelect={run(() => void navigate({ to: "/" }))}
-            >
-              <LayoutDashboardIcon />
-              Overview
-              <CommandShortcut>G O</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value="deployments plans runs"
-              onSelect={run(() => void navigate({ to: "/deployments" }))}
-            >
-              <RocketIcon />
-              Deployments
-              <CommandShortcut>G D</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value="projects"
-              onSelect={run(() => void navigate({ to: "/projects" }))}
-            >
-              <FolderGit2Icon />
-              Projects
-              <CommandShortcut>G P</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value="infrastructure providers clouds"
-              onSelect={run(() => void navigate({ to: "/infrastructure" }))}
-            >
-              <ServerIcon />
-              Infrastructure
-              <CommandShortcut>G I</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value="activity deployments metrics drift"
-              onSelect={run(() => void navigate({ to: "/activity" }))}
-            >
-              <ActivityIcon />
-              Activity
-              <CommandShortcut>G A</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value="variables secrets organization"
-              onSelect={run(() => void navigate({ to: "/variables" }))}
-            >
-              <BracesIcon />
-              Variables
-              <CommandShortcut>G V</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value="members invitations people"
-              onSelect={run(() => void navigate({ to: "/members" }))}
-            >
-              <UsersIcon />
-              Members
-              <CommandShortcut>G M</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value="notifications inbox email webhooks"
-              onSelect={run(() => void navigate({ to: "/notifications" }))}
-            >
-              <BellIcon />
-              Notifications
-            </CommandItem>
-            <CommandItem
-              value="integrations github"
-              onSelect={run(() => void navigate({ to: "/integrations" }))}
-            >
-              <PlugIcon />
-              Integrations
-            </CommandItem>
+            {pages.map((p) => (
+              <CommandItem
+                key={p.to}
+                value={p.search}
+                onSelect={run(() => void navigate({ to: p.to }))}
+              >
+                <Entry icon={p.icon} label={p.label} keys={p.keys} />
+              </CommandItem>
+            ))}
           </CommandGroup>
           {projects.length > 0 && (
             <CommandGroup heading="Projects">
@@ -281,14 +402,22 @@ export function CommandMenu({
                         })
                     )}
                   >
-                    <ProjectIcon
-                      icon={style.icon}
-                      color={style.color}
-                      size="xs"
-                    />
-                    {p.name}
-                    <span className="truncate text-muted-foreground">
-                      {p.description || repositoriesLabel(p.repositories)}
+                    <span className="flex size-7 shrink-0 items-center justify-center">
+                      <ProjectIcon
+                        icon={style.icon}
+                        color={style.color}
+                        size="sm"
+                      />
+                    </span>
+                    <span className="grid min-w-0 flex-1 gap-px">
+                      <span className="truncate font-medium">{p.name}</span>
+                      {(p.repositories.length > 0 || p.description) && (
+                        <span className="truncate text-xs text-muted-foreground">
+                          {p.repositories.length
+                            ? repositoriesLabel(p.repositories)
+                            : p.description}
+                        </span>
+                      )}
                     </span>
                   </CommandItem>
                 )
@@ -304,9 +433,7 @@ export function CommandMenu({
                 value="new deployment deploy plan"
                 onSelect={run(() => openDeploy())}
               >
-                <RocketIcon />
-                New deployment
-                <CommandShortcut>N</CommandShortcut>
+                <Entry icon={<RocketIcon />} label="New deployment" keys="N" />
               </CommandItem>
             )}
             {can("project:create") && (
@@ -314,16 +441,14 @@ export function CommandMenu({
                 value="new project create repository"
                 onSelect={run(openNewProject)}
               >
-                <FolderPlusIcon />
-                New project
+                <Entry icon={<FolderPlusIcon />} label="New project" />
               </CommandItem>
             )}
             <CommandItem
               value="connect github integration"
               onSelect={run(() => void navigate({ to: "/integrations" }))}
             >
-              <PlugIcon />
-              Connect GitHub
+              <Entry icon={<PlugIcon />} label="Connect GitHub" />
             </CommandItem>
             <CommandItem
               value="toggle theme dark light"
@@ -331,20 +456,34 @@ export function CommandMenu({
                 setTheme(theme === "dark" ? "light" : "dark")
               )}
             >
-              <MoonIcon />
-              Toggle theme
-              <CommandShortcut>D</CommandShortcut>
+              <Entry icon={<MoonIcon />} label="Toggle theme" keys="D" />
             </CommandItem>
             <CommandItem
               value="keyboard shortcuts help"
               onSelect={run(openShortcuts)}
             >
-              <KeyboardIcon />
-              Keyboard shortcuts
-              <CommandShortcut>?</CommandShortcut>
+              <Entry
+                icon={<KeyboardIcon />}
+                label="Keyboard shortcuts"
+                keys="?"
+              />
             </CommandItem>
           </CommandGroup>
         </CommandList>
+        <div className="flex items-center gap-4 border-t bg-subtle px-4 py-2.5 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <kbd className="rounded border px-1 font-mono text-[10.5px]">
+              ↑↓
+            </kbd>
+            Move
+          </span>
+          <span className="flex items-center gap-1.5">
+            <kbd className="rounded border px-1 font-mono text-[10.5px]">↵</kbd>
+            Open
+          </span>
+          <span className="flex-1" />
+          <span className="max-sm:hidden">Type a project, page or plan ID</span>
+        </div>
       </Command>
     </CommandDialog>
   )

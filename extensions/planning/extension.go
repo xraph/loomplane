@@ -13,7 +13,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/xraph/chronicle"
@@ -31,6 +33,7 @@ import (
 	"github.com/xraph/vault/secret"
 	vaultpg "github.com/xraph/vault/store/postgres"
 
+	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
@@ -39,10 +42,15 @@ import (
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/artifacts"
+	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/catalogproxy"
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/aws"
+	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
@@ -58,6 +66,7 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recovery"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
@@ -82,8 +91,16 @@ type Extension struct {
 	activity            *activity.Service
 	artifacts           *artifacts.Store
 	backups             *recovery.Service
+	nativeBackups       *recovery.NativeService
 	restoreTargets      func(context.Context) error
 	cloudProfiles       *cloudprofiles.Service
+	endpoints           *catalogconnect.Service
+	catalogAdmin        *catalogproxy.Service
+	endpointChecks      *catalogconnect.Checker
+	endpointDialer      endpointDialer
+	checkLimit          *checkLimiter // nil is checksPerMinute (see checks)
+	checkLimitOnce      sync.Once
+	catalogKinds        *recipes.Registry // nil is recipes.Default()
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
 	cloudRecoveryDone   chan struct{}
@@ -109,7 +126,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 func (e *Extension) Dependencies() []string {
 	return []string{
 		identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
-		connectionsext.Name, environmentsext.Name, realtimeext.Name, troveext.ExtensionName,
+		cloudinfraext.Name, connectionsext.Name, environmentsext.Name, realtimeext.Name, troveext.ExtensionName,
 	}
 }
 
@@ -178,13 +195,6 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.cloudStore = cloudprofiles.NewPgStore(pg)
 	e.cloudProfiles = cloudprofiles.NewService(cloudprofiles.Deps{Store: e.cloudStore, Projects: prj, Connections: clouds, Providers: catalog, Authz: authz, Audit: auditor})
 	e.manifests = manifests.NewService(manifests.NewPgStore(pg), prj, authz, auditor)
-	e.plans = planning.NewService(planning.Deps{
-		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
-		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
-		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
-		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
-		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
-	})
 	deployStore := deployments.NewPgStore(pg)
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
 	e.deploys.Projects = prj
@@ -195,9 +205,12 @@ func (e *Extension) Register(fapp forge.App) error {
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
-		"vercel":       &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
-		"render":       &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
-		"digitalocean": &deployments.DigitalOcean{Client: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)},
+		"vercel":               &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
+		"digitalocean":         &deployments.DigitalOcean{Client: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)},
+		"azure-container-apps": &deployments.Azure{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
+		"azure-database":       &deployments.AzureDatabase{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
+		"azure-managed-redis":  &deployments.AzureRedis{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
 		"cross-cloud-vpn": &deployments.VPN{
 			Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Credentials: clouds,
 		},
@@ -249,11 +262,71 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	resourceSecrets := deployments.NewVaultResourceSecrets(
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
+	// An external endpoint's DSN is a resource credential too.
+	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
+	e.endpoints.Audit = endpointAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
 	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
-	serverTarget := &deployments.OwnedTarget{Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg)}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets}
+	routeService, err := forge.InjectType[*cloudinfra.Service](c)
+	if err != nil {
+		return err
+	}
+	// Plans check the external endpoints composed resources connect from
+	// the target each resource runs on, and each release checks them again.
+	checker := &catalogconnect.Checker{Endpoints: e.endpoints, Probers: map[string]catalogconnect.Prober{
+		catalogconnect.EnginePostgres: catalogconnect.PostgresProber{}, catalogconnect.EngineRedis: catalogconnect.RedisProber{},
+	}}
+	e.endpointChecks = checker
+	// catalogHooks are what composed catalog kinds do beyond their
+	// recipes, by kind. A kind registers its own here.
+	catalogHooks := map[string]deployments.CatalogHooks{}
+	// observers hear of each service binding a deployment writes or
+	// deletes. A kind that tracks its consumers registers its own here.
+	observers := []deployments.ReleaseObserver{}
+	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
+	// A cluster's endpoint checks dial from Loomplane's own network, so
+	// they never reach what Loomplane itself depends on.
+	denied, servicesErr := loomplaneServices(e.cfg)
+	if servicesErr != nil {
+		log.Warn("endpoint checks from a cluster can reach the database", forge.F("error", servicesErr.Error()))
+	}
+	dialGuard := &deployments.DialGuard{Denied: e.cfg.Planning.EndpointDeniedCIDRs, Services: denied}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard}
+	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
-	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, auditor); err != nil {
+	dialer := ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}}
+	e.endpointDialer = dialer
+	// A kind's own API reaches its running components and generated
+	// secrets through CatalogAccess, which it resolves from the container.
+	catalogAccess := deployments.NewCatalogAccess(deployments.CatalogAccessDeps{Authz: authz, Bindings: planStore.ListBindings, Executors: executors, Secrets: resourceSecrets})
+	if err := forge.ProvideValue(c, catalogAccess); err != nil {
+		return err
+	}
+	// A kind's admin UI opens through Loomplane's sandboxed proxy, which
+	// reaches the component over the same private channel. The proxy is
+	// mounted outside the identity guard: a session's token, in its path,
+	// is the credential.
+	e.catalogAdmin = catalogproxy.NewService(catalogproxy.Deps{
+		Store: catalogproxy.NewPgStore(pg), Access: catalogAccess, Authz: authz, Bindings: planStore.ListBindings,
+		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+	})
+	if err := forge.ProvideValue(c, e.catalogAdmin); err != nil {
+		return err
+	}
+	// Deleting a composed resource ends the admin sessions open on it.
+	serverTarget.CompositionRemoved, clusterTarget.CompositionRemoved = e.catalogAdmin.RevokeResource, e.catalogAdmin.RevokeResource
+	if err := fapp.Router().Handle(catalogAdminRoute, e.catalogAdmin.Handler()); err != nil {
+		return fmt.Errorf("mount the catalog admin proxy: %w", err)
+	}
+	e.plans = planning.NewService(planning.Deps{
+		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
+		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
+		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
+		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
+		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+		Endpoints: checker,
+		Dialer:    dialer,
+	})
+	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), Credentials: clouds}, auditor); err != nil {
 		return err
 	}
 	e.restoreTargets = func(ctx context.Context) error {
@@ -282,17 +355,22 @@ func (e *Extension) Register(fapp forge.App) error {
 		return nil
 	}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
-		Logs:          logStore,
+		Logs: logStore, Routes: routeService,
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
 		},
-		Providers: catalog,
-		Executors: executors,
-		Resources: resourceSecrets,
-		Telemetry: metrics,
+		Providers:    catalog,
+		Executors:    executors,
+		Resources:    resourceSecrets,
+		Telemetry:    metrics,
+		CatalogHooks: catalogHooks,
+		Observers:    observers,
 	})
+	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
+		return err
+	}
 	e.plans.BindCloudSyncRunner(runner, runner)
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	e.deployments.BindCloudSync(e.plans)
@@ -356,20 +434,59 @@ func (e *Extension) Stop(ctx context.Context) error {
 	return nil
 }
 
+// ownedDialer dials from the server or cluster a connection belongs to.
+type ownedDialer struct {
+	credentials deployments.Credentials
+	targets     map[string]*deployments.OwnedTarget
+}
+
+// endpointDialer dials from a target for an endpoint check, and says
+// which cloud the target is.
+type endpointDialer interface {
+	planning.TargetDialer
+	TargetCloud(ctx context.Context, orgID, connectionID string) (string, error)
+}
+
+var _ endpointDialer = ownedDialer{}
+
+// TargetCloud is the cloud of a target connection: "server" or
+// "kubernetes".
+func (d ownedDialer) TargetCloud(ctx context.Context, orgID, connectionID string) (string, error) {
+	c, _, err := d.credentials.Credential(ctx, orgID, connectionID)
+	if err != nil {
+		return "", err
+	}
+	return c.Cloud, nil
+}
+
+func (d ownedDialer) TargetDial(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error) {
+	c, _, err := d.credentials.Credential(ctx, orgID, connectionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	target, ok := d.targets[c.Cloud]
+	if !ok {
+		return nil, nil, fmt.Errorf("endpoints are checked from a server or Kubernetes target, and %s is a %s connection", c.Name, c.Cloud)
+	}
+	return target.TargetDial(ctx, orgID, connectionID)
+}
+
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
-	case errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, recovery.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
-		errors.Is(err, deployments.ErrNotFound),
+	case errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, recovery.ErrNotFound), errors.Is(err, catalogconnect.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
+		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound), errors.Is(err, catalogproxy.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
-		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady):
+		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
+		errors.Is(err, catalogconnect.ErrInUse):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph),
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
-	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid):
+	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid),
+		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort), errors.Is(err, catalogproxy.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

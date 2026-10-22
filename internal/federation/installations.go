@@ -179,8 +179,15 @@ func profileMatchesDestination(p KubernetesAttestationProfile, d domain.Destinat
 }
 func installationBindingMatches(b workloadidentity.Binding, d domain.Destination, p KubernetesAttestationProfile) bool {
 	now := time.Now()
-	return b.Destination.Scope == d.Scope && b.Destination.ID == d.ID && b.Destination.ConnectionID == d.ConnectionID && b.Destination.Identity == d.Identity && b.Destination.Generation == d.Generation && !b.Destination.Quarantined && b.Method == "kubernetes" && b.PodUID == p.PodUID && b.ServiceAccount == p.ServiceAccount && b.Container == p.Container && !b.CheckedAt.IsZero() && !b.CheckedAt.Before(now.Add(-5*time.Minute)) && !b.CheckedAt.After(now.Add(30*time.Second))
+	return installationBindingIdentityMatches(b, d, p) && !b.CheckedAt.IsZero() && !b.CheckedAt.Before(now.Add(-5*time.Minute)) && !b.CheckedAt.After(now.Add(30*time.Second))
 }
+
+// Identity pins remain relevant after the bootstrap's freshness window closes.
+// Issuance still requires installationBindingMatches and fresh node evidence.
+func installationBindingIdentityMatches(b workloadidentity.Binding, d domain.Destination, p KubernetesAttestationProfile) bool {
+	return b.Destination.Scope == d.Scope && b.Destination.ID == d.ID && b.Destination.ConnectionID == d.ConnectionID && b.Destination.Identity == d.Identity && b.Destination.Generation == d.Generation && !b.Destination.Quarantined && b.Method == "kubernetes" && b.PodUID == p.PodUID && b.ServiceAccount == p.ServiceAccount && b.Container == p.Container
+}
+
 func (s *InstallationService) record(ctx context.Context, p security.Principal, action string, profile KubernetesAttestationProfile, generation int64) {
 	if s.destinations.audit != nil {
 		s.destinations.audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", ProjectID: profile.ProjectID, Principal: p, Attributes: map[string]any{"destination_id": profile.DestinationID, "installation_generation": generation, "pod_uid": profile.PodUID}})

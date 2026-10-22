@@ -20,6 +20,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // Client calls one Loomplane with one API key.
@@ -329,6 +331,53 @@ func (c *Client) SaveManifest(ctx context.Context, projectID, yaml string) (*Man
 	return &m, c.do(ctx, http.MethodPut, "/api/v1/projects/"+esc(projectID)+"/manifest", map[string]string{"yaml": yaml}, &m)
 }
 
+// ManifestEdit is one change to the project's manifest, which keeps the
+// YAML's comments and order.
+type ManifestEdit struct {
+	AddResource *NewResource `json:"add_resource,omitempty"`
+	// Link makes a service need something, with the options it passes to
+	// it. Unlink removes the need and its options. SetUse chooses where one
+	// dependency of a catalog resource comes from.
+	Link   *ServiceLink `json:"link,omitempty"`
+	Unlink *ServiceLink `json:"unlink,omitempty"`
+	SetUse *ResourceUse `json:"set_use,omitempty"`
+}
+
+// ServiceLink names a service and something it needs. Options are what the
+// service passes to the need, and Unlink ignores them.
+type ServiceLink struct {
+	Service string            `json:"service"`
+	Need    string            `json:"need"`
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// ResourceUse sets where one dependency of a catalog resource comes from.
+// A Use with nothing set asks for a new dependency.
+type ResourceUse struct {
+	Resource   string       `json:"resource"`
+	Dependency string       `json:"dependency"`
+	Use        manifest.Use `json:"use"`
+}
+
+// NewResource is a resource to add to the manifest. Target is the checked
+// connection it runs on, and Uses says where its dependencies come from.
+type NewResource struct {
+	Name     string                  `json:"name"`
+	Kind     string                  `json:"kind"`
+	Provider string                  `json:"provider,omitempty"`
+	Target   string                  `json:"target,omitempty"`
+	Version  string                  `json:"version,omitempty"`
+	Uses     map[string]manifest.Use `json:"uses,omitempty"`
+}
+
+// EditManifest applies one change to the project's current manifest and
+// saves the result as a new revision. A change that's already there adds
+// nothing.
+func (c *Client) EditManifest(ctx context.Context, projectID string, in ManifestEdit) (*ManifestRevision, error) {
+	var m ManifestRevision
+	return &m, c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(projectID)+"/manifest/edits", in, &m)
+}
+
 // --- Plans ---
 
 // Finding is a problem, which blocks a plan, or a warning, which doesn't.
@@ -349,35 +398,39 @@ type Change struct {
 
 // Action is one thing a plan would do.
 type Action struct {
-	ID       string   `json:"id"`
-	Op       string   `json:"op"`
-	Subject  string   `json:"subject"`
-	Name     string   `json:"name"`
-	Provider string   `json:"provider"`
-	Region   string   `json:"region,omitempty"`
-	Creates  string   `json:"creates,omitempty"`
-	Reason   string   `json:"reason,omitempty"`
-	Step     int      `json:"step"`
-	Changes  []Change `json:"changes,omitempty"`
+	// Resource preserves the complete provider request for JSON plan review.
+	Resource json.RawMessage `json:"resource,omitempty"`
+	ID       string          `json:"id"`
+	Op       string          `json:"op"`
+	Subject  string          `json:"subject"`
+	Name     string          `json:"name"`
+	Provider string          `json:"provider"`
+	Region   string          `json:"region,omitempty"`
+	Creates  string          `json:"creates,omitempty"`
+	Reason   string          `json:"reason,omitempty"`
+	Step     int             `json:"step"`
+	Changes  []Change        `json:"changes,omitempty"`
 }
 
 // Plan is what deploying a manifest to an environment would do, waiting
 // for someone to approve or reject it.
 type Plan struct {
-	ID           string       `json:"id"`
-	ProjectID    string       `json:"project_id"`
-	Environment  string       `json:"environment"`
-	Status       string       `json:"status"`
-	Revision     string       `json:"revision"`
-	Sources      []PlanSource `json:"sources"`
-	Executable   bool         `json:"executable"`
-	Error        string       `json:"error,omitempty"`
-	Actions      []Action     `json:"actions"`
-	Problems     []Finding    `json:"problems"`
-	Warnings     []Finding    `json:"warnings"`
-	DecidedBy    string       `json:"decided_by,omitempty"`
-	DecisionNote string       `json:"decision_note,omitempty"`
-	CreatedAt    time.Time    `json:"created_at"`
+	ID           string            `json:"id"`
+	ProjectID    string            `json:"project_id"`
+	Catalog      bool              `json:"catalog"`
+	Connections  map[string]string `json:"connections"`
+	Environment  string            `json:"environment"`
+	Status       string            `json:"status"`
+	Revision     string            `json:"revision"`
+	Sources      []PlanSource      `json:"sources"`
+	Executable   bool              `json:"executable"`
+	Error        string            `json:"error,omitempty"`
+	Actions      []Action          `json:"actions"`
+	Problems     []Finding         `json:"problems"`
+	Warnings     []Finding         `json:"warnings"`
+	DecidedBy    string            `json:"decided_by,omitempty"`
+	DecisionNote string            `json:"decision_note,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
 }
 
 // PlanSource is one repository a plan was made from, at the commit it
@@ -518,6 +571,7 @@ func (c *Client) Retry(ctx context.Context, deploymentID string) (*Deployment, e
 
 // Binding is what runs a service or resource in an environment now.
 type Binding struct {
+	PhysicalID    string     `json:"physical_id,omitempty"`
 	ID            string     `json:"id"`
 	EnvironmentID string     `json:"environment_id"`
 	Subject       string     `json:"subject"`

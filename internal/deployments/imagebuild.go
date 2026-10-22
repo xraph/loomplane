@@ -114,30 +114,17 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 	if job.SourceID == "" || job.Source == nil {
 		return "", errors.New("the approved source artifact is missing")
 	}
-	builder, raw, err := b.connection(ctx, job, target.Builder, connections.Server, target.BuilderSettings, false)
+	builder, raw, client, err := b.builderSession(ctx, job)
 	if err != nil {
 		return "", err
 	}
+	defer client.Close()
+	details := client.Config.Details
 	collector.addCredential(raw)
-	config, err := server.ParseConfig(raw, builder.Details)
-	if err != nil {
-		return "", err
-	}
-	dial := b.Dial
-	if dial == nil {
-		dial = server.Dial
-	}
-	client, err := dial(ctx, config)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = client.Close() }()
-	details, missing, err := client.Check(ctx)
-	if err != nil {
-		return "", err
-	}
-	if len(missing) > 0 || !reflect.DeepEqual(target.BuilderSettings, planning.ReviewedConnectionSettings(connections.Server, details)) {
-		return "", errors.New("the builder identity or Docker capabilities changed; check the connection and plan again")
+	if fence, ok := server.EffectFenceFrom(ctx); ok {
+		if fenceErr := client.ArmEffectFence(ctx, fence); fenceErr != nil {
+			return "", fenceErr
+		}
 	}
 	if state.Reference != "" {
 		if state.SourceID != job.SourceID || state.Builder != target.Builder || state.Registry != target.Registry {
@@ -292,18 +279,14 @@ func imageInspect(ctx context.Context, client *server.Client, reference string, 
 }
 
 func dockerRequest(ctx context.Context, client *server.Client, method, resource string, body io.Reader, contentType string, headers http.Header) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, "http://docker"+resource, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header = headers.Clone()
-	if req.Header == nil {
-		req.Header = make(http.Header)
+	headers = headers.Clone()
+	if headers == nil {
+		headers = make(http.Header)
 	}
 	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+		headers.Set("Content-Type", contentType)
 	}
-	response, err := client.HTTP.Do(req)
+	response, err := client.RequestHeaders(ctx, method, resource, body, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -316,4 +299,49 @@ func dockerRequest(ctx context.Context, client *server.Client, method, resource 
 		message.Message = http.StatusText(response.StatusCode)
 	}
 	return nil, fmt.Errorf("docker returned HTTP %d: %s", response.StatusCode, message.Message)
+}
+
+// PrepareEffects uses the immutable accepted builder identity, including when
+// the builder and deployment daemon differ. It needs no current target grant.
+func (b *ImageBuilder) PrepareEffects(ctx context.Context, job *Job) error {
+	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || job.Action.Service.BuildTarget.Image != "" {
+		return nil
+	}
+	fence, ok := server.EffectFenceFrom(ctx)
+	if !ok {
+		return errors.New("builder effect generation is missing")
+	}
+	_, _, client, err := b.builderSession(ctx, job)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.ArmEffectFence(ctx, fence)
+}
+func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connections.Connection, []byte, *server.Client, error) {
+	target := job.Action.Service.BuildTarget
+	builder, raw, err := b.connection(ctx, job, target.Builder, connections.Server, target.BuilderSettings, false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	config, err := server.ParseConfig(raw, builder.Details)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	dial := b.Dial
+	if dial == nil {
+		dial = server.Dial
+	}
+	client, err := dial(ctx, config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	details, missing, err := client.Check(ctx)
+	if err != nil || len(missing) > 0 || !reflect.DeepEqual(target.BuilderSettings, planning.ReviewedConnectionSettings(connections.Server, details)) {
+		_ = client.Close()
+		return nil, nil, nil, errors.New("the builder identity or Docker capabilities changed; restore the recorded connection")
+	}
+	client.Config.Details = details
+	_, client.RequireFence = server.EffectFenceFrom(ctx)
+	return builder, raw, client, nil
 }

@@ -1,0 +1,342 @@
+package cloudinfra
+
+import (
+	"context"
+	"net"
+	"slices"
+	"strings"
+	"time"
+
+	"golang.org/x/net/idna"
+
+	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
+)
+
+// Zone grants domain use independently of the compute account or Cloud.
+type Zone struct {
+	ID                   string           `json:"id" forge:"id"`
+	OrgID                string           `json:"org_id"`
+	Name                 string           `json:"name"`
+	Mode                 string           `json:"mode"`
+	ConnectionID         string           `json:"connection_id,omitempty"`
+	ConnectionGeneration int64            `json:"connection_generation,omitempty"`
+	Provider             string           `json:"provider,omitempty"`
+	AccountID            string           `json:"account_id,omitempty"`
+	RecordOwnership      bool             `json:"record_ownership"`
+	ProviderZone         provider.DNSZone `json:"provider_zone"`
+	ProjectIDs           []string         `json:"project_ids"`
+	ProofName            string           `json:"proof_name,omitempty"`
+	ProofValue           string           `json:"proof_value,omitempty"`
+	ProofExpiresAt       time.Time        `json:"proof_expires_at"`
+	VerifiedAt           time.Time        `json:"verified_at"`
+	Revision             int64            `json:"revision"`
+}
+
+type ZoneInput struct {
+	Name         string   `json:"name"`
+	Mode         string   `json:"mode"`
+	ConnectionID string   `json:"connection_id,omitempty"`
+	ProjectIDs   []string `json:"project_ids"`
+}
+
+type DomainResolver interface {
+	LookupTXT(context.Context, string) ([]string, error)
+	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+}
+
+// NormalizeHostname accepts exact DNS hostnames, including IDNs and the apex.
+// Wildcards, ports, IP literals and URLs cannot become ownership claims.
+func NormalizeHostname(value string) (string, error) {
+	value = strings.TrimSuffix(strings.TrimSpace(value), ".")
+	host, err := idna.Lookup.ToASCII(strings.ToLower(value))
+	if err != nil || len(host) > 253 || !strings.Contains(host, ".") || net.ParseIP(host) != nil {
+		return "", ErrInvalid
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", ErrInvalid
+		}
+		for _, ch := range label {
+			if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '-' {
+				return "", ErrInvalid
+			}
+		}
+	}
+	return host, nil
+}
+
+func zoneRelative(host, zone string) (string, error) {
+	if host == zone {
+		return "", nil
+	}
+	if !strings.HasSuffix(host, "."+zone) {
+		return "", ErrInvalid
+	}
+	return strings.TrimSuffix(host, "."+zone), nil
+}
+
+func (s *Service) domainStore() (DomainStore, error) {
+	if s.Domains != nil {
+		return s.Domains, nil
+	}
+	if store, ok := s.Store.(DomainStore); ok {
+		return store, nil
+	}
+	return nil, ErrInvalid
+}
+
+func (s *Service) domainResolver() DomainResolver {
+	if s.Resolver != nil {
+		return s.Resolver
+	}
+	return net.DefaultResolver
+}
+
+func (s *Service) domainScope(ctx context.Context, p security.Principal, project string, write bool) error {
+	if p.OrgID == "" || p.UserID == "" {
+		return security.ErrUnauthenticated
+	}
+	if write && p.ReadOnly {
+		return security.ErrForbidden
+	}
+	permission, scope := security.OrganizationCloudManage, p.OrgID
+	if project != "" {
+		permission, scope = security.InfrastructureRead, project
+		if write {
+			permission = security.InfrastructureModify
+		}
+	}
+	return s.Authz.Require(ctx, p, permission, scope)
+}
+
+func (s *Service) CreateZone(ctx context.Context, p security.Principal, in ZoneInput) (*Zone, error) {
+	if err := s.domainScope(ctx, p, "", true); err != nil {
+		return nil, err
+	}
+	name, err := NormalizeHostname(in.Name)
+	if err != nil || (in.Mode != "managed" && in.Mode != "external") || len(in.ProjectIDs) == 0 {
+		return nil, ErrInvalid
+	}
+	st, err := s.domainStore()
+	if err != nil {
+		return nil, err
+	}
+	for _, project := range in.ProjectIDs {
+		if project == "" {
+			return nil, ErrInvalid
+		}
+		if checkErr := st.DomainProject(ctx, p.OrgID, project); checkErr != nil {
+			return nil, checkErr
+		}
+	}
+	id, err := randomID("zone")
+	if err != nil {
+		return nil, err
+	}
+	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: in.Mode, ConnectionID: in.ConnectionID, ProjectIDs: slices.Clone(in.ProjectIDs), Revision: 1}
+	if in.Mode == "managed" {
+		conn, raw, credErr := s.Connections.Credential(ctx, p.OrgID, in.ConnectionID)
+		if credErr != nil {
+			return nil, credErr
+		}
+		cred, credErr := Credential(conn, raw)
+		if credErr != nil {
+			return nil, credErr
+		}
+		adapter, adapterErr := s.Adapters.DNS(conn.Cloud, provider.DNSZoneDiscovery, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSRecordDeletion)
+		if adapterErr != nil {
+			return nil, adapterErr
+		}
+		if ownership, ok := adapter.(provider.DNSRecordOwnership); ok {
+			zone.RecordOwnership = ownership.SupportsDNSRecordOwnership()
+		}
+		zone.ProviderZone, err = adapter.GetZone(ctx, cred, name)
+		if err != nil {
+			return nil, err
+		}
+		if !zone.ProviderZone.Verified || zone.ProviderZone.Name != name || zone.ProviderZone.AccountID != cred.AccountID {
+			return nil, provider.ErrInfrastructureIdentity
+		}
+		zone.Provider, zone.AccountID, zone.ConnectionGeneration = conn.Cloud, cred.AccountID, conn.Generation
+		zone.VerifiedAt = s.now().UTC()
+	} else {
+		if in.ConnectionID != "" {
+			return nil, ErrInvalid
+		}
+		token, tokenErr := reviewToken()
+		if tokenErr != nil {
+			return nil, tokenErr
+		}
+		zone.ProofName, zone.ProofValue = "_loomplane."+name, "loomplane="+id+"-"+token
+		zone.ProofExpiresAt = s.now().UTC().Add(24 * time.Hour)
+	}
+	if checkErr := st.CreateZone(ctx, zone); checkErr != nil {
+		return nil, checkErr
+	}
+	s.domainAudit(ctx, p, "domain.zone.write", zone.ID, "")
+	return zone, nil
+}
+
+func (s *Service) VerifyZone(ctx context.Context, p security.Principal, id string) (*Zone, error) {
+	if err := s.domainScope(ctx, p, "", true); err != nil {
+		return nil, err
+	}
+	st, err := s.domainStore()
+	if err != nil {
+		return nil, err
+	}
+	zone, err := st.Zone(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {
+		return nil, checkErr
+	}
+	zone.VerifiedAt = s.now().UTC()
+	if checkErr := st.SaveZone(ctx, zone); checkErr != nil {
+		return nil, checkErr
+	}
+	s.domainAudit(ctx, p, "domain.zone.write", zone.ID, "")
+	return zone, nil
+}
+
+func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
+	if zone.Mode == "managed" {
+		adapter, credential, err := s.zoneCredential(ctx, zone)
+		if err != nil {
+			return err
+		}
+		current, err := adapter.GetZone(ctx, credential, zone.ProviderZone.ID)
+		if err != nil {
+			return err
+		}
+		if current.ID != zone.ProviderZone.ID || current.Name != zone.Name || current.AccountID != zone.AccountID || !current.Verified {
+			return provider.ErrInfrastructureIdentity
+		}
+		return nil
+	}
+	if zone.VerifiedAt.IsZero() && !s.now().Before(zone.ProofExpiresAt) {
+		return ErrConflict
+	}
+	values, err := s.domainResolver().LookupTXT(ctx, zone.ProofName)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(values, zone.ProofValue) {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (s *Service) ListZones(ctx context.Context, p security.Principal) ([]*Zone, error) {
+	if err := s.domainScope(ctx, p, "", false); err != nil {
+		return nil, err
+	}
+	st, err := s.domainStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.Zones(ctx, p.OrgID)
+}
+
+type ZoneUpdate struct {
+	Revision   int64    `json:"revision"`
+	ProjectIDs []string `json:"project_ids"`
+	RenewProof bool     `json:"renew_proof"`
+}
+
+func (s *Service) UpdateZone(ctx context.Context, p security.Principal, id string, in ZoneUpdate) (*Zone, error) {
+	if err := s.domainScope(ctx, p, "", true); err != nil {
+		return nil, err
+	}
+	st, err := s.domainStore()
+	if err != nil {
+		return nil, err
+	}
+	zone, err := st.Zone(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	if zone.Revision != in.Revision {
+		return nil, ErrConflict
+	}
+	for _, project := range in.ProjectIDs {
+		if project == "" {
+			return nil, ErrInvalid
+		}
+		if checkErr := st.DomainProject(ctx, p.OrgID, project); checkErr != nil {
+			return nil, checkErr
+		}
+	}
+	zone.ProjectIDs = slices.Clone(in.ProjectIDs)
+	if in.RenewProof {
+		if zone.Mode != "external" || !zone.VerifiedAt.IsZero() {
+			return nil, ErrConflict
+		}
+		token, tokenErr := reviewToken()
+		if tokenErr != nil {
+			return nil, tokenErr
+		}
+		zone.ProofValue = "loomplane=" + zone.ID + "-" + token
+		zone.ProofExpiresAt = s.now().UTC().Add(24 * time.Hour)
+	}
+	if checkErr := st.SaveZone(ctx, zone); checkErr != nil {
+		return nil, checkErr
+	}
+	s.domainAudit(ctx, p, "domain.zone.update", zone.ID, "")
+	return zone, nil
+}
+
+func (s *Service) RemoveZone(ctx context.Context, p security.Principal, id string, revision int64) error {
+	if err := s.domainScope(ctx, p, "", true); err != nil {
+		return err
+	}
+	st, err := s.domainStore()
+	if err != nil {
+		return err
+	}
+	err = st.RemoveZone(ctx, p.OrgID, id, revision)
+	if err == nil {
+		s.domainAudit(ctx, p, "domain.zone.remove", id, "")
+	}
+	return err
+}
+
+type ProjectZone struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Mode     string `json:"mode"`
+	Verified bool   `json:"verified"`
+}
+
+func (s *Service) ProjectZones(ctx context.Context, p security.Principal, project string) ([]ProjectZone, error) {
+	if project == "" {
+		return nil, ErrInvalid
+	}
+	if err := s.domainScope(ctx, p, project, false); err != nil {
+		return nil, err
+	}
+	st, err := s.domainStore()
+	if err != nil {
+		return nil, err
+	}
+	zones, err := st.Zones(ctx, p.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	out := []ProjectZone{}
+	for _, zone := range zones {
+		if slices.Contains(zone.ProjectIDs, project) {
+			out = append(out, ProjectZone{zone.ID, zone.Name, zone.Mode, !zone.VerifiedAt.IsZero()})
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) domainAudit(ctx context.Context, p security.Principal, action, id, project string) {
+	if s.Audit != nil {
+		s.Audit.Record(ctx, projects.AuditEvent{Action: action, Severity: "info", Principal: p, Attributes: map[string]any{"resource_id": id, "project_id": project}})
+	}
+}

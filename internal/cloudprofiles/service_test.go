@@ -136,7 +136,7 @@ func TestServiceScopeAndPermissions(t *testing.T) {
 	if _, err := s.Create(t.Context(), p, "proj_1", CreateInput{Name: "Cloud"}); !errors.Is(err, denied) {
 		t.Fatal(err)
 	}
-	if a.permission != security.CloudAccountManage || a.resource != "proj_1" {
+	if a.permission != security.OrganizationCloudManage || a.resource != "org_1" {
 		t.Fatalf("manage check: %+v", a)
 	}
 	a.err = nil

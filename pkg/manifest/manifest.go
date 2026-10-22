@@ -18,6 +18,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -116,6 +118,9 @@ func (m *Manifest) LinkNames() []string { return sortedKeys(m.Links) }
 type Defaults struct {
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
+	// CloudTags select a Cloud target for every service that sets no
+	// cloud_target, cloud_tags, provider or target of its own.
+	CloudTags []string `json:"cloud_tags,omitempty" yaml:"cloud_tags,omitempty"`
 }
 
 // Service is something the application runs.
@@ -136,6 +141,11 @@ type Service struct {
 	// Needs names the resources and other services this one talks to.
 	// Each one it names gets the service its address, in a variable.
 	Needs []string `json:"needs,omitempty" yaml:"needs,omitempty"`
+	// NeedOptions are the values this service passes to a need, by need
+	// and then by option name: need_options.fabriq.tenant. Only a need
+	// that is listed in Needs can have options, and what a need accepts
+	// is the planner's question, not the manifest's.
+	NeedOptions map[string]map[string]string `json:"need_options,omitempty" yaml:"need_options,omitempty"`
 	// Environments override settings in one environment, by name.
 	Environments map[string]Settings `json:"environments,omitempty" yaml:"environments,omitempty"`
 }
@@ -157,8 +167,11 @@ type Build struct {
 type Settings struct {
 	// CloudTarget names a target in the environment's assigned Cloud.
 	CloudTarget string `json:"cloud_target,omitempty" yaml:"cloud_target,omitempty"`
-	Provider    string `json:"provider,omitempty" yaml:"provider,omitempty"`
-	Region      string `json:"region,omitempty" yaml:"region,omitempty"`
+	// CloudTags select the one target in the assigned Cloud that carries
+	// every tag. Planning fails rather than guessing when none or several do.
+	CloudTags []string `json:"cloud_tags,omitempty" yaml:"cloud_tags,omitempty"`
+	Provider  string   `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Region    string   `json:"region,omitempty" yaml:"region,omitempty"`
 	// Target names the server or cluster connection for this service.
 	Target string `json:"target,omitempty" yaml:"target,omitempty"`
 	// Endpoint configures public access on owned infrastructure.
@@ -203,9 +216,22 @@ type Resource struct {
 	// Version is the engine's version, such as "17" for Postgres. Empty
 	// lets the provider choose.
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+	// Uses chooses, by dependency name, where a catalog resource gets each
+	// dependency. A dependency left out gets a new one of its own.
+	Uses map[string]Use `json:"uses,omitempty" yaml:"uses,omitempty"`
 	// Environments override the provider or region in one environment, or
 	// leave the resource out of it.
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
+}
+
+// Use says how a composed catalog resource gets one of its dependencies:
+// from another resource in this manifest, from an external endpoint, or
+// switched on or off when the dependency is optional. With none of them
+// set, the resource gets a new one of its own.
+type Use struct {
+	Resource string `json:"resource,omitempty" yaml:"resource,omitempty"` // a resource in this manifest
+	External string `json:"external,omitempty" yaml:"external,omitempty"` // an external endpoint's ID
+	Enabled  *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`   // optional dependencies
 }
 
 // Gateway is one public address in front of several services, routing
@@ -286,7 +312,16 @@ var (
 	dirRE     = regexp.MustCompile(`^[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 	sourceRE  = regexp.MustCompile(`^(?:[a-z]+:)?[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 	repoRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	// endpointRE is a catalog endpoint's ID: the typeid prefix endpoint and
+	// a 26 character suffix.
+	endpointRE = regexp.MustCompile(`^endpoint_[0-9a-z]{26}$`)
+	// optionRE is the name of an option a service passes to a need, the
+	// same rule a catalog kind's consumer options follow.
+	optionRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 )
+
+// MaxOptionValue is the most characters one need option's value can have.
+const MaxOptionValue = 200
 
 // Problem is one thing wrong with a manifest, at a path such as
 // "services.api.scale".
@@ -412,6 +447,10 @@ func (m *Manifest) Validate() error {
 	if m.Defaults.Region != "" && !tokenRE.MatchString(m.Defaults.Region) {
 		add("defaults.region", "%q isn't a region name", m.Defaults.Region)
 	}
+	checkCloudTags(add, "defaults.cloud_tags", m.Defaults.CloudTags)
+	if len(m.Defaults.CloudTags) > 0 && m.Defaults.Provider != "" {
+		add("defaults.cloud_tags", "can't be set with defaults.provider; choose Cloud tags or a default provider")
+	}
 	if len(m.Services) > MaxServices {
 		add("services", "has %d services; the most is %d", len(m.Services), MaxServices)
 	}
@@ -444,6 +483,7 @@ func (m *Manifest) Validate() error {
 		if r.Version != "" && !versionRE.MatchString(r.Version) {
 			add(path+".version", "%q isn't a version", r.Version)
 		}
+		m.validateUses(add, name, path, r.Uses)
 		for _, env := range sortedKeys(r.Environments) {
 			o := r.Environments[env]
 			epath := path + ".environments." + env
@@ -489,6 +529,12 @@ func (m *Manifest) Validate() error {
 			}
 			seen[need] = true
 		}
+		for _, need := range sortedKeys(s.NeedOptions) {
+			if !slices.Contains(s.Needs, need) {
+				add(path, "need_options.%s isn't in needs", need)
+			}
+			checkNeedOptions(add, path+".need_options."+need, s.NeedOptions[need])
+		}
 		for _, env := range sortedKeys(s.Environments) {
 			epath := path + ".environments." + env
 			if !envRE.MatchString(env) {
@@ -516,15 +562,55 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
+// checkNeedOptions checks the options one service passes to one need.
+func checkNeedOptions(add func(string, string, ...any), path string, options map[string]string) {
+	for _, name := range sortedKeys(options) {
+		opath := path + "." + name
+		if !optionRE.MatchString(name) {
+			add(opath, "%q isn't an option name; use lower case letters, digits and underscores, starting with a letter, at most 32 long", name)
+		}
+		value := options[name]
+		if n := utf8.RuneCountInString(value); n > MaxOptionValue {
+			add(opath, "is %d characters; the most is %d", n, MaxOptionValue)
+		}
+		if strings.ContainsFunc(value, unicode.IsControl) {
+			add(opath, "can't hold a newline or other control character")
+		}
+	}
+}
+
 func checkToken(add func(string, string, ...any), path, what, value string) {
 	if value != "" && !tokenRE.MatchString(value) {
 		add(path, "%q isn't a %s name", value, what)
 	}
 }
 
+// MaxCloudTags bounds how many tags one service selects a target by.
+const MaxCloudTags = 8
+
+func checkCloudTags(add func(string, string, ...any), path string, tags []string) {
+	if len(tags) > MaxCloudTags {
+		add(path, "has %d tags; the most is %d", len(tags), MaxCloudTags)
+	}
+	seen := map[string]bool{}
+	for _, tag := range tags {
+		if len(tag) > 32 || !cloudTargetRE.MatchString(tag) {
+			add(path, "%q must be a lowercase tag of at most 32 characters", tag)
+		}
+		if seen[tag] {
+			add(path, "names %q twice", tag)
+		}
+		seen[tag] = true
+	}
+}
+
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
 	if s.CloudTarget != "" && (len(s.CloudTarget) > 48 || !cloudTargetRE.MatchString(s.CloudTarget)) {
 		add(path+".cloud_target", "must be a lowercase target slug of at most 48 characters")
+	}
+	checkCloudTags(add, path+".cloud_tags", s.CloudTags)
+	if s.CloudTarget != "" && len(s.CloudTags) > 0 {
+		add(path+".cloud_tags", "can't be set with cloud_target; name the target or select it by tags")
 	}
 	checkToken(add, path+".provider", "provider", s.Provider)
 	checkToken(add, path+".region", "region", s.Region)
@@ -593,6 +679,35 @@ func (m *Manifest) serviceCycle() []string {
 		}
 	}
 	return nil
+}
+
+// validateUses checks one resource's choices of where its dependencies
+// come from. Whether the kind has a dependency by that name is the
+// planner's question, not the manifest's.
+func (m *Manifest) validateUses(add func(string, string, ...any), resource, path string, uses map[string]Use) {
+	for _, dep := range sortedKeys(uses) {
+		u := uses[dep]
+		upath := path + ".uses." + dep
+		if !nameRE.MatchString(dep) {
+			add(upath, "the name must be lower case letters, digits and hyphens, starting with a letter, at most 40 long")
+		}
+		if u.Resource != "" && u.External != "" {
+			add(upath, "choose resource or external, not both")
+		}
+		if u.Resource != "" {
+			if _, ok := m.Resources[u.Resource]; !ok {
+				add(upath+".resource", "%q isn't a resource in this manifest", u.Resource)
+			} else if u.Resource == resource {
+				add(upath+".resource", "a resource can't use itself")
+			}
+		}
+		if u.External != "" && !endpointRE.MatchString(u.External) {
+			add(upath+".external", "%q isn't a catalog endpoint ID", u.External)
+		}
+		if u.Enabled != nil && !*u.Enabled && (u.Resource != "" || u.External != "") {
+			add(upath, "enabled: false can't be set with resource or external")
+		}
+	}
 }
 
 func (m *Manifest) validateLinks(add func(string, string, ...any)) {
@@ -725,7 +840,7 @@ func (s Service) For(env string, d Defaults) Settings {
 	out.Provider, out.Region = place(out.Provider, out.Region, d)
 	o, ok := s.Environments[env]
 	if !ok {
-		return out
+		return cloudTagDefaults(out, d)
 	}
 	if o.Provider != "" && o.Provider != out.Provider {
 		out.Target, out.Endpoint = "", nil
@@ -734,8 +849,12 @@ func (s Service) For(env string, d Defaults) Settings {
 		out.Endpoint = nil
 	}
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
+	// An environment names its target one way, replacing the service's.
 	if o.CloudTarget != "" {
-		out.CloudTarget = o.CloudTarget
+		out.CloudTarget, out.CloudTags = o.CloudTarget, nil
+	}
+	if len(o.CloudTags) > 0 {
+		out.CloudTarget, out.CloudTags = "", o.CloudTags
 	}
 	if o.Target != "" {
 		out.Target = o.Target
@@ -763,6 +882,15 @@ func (s Service) For(env string, d Defaults) Settings {
 	}
 	if o.Enabled != nil {
 		out.Enabled = o.Enabled
+	}
+	return cloudTagDefaults(out, d)
+}
+
+// cloudTagDefaults gives a service with no placement of its own the
+// manifest's default Cloud tags.
+func cloudTagDefaults(out Settings, d Defaults) Settings {
+	if len(d.CloudTags) > 0 && out.CloudTarget == "" && len(out.CloudTags) == 0 && out.Provider == "" && out.Target == "" {
+		out.CloudTags = slices.Clone(d.CloudTags)
 	}
 	return out
 }

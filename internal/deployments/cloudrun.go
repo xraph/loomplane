@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -216,22 +217,14 @@ func buildFor(cfg *planning.ServiceConfig, root, image string) gcp.Build {
 		b.Images = []string{image}
 		return b
 	}
+	path, env := packPlan(cfg)
 	args := []string{"build", image, "--builder", googleBuilder, "--publish"}
-	dir := root
-	switch {
-	case cfg.Ecosystem == "go":
-		// The Go buildpack builds one main package of a module: name it.
-		args = append(args, "--env", "GOOGLE_BUILDABLE=./"+cfg.Source)
-	case cfg.Ecosystem == "jvm" && cfg.Source != ".":
-		// A module of a Maven or Gradle build needs the build around it,
-		// so the Java buildpack builds from the root and is told which.
-		args = append(args, "--env", "GOOGLE_BUILDABLE="+cfg.Source)
-	default:
-		dir = root + "/" + cfg.Source
+	for _, e := range env {
+		args = append(args, "--env", e)
 	}
-	if cfg.Ecosystem == "python" && cfg.Start != "" {
-		// A project can run several processes; say which this one is.
-		args = append(args, "--env", "GOOGLE_ENTRYPOINT="+cfg.Start)
+	dir := root
+	if path != "." {
+		dir += "/" + path
 	}
 	args = append(args, "--path", dir)
 	b.Steps = []gcp.BuildStep{{Name: packBuilder, Entrypoint: "pack", Args: args}}
@@ -448,6 +441,22 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 // next plan then sees the move and replaces it properly. An instance that
 // only holds the slug keeps it, and this one takes the next free name.
 func currentInstance(ctx context.Context, ctrl CtrlPlane, job *Job, key string) (inst *instance.Instance, name string, err error) {
+	if len(job.Action.Routes) > 0 {
+		sum := sha256.Sum256([]byte(job.Deployment.ID + "/" + job.Action.ID))
+		name = fmt.Sprintf("%s-release-%x", instanceName(job), sum[:8])
+		inst, err = ctrl.Instances.GetBySlug(ctx, strings.ToLower(name))
+		if errors.Is(err, ctrlplane.ErrNotFound) {
+			return nil, name, nil
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		if inst.ProviderName != key || inst.TenantID != job.Deployment.OrgID || inst.Labels[labelReleaseAttempt] != job.Deployment.ID+"/"+job.Action.ID || replaced(job, inst) {
+			return nil, "", errors.New("routed candidate name belongs to another runtime")
+		}
+		return inst, name, nil
+	}
+
 	if inst, err = boundInstance(ctx, ctrl, job, key); err != nil {
 		return nil, "", err
 	}

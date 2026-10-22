@@ -32,6 +32,24 @@ const GroupName = "loomplane"
 func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
 	g.MustRegister(
+		statements("20261030000200", "catalog_proxy_sessions", catalogProxySessionsUp, catalogProxySessionsDown),
+		statements("20261030000100", "catalog_endpoints", catalogEndpointsUp, catalogEndpointsDown),
+		statements("20261029000500", "cloud_default_switch", cloudDefaultSwitchUp, cloudDefaultSwitchDown),
+		statements("20261029000400", "cloud_tags", cloudTagsUp, cloudTagsDown),
+		statements("20261028000400", "workload_attempt_safety", workloadAttemptSafetyUp, nil),
+		statements("20261028000300", "workload_attempts", workloadAttemptsUp, nil),
+		statements("20261028000200", "shared_sync_capacity_ledger", []string{serverCapacitySQL}, nil),
+		statements("20261028000100", "shared_sync_admission", sharedSyncAdmissionUp, nil),
+		statements("20261027000100", "routed_releases", routedReleasesUp, nil),
+		statements("20261026000100", "cloud_domains", cloudDomainsUp, cloudDomainsDown),
+		statements("20261025001000", "pool_effect_fences", poolEffectFencesUp, poolEffectFencesDown),
+		statements("20261025000300", "pool_recovery", poolRecoveryUp, poolRecoveryDown),
+		statements("20261025000100", "server_pools", serverPoolsUp, serverPoolsDown),
+		statements("20261024000500", "native_inventory", nativeInventoryUp, nativeInventoryDown),
+		statements("20261024000400", "native_sources", nativeSourcesUp, nativeSourcesDown),
+		statements("20261024000300", "binding_physical_identity", bindingPhysicalIdentityUp, bindingPhysicalIdentityDown),
+		statements("20261024000200", "cloud_infrastructure_review_guards", cloudInfrastructureReviewUp, cloudInfrastructureReviewDown),
+		statements("20261024000100", "cloud_infrastructure", cloudInfrastructureUp, cloudInfrastructureDown),
 		statements("20261011000001", "create_projects", projectsUp, projectsDown),
 		statements("20261012000001", "create_analyses", analysesUp, analysesDown),
 		statements("20261012000002", "create_github_installations", githubUp, githubDown),
@@ -79,8 +97,11 @@ func Group() *migrate.Group {
 		statements("20261018000400", "create_cloud_profiles", cloudProfilesUp, cloudProfilesDown),
 		statements("20261018000401", "cloud_sync", cloudSyncUp, cloudSyncDown),
 		statements("20261020000400", "cloud_sync_recovery_guards", cloudSyncRecoveryGuardsUp, cloudSyncRecoveryGuardsDown),
+		statements("20261020000900", "shared_clouds", sharedCloudsUp, sharedCloudsDown),
 		statements("20261020000401", "cloud_events", cloudEventsUp, cloudEventsDown),
 		statements("20261019000100", "plan_source_refs", planSourceRefsUp, planSourceRefsDown),
+		WorkloadControllersMigration(),
+		WorkloadRegistrationsMigration(),
 		NotificationsMigration(),
 	)
 	return g

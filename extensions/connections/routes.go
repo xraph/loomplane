@@ -62,6 +62,16 @@ func (e *Extension) clouds() (CloudList, error) {
 			Cloud: connections.DigitalOcean, Title: "DigitalOcean", Credential: "API token",
 			Help: "Create a personal access token in DigitalOcean under API, Tokens, with read and write access to App Platform and Databases. App Platform builds from your repositories through DigitalOcean's own GitHub connection, so give it access to them under Settings, GitHub. The token's team is where everything is made.",
 		},
+		{
+			Cloud: connections.Azure, Title: "Microsoft Azure", Credential: "Client secret",
+			Help: "Register an application in Microsoft Entra ID, add a client secret under Certificates & secrets, and give it the Contributor role on the subscription, or on the resource group to deploy into. Loomplane makes the resource group if it isn't there, then a container registry and a Container Apps environment in it. The check lists any action the role leaves out.",
+			Settings: []sdk.Setting{
+				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
+				{Key: "client_id", Label: "Application (client) ID", Required: true},
+				{Key: "subscription_id", Label: "Subscription ID", Required: true},
+				{Key: "resource_group", Label: "Resource group (default loomplane)"},
+			},
+		},
 	}}
 	plugs, err := e.plugins.Plugins()
 	if err != nil {

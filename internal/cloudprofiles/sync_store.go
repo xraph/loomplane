@@ -1,6 +1,7 @@
 package cloudprofiles
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ type SyncStore interface {
 	GetPreview(context.Context, string, string, string) (*Preview, *Snapshot, error)
 	Accept(context.Context, *Preview, *Snapshot, *Sync, string) (*Sync, error)
 	GetSync(context.Context, string, string, string) (*Sync, *Snapshot, error)
+	GetSyncView(context.Context, string, string, string) (*Sync, error)
 	ListSyncs(context.Context, string, string) ([]*Sync, error)
 	PendingSyncs(context.Context) ([]*Sync, error)
 	SaveSync(context.Context, *Sync, *Snapshot) error
@@ -96,10 +98,23 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		return nil, err
 	}
 	defer rollbackSync(tx)
-	// Project lock orders overlapping multi-environment changes and idempotent calls.
-	var project string
-	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2 FOR UPDATE`, p.OrgID, p.ProjectID).Scan(&project); err != nil {
-		return nil, storeError(err)
+	if lockErr := LockOrganization(ctx, tx, p.OrgID); lockErr != nil {
+		return nil, lockErr
+	}
+	projects := []string{}
+	if p.ProjectID != "" {
+		projects = append(projects, p.ProjectID)
+	}
+	for _, env := range snapshot.Environments {
+		projects = append(projects, ParticipantProject(env.ProjectID, p.ProjectID))
+	}
+	slices.Sort(projects)
+	projects = slices.Compact(projects)
+	for _, project := range projects {
+		var id string
+		if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2 FOR UPDATE`, p.OrgID, project).Scan(&id); err != nil {
+			return nil, storeError(err)
+		}
 	}
 	existing, _, e := readSync(tx.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND (idempotency_key=$3 OR preview_id=$4) ORDER BY (idempotency_key=$3) DESC LIMIT 1`, p.OrgID, p.ProjectID, key, p.ID))
 	if e == nil {
@@ -117,6 +132,33 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	}
 	if storedRevision != p.Revision {
 		return nil, ErrConflict
+	}
+	if checkErr := validateAcceptedReview(ctx, tx, p, snapshot, sync); checkErr != nil {
+		return nil, checkErr
+	}
+	// Lock every participant's capacity domain before taking target or environment locks.
+	// Pool edits use the same connection, daemon, then server order.
+	rawSnapshot, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	for _, query := range []string{
+		`SELECT id FROM loomplane_cloud_connections WHERE org_id=$1 AND id IN (SELECT jsonb_array_elements_text(coalesce(nullif($2::jsonb->'connections','null'),'[]'))) ORDER BY id FOR UPDATE`,
+		`SELECT pg_advisory_xact_lock(hashtextextended('host-admission/'||identity,0)) FROM (SELECT DISTINCT details->>'docker_id' identity FROM loomplane_cloud_connections WHERE org_id=$1 AND cloud='server' AND coalesce(details->>'docker_id','')<>'' AND id IN (SELECT jsonb_array_elements_text(coalesce(nullif($2::jsonb->'connections','null'),'[]'))) ORDER BY identity) identities`,
+		`SELECT id FROM loomplane_cloud_servers WHERE org_id=$1 AND runtime_connection_id IN (SELECT jsonb_array_elements_text(coalesce(nullif($2::jsonb->'connections','null'),'[]'))) ORDER BY id FOR UPDATE`,
+	} {
+		if _, err = tx.Exec(ctx, query, p.OrgID, rawSnapshot); err != nil {
+			return nil, err
+		}
+	}
+	for _, pin := range snapshot.Grants {
+		var revision int64
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_project_grants WHERE org_id=$1 AND cloud_id=$2 AND project_id=$3 AND NOT revoked FOR SHARE`, p.OrgID, pin.CloudID, pin.ProjectID).Scan(&revision); err != nil {
+			return nil, storeError(err)
+		}
+		if revision != pin.Revision {
+			return nil, ErrConflict
+		}
 	}
 	var originalSnapshot *Snapshot
 	if p.Reverts != "" {
@@ -140,7 +182,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 
 	for _, id := range slices.Sorted(maps.Keys(snapshot.ProfileRevisions)) {
 		var revision int64
-		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, id).Scan(&revision); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, id).Scan(&revision); err != nil {
 			return nil, storeError(err)
 		}
 		if revision != snapshot.ProfileRevisions[id] {
@@ -149,7 +191,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	}
 	for _, id := range slices.Sorted(maps.Keys(snapshot.TargetRevisions)) {
 		var revision int64
-		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_targets WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR SHARE`, p.OrgID, p.ProjectID, id).Scan(&revision); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_targets WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3 FOR SHARE`, p.OrgID, p.ProjectID, id).Scan(&revision); err != nil {
 			return nil, storeError(err)
 		}
 		if revision != snapshot.TargetRevisions[id] {
@@ -158,18 +200,34 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	}
 	if p.Input.TargetID != "" {
 		var rev int64
-		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID).Scan(&rev); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_profiles WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID).Scan(&rev); err != nil {
 			return nil, storeError(err)
 		}
 		var current []byte
-		if err = tx.QueryRow(ctx, `SELECT to_jsonb(t) FROM loomplane_cloud_targets t WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID).Scan(&current); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT to_jsonb(t) FROM loomplane_cloud_targets t WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 AND id=$4 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID).Scan(&current); err != nil {
 			return nil, storeError(err)
 		}
 		var target Target
 		if decodeErr := json.Unmarshal(current, &target); decodeErr != nil {
 			return nil, decodeErr
 		}
-		if target.Revision != p.Input.Revision || p.Before == nil || target.ConnectionID != p.Before.ConnectionID || target.Provider != p.Before.Provider || target.Region != p.Before.Region {
+		if target.Revision != p.Input.Revision || p.Before == nil || target.ConnectionID != p.Before.ConnectionID || target.Provider != p.Before.Provider || target.Region != p.Before.Region || target.Runtime != p.Before.Runtime || target.PoolID != p.Before.PoolID {
+			return nil, ErrConflict
+		}
+	}
+	if p.Input.Default {
+		// The profile row is already locked through ProfileRevisions.
+		var provider, connection *string
+		var region string
+		var rev int64
+		if err = tx.QueryRow(ctx, `SELECT revision,default_provider,default_connection_id,default_region FROM loomplane_cloud_profiles WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, p.Input.CloudID).Scan(&rev, &provider, &connection, &region); err != nil {
+			return nil, storeError(err)
+		}
+		var current *DefaultPlacement
+		if provider != nil && connection != nil {
+			current = &DefaultPlacement{Provider: *provider, ConnectionID: *connection, Region: region}
+		}
+		if rev != p.Input.Revision || !sameDefaultPlacement(current, p.BeforeDefault) {
 			return nil, ErrConflict
 		}
 	}
@@ -188,7 +246,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	})
 	for _, env := range envs {
 		var id string
-		if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_environments WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, p.ProjectID, env.EnvironmentID).Scan(&id); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_environments WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID).Scan(&id); err != nil {
 			return nil, storeError(err)
 		}
 		var active bool
@@ -199,7 +257,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			return nil, ErrBusy
 		}
 		var generation int64
-		if queryErr := tx.QueryRow(ctx, `SELECT coalesce((SELECT revision FROM loomplane_cloud_assignments WHERE org_id=$1 AND project_id=$2 AND environment_id=$3),0)`, p.OrgID, p.ProjectID, env.EnvironmentID).Scan(&generation); queryErr != nil {
+		if queryErr := tx.QueryRow(ctx, `SELECT coalesce((SELECT revision FROM loomplane_cloud_assignments WHERE org_id=$1 AND project_id=$2 AND environment_id=$3),0)`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID).Scan(&generation); queryErr != nil {
 			return nil, queryErr
 		}
 		if generation != env.AssignmentRevision {
@@ -214,6 +272,17 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		}
 		if !equal {
 			return nil, ErrConflict
+		}
+		if len(env.Routes) > 0 {
+			if _, err = tx.Exec(ctx, `SELECT id FROM loomplane_domain_routes WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 ORDER BY id FOR SHARE`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID); err != nil {
+				return nil, err
+			}
+			if checkErr := tx.QueryRow(ctx, `SELECT coalesce(jsonb_agg(body),'[]'::jsonb) @> $4::jsonb AND coalesce(jsonb_agg(body),'[]'::jsonb) <@ $4::jsonb AND NOT EXISTS(SELECT 1 FROM loomplane_route_handoffs h JOIN loomplane_domain_routes r ON r.id=h.route_id WHERE r.org_id=$1 AND r.project_id=$2 AND r.environment_id=$3 AND NOT h.released) FROM loomplane_domain_routes WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND status<>'removed'`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID, []byte(env.Routes)).Scan(&equal); checkErr != nil {
+				return nil, checkErr
+			}
+			if !equal {
+				return nil, ErrConflict
+			}
 		}
 		if originalSnapshot != nil {
 			var original *EnvironmentSnapshot
@@ -233,10 +302,10 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			}
 		}
 	}
-	if p.Input.TargetID != "" {
+	if p.Input.Shared() {
 		// Check the full assignment set too, including a newly assigned empty environment.
 		var ids []string
-		rows, qerr := tx.Query(ctx, `SELECT environment_id FROM loomplane_cloud_assignments WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 ORDER BY environment_id`, p.OrgID, p.ProjectID, p.Input.CloudID)
+		rows, qerr := tx.Query(ctx, `SELECT environment_id FROM loomplane_cloud_assignments WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 ORDER BY environment_id`, p.OrgID, p.ProjectID, p.Input.CloudID)
 		if qerr != nil {
 			return nil, qerr
 		}
@@ -260,8 +329,14 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if !slices.Equal(ids, reviewed) {
 			return nil, ErrConflict
 		}
-		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET provider=$5,connection_id=$6,region=$7,revision=revision+1,updated_at=$8 WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND id=$4`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID, p.After.Provider, p.After.ConnectionID, p.After.Region, sync.CreatedAt)
-	} else {
+	}
+	switch {
+	case p.Input.Default:
+		provider, connection, region := defaultColumns(p.AfterDefault)
+		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET default_provider=$4,default_connection_id=$5,default_region=$6,revision=revision+1,updated_at=$7 WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3`, p.OrgID, p.ProjectID, p.Input.CloudID, provider, connection, region, sync.CreatedAt)
+	case p.Input.TargetID != "":
+		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET provider=$5,connection_id=nullif($6,''),region=$7,revision=revision+1,updated_at=$8,runtime=$9,pool_id=nullif($10,'') WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 AND id=$4`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID, p.After.Provider, p.After.ConnectionID, p.After.Region, sync.CreatedAt, cmp.Or(p.After.Runtime, "managed"), p.After.PoolID)
+	default:
 		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES($1,$2,$3,nullif($4,''),1) ON CONFLICT(org_id,project_id,environment_id) DO UPDATE SET cloud_id=EXCLUDED.cloud_id,revision=loomplane_cloud_assignments.revision+1`, p.OrgID, p.ProjectID, p.Input.EnvironmentID, p.Input.CloudID)
 	}
 	if err != nil {
@@ -286,9 +361,18 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		return nil, storeError(err)
 	}
 	for _, env := range envs {
-		_, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_sync_guards(org_id,project_id,environment_id,sync_id) VALUES($1,$2,$3,$4) ON CONFLICT(org_id,environment_id) DO UPDATE SET sync_id=EXCLUDED.sync_id`, p.OrgID, p.ProjectID, env.EnvironmentID, sync.ID)
+		_, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_sync_guards(org_id,project_id,environment_id,sync_id) VALUES($1,$2,$3,$4) ON CONFLICT(org_id,environment_id) DO UPDATE SET sync_id=EXCLUDED.sync_id`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID, sync.ID)
 		if err != nil {
 			return nil, err
+		}
+	}
+	for _, env := range envs {
+		accepted := env.AcceptedPlan
+		if accepted == nil {
+			continue
+		}
+		if _, insertErr := tx.Exec(ctx, `INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,revision,manifest_id,manifest_revision,result,executable,created_by,created_at,planned_at,decided_by,decided_at) SELECT $1,$2,$3,$4,$5::jsonb->>'environment','approved',$6,$7,$8,$9,($9::jsonb->>'executable')::boolean,$10,$11,$11,$10,$11`, accepted.ID, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID, []byte(env.Plan), accepted.Revision, accepted.ManifestID, accepted.ManifestRevision, []byte(accepted.Result), sync.CreatedBy, sync.CreatedAt); insertErr != nil {
+			return nil, storeError(insertErr)
 		}
 	}
 	for _, id := range snapshot.Connections {
@@ -335,9 +419,21 @@ func (s *PgStore) GetSync(ctx context.Context, org, project, id string) (*Sync, 
 	return readSync(s.db.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND id=$3`, org, project, id))
 }
 
-// ListSyncs lists a project's durable operation history.
+// syncViewScope includes original operations and immutable recorded participants.
+// An empty project is reserved for an authorized organization view.
+const syncViewScope = `($2='' OR s.project_id=$2 OR EXISTS (
+ SELECT 1 FROM jsonb_array_elements(coalesce(nullif(s.snapshot->'environments','null'::jsonb),'[]'::jsonb)) participant
+ WHERE coalesce(nullif(participant->>'project_id',''),s.project_id)=$2))`
+
+// GetSyncView reads history without broadening GetSync's execution scope.
+func (s *PgStore) GetSyncView(ctx context.Context, org, project, id string) (*Sync, error) {
+	sync, _, err := readSync(s.db.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` AND id=$3`, org, project, id))
+	return sync, err
+}
+
+// ListSyncs lists eligible operation history for an organization or project.
 func (s *PgStore) ListSyncs(ctx context.Context, org, project string) ([]*Sync, error) {
-	return s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 ORDER BY created_at DESC LIMIT 100`, org, project)
+	return s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` ORDER BY created_at DESC,id DESC LIMIT 100`, org, project)
 }
 
 // PendingSyncs is the durable outbox read on startup and periodically.
@@ -476,10 +572,91 @@ func (s *PgStore) ListSyncPage(ctx context.Context, org, project string, before 
 	if limit < 1 || limit > page.Max {
 		return nil, page.Cursor{}, page.ErrBadLimit
 	}
-	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND ($3='' OR (created_at,id)<($4,$3)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1)
+	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` AND ($3='' OR (created_at,id)<($4,$3)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1)
 	if err != nil {
 		return nil, page.Cursor{}, err
 	}
 	rows, next := page.Trim(rows, limit, func(v *Sync) page.Cursor { return page.Cursor{At: v.CreatedAt, ID: v.ID} })
 	return rows, next, nil
+}
+
+// validateAcceptedReview compares the caller to the immutable database review.
+// Only the approving actor and the deterministic materialized plans may differ.
+func validateAcceptedReview(ctx context.Context, tx driver.Tx, p *Preview, snapshot *Snapshot, sync *Sync) error {
+	if sync.OrgID != p.OrgID || sync.ProjectID != p.ProjectID || sync.PreviewID != p.ID || sync.CloudID != p.Input.CloudID || sync.TargetID != p.Input.TargetID || sync.Default != p.Input.Default || !sameDefaultPlacement(sync.BeforeDefault, p.BeforeDefault) || !sameDefaultPlacement(sync.AfterDefault, p.AfterDefault) || sync.Reverts != p.Reverts || sync.Status != SyncPending {
+		return ErrConflict
+	}
+	reviewed := *snapshot
+	reviewed.Environments = slices.Clone(snapshot.Environments)
+	for i := range reviewed.Environments {
+		reviewed.Environments[i].AcceptedPlan = nil
+	}
+	body, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(reviewed)
+	if err != nil {
+		return err
+	}
+	var matches bool
+	if checkErr := tx.QueryRow(ctx, `SELECT body=$2::jsonb AND snapshot-'actor'=$3::jsonb-'actor' FROM loomplane_cloud_previews WHERE id=$1`, p.ID, body, raw).Scan(&matches); checkErr != nil {
+		return checkErr
+	}
+	if !matches {
+		return ErrConflict
+	}
+	syncBody, err := json.Marshal(sync)
+	if err != nil {
+		return err
+	}
+	if checkErr := tx.QueryRow(ctx, `SELECT ($1::jsonb->'before' IS NOT DISTINCT FROM $2::jsonb->'before') AND ($1::jsonb->'after' IS NOT DISTINCT FROM $2::jsonb->'after') AND (SELECT coalesce(jsonb_agg(e-'plan_id'),'[]') FROM jsonb_array_elements(coalesce(nullif($1::jsonb->'environments','null'),'[]')) e)=(SELECT coalesce(jsonb_agg(e),'[]') FROM jsonb_array_elements(coalesce(nullif($2::jsonb->'environments','null'),'[]')) e)`, syncBody, body).Scan(&matches); checkErr != nil {
+		return checkErr
+	}
+	if !matches {
+		return ErrConflict
+	}
+	seen := map[string]bool{}
+	for _, env := range snapshot.Environments {
+		if seen[env.EnvironmentID] {
+			return ErrConflict
+		}
+		seen[env.EnvironmentID] = true
+		accepted := env.AcceptedPlan
+		if accepted == nil {
+			var hasWork bool
+			if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce($1::jsonb->'actions','[]')) a WHERE a->>'op'<>'keep' OR coalesce((a->>'adopt_cloud_placement')::boolean,false))`, []byte(env.Plan)).Scan(&hasWork); checkErr != nil {
+				return checkErr
+			}
+			if hasWork {
+				return ErrConflict
+			}
+			continue
+		}
+		participant := slices.IndexFunc(sync.Environments, func(e EnvironmentChange) bool {
+			return e.EnvironmentID == env.EnvironmentID && ParticipantProject(e.ProjectID, p.ProjectID) == ParticipantProject(env.ProjectID, p.ProjectID)
+		})
+		if participant < 0 || sync.Environments[participant].PlanID != accepted.ID {
+			return ErrConflict
+		}
+		if accepted.ID != sync.ID+"."+env.EnvironmentID || accepted.Revision == "" {
+			return ErrConflict
+		}
+		if checkErr := tx.QueryRow(ctx, `SELECT
+   $1::jsonb->>'org_id'=$3 AND $1::jsonb->>'project_id'=$4 AND $1::jsonb->>'environment_id'=$5
+   AND $1::jsonb->>'revision'=$6 AND coalesce($1::jsonb->>'manifest_id','')=$7 AND coalesce(($1::jsonb->>'manifest_revision')::int,0)=$8
+   AND $2::jsonb->>'cloud_sync_id'=$9
+   AND ($2::jsonb-'cloud_sync_id')=jsonb_build_object('actions',$1::jsonb->'actions','problems',$1::jsonb->'problems','warnings',$1::jsonb->'warnings','summary',$1::jsonb->'summary','executable',$1::jsonb->'executable','connections',$1::jsonb->'connections')
+   AND ($2::jsonb->>'executable')::boolean`, []byte(env.Plan), []byte(accepted.Result), p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID, accepted.Revision, accepted.ManifestID, accepted.ManifestRevision, sync.ID).Scan(&matches); checkErr != nil {
+			return checkErr
+		}
+		if !matches {
+			return ErrConflict
+		}
+	}
+	return nil
+}
+
+func sameDefaultPlacement(a, b *DefaultPlacement) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }

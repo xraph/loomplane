@@ -83,7 +83,7 @@ export function NavProjects({
                     />
                   )}
                 </span>
-                <span>{p.name}</span>
+                <span className="truncate">{p.name}</span>
                 {note && <span className="sr-only">, {note}</span>}
               </SidebarMenuButton>
               {menu && (

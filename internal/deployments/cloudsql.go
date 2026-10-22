@@ -3,7 +3,6 @@ package deployments
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -16,9 +15,6 @@ import (
 )
 
 const (
-	// sqlTier is the machine a Cloud SQL instance runs on: one vCPU and
-	// 3.75 GB, the smallest dedicated Enterprise tier.
-	sqlTier = "db-custom-1-3840"
 	// sqlUser is the user Loomplane creates for the application.
 	sqlUser = "app"
 	// passwordField is where a database's password is kept, in Vault.
@@ -41,9 +37,8 @@ type CloudSQL struct {
 
 var _ Executor = (*CloudSQL)(nil)
 
-type cloudSQLState struct {
-	Operation string `json:"operation,omitempty"`
-}
+// RetainCheckpointOnRetry keeps captured operations across explicit retries.
+func (*CloudSQL) RetainCheckpointOnRetry() bool { return true }
 
 // SQLInstanceName is the Cloud SQL instance a resource is in an
 // environment: lower case letters, digits and hyphens.
@@ -84,6 +79,10 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: cloud sql provisions databases, not %s", ErrNoExecutor, job.Action.Subject)
 	}
+	request, err := managedDatabaseRequest(job, "cloud-sql")
+	if err != nil {
+		return nil, err
+	}
 	version, ok := sqlVersions[cfg.Kind+"/"+cfg.Version]
 	if !ok {
 		return nil, fmt.Errorf("cloud sql doesn't offer %s %s", cfg.Kind, cfg.Version)
@@ -92,65 +91,119 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Managed != nil && key.ProjectID != job.Connection.Details["project_id"] {
+		return nil, fmt.Errorf("managed database review changed: the credential belongs to a different project")
+	}
+	instance := cloudSQLInstance(job)
+	if job.Binding != nil {
+		bound, _, bindErr := boundSQLInstance(job.Binding.ExternalID, key.ProjectID, cfg.Region)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		if bound != instance {
+			return nil, errors.New("cloud sql binding no longer matches the saved deployment")
+		}
+	}
+	state, err := readCloudSQLState(job, cfg, key.ProjectID, cfg.Region, instance, "apply")
+	if err != nil {
+		return nil, err
+	}
+	var password string
+	if job.Binding != nil {
+		password, err = originalSQLPassword(ctx, job)
+		if err != nil {
+			return nil, err
+		}
+	}
 	s, err := c.Google.Session(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	var state cloudSQLState
-	if len(job.Resume) > 0 {
-		_ = json.Unmarshal(job.Resume, &state) //nolint:errcheck // an unreadable checkpoint starts over
-	}
-	save := func() {
-		data, _ := json.Marshal(state) //nolint:errcheck // a plain struct always encodes
-		_ = job.Checkpoint(data)       //nolint:errcheck // the next heartbeat retries it
-	}
-	ctx = progress.With(ctx, func(m string) {
-		job.Progress(StepDeploying, m)
-		save()
-	})
-
+	ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
 	job.Progress(StepDeploying, "Creating the database instance; this takes several minutes")
-	in, err := s.EnsureSQLInstance(ctx, gcp.SQLInstanceSpec{
-		Name: cloudSQLInstance(job), DatabaseVersion: version, Region: cfg.Region, Tier: sqlTier,
-	}, state.Operation, func(op string) {
-		state.Operation = op
-		save()
-	})
-	if err != nil {
-		return nil, err
+	spec := gcp.SQLInstanceSpec{
+		Name: instance, DatabaseVersion: version, Region: cfg.Region, Tier: request.ComputeClass,
+		Existing: job.Binding != nil, Intent: state.Intent,
+		Inspect: func(in *gcp.SQLInstance) error { return state.inspect(in, job.Binding == nil) },
+	}
+	if cfg.Managed != nil {
+		spec.Storage = &gcp.SQLStorageSettings{SizeGB: request.StorageGB, Type: request.StorageType, RetainedBackups: request.BackupRetentionValue, RecoveryDays: request.PointInTimeRecoveryDays}
+	}
+	var in *gcp.SQLInstance
+	if state.Stage == "instance" {
+		in, err = s.EnsureSQLInstance(ctx, spec, state.guarded(s, job.Binding == nil))
+		if err != nil {
+			return nil, err
+		}
+		if saveErr := state.advance("database"); saveErr != nil {
+			return nil, saveErr
+		}
+	} else {
+		in, err = s.GetSQLInstance(ctx, instance)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if inspectErr := state.inspect(in, job.Binding == nil); inspectErr != nil {
+		return nil, inspectErr
+	}
+	if in.DatabaseVersion != version || in.State != "RUNNABLE" {
+		return nil, errors.New("cloud sql instance no longer matches the saved deployment")
 	}
 	db := databaseName(job.Action.Name)
-	if derr := s.EnsureDatabase(ctx, in.Name, db); derr != nil {
-		return nil, fmt.Errorf("create the database: %w", derr)
+	if state.Stage == "database" {
+		if err = s.EnsureDatabase(ctx, instance, db, state.guarded(s, job.Binding == nil)); err != nil {
+			return nil, fmt.Errorf("create the database: %w", err)
+		}
+		if saveErr := state.advance("user"); saveErr != nil {
+			return nil, saveErr
+		}
 	}
-	password, _, err := keptPassword(ctx, job, rand.Text()+rand.Text())
+	if password == "" && state.Stage == "user" && state.Operation == "" {
+		password, err = keptPassword(ctx, job, rand.Text()+rand.Text())
+	} else if password == "" {
+		password, err = originalSQLPassword(ctx, job)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if err := s.SetUser(ctx, in.Name, sqlUser, password); err != nil {
-		return nil, fmt.Errorf("set the database user: %w", err)
+	if state.Stage == "user" {
+		if err = s.SetUser(ctx, instance, sqlUser, password, state.guarded(s, job.Binding == nil)); err != nil {
+			return nil, fmt.Errorf("set the database user: %w", err)
+		}
+		if saveErr := state.advance("ready"); saveErr != nil {
+			return nil, saveErr
+		}
 	}
 	if err := job.Keep(ctx, ResourceURL, []byte(databaseURL(cfg.Kind, password, db, in.ConnectionName))); err != nil {
 		return nil, err
 	}
-	return &Outcome{ExternalID: in.ConnectionName, Revision: in.DatabaseVersion}, nil
+
+	return &Outcome{ExternalID: in.ConnectionName, PhysicalID: state.ResourceID, Revision: in.DatabaseVersion}, nil
+}
+
+func originalSQLPassword(ctx context.Context, job *Job) (string, error) {
+	kept, err := job.Recall(ctx, passwordField)
+	if errors.Is(err, ErrNoCredential) || (err == nil && len(kept) == 0) {
+		return "", errors.New("the original cloud sql instance has no kept password")
+	}
+	return string(kept), err
 }
 
 // keptPassword is a database user's password: the one kept for this
 // database, or fresh, kept before it's used so a retry sets the same one.
-// isNew reports which.
-func keptPassword(ctx context.Context, job *Job, fresh string) (password string, isNew bool, err error) {
+func keptPassword(ctx context.Context, job *Job, fresh string) (password string, err error) {
 	kept, err := job.Recall(ctx, passwordField)
 	if err == nil && len(kept) > 0 {
-		return string(kept), false, nil
+		return string(kept), nil
 	}
 	if err != nil && !errors.Is(err, ErrNoCredential) {
-		return "", false, err
+		return "", err
 	}
 	if err := job.Keep(ctx, passwordField, []byte(fresh)); err != nil {
-		return "", false, err
+		return "", err
 	}
-	return fresh, true, nil
+	return fresh, nil
 }
 
 // databaseName is the resource's name as a database name.
@@ -167,44 +220,85 @@ func databaseURL(kind, password, db, connection string) string {
 	return "postgresql://" + creds + "@/" + db + "?host=" + url.QueryEscape(socket)
 }
 
-// Remove implements Executor: it deletes the instance, with its data, and
-// the credentials Loomplane kept for it.
+// Remove implements Executor: it requests a final backup before instance
+// removal and forgets credentials only after the operation succeeds.
 func (c *CloudSQL) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
+	cfg, err := managedDatabaseBindingReview(b, job.Connection, "cloud-sql")
+	if err != nil {
+		return err
+	}
 	key, err := gcp.ParseKey(job.Credential)
 	if err != nil {
 		return err
 	}
-	s, err := c.Google.Session(ctx, key)
+	if cfg.Managed != nil && key.ProjectID != job.Connection.Details["project_id"] {
+		return fmt.Errorf("managed database review changed: the credential belongs to a different project")
+	}
+	instance, region, err := boundSQLInstance(b.ExternalID, key.ProjectID, b.Region)
 	if err != nil {
 		return err
 	}
-	_, instance, _ := strings.Cut(strings.TrimPrefix(b.ExternalID, key.ProjectID+":"), ":")
-	if instance == "" {
-		return fmt.Errorf("the binding names no instance: %q", b.ExternalID)
-	}
-	if err := s.DeleteSQLInstance(ctx, instance); err != nil {
+	state, err := readCloudSQLState(job, cfg, key.ProjectID, region, instance, "remove")
+	if err != nil {
 		return err
 	}
+	if b.PhysicalID != "" {
+		if state.ResourceID != "" && state.ResourceID != b.PhysicalID {
+			return errors.New("cloud sql checkpoint incarnation changed")
+		}
+		state.ResourceID = b.PhysicalID
+	}
+	if state.Stage != "removed" {
+		s, sessionErr := c.Google.Session(ctx, key)
+		if sessionErr != nil {
+			return sessionErr
+		}
+		ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
+		if err := s.DeleteSQLInstance(ctx, instance, state.guarded(s, false)); err != nil {
+			return err
+		}
+		if err := state.advance("removed"); err != nil {
+			return err
+		}
+	}
+
 	return job.Forget(ctx)
 }
 
 // Observe implements Executor.
-func (c *CloudSQL) Observe(ctx context.Context, _ *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+func (c *CloudSQL) Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+	cfg, err := managedDatabaseBindingReview(b, conn, "cloud-sql")
+	if err != nil {
+		return nil, err
+	}
 	key, err := gcp.ParseKey(credential)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.Managed != nil && key.ProjectID != conn.Details["project_id"] {
+		return nil, fmt.Errorf("managed database review changed: the credential belongs to a different project")
 	}
 	s, err := c.Google.Session(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	_, instance, _ := strings.Cut(strings.TrimPrefix(b.ExternalID, key.ProjectID+":"), ":")
+	instance, region, err := boundSQLInstance(b.ExternalID, key.ProjectID, b.Region)
+	if err != nil {
+		return nil, err
+	}
 	in, err := s.GetSQLInstance(ctx, instance)
 	if gcp.IsNotFound(err) {
 		return &Observation{}, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	pin, err := in.Incarnation(key.ProjectID, region, instance)
+	if err != nil {
+		return nil, err
+	}
+	if b.PhysicalID != "" && pin != b.PhysicalID {
+		return nil, errors.New("cloud sql incarnation changed")
 	}
 	return &Observation{Exists: true, Revision: in.DatabaseVersion}, nil
 }

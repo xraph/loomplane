@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xraph/forge/cli"
@@ -14,6 +15,17 @@ import (
 
 func cloudFlag(name, description string) cli.Flag {
 	return cli.NewStringFlag(name, "", description, "")
+}
+
+// cloudTags splits a comma-separated flag; the server validates each tag.
+func cloudTags(value string) []string {
+	tags := []string{}
+	for _, tag := range strings.Split(value, ",") {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
 }
 func cloudRevisionFlag() cli.Flag {
 	return cloudFlag("revision", "Expected target, Cloud or assignment revision")
@@ -28,13 +40,14 @@ func (a *App) cloudsCommand() cli.Command {
 		cli.WithSubcommand(cli.NewCommand("update", "Rename a Cloud at its expected revision", a.updateCloud, cli.WithUsage("clouds update <project> <cloud-id> --name name --revision 1"), cli.WithFlags(jsonFlag, cloudFlag("name", "Cloud name"), cloudRevisionFlag()))),
 		cli.WithSubcommand(cli.NewCommand("delete", "Delete an unassigned Cloud", a.deleteCloud, cli.WithUsage("clouds delete <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
 		cli.WithSubcommand(cli.NewCommand("assignment", "Show an environment's Cloud and assignment generation", a.cloudAssignment, cli.WithUsage("clouds assignment <project> <environment-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("assign", "Review an environment assignment, then apply with --yes", a.assignCloud, cli.WithUsage("clouds assign <project> <environment-id> --cloud cloud-id --revision 0 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("cloud", "Cloud ID; empty to unassign"), cloudRevisionFlag())...))))
+		cli.WithSubcommand(cli.NewCommand("assign", "Review an environment assignment, then apply with --yes", a.assignCloud, cli.WithUsage("clouds assign <project> <environment-id> --cloud cloud-id --revision 0 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("cloud", "Cloud ID; empty to unassign"), cloudRevisionFlag())...))),
+		cli.WithSubcommand(cli.NewCommand("switch-default", "Review a change to a Cloud's default provider and account, then apply with --yes", a.switchCloudDefault, cli.WithUsage("clouds switch-default <project> <cloud-id> --provider vercel --connection conn-id --revision 3 [--clear] [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("provider", "Destination provider"), cloudFlag("connection", "Destination connection ID"), cloudFlag("region", "Destination region"), cli.NewBoolFlag("clear", "", "Remove the default", false), cloudRevisionFlag())...))))
 }
 func (a *App) cloudTargetsCommand() cli.Command {
 	return cli.NewCommand("cloud-targets", "List the targets in a Cloud", a.listCloudTargets, cli.WithUsage("cloud-targets <project> <cloud-id>"), cli.WithFlag(jsonFlag),
 		cli.WithSubcommand(cli.NewCommand("show", "Show a target's desired placement", a.showCloudTarget, cli.WithUsage("cloud-targets show <project> <cloud-id> <target-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("create", "Create a named deployment target", a.createCloudTarget, cli.WithUsage("cloud-targets create <project> <cloud-id> --name frontend --provider vercel --connection conn-id"), cli.WithFlags(jsonFlag, cloudFlag("name", "Immutable lowercase target slug"), cloudFlag("display-name", "Display label"), cloudFlag("provider", "Provider name"), cloudFlag("connection", "Verified connection ID"), cloudFlag("region", "Deployment region")))),
-		cli.WithSubcommand(cli.NewCommand("update", "Change a target's display name", a.updateCloudTarget, cli.WithUsage("cloud-targets update <project> <cloud-id> <target-id> --display-name Frontend --revision 1"), cli.WithFlags(jsonFlag, cloudFlag("display-name", "Display label"), cloudRevisionFlag()))),
+		cli.WithSubcommand(cli.NewCommand("create", "Create a named deployment target", a.createCloudTarget, cli.WithUsage("cloud-targets create <project> <cloud-id> --name frontend --provider vercel --connection conn-id"), cli.WithFlags(jsonFlag, cloudFlag("name", "Immutable lowercase target slug"), cloudFlag("display-name", "Display label"), cloudFlag("provider", "Provider name"), cloudFlag("connection", "Verified connection ID"), cloudFlag("region", "Deployment region"), cloudFlag("tags", "Comma-separated tags, such as eu,gpu")))),
+		cli.WithSubcommand(cli.NewCommand("update", "Change a target's display name", a.updateCloudTarget, cli.WithUsage("cloud-targets update <project> <cloud-id> <target-id> --display-name Frontend --revision 1 [--tags eu,gpu | --clear-tags]"), cli.WithFlags(jsonFlag, cloudFlag("display-name", "Display label"), cloudFlag("tags", "Replace the tags, comma-separated"), cli.NewBoolFlag("clear-tags", "", "Remove every tag", false), cloudRevisionFlag()))),
 		cli.WithSubcommand(cli.NewCommand("delete", "Delete an unused target", a.deleteCloudTarget, cli.WithUsage("cloud-targets delete <project> <cloud-id> <target-id>"), cli.WithFlag(jsonFlag))),
 		cli.WithSubcommand(cli.NewCommand("switch", "Review an account or provider switch, then apply with --yes", a.switchCloudTarget, cli.WithUsage("cloud-targets switch <project> <cloud-id> <target-id> --provider vercel --connection conn-id --revision 1 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("provider", "Destination provider"), cloudFlag("connection", "Destination connection ID"), cloudFlag("region", "Destination region"), cloudRevisionFlag())...))))
 }
@@ -149,7 +162,7 @@ func (a *App) createCloudTarget(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.CreateCloudTarget(ctxOf(ctx), p.ID, ctx.Arg(1), client.CloudCreateTargetInput{Name: ctx.String("name"), DisplayName: ctx.String("display-name"), Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region")})
+	v, err := c.CreateCloudTarget(ctxOf(ctx), p.ID, ctx.Arg(1), client.CloudCreateTargetInput{Name: ctx.String("name"), DisplayName: ctx.String("display-name"), Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Tags: cloudTags(ctx.String("tags"))})
 	if err != nil {
 		return err
 	}
@@ -164,7 +177,14 @@ func (a *App) updateCloudTarget(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.UpdateCloudTarget(ctxOf(ctx), p.ID, ctx.Arg(1), ctx.Arg(2), client.CloudUpdateTargetInput{DisplayName: ctx.String("display-name"), Revision: revision})
+	in := client.CloudUpdateTargetInput{DisplayName: ctx.String("display-name"), Revision: revision}
+	if tags := cloudTags(ctx.String("tags")); len(tags) > 0 || ctx.Bool("clear-tags") {
+		if len(tags) > 0 && ctx.Bool("clear-tags") {
+			return fmt.Errorf("use --tags or --clear-tags, not both")
+		}
+		in.Tags = &tags
+	}
+	v, err := c.UpdateCloudTarget(ctxOf(ctx), p.ID, ctx.Arg(1), ctx.Arg(2), in)
 	if err != nil {
 		return err
 	}
@@ -213,6 +233,25 @@ func (a *App) switchCloudTarget(ctx cli.CommandContext) error {
 		return err
 	}
 	preview, err := c.PreviewCloudChange(ctxOf(ctx), p.ID, client.CloudChangeInput{CloudID: ctx.Arg(1), TargetID: ctx.Arg(2), Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Revision: revision})
+	if err != nil {
+		return err
+	}
+	return a.acceptCloudPreview(ctx, c, p.ID, preview, false)
+}
+func (a *App) switchCloudDefault(ctx cli.CommandContext) error {
+	revision, err := cloudRevision(ctx)
+	if err != nil {
+		return err
+	}
+	in := client.CloudChangeInput{CloudID: ctx.Arg(1), Default: true, Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Revision: revision}
+	if ctx.Bool("clear") == (in.Provider != "") {
+		return fmt.Errorf("name the new --provider and --connection, or pass --clear")
+	}
+	c, p, err := a.cloudClient(ctx, 2)
+	if err != nil {
+		return err
+	}
+	preview, err := c.PreviewCloudChange(ctxOf(ctx), p.ID, in)
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,7 @@ const (
 	AWS          = "aws"
 	Render       = "render"
 	DigitalOcean = "digitalocean"
+	Azure        = "azure"
 	Server       = "server"
 	Kubernetes   = "kubernetes"
 	Registry     = "registry"
@@ -37,6 +38,7 @@ const (
 
 // Errors.
 var (
+	ErrChanged  = errors.New("cloud connection changed during the operation")
 	ErrNotFound = errors.New("cloud connection not found")
 	ErrInvalid  = errors.New("invalid cloud connection")
 	ErrExists   = errors.New("this organization already has a connection with that name")
@@ -48,13 +50,18 @@ var (
 
 // Connection is one cloud account an organization deploys to.
 type Connection struct {
-	ID    string `json:"id" forge:"id"`
-	OrgID string `json:"org_id"`
-	Cloud string `json:"cloud"`
-	Name  string `json:"name"`
+	// Generation changes with credentials or verified placement configuration, not health checks.
+	Generation int64  `json:"generation"`
+	ID         string `json:"id" forge:"id"`
+	OrgID      string `json:"org_id"`
+	Cloud      string `json:"cloud"`
+	Name       string `json:"name"`
 	// Account is what the credential acts as: a Google Cloud project, or
 	// a Vercel team or username.
 	Account string `json:"account"`
+	// AccountIdentity is derived from checked scope, never accepted from input
+	// or persisted separately. Clients use it to compare reviewed plans.
+	AccountIdentity string `json:"account_identity,omitempty"`
 	// Details are facts about the credential that are safe to show, such
 	// as a service account's email. Never the credential.
 	Details map[string]string `json:"details"`
@@ -70,6 +77,10 @@ type Connection struct {
 }
 
 func (c *Connection) normalize() {
+	if c.Generation == 0 {
+		c.Generation = 1
+	}
+	c.AccountIdentity = AccountIdentity(c.Cloud, c.Account, c.Details)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	if c.CheckedAt != nil {
 		t := c.CheckedAt.UTC()
@@ -85,7 +96,7 @@ func (c *Connection) normalize() {
 
 // RegistryPullReady permits an existing pinned image when only push is missing.
 func RegistryPullReady(c *Connection) bool {
-	if c == nil || c.Cloud != Registry {
+	if c == nil || c.Cloud != Registry || c.Message == replacementInProgressMessage {
 		return false
 	}
 	if c.Status == StatusReady {

@@ -125,7 +125,7 @@ export function DeploymentTargets({
           ) : !graph.data || !providers.data ? (
             <Skeleton className="h-24" />
           ) : !graph.data.graph ? (
-            <Empty>
+            <Empty preview={false}>
               <EmptyHeader>
                 <EmptyTitle>Analyze your repositories first</EmptyTitle>
                 <EmptyDescription>
@@ -134,7 +134,7 @@ export function DeploymentTargets({
               </EmptyHeader>
             </Empty>
           ) : rows.length === 0 ? (
-            <Empty>
+            <Empty preview={false}>
               <EmptyHeader>
                 <EmptyTitle>No services to place</EmptyTitle>
                 <EmptyDescription>
@@ -340,7 +340,7 @@ function TargetRow({
           <Button
             size="sm"
             variant="outline"
-            className="rounded-full"
+
             aria-label={`Save ${row.name} placement`}
             disabled={disabled || (value.enabled && !offered)}
             onClick={() => void submit()}
@@ -774,7 +774,7 @@ export function DeploymentAccounts({
   }
   if (current.status === "error" && statusOf(current.error) === 404) {
     return (
-      <Empty>
+      <Empty preview={false}>
         <EmptyHeader>
           <EmptyTitle>Save a manifest first</EmptyTitle>
           <EmptyDescription>

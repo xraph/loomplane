@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -210,6 +211,10 @@ type PlanningConfig struct {
 	// ApprovalWindow is how long a plan waits for someone to approve or
 	// reject it. After that it expires, and you plan again.
 	ApprovalWindow time.Duration
+	// EndpointDeniedCIDRs are ranges an endpoint check from Loomplane's
+	// own network never connects to, at any port, besides its own host
+	// and the services it depends on. A bare address is one host.
+	EndpointDeniedCIDRs []netip.Prefix
 }
 
 // DriftConfig schedules the drift check.
@@ -234,10 +239,12 @@ type StorageConfig struct {
 	URL string
 }
 
-// CloudsConfig points Loomplane's cloud clients somewhere other than the
-// clouds' own APIs, for tests. Leave both empty in every real
-// deployment.
+// CloudsConfig configures enrollment callbacks and provider API test overrides.
+// Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
+	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
+	// Empty uses PublicURL; local addresses cannot provision remote servers.
+	EnrollmentURL string
 	// GoogleEndpoint replaces every Google Cloud API host.
 	GoogleEndpoint string
 	// VercelEndpoint replaces Vercel's API.
@@ -248,6 +255,9 @@ type CloudsConfig struct {
 	RenderEndpoint string
 	// DigitalOceanEndpoint replaces DigitalOcean's API.
 	DigitalOceanEndpoint string
+	// AzureEndpoint replaces Microsoft Entra ID's sign-in and Azure
+	// Resource Manager.
+	AzureEndpoint string
 }
 
 // Bounds on the approval window: long enough to reach a person, short
@@ -332,6 +342,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Environment, "environment")
 	r.str(&c.HTTPAddr, "http_addr")
 	r.str(&c.PublicURL, "public_url")
+	r.str(&c.Clouds.EnrollmentURL, "clouds.enrollment_url")
 	r.str(&c.SecretKey, "secret_key")
 
 	r.str(&c.Database.URL, "database.url")
@@ -372,6 +383,7 @@ func FromSource(src Getter) (Config, error) {
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
+	r.prefixes(&c.Planning.EndpointDeniedCIDRs, "planning.endpoint_denied_cidrs")
 	r.str(&c.Storage.URL, "storage.url")
 	r.str(&c.Storage.ArtifactBucket, "storage.artifact_bucket")
 	r.str(&c.Storage.BackupURL, "storage.backup_url")
@@ -381,6 +393,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.VercelEndpoint, "clouds.vercel_endpoint")
 	r.str(&c.Clouds.RenderEndpoint, "clouds.render_endpoint")
 	r.str(&c.Clouds.DigitalOceanEndpoint, "clouds.digitalocean_endpoint")
+	r.str(&c.Clouds.AzureEndpoint, "clouds.azure_endpoint")
 	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
@@ -567,6 +580,29 @@ func (r *reader) names(dst *[]string, key string) {
 		if s = strings.TrimSpace(s); s != "" {
 			*dst = append(*dst, s)
 		}
+	}
+}
+
+// prefixes reads a list of CIDR ranges, as a list or a comma-separated
+// string. A bare address is a range of one.
+func (r *reader) prefixes(dst *[]netip.Prefix, key string) {
+	var items []string
+	before := len(r.errs)
+	r.names(&items, key)
+	if len(r.errs) > before {
+		return
+	}
+	for _, item := range items {
+		p, err := netip.ParsePrefix(item)
+		if err != nil {
+			addr, aerr := netip.ParseAddr(item)
+			if aerr != nil {
+				r.fail(key, "a list of CIDR ranges, such as 10.20.0.0/16", item)
+				continue
+			}
+			p = netip.PrefixFrom(addr.WithZone(""), addr.BitLen())
+		}
+		*dst = append(*dst, p.Masked())
 	}
 }
 

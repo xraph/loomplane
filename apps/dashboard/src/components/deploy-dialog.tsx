@@ -130,7 +130,7 @@ export function DeploymentForm({
       ) : !list.data ? (
         <Skeleton className="h-40 w-full rounded-xl" />
       ) : projects.length === 0 ? (
-        <Empty>
+        <Empty preview={false}>
           <EmptyHeader>
             <EmptyTitle>No projects to deploy</EmptyTitle>
             <EmptyDescription>
@@ -152,14 +152,17 @@ export function DeploymentForm({
       ) : project ? (
         <FieldGroup>
           <Field>
-            <FieldLabel>Project</FieldLabel>
+            <FieldLabel>
+              <StepNumber n={1} />
+              Project
+            </FieldLabel>
             <Select
               items={projects.map((p) => ({ label: p.name, value: p.id }))}
               value={project.id}
               onValueChange={(v) => setChosen(String(v))}
             >
               <SelectTrigger
-                className="w-full"
+                className="h-11 w-full rounded-xl bg-card"
                 aria-label="Project"
                 disabled={busy}
               >
@@ -203,7 +206,7 @@ export function DeploymentForm({
           />
         </FieldGroup>
       ) : (
-        <Empty>
+        <Empty preview={false}>
           <EmptyHeader>
             <EmptyTitle>Project unavailable</EmptyTitle>
             <EmptyDescription>
@@ -264,7 +267,7 @@ function ProjectChoices({
     !list.some((e) => e.name === preset.environment)
   ) {
     return (
-      <Empty>
+      <Empty preview={false}>
         <EmptyHeader>
           <EmptyTitle>Environment unavailable</EmptyTitle>
           <EmptyDescription>
@@ -379,9 +382,12 @@ function Choices({
         <div className="order-last grid min-w-0 gap-4 xl:order-first">
           <Card size="sm">
             <CardHeader>
-              <CardTitle>{project.name}</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <StepNumber n={2} />
+                Environment
+              </CardTitle>
               <CardDescription className="text-xs">
-                Choose the environment and services for this deployment.
+                Where {project.name} deploys. Then choose its services below.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -458,10 +464,7 @@ function Choices({
                     variant={chosen.includes(alias) ? "secondary" : "outline"}
                     aria-pressed={chosen.includes(alias)}
                     aria-disabled={locked.has(alias) || undefined}
-                    className={cn(
-                      "rounded-full",
-                      locked.has(alias) && "cursor-not-allowed"
-                    )}
+                    className={cn(locked.has(alias) && "cursor-not-allowed")}
                     title={
                       locked.has(alias)
                         ? `Nothing from ${alias} runs in ${environment} yet, so the plan includes it`
@@ -490,7 +493,7 @@ function Choices({
           className="order-first grid gap-3 xl:sticky xl:top-16 xl:order-last"
           aria-label="Deployment summary"
         >
-          <Card size="sm">
+          <Card size="sm" className="hero-glow">
             <CardHeader className="hidden xl:grid">
               <CardTitle>Ready when you are</CardTitle>
               <CardDescription className="text-xs">
@@ -520,7 +523,7 @@ function Choices({
 
               <Button
                 type="submit"
-                className="w-full rounded-full sm:col-span-2 xl:col-span-1"
+                className="h-10 w-full sm:col-span-2 xl:col-span-1"
                 disabled={
                   create.isPending ||
                   busy ||
@@ -545,19 +548,13 @@ function Choices({
                   type="button"
                   size="sm"
                   variant="ghost"
-                  className="rounded-full"
                   aria-expanded={showManifest}
                   onClick={() => setShowManifest(!showManifest)}
                 >
                   <FileCodeIcon /> {showManifest ? "Hide" : "View"} manifest
                 </Button>
               )}
-              <Button
-                type="button"
-                variant="ghost"
-                className="rounded-full"
-                onClick={done}
-              >
+              <Button type="button" variant="ghost" onClick={done}>
                 Cancel
               </Button>
             </CardContent>
@@ -623,7 +620,7 @@ function SuggestedConfiguration({
         )}
         <Button
           type="button"
-          className="w-fit rounded-full"
+          className="w-fit"
           disabled={save.isPending || !can("project:update")}
           onClick={() => void initialize()}
         >
@@ -631,5 +628,17 @@ function SuggestedConfiguration({
         </Button>
       </CardContent>
     </Card>
+  )
+}
+
+/** StepNumber marks a section of the form in the order it's filled in. */
+function StepNumber({ n }: { n: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-primary font-mono text-[11px] text-primary-foreground"
+    >
+      {n}
+    </span>
   )
 }

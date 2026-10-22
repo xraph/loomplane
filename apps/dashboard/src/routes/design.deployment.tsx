@@ -15,7 +15,7 @@ export const Route = createFileRoute("/design/deployment")({
 
 function Unavailable() {
   return (
-    <ZeroState>
+    <ZeroState preview={false}>
       <ZeroStateHeader>
         <ZeroStateTitle>Development preview</ZeroStateTitle>
         <ZeroStateDescription>

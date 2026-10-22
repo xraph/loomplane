@@ -1,0 +1,5 @@
+import type { Codec } from '../codec-runtime';
+import { codec_DNSZone } from './DNSZone';
+import { codec_Zone_project_ids } from './Zone.project_ids';
+
+export const codec_Zone: Codec = {"kind": "object", "fields": {"account_id": {"ts": "accountId"}, "connection_generation": {"ts": "connectionGeneration"}, "connection_id": {"ts": "connectionId"}, "id": {"ts": "id"}, "mode": {"ts": "mode"}, "name": {"ts": "name"}, "org_id": {"ts": "orgId"}, "project_ids": {"ts": "projectIds", "codec": () => codec_Zone_project_ids}, "proof_expires_at": {"ts": "proofExpiresAt"}, "proof_name": {"ts": "proofName"}, "proof_value": {"ts": "proofValue"}, "provider": {"ts": "provider"}, "provider_zone": {"ts": "providerZone", "codec": () => codec_DNSZone}, "record_ownership": {"ts": "recordOwnership"}, "revision": {"ts": "revision"}, "verified_at": {"ts": "verifiedAt"}}, "required": ["id", "mode", "name", "org_id", "project_ids", "proof_expires_at", "provider_zone", "record_ownership", "revision", "verified_at"]};

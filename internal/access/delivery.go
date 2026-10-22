@@ -233,3 +233,15 @@ func (s *PolicyStore) Delivery(ctx context.Context, agent domain.AgentIdentity) 
 	}
 	return state, tx.Commit()
 }
+
+// ReadDeliveryTx reads a receipt for a currently active agent within the caller's
+// snapshot. It neither updates lease retention nor locks lifecycle resources.
+func ReadDeliveryTx(ctx context.Context, tx driver.Tx, agent domain.AgentIdentity) (*DeliveryState, error) {
+	if err := validDeliveryAgent(agent); err != nil {
+		return nil, err
+	}
+	if err := runtimecatalog.CheckAgentReadTx(ctx, tx, agent); err != nil {
+		return nil, err
+	}
+	return loadDelivery(ctx, tx, agent)
+}

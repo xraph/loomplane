@@ -119,12 +119,15 @@ function OrgMark({ org, className }: { org: SwitcherOrg; className?: string }) {
   return (
     <div
       className={cn(
-        "flex aspect-square shrink-0 items-center justify-center border bg-background text-foreground",
+        "flex aspect-square shrink-0 items-center justify-center",
+        org.mark === "brand"
+          ? "bg-linear-145 from-brand-from via-brand-via to-brand-to text-white shadow-[inset_0_1px_0_oklch(1_0_0/0.25)]"
+          : "border bg-background text-foreground",
         className
       )}
     >
       {org.mark === "brand" ? (
-        <BrandMark className="size-[55%]" />
+        <BrandMark inverse className="size-[55%]" />
       ) : (
         <span className="text-xs font-semibold">{org.mark}</span>
       )}

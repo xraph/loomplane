@@ -82,6 +82,11 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		}
 	}
 	c := p.targetConnection(name, base+".target", "target", prov.Cloud, cfg.Target)
+	if c != nil && c.Pooled {
+		if pin, ok := p.in.CloudPlacements[name]; !ok || pin.PoolID == "" {
+			p.problem(Finding{Code: "pool-target-required", Subject: ServiceSubject, Name: name, Path: base + ".target", Message: "This host belongs to shared capacity. Choose its Cloud pool target so approval reserves the workload."})
+		}
+	}
 	if c != nil {
 		cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
 	}

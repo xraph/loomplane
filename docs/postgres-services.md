@@ -6,6 +6,63 @@ You can also choose **MySQL 8.4** or **MariaDB 11.8** in the database engine sel
 
 The PostgreSQL profiles run one private instance with a digest-pinned image, retained storage and a separate application role. That role cannot create databases or roles and is not a superuser. Database credentials stay in Vault. Applications deployed in the same environment on the same target receive the resource URL through the existing resource binding workflow.
 
+## Managed cloud services
+
+In **Services**, you can also deploy PostgreSQL 17 through a checked AWS RDS or Google Cloud SQL account. Choose the account and region, then review the requested compute, disk, access and backup settings. RDS uses the region checked on its connection. Cloud SQL offers the provider's listed regions. Loomplane approves only one creation whose account identity, region and complete profile match that review.
+
+The form keeps a link to your project if creation fails or takes longer than its wait limit. Once a project exists, use that project to inspect the result. **New service** starts a separate creation and requires a new name. Managed operations can take up to 45 minutes before the form stops waiting; this limit does not cancel a cloud operation.
+
+Managed creation has been checked through the actual API and dashboard against controlled provider endpoints, at desktop and narrow widths. Live cloud creation and recovery remain unqualified. You can also use project manifests or prepare standalone plans with `loomctl`, as shown below. The recovery controls in this guide apply to the Docker and Kubernetes profiles. Managed services keep their provider-native backups separate from Trove exports.
+
+| Connected provider | Existing resource adapters                                       |
+| ------------------ | ---------------------------------------------------------------- |
+| AWS                | RDS PostgreSQL/MySQL, ElastiCache Redis OSS and S3               |
+| Google Cloud       | Cloud SQL PostgreSQL/MySQL, Memorystore Redis and Cloud Storage  |
+| DigitalOcean       | Managed PostgreSQL/MySQL/Valkey through the App Platform adapter |
+| Render             | Postgres and Key Value                                           |
+
+Provider availability does not establish backup or restore support. RDS removal retains automated backups and waits until the original database is gone and its final snapshot is available. The snapshot must match the saved physical source, account and region. Missing, failed or mismatched snapshots keep the binding and credentials available for inspection and retry. Cloud SQL removal requests a final backup with a 30-day lifetime and waits for the operation to finish. If Google refuses the request or reports an operation failure, Loomplane keeps the resource credentials and reports the failure. An instance that is already missing does not prove its final backup completed. Loomplane keeps the credentials unless its captured deletion operation succeeds. There is no retry without the final backup. Retained cloud backups can incur storage charges.
+
+RDS saves a creation intent before sending the request, then captures the provider's immutable physical database ID before waiting. Explicit Retry and app restart keep that checkpoint. If the create response is lost, Loomplane can follow the original database only when its creation tag matches the saved intent. A reused name with a different physical ID blocks the operation. A missing original database does not authorize another create.
+
+RDS retries require the original password in Vault. They cannot reset it implicitly or publish a new password. Protected removal also keeps its intent before requesting deletion, so retry can inspect the original final snapshot without sending another delete. Older bindings without a physical ID pin the currently observed database during explicit execution; they cannot prove ownership of an earlier incarnation. These paths have been checked through the actual API, deployment store and Vault against controlled AWS endpoints, including restart and lost responses. Live AWS creation, SQL persistence and snapshot restore remain unqualified.
+
+Cloud SQL deployments save the account, region, resource settings and each native operation before moving to the next setup step. A retry follows the captured operation for instance creation, database creation, user setup or protected removal. Checkpoint failures stop further work. If a request may have reached Google but its operation ID was not saved, Loomplane blocks replay and asks you to reconcile the original operation. Older operation-only checkpoints also need reconciliation. Automatic discovery for these uncertain requests is still pending.
+
+Cloud SQL saves a creation intent label with each new instance. Before it polls further or creates your database and user, it pins the provider's creation time, project, region and instance name. Retry checks that pin again, including after an app restart. A reused name or a missing original blocks setup and removal. Your bound instance and a resumed user operation require the original password in Vault; a missing password cannot trigger a reset. New services refuse an existing instance without a saved operation or binding.
+
+This pin identifies an observed creation, not a provider-issued immutable UUID. Cloud SQL writes address instances by name, so the checks are fresh reads rather than atomic write preconditions. A replacement between a check and Google's write remains a provider API limitation. Older bindings can capture the currently observed creation during explicit execution, but cannot prove an earlier instance's ownership. Version 1 checkpoints have no creation pin and need reconciliation before retry; their saved operations are retained. Unknown create responses still block replay.
+
+These paths have controlled endpoint and actual API restart tests. Live Google Cloud creation, SQL persistence and restore remain unqualified. Cloud SQL backup inventory is available for pinned, reviewed sources; isolated restore controls remain pending. See Google's [instance identity fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/instances) and [operation identities](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/operations).
+
+Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane can retain their metadata with matching source identity in Cloud snapshots. Isolated native restore controls and live cloud recovery qualification remain pending.
+
+## Native cloud snapshot history
+
+Open **Cloud snapshots** under **Service recovery** to inspect captured RDS and Cloud SQL histories in the selected environment. Choose the physical database history, then select **Refresh cloud snapshots**. This reads native recovery points from the original checked account and region. It does not create or remove a snapshot.
+
+The history stays after you remove a service binding. Each saved point keeps its native reference and creation time, so a reused snapshot name gets a separate record. A complete scan can mark earlier points **No longer observed**. A partial scan cannot prove that a point disappeared, and a failed refresh preserves the last successful observations. Check the observation time and completeness before relying on the list.
+
+You need service backup read access. The saved managed account review must still match the connection; a changed account or unready credential blocks refresh. Old unpinned databases cannot refresh until an explicit execution captures their current identity. RDS discovery follows up to ten pages of 100 snapshots per refresh, reports an incomplete scan when more exist, and excludes shared and public snapshots.
+
+Cloud SQL reads up to ten pages of 100 backups from the saved Google project. Each point must include source settings that match the original creation pin. If a list entry omits those settings, Loomplane reads that backup's own details. It never asks the current instance to prove an old backup's source. A backup from a newer instance that reused the name is excluded.
+
+Missing source proof, unavailable point times, provider warnings or more pages leave the scan partial. Partial and failed scans preserve earlier observations. Only a complete scan can mark an earlier point no longer observed; the record stays in history. Cloud SQL's point time is the backup interval start, not a measured export completion or a promised PITR window. Google encrypts Cloud SQL backups by default, and Loomplane retains the optional KMS key reference. See Google's [backup fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/Backups), [project backup listing](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/Backups/ListBackups) and [backup encryption](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/backups).
+
+Your Google account needs permission to list and read these backups. A failed permission check leaves saved observations available so you can correct the account and retry. API, CLI, deletion and restart checks use controlled Google endpoints with a real local control-plane database. Live Google Cloud inventory and recovery remain unqualified.
+
+You can read and refresh the same history with the CLI:
+
+```sh
+loomctl backups native-sources PROJECT_ID --json
+loomctl backups native-inventory SOURCE_ID --limit 50 --json
+loomctl backups native-refresh SOURCE_ID --json
+```
+
+Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. Isolated native restore, PITR, deletion and retention controls remain unavailable in Loomplane; use your provider's controls until those paths are qualified.
+
+Live AWS snapshot and recovery qualification remain pending.
+
 ## Persistence and backup storage
 
 A container replacement retains its named volume. Removing the container also retains the volume. Docker local storage shares host capacity: this profile does not reserve a disk quota or survive host loss on its own. You can inspect retained data under **Infrastructure**, **Persistent storage**, or with `loomctl storage CONNECTION_ID`. See the [inventory guide](storage-inventory.md). Deliberate destruction remains a separate operation; the inventory is read-only.
@@ -56,6 +113,33 @@ loomctl services create "Cluster database" --provider kubernetes --target conn_y
 ```
 
 The Kubernetes catalog currently accepts PostgreSQL only. Review and approve the returned plan with the same `approve` command.
+
+For managed PostgreSQL 17, choose a checked AWS or Google Cloud account connection:
+
+```sh
+loomctl services create "Orders RDS" --provider rds --target conn_your_aws_account --json
+loomctl services create "Orders Cloud SQL" --provider cloud-sql --target conn_your_google_project --region europe-west1 --json
+```
+
+Here, `--target` chooses the environment's cloud account connection. Managed manifests use the provider's storage and contain no container target, image or mount. Selecting the account requires cloud account management access. If selection fails after project creation, the error includes that project's ID; no deployment plan is started.
+
+`--region` is optional for managed services. Cloud SQL uses its default region when you omit it. RDS uses the selected AWS connection's region and blocks a plan that requests a different one. Review the returned plan, connection and provider charges before approving it with `loomctl approve PLAN_ID --yes`. Plan creation does not provision the database. The managed CLI profiles currently accept PostgreSQL only, and the Docker/Kubernetes backup commands do not apply to them.
+
+Each new standalone RDS or Cloud SQL PostgreSQL 17 plan saves a versioned managed profile, the selected connection and its checked account identity. You can review the complete resource request in `--json` output before approval. Deployment checks that identity again. Moving an existing profiled database to another account or region, or changing its profile or engine version, requires a tested restore into a fresh service.
+
+| Requested setting | AWS RDS                                       | Google Cloud SQL                                              |
+| ----------------- | --------------------------------------------- | ------------------------------------------------------------- |
+| Compute           | `db.t4g.micro`                                | `db-custom-1-3840`, Enterprise                                |
+| Disk              | 20 GiB, encrypted gp3                         | 10 GiB, provider-encrypted SSD, automatic growth disabled     |
+| Availability      | Single zone                                   | Single zone                                                   |
+| Access            | Private VPC, environment ECS tasks            | Cloud SQL connector, IPv4 enabled without authorized networks |
+| Automated backups | 7 days                                        | 7 retained backups                                            |
+| Recovery logs     | 7 days through RDS backup retention           | 7 days, point-in-time recovery enabled                        |
+| Removal           | Final snapshot and retained automated backups | Final backup requested for 30 days                            |
+
+These are creation requests. They do not establish the actual retained recovery window or a successful restore, and they do not include a Loomplane point-in-time restore control. A Cloud SQL backup count is not a duration. RDS final snapshots have no Loomplane expiry; your account controls their lifetime. Provider availability and quotas can reject a requested class or region.
+
+Existing databases without a managed profile keep their original settings when you replan. Loomplane does not label them with a new profile or silently reconfigure their storage and backups.
 
 Select MySQL or MariaDB when you create the service project:
 
@@ -195,7 +279,7 @@ Backup creation accepts `environment`, `resource` and `request_id`. Restore crea
 
 PostgreSQL 17.11 has passed the Docker catalog and recovery drill, with local Trove and a separate native adapter drill against an isolated MinIO endpoint. The Kubernetes catalog, CLI, API and browser drill passed on arm64 Kubernetes 1.36.4, Cilium 1.20.3 and a retained local-path class. That drill covered pod replacement, backup persistence after a control-plane restart, isolated SQL recovery, scheduled backups and deletion of the exact temporary PV.
 
-AWS S3 acceptance, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, Kubernetes and other-engine retention, automatic-policy dashboard controls, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
+AWS S3 acceptance, managed cloud recovery, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, Kubernetes and other-engine retention, upgrades, credential rotation and live binding cutover remain pending. A digest pin is not a claim that every architecture has passed live acceptance; the published recipe contains both amd64 and arm64 pins, while the local acceptance host exercised arm64.
 
 ## MySQL and MariaDB recovery
 

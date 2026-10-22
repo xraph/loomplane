@@ -79,22 +79,12 @@ func NewVerifier(trust TrustSource, registry Registry) *Verifier {
 }
 
 func (v *Verifier) VerifyPeer(ctx context.Context, chain []*x509.Certificate, expectedDomain string) (domain.AgentIdentity, error) {
-	if v.trust == nil || v.registry == nil || v.trust.Domain() != expectedDomain || len(chain) == 0 || len(chain) > 8 {
+	if v.registry == nil {
 		return domain.AgentIdentity{}, ErrIdentity
 	}
-	for _, cert := range chain {
-		if cert == nil {
-			return domain.AgentIdentity{}, ErrIdentity
-		}
-	}
-	now := v.now()
-	leaf := chain[0]
-	if leaf.NotAfter.After(now.Add(MaxCredentialLifetime)) || leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0 || !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
-		return domain.AgentIdentity{}, ErrIdentity
-	}
-	id, _, err := x509svid.Verify(chain, v.trust, x509svid.WithTime(now))
-	if err != nil || id.TrustDomain().Name() != expectedDomain {
-		return domain.AgentIdentity{}, ErrIdentity
+	id, err := verifyPeerSVID(v.trust, chain, expectedDomain, v.now())
+	if err != nil {
+		return domain.AgentIdentity{}, err
 	}
 	agent, err := ParseAgentURI(id.String())
 	if err != nil {
@@ -132,4 +122,25 @@ func ControlURIForOrganization(trustDomain, org string) (string, error) {
 		return "", err
 	}
 	return control.String(), nil
+}
+
+// verifyPeerSVID keeps agent and application certificate constraints identical.
+func verifyPeerSVID(trust TrustSource, chain []*x509.Certificate, expectedDomain string, now time.Time) (spiffeid.ID, error) {
+	if trust == nil || trust.Domain() != expectedDomain || len(chain) == 0 || len(chain) > 8 {
+		return spiffeid.ID{}, ErrIdentity
+	}
+	for _, cert := range chain {
+		if cert == nil {
+			return spiffeid.ID{}, ErrIdentity
+		}
+	}
+	leaf := chain[0]
+	if leaf.NotAfter.After(now.Add(MaxCredentialLifetime)) || leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0 || !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
+		return spiffeid.ID{}, ErrIdentity
+	}
+	id, _, err := x509svid.Verify(chain, trust, x509svid.WithTime(now))
+	if err != nil || id.TrustDomain().Name() != expectedDomain {
+		return spiffeid.ID{}, ErrIdentity
+	}
+	return id, nil
 }

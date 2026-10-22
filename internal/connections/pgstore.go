@@ -25,13 +25,13 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 
 const columns = `id, org_id, cloud, name, account, details, status, missing, message,
-	checked_at, created_by, created_at, updated_at`
+	checked_at, created_by, created_at, updated_at, generation`
 
 func scan(row pgx.Row) (*Connection, error) {
 	var c Connection
 	var details, missing []byte
 	if err := row.Scan(&c.ID, &c.OrgID, &c.Cloud, &c.Name, &c.Account, &details, &c.Status, &missing, &c.Message,
-		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(details, &c.Details); err != nil {
@@ -62,9 +62,9 @@ func (s *PgStore) CreateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_cloud_connections (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		c.ID, c.OrgID, c.Cloud, c.Name, c.Account, details, c.Status, missing, c.Message,
-		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt)
+		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return ErrExists
@@ -112,20 +112,34 @@ func (s *PgStore) ListConnections(ctx context.Context, orgID string) ([]*Connect
 
 // UpdateConnection implements Store.
 func (s *PgStore) UpdateConnection(ctx context.Context, c *Connection) error {
+	previous, err := s.GetConnection(ctx, c.OrgID, c.ID)
+	if err != nil {
+		return err
+	}
+	c.normalize()
+	if c.Generation != previous.Generation {
+		return ErrChanged
+	}
+	generation := c.Generation
+	if AccountIdentity(c.Cloud, c.Account, c.Details) != AccountIdentity(previous.Cloud, previous.Account, previous.Details) {
+		generation++
+	}
+
 	details, missing, err := encode(c)
 	if err != nil {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	tag, err := s.db.Exec(ctx, `UPDATE loomplane_cloud_connections
-		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9
-		WHERE org_id = $1 AND id = $2`,
-		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt)
+		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10
+		WHERE org_id = $1 AND id = $2 AND generation = $11`,
+		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation)
 	if err != nil {
 		return fmt.Errorf("update connection: %w", err)
 	}
 	if n, err := tag.RowsAffected(); err == nil && n == 0 {
-		return ErrNotFound
+		return ErrChanged
 	}
+	c.Generation = generation
 	return nil
 }
 
@@ -160,4 +174,45 @@ func (s *PgStore) DeleteConnection(ctx context.Context, orgID, id string) (err e
 		return fmt.Errorf("commit connection deletion: %w", err)
 	}
 	return nil
+}
+
+// BeginCredentialReplacement invalidates reviewed work before Vault is changed.
+func (s *PgStore) BeginCredentialReplacement(ctx context.Context, c *Connection) error {
+	c.normalize()
+	tag, err := s.db.Exec(ctx, `UPDATE loomplane_cloud_connections SET generation=generation+1,status='incomplete',message=$4 WHERE org_id=$1 AND id=$2 AND generation=$3`, c.OrgID, c.ID, c.Generation, replacementInProgressMessage)
+	if err != nil {
+		return err
+	}
+	n, err := tag.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrChanged
+	}
+	c.Generation++
+	return nil
+}
+
+// WithCredentialReplacement serializes Vault writes as well as generation changes.
+func (s *PgStore) WithCredentialReplacement(ctx context.Context, c *Connection, replace func() error) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			err = errors.Join(err, fmt.Errorf("release credential replacement lock: %w", rollbackErr))
+		}
+	}()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "connection-credential/"+c.OrgID+"/"+c.ID); err != nil {
+		return err
+	}
+	if err := s.BeginCredentialReplacement(ctx, c); err != nil {
+		return err
+	}
+	if err := replace(); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

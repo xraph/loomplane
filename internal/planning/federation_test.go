@@ -1,7 +1,6 @@
 package planning
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -48,15 +47,42 @@ func TestFederationPlanRevision(t *testing.T) {
 }
 
 func TestCyclicRuntimeCalls(t *testing.T) {
-	in := federationPlanFixture()
-	in.Manifest.Federation.AccessGrants = map[string]manifest.FederationGrant{"a-b": {SourceService: "a", SourceDestination: "east", Export: "api"}, "b-a": {SourceService: "b", SourceDestination: "west", Export: "api"}}
+	in := federationPlacementFixture(t)
+	svc := in.Manifest.Services["api"]
+	svc.Target = targetA
+	in.Manifest.Services["caller"] = svc
+	in.Manifest.Federation.Placements["caller-east"] = manifest.FederationPlacement{Service: "caller", Destination: "east"}
+	export := in.Manifest.Federation.ServiceExports["api"]
+	export.Service, export.Destination = "caller", "east"
+	in.Manifest.Federation.ServiceExports["caller"] = export
+	in.Manifest.Federation.AccessGrants = map[string]manifest.FederationGrant{"a-b": {SourceService: "caller", SourceDestination: "east", Export: "api"}, "b-a": {SourceService: "api", SourceDestination: "west", Export: "caller"}}
 	actions, _ := PlanFederation(in)
-	for _, a := range actions {
-		for _, dep := range a.DependsOn {
-			if strings.Contains(dep, "grant:") {
-				t.Fatal("runtime call created a deployment grant cycle")
-			}
+	graph := map[string][]string{}
+	for _, action := range actions {
+		graph[action.ID] = action.DependsOn
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string)
+	visit = func(id string) {
+		if visiting[id] {
+			t.Fatalf("runtime calls created a deployment cycle at %s", id)
 		}
+		if visited[id] {
+			return
+		}
+		dependencies, ok := graph[id]
+		if !ok {
+			t.Fatalf("missing dependency %s", id)
+		}
+		visiting[id] = true
+		for _, dependency := range dependencies {
+			visit(dependency)
+		}
+		visiting[id], visited[id] = false, true
+	}
+	visit("policy:activation")
+	if len(visited) != len(actions) {
+		t.Fatal("activation does not wait for all prerequisites")
 	}
 }
 

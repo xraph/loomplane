@@ -86,6 +86,16 @@ planning:
   # How long a plan waits for someone to approve or reject it before it
   # expires. Between 1m and 2160h (90 days).
   approval_window: "${LOOMPLANE_PLANNING_APPROVAL_WINDOW:-168h}"
+  # Ranges an external endpoint check from Loomplane's own network (a
+  # Kubernetes target's) never connects to, at any port, as a list or a
+  # comma-separated string, such as 10.20.0.0/16,192.0.2.7. Loomplane's own
+  # host, its database, its API and its provider plugins are always
+  # refused, as are loopback, link-local and 0.0.0.0/8 addresses, AWS's
+  # IPv6 metadata service (fd00:ec2::254) and the NAT64 forms of all of
+  # these under 64:ff9b::/96 and the local-use 64:ff9b:1::/48. Private
+  # ranges are otherwise dialable, since real endpoints live there. Empty
+  # denies nothing more.
+  endpoint_denied_cidrs: "${LOOMPLANE_PLANNING_ENDPOINT_DENIED_CIDRS:-}"
 
 # How often everything deployed is compared with what its cloud has live.
 # 0 turns the check off. It only records drift; the next plan fixes it.
@@ -110,6 +120,7 @@ clouds:
   aws_endpoint: "${LOOMPLANE_AWS_ENDPOINT:-}"
   render_endpoint: "${LOOMPLANE_RENDER_ENDPOINT:-}"
   digitalocean_endpoint: "${LOOMPLANE_DIGITALOCEAN_ENDPOINT:-}"
+  azure_endpoint: "${LOOMPLANE_AZURE_ENDPOINT:-}"
 
 providers:
   # Deployment targets that run as their own services, built with

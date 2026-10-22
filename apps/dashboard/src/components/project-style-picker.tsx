@@ -167,7 +167,7 @@ export function ProjectStylePopover({
           <Button
             variant="outline"
             size="sm"
-            className="rounded-full"
+
             onClick={() =>
               onChange({ icon: randomIcon(), color: randomColor() })
             }

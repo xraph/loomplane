@@ -29,19 +29,19 @@ It must be a regular file at an absolute path, with no group/world write
 permissions. The final path component cannot be a symlink. Unknown fields,
 trailing JSON values and files larger than 1 MiB are rejected.
 
-| Field | Value supplied by the installer |
-| --- | --- |
-| `version` | `1` |
-| `control_endpoint` | HTTPS origin of the separate agent listener, including its port |
-| `workload_api` | Canonical local socket address, such as `unix:///run/spire/agent.sock` |
-| `state_path` | Absolute path to the agent's SQLite file in a private directory |
-| `enrollment_id` | One-use UUID returned by the enrollment controller |
-| `enrollment_expires_at` | The controller's enrollment expiry, within its five-minute window |
-| `registration` | Exact agent identity, destination generation and export bounds from the enrollment record |
-| `namespace` | Kubernetes namespace selected for this installation |
-| `targets` | Registered export IDs with their exact Service names, UIDs and port names |
-| `trust_generation` | Nonzero generation of the trusted public signing-key configuration |
-| `signing_keys` | Public Ed25519 keys with `public_key`, `not_before` and `not_after` |
+| Field                   | Value supplied by the installer                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `version`               | `1`                                                                                       |
+| `control_endpoint`      | HTTPS origin of the separate agent listener, including its port                           |
+| `workload_api`          | Canonical local socket address, such as `unix:///run/spire/agent.sock`                    |
+| `state_path`            | Absolute path to the agent's SQLite file in a private directory                           |
+| `enrollment_id`         | One-use UUID returned by the enrollment controller                                        |
+| `enrollment_expires_at` | The controller's enrollment expiry, within its five-minute window                         |
+| `registration`          | Exact agent identity, destination generation and export bounds from the enrollment record |
+| `namespace`             | Kubernetes namespace selected for this installation                                       |
+| `targets`               | Registered export IDs with their exact Service names, UIDs and port names                 |
+| `trust_generation`      | Nonzero generation of the trusted public signing-key configuration                        |
+| `signing_keys`          | Public Ed25519 keys with `public_key`, `not_before` and `not_after`                       |
 
 `registration.agent` contains `org_id`, `project_id`, `environment_id`,
 `destination_id`, `agent_id`, `epoch` and the matching SPIFFE `uri`.
@@ -235,12 +235,12 @@ checks and the automatic replacement worker remain separate.
 Enable the internal launch service only after configuring identity administration
 and the agent listener:
 
-| Environment variable | Required value |
-| --- | --- |
-| `LOOMPLANE_FEDERATION_LAUNCH_ENABLED` | `true` (default: `false`) |
+| Environment variable                           | Required value                                     |
+| ---------------------------------------------- | -------------------------------------------------- |
+| `LOOMPLANE_FEDERATION_LAUNCH_ENABLED`          | `true` (default: `false`)                          |
 | `LOOMPLANE_FEDERATION_LAUNCH_CONTROL_ENDPOINT` | Public HTTPS origin of the separate agent listener |
-| `LOOMPLANE_FEDERATION_LAUNCH_AGENT_IMAGE` | Agent image pinned by SHA-256 digest |
-| `LOOMPLANE_FEDERATION_LAUNCH_TRUST_GENERATION` | Positive generation for the public signing trust |
+| `LOOMPLANE_FEDERATION_LAUNCH_AGENT_IMAGE`      | Agent image pinned by SHA-256 digest               |
+| `LOOMPLANE_FEDERATION_LAUNCH_TRUST_GENERATION` | Positive generation for the public signing trust   |
 
 The launch service uses destination, enrollment and attempt IDs. You cannot pass
 identity selectors, credentials, service targets or signing keys through its
@@ -324,3 +324,188 @@ response leaves its consumption status uncertain.
 
 See [the control-plane listener configuration](federation-runtime.md) for SPIRE
 identity and policy signing-key setup.
+
+## Reading installation status
+
+With agent launch enabled, `PreparationStatusService.Get` reads one preparation
+by destination and attempt ID. You need destination read permission. The service
+checks permission and current connection identity before and after the read.
+It does not create resources, issue credentials, or renew policy leases.
+
+The result separates preparation and delivery from enrollment and policy receipt.
+`policy_current` means the active agent acknowledged the latest issued sequence
+for the current policy generation. `policy_valid_until` is the signed snapshot's
+expiry minus the clock-skew allowance. You must stop displaying that state when
+the deadline passes, even if another status request has not finished.
+
+An unapplied renewal or changed policy reports `policy_pending`. An expired
+snapshot reports `lease_expired`; a replacement identity reports `superseded`.
+Retirement retains its own state after enrollment and installation records are
+removed. Database failures remain errors, so an unavailable read cannot appear
+as an empty or healthy installation.
+
+All persisted evidence comes from one read-only database snapshot, with its start
+time in `observed_at`. This is the last confirmed policy state. It does not prove
+current network reachability or grant permission to call a service. Management
+API, CLI and dashboard controls remain pending.
+
+## Private HTTP integration
+
+The internal `mesh` package provides an HTTP authorization guard and a fixed
+Bastion route to a literal loopback address. It is not installed by agent launch.
+You must complete workload enrollment, route assignment and backend isolation
+before wiring it into a destination.
+
+`HTTPGuard` takes one export, target service, port and HTTP authority. Connect its
+policy interface to `agent.SnapshotReceiver` so each request checks the durable
+enrollment epoch. The handler behind the guard must route only to that target
+and honor request cancellation. `NewLoopbackHTTP` provides the local HTTP adapter;
+it has no discovery, route updates, retry policy, caching or traffic mirroring.
+The guard rejects a loopback route whose port differs from its export port. The application
+must listen only on loopback in the gateway's network namespace. A loopback proxy
+address alone does not prove that the application has no other listener.
+
+`ServerTLS` binds the server to its application SPIFFE URI and follows Workload
+API certificate rotation. Clients need service identities in the same trusted
+organization. Agent and control-plane identities cannot authenticate as services.
+The guard re-verifies private trust on each request, then checks the exact signed
+grant. It rejects ambiguous paths, wrong HTTP authorities, CONNECT, TRACE,
+protocol upgrades and gRPC requests. Forwarded and known identity headers from
+the caller are removed before proxying. Bastion returns backend redirects without
+following them.
+
+Active requests inherit policy cancellation and stop before the caller's
+certificate expires. New requests remain denied after policy expiry or revocation.
+This HTTP adapter does not qualify gRPC, TCP, remote upstream TLS, dynamic route
+replacement, DNS or two-cluster reachability. Those require separate runtime and
+installation work; no configuration flag currently enables this path.
+
+## Application registration
+
+`RegisterWorkload` issues a service identity from a server-verified
+`WorkloadBinding`. You must resolve its service from an owned deployment and
+retain durable revocation intent before calling it. There is no management
+endpoint for caller-supplied selectors. The Kubernetes deployment verifier is available internally. Controller receipts are retained by new Kubernetes deployments.
+The internal application journal retains issuance and revocation intent. Agent
+launch does not call it yet; production service issuance still needs the
+application installation and authorization path.
+
+The workload selector must match the destination's organization, project,
+environment and ID. An application binding cannot carry agent authority. Both
+registration paths share the exact pod/container or executable attestation checks
+and reject changed selectors, identities, privileges or lifetimes in SPIRE's
+response, including an existing registration returned by a retry.
+
+Application certificates have a requested lifetime of 30 seconds to five minutes.
+`PruneAfter` sets a pruning threshold within five minutes of checked evidence,
+but it does not impose an issuance or authorization deadline. SPIRE may continue
+serving certificates after that timestamp. Its
+[pinned server reference](https://github.com/spiffe/spire/blob/v1.15.4/doc/spire_server.md#spire-server-entry-create)
+describes entry expiry as a data management feature. The local live qualification
+also observed usable identities beyond it.
+
+You must explicitly revoke the registration and enforce signed access-policy
+leases at the HTTP boundary. Certificates already issued can remain valid until
+their own deadlines. Never use `PruneAfter` to authorize traffic or to mark
+revocation complete.
+
+The lifecycle-owned SPIRE client registers and revokes both agents and services.
+It denies control-plane, privileged and foreign-organization deletion. Application
+registration uses the existing administrative connection; it does not add a
+worker, background renewal or deployment action.
+
+## Verifying a Kubernetes application
+
+`FederationWorkloadDeployment` projects a stored Kubernetes service binding into
+its scope, Ctrl Plane instance, connection and digest-pinned image. It preserves
+the manifest service name separately from the deployed `main` container. Resource
+bindings, drifted workloads and mutable image tags are rejected.
+
+Pass that projection and a trusted `KubernetesWorkloadProfile` to
+`VerifyKubernetesWorkload`. The profile must retain the Deployment UID, generation
+and runtime revision from deployment or installation evidence. Reading a matching
+name or label is not enough to establish those pins. New Kubernetes service deployments save this controller record after readiness
+succeeds. A failed database write fails the operation and invokes the existing
+rollback path. Existing workloads need a successful deployment to establish a
+receipt; discovery does not adopt them.
+
+The verifier uses the current explicit connection and shared namespace, pod,
+node and SPIRE PSAT checks. It follows the pod's controlling ReplicaSet to the
+pinned Deployment, checks ownership labels and selectors, and compares the
+service account, image and runtime revision across the pod and both templates.
+The application container must be running with an `ImageID` digest tied to the
+deployed image. A missing or unverified runtime digest is rejected even when
+the reported image name matches the deployment. Repository aliases may differ when the content digest is identical. An
+OCI index requires the original index bytes as a bounded proof: their SHA-256
+hashes must connect the deployed reference to a manifest for the node's operating system and architecture. Index bytes must be retained unchanged;
+normalizing their JSON invalidates the proof. A runtime import wrapper is also
+accepted when every index in its hash-verified chain has exactly one child
+leading to the deployed digest. Additional candidate images are rejected.
+The verifier performs no registry
+fetch and rejects an unresolved image. Production artifact retrieval still needs
+to provide this evidence. Repeated object reads reject resource-version changes during verification.
+These reads are not an atomic Kubernetes snapshot. Issuance must recheck the
+retained evidence and reconcile later deployment changes.
+
+Kubernetes application registrations add a digest-pinned `container-image`
+selector to the pod UID and container name. A neighboring container or a changed
+image cannot satisfy that registration just by using the same service account.
+The local kind fixture exercises the real Deployment/ReplicaSet chain, CSI
+Workload API, PSAT parent and image selector, including a wrong-image registration
+and explicit revocation. It does not qualify production application registration cleanup,
+StatefulSets, Miget or two-cluster application traffic.
+
+## Saved controller receipts
+
+Kubernetes deployment receipts retain the plan, runtime attempt reference,
+service, image, namespace identity and Deployment UID/generation. They contain
+no credentials. Retries can advance the generation of the same controller;
+a different UID needs a fresh attempt. Same-generation changes and delayed
+older results are rejected. The receipt and project event commit together.
+
+`LoadFederationController` matches a saved receipt to the current service binding
+and Ctrl Plane instance, including their plan and attempt reference. It derives
+the service account and container from that record. Before you issue an identity
+or grant access, authorize the caller and recheck the binding, instance and live
+owner chain with the required image proofs.
+
+Receipts survive process restarts. Application registrations retain their exact
+controller receipt and destination until cleanup finishes, which also prevents
+deleting the connection or environment. Receipts without registrations remain
+public evidence that can be removed with their parents. Schema downgrade refuses
+to discard retained receipts.
+
+## Application issuance journal
+
+`WorkloadStore` reserves a server-generated SPIRE entry ID before creating it.
+You supply verified workload evidence, its saved controller receipt and a guard
+that rechecks authorization, the current instance and live pod ownership. The
+store also verifies any bounded OCI index or import-wrapper proof linking the
+runtime image selector to the deployed digest. It checks the current committed
+service binding, connection, destination
+generation and exact receipt in PostgreSQL. These checks run before creation and
+again before accepting its result. It supports the qualified Kubernetes profile.
+
+The one-time create claim commits before the SPIRE request. A second caller cannot
+repeat it. If the response is lost, the record stays unresolved across restarts.
+The cleanup worker retries deletion but retains the journal and its parent
+references: a successful delete could have preceded a delayed create. Resolving
+that uncertainty still needs an operator reconciliation workflow; there is no
+automatic release or reset for it.
+
+A confirmed creation that races revocation stays marked for another delete.
+After confirmed deletion of a settled creation, the journal retains its parents
+for the larger of the certificate lifetime and maximum policy lease, plus clock
+skew. Cleanup then removes the record and releases its trust reference. SPIRE's
+pruning timestamp never counts as confirmed deletion.
+
+Application cleanup shares the existing sequential identity worker. Each journal
+gets part of its time and item budget so an enrollment timeout does not consume
+the whole sweep. Changed bindings, controller receipts and destination state, or
+the local cleanup deadline, make application records eligible for revocation.
+Every journal transition commits with its project event.
+
+This is an internal lifecycle API. The live Kubernetes fixture uses it with a
+fixture-created controller and explicit CSI installation. Production installation,
+artifact proof retrieval, policy withdrawal and gateway assignment remain separate
+work. No public route or agent-launch flag enables application issuance.

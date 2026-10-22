@@ -7,6 +7,7 @@ import {
   usePlansApprove as approvePlan,
   useDeploymentsForPlan as getDeployment,
   useBackupPoliciesSet as setPolicy,
+  useEnvironmentConnectionsChoose as chooseConnection,
 } from "@/client/forge/loomplane/hooks"
 import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
 import {
@@ -16,6 +17,12 @@ import {
 } from "@/lib/catalog-targets"
 import { statusOf } from "@/client/errors"
 import type { Plan } from "@/client/forge/loomplane/types"
+import {
+  isManagedDatabaseProvider,
+  managedDatabaseCloud,
+  sameManagedDatabaseProfile,
+  type ManagedDatabaseReview,
+} from "@/lib/managed-catalog"
 
 // The Deploy action authorizes one known recipe. A changed plan goes through
 // the ordinary review screen instead of acquiring broader approval here.
@@ -26,9 +33,44 @@ export function assertDatabasePlan(
   target: string,
   kind: DatabaseKind = "postgres",
   provider: DatabaseProvider = "server",
-  expectedPlacement?: Record<string, unknown>
+  expectedPlacement?: Record<string, unknown>,
+  expectedManaged?: ManagedDatabaseReview
 ) {
   const action = plan.actions[0]
+  const managed = isManagedDatabaseProvider(provider)
+  const matchesRequest = managed
+    ? !!expectedManaged &&
+      !!expectedManaged.accountIdentity &&
+      !!expectedManaged.region &&
+      plan.connections[managedDatabaseCloud(provider)] === target &&
+      Object.keys(plan.connections).length === 1 &&
+      (!action?.connectionId || action.connectionId === target) &&
+      action?.region === expectedManaged.region &&
+      action.resource?.region === expectedManaged.region &&
+      action.resource?.provider === provider &&
+      !action.resource.catalog &&
+      !action.resource.target &&
+      !Object.keys(action.resource.targetSettings ?? {}).length &&
+      action.resource.managed?.connectionId === target &&
+      action.resource.managed?.accountIdentity ===
+        expectedManaged.accountIdentity &&
+      sameManagedDatabaseProfile(
+        action.resource.managed?.profile,
+        expectedManaged.profile
+      )
+    : action?.connectionId === target &&
+      action.resource?.target === target &&
+      !!action.resource.catalog?.image &&
+      !action.resource.managed &&
+      (provider !== "kubernetes" ||
+        (kind === "postgres" &&
+          action.resource.provider === provider &&
+          isKubernetesPostgresRecipe(action.resource.catalog) &&
+          (!expectedPlacement ||
+            sameDatabasePlacement(
+              action.resource.targetSettings,
+              expectedPlacement
+            ))))
   if (
     !plan.catalog ||
     !!plan.cloudSyncId ||
@@ -41,10 +83,11 @@ export function assertDatabasePlan(
     plan.problems.length ||
     plan.warnings.some(
       (w) =>
+        managed ||
         w.code !==
-        (provider === "kubernetes"
-          ? "retained-cluster-storage"
-          : "shared-host-storage")
+          (provider === "kubernetes"
+            ? "retained-cluster-storage"
+            : "shared-host-storage")
     ) ||
     plan.actions.length !== 1 ||
     action.op !== "create" ||
@@ -53,34 +96,25 @@ export function assertDatabasePlan(
     action.subject !== "resource" ||
     action.provider !== provider ||
     action.name !== "database" ||
-    action.connectionId !== target ||
     action.resource?.kind !== kind ||
     action.resource.version !== databaseRecipes[kind].version ||
-    action.resource.target !== target ||
-    !action.resource.catalog?.image ||
-    (provider === "kubernetes" &&
-      (kind !== "postgres" ||
-        action.resource.provider !== provider ||
-        !isKubernetesPostgresRecipe(action.resource.catalog) ||
-        (expectedPlacement &&
-          !sameDatabasePlacement(
-            action.resource.targetSettings,
-            expectedPlacement
-          ))))
+    !matchesRequest
   ) {
     throw new Error(
       `The plan differs from this ${databaseRecipes[kind].title} deployment. Open the project to review it.`
     )
   }
 }
-const delay = () => new Promise((resolve) => window.setTimeout(resolve, 1000))
+const delay = (ms: number) =>
+  new Promise((resolve) => window.setTimeout(resolve, ms))
 async function waitFor<T>(
   read: () => Promise<T>,
   ready: (value: T) => boolean,
   label: string,
-  retryMissing = false
+  retryMissing = false,
+  options: { timeoutMs?: number; intervalMs?: number } = {}
 ): Promise<T> {
-  const deadline = Date.now() + 240_000
+  const deadline = Date.now() + (options.timeoutMs ?? 240_000)
   while (true) {
     try {
       const value = await read()
@@ -92,7 +126,7 @@ async function waitFor<T>(
       throw new Error(
         `${label} is still running. Open the project to follow its progress.`
       )
-    await delay()
+    await delay(options.intervalMs ?? 1000)
   }
 }
 export async function deployDatabase(
@@ -103,12 +137,33 @@ export async function deployDatabase(
     kind: DatabaseKind
     provider?: DatabaseProvider
     targetSettings?: Record<string, unknown>
+    managed?: ManagedDatabaseReview
   },
   progress: (message: string) => void,
   created: (project: string) => void
 ) {
   const recipe = databaseRecipes[input.kind]
   const provider = input.provider ?? "server"
+  const managed = input.managed
+    ? { ...input.managed, profile: { ...input.managed.profile } }
+    : undefined
+  if (isManagedDatabaseProvider(provider)) {
+    if (input.daily)
+      throw new Error(
+        "Managed backup schedules are not available in Loomplane."
+      )
+    if (
+      input.kind !== "postgres" ||
+      !managed?.accountIdentity ||
+      !managed.region ||
+      managed.profile.provider !== provider ||
+      managed.profile.kind !== input.kind ||
+      managed.profile.version !== recipe.version
+    )
+      throw new Error(
+        "Choose a checked account, region and managed PostgreSQL profile."
+      )
+  }
   if (provider === "kubernetes" && input.kind !== "postgres")
     throw new Error("Kubernetes currently supports PostgreSQL only.")
   progress("Creating the service project…")
@@ -126,10 +181,30 @@ export async function deployDatabase(
     "Project setup"
   )
   progress("Checking the deployment plan…")
+  if (isManagedDatabaseProvider(provider)) {
+    const cloud = managedDatabaseCloud(provider)
+    const chosen = await chooseConnection({
+      path: { id: project.id, environment: "production", cloud },
+      body: { connectionId: input.target },
+    })
+    const choices =
+      chosen && typeof chosen === "object" && "connections" in chosen
+        ? chosen.connections
+        : undefined
+    if (
+      !choices ||
+      typeof choices !== "object" ||
+      Object.entries(choices).find(([key]) => key === cloud)?.[1] !==
+        input.target
+    )
+      throw new Error(
+        "The selected cloud account was not saved. Open the project to review its placement."
+      )
+  }
   const manifest = await saveManifest({
     path: { id: project.id },
     body: {
-      yaml: `version: 1\nresources:\n  database:\n    kind: ${input.kind}\n    provider: ${provider}\n    version: "${recipe.version}"\n    target: ${JSON.stringify(input.target)}\n`,
+      yaml: `version: 1\nresources:\n  database:\n    kind: ${input.kind}\n    provider: ${provider}\n    version: "${recipe.version}"\n${isManagedDatabaseProvider(provider) ? `    region: ${JSON.stringify(managed!.region)}\n` : `    target: ${JSON.stringify(input.target)}\n`}`,
     },
   })
   let plan = await createPlan({
@@ -149,7 +224,8 @@ export async function deployDatabase(
     input.target,
     input.kind,
     provider,
-    input.targetSettings
+    input.targetSettings,
+    managed
   )
   progress(`Deploying ${recipe.title} with persistent storage…`)
   await approvePlan({
@@ -163,7 +239,10 @@ export async function deployDatabase(
     () => getDeployment({ path: { id: plan.id } }).refetch(),
     (d) => ["succeeded", "failed", "cancelled"].includes(d.status),
     "Deployment",
-    true
+    true,
+    isManagedDatabaseProvider(provider)
+      ? { timeoutMs: 45 * 60_000, intervalMs: 5000 }
+      : undefined
   )
   if (deployment.status !== "succeeded")
     throw new Error(

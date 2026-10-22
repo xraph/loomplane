@@ -36,7 +36,7 @@ export function NewDeploymentPage({ preset }: { preset: DeployPreset }) {
             }}
           />
         ) : (
-          <Empty>
+          <Empty preview={false}>
             <EmptyHeader>
               <EmptyTitle>Deployment access required</EmptyTitle>
               <EmptyDescription>

@@ -2,6 +2,8 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -117,20 +119,25 @@ func TestRuntime_strictKubernetesHTTP(t *testing.T) {
 	}))
 	defer api.Close()
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: api.Certificate().Raw})
-	c, err := New(&Config{Namespace: "selected", Details: map[string]string{"image_pull_secret": "existing-pull"}, REST: &rest.Config{Host: api.URL, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}})
+	digest := sha256.Sum256(ca)
+	c, err := New(&Config{Namespace: "selected", Details: map[string]string{"image_pull_secret": "existing-pull", "namespace_uid": "namespace-uid", "cluster_ca": hex.EncodeToString(digest[:])}, REST: &rest.Config{Host: api.URL, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &Runtime{Session: func(context.Context, map[string]string) (*Client, error) { return c, nil }, Values: func(context.Context, map[string]string) (owned.RuntimeValues, error) {
+	var receipt *ControllerReceipt
+	r := &Runtime{RecordController: func(_ context.Context, saved ControllerReceipt) error { receipt = &saved; return nil }, Session: func(context.Context, map[string]string) (*Client, error) { return c, nil }, Values: func(context.Context, map[string]string) (owned.RuntimeValues, error) {
 		return owned.RuntimeValues{Env: map[string]string{"TOKEN": "runtime-private"}}, nil
 	}}
-	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelRevision: "reviewed", owned.LabelHealth: "/_/health", owned.LabelReplicas: "2"}
-	result, err := r.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "registry.example.com/team/api@sha256:fixture", Ports: []cpprovider.PortSpec{{Container: 8080}}}, labels)
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelConnection: "connection", owned.LabelPlan: "plan", owned.LabelService: "api", owned.LabelRuntime: "runtime-ref", owned.LabelRevision: "reviewed", owned.LabelHealth: "/_/health", owned.LabelReplicas: "2"}
+	result, err := r.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "registry.example.com/team/api@sha256:" + strings.Repeat("a", 64), Ports: []cpprovider.PortSpec{{Container: 8080}}}, labels)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Endpoints) != 1 || !strings.Contains(result.Endpoints[0].URL, name+".selected.svc") {
 		t.Fatalf("endpoint: %+v", result)
+	}
+	if receipt == nil || !receipt.Valid() || receipt.DeploymentUID != "uid-"+name || receipt.DeploymentGeneration != 1 {
+		t.Fatal("API mutation receipt missing", receipt)
 	}
 	deployment := objects["/apis/apps/v1/namespaces/selected/deployments/"+name]
 	encoded, _ := json.Marshal(deployment["spec"])

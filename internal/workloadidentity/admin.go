@@ -119,8 +119,10 @@ func (a *Admin) Revoke(ctx context.Context, entryID string) error {
 	if entry.ParentId == nil || entry.ParentId.TrustDomain != a.domain || entry.ParentId.Path == "/spire/server" {
 		return ErrIdentity
 	}
-	agent, err := ParseAgentURI("spiffe://" + entry.SpiffeId.TrustDomain + entry.SpiffeId.Path)
-	if err != nil || agent.OrgID != a.org {
+	uri := "spiffe://" + entry.SpiffeId.TrustDomain + entry.SpiffeId.Path
+	agent, agentErr := ParseAgentURI(uri)
+	workload, workloadErr := ParseWorkloadURI(uri)
+	if (agentErr != nil || agent.OrgID != a.org) && (workloadErr != nil || workload.OrgID != a.org) {
 		return ErrIdentity
 	}
 	return a.issuer.Revoke(ctx, entryID)

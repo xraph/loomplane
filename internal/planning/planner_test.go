@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/providers"
@@ -144,7 +146,7 @@ func TestCompute_fresh(t *testing.T) {
 	if api.Service.Port != 8080 || api.Service.Image != "services/api/Dockerfile" || api.Service.Scale.Max != 3 {
 		t.Errorf("api config = %+v", api.Service)
 	}
-	if len(api.Service.Env) != 1 || api.Service.Env[0] != (EnvLink{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject}) {
+	if len(api.Service.Env) != 1 || !reflect.DeepEqual(api.Service.Env[0], EnvLink{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject}) {
 		t.Errorf("api env = %+v", api.Service.Env)
 	}
 
@@ -240,6 +242,7 @@ func TestCompute_problems(t *testing.T) {
 		{"private across clouds", "version: 1\nservices:\n  web: {source: apps/web, provider: vercel, needs: [api]}\n  api: {source: services/api, provider: ecs-fargate, public: false}", "private-across-clouds:web"},
 		{"private with no network", "version: 1\ndefaults: {provider: vercel}\nservices:\n  web: {source: apps/web, needs: [docs]}\n  docs: {source: apps/docs, public: false}", "private-unreachable:web"},
 		{"render without a dockerfile", "version: 1\nservices:\n  ingest: {source: crates/ingest/src/main.rs, provider: render}", "render-needs-dockerfile:ingest"},
+		{"azure static site without a dockerfile", "version: 1\nservices:\n  docs: {source: apps/docs, provider: azure-container-apps}", "azure-static-needs-dockerfile:docs"},
 		{"tool kind", "version: 1\nservices:\n  api: {source: services/api, provider: render, kind: worker}\n  w: {source: services/worker/cmd/worker, provider: cloud-run, kind: http-service}", ""},
 	}
 	for _, tt := range tests {
@@ -259,6 +262,91 @@ func TestCompute_problems(t *testing.T) {
 				t.Error("a plan with problems is executable")
 			}
 		})
+	}
+}
+
+// Azure builds a service with no Dockerfile on ACR Tasks, with
+// buildpacks, so the plan doesn't ask for one.
+func TestCompute_azureBuildsWithoutADockerfile(t *testing.T) {
+	r := compute(t, "version: 1\nservices:\n  ingest: {source: crates/ingest/src/main.rs, provider: azure-container-apps}", "production")
+	for _, f := range r.Problems {
+		if f.Code == "azure-needs-dockerfile" {
+			t.Fatalf("problems %v", codes(r.Problems))
+		}
+	}
+}
+
+// azureConnection is a ready connection to one Azure resource group, which
+// is one Container Apps environment per region.
+func azureConnection(id, group string) ConnectionOption {
+	return ConnectionOption{ID: id, Name: id, Cloud: "azure", Account: "sub", Ready: true, Details: map[string]string{"tenant_id": "tenant", "subscription_id": "sub", "resource_group": group}}
+}
+
+// A private Azure app takes traffic from the other apps in its Container
+// Apps environment, at the internal address the runner reads from its
+// binding.
+func TestCompute_azureAppsReachPrivateAppsInTheirEnvironment(t *testing.T) {
+	r := Compute(Input{
+		Environment: "production", Graph: polyglot(t), Providers: providers.Registry(),
+		Connections: append([]ConnectionOption{azureConnection("conn_azure", "rg")}, connected...),
+		Manifest:    parse(t, "version: 1\nservices:\n  web: {source: apps/web, provider: azure-container-apps, needs: [api]}\n  api: {source: services/api, provider: azure-container-apps, public: false}"),
+	})
+	if len(r.Problems) > 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	web := action(t, r, "service:web")
+	if !slices.Contains(web.DependsOn, "service:api") {
+		t.Errorf("web depends on %v, not api", web.DependsOn)
+	}
+	var link *EnvLink
+	for i := range web.Service.Env {
+		if web.Service.Env[i].From == "api" {
+			link = &web.Service.Env[i]
+		}
+	}
+	if link == nil || link.Key != "API_URL" || link.Address != "" {
+		t.Fatalf("web's link to api is %+v, want API_URL with the address left to its binding", link)
+	}
+}
+
+// Container Apps environments are per resource group and region, so a
+// private app in another region or another connection's resource group is
+// out of reach.
+func TestCompute_azureAppsCantReachPrivateAppsElsewhere(t *testing.T) {
+	for _, tt := range []struct {
+		name, apiTarget, webTarget string
+	}{
+		{"another region", "west", "east"},
+		{"another resource group", "other", "east"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assigned := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, Targets: []cloudprofiles.Target{
+				{ID: "t-east", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "east", Provider: "azure-container-apps", ConnectionID: "conn_a", Region: "eastus", Revision: 1},
+				{ID: "t-west", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "west", Provider: "azure-container-apps", ConnectionID: "conn_a", Region: "westeurope", Revision: 1},
+				{ID: "t-other", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "other", Provider: "azure-container-apps", ConnectionID: "conn_b", Region: "eastus", Revision: 1},
+			}}
+			conns := []ConnectionOption{azureConnection("conn_a", "rg-a"), azureConnection("conn_b", "rg-b")}
+			m, pins, err := ResolveCloudTargets(parse(t, "version: 1\nservices:\n  web: {source: apps/web, cloud_target: "+tt.webTarget+", needs: [api]}\n  api: {source: services/api, cloud_target: "+tt.apiTarget+", public: false}"), "production", assigned, conns)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := Compute(Input{Environment: "production", Graph: polyglot(t), Manifest: m, Providers: providers.Registry(), Connections: conns, CloudPlacements: pins})
+			if got := codes(r.Problems); !slices.Contains(got, "private-across-accounts:web") {
+				t.Fatalf("problems %v, want private-across-accounts:web", got)
+			}
+		})
+	}
+}
+
+// A private Azure app is as out of reach of another cloud as any other.
+func TestCompute_azurePrivateAppsStayOffOtherClouds(t *testing.T) {
+	r := Compute(Input{
+		Environment: "production", Graph: polyglot(t), Providers: providers.Registry(),
+		Connections: append([]ConnectionOption{azureConnection("conn_azure", "rg")}, connected...),
+		Manifest:    parse(t, "version: 1\nservices:\n  web: {source: apps/web, provider: vercel, needs: [api]}\n  api: {source: services/api, provider: azure-container-apps, public: false}"),
+	})
+	if got := codes(r.Problems); !slices.Contains(got, "private-across-clouds:web") {
+		t.Fatalf("problems %v, want private-across-clouds:web", got)
 	}
 }
 
@@ -2557,5 +2645,66 @@ links:
 `, "production")
 	if !slices.Contains(codes(r.Problems), "private-across-clouds:worker") {
 		t.Fatalf("problems %v", codes(r.Problems))
+	}
+}
+
+// envKeyPlan is a service on a server that needs a MariaDB database and a
+// Valkey cache on the same server.
+func envKeyPlan(t *testing.T, bindings ...*Binding) *Result {
+	t.Helper()
+	doc := "version: 1\nservices:\n  api: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [db, cache]}\n" +
+		"resources:\n  db: {kind: mariadb, provider: server, target: " + targetA + "}\n  cache: {kind: valkey, provider: server, target: " + targetA + "}\n"
+	connections := infrastructureConnections(t)
+	connections[0].Details["architecture"] = "arm64"
+	return Compute(Input{
+		Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc),
+		Providers: providers.Registry(), Connections: connections, Bindings: bindings,
+	})
+}
+
+func TestMariaDBAndValkeyConsumersGetConventionalKeys(t *testing.T) {
+	r := envKeyPlan(t)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems: %+v", r.Problems)
+	}
+	got := action(t, r, "service:api").Service.Env
+	for _, want := range []EnvLink{
+		{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject},
+		{Key: "REDIS_URL", From: "cache", Subject: ResourceSubject},
+	} {
+		if !slices.ContainsFunc(got, func(e EnvLink) bool { return reflect.DeepEqual(e, want) }) {
+			t.Errorf("api env lacks %+v: %+v", want, got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("api env = %+v, want only the two conventional variables", got)
+	}
+	if slices.Contains(codes(r.Warnings), "env-key-renamed:api") {
+		t.Errorf("a new service was warned about a rename: %v", codes(r.Warnings))
+	}
+}
+
+func TestDeployedConsumerKeepsLegacyKeyWithWarning(t *testing.T) {
+	cfg, err := json.Marshal(ServiceConfig{Env: []EnvLink{
+		{Key: "DB_URL", From: "db", Subject: ResourceSubject},
+		{Key: "CACHE_URL", From: "cache", Subject: ResourceSubject},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := &Binding{ID: "binding", Name: "api", Subject: ServiceSubject, Provider: "server", ConnectionID: targetA, ExternalID: "ext-api", Config: cfg}
+	r := envKeyPlan(t, live)
+	env := action(t, r, "service:api").Service.Env
+	for _, key := range []string{"DB_URL", "DATABASE_URL", "CACHE_URL", "REDIS_URL"} {
+		if !slices.ContainsFunc(env, func(e EnvLink) bool { return e.Key == key }) {
+			t.Errorf("api env lacks %s: %+v", key, env)
+		}
+	}
+	w := warning(r, "env-key-renamed", "api")
+	if w == nil {
+		t.Fatalf("no env-key-renamed warning: %v", codes(r.Warnings))
+	}
+	if !strings.Contains(w.Message, "DB_URL") || !strings.Contains(w.Message, "DATABASE_URL") {
+		t.Errorf("message = %q", w.Message)
 	}
 }

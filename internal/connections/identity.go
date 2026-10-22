@@ -48,6 +48,13 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 			}
 			keys = []string{"account_uuid"}
 		}
+	case Azure:
+		// The subscription and resource group are where everything is
+		// made; the principal acting there can change.
+		if strings.TrimSpace(details["subscription_id"]) == "" || strings.TrimSpace(details["tenant_id"]) == "" {
+			return ""
+		}
+		keys = []string{"tenant_id", "subscription_id", "resource_group"}
 	case AWS:
 		if strings.TrimSpace(account) == "" || strings.TrimSpace(details["region"]) == "" {
 			return ""
@@ -83,6 +90,8 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 		// The verified owner ID identifies this workspace.
 	case DigitalOcean:
 		// The verified team or account UUID identifies this scope.
+	case Azure:
+		// The verified tenant and subscription IDs identify this scope.
 	case Kubernetes:
 		if scope["endpoint"] == "" || scope["namespace"] == "" {
 			scope["account"] = account

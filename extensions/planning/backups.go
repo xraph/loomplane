@@ -38,12 +38,13 @@ type BackupList struct {
 
 func (BackupList) ForgeEnvelope() forge.EnvelopeDef { return forge.EnvelopeDef{ItemsField: "backups"} }
 
-func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects.PgStore, plans *planning.PgStore, authz *security.Authorizer, target recovery.Targets, audit projects.Auditor) error {
+func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects.PgStore, plans *planning.PgStore, authz *security.Authorizer, target recovery.Targets, native recovery.NativeBackend, audit projects.Auditor) error {
 	files, err := forge.InjectType[*backupfiles.Store](app.Container())
 	if err != nil {
 		return err
 	}
 	records := recovery.NewPgStore(pg)
+	e.nativeBackups = &recovery.NativeService{Store: records, Authz: authz, Projects: prj, Backend: native}
 	e.backups = &recovery.Service{
 		RetentionPolicies: records, Policies: records, Restores: records, Retirements: records, Store: records,
 		RestoreBackend: target, Backend: target, Projects: prj, Bindings: plans, Authz: authz, Audit: audit, Files: files,
@@ -72,6 +73,9 @@ func (e *Extension) scheduleBackupReconciliation(ctx context.Context) error {
 
 func (e *Extension) backupRoutes(router forge.Router, guard identity.Guard) error {
 	group := router.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Service backups"))
+	if err := e.nativeBackupRoutes(group); err != nil {
+		return err
+	}
 	if err := group.GET("/projects/:id/service-backups", e.listBackups, forge.WithName("serviceBackups.list"), forge.WithResponseSchema(http.StatusOK, "Database recovery points", BackupList{})); err != nil {
 		return err
 	}

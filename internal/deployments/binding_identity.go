@@ -12,7 +12,11 @@ import (
 // bindingIdentity includes the provider's account scope. Resource names alone
 // can repeat in another account or region.
 func bindingIdentity(b *planning.Binding) string {
-	v, _ := json.Marshal([]string{b.Provider, b.Region, b.ConnectionID, b.ExternalID}) //nolint:errcheck // A slice of strings always marshals.
+	parts := []string{b.Provider, b.Region, b.ConnectionID, b.ExternalID}
+	if b.PhysicalID != "" {
+		parts = append(parts, b.PhysicalID)
+	}
+	v, _ := json.Marshal(parts) //nolint:errcheck // A slice of strings always marshals.
 	return string(v)
 }
 
@@ -20,6 +24,9 @@ func bindingIdentity(b *planning.Binding) string {
 // A region change that returns the original identity is rejected before binding.
 func (r *Runner) sameBindingResource(ctx context.Context, org string, a, b *planning.Binding) (bool, error) {
 	if a == nil || b == nil || a.Provider != b.Provider || a.ExternalID == "" || a.ExternalID != b.ExternalID {
+		return false, nil
+	}
+	if a.PhysicalID != "" && b.PhysicalID != "" && (a.PhysicalID != b.PhysicalID || a.Region != b.Region) {
 		return false, nil
 	}
 	return r.sameBindingAccount(ctx, org, a, b)

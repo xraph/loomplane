@@ -2,12 +2,16 @@ package planning
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/discovery"
 )
+
+// commitPattern is a ref that names a commit rather than a branch.
+var commitPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
 
 // lockset pins each live repository of a plan: one in scope to its newest
 // successful analysis, one held to what's deployed in the environment.
@@ -34,6 +38,11 @@ func lockset(sources []*discovery.Source, latest map[string]*discovery.Analysis,
 				return nil, fmt.Errorf("%w: %s has no successful analysis", ErrNoAnalysis, s.Alias)
 			}
 			ps.AnalysisID, ps.CommitSHA = a.ID, a.CommitSHA
+			// The commit came from the branch the analysis read, which
+			// "Another branch" can set apart from the source's own.
+			if ref := strings.TrimSpace(a.Ref); ref != "" && !commitPattern.MatchString(ref) {
+				ps.Ref = ref
+			}
 		} else {
 			d := deployed[s.ID]
 			if d == nil {

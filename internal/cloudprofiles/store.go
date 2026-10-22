@@ -2,8 +2,9 @@ package cloudprofiles
 
 import "context"
 
-// Store persists configuration scoped to both organization and project. Update
-// methods change metadata only and compare the previous revision atomically.
+// Store persists organization configuration. A nonempty project selects its
+// granted view; an empty project selects the organization manager view. Callers
+// must authorize that view. Updates compare the previous revision atomically.
 // Reviewed placement and assignment writes belong to the sync workflow.
 type Store interface {
 	CreateProfile(context.Context, *Profile) error

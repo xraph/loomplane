@@ -133,7 +133,7 @@ export function Infrastructure() {
               ))}
             </div>
           ) : connections.data.connections.length === 0 ? (
-            <Empty className="border border-dashed">
+            <Empty>
               <EmptyHeader>
                 <EmptyMedia variant="icon">
                   <ServerIcon />
@@ -196,6 +196,15 @@ export function Infrastructure() {
               cloud charges, against a budget you set.
             </CardDescription>
           </CardHeader>
+          <CardContent className="flex items-center gap-5">
+            <div
+              aria-hidden="true"
+              className="canvas-dots size-24 shrink-0 rounded-full opacity-60"
+            />
+            <span className="text-[26px] font-semibold tracking-tight text-muted-foreground">
+              None yet
+            </span>
+          </CardContent>
         </Card>
 
         {infra.data && (
@@ -285,10 +294,16 @@ function CloudCard({
   const drifted = bindings.filter((binding) => binding.drift).length
   return (
     <Card size="sm" className="flex-row items-center gap-3 px-3 py-2">
-      <CloudGlyph cloud={c.cloud} className="size-8 shrink-0 text-[10px]" />
+      <CloudGlyph cloud={c.cloud} size="md" />
       <div className="grid min-w-0 flex-1 gap-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="truncate text-sm font-medium">{c.name}</span>
+          <Link
+            to="/clouds/accounts/$id"
+            params={{ id: c.id }}
+            className="truncate text-sm font-semibold text-foreground hover:underline"
+          >
+            {c.name}
+          </Link>
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className={cn("size-1.5 rounded-full", status.tone)} />
             {status.label}
@@ -299,12 +314,12 @@ function CloudCard({
           {resources} resources
         </p>
         {c.status !== "ready" && (
-          <p className="text-weld-ink text-xs">
+          <p className="text-xs text-weld-ink">
             {c.message || "Check the connection under Integrations."}
           </p>
         )}
         {drifted > 0 && (
-          <p className="text-weld-ink text-xs">
+          <p className="text-xs text-weld-ink">
             {drifted} deployments need review
           </p>
         )}
@@ -322,7 +337,9 @@ function CloudCard({
           <EllipsisIcon />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem render={<Link to="/integrations" />}>
+          <DropdownMenuItem
+            render={<Link to="/clouds/accounts/$id" params={{ id: c.id }} />}
+          >
             Check, replace or remove it
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -535,7 +552,7 @@ function Running({
           </Table>
         )}
         {loaded && rows.length === 0 && (
-          <Empty className="border-t">
+          <Empty variant="inline" className="border-t">
             <EmptyHeader>
               <EmptyTitle>
                 {bindings.length === 0

@@ -1,11 +1,32 @@
 package providers
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
+	"github.com/xraph/loomplane/internal/manageddb"
+	"github.com/xraph/loomplane/internal/recipes/recipestest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
+
+func TestManagedProfilesShareTheDeploymentContract(t *testing.T) {
+	for _, target := range []string{"rds", "cloud-sql"} {
+		p, err := Registry().Get(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, offer := range p.Provisions {
+			if offer.Kind == "postgres" {
+				if !reflect.DeepEqual(offer.ManagedProfiles, manageddb.Profiles(target)) {
+					t.Fatalf("%s publishes a different profile than deployment", target)
+				}
+			} else if len(offer.ManagedProfiles) != 0 {
+				t.Fatal("unreviewed managed engine published a profile")
+			}
+		}
+	}
+}
 
 func TestBuildLogCapabilitiesAreOperationScoped(t *testing.T) {
 	want := map[string]string{"vercel": "streamed", "cloud-run": "polled", "ecs-fargate": "polled", "render": "unavailable"}
@@ -41,13 +62,14 @@ func TestRegistry_capabilities(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "server", "kubernetes"}},
-		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "server", "kubernetes"}},
-		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "server", "kubernetes"}},
-		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "server", "kubernetes"}},
-		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "server"}},
+		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "azure-database", "server", "kubernetes"}},
+		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "azure-database", "server"}},
 		{"mariadb", names(r.Provisioning("mariadb")), []string{"server"}},
-		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache", "server"}},
+		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache", "azure-managed-redis", "server"}},
 		{"valkey", names(r.Provisioning("valkey")), []string{"server"}},
 		{"kafka", names(r.Provisioning("kafka")), nil},
 	}
@@ -74,6 +96,8 @@ func TestProvider_engine(t *testing.T) {
 		{"vercel", provider.WebApp, provider.Loomplane},
 		{"render", provider.Worker, provider.Loomplane},
 		{"render", provider.StaticSite, provider.Loomplane},
+		// Loomplane builds and runs Container Apps itself, without Ctrl Plane.
+		{"azure-container-apps", provider.HTTPService, provider.Loomplane},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider+"/"+string(tt.workload), func(t *testing.T) {
@@ -130,5 +154,83 @@ func TestRegistry_aPausedTargetIsForReviewOnly(t *testing.T) {
 	}
 	if p, _ := Registry().Get("render"); !p.Available {
 		t.Fatal("render is paused without being named")
+	}
+}
+
+func provisionsOf(t *testing.T, all []provider.Provider, name string) []provider.Provisions {
+	t.Helper()
+	for _, p := range all {
+		if p.Name == name {
+			return p.Provisions
+		}
+	}
+	t.Fatalf("no %s provider", name)
+	return nil
+}
+
+func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
+	builtIn := []provider.Provisions{
+		{Kind: "postgres", Creates: "Persistent PostgreSQL container", Versions: []string{"17"}},
+		{Kind: "mysql", Creates: "Persistent MySQL container", Versions: []string{"8.4"}},
+		{Kind: "mariadb", Creates: "Persistent MariaDB container", Versions: []string{"11.8"}},
+		{Kind: "redis", Creates: "Persistent Redis container", Versions: []string{"8.2"}},
+		{Kind: "valkey", Creates: "Persistent Valkey container", Versions: []string{"8.1"}},
+	}
+	got := provisionsOf(t, Catalog(), "server")
+	if !reflect.DeepEqual(got, builtIn) {
+		t.Fatalf("default registry changed the server provisions: %+v", got)
+	}
+
+	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "server")
+	if len(got) != 6 || !reflect.DeepEqual(got[:5], builtIn) {
+		t.Fatalf("built-in provisions moved or changed: %+v", got)
+	}
+	want := provider.Provisions{Kind: "sample", Creates: "Sample catalog service", Versions: []string{"1"}}
+	if !reflect.DeepEqual(got[5], want) {
+		t.Fatalf("registered kind: %+v, want %+v", got[5], want)
+	}
+}
+
+func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
+	first := provider.Provisions{Kind: "postgres", Creates: "Retained PostgreSQL StatefulSet", Versions: []string{"17"}}
+	got := provisionsOf(t, Catalog(), "kubernetes")
+	if !reflect.DeepEqual(got, []provider.Provisions{first}) {
+		t.Fatalf("default registry changed the Kubernetes provisions: %+v", got)
+	}
+
+	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "kubernetes")
+	if len(got) != 2 || !reflect.DeepEqual(got[0], first) || got[1].Kind != "sample" || got[1].Creates != "Sample catalog service" {
+		t.Fatalf("Kubernetes provisions: %+v", got)
+	}
+	// Managed clouds don't gain registered kinds.
+	for _, p := range catalogWith(recipestest.Registry(t)) {
+		if p.Cloud == "server" || p.Cloud == "kubernetes" {
+			continue
+		}
+		for _, offer := range p.Provisions {
+			if offer.Kind == "sample" {
+				t.Errorf("%s offers the sample kind", p.Name)
+			}
+		}
+	}
+	if _, err := provider.NewRegistry(catalogWith(recipestest.Registry(t))...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServerProvisionsSkipDependencyOnlyKinds(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Graph()); err != nil {
+		t.Fatal(err)
+	}
+	all := catalogWith(kinds)
+	for _, name := range []string{"server", "kubernetes"} {
+		got := provisionsOf(t, all, name)
+		if !slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "sample" }) {
+			t.Fatalf("%s lost the sample kind: %+v", name, got)
+		}
+		if slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "graph" }) {
+			t.Fatalf("%s offers a dependency-only kind: %+v", name, got)
+		}
 	}
 }

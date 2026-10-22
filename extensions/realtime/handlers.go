@@ -116,6 +116,28 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 			grants[key] = allowed
 		}
 		if allowed {
+			if event.Type == "cloud_sync.updated" && len(event.Data) > 0 {
+				managerErr := e.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
+				if managerErr != nil && !errors.Is(managerErr, security.ErrForbidden) {
+					return nil, managerErr
+				}
+				if managerErr != nil {
+					// Status events also serve replay. Fetch current target details through
+					// the grant-checked sync API instead of persisting subscriber authority.
+					var payload map[string]json.RawMessage
+					if err := json.Unmarshal(event.Data, &payload); err != nil {
+						return nil, err
+					}
+					payload["target_id"] = json.RawMessage(`""`)
+					delete(payload, "before")
+					delete(payload, "after")
+					data, err := json.Marshal(payload)
+					if err != nil {
+						return nil, err
+					}
+					event.Data = data
+				}
+			}
 			out = append(out, event)
 		}
 	}

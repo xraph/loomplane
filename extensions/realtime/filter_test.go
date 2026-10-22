@@ -51,3 +51,38 @@ func TestFilterCloudEventsRequireTheirResourcePermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterCloudSyncTargetDetailsStayPrivateForProjectSubscribers(t *testing.T) {
+	raw := json.RawMessage(`{"id":"sync","target_id":"private-target","before":{"connection_id":"private-old"},"after":{"connection_id":"private-new"},"status":"running","environments":[{"project_id":"proj_a","environment_id":"env"}]}`)
+	original := string(raw)
+	input := []store.Event{{ProjectID: "proj_a", Type: "cloud_sync.updated", Data: raw}}
+	e := &Extension{authz: permissionFixture{denied: security.OrganizationCloudManage}}
+	actor := security.Principal{OrgID: "org", UserID: "member"}
+	got, err := e.filter(t.Context(), actor, Subscription{ProjectIDs: []string{"proj_a"}}, input)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("project event: %+v %v", got, err)
+	}
+	var projected map[string]json.RawMessage
+	if err = json.Unmarshal(got[0].Data, &projected); err != nil {
+		t.Fatal(err)
+	}
+	if string(projected["target_id"]) != `""` {
+		t.Error("project status event exposed target_id")
+	}
+	for _, field := range []string{"before", "after"} {
+		if _, ok := projected[field]; ok {
+			t.Errorf("project status event exposed %s", field)
+		}
+	}
+	if string(projected["status"]) != `"running"` || len(projected["environments"]) == 0 {
+		t.Fatal("status notification lost participant state")
+	}
+	if string(input[0].Data) != original {
+		t.Fatal("projection mutated stored event payload")
+	}
+	e.authz = permissionFixture{}
+	got, err = e.filter(t.Context(), actor, Subscription{ProjectIDs: []string{"proj_a"}}, input)
+	if err != nil || len(got) != 1 || string(got[0].Data) != original {
+		t.Fatalf("manager event details changed: %+v %v", got, err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/pkg/manifest"
@@ -15,7 +16,14 @@ import (
 // AppliedCloudPlan constructs migration actions from serving bindings only.
 // It never reads a current analysis, manifest, branch or environment variable.
 func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, _ ...*cloudprofiles.Assignment) *Result {
+	return appliedCloudPlan(bindings, assignment, targetID, options, registry, nil)
+}
+
+func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, routes ...[]cloudinfra.Route) *Result {
 	p := &planner{in: Input{Providers: registry, Connections: options, CloudPlacements: map[string]CloudPlacement{}, Chosen: map[string]string{}}, services: map[string]*Action{}, resources: map[string]*Action{}, bindings: map[string]*Binding{}, clouds: map[string]bool{}, unready: map[string]string{}, held: map[string]string{}, removing: map[string]bool{}}
+	if len(routes) > 0 {
+		p.in.Routes = routes[0]
+	}
 	blocked := func(name, message string) {
 		p.problem(Finding{Code: "cloud-sync-blocked", Subject: ServiceSubject, Name: name, Message: message})
 	}
@@ -33,19 +41,37 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 		p.actions = append(p.actions, a)
 		p.services[b.Name] = a
 		pin := cfg.CloudPlacement
-		if pin == nil || targetID != "" && pin.TargetID != targetID {
+		if pin == nil || !selectsPlacement(targetID, pin) {
 			continue
 		}
 		if assignment == nil {
 			blocked(b.Name, "This deployed service needs a named Cloud target; remove or adopt its reference before unassigning the Cloud.")
 			continue
 		}
-		ti := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.Name == pin.TargetName })
-		if ti < 0 {
-			blocked(b.Name, "The proposed Cloud is missing target "+pin.TargetName+".")
-			continue
+		var t cloudprofiles.Target
+		if pin.Default {
+			d := assignment.DefaultPlacement
+			if d == nil {
+				blocked(b.Name, "The proposed Cloud has no default placement this project may use.")
+				continue
+			}
+			t = cloudprofiles.Target{Runtime: "managed", Provider: d.Provider, ConnectionID: d.ConnectionID, Region: d.Region}
+		} else {
+			ti := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.Name == pin.TargetName })
+			if ti < 0 {
+				blocked(b.Name, "The proposed Cloud is missing target "+pin.TargetName+".")
+				continue
+			}
+			t = assignment.Targets[ti]
 		}
-		t := assignment.Targets[ti]
+		if t.PoolID != "" {
+			placement, found := pools[b.Name]
+			if !found || placement.PoolID != t.PoolID {
+				blocked(b.Name, "Pool placement needs a reviewed capacity selection.")
+				continue
+			}
+			t.ConnectionID = placement.ConnectionID
+		}
 		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == t.ConnectionID })
 		prov, err := registry.Get(t.Provider)
 		if err != nil {
@@ -80,11 +106,16 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 		if prov.Placed() && !prov.HasRegion(region) {
 			blocked(b.Name, "The destination does not support the applied region.")
 		}
-		if !prov.Scaling && (cfg.Scale != nil || cfg.Size != nil) {
+		if !prov.Scaling && prov.Cloud != "server" && (cfg.Scale != nil || cfg.Size != nil) {
 			blocked(b.Name, "The destination cannot preserve the applied scale and size settings.")
 		}
 		cfg.Provider, cfg.Region, cfg.Execution = prov.Name, region, runs.Execution
-		cfg.CloudPlacement = &CloudPlacement{CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: pin.RegionSource}
+		placed := targetPlacement(assignment, t, identity, region, pin.RegionSource)
+		placed.Default = pin.Default
+		cfg.CloudPlacement = &placed
+		if placement, found := pools[b.Name]; found && t.PoolID != "" {
+			cfg.CloudPlacement = &placement
+		}
 		p.in.CloudPlacements[b.Name] = *cfg.CloudPlacement
 		set := manifest.Settings{Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size}
 		if OwnedCloud(prov.Cloud) {
@@ -96,6 +127,7 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 		cfg.Target = ""
 		p.configureTarget(b.Name, "services."+b.Name, prov, set, &cfg)
 		p.checkRender(b.Name, "services."+b.Name, &cfg)
+		p.checkAzure(b.Name, "services."+b.Name, &cfg)
 		a.Provider, a.Region, a.ConnectionID, a.Engine, a.Creates = prov.Name, region, t.ConnectionID, prov.Engine(runs), runs.Creates
 		if b.Provider != a.Provider || b.ConnectionID != a.ConnectionID || b.Region != a.Region {
 			a.Op = Replace
@@ -106,9 +138,10 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			a.Reason = "Adopt the reviewed Cloud placement."
 		}
 	}
+	p.routedReplacements()
 	// Follow the applied dependency graph transitively, including generated gateways.
 	for changed := true; changed; {
-		changed = false
+		changed = p.routedReplacements()
 		for _, a := range p.actions {
 			for i, link := range a.Service.Env {
 				if link.Subject == ResourceSubject {
@@ -145,6 +178,21 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 					}
 				}
 			}
+		}
+	}
+	// A service redeployed only to refresh a dependency keeps its placement,
+	// but deploys against the reviewed Cloud: a default switch advances the
+	// Cloud revision its old pin recorded.
+	for _, a := range p.actions {
+		if a.Op == Keep || a.Service == nil || a.Service.CloudPlacement == nil || assignment == nil {
+			continue
+		}
+		if _, moved := p.in.CloudPlacements[a.Name]; moved {
+			continue
+		}
+		// A pin that no longer matches is left for the deploy-time check to refuse.
+		if pin, ok := repinCloudPlacement(*a.Service.CloudPlacement, assignment); ok {
+			a.Service.CloudPlacement = &pin
 		}
 	}
 	visiting, done := map[string]bool{}, map[string]bool{}
@@ -225,4 +273,30 @@ func snapshotConnections(bindings []*Binding, plan *Plan) []string {
 
 func migrationPlanID(syncID, environmentID string) string {
 	return fmt.Sprintf("%s.%s", syncID, environmentID)
+}
+
+// repinCloudPlacement carries an unchanged placement onto a reviewed
+// assignment. It reports false when the default or target no longer matches.
+func repinCloudPlacement(pin CloudPlacement, assignment *cloudprofiles.Assignment) (CloudPlacement, bool) {
+	if pin.CloudID != assignment.CloudID {
+		return pin, false
+	}
+	if pin.Default {
+		d := assignment.DefaultPlacement
+		if d == nil || d.Provider != pin.Provider || d.ConnectionID != pin.ConnectionID {
+			return pin, false
+		}
+	} else {
+		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.ID == pin.TargetID })
+		if i < 0 {
+			return pin, false
+		}
+		t := assignment.Targets[i]
+		if t.Provider != pin.Provider || t.PoolID != pin.PoolID || t.PoolID == "" && t.ConnectionID != pin.ConnectionID {
+			return pin, false
+		}
+		pin.TargetRevision, pin.TargetName = t.Revision, t.Name
+	}
+	pin.CloudRevision, pin.AssignmentRevision, pin.GrantRevision = assignment.CloudRevision, assignment.Revision, assignment.GrantRevision
+	return pin, true
 }

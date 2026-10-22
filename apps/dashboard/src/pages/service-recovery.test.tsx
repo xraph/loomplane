@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
-import { ServiceCatalog } from "@/pages/service-catalog"
+import { ServiceRecovery } from "@/pages/service-catalog"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ can: () => true }),
@@ -28,7 +28,19 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-function recoveryFixture({ removed = false, everyHours = 6, kind = "postgres" } = {}) {
+function recoveryFixture({
+  removed = false,
+  everyHours = 6,
+  kind = "postgres",
+  environment,
+  resource,
+}: {
+  removed?: boolean
+  everyHours?: number
+  kind?: string
+  environment?: string
+  resource?: string
+} = {}) {
   const writes: { url: string; body: Record<string, unknown> }[] = []
   let enabled = true
   let cadence = everyHours
@@ -147,7 +159,11 @@ function recoveryFixture({ removed = false, everyHours = 6, kind = "postgres" } 
   )
   render(
     <ClientProvider client={forgeClient}>
-      <ServiceCatalog />
+      <ServiceRecovery
+        project="p"
+        environment={environment}
+        resource={resource}
+      />
     </ClientProvider>
   )
   return writes
@@ -225,8 +241,45 @@ it("saves a changed cadence without pausing an enabled schedule", async () => {
   })
 })
 
-it.each(["mysql", "mariadb"])("offers recovery controls for a deployed %s recipe", async (kind) => {
-  recoveryFixture({kind})
-  expect(await screen.findByRole("button", {name:"Back up now"})).toBeEnabled()
-  expect(screen.getByRole("button", {name:"Pause backup schedule"})).toBeEnabled()
+it.each(["mysql", "mariadb"])(
+  "offers recovery controls for a deployed %s recipe",
+  async (kind) => {
+    recoveryFixture({ kind })
+    expect(
+      await screen.findByRole("button", { name: "Back up now" })
+    ).toBeEnabled()
+    expect(
+      screen.getByRole("button", { name: "Pause backup schedule" })
+    ).toBeEnabled()
+  }
+)
+
+it("opens on the database and environment a service page chose", async () => {
+  recoveryFixture({ environment: "prod", resource: "another" })
+  expect(
+    await screen.findByRole("combobox", { name: "Database" })
+  ).toHaveTextContent("another")
+})
+
+it("says a chosen database has no recovery instead of opening another", async () => {
+  recoveryFixture({ environment: "prod", resource: "missing" })
+  expect(
+    await screen.findByText("No recovery for missing in production")
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("button", { name: "Back up now" })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("combobox", { name: "Database" })
+  ).not.toBeInTheDocument()
+})
+
+it("says a chosen environment is missing instead of opening production", async () => {
+  recoveryFixture({ environment: "gone", resource: "database" })
+  expect(
+    await screen.findByText("This environment isn't in the project")
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("button", { name: "Back up now" })
+  ).not.toBeInTheDocument()
 })

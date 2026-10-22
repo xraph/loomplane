@@ -17,7 +17,9 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/planning"
@@ -38,6 +40,13 @@ type Executor interface {
 	Remove(ctx context.Context, job *Job, b *planning.Binding) error
 	// Observe reads what's live for a binding, without changing anything.
 	Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error)
+}
+
+// retryCheckpointExecutor opts into keeping native operation state when an
+// explicit deployment retry starts a new workflow. Its checkpoints must be
+// scoped to the original deployment and safe to resume after failure.
+type retryCheckpointExecutor interface {
+	RetainCheckpointOnRetry() bool
 }
 
 // Observation is what's live for a binding.
@@ -108,17 +117,50 @@ type Job struct {
 	// Attach are the resources a service needs, which some providers have
 	// to wire to it: a Cloud SQL instance Cloud Run mounts.
 	Attach []*planning.Binding
+
+	// files are a catalog component's rendered files, which an owned
+	// target keeps in Vault beside its runtime values.
+	files []runtimeFile
+	// replacing is a Remove of what an action ran as before it moved.
+	// What's kept under the action's name is the replacement's then.
+	replacing bool
+	// warn adds a warning to the step, or is nil.
+	warn func(error)
+}
+
+// Warn adds a warning to the step an executor runs in, for something that
+// went wrong without failing it. A step that can't take warnings drops
+// it.
+func (j *Job) Warn(err error) {
+	if j.warn != nil && err != nil {
+		j.warn(err)
+	}
 }
 
 // ResourceURL is the field a resource executor keeps its address under,
 // which the services that need it get.
 const ResourceURL = "url"
 
+// linkField is the field of a resource a service's variable reads: its
+// address, or one of a composed resource's outputs, which it keeps as
+// "output:<name>". A "consumer:<name>" output isn't kept: it's issued to
+// the service as its variables are captured.
+func linkField(link planning.EnvLink) (string, error) {
+	switch {
+	case link.Field == "":
+		return ResourceURL, nil
+	case link.Field == ResourceURL, strings.HasPrefix(link.Field, "output:") && len(link.Field) > len("output:"):
+		return link.Field, nil
+	}
+	return "", fmt.Errorf("%s reads %s of %s, which this Loomplane can't give it yet", link.Key, link.Field, link.From)
+}
+
 // Outcome is what an executor did.
 type Outcome struct {
 	// ExternalID is what the provider calls it: a Ctrl Plane instance or a
 	// Vercel project.
 	ExternalID string
+	PhysicalID string
 	URL        string
 	// Image is the container image a build produced.
 	Image string
@@ -162,6 +204,8 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
+	routes ReleaseRoutes
+
 	cloudSyncAuth CloudSyncAuthorizer
 	cloudProfiles cloudprofiles.Resolver
 	store         Store
@@ -171,6 +215,8 @@ type Runner struct {
 	sources       Sources
 	providers     *provider.Registry
 	executors     map[string]Executor
+	catalogHooks  map[string]CatalogHooks
+	observers     []ReleaseObserver
 	resources     ResourceSecrets
 	telemetry     *telemetry.Recorder
 	logs          LogSink
@@ -182,6 +228,8 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	Routes ReleaseRoutes
+
 	CloudSyncAuth CloudSyncAuthorizer
 	CloudProfiles cloudprofiles.Resolver
 	Logs          LogSink
@@ -198,14 +246,40 @@ type RunnerDeps struct {
 	Resources ResourceSecrets
 	// Telemetry records how deployments go. It may be nil.
 	Telemetry *telemetry.Recorder
+	// CatalogHooks are composed catalog kinds' hooks, by kind: the same
+	// ones the owned targets run.
+	CatalogHooks map[string]CatalogHooks
+	// Observers hear of each service binding a deployment writes or
+	// deletes. What they fail at only warns.
+	Observers []ReleaseObserver
+}
+
+// Release is a service binding a deployment step wrote, or deleted
+// (Removed), as a ReleaseObserver hears of it.
+type Release struct {
+	OrgID, ProjectID, EnvironmentID string
+	Binding                         *planning.Binding
+	Removed                         bool
+}
+
+// ReleaseObserver hears of each service binding a deployment step writes
+// or deletes, once that's done. Each call has 10 seconds; an error never
+// fails the step, and lands on it as a warning naming the service.
+// Resource bindings aren't observed, and neither are writes that only
+// record metadata about what's already deployed: adopting a Cloud
+// placement, or recording that another connection deployed it (see
+// Runner.deployedElsewhere). Each observer gets its own copy of the
+// binding.
+type ReleaseObserver interface {
+	Released(ctx context.Context, r Release) error
 }
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
-		cloudSyncAuth: d.CloudSyncAuth,
+		cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
 }
@@ -387,10 +461,15 @@ func commitFor(d *Deployment, a planning.Action) string {
 	return d.CommitSHA
 }
 
+func (r *Runner) retainsCheckpoint(providerName string) bool {
+	executor, ok := r.executors[providerName].(retryCheckpointExecutor)
+	return ok && executor.RetainCheckpointOnRetry()
+}
+
 // Run carries out one action of a deployment. resume is the last
 // checkpoint an earlier attempt saved, or nil; heartbeat saves one and
 // tells Dispatch the activity is alive.
-func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) error {
+func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) (runErr error) {
 	ctx, heartbeat, stopHeartbeat := keepHeartbeat(ctx, resume, heartbeat, 30*time.Second)
 	defer stopHeartbeat()
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
@@ -414,10 +493,45 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			action = a
 		}
 	}
+	poolLock, err := r.beginPoolExecution(ctx, plan, action)
+	if err != nil {
+		return err
+	}
+	if poolLock != nil {
+		ctx = poolEffectContext(poolLock.Context(ctx))
+		defer func() { runErr = errors.Join(runErr, poolLock.Finish(context.WithoutCancel(ctx))) }()
+	}
+	ctx, finishAttempt, err := r.beginWorkloadAttempt(ctx, d, action, false)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, finishAttempt(runErr == nil && len(action.Routes) == 0)) }()
+	admission, err := r.directServerAdmission(ctx, plan, action)
+	if err != nil {
+		return err
+	}
+	if admission != nil {
+		defer func() { _ = admission.Rollback() }() //nolint:errcheck // releasing a read-only admission lock
+	}
 	if err := r.authorizeSync(ctx, plan); err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" {
+	retainCheckpoint := poolAction(action) || plan.CloudSyncID != "" || r.retainsCheckpoint(action.Provider) || (step.Replaced != nil && r.retainsCheckpoint(step.Replaced.Provider))
+	// The first move has not populated Step.Replaced yet. Its original provider
+	// can still require durable cleanup even when the destination does not.
+	if !retainCheckpoint && (action.Op == planning.Replace || action.Op == planning.Create) {
+		bindings, readErr := r.plans.ListBindings(ctx, orgID, d.EnvironmentID)
+		if readErr != nil {
+			return readErr
+		}
+		for _, binding := range bindings {
+			if string(binding.Subject)+":"+binding.Name == actionID && r.retainsCheckpoint(binding.Provider) {
+				retainCheckpoint = true
+				break
+			}
+		}
+	}
+	if retainCheckpoint {
 		if len(step.Checkpoint) > 0 {
 			resume = step.Checkpoint
 		}
@@ -436,7 +550,7 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		step.Status, step.Message = status, message
 		_ = r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step) //nolint:errcheck // progress is best effort; the step's end is recorded
 	}
-	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress); err != nil {
+	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress, poolLock); err != nil {
 		finished := r.now().UTC()
 		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))
 		step.Status, step.Message, step.FinishedAt = StepFailed, err.Error(), &finished
@@ -465,6 +579,7 @@ func doneMessage(s *Step) string {
 
 func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action, step *Step,
 	resume []byte, heartbeat func([]byte) error, progress func(string, string),
+	poolLock *cloudinfra.PoolExecutionLock,
 ) error {
 	if plan.CloudSyncID != "" {
 		ctx = planning.WithCloudSyncMutation(ctx, plan.CloudSyncID)
@@ -541,7 +656,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
 	}
-	if captureErr := r.captureAppliedVariables(ctx, d, &a); captureErr != nil {
+	if captureErr := r.captureAppliedVariables(ctx, d, &a, resources); captureErr != nil {
 		return captureErr
 	}
 	pinAppliedSource(d, plan, &a)
@@ -594,7 +709,13 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	rc := readReplaceCheckpoint(resume)
 	job.Resume = rc.Apply
 	if deleting {
-		return r.deleteBound(ctx, job, exec, current, unreachable, step, rc, heartbeat)
+		if derr := r.deleteBound(ctx, job, exec, current, unreachable, step, rc, heartbeat); derr != nil {
+			return derr
+		}
+		// What the service was issued goes with it, once it's gone.
+		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, nil, resources)...)
+		step.Warnings = append(step.Warnings, r.released(ctx, d, current, true)...)
+		return nil
 	}
 	// A failure removing what an earlier move left only warns: the plan
 	// keeps warning about it, and a permanent one, such as a revoked
@@ -619,7 +740,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		// redeploy it. A step that replaced what's bound now, as a retry
 		// after later deployments moved the action back can find, isn't
 		// one of these.
-		if plan.CloudSyncID != "" {
+		if plan.CloudSyncID != "" || len(a.Routes) > 0 {
 			return nil
 		}
 		if rerr := r.removeReplaced(ctx, job, current, step.Replaced, warn, rc, heartbeat); rerr != nil {
@@ -628,7 +749,10 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		step.Replaced = nil
 		return nil
 	}
-	moving := moves(current, a, connID)
+	if routeErr := r.validateReleaseRoutes(ctx, job, current); routeErr != nil {
+		return routeErr
+	}
+	moving := moves(current, a, connID) || len(a.Routes) > 0
 	if moving && a.Op != planning.Replace && (a.Op != planning.Create || current.Drift != planning.DriftMissing) && current.Provider == a.Provider && current.Region == a.Region {
 		// Only the planner moves something to another connection, since
 		// only it deploys again what uses it, or refuses when something
@@ -679,6 +803,19 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 		return authErr
 	}
+	if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+		return effectErr
+	}
+	if _, fenced := server.EffectFenceFrom(ctx); fenced {
+		if fenceErr := preparePoolEffects(ctx, exec, job); fenceErr != nil {
+			return fenceErr
+		}
+		if poolLock != nil {
+			if fenceErr := poolLock.Attempt(ctx); fenceErr != nil {
+				return fenceErr
+			}
+		}
+	}
 	out, err := exec.Apply(ctx, job)
 	if elsewhere := (*ElsewhereError)(nil); errors.As(err, &elsewhere) {
 		return r.deployedElsewhere(ctx, current, elsewhere)
@@ -695,13 +832,13 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	old := job.Replaces
 	if old != nil {
-		destination := &planning.Binding{Provider: a.Provider, Region: a.Region, ConnectionID: connID, ExternalID: out.ExternalID}
+		destination := &planning.Binding{Provider: a.Provider, Region: a.Region, ConnectionID: connID, ExternalID: out.ExternalID, PhysicalID: out.PhysicalID}
 		if out.ExternalID != "" && out.ExternalID == old.ExternalID && old.Provider == a.Provider {
 			sameAccount, identityErr := r.sameBindingAccount(ctx, d.OrgID, old, destination)
 			if identityErr != nil {
 				return identityErr
 			}
-			if sameAccount && old.Region != a.Region {
+			if sameAccount && old.Region != a.Region && (old.PhysicalID == "" || out.PhysicalID == "") {
 				return fmt.Errorf("%s can't move %s to %s: it kept the one it was to replace (%s), so nothing was removed", a.Provider, a.Name, placement(a.Provider, a.Region), old.ExternalID)
 			}
 		}
@@ -717,7 +854,12 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" {
+	// A service that no longer needs a per-consumer output gives it back.
+	if a.Service != nil {
+		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, a.Service, resources)...)
+	}
+	step.Warnings = append(step.Warnings, r.released(ctx, d, bound, false)...)
+	if plan.CloudSyncID != "" || len(a.Routes) > 0 {
 		return nil
 	}
 	if rerr := r.removeReplaced(ctx, job, bound, step.Replaced, warn, rc, heartbeat); rerr != nil {
@@ -815,6 +957,13 @@ func (rc *replaceCheckpoint) encode() []byte {
 func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound *planning.Binding, unreachable bool,
 	step *Step, rc *replaceCheckpoint, heartbeat func([]byte) error,
 ) error {
+	if r.routes != nil {
+		for _, retained := range append([]planning.Binding{*bound}, bound.Replaced...) {
+			if routeErr := r.routes.ValidateRuntimeRemoval(ctx, bound.OrgID, bound.ProjectID, retained.ExternalID); routeErr != nil {
+				return routeErr
+			}
+		}
+	}
 	var warnings []string
 	warn := func(err error) { warnings = append(warnings, err.Error()) }
 	if err := r.removeReplaced(ctx, job, bound, nil, warn, rc, heartbeat); err != nil {
@@ -822,14 +971,33 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 	}
 	a := job.Action
 	if unreachable {
+		if poolBinding(bound) {
+			return errors.New("pooled server cleanup is blocked: restore the recorded connection before releasing capacity")
+		}
 		warn(fmt.Errorf("the connection that deployed %s has been removed, so Loomplane can't reach it to delete it, and stops tracking it. If %s still runs, delete it yourself, in the account that connection reached",
 			a.Name, locate(exec, bound)))
+		// What Loomplane itself keeps open on it still ends.
+		if remover, ok := exec.(unreachableRemover); ok {
+			job.warn = warn
+			remover.removedUnreachable(ctx, job, bound)
+			job.warn = nil
+		}
 		if err := job.Forget(ctx); err != nil {
 			return err
 		}
 	} else {
 		job.Progress(StepDeploying, "Removing "+a.Name)
-		if err := exec.Remove(ctx, job, bound); err != nil {
+		if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+			return effectErr
+		}
+		removalCtx, fenceErr := preparePoolRemoval(ctx, exec, job, bound)
+		if fenceErr != nil {
+			return fenceErr
+		}
+		job.warn = warn
+		err := exec.Remove(removalCtx, job, bound)
+		job.warn = nil
+		if err != nil {
 			return err
 		}
 	}
@@ -838,6 +1006,12 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 	}
 	step.Warnings = append(step.Warnings, warnings...)
 	return nil
+}
+
+// unreachableRemover is an executor with something of its own to end when
+// what it deployed is deleted through a connection that's gone.
+type unreachableRemover interface {
+	removedUnreachable(ctx context.Context, job *Job, b *planning.Binding)
 }
 
 // removeReplaced removes what an action ran as before it moved, which its
@@ -925,7 +1099,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 		}
 	}
 	conn, cred, err := r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
-	if errors.Is(err, connections.ErrNotFound) && job.Plan.CloudSyncID != "" {
+	if errors.Is(err, connections.ErrNotFound) && (job.Plan.CloudSyncID != "" || poolBinding(old)) {
 		return false, err
 	}
 	if errors.Is(err, connections.ErrNotFound) {
@@ -970,11 +1144,19 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	// What's kept under the action's name, such as a database's address,
 	// is the replacement's now.
 	gone.Forget = func(context.Context) error { return nil }
+	gone.replacing = true
 	job.Progress(StepDeploying, "Removing the one it replaces on "+placement(old.Provider, old.Region))
 	if authErr := r.authorizeCloudRemoval(ctx, job); authErr != nil {
 		return false, authErr
 	}
-	if err := exec.Remove(ctx, &gone, old); err != nil {
+	if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+		return false, effectErr
+	}
+	removalCtx, fenceErr := preparePoolRemoval(ctx, exec, &gone, old)
+	if fenceErr != nil {
+		return false, fenceErr
+	}
+	if err := exec.Remove(removalCtx, &gone, old); err != nil {
 		if deleting {
 			return false, untracked(fmt.Errorf("remove the old %s on %s: %w", a.Name, placement(old.Provider, old.Region), err))
 		}
@@ -1057,7 +1239,14 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 			if resources[link.From] == nil || r.resources == nil {
 				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
 			}
-			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, ResourceURL))
+			if _, consumer := consumerOutput(link); consumer {
+				return nil, nil, fmt.Errorf("%s's %s for %s is issued when its variables are captured, and none was", link.From, link.Field, a.Name)
+			}
+			field, err := linkField(link)
+			if err != nil {
+				return nil, nil, err
+			}
+			addr, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, field))
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s needs %s: %w", a.Name, link.From, err)
 			}
@@ -1108,11 +1297,53 @@ func (r *Runner) verify(ctx context.Context, url string) error {
 	}
 }
 
+// releaseObserverTimeout is how long each release observer has.
+const releaseObserverTimeout = 10 * time.Second
+
+// released tells the release observers of a service binding a step wrote,
+// or deleted (removed). It returns what they failed at as warnings naming
+// the service: the binding has changed already, so failing the step
+// wouldn't undo it. A resource binding isn't observed.
+func (r *Runner) released(ctx context.Context, d *Deployment, b *planning.Binding, removed bool) []string {
+	if b == nil || b.Subject != planning.ServiceSubject {
+		return nil
+	}
+	var warnings []string
+	for _, observer := range r.observers {
+		observed, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseObserverTimeout)
+		err := observer.Released(observed, Release{OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Binding: cloneBinding(b), Removed: removed})
+		cancel()
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", b.Name, err))
+		}
+	}
+	return warnings
+}
+
+// cloneBinding is a copy of b that shares nothing with it, so an observer
+// can't change what the step holds.
+func cloneBinding(b *planning.Binding) *planning.Binding {
+	c := *b
+	c.Config = slices.Clone(b.Config)
+	if b.ObservedAt != nil {
+		at := *b.ObservedAt
+		c.ObservedAt = &at
+	}
+	c.Replaced = nil
+	for _, old := range b.Replaced {
+		c.Replaced = append(c.Replaced, *cloneBinding(&old))
+	}
+	return &c
+}
+
 // bind records what runs an action now, with what it ran as before it
 // moved and still needs removing: what the binding recorded already, and
 // replaced, when it moves now. Something it runs as again, after a move
 // back, isn't left to remove.
 func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, current *planning.Binding, out *Outcome, connID string, replaced *planning.Binding) (*planning.Binding, error) {
+	if current != nil && current.PhysicalID != "" && out.PhysicalID == "" && current.Provider == a.Provider && current.ExternalID == out.ExternalID && current.ConnectionID == connID {
+		return nil, errors.New("the provider omitted the known physical resource identity; binding update is blocked")
+	}
 	var cfg any = a.Service
 	if a.Subject == planning.ResourceSubject {
 		cfg = a.Resource
@@ -1124,7 +1355,7 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 	now := r.now().UTC()
 	b := &planning.Binding{
 		OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Subject: a.Subject, Name: a.Name,
-		Provider: a.Provider, Region: a.Region, Engine: a.Engine, ExternalID: out.ExternalID, Config: raw, URL: out.URL,
+		Provider: a.Provider, Region: a.Region, Engine: a.Engine, ExternalID: out.ExternalID, PhysicalID: out.PhysicalID, Config: raw, URL: out.URL,
 		ConnectionID: connID, Revision: out.Revision, CommitSHA: commitFor(d, a),
 		PlanID: d.PlanID, CreatedAt: now, UpdatedAt: now,
 	}
@@ -1169,6 +1400,11 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
+	}
+	if reason == "" && d.Status != StatusFailed {
+		if cleanupErr := r.finishRoutedRelease(ctx, d); cleanupErr != nil {
+			return cleanupErr
+		}
 	}
 	status := StatusSucceeded
 	if reason != "" {

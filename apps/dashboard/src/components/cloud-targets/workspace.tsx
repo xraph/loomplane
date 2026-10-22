@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useState } from "react"
 import { PlusIcon } from "lucide-react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
+  Connection,
   Environment,
   Profile,
   Target,
@@ -29,6 +30,10 @@ import {
 } from "@/components/zero-state"
 import { cloudDeletionError } from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
+import { CloudGlyph } from "@/components/cloud-glyph"
+import { cloudLabel } from "@/lib/clouds"
+
+import { AccountSummary, cloudOf } from "./target-mix"
 import { TargetEditor } from "./target-editor"
 import { ChangeReview } from "./change-review"
 import { ServiceAdoption } from "./service-adoption"
@@ -46,7 +51,7 @@ export function EmptyClouds({
   children?: ReactNode
 }) {
   return (
-    <ZeroState className="border">
+    <ZeroState>
       <ZeroStateHeader>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{description}</ZeroStateDescription>
@@ -58,9 +63,12 @@ export function EmptyClouds({
 export function CloudWorkspace({
   projectId,
   projectControl,
+  cloudId,
 }: {
   projectId: string
   projectControl?: ReactNode
+  /** The Cloud to open on, such as the one a Cloud's own page is about. */
+  cloudId?: string
 }) {
   const environments = useQuery(api.useEnvironmentsList, {
     path: { id: projectId },
@@ -91,6 +99,7 @@ export function CloudWorkspace({
       <EnvironmentWorkspace
         key={environment.id}
         projectId={projectId}
+        cloudId={cloudId}
         environment={environment}
         environments={environments.data.environments}
         scopeControls={
@@ -131,11 +140,13 @@ export function CloudWorkspace({
 }
 function EnvironmentWorkspace({
   projectId,
+  cloudId,
   environment,
   environments,
   scopeControls,
 }: {
   projectId: string
+  cloudId?: string
   environment: Environment
   environments: Environment[]
   scopeControls: ReactNode
@@ -149,7 +160,7 @@ function EnvironmentWorkspace({
   })
   const { refetch: refetchAssignment } = assignment
   const { refetch: refetchProfiles } = profiles
-  const [chosen, setChosen] = useState("")
+  const [chosen, setChosen] = useState(cloudId ?? "")
   const [editing, setEditing] = useState<Profile | "new" | null>(null)
   const [assigning, setAssigning] = useState(false)
   const [unassign, setUnassign] = useState(false)
@@ -333,7 +344,7 @@ function EnvironmentWorkspace({
     </>
   )
 }
-function CloudForm({
+export function CloudForm({
   projectId,
   profile,
   onClose,
@@ -453,8 +464,9 @@ function Targets({
   const [query, setQuery] = useState("")
   const [editing, setEditing] = useState<Target | "new" | null>(null)
   const all = (targets.data?.targets ?? []).filter((t): t is Target => !!t)
+  const accounts = connections.data?.connections ?? []
   const visible = all.filter((t) =>
-    `${t.name} ${t.displayName} ${t.provider} ${connections.data?.connections.find((c) => c.id === t.connectionId)?.name ?? ""}`
+    `${t.name} ${t.displayName} ${t.provider} ${(t.tags ?? []).join(" ")} ${connections.data?.connections.find((c) => c.id === t.connectionId)?.name ?? ""}`
       .toLowerCase()
       .includes(query.toLowerCase())
   )
@@ -517,35 +529,13 @@ function Targets({
           )}
         </EmptyClouds>
       ) : (
-        <div className="divide-y rounded-xl border">
-          {visible.map((t) => (
-            <div
-              key={t.id}
-              className="flex flex-wrap items-center justify-between gap-2 p-3"
-            >
-              <div className="min-w-0">
-                <p className="text-sm font-medium break-words">
-                  {t.displayName || t.name}{" "}
-                  {t.displayName && t.displayName !== t.name && (
-                    <span className="text-xs font-normal text-muted-foreground">
-                      {t.name}
-                    </span>
-                  )}
-                </p>
-                <p className="text-xs break-words text-muted-foreground">
-                  {t.provider} · Desired:{" "}
-                  {connections.data?.connections.find(
-                    (c) => c.id === t.connectionId
-                  )?.name ?? t.connectionId}
-                  {t.region ? ` · ${t.region}` : ""}
-                </p>
-              </div>
-              <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
-                {manage ? "Edit target" : "View target"}
-              </Button>
-            </div>
-          ))}
-        </div>
+        <TargetTable
+          targets={visible}
+          all={all}
+          connections={accounts}
+          manage={manage}
+          onEdit={setEditing}
+        />
       )}
       {assigned && (
         <AppliedPlacement
@@ -569,6 +559,7 @@ function Targets({
           projectId={projectId}
           profile={profile}
           target={editing === "new" ? undefined : editing}
+          siblingTags={cloudTags(all, editing === "new" ? undefined : editing)}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null)
@@ -658,4 +649,112 @@ function AppliedPlacement({
       )}
     </section>
   )
+}
+
+/**
+ * TargetTable lists a Cloud's targets with the account each points at, under
+ * a summary of the accounts and providers they span.
+ */
+export function TargetTable({
+  targets: visible,
+  all,
+  connections: accounts,
+  manage,
+  onEdit: setEditing,
+}: {
+  targets: Target[]
+  all: Target[]
+  connections: Connection[]
+  manage: boolean
+  onEdit: (target: Target) => void
+}) {
+  return (
+    <div className="grid gap-2.5">
+      <AccountSummary targets={all} connections={accounts} />
+      <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
+        <div
+          aria-hidden="true"
+          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto] gap-4 border-b px-4 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase max-md:hidden"
+        >
+          <span>Target</span>
+          <span>Account</span>
+          <span>Region</span>
+          <span className="w-[86px]" />
+        </div>
+        <ul className="divide-y">
+          {[...visible]
+            .sort((a, b) =>
+              `${cloudOf(a, accounts)}:${a.connectionId}:${a.name}`.localeCompare(
+                `${cloudOf(b, accounts)}:${b.connectionId}:${b.name}`
+              )
+            )
+            .map((t) => {
+              const account = accounts.find((c) => c.id === t.connectionId)
+              const cloud = cloudOf(t, accounts)
+              return (
+                <li
+                  key={t.id}
+                  className="grid items-center gap-x-4 gap-y-2 px-4 py-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto]"
+                >
+                  <span className="grid min-w-0 gap-0.5">
+                    <span className="truncate text-[13px] font-medium">
+                      {t.displayName || t.name}
+                    </span>
+                    {t.displayName && t.displayName !== t.name && (
+                      <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+                        {t.name}
+                      </span>
+                    )}
+                    {(t.tags ?? []).length > 0 && (
+                      <span className="mt-1 flex flex-wrap gap-1">
+                        {t.tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="rounded-[5px] bg-brand-tint px-1.5 font-mono text-[11px] text-brand-ink"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <CloudGlyph cloud={cloud} size="sm" />
+                    <span className="grid min-w-0 gap-0.5">
+                      <span className="truncate text-[13px]">
+                        {account?.name ?? "An account that was removed"}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {cloudLabel(cloud)}
+                        {account?.account && ` · ${account.account}`}
+                      </span>
+                    </span>
+                  </span>
+                  <span className="truncate font-mono text-xs text-muted-foreground">
+                    {t.region || "Default"}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="justify-self-start md:justify-self-end"
+                    onClick={() => setEditing(t)}
+                  >
+                    {manage ? "Edit target" : "View target"}
+                  </Button>
+                </li>
+              )
+            })}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+/** cloudTags is every tag on a Cloud's targets except the one being edited. */
+export function cloudTags(targets: Target[], except?: Target): string[] {
+  return [
+    ...new Set(
+      targets.filter((t) => t.id !== except?.id).flatMap((t) => t.tags ?? [])
+    ),
+  ].sort()
 }

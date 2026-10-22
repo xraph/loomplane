@@ -21,6 +21,17 @@
         },
         "region": {
           "$ref": "#/$defs/region"
+        },
+        "cloud_tags": {
+          "description": "Select a Cloud target by tags for every service with no placement of its own. Can't be set with provider.",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+          }
         }
       }
     },
@@ -192,6 +203,17 @@
           "maxLength": 48,
           "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
         },
+        "cloud_tags": {
+          "description": "Select the one target in this environment's assigned Cloud that carries every tag. Can't be set with cloud_target.",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+          }
+        },
         "provider": {
           "$ref": "#/$defs/provider"
         },
@@ -297,6 +319,24 @@
             "$ref": "#/$defs/name"
           }
         },
+        "need_options": {
+          "description": "Options this service passes to a need, by need and then by option name. A need has to be listed in needs. What a need accepts is checked when you plan.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$"
+            }
+          }
+        },
         "environments": {
           "description": "Overrides in one environment, by name.",
           "type": "object",
@@ -311,6 +351,25 @@
               }
             ]
           }
+        }
+      }
+    },
+    "use": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "description": "A resource in this manifest to use for the dependency.",
+          "$ref": "#/$defs/name"
+        },
+        "external": {
+          "description": "A catalog endpoint to connect to instead, by ID.",
+          "type": "string",
+          "pattern": "^endpoint_[0-9a-z]{26}$"
+        },
+        "enabled": {
+          "description": "Turns an optional dependency on or off. Off can't be set with resource or external.",
+          "type": "boolean"
         }
       }
     },
@@ -336,6 +395,16 @@
           "description": "The engine's version, such as \"17\" for Postgres. Without it, the provider chooses.",
           "type": "string",
           "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$"
+        },
+        "uses": {
+          "description": "Where a catalog resource gets each dependency, by dependency name: a resource in this manifest, an external endpoint, or on or off for an optional one. A dependency left out gets a new one.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/use"
+          }
         },
         "environments": {
           "description": "Overrides in one environment, by name.",

@@ -8,6 +8,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
+	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -38,9 +39,9 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		if len(result.Missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, result.Details), planning.ReviewedConnectionSettings(e.Cloud, c.Details)) {
 			return nil, errors.New("cluster identity or namespace permissions changed; check the connection and plan again")
 		}
-		// Planning checks these when you review a database. A cluster admin can
-		// revoke them afterwards, so every session against the database checks again.
-		if labels[nativepg.LabelDatabase] != "" && result.Details["postgres_recovery_permissions"] != "ready" {
+		// Planning checks these when you review a database or a cache. A cluster
+		// admin can revoke them afterwards, so every session against one checks again.
+		if (labels[nativepg.LabelDatabase] != "" || labels[nativecache.LabelEngine] != "") && result.Details["postgres_recovery_permissions"] != "ready" {
 			return nil, errors.New("this database needs pod exec, network-policy and temporary-volume cleanup permissions; check the connection and plan again")
 		}
 		operation := labels[owned.LabelOperation]
@@ -56,10 +57,17 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		if activate && labels[owned.LabelScaleMin] != labels[owned.LabelScaleMax] && result.Details["hpa"] != "ready" {
 			return nil, errors.New("this workload needs HPA permissions and the metrics API")
 		}
+		if activate && labels[owned.LabelKubernetesRules] != "" && result.Details["rbac"] != "ready" {
+			return nil, errors.New("this component needs a Role to discover Services; let Loomplane create serviceaccounts, roles and rolebindings in the namespace, and get, list and watch services, endpoints and endpointslices, then check the connection and plan again")
+		}
 		client.Config.Details = result.Details
 		return client, nil
 	}
 }
 func (e *OwnedTarget) kubernetesBackend(org, connection string) owned.Backend {
-	return &kubernetes.Runtime{Session: e.kubernetesSession(org, connection), Values: e.values}
+	runtime := &kubernetes.Runtime{Session: e.kubernetesSession(org, connection), Values: e.values}
+	if e.Controllers != nil {
+		runtime.RecordController = e.Controllers.RecordController
+	}
+	return runtime
 }

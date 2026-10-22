@@ -1013,6 +1013,12 @@
           "resource": {
             "$ref": "#/components/schemas/ResourceConfig"
           },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudinfraRoute"
+            }
+          },
           "service": {
             "$ref": "#/components/schemas/ServiceConfig"
           },
@@ -1123,6 +1129,9 @@
           "account_identity": {
             "type": "string"
           },
+          "allocation": {
+            "type": "string"
+          },
           "assignment_revision": {
             "type": "integer"
           },
@@ -1132,8 +1141,29 @@
           "cloud_revision": {
             "type": "integer"
           },
+          "connection_generation": {
+            "type": "integer"
+          },
           "connection_id": {
             "type": "string"
+          },
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "pool_revision": {
+            "type": "integer"
           },
           "provider": {
             "type": "string"
@@ -1143,6 +1173,12 @@
           },
           "region_source": {
             "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "server_revision": {
+            "type": "integer"
           },
           "target_id": {
             "type": "string"
@@ -1155,9 +1191,187 @@
           }
         }
       },
+      "CloudinfraRoute": {
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/RouteBinding"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "input": {
+            "$ref": "#/components/schemas/RouteInput"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/DNSRecord"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/RouteVerification"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "input",
+          "binding",
+          "status",
+          "operation_id",
+          "verification",
+          "revision",
+          "updated_at"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.Route"
+      },
+      "ComponentConfig": {
+        "type": "object",
+        "required": [
+          "kind",
+          "resource",
+          "revision",
+          "component",
+          "protection"
+        ],
+        "properties": {
+          "component": {
+            "$ref": "#/components/schemas/ResolvedComponent"
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "protection": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "CompositionConfig": {
+        "type": "object",
+        "required": [
+          "kind",
+          "version",
+          "revision"
+        ],
+        "properties": {
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Output"
+            }
+          },
+          "revision": {
+            "type": "string"
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GeneratedSecret"
+            }
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "DNSRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "zone_id",
+          "name",
+          "type",
+          "value",
+          "ttl"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "zone_id": {
+            "type": "string"
+          }
+        }
+      },
+      "DefaultPlacement": {
+        "type": "object",
+        "required": [
+          "provider",
+          "connection_id",
+          "region"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      },
       "Defaults": {
         "type": "object",
         "properties": {
+          "cloud_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "provider": {
             "type": "string"
           },
@@ -1194,13 +1408,46 @@
           "address": {
             "type": "string"
           },
+          "field": {
+            "type": "string"
+          },
           "from": {
             "type": "string"
           },
           "key": {
             "type": "string"
           },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "EnvVar": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/Ref"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "template": {
+            "type": "string"
+          },
+          "value": {
             "type": "string"
           }
         }
@@ -1232,6 +1479,9 @@
             "type": "boolean"
           },
           "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
             "type": "string"
           },
           "routing_evidence": {
@@ -1297,6 +1547,20 @@
           }
         }
       },
+      "File": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "mode": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
       "Finding": {
         "type": "object",
         "required": [
@@ -1323,6 +1587,49 @@
             "type": "string"
           },
           "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "GatewayRoute": {
+        "properties": {
+          "env": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "strip_prefix": {
+            "type": "boolean"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "to",
+          "env"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/gateway.Route"
+      },
+      "GeneratedSecret": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
             "type": "string"
           }
         }
@@ -1355,6 +1662,21 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/graph.Summary"
       },
+      "HTTPProbe": {
+        "type": "object",
+        "required": [
+          "port",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "port": {
+            "type": "string"
+          }
+        }
+      },
       "Held": {
         "type": "object",
         "properties": {
@@ -1371,6 +1693,128 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "KubernetesRule": {
+        "type": "object",
+        "required": [
+          "api_groups",
+          "resources",
+          "verbs"
+        ],
+        "properties": {
+          "api_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verbs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ManagedDatabaseConfig": {
+        "type": "object",
+        "required": [
+          "profile",
+          "connection_id",
+          "account_identity"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ManagedDatabaseProfile"
+          }
+        }
+      },
+      "ManagedDatabaseProfile": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "provider",
+          "kind",
+          "version",
+          "compute_class",
+          "storage_gb",
+          "storage_type",
+          "storage_encrypted",
+          "availability",
+          "access",
+          "backup_retention_value",
+          "backup_retention_unit",
+          "point_in_time_recovery_days",
+          "final_backup",
+          "final_backup_retention_days",
+          "retain_automated_backups"
+        ],
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "availability": {
+            "type": "string"
+          },
+          "backup_retention_unit": {
+            "type": "string"
+          },
+          "backup_retention_value": {
+            "type": "integer"
+          },
+          "compute_class": {
+            "type": "string"
+          },
+          "final_backup": {
+            "type": "string"
+          },
+          "final_backup_retention_days": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "point_in_time_recovery_days": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "retain_automated_backups": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "storage_encrypted": {
+            "type": "boolean"
+          },
+          "storage_gb": {
+            "type": "integer"
+          },
+          "storage_type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
           }
         }
       },
@@ -1410,6 +1854,36 @@
           },
           "version": {
             "type": "integer"
+          }
+        }
+      },
+      "Output": {
+        "type": "object",
+        "required": [
+          "name",
+          "env_key"
+        ],
+        "properties": {
+          "env_key": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/components/schemas/Ref"
+          },
+          "name": {
+            "type": "string"
+          },
+          "per_consumer": {
+            "type": "boolean"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "template": {
+            "type": "string"
           }
         }
       },
@@ -1510,6 +1984,31 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
       },
+      "Port": {
+        "type": "object",
+        "required": [
+          "name",
+          "container",
+          "protocol"
+        ],
+        "properties": {
+          "container": {
+            "type": "integer"
+          },
+          "control": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "routable": {
+            "type": "boolean"
+          }
+        }
+      },
       "Recipe": {
         "type": "object",
         "required": [
@@ -1527,6 +2026,18 @@
           },
           "backup_format": {
             "type": "string"
+          },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "family": {
+            "type": "string"
+          },
+          "fs_group": {
+            "type": "integer"
           },
           "id": {
             "type": "string"
@@ -1548,6 +2059,107 @@
           }
         }
       },
+      "Ref": {
+        "type": "object",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "dependency": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolvedComponent": {
+        "type": "object",
+        "required": [
+          "name",
+          "role",
+          "resources",
+          "image",
+          "step"
+        ],
+        "properties": {
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/File"
+            }
+          },
+          "image": {
+            "type": "string"
+          },
+          "kubernetes_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KubernetesRule"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Port"
+            }
+          },
+          "protection": {
+            "type": "string"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/HTTPProbe"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/Resources"
+          },
+          "role": {
+            "type": "string"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "timeout": {
+            "type": "integer"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Volume"
+          }
+        }
+      },
       "ResourceConfig": {
         "type": "object",
         "required": [
@@ -1558,14 +2170,32 @@
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
+          "cloud_placement": {
+            "$ref": "#/components/schemas/CloudPlacement"
+          },
+          "component": {
+            "$ref": "#/components/schemas/ComponentConfig"
+          },
+          "composition": {
+            "$ref": "#/components/schemas/CompositionConfig"
+          },
           "kind": {
             "type": "string"
+          },
+          "managed": {
+            "$ref": "#/components/schemas/ManagedDatabaseConfig"
           },
           "provider": {
             "type": "string"
           },
           "region": {
             "type": "string"
+          },
+          "routable_ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
           },
           "target": {
             "type": "string"
@@ -1579,24 +2209,140 @@
           }
         }
       },
-      "Route": {
+      "Resources": {
         "type": "object",
         "required": [
-          "path",
-          "to",
-          "env"
+          "cpu_millis",
+          "memory_mb"
         ],
         "properties": {
-          "env": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_mb": {
+            "type": "integer"
+          }
+        }
+      },
+      "RouteBinding": {
+        "type": "object",
+        "required": [
+          "runtime_id",
+          "binding_id",
+          "config_digest",
+          "server_id",
+          "target_id",
+          "connection_id",
+          "connection_generation",
+          "instance_id",
+          "release_id",
+          "container_id",
+          "address"
+        ],
+        "properties": {
+          "address": {
             "type": "string"
           },
-          "path": {
+          "binding_id": {
             "type": "string"
           },
-          "strip_prefix": {
+          "config_digest": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "container_id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "runtime_id": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RouteInput": {
+        "type": "object",
+        "required": [
+          "zone_id",
+          "cloud_id",
+          "environment_id",
+          "service",
+          "hostname",
+          "port"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "external_ttl_seconds": {
+            "type": "integer"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "zone_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RouteVerification": {
+        "type": "object",
+        "required": [
+          "dns",
+          "tls",
+          "backend",
+          "checked_at",
+          "cert_expires"
+        ],
+        "properties": {
+          "backend": {
             "type": "boolean"
           },
-          "to": {
+          "backend_error": {
+            "type": "string"
+          },
+          "cert_expires": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dns": {
+            "type": "boolean"
+          },
+          "dns_error": {
+            "type": "string"
+          },
+          "tls": {
+            "type": "boolean"
+          },
+          "tls_error": {
             "type": "string"
           }
         }
@@ -1646,6 +2392,9 @@
           "commit_sha": {
             "type": "string"
           },
+          "component": {
+            "$ref": "#/components/schemas/ComponentConfig"
+          },
           "context": {
             "type": "string"
           },
@@ -1670,7 +2419,7 @@
           "gateway": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Route"
+              "$ref": "#/components/schemas/GatewayRoute"
             }
           },
           "health_path": {
@@ -1857,6 +2606,23 @@
           }
         }
       },
+      "Volume": {
+        "type": "object",
+        "required": [
+          "mount_path"
+        ],
+        "properties": {
+          "fs_group": {
+            "type": "integer"
+          },
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
+          }
+        }
+      },
       "Analysis": {
         "type": "object",
         "required": [
@@ -1988,6 +2754,9 @@
             "type": "string"
           },
           "org_id": {
+            "type": "string"
+          },
+          "physical_id": {
             "type": "string"
           },
           "plan_id": {
@@ -2138,6 +2907,7 @@
           "org_id",
           "project_id",
           "name",
+          "default_placement",
           "revision",
           "created_at",
           "updated_at"
@@ -2146,6 +2916,20 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "default_placement": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DefaultPlacement"
+              },
+              {
+                "type": "object",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "id": {
             "type": "string",
@@ -2222,6 +3006,7 @@
       "Target": {
         "type": "object",
         "required": [
+          "runtime",
           "id",
           "org_id",
           "project_id",
@@ -2231,6 +3016,7 @@
           "provider",
           "connection_id",
           "region",
+          "tags",
           "revision",
           "created_at",
           "updated_at"
@@ -2259,6 +3045,9 @@
           "org_id": {
             "type": "string"
           },
+          "pool_id": {
+            "type": "string"
+          },
           "project_id": {
             "type": "string"
           },
@@ -2271,6 +3060,15 @@
           "revision": {
             "type": "integer"
           },
+          "runtime": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
@@ -2280,6 +3078,7 @@
       "Connection": {
         "type": "object",
         "required": [
+          "generation",
           "id",
           "org_id",
           "cloud",
@@ -2295,6 +3094,9 @@
         ],
         "properties": {
           "account": {
+            "type": "string"
+          },
+          "account_identity": {
             "type": "string"
           },
           "checked_at": {
@@ -2313,6 +3115,9 @@
           "details": {
             "type": "object",
             "additionalProperties": true
+          },
+          "generation": {
+            "type": "integer"
           },
           "id": {
             "type": "string",
@@ -3092,6 +3897,9 @@
             "org_id": {
               "type": "string"
             },
+            "physical_id": {
+              "type": "string"
+            },
             "plan_id": {
               "type": "string"
             },
@@ -3189,6 +3997,9 @@
               "type": "string"
             },
             "org_id": {
+              "type": "string"
+            },
+            "physical_id": {
               "type": "string"
             },
             "plan_id": {
@@ -3357,6 +4168,7 @@
             "org_id",
             "project_id",
             "name",
+            "default_placement",
             "revision",
             "created_at",
             "updated_at"
@@ -3365,6 +4177,20 @@
             "created_at": {
               "type": "string",
               "format": "date-time"
+            },
+            "default_placement": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/DefaultPlacement"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
             },
             "id": {
               "type": "string",
@@ -3401,6 +4227,7 @@
             "org_id",
             "project_id",
             "name",
+            "default_placement",
             "revision",
             "created_at",
             "updated_at"
@@ -3409,6 +4236,20 @@
             "created_at": {
               "type": "string",
               "format": "date-time"
+            },
+            "default_placement": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/DefaultPlacement"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
             },
             "id": {
               "type": "string",
@@ -3497,6 +4338,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "runtime",
             "id",
             "org_id",
             "project_id",
@@ -3506,6 +4348,7 @@
             "provider",
             "connection_id",
             "region",
+            "tags",
             "revision",
             "created_at",
             "updated_at"
@@ -3534,6 +4377,9 @@
             "org_id": {
               "type": "string"
             },
+            "pool_id": {
+              "type": "string"
+            },
             "project_id": {
               "type": "string"
             },
@@ -3545,6 +4391,15 @@
             },
             "revision": {
               "type": "integer"
+            },
+            "runtime": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "updated_at": {
               "type": "string",
@@ -3561,6 +4416,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "runtime",
             "id",
             "org_id",
             "project_id",
@@ -3570,6 +4426,7 @@
             "provider",
             "connection_id",
             "region",
+            "tags",
             "revision",
             "created_at",
             "updated_at"
@@ -3598,6 +4455,9 @@
             "org_id": {
               "type": "string"
             },
+            "pool_id": {
+              "type": "string"
+            },
             "project_id": {
               "type": "string"
             },
@@ -3609,6 +4469,15 @@
             },
             "revision": {
               "type": "integer"
+            },
+            "runtime": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "updated_at": {
               "type": "string",
@@ -3625,6 +4494,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "generation",
             "id",
             "org_id",
             "cloud",
@@ -3640,6 +4510,9 @@
           ],
           "properties": {
             "account": {
+              "type": "string"
+            },
+            "account_identity": {
               "type": "string"
             },
             "checked_at": {
@@ -3658,6 +4531,9 @@
             "details": {
               "type": "object",
               "additionalProperties": true
+            },
+            "generation": {
+              "type": "integer"
             },
             "id": {
               "type": "string",
@@ -3696,6 +4572,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "generation",
             "id",
             "org_id",
             "cloud",
@@ -3711,6 +4588,9 @@
           ],
           "properties": {
             "account": {
+              "type": "string"
+            },
+            "account_identity": {
               "type": "string"
             },
             "checked_at": {
@@ -3729,6 +4609,9 @@
             "details": {
               "type": "object",
               "additionalProperties": true
+            },
+            "generation": {
+              "type": "integer"
             },
             "id": {
               "type": "string",

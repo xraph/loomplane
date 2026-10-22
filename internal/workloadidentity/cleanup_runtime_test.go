@@ -18,6 +18,10 @@ type cleanupAdminFixture struct {
 	closed atomic.Int32
 }
 
+func (*cleanupAdminFixture) RegisterWorkload(context.Context, WorkloadBinding) (*spiretypes.Entry, error) {
+	return nil, ErrIdentity
+}
+
 func (*cleanupAdminFixture) Health(context.Context) error { return nil }
 func (a *cleanupAdminFixture) Close() error               { a.closed.Add(1); return nil }
 
@@ -164,6 +168,11 @@ func TestCleanupRuntimeSharesAndFencesAdministrativeAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := bindingFixture(t)
+	workload := workloadBindingFixture(t)
+	workload.Binding.EntryID = "91234567-89ab-cdef-0123-456789abcdef"
+	if _, issueErr := runtime.RegisterWorkload(t.Context(), workload); issueErr == nil {
+		t.Fatal("workload authority available before startup")
+	}
 	if _, issueErr := runtime.Register(t.Context(), binding); issueErr == nil {
 		t.Fatal("authority available before startup")
 	}
@@ -180,7 +189,13 @@ func TestCleanupRuntimeSharesAndFencesAdministrativeAuthority(t *testing.T) {
 	if _, issueErr := runtime.Register(t.Context(), binding); issueErr != nil {
 		t.Fatal(issueErr)
 	}
+	if _, issueErr := runtime.RegisterWorkload(t.Context(), workload); issueErr != nil {
+		t.Fatal(issueErr)
+	}
 	if revokeErr := runtime.Revoke(t.Context(), binding.EntryID); revokeErr != nil {
+		t.Fatal(revokeErr)
+	}
+	if revokeErr := runtime.Revoke(t.Context(), workload.Binding.EntryID); revokeErr != nil {
 		t.Fatal(revokeErr)
 	}
 	if stopErr := runtime.Stop(t.Context()); stopErr != nil {
@@ -188,6 +203,9 @@ func TestCleanupRuntimeSharesAndFencesAdministrativeAuthority(t *testing.T) {
 	}
 	if _, issueErr := runtime.Register(t.Context(), binding); issueErr == nil {
 		t.Fatal("authority retained after shutdown")
+	}
+	if _, issueErr := runtime.RegisterWorkload(t.Context(), workload); issueErr == nil {
+		t.Fatal("workload authority retained after shutdown")
 	}
 	if _, readErr := runtime.GetAgent(t.Context(), nil); readErr == nil {
 		t.Fatal("parent reader retained after shutdown")

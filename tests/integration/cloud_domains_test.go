@@ -1,0 +1,559 @@
+//go:build integration
+
+package integration
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
+)
+
+type domainAuth struct{}
+
+func (domainAuth) Require(_ context.Context, p security.Principal, _ security.Permission, scope string) error {
+	if p.OrgID == "org" && p.UserID == "manager" && (scope == "org" || scope == "proj") {
+		return nil
+	}
+	return security.ErrForbidden
+}
+
+type domainDNS struct{ proof string }
+
+func (r *domainDNS) LookupTXT(context.Context, string) ([]string, error) {
+	return []string{r.proof}, nil
+}
+func (*domainDNS) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) { return nil, nil }
+
+type domainWorkflow struct {
+	infraWorkflow
+	routes int
+}
+
+func (w *domainWorkflow) StartRoute(context.Context, string, string, int) error {
+	w.routes++
+	return nil
+}
+
+func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
+	clouds, sql, db := cloudSyncDatabase(t)
+	ctx := t.Context()
+	store := cloudinfra.NewPgStore(db)
+	cs := connections.NewPgStore(db)
+	now := time.Now().UTC()
+	conn := &connections.Connection{ID: "runtime", OrgID: "org", Cloud: "server", Name: "Runtime", Status: "ready", Details: map[string]string{"host": "192.0.2.42", "docker_id": "daemon"}, CreatedAt: now, UpdatedAt: now}
+	if err := cs.CreateConnection(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	host := &cloudinfra.Server{ID: "host", OrgID: "org", CloudID: "cloud", Name: "Host", Ownership: "adopted", Provider: "server", AccountID: "daemon", ResourceID: "daemon", ConnectionID: "runtime", RuntimeConnectionID: "runtime", Revision: 1, Status: "ready"}
+	if err := store.SaveServer(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT)`,
+		`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`,
+		`INSERT INTO cp_instances VALUES('instance','org',NULL,'{"main":"container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
+		`UPDATE loomplane_cloud_targets SET provider='server',connection_id='runtime',revision=revision+1 WHERE id='target'`,
+		`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES('binding','org','proj','env','service','web','server','http','instance','runtime','{"cloud_placement":{"cloud_id":"cloud","target_id":"target","server_id":"host"},"port":8080}',now(),now())`,
+	} {
+		if _, err := sql.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver, workflow := &domainDNS{}, &domainWorkflow{}
+	svc := cloudinfra.NewService(cloudinfra.Deps{Store: store, Clouds: clouds, Authz: domainAuth{}, Resolver: resolver, Workflow: workflow})
+	p := security.Principal{OrgID: "org", UserID: "manager"}
+	zone, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "Example.COM.", Mode: "external", ProjectIDs: []string{"proj"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zone.Name != "example.com" || zone.ConnectionID != "" || !zone.VerifiedAt.IsZero() {
+		t.Fatal("unexpected external zone", zone)
+	}
+	input := cloudinfra.RouteInput{ZoneID: zone.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "APP.EXAMPLE.COM.", Port: 8080}
+	if _, err = svc.PreviewRoute(ctx, p, "proj", input); !errors.Is(err, cloudinfra.ErrNotFound) {
+		t.Fatal("unverified control accepted", err)
+	}
+	resolver.proof = zone.ProofValue
+	if zone, err = svc.VerifyZone(ctx, p, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.PreviewRoute(ctx, p, "proj", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Route.Input.Hostname != "app.example.com" || preview.DesiredRecord.Name != "app" || preview.DesiredRecord.Value != "192.0.2.42" {
+		t.Fatal("incorrect external instructions", preview)
+	}
+
+	// Loomplane Create has no controller release or deployment row. Its original
+	// service reference and revision label are the persisted runtime identity.
+	if preview.Route.Binding.ReleaseID != "deployment/action" || preview.Route.Binding.ContainerID != "container" {
+		t.Fatal("initial Create shape rejected", preview.Route.Binding)
+	}
+	for _, test := range []struct {
+		name, state, receipt, revision, ref string
+		valid                               bool
+	}{
+		{"successful update", "succeeded", "updated", "updated", "new-container", true},
+		{"in progress", "running", "updated", "updated", "new-container", false},
+		{"failed", "failed", "updated", "updated", "new-container", false},
+		{"stale receipt", "succeeded", "old", "updated", "new-container", false},
+		{"mismatched revision", "succeeded", "updated", "old", "new-container", false},
+		{"legacy missing receipt", "succeeded", "", "updated", "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, statementErr := sql.Exec(ctx, `INSERT INTO cp_deployments(id,tenant_id,instance_id,release_id,state,created_at) VALUES('older','org','instance','updated','succeeded',now()-interval '1 second'),('foreign','foreign','instance','updated','succeeded',now()+interval '1 second'),('other-instance','org','unrelated','updated','succeeded',now()+interval '1 second')`); statementErr != nil {
+				t.Fatal(statementErr)
+			}
+			if _, statementErr := sql.Exec(ctx, `INSERT INTO cp_deployments(id,tenant_id,instance_id,release_id,state) VALUES('update','org','instance','updated',$1)`, test.state); statementErr != nil {
+				t.Fatal(statementErr)
+			}
+			labels, _ := json.Marshal(map[string]string{"loomplane.revision": test.revision, "loomplane.runtime.receipt.release": test.receipt, "loomplane.runtime.receipt.service.main": test.ref})
+			if _, statementErr := sql.Exec(ctx, `UPDATE cp_instances SET labels=$1 WHERE id='instance'`, labels); statementErr != nil {
+				t.Fatal(statementErr)
+			}
+			binding, resolveErr := store.ResolveRouteBinding(ctx, "org", "proj", input)
+			if test.valid {
+				if resolveErr != nil || binding.ReleaseID != "updated" || binding.ContainerID != "new-container" {
+					t.Fatalf("updated receipt: %+v %v", binding, resolveErr)
+				}
+			} else if !errors.Is(resolveErr, cloudinfra.ErrConflict) {
+				t.Fatalf("unaccepted runtime identity: %+v %v", binding, resolveErr)
+			}
+			if resolveErr = store.ValidateRetainedRoute(ctx, preview.Route); resolveErr == nil {
+				t.Fatal("old runtime identity accepted after update")
+			}
+			if _, resolveErr = sql.Exec(ctx, `DELETE FROM cp_deployments`); resolveErr != nil {
+				t.Fatal(resolveErr)
+			}
+		})
+	}
+	if _, err = sql.Exec(ctx, `UPDATE cp_instances SET labels='{"loomplane.revision":"deployment/action"}' WHERE id='instance'`); err != nil {
+		t.Fatal(err)
+	}
+
+	accepted, err := svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err != nil || workflow.routes != 1 {
+		t.Fatalf("duplicate acceptance queued another operation: %v %d", err, workflow.routes)
+	}
+	second, err := svc.PreviewRoute(ctx, p, "proj", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", second.ID, cloudinfra.ApplyInput{Review: second.Review}); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("duplicate global hostname accepted", err)
+	}
+	if _, err = store.Zone(ctx, "foreign-org", zone.ID); !errors.Is(err, cloudinfra.ErrNotFound) {
+		t.Fatal("foreign zone disclosed", err)
+	}
+	if _, err = svc.GetRouteOperation(ctx, security.Principal{OrgID: "foreign-org", UserID: "manager"}, "proj", accepted.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatal("foreign operation disclosed", err)
+	}
+	if _, err = svc.GetRouteOperation(ctx, p, "other-project", accepted.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatal("other project's operation disclosed", err)
+	}
+	used, err := store.ServerInUse(ctx, host)
+	if err != nil || !used {
+		t.Fatalf("pending route did not retain runtime: %v %v", used, err)
+	}
+	if err = store.RetireServer(ctx, host); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("server retired under accepted route", err)
+	}
+	if _, err = sql.Exec(ctx, `DELETE FROM loomplane_dns_zones WHERE id=$1`, zone.ID); err == nil {
+		t.Fatal("zone deleted under live claim")
+	}
+	if _, err = sql.Exec(ctx, `DELETE FROM loomplane_projects WHERE id='proj'`); err == nil {
+		t.Fatal("project deletion silently orphaned route")
+	}
+	state1, err := store.BeginIngress(ctx, accepted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := *accepted
+	state2, err := store.BeginIngress(ctx, accepted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state2.Generation <= state1.Generation || store.SaveIngress(ctx, &stale, state1) == nil {
+		t.Fatal("stale ingress worker published config")
+	}
+	accepted.Route.Status = "waiting"
+	if err = store.PublishRoute(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.RouteOperation(ctx, "org", accepted.ID)
+	if err != nil || recovered.Route.Revision != accepted.Route.Revision {
+		t.Fatalf("publication did not atomically checkpoint route revision: %v", err)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_route_operations SET body=jsonb_set(body,'{route,input,hostname}','"attacker.example.com"') WHERE id=$1`, accepted.ID); err == nil {
+		t.Fatal("accepted hostname intent was mutable")
+	}
+	public, err := json.Marshal(recovered)
+	if err != nil || string(public) == "" {
+		t.Fatal(err)
+	}
+	var exposed map[string]any
+	if err = json.Unmarshal(public, &exposed); err != nil {
+		t.Fatal(err)
+	}
+	binding := exposed["route"].(map[string]any)["binding"].(map[string]any)
+	if _, present := binding["config"]; present {
+		t.Fatal("route API exposed the applied config snapshot")
+	}
+
+	// The handoff API accepts only the now-current binding and keeps the old
+	// route independently. These fixtures exercise persistence, not proxy I/O.
+	accepted.Route.Status = "ready"
+	accepted.Receipt = &provider.DNSRecord{ID: "source-receipt", Name: "app", Type: "A", Value: "192.0.2.42", TTL: 300}
+	if err = store.PublishRoute(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	accepted.Status = "succeeded"
+	if err = store.SaveRouteOperation(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	conn2 := *conn
+	conn2.ID = "runtime2"
+	conn2.Name = "Destination"
+	conn2.Details = map[string]string{"host": "192.0.2.43", "docker_id": "daemon2"}
+	if err = cs.CreateConnection(ctx, &conn2); err != nil {
+		t.Fatal(err)
+	}
+	host2 := *host
+	host2.ID = "host2"
+	host2.ConnectionID = "runtime2"
+	host2.RuntimeConnectionID = "runtime2"
+	host2.ResourceID = "daemon2"
+	if err = store.SaveServer(ctx, &host2); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO cp_instances VALUES('destination','org',NULL,'{"main":"destination-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
+		`UPDATE loomplane_bindings SET external_id='destination',connection_id='runtime2',config=jsonb_set(config,'{cloud_placement,server_id}','"host2"') WHERE id='binding'`,
+	} {
+		if _, err = sql.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepared, err := svc.PrepareRouteHandoff(ctx, p, "proj", accepted.Route.ID, cloudinfra.HandoffInput{Revision: accepted.Route.Revision, DestinationCloudID: "cloud"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, historyErr := svc.RouteHistory(ctx, p, "proj", accepted.Route.ID)
+	if historyErr != nil || len(history) == 0 || history[0].ID != prepared.ID {
+		t.Fatal("lost response could not recover accepted handoff", historyErr)
+	}
+	current, err := store.Route(ctx, "org", "proj", accepted.Route.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Binding.ServerID != "host" || prepared.Route.Binding.ServerID != "host2" || prepared.Source.Binding.ServerID != "host" {
+		t.Fatal("preparation changed source claim")
+	}
+	if _, err = svc.RemoveRoute(ctx, p, "proj", current.ID, current.Revision); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("removal discarded pending source handoff", err)
+	}
+	prepared.Status = "succeeded"
+	prepared.AppliedConfig = &server.IngressSnapshot{ContainerID: "proxy", ETag: "prepared"}
+	prepared.DesiredConfig = &server.IngressConfig{OrgID: "org", ServerID: "host2", Version: prepared.ID}
+	if err = store.SaveRouteOperation(ctx, prepared); err != nil {
+		t.Fatal(err)
+	}
+	cutover, err := svc.CutoverRoute(ctx, p, "proj", prepared.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Failure before DNS must retain the source receipt through rollback.
+	cutover.Status = "failed"
+	if err = store.SaveRouteOperation(ctx, cutover); err != nil {
+		t.Fatal(err)
+	}
+	preDNSRollback, preDNSErr := svc.RollbackRoute(ctx, p, "proj", cutover.ID)
+	if preDNSErr != nil {
+		t.Fatal(preDNSErr)
+	}
+	if preDNSRollback.PreviousReceipt == nil || preDNSRollback.PreviousReceipt.ID != "source-receipt" || preDNSRollback.DesiredRecord.ID != "source-receipt" || preDNSRollback.DesiredRecord.TTL != 300 {
+		t.Fatal("pre-DNS rollback lost source receipt")
+	}
+	// Explicit completed fixture, as with proxy snapshots in this database test.
+	preDNSRollback.Status = "succeeded"
+	if err = store.SaveRouteOperation(ctx, preDNSRollback); err != nil {
+		t.Fatal(err)
+	}
+	cutover, err = svc.CutoverRoute(ctx, p, "proj", prepared.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.BeginIngress(ctx, cutover); err != nil {
+		t.Fatal(err)
+	}
+	cutover.Route.Status = "ready"
+	cutover.Receipt = &provider.DNSRecord{ID: "rotated-receipt", Name: "app", Type: "A", Value: "192.0.2.43", TTL: 60}
+	if err = store.PublishRoute(ctx, cutover); err != nil {
+		t.Fatal(err)
+	}
+	cutover.Status = "succeeded"
+	if err = store.SaveRouteOperation(ctx, cutover); err != nil {
+		t.Fatal(err)
+	}
+	if used, err = store.ServerInUse(ctx, host); err != nil || !used {
+		t.Fatal("cutover discarded retained source", err)
+	}
+
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ValidateRouteCleanup(ctx, cutover.Route); err != nil {
+		t.Fatal("revoked cutover denied exact cleanup", err)
+	}
+	if _, err = svc.RollbackRoute(ctx, p, "proj", cutover.ID); err == nil {
+		t.Fatal("revoked cutover authorized rollback")
+	}
+	revokeRelease, revokeErr := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 60)
+	if revokeErr != nil {
+		t.Fatal("revoked cutover denied release", revokeErr)
+	}
+	if revokeRelease.Source.Binding.ServerID != "host" || revokeRelease.Route.Binding.ServerID != "host2" {
+		t.Fatal("release targeted active destination")
+	}
+	// Cancel this unexecuted fixture so the rollback branch can also be covered.
+	revokeRelease.Status = "cancelled"
+	if err = store.SaveRouteOperation(ctx, revokeRelease); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=false,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
+	}
+	rolled, err := svc.RollbackRoute(ctx, p, "proj", cutover.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolled.Route.Binding.ServerID != "host" {
+		t.Fatal("rollback lost original destination")
+	}
+	if _, err = store.BeginIngress(ctx, rolled); err != nil {
+		t.Fatal(err)
+	}
+	rolled.Route.Status = "ready"
+	if rolled.PreviousReceipt == nil || rolled.PreviousReceipt.ID != "rotated-receipt" {
+		t.Fatal("rollback lost latest DNS receipt")
+	}
+	rolled.Receipt = &provider.DNSRecord{ID: "rollback-receipt", Name: "app", Type: "A", Value: "192.0.2.42", TTL: 60}
+	if err = store.PublishRoute(ctx, rolled); err != nil {
+		t.Fatal(err)
+	}
+	rolled.Status = "succeeded"
+	if err = store.SaveRouteOperation(ctx, rolled); err != nil {
+		t.Fatal(err)
+	}
+
+	// Revocation and credential rotation do not grant fresh route work, but exact
+	// retained cleanup is still authorized for the active runtime.
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_connections SET generation=generation+1 WHERE id='runtime'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ValidateRetainedRoute(ctx, rolled.Route); err == nil {
+		t.Fatal("revocation authorized new rollback")
+	}
+	if err = store.ValidateRouteCleanup(ctx, rolled.Route); err != nil {
+		t.Fatal("retained cleanup denied after revoke/rotate", err)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_connections SET details=jsonb_set(details,'{docker_id}','"replacement"') WHERE id='runtime'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ValidateRouteCleanup(ctx, rolled.Route); err == nil {
+		t.Fatal("cleanup accepted replaced runtime")
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_connections SET details=jsonb_set(details,'{docker_id}','"daemon"') WHERE id='runtime'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RollbackRoute(ctx, p, "proj", cutover.ID); err == nil {
+		t.Fatal("revoked grant authorized rollback")
+	}
+	released, err := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !released.NotBefore.Equal(rolled.Route.UpdatedAt.Add(300 * time.Second)) {
+		t.Fatal("prior source TTL was shortened", released.NotBefore)
+	}
+	if released.Source.Binding.ServerID != "host2" || released.NotBefore.IsZero() {
+		t.Fatal("release lost inactive identity or TTL gate")
+	}
+	if err = store.CompleteHandoff(ctx, released); err != nil {
+		t.Fatal(err)
+	}
+	released.Status = "succeeded"
+	if err = store.SaveRouteOperation(ctx, released); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.CutoverRoute(ctx, p, "proj", prepared.ID); err == nil {
+		t.Fatal("released handoff reused stale source authority")
+	}
+
+	var activeHolds, inactiveHolds int
+	if err = sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_connection_uses WHERE kind='domain_route' AND owner_id=$1`, rolled.Route.ID).Scan(&activeHolds); err != nil {
+		t.Fatal(err)
+	}
+	if err = sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_connection_uses WHERE kind='route_handoff' AND owner_id=$1`, prepared.ID).Scan(&inactiveHolds); err != nil {
+		t.Fatal(err)
+	}
+	if activeHolds != 1 || inactiveHolds != 0 {
+		t.Fatalf("cleanup changed active hold: %d %d", activeHolds, inactiveHolds)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=false,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// A same-server candidate can be abandoned after either failed or successful
+	// preparation, without restoring its Cloud grant or changing the source.
+	if _, err = sql.Exec(ctx, `INSERT INTO cp_instances VALUES('same-server-candidate','org',NULL,'{"main":"candidate-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, prepareStatus := range []string{"failed", "succeeded"} {
+		t.Run("abandon_same_server_"+prepareStatus, func(t *testing.T) {
+			sourceInput := input
+			sourceInput.Hostname = prepareStatus + ".example.com"
+			previewSame, previewErr := svc.PreviewRoute(ctx, p, "proj", sourceInput)
+			if previewErr != nil {
+				t.Fatal(previewErr)
+			}
+			sourceOp, sourceErr := svc.ApplyRoute(ctx, p, "proj", previewSame.ID, cloudinfra.ApplyInput{Review: previewSame.Review})
+			if sourceErr != nil {
+				t.Fatal(sourceErr)
+			}
+			if _, err = store.BeginIngress(ctx, sourceOp); err != nil {
+				t.Fatal(err)
+			}
+			sourceOp.Route.Status = "ready"
+			if err = store.PublishRoute(ctx, sourceOp); err != nil {
+				t.Fatal(err)
+			}
+			sourceOp.Status = "succeeded"
+			if err = store.SaveRouteOperation(ctx, sourceOp); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sql.Exec(ctx, `UPDATE loomplane_bindings SET external_id='same-server-candidate' WHERE id='binding'`); err != nil {
+				t.Fatal(err)
+			}
+			prep, prepErr := svc.PrepareRouteHandoff(ctx, p, "proj", sourceOp.Route.ID, cloudinfra.HandoffInput{Revision: sourceOp.Route.Revision, DestinationCloudID: "cloud"})
+			if prepErr != nil {
+				t.Fatal(prepErr)
+			}
+			if prep.Route.Binding.ServerID != prep.Source.Binding.ServerID {
+				t.Fatal("fixture is not same-server")
+			}
+			prep.Status = prepareStatus
+			prep.DesiredConfig = &server.IngressConfig{OrgID: "org", ServerID: "host2", Version: prep.ID}
+			if err = store.SaveRouteOperation(ctx, prep); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+				t.Fatal(err)
+			}
+			abandoned, abandonErr := svc.ReleaseRouteHandoff(ctx, p, "proj", prep.ID, 60)
+			if abandonErr != nil {
+				t.Fatal(abandonErr)
+			}
+			if abandoned.Route.Binding.InstanceID != "destination" || abandoned.Source.Binding.InstanceID != "same-server-candidate" {
+				t.Fatal("abandonment selected wrong active binding")
+			}
+			if err = store.ValidateRouteCleanup(ctx, abandoned.Route); err != nil {
+				t.Fatal("revoked grant blocked cleanup", err)
+			}
+			// Checkpoint the cleanup-only CAS intent, then read it as a resumed worker.
+			abandoned.DesiredConfig = &server.IngressConfig{OrgID: "org", ServerID: "host2", Version: abandoned.ID + "-abandoned"}
+			abandoned.PreviousConfig = &server.IngressSnapshot{ContainerID: "proxy", ETag: "prepared"}
+			if err = store.SaveRouteOperation(ctx, abandoned); err != nil {
+				t.Fatal(err)
+			}
+			resumed, resumeErr := store.RouteOperation(ctx, "org", abandoned.ID)
+			if resumeErr != nil {
+				t.Fatal(resumeErr)
+			}
+			if resumed.DesiredConfig == nil || resumed.DesiredConfig.Version != abandoned.DesiredConfig.Version || resumed.PreviousConfig.ETag != "prepared" {
+				t.Fatal("cleanup CAS intent was lost")
+			}
+			if err = store.CompleteHandoff(ctx, resumed); err != nil {
+				t.Fatal(err)
+			}
+			resumed.Status = "succeeded"
+			if err = store.SaveRouteOperation(ctx, resumed); err != nil {
+				t.Fatal(err)
+			}
+			stillActive, activeErr := store.Route(ctx, "org", "proj", sourceOp.Route.ID)
+			if activeErr != nil || stillActive.Binding != sourceOp.Route.Binding {
+				t.Fatal("cleanup published a different active binding", activeErr)
+			}
+			var holds int
+			if err = sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_connection_uses WHERE kind='route_handoff' AND owner_id=$1`, prep.ID).Scan(&holds); err != nil || holds != 0 {
+				t.Fatal("abandoned preparation retained holds", err)
+			}
+			if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=false,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sql.Exec(ctx, `UPDATE loomplane_bindings SET external_id='destination' WHERE id='binding'`); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	input.Hostname = "other.example.com"
+	changed, err := svc.PreviewRoute(ctx, p, "proj", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recoveryInput := input
+	recoveryInput.Hostname = "recovery.example.com"
+	recoveryPreview, recoveryErr := svc.PreviewRoute(ctx, p, "proj", recoveryInput)
+	if recoveryErr != nil {
+		t.Fatal(recoveryErr)
+	}
+	recoveryOp, recoveryErr := svc.ApplyRoute(ctx, p, "proj", recoveryPreview.ID, cloudinfra.ApplyInput{Review: recoveryPreview.Review})
+	if recoveryErr != nil {
+		t.Fatal(recoveryErr)
+	}
+	recoveryOp.Status = "failed"
+	recoveryOp.DesiredConfig = &server.IngressConfig{OrgID: "org", ServerID: "host2", Version: "lost-save"}
+	recoveryOp.PreviousConfig = &server.IngressSnapshot{ContainerID: "proxy", ETag: "before"}
+	if err = store.SaveRouteOperation(ctx, recoveryOp); err != nil {
+		t.Fatal(err)
+	}
+	removal, removeErr := svc.RemoveRoute(ctx, p, "proj", recoveryOp.Route.ID, recoveryOp.Route.Revision)
+	if removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	reloaded, reloadErr := store.RouteOperation(ctx, "org", removal.ID)
+	if reloadErr != nil {
+		t.Fatal(reloadErr)
+	}
+	if reloaded.CancelledIngress == nil || reloaded.CancelledIngress.Desired.Version != "lost-save" || reloaded.CancelledIngress.Previous.ETag != "before" {
+		t.Fatal("cancel lost ingress intent")
+	}
+	cancelled, cancelErr := store.RouteOperation(ctx, "org", recoveryOp.ID)
+	if cancelErr != nil || cancelled.Status != "cancelled" {
+		t.Fatal("old operation not cancelled", cancelErr)
+	}
+	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", changed.ID, cloudinfra.ApplyInput{Review: changed.Review}); err == nil {
+		t.Fatal("revoked Cloud grant admitted a route")
+	}
+}

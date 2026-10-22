@@ -9,6 +9,10 @@ package providers
 import (
 	"slices"
 
+	"github.com/xraph/loomplane/internal/clouds/digitalocean"
+	"github.com/xraph/loomplane/internal/clouds/vercel"
+	"github.com/xraph/loomplane/internal/manageddb"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -29,12 +33,28 @@ var (
 	// App Platform's regions. Managed Databases go in each one's
 	// datacenter.
 	digitalOceanRegions = []string{"nyc", "sfo", "tor", "atl", "ams", "fra", "lon", "blr", "sgp", "syd"}
+	// Regions with Container Apps and ACR Tasks.
+	azureRegions = []string{
+		"eastus", "eastus2", "centralus", "westus2", "westus3", "canadacentral", "brazilsouth",
+		"northeurope", "westeurope", "uksouth", "francecentral", "germanywestcentral", "swedencentral",
+		"japaneast", "koreacentral", "southeastasia", "centralindia", "australiaeast",
+	}
 )
 
+// builtinKinds are the engines whose provisions are listed literally for
+// the server and Kubernetes targets. Every other registered kind is added
+// after them.
+var builtinKinds = []string{"postgres", "mysql", "mariadb", "redis", "valkey"}
+
 // Catalog returns the built-in targets, in the order a person choosing one
-// should see them.
+// should see them. The server and Kubernetes targets also offer every kind
+// registered in internal/recipes that runs on them.
 func Catalog() []provider.Provider {
-	return []provider.Provider{
+	return catalogWith(recipes.Default())
+}
+
+func catalogWith(kinds *recipes.Registry) []provider.Provider {
+	all := []provider.Provider{
 		{
 			Name: "vercel", Title: "Vercel", Cloud: "vercel",
 			BuildLogs:   "streamed",
@@ -116,6 +136,23 @@ func Catalog() []provider.Provider {
 			Available: true,
 		},
 		{
+			Name: "azure-container-apps", Title: "Azure Container Apps", Cloud: "azure",
+			BuildLogs: "unavailable", LogNote: "ACR Tasks' build logs are under Services, Tasks, Runs in the container registry Loomplane makes; progress remains available.",
+			Description: "Builds a service with ACR Tasks, from its Dockerfile or with Google's buildpacks, and runs it on Azure Container Apps, which scales it with traffic, down to zero if you let it.",
+			Model:       provider.Build,
+			Runs: []provider.Runs{
+				{Workload: provider.HTTPService, Execution: provider.Container, Creates: "Container app"},
+				{Workload: provider.WebApp, Execution: provider.Container, Creates: "Container app"},
+				{Workload: provider.Worker, Execution: provider.Container, Creates: "Container app with no ingress"},
+				{Workload: provider.StaticSite, Execution: provider.Container, Creates: "Container app serving the built site"},
+			},
+			Regions: azureRegions, Scaling: true,
+			// Built and run by a Loomplane adapter (internal/deployments,
+			// internal/clouds/azure), each build pinned to the approved
+			// commit's source.
+			Available: true,
+		},
+		{
 			Name: "cross-cloud-vpn", Title: "Cross-cloud VPN", Cloud: "gcp",
 			Description: "Links an environment's Google Cloud network to its AWS VPC with an HA VPN: four IPsec tunnels with BGP, so Cloud Run services reach private services and databases on AWS.",
 			Model:       provider.Managed,
@@ -127,7 +164,7 @@ func Catalog() []provider.Provider {
 			Description: "Managed Postgres and MySQL on Google Cloud.",
 			Model:       provider.Managed,
 			Provisions: []provider.Provisions{
-				{Kind: "postgres", Creates: "Cloud SQL for PostgreSQL instance", Versions: []string{"17", "16", "15"}},
+				{Kind: "postgres", Creates: "Cloud SQL for PostgreSQL instance", Versions: []string{"17", "16", "15"}, ManagedProfiles: manageddb.Profiles("cloud-sql")},
 				{Kind: "mysql", Creates: "Cloud SQL for MySQL instance", Versions: []string{"8.4", "8.0"}},
 			},
 			Regions: gcpRegions,
@@ -160,7 +197,7 @@ func Catalog() []provider.Provider {
 			Description: "Managed Postgres and MySQL on AWS.",
 			Model:       provider.Managed,
 			Provisions: []provider.Provisions{
-				{Kind: "postgres", Creates: "RDS for PostgreSQL instance", Versions: []string{"17", "16", "15"}},
+				{Kind: "postgres", Creates: "RDS for PostgreSQL instance", Versions: []string{"17", "16", "15"}, ManagedProfiles: manageddb.Profiles("rds")},
 				{Kind: "mysql", Creates: "RDS for MySQL instance", Versions: []string{"8.4", "8.0"}},
 			},
 			Regions: awsRegions,
@@ -189,6 +226,31 @@ func Catalog() []provider.Provider {
 			Available: true,
 		},
 		{
+			Name: "azure-database", Title: "Azure Database for PostgreSQL and MySQL", Cloud: "azure",
+			Description: "Managed Postgres and MySQL flexible servers on Azure, reached over TLS from Azure's services.",
+			Model:       provider.Managed,
+			Provisions: []provider.Provisions{
+				{Kind: "postgres", Creates: "Azure Database for PostgreSQL flexible server", Versions: []string{"17", "16", "15"}},
+				{Kind: "mysql", Creates: "Azure Database for MySQL flexible server", Versions: []string{"8.4", "8.0.21"}},
+			},
+			Regions: azureRegions,
+			// Provisioned by Loomplane with public access and a firewall
+			// rule that lets in Azure's services (internal/deployments,
+			// internal/clouds/azure).
+			Available: true,
+		},
+		{
+			Name: "azure-managed-redis", Title: "Azure Managed Redis", Cloud: "azure",
+			Description: "Managed Redis on Azure, reached over TLS with an access key.",
+			Model:       provider.Managed,
+			Provisions:  []provider.Provisions{{Kind: "redis", Creates: "Azure Managed Redis cluster"}},
+			Regions:     azureRegions,
+			// Provisioned by Loomplane on the smallest Balanced size, its
+			// key read from Azure on every apply (internal/deployments,
+			// internal/clouds/azure).
+			Available: true,
+		},
+		{
 			Name: "server", Title: "Existing server", Cloud: "server",
 			BuildLogs:   "streamed",
 			Description: "Runs a service container on the Docker daemon of the SSH server you choose.",
@@ -213,6 +275,35 @@ func Catalog() []provider.Provider {
 			Available:  true,
 		},
 	}
+	for i := range all {
+		switch all[i].Cloud {
+		case "digitalocean":
+			all[i].Infrastructure = digitalocean.InfrastructureCapabilities()
+		case "vercel":
+			all[i].Infrastructure = vercel.InfrastructureCapabilities()
+		case "server", "kubernetes":
+			all[i].Provisions = append(all[i].Provisions, registeredProvisions(kinds, all[i].Cloud)...)
+		}
+	}
+	return all
+}
+
+// registeredProvisions describes the registered kinds, other than the five
+// built-in engines, that run on the cloud. A dependency-only kind is only
+// provisioned for another kind, so it isn't offered on its own.
+func registeredProvisions(kinds *recipes.Registry, cloud string) []provider.Provisions {
+	var out []provider.Provisions
+	for _, info := range kinds.Kinds() {
+		if slices.Contains(builtinKinds, info.Name) || !slices.Contains(info.Targets, cloud) || info.Placement == recipes.PlacementDependency {
+			continue
+		}
+		out = append(out, provider.Provisions{
+			Kind:     info.Name,
+			Creates:  info.Title + " catalog service",
+			Versions: slices.Clone(info.Versions),
+		})
+	}
+	return out
 }
 
 func containerWorkloads(creates string) []provider.Runs {

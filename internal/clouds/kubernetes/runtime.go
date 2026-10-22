@@ -27,10 +27,11 @@ var ErrOwned = errors.New("the matching Kubernetes resource is not owned by this
 
 type Session func(context.Context, map[string]string) (*Client, error)
 type Runtime struct {
-	Session   Session
-	Values    owned.Values
-	WaitReady func(context.Context, *Client, string) error
-	Wait      time.Duration
+	Session          Session
+	Values           owned.Values
+	WaitReady        func(context.Context, *Client, string) error
+	RecordController func(context.Context, ControllerReceipt) error
+	Wait             time.Duration
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -177,10 +178,16 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	meta := func(name string) metav1.ObjectMeta {
 		return metav1.ObjectMeta{Name: name, Namespace: ns, Labels: maps.Clone(identity)}
 	}
-	runtimeSecret := &corev1.Secret{ObjectMeta: meta(name + "-runtime"), Type: corev1.SecretTypeOpaque, Data: map[string][]byte{}}
-	for key, value := range values.Env {
-		runtimeSecret.Data[key] = []byte(value)
+	data, err := runtimeSecretData(values)
+	if err != nil {
+		return nil, err
 	}
+	// The account comes first so a refused rule changes nothing else.
+	account, err := r.applyAccess(ctx, c, iid, labels)
+	if err != nil {
+		return nil, err
+	}
+	runtimeSecret := &corev1.Secret{ObjectMeta: meta(name + "-runtime"), Type: corev1.SecretTypeOpaque, Data: data}
 	mutated = true
 	if old.runtime != nil {
 		runtimeSecret.ResourceVersion = old.runtime.ResourceVersion
@@ -201,7 +208,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		}
 	}
 
-	template, servicePorts, err := runtimePod(spec, labels, values, runtimeSecret, pulls)
+	template, servicePorts, err := runtimePod(spec, labels, values, runtimeSecret, pulls, account)
 	if err != nil {
 		return nil, err
 	}
@@ -300,6 +307,12 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	if checkErr := wait(ctx, c, name); checkErr != nil {
 		return nil, checkErr
+	}
+	if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
+		return nil, recordErr
+	}
+	if dropErr := r.dropAccess(ctx, c, iid, labels); dropErr != nil {
+		return nil, dropErr
 	}
 	endpoints := []cpprovider.Endpoint{}
 	for _, port := range servicePorts {
@@ -449,7 +462,7 @@ func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]strin
 			}
 		}
 	}
-	return nil
+	return r.removeAccess(ctx, c, iid, labels)
 }
 func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]string, running bool) error {
 	replicas := 0

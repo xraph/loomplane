@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_NativeSource: Codec = {"kind": "object", "fields": {"captured_at": {"ts": "capturedAt"}, "checked_at": {"ts": "checkedAt"}, "complete": {"ts": "complete"}, "connection_id": {"ts": "connectionId"}, "environment_id": {"ts": "environmentId"}, "error": {"ts": "error"}, "id": {"ts": "id"}, "name": {"ts": "name"}, "observed_at": {"ts": "observedAt"}, "org_id": {"ts": "orgId"}, "physical_id": {"ts": "physicalId"}, "project_id": {"ts": "projectId"}, "provider": {"ts": "provider"}, "region": {"ts": "region"}, "state": {"ts": "state"}}, "required": ["captured_at", "complete", "connection_id", "environment_id", "id", "name", "org_id", "physical_id", "project_id", "provider", "region", "state"]};

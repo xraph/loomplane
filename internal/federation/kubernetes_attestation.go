@@ -93,6 +93,9 @@ func validAttestationProfile(p KubernetesAttestationProfile) bool {
 // Resolve reads fresh namespace, pod, node and SPIRE parent evidence. Enrollment
 // permissions are separate from the observer's namespace-scoped runtime RBAC.
 func (r *KubernetesAttestationResolver) Resolve(ctx context.Context, d domain.Destination) (workloadidentity.Binding, error) {
+	return r.resolve(ctx, d, nil)
+}
+func (r *KubernetesAttestationResolver) resolve(ctx context.Context, d domain.Destination, verifyPod func(context.Context, *corev1.Pod, *corev1.Node) error) (workloadidentity.Binding, error) {
 	denied := workloadidentity.Binding{}
 	if err := ctx.Err(); err != nil {
 		return denied, err
@@ -167,6 +170,11 @@ func (r *KubernetesAttestationResolver) Resolve(ctx context.Context, d domain.De
 	}
 	if !currentPod(spirePod, selectors["agent_pod_uid"], p.SPIREServiceAccount) || spirePod.Spec.NodeName != pod.Spec.NodeName {
 		return denied, ErrUnverified
+	}
+	if verifyPod != nil {
+		if err := verifyPod(ctx, pod, node); err != nil {
+			return denied, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return denied, err
