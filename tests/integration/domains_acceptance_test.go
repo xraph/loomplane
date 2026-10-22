@@ -75,8 +75,10 @@ type cloudflareGuard struct {
 	refused []string
 }
 
-// zoneWrite is a request that changes a zone, or with records a DNS record
-// in one. The zones API is the production account's even in sandbox mode.
+// zoneWrite is a request that changes a zone, or without records a DNS
+// record in one. The zones API is the production account's even in sandbox
+// mode. The connection check's DNS Write probe, a record Cloudflare can only
+// refuse, still goes through.
 func zoneWrite(r *http.Request, records bool) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		return false
@@ -89,29 +91,62 @@ func zoneWrite(r *http.Request, records bool) bool {
 	if strings.Count(strings.Trim(rest, "/"), "/") < 1 {
 		return true
 	}
-	return !records
+	return !records && !dnsWriteProbe(r, rest)
+}
+
+// dnsWriteProbe is the connection check's DNS Write probe: a POST to
+// /zones/{id}/dns_records naming the probe record and its invalid content.
+// It reads the body and puts it back for Cloudflare.
+func dnsWriteProbe(r *http.Request, rest string) bool {
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if r.Method != http.MethodPost || len(parts) != 2 || parts[0] == "" || parts[1] != "dns_records" || r.Body == nil {
+		return false
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if err != nil {
+		return false
+	}
+	var record struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+	return json.Unmarshal(raw, &record) == nil && record.Name == "_loomplane-permission-probe" && record.Content == "permission-probe"
 }
 
 func TestCloudflareGuardRefusesZoneWrites(t *testing.T) {
+	probe := `{"type":"A","name":"_loomplane-permission-probe","content":"permission-probe","ttl":60,"proxied":false}`
 	for _, tc := range []struct {
-		method, path string
-		records      bool
-		refused      bool
+		method, path, body string
+		records            bool
+		refused            bool
 	}{
-		{http.MethodPost, "/client/v4/zones", true, true},
-		{http.MethodPatch, "/client/v4/zones/z1", true, true},
-		{http.MethodDelete, "/client/v4/zones/z1/", true, true},
-		{http.MethodGet, "/client/v4/zones", false, false},
-		{http.MethodPost, "/client/v4/zones/z1/dns_records", true, false},
-		{http.MethodPost, "/client/v4/zones/z1/dns_records", false, true},
-		{http.MethodPut, "/client/v4/zones/z1/dns_records/r1", false, true},
-		{http.MethodGet, "/client/v4/zones/z1/dns_records", false, false},
-		{http.MethodPost, "/client/v4/zonesx", false, false},
-		{http.MethodPost, "/client/v4/accounts/a/registrar-sandbox/registrations", false, false},
+		{http.MethodPost, "/client/v4/zones", `{"name":"acme.com"}`, true, true},
+		{http.MethodPost, "/client/v4/zones", `{"name":"acme.com"}`, false, true},
+		{http.MethodPatch, "/client/v4/zones/z1", "", true, true},
+		{http.MethodDelete, "/client/v4/zones/z1/", "", true, true},
+		{http.MethodGet, "/client/v4/zones", "", false, false},
+		{http.MethodPost, "/client/v4/zones/z1/dns_records", `{"type":"A","name":"app","content":"192.0.2.1"}`, true, false},
+		{http.MethodPost, "/client/v4/zones/z1/dns_records", `{"type":"A","name":"app","content":"192.0.2.1"}`, false, true},
+		// The connection check's DNS Write probe, which Cloudflare can only refuse.
+		{http.MethodPost, "/client/v4/zones/z1/dns_records", probe, false, false},
+		{http.MethodPost, "/client/v4/zones/z1/dns_records", `{"type":"A","name":"_loomplane-permission-probe","content":"192.0.2.1"}`, false, true},
+		{http.MethodPost, "/client/v4/zones/z1/dns_records", `{"name":"x","comment":"_loomplane-permission-probe permission-probe"}`, false, true},
+		{http.MethodPost, "/client/v4/zones/z1/dns_records", "not json", false, true},
+		{http.MethodPut, "/client/v4/zones/z1/dns_records/r1", probe, false, true},
+		{http.MethodPost, "/client/v4/zones", probe, false, true},
+		{http.MethodGet, "/client/v4/zones/z1/dns_records", "", false, false},
+		{http.MethodPost, "/client/v4/zonesx", "", false, false},
+		{http.MethodPost, "/client/v4/accounts/a/registrar-sandbox/registrations", "", false, false},
 	} {
-		r := httptest.NewRequest(tc.method, tc.path, nil)
+		r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 		if got := zoneWrite(r, tc.records); got != tc.refused {
-			t.Errorf("%s %s records=%v: refused %v, want %v", tc.method, tc.path, tc.records, got, tc.refused)
+			t.Errorf("%s %s %s records=%v: refused %v, want %v", tc.method, tc.path, tc.body, tc.records, got, tc.refused)
+		}
+		// The body still reaches Cloudflare whole.
+		if rest, err := io.ReadAll(r.Body); err != nil || string(rest) != tc.body {
+			t.Errorf("%s %s: forwarded body %q %v", tc.method, tc.path, rest, err)
 		}
 	}
 }
