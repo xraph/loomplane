@@ -294,3 +294,75 @@ func TestRegistryChecksIndividualOperations(t *testing.T) {
 		}
 	}
 }
+
+type fixtureRegistrar struct {
+	domains map[string]provider.RegisteredDomain
+}
+
+func (*fixtureRegistrar) RegistrationExtensions(context.Context, provider.InfrastructureCredential) ([]string, error) {
+	return []string{"dev"}, nil
+}
+func (*fixtureRegistrar) SearchDomains(context.Context, provider.InfrastructureCredential, string, int) ([]provider.DomainOffer, error) {
+	return nil, nil
+}
+func (*fixtureRegistrar) CheckDomains(_ context.Context, _ provider.InfrastructureCredential, names []string) ([]provider.DomainOffer, error) {
+	offers := make([]provider.DomainOffer, 0, len(names))
+	for _, name := range names {
+		offers = append(offers, provider.DomainOffer{Name: name, Registrable: true, Price: &provider.DomainPrice{Currency: "USD", RegistrationCost: "10.11", RenewalCost: "10.11"}})
+	}
+	return offers, nil
+}
+func (r *fixtureRegistrar) RegisterDomain(_ context.Context, _ provider.InfrastructureCredential, spec provider.DomainRegistrationSpec) (provider.DomainRegistrationResult, error) {
+	if r.domains == nil {
+		r.domains = map[string]provider.RegisteredDomain{}
+	}
+	r.domains[spec.Name] = provider.RegisteredDomain{Name: spec.Name, Status: "active", AutoRenew: spec.AutoRenew, PrivacyMode: spec.PrivacyMode}
+	return provider.DomainRegistrationResult{Name: spec.Name, State: provider.RegistrationSucceeded, Completed: true, AutoRenew: spec.AutoRenew, PrivacyMode: spec.PrivacyMode}, nil
+}
+func (r *fixtureRegistrar) RegistrationStatus(_ context.Context, _ provider.InfrastructureCredential, name string) (provider.DomainRegistrationResult, error) {
+	if _, ok := r.domains[name]; !ok {
+		return provider.DomainRegistrationResult{}, provider.ErrInfrastructureNotFound
+	}
+	return provider.DomainRegistrationResult{Name: name, State: provider.RegistrationSucceeded, Completed: true}, nil
+}
+func (r *fixtureRegistrar) GetRegisteredDomain(_ context.Context, _ provider.InfrastructureCredential, name string) (provider.RegisteredDomain, error) {
+	domain, ok := r.domains[name]
+	if !ok {
+		return provider.RegisteredDomain{}, provider.ErrInfrastructureNotFound
+	}
+	return domain, nil
+}
+func (r *fixtureRegistrar) SetAutoRenew(ctx context.Context, cred provider.InfrastructureCredential, name string, enabled bool) (provider.RegisteredDomain, error) {
+	domain, err := r.GetRegisteredDomain(ctx, cred, name)
+	if err != nil {
+		return provider.RegisteredDomain{}, err
+	}
+	domain.AutoRenew = enabled
+	r.domains[name] = domain
+	return domain, nil
+}
+
+func TestRegistryRegistrarIsSeparateCapability(t *testing.T) {
+	r := cloudinfra.NewAdapters()
+	if _, err := r.Registrar("cloudflare"); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+		t.Fatal(err)
+	}
+	if err := r.RegisterRegistrar("fixture", &fixtureRegistrar{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Registrar("fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(r.Capabilities("fixture"), []provider.InfrastructureCapability{provider.DomainRegistration}) {
+		t.Fatal(r.Capabilities("fixture"))
+	}
+	if !slices.Equal(r.Providers(), []string{"fixture"}) {
+		t.Fatal(r.Providers())
+	}
+	if err := r.RegisterRegistrar("fixture", &fixtureRegistrar{}); err == nil {
+		t.Fatal("duplicate registrar")
+	}
+	if err := r.RegisterRegistrar("", &fixtureRegistrar{}); err == nil {
+		t.Fatal("empty registrar name")
+	}
+}
