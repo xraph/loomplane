@@ -319,6 +319,24 @@
             "$ref": "#/$defs/name"
           }
         },
+        "need_options": {
+          "description": "Options this service passes to a need, by need and then by option name. A need has to be listed in needs. What a need accepts is checked when you plan.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$"
+            }
+          }
+        },
         "environments": {
           "description": "Overrides in one environment, by name.",
           "type": "object",

@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -174,5 +175,207 @@ func TestWithResourceWritesCatalogFields(t *testing.T) {
 	}
 	if got := m.Resources["gateway"]; !reflect.DeepEqual(got, want) {
 		t.Errorf("gateway = %+v, want %+v\n%s", got, want, out)
+	}
+}
+
+const needsDoc = `# Acme's manifest.
+version: 1
+services:
+  # The API.
+  api:
+    source: services/api # the Go module
+    needs: [db] # just the database
+resources:
+  db:
+    kind: postgres
+  fabriq:
+    kind: sample
+    uses:
+      postgres: {resource: db} # share the main database
+`
+
+func TestWithNeedAddsNeedAndOptions(t *testing.T) {
+	out, err := WithNeed([]byte(needsDoc), "api", "fabriq", map[string]string{"tenant": "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Acme's manifest.", "# The API.", "# the Go module", "# just the database", "# share the main database"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("lost %q:\n%s", want, out)
+		}
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	api := m.Services["api"]
+	if !reflect.DeepEqual(api.Needs, []string{"db", "fabriq"}) {
+		t.Errorf("needs %v, want db then fabriq", api.Needs)
+	}
+	if want := map[string]map[string]string{"fabriq": {"tenant": "acme"}}; !reflect.DeepEqual(api.NeedOptions, want) {
+		t.Errorf("need_options %v, want %v", api.NeedOptions, want)
+	}
+
+	// Again with other options: still one need, options replaced.
+	out, err = WithNeed(out, "api", "fabriq", map[string]string{"region": "eu"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if api := m.Services["api"]; !reflect.DeepEqual(api.Needs, []string{"db", "fabriq"}) ||
+		!reflect.DeepEqual(api.NeedOptions["fabriq"], map[string]string{"region": "eu"}) {
+		t.Errorf("needs %v, options %v", api.Needs, api.NeedOptions)
+	}
+
+	// Without options it keeps what is there.
+	same, err := WithNeed(out, "api", "fabriq", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(same) != string(out) {
+		t.Errorf("linking again without options changed the manifest:\n%s", same)
+	}
+
+	// A need with no options adds no need_options.
+	plain, err := WithNeed([]byte(needsDoc), "api", "fabriq", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "need_options") {
+		t.Errorf("wrote need_options for none:\n%s", plain)
+	}
+}
+
+func TestWithNeedRefusesWhatCannotWork(t *testing.T) {
+	doc := []byte(needsDoc)
+	tests := []struct {
+		name, service, need string
+		options             map[string]string
+		want                string
+	}{
+		{"no such service", "web", "fabriq", nil, "services.web doesn't exist"},
+		{"no such need", "api", "ghost", nil, `"ghost" isn't a service or resource`},
+		{"itself", "api", "api", nil, "can't need itself"},
+		{"bad option name", "api", "fabriq", map[string]string{"Tenant": "acme"}, `"Tenant" isn't an option name`},
+		{"long value", "api", "fabriq", map[string]string{"tenant": strings.Repeat("a", 201)}, "is 201 characters; the most is 200"},
+		{"newline", "api", "fabriq", map[string]string{"tenant": "a\nb"}, "can't hold a newline or other control character"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := WithNeed(doc, tt.service, tt.need, tt.options)
+			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("got %v, want an invalid manifest saying %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestWithoutNeedRemovesBoth(t *testing.T) {
+	linked, err := WithNeed([]byte(needsDoc), "api", "fabriq", map[string]string{"tenant": "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := WithNeed(linked, "api", "db", map[string]string{"schema": "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := WithoutNeed(other, "api", "fabriq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	api := m.Services["api"]
+	if !reflect.DeepEqual(api.Needs, []string{"db"}) || !reflect.DeepEqual(api.NeedOptions, map[string]map[string]string{"db": {"schema": "app"}}) {
+		t.Errorf("needs %v, options %v", api.Needs, api.NeedOptions)
+	}
+
+	// The last options go with the need, and need_options goes with them.
+	out, err = WithoutNeed(linked, "api", "fabriq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "need_options") {
+		t.Errorf("left an empty need_options:\n%s", out)
+	}
+	for _, want := range []string{"# Acme's manifest.", "# The API.", "# the Go module"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("lost %q:\n%s", want, out)
+		}
+	}
+
+	// A service's only need: needs goes too.
+	out, err = WithoutNeed([]byte(needsDoc), "api", "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err = Parse(out)
+	if err != nil || len(m.Services["api"].Needs) != 0 || strings.Contains(string(out), "needs:") {
+		t.Errorf("%v\n%s", err, out)
+	}
+
+	if _, err := WithoutNeed([]byte(needsDoc), "api", "fabriq"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "api doesn't need fabriq") {
+		t.Errorf("unlinking something it doesn't need: %v", err)
+	}
+	if _, err := WithoutNeed([]byte(needsDoc), "web", "db"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("unlinking from a missing service: %v", err)
+	}
+}
+
+func TestWithUseSetsOneDependency(t *testing.T) {
+	doc := []byte(needsDoc + "  cache:\n    kind: redis\n")
+	on := true
+	out, err := WithUse(doc, "fabriq", "redis", Use{Resource: "cache"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "# share the main database") {
+		t.Errorf("lost a comment:\n%s", out)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := map[string]Use{"postgres": {Resource: "db"}, "redis": {Resource: "cache"}}
+	if got := m.Resources["fabriq"].Uses; !reflect.DeepEqual(got, want) {
+		t.Errorf("uses %v, want %v", got, want)
+	}
+
+	// Setting one again replaces only that one.
+	out, err = WithUse(out, "fabriq", "redis", Use{Enabled: &on})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	want = map[string]Use{"postgres": {Resource: "db"}, "redis": {Enabled: &on}}
+	if got := m.Resources["fabriq"].Uses; !reflect.DeepEqual(got, want) {
+		t.Errorf("uses %v, want %v", got, want)
+	}
+
+	// A resource with no uses gets them.
+	out, err = WithUse(doc, "cache", "postgres", Use{External: "endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if got := m.Resources["cache"].Uses["postgres"].External; got != "endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae" {
+		t.Errorf("external %q\n%s", got, out)
+	}
+
+	for name, call := range map[string]func() error{
+		"no such resource":    func() error { _, err := WithUse(doc, "ghost", "postgres", Use{}); return err },
+		"a service":           func() error { _, err := WithUse(doc, "api", "postgres", Use{}); return err },
+		"bad dependency name": func() error { _, err := WithUse(doc, "fabriq", "Postgres", Use{}); return err },
+		"both choices": func() error {
+			_, err := WithUse(doc, "fabriq", "redis", Use{Resource: "db", External: "endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae"})
+			return err
+		},
+		"itself": func() error { _, err := WithUse(doc, "fabriq", "redis", Use{Resource: "fabriq"}); return err },
+	} {
+		if err := call(); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: got %v, want ErrInvalid", name, err)
+		}
 	}
 }

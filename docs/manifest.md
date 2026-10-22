@@ -81,8 +81,9 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 | `scale`              | `{min, max}` instances, on targets that let you choose.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `size`               | `{cpu, memory}`: virtual CPUs, such as 0.5 or 2, and MiB.                                                                                                                                                                                                                                                                                                                                                                                        |
 | `needs`              | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them.                                                                                                                                                                                                                                                                                                                           |
+| `need_options`       | Options this service passes to a need, by need and then by option name. See [Passing options](#passing-options-to-what-a-service-needs). |
 | `enabled`            | `false` leaves it out.                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build` and `needs`.                                                                                                                                                                                                                                                                                                                                                |
+| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build`, `needs` and `need_options`.                                                                                                                                                                                                                                                                                                                                                |
 
 A Dockerfile that copies from across the repository, such as a Go service that needs the module's `go.mod` at the root, has to build from the root:
 
@@ -145,6 +146,27 @@ resources:
 ```
 
 In this example `sample` stands in for a catalog kind with those three dependencies. The `gateway` resource shares the `db` Postgres, connects to an existing Redis instead of creating one, and switches on its optional FalkorDB. The manifest only checks the shape. Whether `gateway`'s kind has a dependency called `postgres`, and whether the endpoint is reachable, is checked when you plan.
+
+#### Passing options to what a service needs
+
+A service can hand options to something it needs. Some catalog kinds ask for them, a tenant name for a shared server, say. They go under `need_options` on the service, first by the need's name and then by option name:
+
+```yaml
+services:
+  api:
+    source: services/api
+    needs: [fabriq]
+    need_options:
+      fabriq:
+        tenant: acme
+resources:
+  fabriq:
+    kind: sample
+```
+
+The need has to be in `needs`, or the manifest is invalid. Option names are lower case letters, digits and underscores, start with a letter, and run to 32 characters at most. A value is up to 200 characters and can't hold a newline or any other control character. Which options a kind accepts, and whether a value fits, is checked when you plan.
+
+The dashboard and `POST /projects/:id/manifest/edits` can change these in place without touching your comments. `link` adds a need to a service, with options if you give them. Link again with new options and they replace the old ones as a whole; link again with none and they stay. `unlink` removes the need and its options, and fails if the service doesn't need it. `set_use` sets one dependency on a catalog resource and leaves the rest of its `uses` alone. Send one of the three per edit.
 
 ## gateways
 

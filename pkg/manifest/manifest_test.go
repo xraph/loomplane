@@ -466,3 +466,91 @@ resources:
 		}
 	}
 }
+
+const needOptionsDoc = `version: 1
+services:
+  api:
+    source: services/api
+    needs: [db, fabriq]
+    need_options:
+      fabriq:
+        tenant: acme
+        plan_tier: "2"
+resources:
+  db:
+    kind: postgres
+  fabriq:
+    kind: sample
+`
+
+func TestNeedOptionsValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		opts string
+		want string
+	}{
+		{"for a resource it doesn't need", "      cache: {tenant: acme}\n", "need_options.cache isn't in needs"},
+		{"for something that isn't a need at all", "      fabriq: {tenant: acme}\n      other: {a: b}\n", "need_options.other isn't in needs"},
+		{"option name in capitals", "      fabriq: {Tenant: acme}\n", `"Tenant" isn't an option name`},
+		{"option name with a hyphen", "      fabriq: {plan-tier: gold}\n", `"plan-tier" isn't an option name`},
+		{"option name too long", "      fabriq: {" + strings.Repeat("a", 33) + ": x}\n", "isn't an option name"},
+		{"value of 201 characters", "      fabriq: {tenant: " + strings.Repeat("a", 201) + "}\n", "is 201 characters; the most is 200"},
+		{"value with a newline", "      fabriq: {tenant: \"acme\\nevil\"}\n", "can't hold a newline or other control character"},
+		{"value with a tab", "      fabriq: {tenant: \"a\\tb\"}\n", "can't hold a newline or other control character"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := "version: 1\nservices:\n  api:\n    source: services/api\n    needs: [db, fabriq]\n    need_options:\n" + tt.opts +
+				"resources:\n  db: {kind: postgres}\n  cache: {kind: redis}\n  fabriq: {kind: sample}\n"
+			_, err := Parse([]byte(doc))
+			var ps Problems
+			if !errors.As(err, &ps) {
+				t.Fatalf("got %v, want problems", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("got %v, want %q", err, tt.want)
+			}
+		})
+	}
+	if _, err := Parse([]byte(needOptionsDoc)); err != nil {
+		t.Fatalf("a valid manifest: %v", err)
+	}
+	ok := strings.Replace(needOptionsDoc, "tenant: acme", "tenant: "+strings.Repeat("a", 200), 1)
+	if _, err := Parse([]byte(ok)); err != nil {
+		t.Errorf("200 characters is allowed: %v", err)
+	}
+}
+
+func TestNeedOptionsRoundTrip(t *testing.T) {
+	m, err := Parse([]byte(needOptionsDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]string{"fabriq": {"tenant": "acme", "plan_tier": "2"}}
+	if got := m.Services["api"].NeedOptions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("need_options %v, want %v", got, want)
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := again.Services["api"].NeedOptions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after Marshal %v, want %v\n%s", got, want, out)
+	}
+	// A service without options writes none.
+	plain, err := Parse([]byte("version: 1\nservices:\n  api: {source: services/api}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := Marshal(plain); strings.Contains(string(out), "need_options") {
+		t.Errorf("wrote need_options for a service with none:\n%s", out)
+	}
+	data, err := json.Marshal(m.Services["api"])
+	if err != nil || !strings.Contains(string(data), `"need_options"`) {
+		t.Errorf("JSON %s, %v", data, err)
+	}
+}

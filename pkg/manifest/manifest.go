@@ -18,6 +18,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -139,6 +141,11 @@ type Service struct {
 	// Needs names the resources and other services this one talks to.
 	// Each one it names gets the service its address, in a variable.
 	Needs []string `json:"needs,omitempty" yaml:"needs,omitempty"`
+	// NeedOptions are the values this service passes to a need, by need
+	// and then by option name: need_options.fabriq.tenant. Only a need
+	// that is listed in Needs can have options, and what a need accepts
+	// is the planner's question, not the manifest's.
+	NeedOptions map[string]map[string]string `json:"need_options,omitempty" yaml:"need_options,omitempty"`
 	// Environments override settings in one environment, by name.
 	Environments map[string]Settings `json:"environments,omitempty" yaml:"environments,omitempty"`
 }
@@ -308,7 +315,13 @@ var (
 	// endpointRE is a catalog endpoint's ID: the typeid prefix endpoint and
 	// a 26 character suffix.
 	endpointRE = regexp.MustCompile(`^endpoint_[0-9a-z]{26}$`)
+	// optionRE is the name of an option a service passes to a need, the
+	// same rule a catalog kind's consumer options follow.
+	optionRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 )
+
+// MaxOptionValue is the most characters one need option's value can have.
+const MaxOptionValue = 200
 
 // Problem is one thing wrong with a manifest, at a path such as
 // "services.api.scale".
@@ -516,6 +529,12 @@ func (m *Manifest) Validate() error {
 			}
 			seen[need] = true
 		}
+		for _, need := range sortedKeys(s.NeedOptions) {
+			if !slices.Contains(s.Needs, need) {
+				add(path, "need_options.%s isn't in needs", need)
+			}
+			checkNeedOptions(add, path+".need_options."+need, s.NeedOptions[need])
+		}
 		for _, env := range sortedKeys(s.Environments) {
 			epath := path + ".environments." + env
 			if !envRE.MatchString(env) {
@@ -541,6 +560,23 @@ func (m *Manifest) Validate() error {
 		return ps
 	}
 	return nil
+}
+
+// checkNeedOptions checks the options one service passes to one need.
+func checkNeedOptions(add func(string, string, ...any), path string, options map[string]string) {
+	for _, name := range sortedKeys(options) {
+		opath := path + "." + name
+		if !optionRE.MatchString(name) {
+			add(opath, "%q isn't an option name; use lower case letters, digits and underscores, starting with a letter, at most 32 long", name)
+		}
+		value := options[name]
+		if n := utf8.RuneCountInString(value); n > MaxOptionValue {
+			add(opath, "is %d characters; the most is %d", n, MaxOptionValue)
+		}
+		if strings.ContainsFunc(value, unicode.IsControl) {
+			add(opath, "can't hold a newline or other control character")
+		}
+	}
 }
 
 func checkToken(add func(string, string, ...any), path, what, value string) {

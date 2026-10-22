@@ -317,6 +317,166 @@ func useNode(u Use) *yaml.Node {
 	return n
 }
 
+// WithNeed makes a service need something, and sets the options it passes
+// to it. The need is added once, after the ones already listed. Options
+// replace the need's options as a whole; none leaves what is there alone,
+// so linking again without options doesn't wipe them. Unlink and link
+// again to clear them.
+func WithNeed(doc []byte, service, need string, options map[string]string) ([]byte, error) {
+	root, file, err := mapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := editTarget(root, "services", service)
+	if err != nil {
+		return nil, err
+	}
+	var problems Problems
+	checkNeedOptions(func(path, format string, args ...any) {
+		problems = append(problems, Problem{Path: path, Message: fmt.Sprintf(format, args...)})
+	}, "services."+service+".need_options."+need, options)
+	if len(problems) > 0 {
+		return nil, problems
+	}
+	changed := false
+	needs := child(svc, "needs")
+	switch {
+	case needs == nil:
+		needs = &yaml.Node{Kind: yaml.SequenceNode}
+		svc.Content = append(svc.Content, scalar("needs"), needs)
+	case needs.Kind == yaml.ScalarNode && needs.Tag == "!!null":
+		needs.Kind, needs.Tag, needs.Value = yaml.SequenceNode, "!!seq", ""
+	case needs.Kind != yaml.SequenceNode:
+		return nil, fmt.Errorf("%w: services.%s.needs isn't a list", ErrInvalid, service)
+	}
+	if !slices.ContainsFunc(needs.Content, func(n *yaml.Node) bool { return n.Value == need }) {
+		needs.Content = append(needs.Content, scalar(need))
+		changed = true
+	}
+	if len(options) > 0 {
+		all, err := editMapping(svc, "need_options", true)
+		if err != nil {
+			return nil, fmt.Errorf("%w: services.%s.%w", ErrInvalid, service, err)
+		}
+		value := &yaml.Node{Kind: yaml.MappingNode}
+		for _, name := range sortedKeys(options) {
+			value.Content = append(value.Content, scalar(name), scalar(options[name]))
+		}
+		setChild(all, need, value)
+		changed = true
+	}
+	if !changed {
+		return doc, nil
+	}
+	return encode(file)
+}
+
+// WithoutNeed stops a service needing something, and drops the options it
+// passed to it. A need_options or needs left empty goes too. A service that
+// doesn't need it is an error: the edit would do nothing.
+func WithoutNeed(doc []byte, service, need string) ([]byte, error) {
+	root, file, err := mapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := editTarget(root, "services", service)
+	if err != nil {
+		return nil, err
+	}
+	needs := child(svc, "needs")
+	if needs == nil || needs.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("%w: %s doesn't need %s", ErrInvalid, service, need)
+	}
+	at := slices.IndexFunc(needs.Content, func(n *yaml.Node) bool { return n.Value == need })
+	if at < 0 {
+		return nil, fmt.Errorf("%w: %s doesn't need %s", ErrInvalid, service, need)
+	}
+	needs.Content = slices.Delete(needs.Content, at, at+1)
+	if len(needs.Content) == 0 {
+		removeChild(svc, "needs")
+	}
+	if all := child(svc, "need_options"); all != nil && all.Kind == yaml.MappingNode {
+		removeChild(all, need)
+		if len(all.Content) == 0 {
+			removeChild(svc, "need_options")
+		}
+	}
+	return encode(file)
+}
+
+// WithUse sets where one dependency of a catalog resource comes from,
+// replacing that dependency's choice and leaving the others. A choice with
+// nothing set asks for a new dependency.
+func WithUse(doc []byte, resource, dependency string, u Use) ([]byte, error) {
+	root, file, err := mapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	if !nameRE.MatchString(dependency) {
+		return nil, fmt.Errorf("%w: %q isn't a dependency name", ErrInvalid, dependency)
+	}
+	res, err := editTarget(root, "resources", resource)
+	if err != nil {
+		return nil, err
+	}
+	uses, err := editMapping(res, "uses", true)
+	if err != nil {
+		return nil, fmt.Errorf("%w: resources.%s.%w", ErrInvalid, resource, err)
+	}
+	setChild(uses, dependency, useNode(u))
+	return encode(file)
+}
+
+// editTarget is the mapping for a named service or resource in a section.
+func editTarget(root *yaml.Node, section, name string) (*yaml.Node, error) {
+	target := child(child(root, section), name)
+	if target == nil {
+		return nil, fmt.Errorf("%w: %s.%s doesn't exist", ErrInvalid, section, name)
+	}
+	if target.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("%w: %s.%s isn't a mapping the edit can change", ErrInvalid, section, name)
+	}
+	return target, nil
+}
+
+// editMapping is the mapping under key, made if it's missing or empty.
+func editMapping(m *yaml.Node, key string, create bool) (*yaml.Node, error) {
+	n := child(m, key)
+	switch {
+	case n == nil && create:
+		n = &yaml.Node{Kind: yaml.MappingNode}
+		m.Content = append(m.Content, scalar(key), n)
+	case n != nil && n.Kind == yaml.ScalarNode && n.Tag == "!!null":
+		n.Kind, n.Tag, n.Value, n.Style = yaml.MappingNode, "!!map", "", 0
+	case n == nil || n.Kind != yaml.MappingNode:
+		return nil, fmt.Errorf("%s isn't a mapping the edit can change", key)
+	}
+	return n, nil
+}
+
+// setChild sets key in a mapping, in place if it's there, keeping the
+// comments on the old value, and at the end if it isn't.
+func setChild(m *yaml.Node, key string, value *yaml.Node) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			old := m.Content[i+1]
+			value.HeadComment, value.LineComment, value.FootComment = old.HeadComment, old.LineComment, old.FootComment
+			m.Content[i+1] = value
+			return
+		}
+	}
+	m.Content = append(m.Content, scalar(key), value)
+}
+
+func removeChild(m *yaml.Node, key string) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content = slices.Delete(m.Content, i, i+2)
+			return
+		}
+	}
+}
+
 // WithIgnored adds a resource kind to what a manifest's YAML ignores.
 func WithIgnored(doc []byte, kind string) ([]byte, error) {
 	root, file, err := mapping(doc)
