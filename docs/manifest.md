@@ -162,7 +162,7 @@ resources:
 | `cloud_tags`         | Picks the one target in your assigned Cloud that carries every tag, the way a service's tags do. Can't be set together with `provider`.               |
 | `environments`       | `provider`, `region` or `enabled` by environment name. `enabled: false` leaves the gateway out of that environment and removes it if it was deployed. |
 
-Each opted-in resource gets a variable beside its usual one. A Postgres resource's `DATABASE_URL` stays the address your service connects with, with its host changed to a name the gateway recognises, and `DATABASE_URL_GATEWAY` holds the gateway's own https address. The suffix is always `_GATEWAY`, added to whatever name the resource's kind gets.
+Each opted-in resource gets two variables beside its usual one, in every service that needs it. A Postgres resource's `DATABASE_URL` keeps its credentials but takes a host the gateway recognises, so only a client that speaks to the gateway can use it. `DATABASE_URL_GATEWAY` holds the gateway's own https address, and `DATABASE_URL_DIRECT` holds the database's unchanged address, as a secret, for clients that connect over TCP. The suffixes are always `_GATEWAY` and `_DIRECT`, added to whatever name the resource's kind gets.
 
 The plan stops with a problem in these cases:
 

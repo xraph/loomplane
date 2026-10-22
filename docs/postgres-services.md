@@ -312,7 +312,9 @@ Then point Loomplane at the file with `dbgateway.signing_key_file` in its config
 
 Loomplane reads the file once, at startup. If anything about it is wrong, Loomplane won't start. You get `dbgateway.signing_key_file: invalid database gateway signing key configuration` and nothing more, so the message can't leak the file. Leave the setting empty and Loomplane starts, but the gateway endpoints answer 503 and a deployment that includes a gateway fails.
 
-Gateways are handed the public half of the key when they're deployed. One deployed before you replace the key won't trust snapshots signed with the new one.
+Gateways are handed the public half of the key when they're deployed, and nothing sends it again on its own. If you replace the key file and restart Loomplane, a plan still shows `db-gateway` as unchanged, because none of its configuration moved, and the gateway you deployed keeps trusting the old key. It refuses every snapshot signed with the new one. It carries on serving the routes it already has, but it never hears about a changed password or a paused route.
+
+A gateway gets the current key whenever a plan creates, updates or replaces it. An update happens when its planned configuration changes: the resources behind it, its region or provider, or the DNS zone its names live in. Opting another Postgres resource in, or one out, is the smallest change that does it, and it redeploys only the apps that need that resource. If there's no change you want to make, the only other way is to remove the gateway and add it back. Set `gateway: false` on every resource, approve that plan, then set them back to `true` and approve the next. Removing it deletes its record and keys, so adding it back mints new ones and a new gateway. It costs two deployments, each redeploying every app that needs one of those databases, and until the second finishes an app that can only reach its database through the gateway has no database.
 
 A gateway also has to reach Loomplane to fetch its routes, and it does that at your `public_url`. That has to be https (plain http is accepted for `localhost` only), or the deployment is refused.
 
@@ -338,11 +340,13 @@ services:
 
 The gateway names each database from its resource and your DNS zone, as `<resource>.<region>.db.<zone>`. So `db` in `us-central1` on `example.com` becomes `db.us-central1.db.example.com`. That needs a verified zone granted to the project, which you add under Domains. With two or more, Loomplane keeps the ones this environment's domain routes use. If that still leaves several, the plan stops with `db-gateway-domain-ambiguous`, and with none it stops with `db-gateway-domain-missing`. Nothing has to resolve these names. They tell the gateway which database a connection is for.
 
-Create a plan and review it. Turning the gateway on adds one `db-gateway` service, deploys it before anything that needs a resource behind it, and redeploys those apps with their new variables. Taking a resource off the gateway redeploys them too. The plan stops with `db-gateway-held-user` if it would take a resource off the gateway while a [held](manifest.md#held) app, one the plan leaves alone, still reaches it there.
+Create a plan and review it. Turning the gateway on adds one `db-gateway` service, deploys it before anything that needs a resource behind it, and redeploys those apps with their new variables. Taking a resource off the gateway redeploys them too.
+
+Opting a database in changes `DATABASE_URL` for every service that needs it, not just the Vercel app. Apps on Cloud Run and ECS get the gateway's host in `DATABASE_URL` too, so a service that connects over TCP stops working until it reads `DATABASE_URL_DIRECT` instead. The next section says where that comes from. The plan stops with `db-gateway-held-user` if it would take a resource off the gateway while a [held](manifest.md#held) app, one the plan leaves alone, still reaches it there.
 
 ### Connect from Vercel
 
-An app that needs `db` gets two variables. `DATABASE_URL` keeps the user and password but carries the gateway's name for the database as its host. `DATABASE_URL_GATEWAY` is the gateway's own https address. The second is always the first's name with `_GATEWAY` on the end, so a variable called `DATABASE_URL` gets `DATABASE_URL_GATEWAY`. Only Postgres can opt in today.
+An app that needs `db` gets three variables. `DATABASE_URL` keeps the user and password but carries the gateway's name for the database as its host. `DATABASE_URL_GATEWAY` is the gateway's own https address. `DATABASE_URL_DIRECT` is the database's own address, exactly as it was before you opted in, and it's a secret because it holds the credentials. The last two are always the first's name with `_GATEWAY` or `_DIRECT` on the end. Only Postgres can opt in today.
 
 Install `@neondatabase/serverless` and `ws`. The gateway speaks the protocol this driver uses, and we've verified version 1.2.0 against it. All you do is tell the driver where the gateway is:
 
@@ -388,6 +392,7 @@ State the gateway can't replay pins the session instead. A pinned session keeps 
 - Cursors declared `WITH HOLD`, and SQL-level `PREPARE`, including `PREPARE TRANSACTION`.
 - `SET` of any parameter not in the list above, `set_config()`, and a `SET` that runs inside an open transaction, where a rollback would undo it.
 - `DO`, `LOAD`, `setseed` and `dblink_connect`.
+- `query_to_xml`, `query_to_xmlschema`, `query_to_xml_and_xmlschema` and `ts_stat`, which run SQL held in a string that the gateway doesn't read.
 - The protocol's fast-path function call.
 - A text with several statements that includes `SET`, `RESET`, `LISTEN` or `UNLISTEN`, since the gateway can't tell which one you meant to keep.
 
@@ -395,7 +400,9 @@ State the gateway can't replay pins the session instead. A pinned session keeps 
 
 ### Limits
 
-Phase 1 speaks Postgres to clients over WebSocket and HTTP only. There is no TCP listener, so `pg` and other drivers that open a plain socket can't connect through the gateway from Vercel yet. The database names the gateway hands out don't resolve for them either. Use the Neon driver as above. Anything else that still opens a TCP connection with `DATABASE_URL`, a migration step for example, won't reach the database once its resource is behind the gateway.
+Phase 1 speaks Postgres to clients over WebSocket and HTTP only. There is no TCP listener, so `pg` and other drivers that open a plain socket can't connect through the gateway from Vercel yet. The database names the gateway hands out don't resolve for them either. Use the Neon driver as above.
+
+Anything else that opens a TCP connection, a migration step for example, should read `DATABASE_URL_DIRECT`. Prisma's `directUrl` is the usual place for it. That's the database's own address, so it works only from somewhere that can reach the database itself: a DigitalOcean database is public, but RDS is private to its VPC, and a Vercel build can't get into it. If your migrations run from Vercel against RDS, run them from a machine inside the VPC instead.
 
 `currval()` and `lastval()` don't work across transactions. The sequence value belongs to a connection, and your next transaction may run on another one. Get the value in the same statement with `INSERT ... RETURNING id`. PgBouncer in transaction mode has the same limit.
 
