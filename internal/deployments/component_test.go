@@ -792,6 +792,11 @@ func TestCompositionPublishesOutputs(t *testing.T) {
 
 	f.secrets.m[resourceKey("org", "env", "app", "secret:admin-password")] = []byte("generated")
 	f.secrets.m[resourceKey("org", "env", "app--api", "url")] = []byte("kept")
+	var revoked []string
+	f.target.CompositionRemoved = func(_ context.Context, orgID, environmentID, resource string) error {
+		revoked = append(revoked, orgID+"/"+environmentID+"/"+resource)
+		return nil
+	}
 	// Removing what it was before it moved leaves everything to its
 	// replacement, under the same name, and the kind hears nothing.
 	moved := *job
@@ -799,8 +804,14 @@ func TestCompositionPublishesOutputs(t *testing.T) {
 	if err := f.target.Remove(t.Context(), &moved, b); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.hooks.removed) != 0 {
-		t.Fatalf("removing a replaced composition ran the removed hook: %+v", f.hooks.removed)
+	// Nor does a delete that removes what it ran as before it moved.
+	replaced := *job
+	replaced.Action.Op, replaced.replacing = planning.Delete, true
+	if err := f.target.Remove(t.Context(), &replaced, b); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.hooks.removed) != 0 || len(revoked) != 0 {
+		t.Fatalf("removing a replaced composition ran the removed hook %+v and revoked %q", f.hooks.removed, revoked)
 	}
 	for _, field := range []string{"url", "output:admin", "secret:admin-password"} {
 		if _, ok := f.secrets.m[resourceKey("org", "env", "app", field)]; !ok {
@@ -813,6 +824,10 @@ func TestCompositionPublishesOutputs(t *testing.T) {
 	}
 	if len(f.hooks.removed) != 1 || f.hooks.removed[0] != (ComposedResource{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Resource: "app", Kind: "sample"}) {
 		t.Fatalf("removed hook: %+v", f.hooks.removed)
+	}
+	// A real delete ends the admin sessions open on it.
+	if !slices.Equal(revoked, []string{"org/env/app"}) {
+		t.Fatalf("revoked %q", revoked)
 	}
 	for _, field := range []string{"url", "output:admin", "secret:admin-password"} {
 		if _, ok := f.secrets.m[resourceKey("org", "env", "app", field)]; ok {
@@ -1607,5 +1622,40 @@ func TestComponentRunCarriesTargetSettings(t *testing.T) {
 	hooks.rendered[0].TargetSettings["namespace"] = "changed"
 	if job.Action.Resource.TargetSettings["namespace"] != "apps" {
 		t.Fatal("a hook can change the reviewed settings")
+	}
+}
+
+func TestDeletingACompositionWarnsWhenItsSessionsOutliveIt(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	f := newComponentFixture(t, kinds)
+	f.secrets.m[resourceKey("org", "env", "app--api", "address")] = []byte(`{"http":"http://lp-inst-api:8080","admin":"http://lp-inst-api:9090"}`)
+	kind, _ := kinds.Kind("sample")
+	cfg := &planning.ResourceConfig{
+		Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": "amd64"}, Kind: "sample", Version: "1",
+		Composition: &planning.CompositionConfig{Kind: "sample", Version: "1", Revision: "1", Dependencies: newPostgres, Outputs: kind.Outputs, Secrets: kind.Secrets},
+	}
+	job := f.job("app", cfg)
+	out, err := f.target.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.target.CompositionRemoved = func(context.Context, string, string, string) error {
+		return errors.New("the session store is down")
+	}
+	var warnings []string
+	job.warn = func(err error) { warnings = append(warnings, err.Error()) }
+	job.Action.Op = planning.Delete
+	if err := f.target.Remove(t.Context(), job, bound(job, out)); err != nil {
+		t.Fatalf("a failed revoke failed the step: %v", err)
+	}
+	want := "the admin sessions open on app couldn't be ended, and expire on their own once idle: the session store is down"
+	if !slices.Equal(warnings, []string{want}) {
+		t.Fatalf("warnings %q", warnings)
+	}
+	if len(f.hooks.removed) != 1 {
+		t.Fatalf("removed hook: %+v", f.hooks.removed)
+	}
+	if _, ok := f.secrets.m[resourceKey("org", "env", "app", "url")]; ok {
+		t.Fatal("a failed revoke kept the composed resource's values")
 	}
 }

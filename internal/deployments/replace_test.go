@@ -59,6 +59,8 @@ type placed struct {
 	mu      sync.Mutex
 	applies []*Job
 	removes []*Job
+	// warn is a warning each Remove gives its step.
+	warn error
 }
 
 func (p *placed) Apply(ctx context.Context, job *Job) (*Outcome, error) {
@@ -100,6 +102,9 @@ func (p *placed) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 		p.onRemove()
 	}
 	p.log.add("remove " + p.provider + " " + b.ExternalID)
+	if p.warn != nil {
+		job.Warn(p.warn)
+	}
 	if cerr := job.Checkpoint([]byte("rm-" + p.provider)); cerr != nil {
 		return cerr
 	}
@@ -626,5 +631,27 @@ func TestElsewhereError_saysWhatWasRecorded(t *testing.T) {
 	e.ConnectionID = ""
 	if msg := e.Error(); !strings.Contains(msg, "Choose the connection that deployed it") || strings.Contains(msg, "recorded") {
 		t.Fatalf("unreadable key: %s", msg)
+	}
+}
+
+// A warning an executor gives while it removes what a delete names lands
+// on the step, which still succeeds.
+func TestRunner_aRemovalsWarningLandsOnItsStep(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-run", log: log, warn: errors.New("the admin sessions open on api couldn't be ended")}
+	del := apiMoves()
+	del.Actions[0].Op, del.Actions[0].Service, del.Actions[0].Provider = planning.Delete, nil, "cloud-run"
+	r, store, plans, _ := moveRunner(t, del, onCloudRun(), map[string]Executor{"cloud-run": exec})
+	id, err := runAll(t, r, del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	s := d.Step("service:api")
+	if d.Status != StatusSucceeded || !slices.Equal(s.Warnings, []string{"the admin sessions open on api couldn't be ended"}) {
+		t.Fatalf("deleting: %s: %s, warnings %q", d.Status, d.Error, s.Warnings)
+	}
+	if _, ok := plans.bindings["service:api"]; ok {
+		t.Fatal("the binding is still there")
 	}
 }

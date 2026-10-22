@@ -1249,7 +1249,8 @@ func (e *OwnedTarget) applyComposition(ctx context.Context, job *Job) (*Outcome,
 }
 
 // removeComposition forgets a composed resource once its components are
-// gone: its kind's hooks first, then its outputs and generated secrets.
+// gone: it ends the admin sessions open on it (CompositionRemoved), runs
+// its kind's hooks, then forgets its outputs and generated secrets.
 // Removing what it was before it moved forgets nothing (see forgetsKept).
 func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planning.Binding, c *planning.CompositionConfig) error {
 	if job.Deployment == nil || job.Deployment.OrgID != b.OrgID {
@@ -1262,6 +1263,13 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 	}
 	if e.Secrets == nil {
 		return ErrNoCredential
+	}
+	if e.CompositionRemoved != nil {
+		// A session left open only warns: nothing it reaches is there any
+		// more, and it expires on its own.
+		if err := e.CompositionRemoved(ctx, b.OrgID, b.EnvironmentID, b.Name); err != nil {
+			job.Warn(fmt.Errorf("the admin sessions open on %s couldn't be ended, and expire on their own once idle: %w", b.Name, err))
+		}
 	}
 	if err := e.hooks(c.Kind).Removed(ctx, ComposedResource{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID, Resource: b.Name, Kind: c.Kind}); err != nil {
 		return err

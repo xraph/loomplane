@@ -68,6 +68,11 @@ type OwnedTarget struct {
 	// and Checker checks them again from the target on each release.
 	Endpoints EndpointResolver
 	Checker   EndpointChecker
+	// CompositionRemoved runs once a composed resource is really deleted,
+	// never when what it ran as before it moved is removed, such as to
+	// end the admin sessions open on it. Its error is a warning on the
+	// deployment, never a failure. Nil does nothing.
+	CompositionRemoved func(ctx context.Context, orgID, environmentID, resource string) error
 	// DialGuard refuses what a cluster's endpoint checks, which dial from
 	// Loomplane's own network, must never reach beyond its own host: the
 	// services Loomplane depends on and an operator's denied ranges. Nil

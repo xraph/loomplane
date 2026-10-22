@@ -308,6 +308,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.catalogAdmin); err != nil {
 		return err
 	}
+	// Deleting a composed resource ends the admin sessions open on it.
+	serverTarget.CompositionRemoved, clusterTarget.CompositionRemoved = e.catalogAdmin.RevokeResource, e.catalogAdmin.RevokeResource
 	if err := fapp.Router().Handle(catalogAdminRoute, e.catalogAdmin.Handler()); err != nil {
 		return fmt.Errorf("mount the catalog admin proxy: %w", err)
 	}

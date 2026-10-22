@@ -124,6 +124,17 @@ type Job struct {
 	// replacing is a Remove of what an action ran as before it moved.
 	// What's kept under the action's name is the replacement's then.
 	replacing bool
+	// warn adds a warning to the step, or is nil.
+	warn func(error)
+}
+
+// Warn adds a warning to the step an executor runs in, for something that
+// went wrong without failing it. A step that can't take warnings drops
+// it.
+func (j *Job) Warn(err error) {
+	if j.warn != nil && err != nil {
+		j.warn(err)
+	}
 }
 
 // ResourceURL is the field a resource executor keeps its address under,
@@ -977,7 +988,10 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		if fenceErr != nil {
 			return fenceErr
 		}
-		if err := exec.Remove(removalCtx, job, bound); err != nil {
+		job.warn = warn
+		err := exec.Remove(removalCtx, job, bound)
+		job.warn = nil
+		if err != nil {
 			return err
 		}
 	}
