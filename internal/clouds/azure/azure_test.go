@@ -570,15 +570,21 @@ func TestManagedRedis(t *testing.T) {
 	}
 }
 
-func TestManagedRedis_aRegionWithoutTheSKU(t *testing.T) {
-	f := azuretest.New(t)
-	f.RedisUnavailableIn = "brazilsouth"
-	s := fakeSession(t, f)
-	if err := s.EnsureGroup(t.Context(), "brazilsouth"); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := s.EnsureManagedRedis(t.Context(), "cache", "brazilsouth")
-	if err == nil || !strings.Contains(err.Error(), "brazilsouth") || !strings.Contains(err.Error(), "another region") {
-		t.Fatalf("%v", err)
+func TestManagedRedis_aRegionWithoutIt(t *testing.T) {
+	// Azure says a region lacks Managed Redis, or just its size, with
+	// either code.
+	for _, code := range []string{"SkuNotAvailable", "LocationNotAvailableForResourceType"} {
+		t.Run(code, func(t *testing.T) {
+			f := azuretest.New(t)
+			f.RedisUnavailableIn, f.RedisUnavailableCode = "brazilsouth", code
+			s := fakeSession(t, f)
+			if err := s.EnsureGroup(t.Context(), "brazilsouth"); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err := s.EnsureManagedRedis(t.Context(), "cache", "brazilsouth")
+			if err == nil || !strings.Contains(err.Error(), "brazilsouth") || !strings.Contains(err.Error(), "another region") || !strings.Contains(err.Error(), code) {
+				t.Fatalf("%v", err)
+			}
+		})
 	}
 }

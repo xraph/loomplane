@@ -243,8 +243,10 @@ func TestAzureRedis(t *testing.T) {
 	if len(clusters) != 1 || clusters[0]["location"] != "westeurope" || clusters[0]["sku"].(map[string]any)["name"] != "Balanced_B0" {
 		t.Fatalf("clusters %v", clusters)
 	}
-	props := dbs[0]["properties"].(map[string]any)
-	if len(dbs) != 1 || props["accessKeysAuthentication"] != "Enabled" || props["clientProtocol"] != "Encrypted" {
+	if len(dbs) != 1 {
+		t.Fatalf("databases %v", dbs)
+	}
+	if props := dbs[0]["properties"].(map[string]any); props["accessKeysAuthentication"] != "Enabled" || props["clientProtocol"] != "Encrypted" {
 		t.Fatalf("databases %v", dbs)
 	}
 	if loc := exec.Locate(&planning.Binding{ExternalID: out.ExternalID, Region: "westeurope"}); loc != "the Azure Managed Redis cluster "+name+" in westeurope" {

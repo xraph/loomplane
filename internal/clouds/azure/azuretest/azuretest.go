@@ -92,9 +92,9 @@ type Fake struct {
 	// RedisPuts are the Managed Redis cluster bodies Loomplane PUT, and
 	// RedisDatabasePuts its databases' bodies, in order.
 	RedisPuts, RedisDatabasePuts []map[string]any
-	// RedisUnavailableIn is a region that answers SkuNotAvailable to a
-	// Managed Redis cluster.
-	RedisUnavailableIn string
+	// RedisUnavailableIn is a region that refuses a Managed Redis cluster,
+	// with RedisUnavailableCode: SkuNotAvailable unless it's set.
+	RedisUnavailableIn, RedisUnavailableCode string
 }
 
 // New starts a fake.
@@ -264,8 +264,8 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		case "microsoft.cache/redisenterprise":
 			location, _ := body["location"].(string)
 			if strings.EqualFold(location, f.RedisUnavailableIn) {
-				reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "SkuNotAvailable",
-					"message": "The requested SKU Balanced_B0 is not available in location " + location + "."}})
+				reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": cmp.Or(f.RedisUnavailableCode, "SkuNotAvailable"),
+					"message": "Managed Redis Balanced_B0 is not available in location " + location + "."}})
 				return
 			}
 			f.RedisPuts = append(f.RedisPuts, record(body))

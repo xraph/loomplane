@@ -208,8 +208,8 @@ func (s *Session) ownsRedis(id string) bool {
 // called name, with one database that takes TLS connections and access
 // keys, and returns its host name and primary key once both are ready.
 // The first one registers Microsoft.Cache in the subscription. A region
-// that doesn't offer the size fails with a message that says to choose
-// another.
+// that doesn't offer Managed Redis, or its size, fails with a message
+// that says to choose another.
 func (s *Session) EnsureManagedRedis(ctx context.Context, name, location string) (host, key string, err error) {
 	if rerr := s.register(ctx, cacheNamespace); rerr != nil {
 		return "", "", rerr
@@ -224,7 +224,7 @@ func (s *Session) EnsureManagedRedis(ctx context.Context, name, location string)
 	}
 	if _, perr := s.do(ctx, http.MethodPut, path, managedRedisVersion, body, nil); perr != nil {
 		var ae *APIError
-		if errors.As(perr, &ae) && strings.EqualFold(ae.Code, "SkuNotAvailable") {
+		if errors.As(perr, &ae) && (strings.EqualFold(ae.Code, "SkuNotAvailable") || strings.EqualFold(ae.Code, "LocationNotAvailableForResourceType")) {
 			return "", "", fmt.Errorf("azure managed redis (%s) isn't available in %s for this subscription; choose another region for this resource, such as %s: %w",
 				managedRedisSKU, location, otherRedisRegion(location), perr)
 		}
