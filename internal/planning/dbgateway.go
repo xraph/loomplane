@@ -134,7 +134,15 @@ func (p *planner) planDatabaseGateway() {
 	if !ok || len(served) == 0 {
 		return
 	}
-	cfg.DatabaseGateway = &DatabaseGatewayConfig{Name: dbGatewayName, Suffix: strings.ToLower(cfg.Region + ".db." + domain), Resources: served}
+	program, err := dbgateway.ProgramID()
+	if err != nil {
+		p.problem(Finding{
+			Code: "db-gateway-program", Subject: ServiceSubject, Name: dbGatewayName, Path: base,
+			Message: fmt.Sprintf("Loomplane couldn't generate the database gateway's source: %v", err),
+		})
+		return
+	}
+	cfg.DatabaseGateway = &DatabaseGatewayConfig{Name: dbGatewayName, Suffix: strings.ToLower(cfg.Region + ".db." + domain), Resources: served, Program: program}
 	sort.Strings(deps)
 	a := &Action{
 		ID: actionID(ServiceSubject, dbGatewayName), Subject: ServiceSubject, Name: dbGatewayName,

@@ -21,6 +21,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -49,6 +50,17 @@ const root = "dbgateway"
 // epoch is every file's modification time, so the same source always
 // makes the same bytes, and the same ID.
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// programID is Source's ID, worked out the first time it's asked for.
+var programID = sync.OnceValues(func() (string, error) {
+	_, id, err := Source()
+	return id, err
+})
+
+// ProgramID is the ID Source returns, computed once per process. The plan
+// records it in the gateway's configuration, so a Loomplane upgrade that
+// changes the gateway's code redeploys it.
+func ProgramID() (string, error) { return programID() }
 
 // Source is the database gateway's source as a gzipped tarball with one
 // top-level directory, and an ID that changes only when the source does.

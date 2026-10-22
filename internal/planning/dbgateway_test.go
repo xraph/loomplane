@@ -163,6 +163,44 @@ func TestPlanDatabaseGatewayReplanIsNoOp(t *testing.T) {
 	}
 }
 
+// The gateway's configuration records the ID of the code it runs, so a
+// Loomplane upgrade that changes that code redeploys it, and the apps
+// behind it stay as they are.
+func TestPlanDatabaseGatewayFollowsAnUpgrade(t *testing.T) {
+	want, err := dbgateway.ProgramID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := dbgwCompute(t, dbgwManifest, exampleZone)
+	if got := action(t, first, "service:db-gateway").Service.DatabaseGateway.Program; got != want || got == "" {
+		t.Fatalf("program %q, want %q", got, want)
+	}
+	// What's deployed was built from an older Loomplane's gateway.
+	live := deployed(t, first)
+	for _, b := range live {
+		if b.Name != dbGatewayName {
+			continue
+		}
+		var cfg ServiceConfig
+		if err = json.Unmarshal(b.Config, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg.DatabaseGateway.Program = "dg0000000000"
+		if b.Config, err = json.Marshal(cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := dbgwCompute(t, dbgwManifest, exampleZone, live...)
+	if gw := action(t, r, "service:db-gateway"); gw.Op != Update || gw.Service.DatabaseGateway.Program != want {
+		t.Fatalf("after an upgrade db-gateway is %s (%s)", gw.Op, gw.Reason)
+	}
+	for _, name := range []string{"api", "web"} {
+		if a := action(t, r, "service:"+name); a.Op != Keep {
+			t.Fatalf("%s is %s (%s) when only the gateway's code changed", name, a.Op, a.Reason)
+		}
+	}
+}
+
 // A deployed gateway the plan can't plan this time, here for want of a
 // zone, isn't deleted: the problem says why.
 func TestPlanDatabaseGatewayProblemKeepsDeployedGateway(t *testing.T) {

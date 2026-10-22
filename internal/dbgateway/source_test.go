@@ -60,6 +60,18 @@ func TestSourceDeterministic(t *testing.T) {
 	}
 }
 
+func TestProgramIDIsSourcesID(t *testing.T) {
+	_, id, err := Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if got, err := ProgramID(); err != nil || got != id {
+			t.Fatalf("ProgramID = %q %v, want %q", got, err, id)
+		}
+	}
+}
+
 func TestSourceLayout(t *testing.T) {
 	data, _, err := Source()
 	if err != nil {

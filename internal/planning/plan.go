@@ -182,6 +182,10 @@ type DatabaseGatewayConfig struct {
 	Suffix string `json:"suffix"`
 	// Resources are the opted-in resources' names, sorted.
 	Resources []string `json:"resources"`
+	// Program is the ID of the gateway's generated source, so a Loomplane
+	// upgrade that changes the gateway's code changes its configuration
+	// and redeploys it.
+	Program string `json:"program"`
 }
 
 // Generated reports whether Loomplane generates the service from its own
