@@ -322,9 +322,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	if injectErr != nil {
 		return fmt.Errorf("planning needs the projects extension: %w", injectErr)
 	}
+	reapWarn := func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) }
 	projectSvc.AddReaper(&deployments.DatabaseGatewayReaper{
 		Gateways: gatewayStore, Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
-		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+		Warn: reapWarn,
+	})
+	// It takes every other service and resource's binding too, and this
+	// deletes their credentials from Vault and warns about each one still
+	// running in a cloud.
+	projectSvc.AddReaper(&deployments.BindingReaper{
+		Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
+		Warn: reapWarn,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err

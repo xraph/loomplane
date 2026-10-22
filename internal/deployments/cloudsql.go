@@ -19,6 +19,9 @@ const (
 	sqlUser = "app"
 	// passwordField is where a database's password is kept, in Vault.
 	passwordField = "password"
+	// adminPasswordField is where a database Loomplane runs itself keeps
+	// its administrator's password, in Vault.
+	adminPasswordField = "admin-password"
 )
 
 // sqlVersions maps a resource kind and version to Cloud SQL's names.
