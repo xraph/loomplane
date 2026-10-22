@@ -206,26 +206,30 @@ func shimScript(sp string, prefixes []string) (string, error) {
 }
 
 // injectShim puts tag right after the page's <head>, or at the top of its
-// <body> when it has no head. A <meta charset> that opens the head stays
-// first, so the browser's prescan of the first 1024 bytes still finds it.
-// Tags are found the way a browser would, near enough: not inside
-// comments, other tags' attributes, or script, style, textarea and title
-// text. A fragment with neither head nor body, such as an htmx partial,
-// gets no shim: the page it lands in already has it.
+// <body> when it has no head. A <meta> naming the charset in the head,
+// within the first 1024 bytes, stays ahead of the shim, so the browser's
+// encoding prescan of those bytes still finds it. Tags are found the way a
+// browser would, near enough: not inside comments, other tags' attributes,
+// or script, style, textarea and title text. A fragment with neither head
+// nor body, such as an htmx partial, gets no shim: the page it lands in
+// already has it.
 func injectShim(b []byte, tag string) []byte {
-	name, at := firstTag(b, 0, "head", "body")
+	name, _, at := firstTag(b, 0, "head", "body")
 	if at < 0 {
 		return b
 	}
 	if name == "head" {
-		next := at
-		for next < len(b) && isHTMLSpace(b[next]) {
-			next++
-		}
-		if startsTag(b[next:], "meta") {
-			if end := tagEnd(b, next+len("<meta")); end > 0 && indexFold(b[next:end], []byte("charset")) >= 0 {
-				at = end
+		prescan := b[:min(len(b), charsetPrescan)]
+		for from := at; from < len(prescan); {
+			found, start, end := firstTag(prescan, from, "meta", "body")
+			if found != "meta" {
+				break
 			}
+			if indexFold(prescan[start:end], []byte("charset")) >= 0 {
+				at = end
+				break
+			}
+			from = end
 		}
 	}
 	out := make([]byte, 0, len(b)+len(tag))
@@ -234,17 +238,20 @@ func injectShim(b []byte, tag string) []byte {
 	return append(out, b[at:]...)
 }
 
+// charsetPrescan is how far into a page a browser looks for its charset.
+const charsetPrescan = 1024
+
 // rawText are elements whose content is text, not markup.
 var rawText = map[string]bool{"script": true, "style": true, "textarea": true, "title": true}
 
 // firstTag finds, from offset from, the first start tag named one of
-// names, and returns its name and the offset just past its ">"; or "" and
-// -1.
-func firstTag(b []byte, from int, names ...string) (name string, end int) {
+// names, and returns its name, its offset and the offset just past its
+// ">"; or "", -1 and -1.
+func firstTag(b []byte, from int, names ...string) (name string, start, end int) {
 	for i := from; i < len(b); {
 		lt := bytes.IndexByte(b[i:], '<')
 		if lt < 0 {
-			return "", -1
+			return "", -1, -1
 		}
 		i += lt
 		rest := b[i:]
@@ -252,7 +259,7 @@ func firstTag(b []byte, from int, names ...string) (name string, end int) {
 		case bytes.HasPrefix(rest, []byte("<!--")):
 			end := bytes.Index(rest[4:], []byte("-->"))
 			if end < 0 {
-				return "", -1
+				return "", -1, -1
 			}
 			i += 4 + end + 3
 			continue
@@ -260,7 +267,7 @@ func firstTag(b []byte, from int, names ...string) (name string, end int) {
 			// A doctype, processing instruction or end tag.
 			end := bytes.IndexByte(rest, '>')
 			if end < 0 {
-				return "", -1
+				return "", -1, -1
 			}
 			i += end + 1
 			continue
@@ -275,23 +282,23 @@ func firstTag(b []byte, from int, names ...string) (name string, end int) {
 		name := strings.ToLower(string(b[i+1 : j]))
 		end := tagEnd(b, j)
 		if end < 0 {
-			return "", -1
+			return "", -1, -1
 		}
 		for _, n := range names {
 			if name == n {
-				return name, end
+				return name, i, end
 			}
 		}
 		i = end
 		if rawText[name] {
 			closing := indexFold(b[end:], []byte("</"+name))
 			if closing < 0 {
-				return "", -1
+				return "", -1, -1
 			}
 			i = end + closing
 		}
 	}
-	return "", -1
+	return "", -1, -1
 }
 
 // tagEnd is the offset just past the ">" that ends a tag whose attributes
@@ -312,12 +319,6 @@ func tagEnd(b []byte, j int) int {
 		}
 	}
 	return -1
-}
-
-// startsTag reports whether b starts with the start tag <name.
-func startsTag(b []byte, name string) bool {
-	n := len(name) + 1
-	return len(b) > n && b[0] == '<' && bytes.EqualFold(b[1:n], []byte(name)) && (isHTMLSpace(b[n]) || b[n] == '>' || b[n] == '/')
 }
 
 func isHTMLSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' }

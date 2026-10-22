@@ -85,11 +85,10 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusNotFound, msgNotFound)
 		return
 	}
-	if status, msg := s.recheck(ctx, rec, now); status != 0 {
+	if status, msg := s.recheck(ctx, rec, now, false); status != 0 {
 		refuse(w, status, msg)
 		return
 	}
-	fmt.Println("serve", r.Method, now)
 	if now.Sub(rec.LastUsedAt) >= touchEvery {
 		// A failed write only shortens the session; this request is
 		// still the creator's.
@@ -194,14 +193,15 @@ func upstreamPath(rest string, t Target) (decodedPath, escapedPath string, ok bo
 	return join(decoded), join(raw), true
 }
 
-// recheck asks again, at most once per RecheckEvery, whether the
-// session's creator may still modify the project's infrastructure. A
-// session whose creator may not ends here. It returns 0 to go on.
-func (s *Service) recheck(ctx context.Context, rec *Record, now time.Time) (status int, msg string) {
+// recheck asks again, at most once per RecheckEvery unless always,
+// whether the session's creator may still modify the project's
+// infrastructure. A session whose creator may not ends here. It returns 0
+// to go on.
+func (s *Service) recheck(ctx context.Context, rec *Record, now time.Time, always bool) (status int, msg string) {
 	s.mu.Lock()
 	last, ok := s.checked[rec.TokenHash]
 	s.mu.Unlock()
-	if ok && now.Sub(last) < RecheckEvery {
+	if !always && ok && now.Sub(last) < RecheckEvery {
 		return 0, ""
 	}
 	err := s.d.Authz.Require(ctx, security.Principal{OrgID: rec.OrgID, UserID: rec.UserID}, security.InfrastructureModify, rec.ProjectID)
@@ -336,8 +336,7 @@ func (s *Service) watch(ctx context.Context, stop func(), hash string, end time.
 
 // stillOpen reports whether a streaming response's session still stands,
 // recording its use when used is true.
-func (s *Service) stillOpen(ctx context.Context, hash string, end time.Time, used bool) (ok bool) {
-	defer func() { fmt.Println("stillOpen", s.d.Now(), used, ok) }()
+func (s *Service) stillOpen(ctx context.Context, hash string, end time.Time, used bool) bool {
 	rec, err := s.d.Store.Get(ctx, hash)
 	if err != nil {
 		// Gone, or Loomplane can't tell: either way the stream ends.
@@ -355,7 +354,9 @@ func (s *Service) stillOpen(ctx context.Context, hash string, end time.Time, use
 		s.forget(hash)
 		return false
 	}
-	status, _ := s.recheck(ctx, rec, now)
+	// The ticks come every RecheckEvery, so each one checks: a creator who
+	// lost permission loses the stream within one RecheckEvery.
+	status, _ := s.recheck(ctx, rec, now, true)
 	return status == 0
 }
 

@@ -104,8 +104,10 @@ func TestProxyEndsStreamsWhenPermissionIsRevoked(t *testing.T) {
 	if !s.open() {
 		t.Fatal("a stream whose creator may still modify infrastructure ended")
 	}
+	// Revoked a second after the last check: the next tick still checks,
+	// so the stream ends within one RecheckEvery.
 	h.authz.deny("admin")
-	h.clock.Add(RecheckEvery)
+	h.clock.Add(time.Second)
 	h.tickOnce(t)
 	w := s.ended(t)
 	if !strings.HasPrefix(w.Body.String(), "data: x\n\n") {
