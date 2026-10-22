@@ -115,7 +115,8 @@ func (e *Extension) Start(context.Context) error {
 }
 
 // auditor records route pauses and resumes in Chronicle, in the
-// organization's stream: the route and its resource, never its salt.
+// organization's stream: the route, its resource and new state, and the
+// project, environment and gateway it belongs to. Never a key or a salt.
 type auditor struct {
 	chronicle *chronicle.Chronicle
 	appID     string
@@ -124,9 +125,10 @@ type auditor struct {
 
 var _ dbgateway.Auditor = auditor{}
 
-func (a auditor) Record(ctx context.Context, action string, p security.Principal, route *dbgateway.RouteRecord) {
+func (a auditor) Record(ctx context.Context, action string, p security.Principal, gw *dbgateway.Gateway, route *dbgateway.RouteRecord) {
 	err := a.chronicle.Info(ctx, action, "db_gateway_route", route.ID).
 		Category("database_gateways").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
+		Meta("project_id", gw.ProjectID).Meta("environment_id", gw.EnvironmentID).Meta("gateway_id", gw.ID).
 		Meta("resource", route.Resource).Meta("state", route.State).Record()
 	if err != nil {
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))

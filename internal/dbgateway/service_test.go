@@ -646,10 +646,12 @@ type memAudit struct {
 	events []string
 }
 
-func (a *memAudit) Record(_ context.Context, action string, p security.Principal, r *RouteRecord) {
+func (a *memAudit) Record(_ context.Context, action string, p security.Principal, gw *Gateway, r *RouteRecord) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.events = append(a.events, action+" "+p.UserID+" "+r.ID+" "+r.Resource+" "+r.State)
+	a.events = append(a.events, strings.Join([]string{
+		action, p.UserID, gw.ProjectID, gw.EnvironmentID, gw.ID, r.ID, r.Resource, r.State,
+	}, " "))
 }
 
 func (a *memAudit) list() []string {
@@ -837,8 +839,8 @@ func TestPauseAudits(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"dbGateway.route.pause usr_admin dbgr_1 orders paused",
-		"dbGateway.route.resume usr_admin dbgr_1 orders active",
+		"dbGateway.route.pause usr_admin proj_1 env_1 dbgw_01test dbgr_1 orders paused",
+		"dbGateway.route.resume usr_admin proj_1 env_1 dbgw_01test dbgr_1 orders active",
 	}
 	if ev := audit.list(); !slices.Equal(ev, want) {
 		t.Fatalf("audited %v, want %v", ev, want)

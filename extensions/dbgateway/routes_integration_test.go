@@ -15,7 +15,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -203,18 +202,6 @@ func (a catalogAuthz) Require(_ context.Context, p security.Principal, perm secu
 	return security.ErrForbidden
 }
 
-// actions keeps the audited actions.
-type actions struct {
-	mu   sync.Mutex
-	list []string
-}
-
-func (a *actions) Record(_ context.Context, action string, p security.Principal, r *dbgateway.RouteRecord) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.list = append(a.list, action+" "+p.UserID+" "+r.ID+" "+r.State)
-}
-
 // The project routes over the real store: a viewer lists the gateway with
 // its reporting instance and can't pause; an admin's pause is audited and
 // reaches the gateway's next snapshot.
@@ -249,9 +236,9 @@ func TestManagementRoutesAgainstTheStore(t *testing.T) {
 	}
 	trust := plane.TrustKey{PublicKey: cpPub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
 	svc := dbgateway.NewService(store, resourceURLs{secrets: secrets}, cpPriv, trust, time.Now)
-	audit := &actions{}
+	trail, events := memChronicle(t)
 	svc.Authz = catalogAuthz{"usr_viewer": security.RoleViewer, "usr_admin": security.RoleAdmin}
-	svc.Audit = audit
+	svc.Audit = auditor{chronicle: trail, appID: "app_1", log: forge.NewNoopLogger()}
 	r := forge.NewRouter()
 	if err = mount(r, &handlers{svc: svc, wait: 200 * time.Millisecond, every: 20 * time.Millisecond, now: time.Now,
 		warn: func(msg string, werr error) { t.Errorf("%s: %v", msg, werr) }}); err != nil {
@@ -319,10 +306,10 @@ func TestManagementRoutesAgainstTheStore(t *testing.T) {
 		t.Fatalf("an admin's resume: %d %q", out.Code, out.Body.String())
 	}
 	want := []string{
-		"dbGateway.route.pause usr_admin " + route.ID + " paused",
-		"dbGateway.route.resume usr_admin " + route.ID + " active",
+		"dbGateway.route.pause usr_admin proj_1 env_1 " + gw.ID + " " + route.ID + " orders paused",
+		"dbGateway.route.resume usr_admin proj_1 env_1 " + gw.ID + " " + route.ID + " orders active",
 	}
-	if !slices.Equal(audit.list, want) {
-		t.Fatalf("audited %v, want %v", audit.list, want)
+	if got := auditedRouteChanges(t, events); !slices.Equal(got, want) {
+		t.Fatalf("audited %v, want %v", got, want)
 	}
 }

@@ -71,11 +71,11 @@ type Authorizer interface {
 	Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error
 }
 
-// Auditor records route pauses and resumes. The route it's given still
-// carries its salt, which must not be recorded, and recording must not fail
-// the change.
+// Auditor records route pauses and resumes, with the gateway the route is
+// on. The gateway carries its public keys and the route its salt, neither
+// of which may be recorded, and recording must not fail the change.
 type Auditor interface {
-	Record(ctx context.Context, action string, p security.Principal, route *RouteRecord)
+	Record(ctx context.Context, action string, p security.Principal, gw *Gateway, route *RouteRecord)
 }
 
 // Service is the control plane's side of the gateway protocol: it compiles
@@ -451,7 +451,7 @@ func (s *Service) SetRouteState(ctx context.Context, p security.Principal, proje
 	route := routes[i]
 	route.State = state
 	if s.Audit != nil {
-		s.Audit.Record(ctx, action, p, &route)
+		s.Audit.Record(ctx, action, p, gw, &route)
 	}
 	return &RouteSummary{ID: route.ID, GatewayID: gw.ID, Resource: route.Resource, State: state}, nil
 }
