@@ -1,6 +1,7 @@
 package planning
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -233,7 +234,9 @@ func TestDatabaseGatewayRegionMismatch(t *testing.T) {
 func TestDatabaseGatewayRDSOnECS(t *testing.T) {
 	doc := strings.Replace(dbgwManifest, "provider: digitalocean", "provider: rds", 1)
 	doc = strings.Replace(doc, "{provider: cloud-run, region: us-east1}", "{provider: ecs-fargate}", 1)
-	r := dbgwCompute(t, doc, exampleZone)
+	in := dbgwInput(t, doc, exampleZone)
+	in.Connections = httpsAWS(in.Connections)
+	r := Compute(in)
 	if len(r.Problems) > 0 {
 		t.Fatalf("problems: %+v", r.Problems)
 	}
@@ -404,5 +407,167 @@ func TestCloudResolutionManifestCountsDatabaseGateway(t *testing.T) {
 		if err != nil || needs.Explicit != tc.explicit || needs.Fallback != tc.fallback {
 			t.Errorf("%q: needs %+v %v", tc.doc, needs, err)
 		}
+	}
+}
+
+// httpsAWS gives the AWS connection a certificate, so ECS serves HTTPS.
+func httpsAWS(cs []ConnectionOption) []ConnectionOption {
+	out := slices.Clone(cs)
+	for i := range out {
+		if out[i].Cloud == "aws" {
+			out[i].HTTPS = true
+		}
+	}
+	return out
+}
+
+// dbgwSameCloud has an app on DigitalOcean that reaches its database
+// directly, so the resource can opt in and out without a problem.
+const dbgwSameCloud = `version: 1
+services:
+  api: {source: services/api, provider: digitalocean, needs: [db]}
+resources:
+  db: {kind: postgres, provider: digitalocean}
+database_gateway: {provider: cloud-run, region: us-east1}
+`
+
+func TestDatabaseGatewayOptInAndOutRedeploysApps(t *testing.T) {
+	optedIn := strings.Replace(dbgwSameCloud, "provider: digitalocean}", "provider: digitalocean, gateway: true}", 1)
+	direct := dbgwCompute(t, dbgwSameCloud, exampleZone)
+	if len(direct.Problems) > 0 {
+		t.Fatalf("problems: %+v", direct.Problems)
+	}
+	if link := action(t, direct, "service:api").Service.Env[0]; link.Gateway {
+		t.Fatalf("a direct link is marked as through the gateway: %+v", link)
+	}
+	// A link that isn't through the gateway is written as it always was,
+	// so bindings from before the field compare as unchanged.
+	if raw, _ := json.Marshal(action(t, direct, "service:api").Service.Env); strings.Contains(string(raw), "gateway") {
+		t.Fatalf("a direct link records the gateway: %s", raw)
+	}
+	if again := dbgwCompute(t, dbgwSameCloud, exampleZone, deployed(t, direct)...); action(t, again, "service:api").Op != Keep {
+		t.Fatal("an unchanged direct link redeployed the app")
+	}
+
+	in := dbgwCompute(t, optedIn, exampleZone, deployed(t, direct)...)
+	api := action(t, in, "service:api")
+	if api.Op != Update || !api.Service.Env[0].Gateway || !slices.Contains(api.DependsOn, "service:db-gateway") {
+		t.Fatalf("opting in left api %s (%s) with %+v", api.Op, api.Reason, api.Service.Env)
+	}
+	if again := dbgwCompute(t, optedIn, exampleZone, deployed(t, in)...); action(t, again, "service:api").Op != Keep {
+		t.Fatal("re-planning an opted-in app redeployed it")
+	}
+
+	out := dbgwCompute(t, dbgwSameCloud, exampleZone, deployed(t, in)...)
+	if api := action(t, out, "service:api"); api.Op != Update || api.Service.Env[0].Gateway {
+		t.Fatalf("opting out left api %s with %+v", api.Op, api.Service.Env)
+	}
+	if gw := action(t, out, "service:db-gateway"); gw.Op != Delete {
+		t.Fatalf("db-gateway is %s after the last resource opted out", gw.Op)
+	}
+}
+
+func TestDatabaseGatewayNewAddressRedeploysApps(t *testing.T) {
+	first := dbgwCompute(t, dbgwManifest, exampleZone)
+	live := deployed(t, first)
+
+	// A new region replaces the gateway, at a new address.
+	moved := dbgwCompute(t, strings.Replace(dbgwManifest, "region: us-east1", "region: us-east4", 1), exampleZone, live...)
+	if gw := action(t, moved, "service:db-gateway"); gw.Op != Replace {
+		t.Fatalf("db-gateway is %s", gw.Op)
+	}
+	for _, name := range []string{"api", "web"} {
+		if a := action(t, moved, "service:"+name); a.Op != Update || !strings.Contains(a.Reason, "db-gateway") {
+			t.Fatalf("%s is %s (%s) while the gateway moves", name, a.Op, a.Reason)
+		}
+	}
+
+	// One deleted outside Loomplane is created again, at a new address.
+	for _, b := range live {
+		if b.Name == dbGatewayName {
+			b.Drift = DriftMissing
+		}
+	}
+	again := dbgwCompute(t, dbgwManifest, exampleZone, live...)
+	if gw := action(t, again, "service:db-gateway"); gw.Op != Create {
+		t.Fatalf("db-gateway is %s", gw.Op)
+	}
+	if a := action(t, again, "service:api"); a.Op != Update {
+		t.Fatalf("api is %s while the gateway is created again", a.Op)
+	}
+}
+
+// A held app keeps the gateway address it was deployed with, so a plan
+// that moves the gateway is a problem.
+func TestDatabaseGatewayMoveUnderAHeldApp(t *testing.T) {
+	live := deployed(t, dbgwCompute(t, dbgwManifest, exampleZone))
+	in := dbgwInput(t, strings.Replace(dbgwManifest, "region: us-east1", "region: us-east4", 1), exampleZone, live...)
+	in.Held = map[string]bool{"other": true}
+	r := Compute(in)
+	f := finding(t, r.Problems, "held-address")
+	if !strings.Contains(f.Message, "uses db-gateway's address") {
+		t.Fatalf("held-address doesn't name the gateway: %+v", f)
+	}
+}
+
+func TestDatabaseGatewayOnECSNeedsHTTPS(t *testing.T) {
+	doc := strings.Replace(dbgwManifest, "provider: digitalocean", "provider: rds", 1)
+	doc = strings.Replace(doc, "{provider: cloud-run, region: us-east1}", "{provider: ecs-fargate}", 1)
+	f := finding(t, dbgwCompute(t, doc, exampleZone).Problems, "db-gateway-needs-https")
+	if f.Path != "database_gateway.provider" || !strings.Contains(f.Message, "certificate") || strings.Contains(f.Message, "—") {
+		t.Fatalf("finding = %+v", f)
+	}
+
+	in := dbgwInput(t, doc, exampleZone)
+	in.Connections = httpsAWS(in.Connections)
+	first := Compute(in)
+	if len(first.Problems) > 0 {
+		t.Fatalf("problems: %+v", first.Problems)
+	}
+	// A gateway deployed before the certificate keeps its plain HTTP port.
+	live := deployed(t, first)
+	for _, b := range live {
+		if b.Name == dbGatewayName {
+			b.URL = "http://lb.example.com:8000"
+		}
+	}
+	in.Bindings = live
+	f = finding(t, Compute(in).Problems, "db-gateway-needs-https")
+	if !strings.Contains(f.Message, "http://lb.example.com:8000") {
+		t.Fatalf("finding = %+v", f)
+	}
+}
+
+// dbgwAppliedGateway is a deployed database gateway on a Cloud Run
+// target, as a Cloud switch reads it.
+func dbgwAppliedGateway(t *testing.T) *Binding {
+	t.Helper()
+	cfg := ServiceConfig{Provider: cloudRun, Region: "us-east1", Workload: "http-service", Execution: "container", Source: ".", Ecosystem: "go", Image: dbgateway.Dockerfile, Port: dbgateway.Port, Public: true,
+		DatabaseGateway: &DatabaseGatewayConfig{Name: dbGatewayName, Suffix: "us-east1.db.example.com", Resources: []string{"db"}},
+		CloudPlacement:  &CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "run", Provider: cloudRun, ConnectionID: "old", AccountIdentity: "gcp:old"}}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Binding{ID: "bind_gw", OrgID: "org", ProjectID: "project", EnvironmentID: "env", Name: dbGatewayName, Subject: ServiceSubject, Provider: cloudRun, Region: "us-east1", ConnectionID: "old", Config: raw, ExternalID: "ext_gw"}
+}
+
+func TestDatabaseGatewayInCloudSync(t *testing.T) {
+	assignment := func(connection string) *cloudprofiles.Assignment {
+		return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "run", Provider: cloudRun, ConnectionID: connection, Revision: 2}}}
+	}
+	gcp := func(id string) ConnectionOption {
+		return ConnectionOption{ID: id, Cloud: "gcp", Ready: true, Details: map[string]string{"project_id": id}}
+	}
+	// Staying put, it keeps the configuration it was applied with.
+	r := AppliedCloudPlan([]*Binding{dbgwAppliedGateway(t)}, assignment("old"), "target", []ConnectionOption{gcp("old")}, providers.Registry())
+	if !r.Executable || r.Actions[0].Op != Keep || !slices.Equal(r.Actions[0].Service.DatabaseGateway.Resources, []string{"db"}) {
+		t.Fatalf("adopting the gateway's placement: %+v %+v", r.Problems, r.Actions)
+	}
+	// Moving, it would get a new address its apps never hear of.
+	r = AppliedCloudPlan([]*Binding{dbgwAppliedGateway(t)}, assignment("new"), "target", []ConnectionOption{gcp("new")}, providers.Registry())
+	f := finding(t, r.Problems, "cloud-sync-blocked")
+	if r.Executable || f.Name != dbGatewayName || !strings.Contains(f.Message, "database gateway") {
+		t.Fatalf("a Cloud switch moved the gateway: %+v", r.Problems)
 	}
 }

@@ -134,9 +134,49 @@ func (p *planner) planDatabaseGateway() {
 		Service: cfg, ConnectionID: serviceConnection(cfg), DependsOn: deps, Step: 2,
 	}
 	p.diff(a, a.Service, a.Provider, a.Region)
+	if prov.Name == ecsFargate {
+		p.checkDatabaseGatewayHTTPS(a, connection)
+	}
 	p.services[dbGatewayName] = a
 	p.actions = append(p.actions, a)
 	p.dependOnDatabaseGateway(a, served)
+}
+
+// checkDatabaseGatewayHTTPS reports a database gateway on ECS that
+// wouldn't answer at an https address, which is the only kind an app is
+// handed for it. ECS serves HTTPS only through a certificate on the
+// connection, and keeps the plain HTTP port a gateway was first given.
+// Where the connection isn't settled, connect says so.
+func (p *planner) checkDatabaseGatewayHTTPS(a *Action, connection string) {
+	i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == connection })
+	if i < 0 {
+		return
+	}
+	c := p.in.Connections[i]
+	var msg string
+	switch b := p.bindings[a.ID]; {
+	case !c.HTTPS:
+		msg = fmt.Sprintf("Apps reach the database gateway only at an https address, and on ECS it gets one only when its connection has a certificate. %s has none. Add an ACM certificate to it, or run database_gateway on Cloud Run.", c.Name)
+	case b != nil && strings.HasPrefix(b.URL, "http://") && a.Op != Create && a.Op != Replace:
+		msg = fmt.Sprintf("Apps reach the database gateway only at an https address, and it answers at %s, a port ECS opened before %s had a certificate and keeps for it. Move database_gateway to another region or connection, or remove it and deploy it again, to get an https one.", b.URL, c.Name)
+	default:
+		return
+	}
+	p.problem(Finding{Code: "db-gateway-needs-https", Subject: ServiceSubject, Name: dbGatewayName, Path: "database_gateway.provider", Message: msg})
+}
+
+// linkTargets are the actions whose addresses a link hands a service:
+// what it names, and for a resource behind the database gateway, the
+// gateway too.
+func (p *planner) linkTargets(e EnvLink) []*Action {
+	var out []*Action
+	if dep := p.planned(e.Subject, e.From); dep != nil {
+		out = append(out, dep)
+	}
+	if gw := p.services[dbGatewayName]; e.Gateway && e.Subject == ResourceSubject && gw != nil && gw.Service != nil && gw.Service.DatabaseGateway != nil {
+		out = append(out, gw)
+	}
+	return out
 }
 
 // dbGatewayDomain is the DNS zone the database gateway names its hosts
@@ -182,11 +222,30 @@ func (p *planner) dbGatewayDomain(path string) (string, bool) {
 	return "", false
 }
 
-// dependOnDatabaseGateway orders every service that needs a resource
-// behind the gateway after it, wherever the service runs, and moves what
-// runs after those services along with them.
+// dependOnDatabaseGateway marks each link a service has to a resource
+// behind the gateway, which redeploys the service when that changes, and
+// orders every service that needs one after the gateway, wherever it
+// runs, moving what runs after those services along with them. A held
+// service keeps the links it was deployed with.
 func (p *planner) dependOnDatabaseGateway(gw *Action, resources []string) {
 	behind := func(e EnvLink) bool { return e.Subject == ResourceSubject && slices.Contains(resources, e.From) }
+	for _, name := range p.in.Manifest.ServiceNames() {
+		a := p.services[name]
+		if _, held := p.held[name]; held || a == nil || a.Service == nil {
+			continue
+		}
+		marked := false
+		for i, e := range a.Service.Env {
+			if behind(e) && !e.Gateway {
+				a.Service.Env[i].Gateway, marked = true, true
+			}
+		}
+		// The links are part of the configuration, so the comparison with
+		// what's deployed has to happen again.
+		if marked {
+			p.diff(a, a.Service, a.Provider, a.Region)
+		}
+	}
 	for _, a := range p.actions {
 		if a == gw || a.Service == nil || a.Op == Delete || slices.Contains(a.DependsOn, gw.ID) || !slices.ContainsFunc(a.Service.Env, behind) {
 			continue

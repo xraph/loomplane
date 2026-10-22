@@ -244,7 +244,9 @@ func (p *planner) use(prov *provider.Provider) {
 func (p *planner) checkHTTPS(chosen map[string]string) {
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
-		if a.Provider != ecsFargate || a.Service == nil || !a.Service.Public || a.Service.Port == 0 {
+		// The database gateway must serve HTTPS, which
+		// checkDatabaseGatewayHTTPS makes a problem.
+		if a.Provider != ecsFargate || a.Service == nil || !a.Service.Public || a.Service.Port == 0 || a.Service.DatabaseGateway != nil {
 			continue
 		}
 		id := a.ConnectionID
@@ -646,12 +648,13 @@ func (p *planner) readdress() {
 		}
 		var moved []string
 		for _, e := range a.Service.Env {
-			dep := p.planned(e.Subject, e.From)
-			if dep == nil || slices.Contains(moved, dep.Name) {
-				continue
-			}
-			if _, ok := p.readdressed(dep, e, a.Provider); ok {
-				moved = append(moved, dep.Name)
+			for _, dep := range p.linkTargets(e) {
+				if slices.Contains(moved, dep.Name) {
+					continue
+				}
+				if _, ok := p.readdressed(dep, e, a.Provider); ok {
+					moved = append(moved, dep.Name)
+				}
 			}
 		}
 		switch len(moved) {
@@ -804,37 +807,50 @@ func (p *planner) heldAddresses() {
 		}
 		var seen []string
 		for _, e := range u.env {
-			dep := p.planned(e.Subject, e.From)
-			if dep == nil || slices.Contains(seen, dep.ID) {
-				continue
+			for _, dep := range p.linkTargets(e) {
+				p.heldAddress(u.name, u.provider, who, scope, e, dep, &seen)
 			}
-			how, ok := p.readdressed(dep, e, u.provider)
-			if !ok {
-				continue
-			}
-			seen = append(seen, dep.ID)
-			p.addressed[dep.ID] = append(p.addressed[dep.ID], u.name)
-			if p.in.Manifest != nil && p.in.Manifest.Held.WarnSameAddress() && p.sameAddress(dep) {
-				p.warn(Finding{
-					Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
-					Message: fmt.Sprintf("%s, uses %s's address, and this plan creates %s again on Cloud Run with the name, region and connection it had, so it should get the same address, and %s should still reach it. %s if it doesn't.",
-						who, e.From, dep.Name, u.name, strings.TrimSuffix(scope, ".")),
-				})
-				continue
-			}
-			// A deployment removes what it replaces once the new one is up.
-			// What's created again was deleted outside Loomplane.
-			fate := "which this plan stops tracking"
-			if dep.Op == Replace {
-				fate = "which the deployment removes once the new one is up"
-			}
-			p.problem(Finding{
-				Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
-				Message: fmt.Sprintf("%s, uses %s's address, and this plan %s, so %s keeps the old one's address, %s. %s",
-					who, e.From, how, u.name, fate, scope),
-			})
 		}
 	}
+}
+
+// heldAddress reports one link of name, a held user on target, to dep,
+// when this plan gives dep a new address, as heldAddresses says. seen
+// are what name's other links reported already.
+func (p *planner) heldAddress(name, target, who, scope string, e EnvLink, dep *Action, seen *[]string) {
+	if slices.Contains(*seen, dep.ID) {
+		return
+	}
+	how, ok := p.readdressed(dep, e, target)
+	if !ok {
+		return
+	}
+	*seen = append(*seen, dep.ID)
+	p.addressed[dep.ID] = append(p.addressed[dep.ID], name)
+	// A link through the database gateway uses the gateway's address too.
+	from := e.From
+	if dep.Name != e.From {
+		from = dep.Name
+	}
+	if p.in.Manifest != nil && p.in.Manifest.Held.WarnSameAddress() && p.sameAddress(dep) {
+		p.warn(Finding{
+			Code: "held-address", Subject: ServiceSubject, Name: name, Path: "services." + name,
+			Message: fmt.Sprintf("%s, uses %s's address, and this plan creates %s again on Cloud Run with the name, region and connection it had, so it should get the same address, and %s should still reach it. %s if it doesn't.",
+				who, from, dep.Name, name, strings.TrimSuffix(scope, ".")),
+		})
+		return
+	}
+	// A deployment removes what it replaces once the new one is up.
+	// What's created again was deleted outside Loomplane.
+	fate := "which this plan stops tracking"
+	if dep.Op == Replace {
+		fate = "which the deployment removes once the new one is up"
+	}
+	p.problem(Finding{
+		Code: "held-address", Subject: ServiceSubject, Name: name, Path: "services." + name,
+		Message: fmt.Sprintf("%s, uses %s's address, and this plan %s, so %s keeps the old one's address, %s. %s",
+			who, from, how, name, fate, scope),
+	})
 }
 
 // gatewayHeld warns about each name a gateway on here takes from what a

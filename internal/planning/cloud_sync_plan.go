@@ -136,6 +136,15 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			a.Reason = "Adopt the reviewed Cloud placement."
 		}
 	}
+	// The database gateway keeps the configuration it was applied with,
+	// which is what its routes were settled to. Moving it gives it a new
+	// address, and the apps behind it pinned the old one in their applied
+	// variables, so a redeploy wouldn't refresh it.
+	for _, a := range p.actions {
+		if a.Op == Replace && a.Service.DatabaseGateway != nil {
+			blocked(a.Name, "The database gateway can't move in a Cloud switch yet: the apps behind it pinned its current address. Give database_gateway a provider of its own and deploy, so the switch leaves it where it is.")
+		}
+	}
 	p.routedReplacements()
 	// Follow the applied dependency graph transitively, including generated gateways.
 	for changed := true; changed; {
