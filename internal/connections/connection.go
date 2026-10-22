@@ -24,6 +24,7 @@ const (
 	Server       = "server"
 	Kubernetes   = "kubernetes"
 	Registry     = "registry"
+	Cloudflare   = "cloudflare"
 )
 
 // Statuses. A connection is checked when it's made and whenever someone

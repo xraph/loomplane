@@ -63,6 +63,11 @@ func (e *Extension) clouds() (CloudList, error) {
 			Help: "Create a personal access token in DigitalOcean under API, Tokens, with read and write access to App Platform and Databases. App Platform builds from your repositories through DigitalOcean's own GitHub connection, so give it access to them under Settings, GitHub. The token's team is where everything is made.",
 		},
 		{
+			Cloud: connections.Cloudflare, Title: "Cloudflare", Credential: "API token",
+			Help:     "Create an API token in Cloudflare under My Profile, API Tokens, scoped to this account, with Zone Read and DNS Edit for the zones Loomplane manages. Add Registrar edit only if you want to register domains from Loomplane. Loomplane checks each permission without changing anything and says which are missing.",
+			Settings: []sdk.Setting{{Key: "account_id", Label: "Account ID", Required: true}},
+		},
+		{
 			Cloud: connections.Azure, Title: "Microsoft Azure", Credential: "Client secret",
 			Help: "Register an application in Microsoft Entra ID, add a client secret under Certificates & secrets, and give it the Contributor role on the subscription, or on the resource group to deploy into. Loomplane makes the resource group if it isn't there, then a container registry and a Container Apps environment in it. The check lists any action the role leaves out.",
 			Settings: []sdk.Setting{

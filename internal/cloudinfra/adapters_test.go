@@ -43,18 +43,21 @@ func TestRegistryExposesOnlyImplementedCapabilities(t *testing.T) {
 	}
 }
 func TestCredentialRequiresRecordedImmutableIdentity(t *testing.T) {
-	for _, cloud := range []string{"vercel", "digitalocean"} {
+	for _, cloud := range []string{"vercel", "digitalocean", "cloudflare"} {
 		connection := &connections.Connection{Cloud: cloud, Account: "mutable name", Status: connections.StatusReady, Details: map[string]string{}}
 		if _, err := cloudinfra.Credential(connection, []byte("secret")); !errors.Is(err, provider.ErrInfrastructureIdentity) {
 			t.Fatalf("display name established identity: %v", err)
 		}
-		key := "team_id"
-		if cloud == "digitalocean" {
+		key, team := "team_id", "immutable-team"
+		switch cloud {
+		case "digitalocean":
 			key = "team_uuid"
+		case "cloudflare":
+			key, team = "account_id", ""
 		}
 		connection.Details[key] = "immutable-team"
 		credential, err := cloudinfra.Credential(connection, []byte("secret"))
-		if err != nil || credential.AccountID != "immutable-team" || credential.TeamID != "immutable-team" {
+		if err != nil || credential.AccountID != "immutable-team" || credential.TeamID != team {
 			t.Fatalf("credential %v", err)
 		}
 	}
