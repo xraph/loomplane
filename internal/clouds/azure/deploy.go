@@ -464,6 +464,9 @@ type Secret struct {
 type Template struct {
 	Containers []Container `json:"containers"`
 	Scale      *Scale      `json:"scale,omitempty"`
+	// RevisionSuffix names the revision a PUT makes. Container Apps only
+	// makes one when the template changes, so a new suffix forces it.
+	RevisionSuffix string `json:"revisionSuffix,omitempty"`
 }
 
 // Container is an app's container.

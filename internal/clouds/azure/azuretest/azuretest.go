@@ -13,6 +13,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,8 +67,10 @@ type Fake struct {
 	Uploads map[string][]byte
 	// Tasks are the ACR Tasks files of the runs started, decoded.
 	Tasks []string
-	// Apps are the container app bodies Loomplane PUT, by name.
+	// Apps are the container app bodies Loomplane PUT, by name, and
+	// AppPuts every one of them in order.
 	Apps    map[string]map[string]any
+	AppPuts []map[string]any
 	Deleted []string
 	// RoleAssignments are the roles assigned, each once.
 	RoleAssignments []RoleAssignment
@@ -226,14 +230,14 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			props["defaultDomain"] = "fake.azurecontainerapps.io"
 		case "microsoft.app/containerapps":
 			f.Apps[name] = body
-			rev := 1
-			if old := f.resources[id]; old != nil {
-				rev = int(old["revision"].(float64)) + 1
-			}
-			body["revision"] = float64(rev)
-			props["latestRevisionName"] = name + "--" + string(rune('0'+rev))
-			if len(f.RoleAssignments) > 0 && len(f.pullDenied) < f.PullDeniedFor {
-				f.pullDenied[strings.ToLower(props["latestRevisionName"].(string))] = true
+			f.AppPuts = append(f.AppPuts, body)
+			// Like Container Apps, a PUT makes a new revision only when the
+			// template changed, its revisionSuffix included.
+			if old := f.resources[id]; old != nil && reflect.DeepEqual(old["properties"].(map[string]any)["template"], props["template"]) {
+				body["revision"] = old["revision"]
+				props["latestRevisionName"] = old["properties"].(map[string]any)["latestRevisionName"]
+			} else {
+				f.newRevision(name, old, body, props)
 			}
 			if conf, _ := props["configuration"].(map[string]any); conf != nil {
 				if ing, _ := conf["ingress"].(map[string]any); ing != nil {
@@ -307,6 +311,27 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioning", "runningState": "Processing"}})
 	default:
 		notFound("NotFound")
+	}
+}
+
+// newRevision numbers a container app's new revision, or names it with
+// the template's revisionSuffix, and denies it a pull while
+// PullDeniedFor says so.
+func (f *Fake) newRevision(name string, old, body, props map[string]any) {
+	rev := 1
+	if old != nil {
+		rev = int(old["revision"].(float64)) + 1
+	}
+	body["revision"] = float64(rev)
+	revision := name + "--" + strconv.Itoa(rev)
+	if tmpl, _ := props["template"].(map[string]any); tmpl != nil {
+		if suffix, _ := tmpl["revisionSuffix"].(string); suffix != "" {
+			revision = name + "--" + suffix
+		}
+	}
+	props["latestRevisionName"] = revision
+	if len(f.RoleAssignments) > 0 && len(f.pullDenied) < f.PullDeniedFor {
+		f.pullDenied[strings.ToLower(revision)] = true
 	}
 }
 

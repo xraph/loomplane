@@ -138,9 +138,11 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, fmt.Errorf("read whether apps may pull with an identity: %w", err)
 	}
 	pull := azurePull{Server: reg.Properties.LoginServer}
+	// One wait covers both the grant and the first pulls after it.
+	deadline := time.Now().Add(azurePullWait)
 	if mode == azure.PullModeIdentity {
 		// The role propagates while the build runs.
-		if pull.Identity, err = a.pullIdentity(ctx, s, job, location, reg.ID); err != nil {
+		if pull.Identity, err = a.pullIdentity(ctx, s, job, location, reg.ID, deadline); err != nil {
 			return nil, err
 		}
 	}
@@ -167,9 +169,13 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	name := a.appName(s, job)
 	job.Progress(StepDeploying, "Deploying "+state.Image)
 	// An app can't pull with a new identity until its role propagates, so
-	// a revision that couldn't pull is tried again, with the same app.
-	deadline := time.Now().Add(azurePullWait)
-	for {
+	// a revision that couldn't pull is tried again. Container Apps only
+	// makes a revision when the template changes, so each retry names a
+	// new one.
+	for attempt := 1; ; attempt++ {
+		if attempt > 1 {
+			app.Properties.Template.RevisionSuffix = azureRetrySuffix(attempt)
+		}
 		if state.AppID, err = s.PutApp(ctx, name, app); err != nil {
 			return nil, fmt.Errorf("deploy container app %s: %w", name, err)
 		}
@@ -199,13 +205,12 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 // AcrPull on the registry, and returns its resource ID. Entra ID can take
 // a while to replicate a new identity, and until it has, Azure can't
 // assign it a role.
-func (a *Azure) pullIdentity(ctx context.Context, s *azure.Session, job *Job, location, registryID string) (string, error) {
+func (a *Azure) pullIdentity(ctx context.Context, s *azure.Session, job *Job, location, registryID string, deadline time.Time) (string, error) {
 	job.Progress(StepBuilding, "Setting up the managed identity your apps pull with")
 	id, err := s.EnsurePullIdentity(ctx, location)
 	if err != nil {
 		return "", err
 	}
-	deadline := time.Now().Add(azurePullWait)
 	for {
 		_, gerr := s.GrantPull(ctx, registryID, id.PrincipalID)
 		var ae *azure.APIError
@@ -223,6 +228,13 @@ func (a *Azure) pullIdentity(ctx context.Context, s *azure.Session, job *Job, lo
 			return "", serr
 		}
 	}
+}
+
+// azureRetrySuffix is the revision suffix of a deploy's attempt'th try:
+// lower case letters and digits, and new each time, since a suffix an
+// app already used is refused.
+func azureRetrySuffix(attempt int) string {
+	return "pull" + strconv.FormatInt(time.Now().Unix(), 36) + "a" + strconv.Itoa(attempt)
 }
 
 // azureSleep waits for d, or until ctx is done.

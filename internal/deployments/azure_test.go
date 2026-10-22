@@ -437,20 +437,56 @@ func TestAzure_waitsForTheRoleToPropagate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	third := AzureName(job) + "--3"
+	// Container Apps makes a revision only when the template changes, so
+	// each retry names a new one.
+	f.Lock()
+	suffixes := make([]string, 0, len(f.AppPuts))
+	for _, put := range f.AppPuts {
+		suffix, _ := put["properties"].(map[string]any)["template"].(map[string]any)["revisionSuffix"].(string)
+		suffixes = append(suffixes, suffix)
+	}
+	f.Unlock()
+	if len(suffixes) != 3 || suffixes[0] != "" || suffixes[1] == "" || suffixes[2] == "" || suffixes[1] == suffixes[2] {
+		t.Fatalf("revision suffixes %q", suffixes)
+	}
+	third := AzureName(job) + "--" + suffixes[2]
 	if p := live.Properties; p.LatestRevisionName != third || p.LatestReadyRevision != third {
-		t.Fatalf("latest %q, ready %q", p.LatestRevisionName, p.LatestReadyRevision)
+		t.Fatalf("latest %q, ready %q, want %q", p.LatestRevisionName, p.LatestReadyRevision, third)
+	}
+}
+
+func TestAzure_oneWaitCoversTheGrantAndThePull(t *testing.T) {
+	// The build, the environment and the first revision each take at
+	// least one 100ms poll of the fake, so a 250ms wait that started
+	// before the grant has run out when the first pull fails.
+	shortPullWaits(t, 250*time.Millisecond)
+	f := azuretest.New(t)
+	f.NotActions = nil
+	f.PullDeniedFor = 1
+	_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
+	if err == nil || !strings.Contains(err.Error(), "retry the deployment") {
+		t.Fatalf("err %v", err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.AppPuts) != 1 {
+		t.Fatalf("app puts %d", len(f.AppPuts))
 	}
 }
 
 func TestAzure_givesUpWhenThePullNeverWorks(t *testing.T) {
-	shortPullWaits(t, 150*time.Millisecond)
+	shortPullWaits(t, 600*time.Millisecond)
 	f := azuretest.New(t)
 	f.NotActions = nil
 	f.PullDeniedFor = 1000
 	_, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), azureJob(t, apiConfig()))
 	if err == nil || !strings.Contains(err.Error(), "identity") || !strings.Contains(err.Error(), "retry the deployment") {
 		t.Fatalf("err %v", err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.AppPuts) < 2 {
+		t.Fatalf("gave up after %d app puts", len(f.AppPuts))
 	}
 }
 
