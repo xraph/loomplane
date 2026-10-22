@@ -101,6 +101,19 @@ func (f *fakePG) serve(conn net.Conn) {
 			if !f.run(b, st, m.String, true) {
 				return
 			}
+			if strings.Contains(m.String, "partial") {
+				// ReadyForQuery and the first bytes of a notice in one write;
+				// the rest of the notice never comes.
+				if b.Flush() != nil {
+					return
+				}
+				buf, _ := (&pgproto3.ReadyForQuery{TxStatus: st.status}).Encode(nil)
+				notice, _ := (&pgproto3.NoticeResponse{Severity: "NOTICE", Code: "00000", Message: "cut short"}).Encode(nil)
+				if _, err := conn.Write(append(buf, notice[:8]...)); err != nil {
+					return
+				}
+				continue
+			}
 			b.Send(&pgproto3.ReadyForQuery{TxStatus: st.status})
 			if strings.Contains(m.String, "notice") {
 				// An asynchronous message right behind ReadyForQuery, in the
@@ -1490,6 +1503,28 @@ func TestSessionAsyncAfterReadyStaysWithItsClient(t *testing.T) {
 	want(t, "B", b.query("SELECT 1"), selectOne)
 	a.terminate()
 	b.terminate()
+}
+
+// TestSessionHalfReadConnNeverPooled: the client leaves while the backend
+// reader holds part of an asynchronous message. The stop deadline cuts the
+// read short, and the connection must be closed: returned to the pool, the
+// next holder's reader would finish the message and hand it to another
+// client.
+func TestSessionHalfReadConnNeverPooled(t *testing.T) {
+	h := newHarness(t, 1, time.Second)
+	c := h.connect(nil)
+	c.send(&pgproto3.Query{String: "SELECT partial"})
+	// The partial notice keeps the lease: the reader can't release with bytes
+	// buffered, and can't finish reading them.
+	want(t, "query", c.read(4), []string{"RowDescription", "DataRow partial", "CommandComplete SELECT 1", "ReadyForQuery I"})
+	if s := h.pool.Stats(); s.Idle != 0 {
+		t.Fatalf("stats = %+v, want the lease held while a message is half read", s)
+	}
+	c.terminate()
+	waitFor(t, "the half-read connection to close", func() bool { return isClosedPG(h.dialer.server(0)) })
+	if s := h.pool.Stats(); s.Open != 0 || s.Idle != 0 {
+		t.Fatalf("stats = %+v, want the connection dropped", s)
+	}
 }
 
 // TestSessionTwoClientsOneConnection is Review Focus 5 across clients: A

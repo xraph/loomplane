@@ -29,6 +29,9 @@ func (s *session) readBackend(l *Lease, done chan struct{}) {
 		if err != nil {
 			s.mu.Lock()
 			if s.stopping {
+				// The stop deadline cut this read short, possibly part way
+				// through a message.
+				s.readerCut = true
 				s.mu.Unlock()
 				return
 			}
@@ -84,7 +87,10 @@ func (s *session) fromBackend(l *Lease, msg pgproto3.BackendMessage) bool {
 	}
 	exit := release || s.stopping
 	s.mu.Unlock()
-	if drained || exit {
+	// Flush once the backend's buffer is drained, and always at
+	// ReadyForQuery: bytes left behind it may be only part of a message, and
+	// the next Receive would hold the reply back until the rest arrives.
+	if drained || ready || exit {
 		s.flushLocked()
 	}
 	s.writeMu.Unlock()

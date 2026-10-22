@@ -96,6 +96,7 @@ type session struct {
 	lease       *Lease
 	readerDone  chan struct{}
 	stopping    bool // the session goroutine is taking the lease back from the reader
+	readerCut   bool // the stop deadline interrupted the reader's Receive
 	lost        bool // the backend failed and the client has been told
 	writeFailed bool // a write to the leased connection failed
 	writing     int  // writes to the leased connection in progress
@@ -559,11 +560,18 @@ func (s *session) endLease() {
 		state = LeaseDirtyTxn
 	case s.pinned:
 		state = LeaseSession
+	case s.readerCut || c.Frontend.ReadBufferLen() > 0:
+		// A clean connection goes straight to its next holder, whose reader
+		// would finish a half-read message and hand it to another client.
+		// The reader normally releases an idle lease itself, so this only
+		// closes a connection the client left in a narrow window.
+		state = LeaseBroken
 	default:
 		state = LeaseClean
 	}
 	s.lease = nil
 	s.stopping = false
+	s.readerCut = false
 	s.seq = sequencer{}
 	s.skip = false
 	s.mu.Unlock()
