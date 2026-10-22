@@ -266,20 +266,26 @@ function DomainsList({
           />
         ))}
 
-        {denied ? (
-          <Restricted />
-        ) : overview.status === "error" ? (
+        {/* A refresh that fails keeps what was read before on screen, with
+            the failure above it, so open cards and popovers stay put. */}
+        {!denied && overview.status === "error" && (
           <QueryError
             error={overview.error}
             fallback="Domains couldn't be loaded."
             retry={overview.refetch}
           />
+        )}
+
+        {denied ? (
+          <Restricted />
         ) : !overview.data ? (
-          <div className="grid gap-3">
-            <Skeleton className="h-9 w-64 rounded-[10px]" />
-            <Skeleton className="h-16 rounded-[14px]" />
-            <Skeleton className="h-16 rounded-[14px]" />
-          </div>
+          overview.status === "error" ? null : (
+            <div className="grid gap-3">
+              <Skeleton className="h-9 w-64 rounded-[10px]" />
+              <Skeleton className="h-16 rounded-[14px]" />
+              <Skeleton className="h-16 rounded-[14px]" />
+            </div>
+          )
         ) : items.length === 0 ? (
           <Empty title="No domains yet">
             Bring a domain you own, or register a new one in your Cloudflare

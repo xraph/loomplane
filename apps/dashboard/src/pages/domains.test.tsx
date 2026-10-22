@@ -1,5 +1,6 @@
 import { ClientProvider } from "@forge-go/client-react"
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -61,6 +62,7 @@ vi.mock("@/lib/use-runs", () => ({ useRuns: () => ({ runs: [] }) }))
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   forgeClient.clear()
   access.allowed = true
@@ -655,6 +657,41 @@ it("keeps denied, failed and empty apart", async () => {
       "Bring a domain you own, or register a new one in your Cloudflare account."
     )
   ).toBeTruthy()
+})
+
+it("keeps the list through a failed refresh", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  const pending = registration({
+    name: "acme.app",
+    status: "registering",
+    zone_id: "",
+    domain_expires_at: zero,
+  })
+  let reads = 0
+  stubFetch({
+    "/api/v1/domains": () => {
+      reads++
+      return reads === 1
+        ? Response.json({ zones: [], registrations: [pending] })
+        : Response.json({ message: "Domains are unavailable" }, { status: 503 })
+    },
+    "/api/v1/domain-registrations": { registrations: [pending] },
+  })
+  render(
+    <Wrapped>
+      <Domains />
+    </Wrapped>
+  )
+  const card = await screen.findByRole("region", { name: "acme.app" })
+  // The 5-second refresh of a registration in flight fails.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000)
+  })
+  expect(await screen.findByText("Domains are unavailable.")).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy()
+  expect(screen.getByRole("region", { name: "acme.app" })).toBe(card)
+  expect(screen.queryByText("No domains yet")).toBeNull()
+  expect(screen.queryByText("Domain access is restricted")).toBeNull()
 })
 
 it("puts Domains between Services and Clouds in the sidebar", async () => {
