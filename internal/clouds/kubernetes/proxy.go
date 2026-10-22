@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -72,12 +73,23 @@ type serviceProxy struct {
 // one on to the Service.
 var errProxyAuthorization = errors.New("a request through the Kubernetes service proxy can't carry its own Authorization header")
 
+// errProxyPath is a request path that could leave the Service's proxy
+// path once something on the way normalises it.
+var errProxyPath = errors.New("a request through the Kubernetes service proxy needs an absolute path without . or .. segments")
+
 func (p *serviceProxy) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Header.Get("Authorization") != "" {
+	var refused error
+	switch {
+	case req.Header.Get("Authorization") != "":
+		refused = errProxyAuthorization
+	case !confinedPath(req.URL):
+		refused = errProxyPath
+	}
+	if refused != nil {
 		if req.Body != nil {
 			_ = req.Body.Close()
 		}
-		return nil, errProxyAuthorization
+		return nil, refused
 	}
 	out := req.Clone(req.Context())
 	target := *req.URL
@@ -92,6 +104,27 @@ func (p *serviceProxy) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	out.URL, out.Host = &target, ""
 	return p.next.RoundTrip(out)
+}
+
+// confinedPath reports whether a request's path stays under the proxy
+// prefix it's appended to: no opaque form, an absolute path, and no . or
+// .. segment, decoded or escaped.
+func confinedPath(u *url.URL) bool {
+	if u.Opaque != "" || (u.Path != "" && !strings.HasPrefix(u.Path, "/")) || (u.RawPath != "" && !strings.HasPrefix(u.RawPath, "/")) {
+		return false
+	}
+	for _, segment := range strings.Split(u.Path, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	for _, segment := range strings.Split(u.RawPath, "/") {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil || decoded == "." || decoded == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 var _ http.RoundTripper = (*serviceProxy)(nil)

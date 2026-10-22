@@ -53,7 +53,12 @@ type ComponentRun struct {
 	// Secrets are the composition's generated secrets the component
 	// reads, by GeneratedSecret.Name.
 	Secrets map[string][]byte
-	// Channel reaches a component already running in this composition.
+	// Channel reaches a control port of a component already running in
+	// this composition: the component itself once it has started (in
+	// Ready), and components that started in an earlier step. One in the
+	// same step, with no After ordering between them, can't be reached
+	// yet. Requests can't carry an Authorization header (see
+	// ComponentChannel).
 	Channel func(ctx context.Context, component, port string) (*ComponentChannel, error)
 }
 
@@ -61,6 +66,11 @@ type ComponentRun struct {
 type ComposedResource struct{ OrgID, ProjectID, EnvironmentID, Resource, Kind string }
 
 // ComponentChannel sends requests to one port of a running component.
+// It sends nothing but requests to http://component, and no request may
+// carry an Authorization header: through the Kubernetes service proxy it
+// would replace the cluster credential and never reach the component, so
+// it's refused on every target. Send the component's own credential in
+// another header, such as a kind-specific admin token header.
 type ComponentChannel struct {
 	// Client sends requests to BaseURL, with a 30 second timeout and no
 	// redirects.

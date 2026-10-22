@@ -34,6 +34,35 @@ const componentChannelTimeout = 30 * time.Second
 // component channel never follows.
 var errChannelRedirect = errors.New("the component answered with a redirect, which Loomplane doesn't follow on its private channel")
 
+// errChannelAuthorization is a request that brings its own Authorization
+// header. Through the Kubernetes service proxy it would replace the
+// cluster credential, and the API server never passes it on, so no
+// channel carries one.
+var errChannelAuthorization = errors.New("a component channel can't carry an Authorization header; send the component's own credential in another header, such as a kind-specific admin token header")
+
+// errChannelHost is a request to anything but http://component.
+var errChannelHost = errors.New("a component channel sends requests only to http://component")
+
+// channelTransport refuses, the same way on every target, what a channel
+// never sends.
+type channelTransport struct{ next http.RoundTripper }
+
+func (t channelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var refused error
+	switch {
+	case req.URL.Scheme != "http" || req.URL.Host != "component" || (req.Host != "" && req.Host != "component"):
+		refused = errChannelHost
+	case req.Header.Get("Authorization") != "":
+		refused = errChannelAuthorization
+	default:
+		return t.next.RoundTrip(req)
+	}
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	return nil, refused
+}
+
 // ComponentDialer reaches a port of a running catalog component privately,
 // over the target's own connection. *OwnedTarget is the real one.
 type ComponentDialer interface {
@@ -74,7 +103,10 @@ type CatalogAccess struct{ d CatalogAccessDeps }
 func NewCatalogAccess(d CatalogAccessDeps) *CatalogAccess { return &CatalogAccess{d: d} }
 
 // Channel opens a channel to a control port of a running component. Send
-// requests to http://component/...; close the channel when done.
+// requests to http://component/...; close the channel when done. A request
+// can't carry an Authorization header on any target, since the Kubernetes
+// service proxy authenticates with it: send the component's own credential
+// in another header, such as a kind-specific admin token header.
 func (a *CatalogAccess) Channel(ctx context.Context, p security.Principal, need security.Permission, ref ComponentRef) (*ComponentChannel, error) {
 	if err := a.d.Authz.Require(ctx, p, need, ref.ProjectID); err != nil {
 		return nil, err
@@ -157,7 +189,7 @@ func openChannel(ctx context.Context, dialer ComponentDialer, b *planning.Bindin
 		return nil, fmt.Errorf("reach %s's %s port: %w", b.Name, port.Name, err)
 	}
 	return &ComponentChannel{
-		Client: &http.Client{Transport: transport, Timeout: componentChannelTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+		Client: &http.Client{Transport: channelTransport{transport}, Timeout: componentChannelTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errChannelRedirect
 		}},
 		BaseURL: &url.URL{Scheme: "http", Host: "component"},

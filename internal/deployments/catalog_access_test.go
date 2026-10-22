@@ -198,6 +198,33 @@ func TestCatalogAccessChannelChecksPermissionAndPort(t *testing.T) {
 	if elsewhere != 0 {
 		t.Fatal("a redirect reached another host")
 	}
+	// Every target refuses a request's own Authorization header, and
+	// anything but http://component.
+	for name, tc := range map[string]struct {
+		url, auth string
+		want      error
+	}{
+		"authorization": {"http://component/admin", "Bearer admin", errChannelAuthorization},
+		"another host":  {"http://elsewhere.example/admin", "", errChannelHost},
+		"https":         {"https://component/admin", "", errChannelHost},
+	} {
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodPost, tc.url, strings.NewReader("r1"))
+		if reqErr != nil {
+			t.Fatal(reqErr)
+		}
+		if tc.auth != "" {
+			req.Header.Set("Authorization", tc.auth)
+		}
+		if res, doErr := channel.Client.Do(req); !errors.Is(doErr, tc.want) {
+			if res != nil {
+				_ = res.Body.Close()
+			}
+			t.Fatalf("%s: %v", name, doErr)
+		}
+	}
+	if elsewhere != 0 {
+		t.Fatal("a refused request reached another host")
+	}
 	if err := channel.Close(); err != nil || dialer.closed != 1 {
 		t.Fatalf("close: %v, %d", err, dialer.closed)
 	}

@@ -109,6 +109,62 @@ func TestServiceProxyTransportRewritesToAPIServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Nothing leaves the Service's proxy path, even where something on
+	// the way normalises dot segments.
+	mu.Lock()
+	requests = nil
+	mu.Unlock()
+	for _, raw := range []string{
+		"http://component/../../../secrets/db",
+		"http://component/admin/../../../../secrets/db",
+		"http://component/admin/./x",
+		"http://component/%2e%2e/%2e%2e/secrets",
+		"http://component/admin%2F..%2F..%2Fsecrets",
+		"http://component/..",
+	} {
+		escape, parseErr := http.NewRequestWithContext(t.Context(), http.MethodGet, raw, http.NoBody)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if res, roundErr := transport.RoundTrip(escape); roundErr == nil {
+			_ = res.Body.Close()
+			t.Fatalf("proxied %s", raw)
+		}
+	}
+	opaque, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://component/admin", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opaque.URL.Opaque = "//component/api/v1/namespaces/ns/secrets"
+	if res, roundErr := transport.RoundTrip(opaque); roundErr == nil {
+		_ = res.Body.Close()
+		t.Fatal("proxied an opaque URL")
+	}
+	relative, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://component/admin", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative.URL.Path = "admin"
+	if res, roundErr := transport.RoundTrip(relative); roundErr == nil {
+		_ = res.Body.Close()
+		t.Fatal("proxied a relative path")
+	}
+	mu.Lock()
+	escaped := len(requests)
+	mu.Unlock()
+	if escaped != 0 {
+		t.Fatalf("API server saw %+v", requests)
+	}
+	// A dot inside a name isn't a segment.
+	dotted, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://component/admin/v1.2/..config", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := transport.RoundTrip(dotted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://component/admin", http.NoBody)
 	if err != nil {
 		t.Fatal(err)
