@@ -23,6 +23,9 @@ const DefaultPort = 8080
 // Input is everything a plan is made from.
 type Input struct {
 	Routes []cloudinfra.Route
+	// Zones are the verified DNS zones granted to the project. The
+	// database gateway names its hosts in one of them.
+	Zones []cloudinfra.ProjectZone
 
 	// Catalog requests a standalone service without repository sources.
 	Catalog         bool
@@ -129,6 +132,7 @@ func Compute(in Input) *Result {
 	p.planLinks()
 	p.planServices()
 	p.planGateways()
+	p.planDatabaseGateway()
 	p.checkTargetPlacements()
 	p.readdress()
 	for p.routedReplacements() {
@@ -251,13 +255,22 @@ func (p *planner) checkHTTPS(chosen map[string]string) {
 		if i < 0 || p.in.Connections[i].HTTPS {
 			continue
 		}
-		path := "services." + name
-		if a.Service.Gateway != nil {
-			path = "gateways." + name
-		}
+		path := servicePath(a)
 		p.warn(Finding{Code: "plain-http", Subject: ServiceSubject, Name: name, Path: path,
 			Message: fmt.Sprintf("%s will serve plain HTTP: %s has no certificate. Add an ACM certificate to the connection to serve HTTPS.", name, p.in.Connections[i].Name)})
 	}
+}
+
+// servicePath is where the manifest says how a service action runs: its
+// service, its gateway, or database_gateway.
+func servicePath(a *Action) string {
+	switch {
+	case a.Service != nil && a.Service.DatabaseGateway != nil:
+		return "database_gateway"
+	case a.Service != nil && a.Service.Gateway != nil:
+		return "gateways." + a.Name
+	}
+	return "services." + a.Name
 }
 
 // connect settles which connection each cloud the plan uses deploys
@@ -362,10 +375,7 @@ func (p *planner) checkRegions(chosen map[string]string) {
 		}
 		path := "resources." + a.Name + ".region"
 		if a.Subject == ServiceSubject {
-			path = "services." + a.Name + ".region"
-			if a.Service != nil && a.Service.Gateway != nil {
-				path = "gateways." + a.Name + ".region"
-			}
+			path = servicePath(a) + ".region"
 		}
 		title := cloudTitle(prov.Cloud)
 		p.problem(Finding{
@@ -1155,10 +1165,11 @@ func (p *planner) retain() {
 			continue
 		}
 		var cfg ServiceConfig
-		if json.Unmarshal(b.Config, &cfg) != nil || cfg.Gateway != nil {
+		if json.Unmarshal(b.Config, &cfg) != nil || cfg.Generated() {
 			// A gateway is built from Loomplane's own code, not from any
 			// repository, so no plan holds it. planGateways plans it from
 			// the manifest, and planDeletes removes one the manifest dropped.
+			// The database gateway is the same.
 			continue
 		}
 		alias, held := p.heldRepo(cfg)
@@ -1545,6 +1556,14 @@ func (p *planner) link(name string, a *Action) {
 					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: "The private database and its dependent service must run on the same checked target network."})
 					continue
 				}
+			}
+			if r.GatewayIn(p.in.Environment) {
+				// The service reaches it through the database gateway's
+				// public address, from any cloud or account, and
+				// planDatabaseGateway orders the service after it.
+				a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+				a.DependsOn = append(a.DependsOn, dep.ID)
+				continue
 			}
 			if rc, sc := p.cloud(dep.Provider), p.cloud(a.Provider); rc != sc {
 				if l := p.reachOver(sc, rc); l != nil {
@@ -2262,7 +2281,7 @@ func (p *planner) heldBinding(b *Binding) (string, bool) {
 		return "", false
 	}
 	var cfg ServiceConfig
-	if json.Unmarshal(b.Config, &cfg) != nil || cfg.Gateway != nil {
+	if json.Unmarshal(b.Config, &cfg) != nil || cfg.Generated() {
 		return "", false
 	}
 	return p.heldRepo(cfg)
@@ -2328,6 +2347,9 @@ func (p *planner) wantedAsDeployed(b *Binding) (wanted, on bool) {
 func (p *planner) wanted(b *Binding) (wanted, on bool) {
 	m := p.in.Manifest
 	if b.Subject == ServiceSubject {
+		if p.isDatabaseGateway(b) {
+			return m.DatabaseGateway != nil, p.dbGatewayOn()
+		}
 		if g, ok := m.Gateways[b.Name]; ok {
 			return true, manifest.On(g.For(p.in.Environment, m.Defaults).Enabled)
 		}

@@ -168,7 +168,26 @@ type ServiceConfig struct {
 	// Gateway are a gateway's routes. A service with routes is a gateway
 	// Loomplane generates and builds, not code from the repository.
 	Gateway []gateway.Route `json:"gateway,omitempty"`
+	// DatabaseGateway is set on the database gateway, a service Loomplane
+	// generates and builds in front of the Postgres resources that opt in.
+	DatabaseGateway *DatabaseGatewayConfig `json:"database_gateway,omitempty"`
 }
+
+// DatabaseGatewayConfig is what the database gateway serves: the
+// resources behind it, each at <resource>.<Suffix>.
+type DatabaseGatewayConfig struct {
+	Name string `json:"name"`
+	// Suffix is <region>.db.<domain>, the domain being a DNS zone granted
+	// to the project.
+	Suffix string `json:"suffix"`
+	// Resources are the opted-in resources' names, sorted.
+	Resources []string `json:"resources"`
+}
+
+// Generated reports whether Loomplane generates the service from its own
+// code, as it does a gateway or the database gateway, rather than
+// building it from a repository.
+func (c *ServiceConfig) Generated() bool { return c.Gateway != nil || c.DatabaseGateway != nil }
 
 // BuildTarget pins the builder, registry and image reviewed in a plan.
 type BuildTarget struct {

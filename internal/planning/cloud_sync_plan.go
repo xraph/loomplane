@@ -226,7 +226,7 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 		if b.Drift != "" {
 			blocked(a.Name, "Resolve the serving resource's drift before migration.")
 		}
-		if a.Service.Gateway != nil {
+		if a.Service.Generated() {
 			continue
 		}
 		inputs := a.Service.AppliedInputs

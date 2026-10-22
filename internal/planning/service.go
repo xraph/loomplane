@@ -11,6 +11,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/discovery"
@@ -572,17 +573,26 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if routeErr != nil {
 		return nil, "", routeErr
 	}
+	var zones []cloudinfra.ProjectZone
+	if len(dbGatewayResources(rev.Manifest, plan.Environment)) > 0 {
+		if zones, err = s.projectZones(ctx, plan); err != nil {
+			return nil, "", err
+		}
+	}
 	var result *Result
 	if resolutionErr != nil {
 		finding := Finding{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}
 		var placementErr *CloudPlacementError
 		if errors.As(resolutionErr, &placementErr) {
 			finding = Finding{Code: placementErr.Code, Subject: ServiceSubject, Name: strings.TrimSuffix(strings.TrimPrefix(placementErr.Path, "services."), ".cloud_tags"), Path: placementErr.Path, Message: placementErr.Message}
+			if strings.HasPrefix(placementErr.Path, "database_gateway.") {
+				finding.Name = dbGatewayName
+			}
 		}
 		result = &Result{Problems: []Finding{finding}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
 		result = Compute(Input{
-			Catalog: plan.Catalog, Routes: routes,
+			Catalog: plan.Catalog, Routes: routes, Zones: zones,
 			Federation: federation, CloudPlacements: placements,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
