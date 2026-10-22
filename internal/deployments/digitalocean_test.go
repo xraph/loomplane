@@ -3,12 +3,15 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/planning"
@@ -139,6 +142,11 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// newDO is an executor whose apps' addresses are in DNS at once.
+func newDO(client *digitalocean.Client) *DigitalOcean {
+	return &DigitalOcean{Client: client, Resolve: func(context.Context, string) error { return nil }}
+}
+
 func doJob(cfg *planning.ServiceConfig, ref string) *Job {
 	return &Job{
 		Deployment: &Deployment{OrgID: "org", ProjectID: "proj_0123456789", Environment: "production",
@@ -159,7 +167,7 @@ func apiConfig() *planning.ServiceConfig {
 
 func TestDigitalOcean_deploysTheApprovedCommitFromItsBranch(t *testing.T) {
 	f, client := newFakeAppPlatform(t)
-	out, err := (&DigitalOcean{Client: client}).Apply(t.Context(), doJob(apiConfig(), "release"))
+	out, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "release"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +200,7 @@ func TestDigitalOcean_deploysTheApprovedCommitFromItsBranch(t *testing.T) {
 
 func TestDigitalOcean_aSourceWithoutABranchBuildsMain(t *testing.T) {
 	f, client := newFakeAppPlatform(t)
-	if _, err := (&DigitalOcean{Client: client}).Apply(t.Context(), doJob(apiConfig(), "")); err != nil {
+	if _, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "")); err != nil {
 		t.Fatal(err)
 	}
 	gh := f.specs[0]["services"].([]any)[0].(map[string]any)["github"].(map[string]any)
@@ -206,7 +214,7 @@ func TestDigitalOcean_refusesACommitNobodyApproved(t *testing.T) {
 	t.Run("cancelled while it builds", func(t *testing.T) {
 		f, client := newFakeAppPlatform(t)
 		f.tip = pushed
-		_, err := (&DigitalOcean{Client: client}).Apply(t.Context(), doJob(apiConfig(), "main"))
+		_, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "main"))
 		if err == nil || !strings.Contains(err.Error(), "cancelled it before it went live") || !strings.Contains(err.Error(), "ffffffffffff") {
 			t.Fatalf("err %v", err)
 		}
@@ -222,7 +230,7 @@ func TestDigitalOcean_refusesACommitNobodyApproved(t *testing.T) {
 		f.active["app-"+name] = "dep-approved-before"
 		f.tip, f.liveAt = pushed, "ACTIVE"
 		job.Binding = &planning.Binding{ExternalID: "app-" + name}
-		_, err := (&DigitalOcean{Client: client}).Apply(t.Context(), job)
+		_, err := newDO(client).Apply(t.Context(), job)
 		if err == nil || !strings.Contains(err.Error(), "rolled the app back") {
 			t.Fatalf("err %v", err)
 		}
@@ -233,7 +241,7 @@ func TestDigitalOcean_refusesACommitNobodyApproved(t *testing.T) {
 	t.Run("a new app it went live on is deleted", func(t *testing.T) {
 		f, client := newFakeAppPlatform(t)
 		f.tip, f.liveAt = pushed, "ACTIVE"
-		_, err := (&DigitalOcean{Client: client}).Apply(t.Context(), doJob(apiConfig(), "main"))
+		_, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "main"))
 		if err == nil || !strings.Contains(err.Error(), "deleted it") {
 			t.Fatalf("err %v", err)
 		}
@@ -297,7 +305,7 @@ func TestDigitalOcean_redisIsValkeyInTheRegionsDatacenter(t *testing.T) {
 	job := doJob(nil, "")
 	job.Action = planning.Action{ID: "resource:cache", Name: "cache", Resource: &planning.ResourceConfig{Kind: "redis", Version: "7", Region: "fra"}}
 	job.Keep = func(_ context.Context, field string, v []byte) error { kept[field] = string(v); return nil }
-	d := &DigitalOcean{Client: client}
+	d := newDO(client)
 	out, err := d.Apply(t.Context(), job)
 	if err != nil {
 		t.Fatal(err)
@@ -321,4 +329,60 @@ func TestDigitalOcean_redisIsValkeyInTheRegionsDatacenter(t *testing.T) {
 	if obs, err := d.Observe(t.Context(), nil, job.Credential, &planning.Binding{ExternalID: "app-gone"}); err != nil || obs.Exists {
 		t.Fatalf("observe a deleted app %+v, %v", obs, err)
 	}
+}
+
+func TestDigitalOcean_waitsForANewAppsAddressInDNS(t *testing.T) {
+	notYet := &net.DNSError{Err: "no such host", IsNotFound: true}
+	t.Run("returns once the name resolves", func(t *testing.T) {
+		_, client := newFakeAppPlatform(t)
+		var asked []string
+		d := &DigitalOcean{Client: client, DNSPoll: time.Millisecond, Resolve: func(_ context.Context, host string) error {
+			asked = append(asked, host)
+			if len(asked) < 3 {
+				return notYet
+			}
+			return nil
+		}}
+		var said []string
+		job := doJob(apiConfig(), "main")
+		job.Progress = func(_, m string) { said = append(said, m) }
+		out, err := d.Apply(t.Context(), job)
+		if err != nil || out.URL == "" {
+			t.Fatalf("apply: %+v, %v", out, err)
+		}
+		if len(asked) != 3 || asked[0] != strings.TrimPrefix(out.URL, "https://") {
+			t.Fatalf("asked %v for %s", asked, out.URL)
+		}
+		if !slices.ContainsFunc(said, func(m string) bool { return strings.Contains(m, "publish") }) {
+			t.Fatalf("progress %v", said)
+		}
+	})
+	t.Run("gives up with a way forward", func(t *testing.T) {
+		_, client := newFakeAppPlatform(t)
+		d := &DigitalOcean{Client: client, DNSPoll: time.Millisecond, DNSWait: 20 * time.Millisecond,
+			Resolve: func(context.Context, string) error { return notYet }}
+		_, err := d.Apply(t.Context(), doJob(apiConfig(), "main"))
+		if err == nil || !strings.Contains(err.Error(), "isn't in DNS") || !strings.Contains(err.Error(), "Retry") {
+			t.Fatalf("err %v", err)
+		}
+	})
+	t.Run("doesn't wait when public DNS is out of reach", func(t *testing.T) {
+		_, client := newFakeAppPlatform(t)
+		calls := 0
+		d := &DigitalOcean{Client: client, DNSPoll: time.Millisecond, Resolve: func(context.Context, string) error {
+			calls++
+			return &net.DNSError{Err: "i/o timeout", IsTimeout: true}
+		}}
+		if _, err := d.Apply(t.Context(), doJob(apiConfig(), "main")); err != nil || calls != 1 {
+			t.Fatalf("err %v after %d lookups", err, calls)
+		}
+	})
+	t.Run("an address without a name needs no lookup", func(t *testing.T) {
+		d := &DigitalOcean{Resolve: func(context.Context, string) error { t.Fatal("looked up an IP"); return nil }}
+		for _, u := range []string{"", "http://127.0.0.1:1234/site/app", "http://localhost:8080"} {
+			if err := d.waitForDNS(t.Context(), doJob(apiConfig(), "main"), u); err != nil {
+				t.Fatalf("%q: %v", u, err)
+			}
+		}
+	})
 }
