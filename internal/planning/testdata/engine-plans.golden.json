@@ -1,0 +1,670 @@
+{
+  "mariadb": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent MariaDB container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "mariadb-11.8",
+          "revision": "1",
+          "product_version": "11.8.9",
+          "image": "docker.io/library/mariadb@sha256:3607e75203fd9f69fb7e0829ec2d8fe55c30ec9d8aa266f7580719711bb4a4e1",
+          "architecture": "arm64",
+          "mount_path": "/var/lib/mysql",
+          "backup_format": "mariadb-dump-sql-v1"
+        },
+        "provider": "server",
+        "kind": "mariadb",
+        "version": "11.8"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    }
+  ],
+  "mariadb-needed": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent MariaDB container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "mariadb-11.8",
+          "revision": "1",
+          "product_version": "11.8.9",
+          "image": "docker.io/library/mariadb@sha256:3607e75203fd9f69fb7e0829ec2d8fe55c30ec9d8aa266f7580719711bb4a4e1",
+          "architecture": "arm64",
+          "mount_path": "/var/lib/mysql",
+          "backup_format": "mariadb-dump-sql-v1"
+        },
+        "provider": "server",
+        "kind": "mariadb",
+        "version": "11.8"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    },
+    {
+      "id": "service:web",
+      "op": "create",
+      "subject": "service",
+      "name": "web",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "ctrlplane",
+      "creates": "Docker container",
+      "service": {
+        "provider": "server",
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "health_path": "/_/health",
+        "build_target": {
+          "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "builder_settings": {
+            "architecture": "arm64",
+            "docker_id": "reviewed-daemon",
+            "docker_socket": "/var/run/docker.sock",
+            "host": "one.example.com",
+            "user": "deploy"
+          }
+        },
+        "workload": "http-service",
+        "execution": "container",
+        "service": "svc:go:cmd/api",
+        "source": "cmd/api",
+        "ecosystem": "go",
+        "framework": "forge",
+        "image": "Dockerfile",
+        "port": 8080,
+        "public": false,
+        "env": [
+          {
+            "key": "DATABASE_URL",
+            "from": "database",
+            "subject": "resource"
+          }
+        ]
+      },
+      "reason": "Nothing runs web in production yet.",
+      "depends_on": [
+        "resource:database"
+      ],
+      "step": 2
+    }
+  ],
+  "mysql": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent MySQL container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "mysql-8.4",
+          "revision": "1",
+          "product_version": "8.4.11",
+          "image": "docker.io/library/mysql@sha256:88b9c60a44c8864787b96e8254cd050c4af5e82fea6edf08225546f447b43a31",
+          "architecture": "arm64",
+          "mount_path": "/var/lib/mysql",
+          "backup_format": "mysqldump-sql-v1"
+        },
+        "provider": "server",
+        "kind": "mysql",
+        "version": "8.4"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    }
+  ],
+  "mysql-needed": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent MySQL container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "mysql-8.4",
+          "revision": "1",
+          "product_version": "8.4.11",
+          "image": "docker.io/library/mysql@sha256:88b9c60a44c8864787b96e8254cd050c4af5e82fea6edf08225546f447b43a31",
+          "architecture": "arm64",
+          "mount_path": "/var/lib/mysql",
+          "backup_format": "mysqldump-sql-v1"
+        },
+        "provider": "server",
+        "kind": "mysql",
+        "version": "8.4"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    },
+    {
+      "id": "service:web",
+      "op": "create",
+      "subject": "service",
+      "name": "web",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "ctrlplane",
+      "creates": "Docker container",
+      "service": {
+        "provider": "server",
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "health_path": "/_/health",
+        "build_target": {
+          "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "builder_settings": {
+            "architecture": "arm64",
+            "docker_id": "reviewed-daemon",
+            "docker_socket": "/var/run/docker.sock",
+            "host": "one.example.com",
+            "user": "deploy"
+          }
+        },
+        "workload": "http-service",
+        "execution": "container",
+        "service": "svc:go:cmd/api",
+        "source": "cmd/api",
+        "ecosystem": "go",
+        "framework": "forge",
+        "image": "Dockerfile",
+        "port": 8080,
+        "public": false,
+        "env": [
+          {
+            "key": "DATABASE_URL",
+            "from": "database",
+            "subject": "resource"
+          }
+        ]
+      },
+      "reason": "Nothing runs web in production yet.",
+      "depends_on": [
+        "resource:database"
+      ],
+      "step": 2
+    }
+  ],
+  "postgres": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent PostgreSQL container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "postgresql-17",
+          "revision": "1",
+          "product_version": "17.11",
+          "image": "docker.io/library/postgres@sha256:0b2882c46a2b8d8e148431b333394348cf4d7f15aec6df7f17d51dc641e56cfa",
+          "architecture": "arm64",
+          "mount_path": "/var/lib/postgresql/data",
+          "backup_format": "pg-dump-custom-v1"
+        },
+        "provider": "server",
+        "kind": "postgres",
+        "version": "17"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    }
+  ],
+  "postgres-kubernetes": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "kubernetes",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Retained PostgreSQL StatefulSet",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "cluster_ca": "checked-ca",
+          "endpoint": "https://cluster.example",
+          "namespace": "databases",
+          "namespace_uid": "namespace-identity",
+          "persistent_storage": "ready",
+          "storage_binding": "WaitForFirstConsumer",
+          "storage_class": "retained",
+          "storage_class_uid": "class-identity",
+          "storage_provisioner": "fixture.csi",
+          "storage_reclaim": "Retain"
+        },
+        "catalog": {
+          "id": "postgresql-17-kubernetes",
+          "revision": "1",
+          "product_version": "17.11",
+          "image": "docker.io/library/postgres@sha256:0b2882c46a2b8d8e148431b333394348cf4d7f15aec6df7f17d51dc641e56cfa",
+          "architecture": "arm64",
+          "mount_path": "/var/lib/postgresql/data",
+          "backup_format": "pg-dump-custom-v1",
+          "volume_size_mb": 10240
+        },
+        "provider": "kubernetes",
+        "kind": "postgres",
+        "version": "17"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    }
+  ],
+  "postgres-needed": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent PostgreSQL container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "postgresql-17",
+          "revision": "1",
+          "product_version": "17.11",
+          "image": "docker.io/library/postgres@sha256:0b2882c46a2b8d8e148431b333394348cf4d7f15aec6df7f17d51dc641e56cfa",
+          "architecture": "arm64",
+          "mount_path": "/var/lib/postgresql/data",
+          "backup_format": "pg-dump-custom-v1"
+        },
+        "provider": "server",
+        "kind": "postgres",
+        "version": "17"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    },
+    {
+      "id": "service:web",
+      "op": "create",
+      "subject": "service",
+      "name": "web",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "ctrlplane",
+      "creates": "Docker container",
+      "service": {
+        "provider": "server",
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "health_path": "/_/health",
+        "build_target": {
+          "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "builder_settings": {
+            "architecture": "arm64",
+            "docker_id": "reviewed-daemon",
+            "docker_socket": "/var/run/docker.sock",
+            "host": "one.example.com",
+            "user": "deploy"
+          }
+        },
+        "workload": "http-service",
+        "execution": "container",
+        "service": "svc:go:cmd/api",
+        "source": "cmd/api",
+        "ecosystem": "go",
+        "framework": "forge",
+        "image": "Dockerfile",
+        "port": 8080,
+        "public": false,
+        "env": [
+          {
+            "key": "DATABASE_URL",
+            "from": "database",
+            "subject": "resource"
+          }
+        ]
+      },
+      "reason": "Nothing runs web in production yet.",
+      "depends_on": [
+        "resource:database"
+      ],
+      "step": 2
+    }
+  ],
+  "redis": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent Redis container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "redis-8.2",
+          "revision": "1",
+          "product_version": "8.2.10",
+          "image": "docker.io/library/redis@sha256:0f16771e42330c740f93cc57e2ebd1d60c75569b6e4e2aa90ff4bc8f65618078",
+          "architecture": "arm64",
+          "mount_path": "/data",
+          "backup_format": "redis-rdb-v1"
+        },
+        "provider": "server",
+        "kind": "redis",
+        "version": "8.2"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    }
+  ],
+  "redis-needed": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent Redis container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "redis-8.2",
+          "revision": "1",
+          "product_version": "8.2.10",
+          "image": "docker.io/library/redis@sha256:0f16771e42330c740f93cc57e2ebd1d60c75569b6e4e2aa90ff4bc8f65618078",
+          "architecture": "arm64",
+          "mount_path": "/data",
+          "backup_format": "redis-rdb-v1"
+        },
+        "provider": "server",
+        "kind": "redis",
+        "version": "8.2"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    },
+    {
+      "id": "service:web",
+      "op": "create",
+      "subject": "service",
+      "name": "web",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "ctrlplane",
+      "creates": "Docker container",
+      "service": {
+        "provider": "server",
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "health_path": "/_/health",
+        "build_target": {
+          "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "builder_settings": {
+            "architecture": "arm64",
+            "docker_id": "reviewed-daemon",
+            "docker_socket": "/var/run/docker.sock",
+            "host": "one.example.com",
+            "user": "deploy"
+          }
+        },
+        "workload": "http-service",
+        "execution": "container",
+        "service": "svc:go:cmd/api",
+        "source": "cmd/api",
+        "ecosystem": "go",
+        "framework": "forge",
+        "image": "Dockerfile",
+        "port": 8080,
+        "public": false,
+        "env": [
+          {
+            "key": "REDIS_URL",
+            "from": "database",
+            "subject": "resource"
+          }
+        ]
+      },
+      "reason": "Nothing runs web in production yet.",
+      "depends_on": [
+        "resource:database"
+      ],
+      "step": 2
+    }
+  ],
+  "valkey": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent Valkey container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "valkey-8.1",
+          "revision": "1",
+          "product_version": "8.1.10",
+          "image": "docker.io/valkey/valkey@sha256:6bd0360157519e3de7c49f6bae7d2bdfab574083bd7d266182db36b1646b0936",
+          "architecture": "arm64",
+          "mount_path": "/data",
+          "backup_format": "valkey-rdb-v1"
+        },
+        "provider": "server",
+        "kind": "valkey",
+        "version": "8.1"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    }
+  ],
+  "valkey-needed": [
+    {
+      "id": "resource:database",
+      "op": "create",
+      "subject": "resource",
+      "name": "database",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "loomplane",
+      "creates": "Persistent Valkey container",
+      "resource": {
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "catalog": {
+          "id": "valkey-8.1",
+          "revision": "1",
+          "product_version": "8.1.10",
+          "image": "docker.io/valkey/valkey@sha256:6bd0360157519e3de7c49f6bae7d2bdfab574083bd7d266182db36b1646b0936",
+          "architecture": "arm64",
+          "mount_path": "/data",
+          "backup_format": "valkey-rdb-v1"
+        },
+        "provider": "server",
+        "kind": "valkey",
+        "version": "8.1"
+      },
+      "reason": "Nothing runs database in production yet.",
+      "step": 1
+    },
+    {
+      "id": "service:web",
+      "op": "create",
+      "subject": "service",
+      "name": "web",
+      "provider": "server",
+      "connection_id": "conn_01m4vewksnea2bwdxwdy5aekhn",
+      "engine": "ctrlplane",
+      "creates": "Docker container",
+      "service": {
+        "provider": "server",
+        "target": "conn_01m4vewksnea2bwdxwdy5aekhn",
+        "target_settings": {
+          "architecture": "arm64",
+          "docker_id": "reviewed-daemon",
+          "docker_socket": "/var/run/docker.sock",
+          "host": "one.example.com",
+          "user": "deploy"
+        },
+        "health_path": "/_/health",
+        "build_target": {
+          "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "builder_settings": {
+            "architecture": "arm64",
+            "docker_id": "reviewed-daemon",
+            "docker_socket": "/var/run/docker.sock",
+            "host": "one.example.com",
+            "user": "deploy"
+          }
+        },
+        "workload": "http-service",
+        "execution": "container",
+        "service": "svc:go:cmd/api",
+        "source": "cmd/api",
+        "ecosystem": "go",
+        "framework": "forge",
+        "image": "Dockerfile",
+        "port": 8080,
+        "public": false,
+        "env": [
+          {
+            "key": "REDIS_URL",
+            "from": "database",
+            "subject": "resource"
+          }
+        ]
+      },
+      "reason": "Nothing runs web in production yet.",
+      "depends_on": [
+        "resource:database"
+      ],
+      "step": 2
+    }
+  ]
+}

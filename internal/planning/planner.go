@@ -46,6 +46,9 @@ type Input struct {
 	// Held are the aliases of repositories this plan doesn't move: their
 	// services stay as deployed.
 	Held map[string]bool
+	// Kinds are the catalog's engines and composed kinds. Nil means
+	// recipes.Default().
+	Kinds *recipes.Registry
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
@@ -426,12 +429,23 @@ func (p *planner) place(subject Subject, name, path string, prov *provider.Provi
 
 func (p *planner) planResources() {
 	m := p.in.Manifest
+	var composed []string
 	for _, name := range m.ResourceNames() {
 		r := m.Resources[name]
 		base := "resources." + name
 		set := r.For(p.in.Environment, m.Defaults)
 		if !manifest.On(set.Enabled) || p.noLinkKind(name, base, r) {
 			continue
+		}
+		if p.kinds().Composed(r.Kind) {
+			composed = append(composed, name)
+			continue
+		}
+		for _, dep := range slices.Sorted(maps.Keys(r.Uses)) {
+			p.problem(Finding{
+				Code: "catalog-dependency-unknown", Subject: ResourceSubject, Name: name, Path: base + ".uses." + dep,
+				Message: fmt.Sprintf("%s has no dependency called %s.", r.Kind, dep),
+			})
 		}
 		able := p.in.Providers.Provisioning(r.Kind)
 		prov := p.lookup(ResourceSubject, name, base+".provider", set.Provider, able)
@@ -477,6 +491,7 @@ func (p *planner) planResources() {
 		p.resources[name] = a
 		p.actions = append(p.actions, a)
 	}
+	p.planCompositions(composed)
 }
 
 func (p *planner) planServices() {
@@ -1555,9 +1570,19 @@ func (p *planner) link(name string, a *Action) {
 	needs := m.Services[name].Needs
 	base := "services." + name + ".needs"
 	keys := make([]string, len(needs))
+	// A composed catalog resource gives a variable for each output.
+	outputs := make([][]recipes.Output, len(needs))
+	composed := make([]bool, len(needs))
 	count := map[string]int{}
 	for i, need := range needs {
 		if r, ok := m.Resources[need]; ok {
+			if kind, ok := p.kinds().Kind(r.Kind); ok {
+				outputs[i], composed[i] = kind.Outputs, true
+				for _, o := range kind.Outputs {
+					count[o.EnvKey]++
+				}
+				continue
+			}
 			keys[i] = resourceEnvKey(r.Kind)
 		}
 		if keys[i] == "" {
@@ -1581,12 +1606,21 @@ func (p *planner) link(name string, a *Action) {
 				}
 				continue
 			}
-			if dep.Resource != nil && dep.Resource.Catalog != nil {
+			if dep.Resource != nil && (dep.Resource.Catalog != nil || dep.Resource.Composition != nil) {
 				resourceTarget := &ServiceConfig{Target: dep.Resource.Target, TargetSettings: dep.Resource.TargetSettings}
 				if !sameTargetNetwork(a.Service, resourceTarget, p.cloud(a.Provider), p.cloud(dep.Provider)) {
-					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: "The private database and its dependent service must run on the same checked target network."})
+					message := "The private database and its dependent service must run on the same checked target network."
+					if dep.Resource.Composition != nil {
+						message = fmt.Sprintf("%s and %s must run on the same checked target network.", name, need)
+					}
+					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
+			}
+			if composed[i] {
+				p.linkComposition(a, need, outputs[i], count)
+				a.DependsOn = append(a.DependsOn, dep.ID)
+				continue
 			}
 			if rc, sc := p.cloud(dep.Provider), p.cloud(a.Provider); rc != sc {
 				if l := p.reachOver(sc, rc); l != nil {
@@ -1767,10 +1801,15 @@ func (p *planner) order() {
 				step = max(step, depth(need, seen)+1)
 			}
 		}
-		// A held service also runs after what's kept only for it.
+		// A held service also runs after what's kept only for it, and
+		// any service after the resources it needs, which is later than
+		// step 1 for a composed catalog resource.
 		for _, id := range a.DependsOn {
 			if r := p.retained[id]; r != nil {
 				step = max(step, r.Step+1)
+			}
+			if name, ok := strings.CutPrefix(id, string(ResourceSubject)+":"); ok && p.resources[name] != nil {
+				step = max(step, p.resources[name].Step+1)
 			}
 		}
 		a.Step = step
@@ -2134,6 +2173,7 @@ func (p *planner) planDeletes() {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	composed := p.composedBindings()
 	for _, id := range ids {
 		b := p.bindings[id]
 		if p.planned(b.Subject, b.Name) != nil || p.retained[id] != nil {
@@ -2145,20 +2185,34 @@ func (p *planner) planDeletes() {
 				continue
 			}
 		}
-		reason := fmt.Sprintf("The manifest no longer has %s.", b.Name)
-		if wanted, on := p.wanted(b); wanted {
+		// A part of a composed resource goes with it, or when the
+		// resource no longer has it.
+		of, part := composed[id]
+		owner := b
+		if part {
+			owner = &Binding{Subject: ResourceSubject, Name: of.parent}
+		}
+		reason := fmt.Sprintf("The manifest no longer has %s.", owner.Name)
+		if wanted, on := p.wanted(owner); part && p.resources[of.parent] != nil {
+			reason = fmt.Sprintf("%s no longer has %s.", of.parent, b.Name)
+		} else if wanted {
 			if on {
 				continue // it couldn't be planned, and a problem says why
 			}
-			reason = fmt.Sprintf("%s is off in %s.", b.Name, p.in.Environment)
+			reason = fmt.Sprintf("%s is off in %s.", owner.Name, p.in.Environment)
 		}
 		step := last + 1
 		if b.Subject == ResourceSubject {
 			step = last + 2
-			p.warn(Finding{
-				Code: "data-loss", Subject: ResourceSubject, Name: b.Name, Path: "resources",
-				Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
-			})
+			if of.last {
+				step = last + 3
+			}
+			if !of.stateless {
+				p.warn(Finding{
+					Code: "data-loss", Subject: ResourceSubject, Name: b.Name, Path: "resources",
+					Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
+				})
+			}
 		}
 		connectionID := p.deleteThrough(b)
 		p.actions = append(p.actions, &Action{
@@ -2387,6 +2441,9 @@ func (p *planner) creates(b *Binding) string {
 	if b.Subject == ResourceSubject {
 		var cfg ResourceConfig
 		if json.Unmarshal(b.Config, &cfg) == nil {
+			if creates := p.composedCreates(cfg); creates != "" {
+				return creates
+			}
 			if offer, ok := prov.Provisioning(cfg.Kind); ok {
 				return offer.Creates
 			}

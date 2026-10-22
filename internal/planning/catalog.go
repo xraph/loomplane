@@ -10,6 +10,9 @@ import (
 )
 
 func (p *planner) configureCatalog(name, base string, resource manifest.Resource, cfg *ResourceConfig, action *Action) {
+	if p.kinds().Composed(cfg.Kind) {
+		return // planComposition pins each of its components
+	}
 	if !OwnedCloud(cfg.Provider) {
 		if resource.Target != "" {
 			p.problem(Finding{Code: "resource-target-unsupported", Subject: ResourceSubject, Name: name, Path: base + ".target", Message: "This resource provider does not accept a target connection."})
