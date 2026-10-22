@@ -40,6 +40,7 @@ import (
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/activity"
 	"github.com/xraph/loomplane/internal/artifacts"
+	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/aws"
@@ -89,6 +90,7 @@ type Extension struct {
 	nativeBackups       *recovery.NativeService
 	restoreTargets      func(context.Context) error
 	cloudProfiles       *cloudprofiles.Service
+	endpoints           *catalogconnect.Service
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
 	cloudRecoveryDone   chan struct{}
@@ -255,6 +257,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	resourceSecrets := deployments.NewVaultResourceSecrets(
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
+	// An external endpoint's DSN is a resource credential too.
+	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
 	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
 	routeService, err := forge.InjectType[*cloudinfra.Service](c)
 	if err != nil {
@@ -372,17 +376,19 @@ func (e *Extension) Stop(ctx context.Context) error {
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
-	case errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, recovery.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
+	case errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, recovery.ErrNotFound), errors.Is(err, catalogconnect.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
 		errors.Is(err, deployments.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
-		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady):
+		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
+		errors.Is(err, catalogconnect.ErrInUse):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph),
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
-	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid):
+	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid),
+		errors.Is(err, catalogconnect.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

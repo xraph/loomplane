@@ -9,6 +9,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/activity"
+	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/page"
@@ -249,6 +250,21 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run"),
 			forge.WithResponseSchema(http.StatusOK, "Kinds", CatalogKindList{}),
 		}},
+		{http.MethodGet, "/catalog/endpoints", e.listCatalogEndpoints, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.list"),
+			forge.WithSummary("The external databases and caches a catalog service can connect to, without their DSNs"),
+			forge.WithResponseSchema(http.StatusOK, "Endpoints", EndpointList{}),
+		}},
+		{http.MethodPost, "/catalog/endpoints", e.createCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.create"),
+			forge.WithSummary("Register an external Postgres or Redis; its DSN is kept in Vault and never returned"),
+			forge.WithRequestSchema(catalogconnect.CreateInput{}),
+			forge.WithResponseSchema(http.StatusCreated, "The endpoint", catalogconnect.Endpoint{}),
+		}},
+		{http.MethodDelete, "/catalog/endpoints/:id", e.deleteCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.delete"),
+			forge.WithSummary("Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes"),
+		}},
 	}
 	groups := []struct {
 		tag    string
@@ -265,6 +281,8 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 				err = g.POST(rt.path, rt.handler, rt.opts...)
 			case http.MethodPut:
 				err = g.PUT(rt.path, rt.handler, rt.opts...)
+			case http.MethodDelete:
+				err = g.DELETE(rt.path, rt.handler, rt.opts...)
 			}
 			if err != nil {
 				return err
