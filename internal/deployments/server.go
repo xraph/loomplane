@@ -68,6 +68,11 @@ type OwnedTarget struct {
 	// and Checker checks them again from the target on each release.
 	Endpoints EndpointResolver
 	Checker   EndpointChecker
+	// DialGuard refuses what a cluster's endpoint checks, which dial from
+	// Loomplane's own network, must never reach beyond its own host: the
+	// services Loomplane depends on and an operator's denied ranges. Nil
+	// refuses only its own host's addresses.
+	DialGuard *DialGuard
 
 	// Bindings lists what runs in an environment, for reaching the
 	// components of a composition from its hooks. Nil leaves a component

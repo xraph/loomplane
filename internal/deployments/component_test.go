@@ -204,6 +204,10 @@ func TestLoomplaneDialsOnlyOutsideItsOwnHost(t *testing.T) {
 		"169.254.169.254": false, "169.254.0.1": false, "fe80::1": false, "febf::1": false,
 		"::ffff:127.0.0.1": false, "::ffff:169.254.169.254": false, "::ffff:0.0.0.0": false,
 		"10.0.0.5": true, "192.168.1.20": true, "203.0.113.7": true, "2001:db8::1": true, "fd00::1": true,
+		// This network, and the NAT64 forms of what's refused.
+		"0.1.2.3": false, "0.255.255.255": false, "::ffff:0.1.2.3": false,
+		"64:ff9b::7f00:1": false, "64:ff9b::a9fe:a9fe": false, "64:ff9b::": false, "64:ff9b::7:1": false,
+		"64:ff9b::a00:5": true, "64:ff9b::cb00:7107": true,
 	} {
 		if got := loomplaneDials(netip.MustParseAddr(addr)); got != want {
 			t.Fatalf("%s: got %t, want %t", addr, got, want)
