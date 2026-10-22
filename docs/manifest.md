@@ -110,9 +110,23 @@ Backing services the application needs, by name. A resource can't share a servic
 | `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.            |
 | `provider`, `region` | Where it's provisioned.                                                               |
 | `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest. |
-| `environments`       | `provider`, `region` or `enabled` by environment name.                                |
+| `gateway`            | `true` puts a Postgres resource behind the [database gateway](#database_gateway).     |
+| `environments`       | `provider`, `region`, `enabled` or `gateway` by environment name.                     |
 
 A managed resource is only reachable from services on its own cloud. A Vercel app that needs a Cloud SQL database is a problem on the plan.
+
+A resource behind the database gateway is the exception, since its services reach it at the gateway's address, from any cloud. `gateway` only works on `postgres` resources, and a plan stops until the manifest also has a `database_gateway`. An environment can switch it on or off for one resource, so `preview` can skip the gateway while `production` uses it:
+
+```yaml
+resources:
+  db:
+    kind: postgres
+    provider: digitalocean
+    gateway: true
+    environments:
+      preview:
+        gateway: false
+```
 
 ## gateways
 
@@ -125,6 +139,40 @@ One public address in front of several services, routing each request by its pat
 | `environments`       | `provider`, `region` or `enabled` by environment name.                                                                                                                                                                                                                   |
 
 A gateway gets the addresses it routes to and none of the project's variables. On ECS it reaches private services inside the environment; elsewhere a route to a private service is a problem, since a gateway can't present Cloud Run's ID token.
+
+## database_gateway
+
+Where the database gateway runs: one per application, in front of every Postgres resource that sets `gateway: true`. Loomplane builds it and runs it on Cloud Run or ECS like a service, under the name `db-gateway`, so a service or gateway of yours with that name is a problem on the plan (`db-gateway-name-taken`). [Database services](postgres-services.md#database-gateway) covers what it does, which databases it supports and how to connect from Vercel.
+
+```yaml
+database_gateway:
+  provider: cloud-run
+  region: us-central1
+
+resources:
+  db:
+    kind: postgres
+    provider: digitalocean
+    gateway: true
+```
+
+| Field                | What it does                                                                                                                                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`, `region` | Where it runs: `cloud-run` or `ecs-fargate`. Without a provider it takes the Cloud tags or provider from `defaults`.                                  |
+| `cloud_tags`         | Picks the one target in your assigned Cloud that carries every tag, the way a service's tags do. Can't be set together with `provider`.               |
+| `environments`       | `provider`, `region` or `enabled` by environment name. `enabled: false` leaves the gateway out of that environment and removes it if it was deployed. |
+
+Each opted-in resource gets a variable beside its usual one. A Postgres resource's `DATABASE_URL` stays the address your service connects with, with its host changed to a name the gateway recognises, and `DATABASE_URL_GATEWAY` holds the gateway's own https address. The suffix is always `_GATEWAY`, added to whatever name the resource's kind gets.
+
+The plan stops with a problem in these cases:
+
+- A resource has `gateway: true` and there's no `database_gateway`, or it's off in the environment (`db-gateway-missing`).
+- `gateway` is set on a resource that isn't Postgres, or on a service, gateway or `database_gateway` override. Loomplane refuses the manifest when you save it.
+- The gateway would run on something other than Cloud Run or ECS (`db-gateway-unsupported`), or in front of a database it can't reach (`db-gateway-backend-unsupported`).
+- A resource's name can't be a DNS label: it has a double hyphen or ends with a hyphen (`db-gateway-name-invalid`).
+- No single verified DNS zone is granted to the project (`db-gateway-domain-missing` and `db-gateway-domain-ambiguous`).
+
+[Database services](postgres-services.md#what-phase-1-supports) lists the databases it reaches, and what to do about an ECS gateway that needs a certificate.
 
 ## links
 
@@ -206,7 +254,8 @@ Use `pkg/manifest/schema.json` (`https://loomplane.dev/schemas/loomplane.json`) 
 version: 2
 services:
   api: { source: cmd/api, provider: kubernetes }
-  worker: { source: cmd/worker, provider: kubernetes, public: false, port: 8080 }
+  worker:
+    { source: cmd/worker, provider: kubernetes, public: false, port: 8080 }
 federation:
   destinations:
     east: { id: dest_01m4va49zwe9pvk24sm9h8v0ta }
