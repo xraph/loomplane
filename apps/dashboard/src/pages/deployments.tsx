@@ -1,45 +1,44 @@
 // Every deployment across the organization's projects, newest first, as
-// runs: a plan and what came of it. Filters by status, project and
-// environment; search finds a run by ID, commit, repository or project.
-import { ChevronRightIcon, PlusIcon, SearchIcon } from "lucide-react"
-import { Fragment, useMemo, useState } from "react"
+// runs: a plan and what came of it. One filter panel holds the status tabs,
+// search, project, environment and time; the oldest plan waiting on you sits
+// above it so it can be approved without opening it.
+import {
+  ChevronRightIcon,
+  ClockIcon,
+  GitCommitHorizontalIcon,
+  LayersIcon,
+  LayoutGridIcon,
+  PlusIcon,
+  RocketIcon,
+  SearchIcon,
+  SearchXIcon,
+  XIcon,
+} from "lucide-react"
+import { type ReactNode, useMemo, useState } from "react"
 
+import { ApprovalCallout } from "@/components/approval"
 import { QueryError } from "@/components/query-error"
 import { Page, PageHeading } from "@/components/page"
 import {
-  Code,
+  ChangeChips,
   EnvBadge,
   PersonAvatar,
-  RunDot,
-  segmented,
+  StatusTile,
   Thread,
+  toneClass,
+  toneOf,
 } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   Empty,
   EmptyContent,
   EmptyDescription,
   EmptyHeader,
+  EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemMedia,
-  ItemSeparator,
-  ItemTitle,
-} from "@/components/ui/item"
 import { Kbd } from "@/components/ui/kbd"
 import {
   Select,
@@ -49,12 +48,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { dateTime, duration, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
@@ -97,6 +90,15 @@ export type RunFilter = (typeof runFilters)[number]["value"]
 const pageSize = 25
 const day = 86_400_000
 
+const ranges = [
+  { value: "any", label: "Any time", days: Infinity },
+  { value: "1", label: "Last 24 hours", days: 1 },
+  { value: "7", label: "Last 7 days", days: 7 },
+  { value: "30", label: "Last 30 days", days: 30 },
+] as const
+
+type Range = (typeof ranges)[number]["value"]
+
 function dayLabel(ts: number, now: number) {
   const midnight = (t: number) => new Date(t).setHours(0, 0, 0, 0)
   const diff = Math.round((midnight(now) - midnight(ts)) / day)
@@ -109,6 +111,19 @@ function dayLabel(ts: number, now: number) {
   })
 }
 
+// The middle value of a list of durations, or undefined for none.
+function median(ms: number[]): number | undefined {
+  if (ms.length === 0) return undefined
+  const s = [...ms].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 ? s[mid] : (s[mid - 1]! + s[mid]!) / 2
+}
+
+// The grid every row and the column headings share. On a phone a row keeps
+// only its status, deployment and start; the steps move under the name.
+const columns =
+  "grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 md:grid-cols-[28px_minmax(0,1fr)_96px_minmax(0,150px)_120px_72px_116px_16px] md:gap-4"
+
 export function Deployments({ status }: { status: RunFilter }) {
   const navigate = useNavigate()
   const { can } = useOrganization()
@@ -118,6 +133,7 @@ export function Deployments({ status }: { status: RunFilter }) {
   const now = useNow()
   const [projectID, setProjectID] = useState("all")
   const [env, setEnv] = useState("all")
+  const [range, setRange] = useState<Range>("any")
   const [search, setSearch] = useState("")
   const [limit, setLimit] = useState(pageSize)
 
@@ -134,15 +150,19 @@ export function Deployments({ status }: { status: RunFilter }) {
         : runs.filter((r) => Date.parse(r.createdAt) >= Date.parse(whole)),
     [runs, whole]
   )
+  const days = ranges.find((r) => r.value === range)?.days ?? Infinity
+  // Everything but the status tab narrows the counts, so a tab's count is
+  // what clicking it shows.
   const scoped = useMemo(
     () =>
       known.filter(
         (r) =>
           (projectID === "all" || r.projectId === projectID) &&
           (env === "all" || r.environment === env) &&
+          (days === Infinity || now - Date.parse(r.createdAt) <= days * day) &&
           matches(r, search)
       ),
-    [known, projectID, env, search]
+    [known, projectID, env, days, now, search]
   )
   const filter = runFilters.find((f) => f.value === status) ?? runFilters[0]
   const rows = scoped.filter((r) => filter.test(r))
@@ -160,124 +180,248 @@ export function Deployments({ status }: { status: RunFilter }) {
     else groups.push({ label, rows: [r] })
   }
 
+  const waiting = known
+    .filter((r) => r.status === "waiting")
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+  const succeeded = scoped.filter((r) => r.status === "succeeded")
+  const finished = scoped.filter(
+    (r) => r.status === "succeeded" || r.status === "failed"
+  )
+  const typical = median(succeeded.map((r) => elapsed(r, now)))
+
   const setStatus = (v: string) =>
     void navigate({
       to: "/deployments",
       search: v === "all" ? {} : { status: v as RunFilter },
     })
+  const clear = () => {
+    setStatus("all")
+    setProjectID("all")
+    setEnv("all")
+    setRange("any")
+    setSearch("")
+  }
+  const projectName = projects.find((p) => p.id === projectID)?.name
+  const chips: {
+    key: string
+    label: string
+    value: string
+    clear: () => void
+  }[] = [
+    ...(search.trim()
+      ? [
+          {
+            key: "q",
+            label: "Search",
+            value: `“${search.trim()}”`,
+            clear: () => setSearch(""),
+          },
+        ]
+      : []),
+    ...(projectName
+      ? [
+          {
+            key: "p",
+            label: "Project",
+            value: projectName,
+            clear: () => setProjectID("all"),
+          },
+        ]
+      : []),
+    ...(env !== "all"
+      ? [
+          {
+            key: "e",
+            label: "Environment",
+            value: env,
+            clear: () => setEnv("all"),
+          },
+        ]
+      : []),
+    ...(range !== "any"
+      ? [
+          {
+            key: "t",
+            label: "Time",
+            value: ranges.find((r) => r.value === range)?.label ?? "",
+            clear: () => setRange("any"),
+          },
+        ]
+      : []),
+  ]
 
   return (
     <>
       <SiteHeader crumbs={[{ label: "Deployments" }]} />
-      <Page className="gap-6">
+      <Page>
         <PageHeading
           title="Deployments"
           description="Every deploy across your projects, from plan to live. Search by plan ID, commit, repository or project."
           actions={
             can("deployment:create") && (
-              <Button className="rounded-full" onClick={() => openDeploy()}>
+              <Button onClick={() => openDeploy()}>
                 <PlusIcon />
                 New deployment
+                <Kbd className="ml-0.5 bg-primary-foreground/15 text-primary-foreground">
+                  N
+                </Kbd>
               </Button>
             )
           }
         />
-        <div className="sticky top-12 z-10 -mx-4 flex flex-wrap items-center gap-2 border-b bg-background/85 px-4 py-3 backdrop-blur-xl md:-mx-8 md:px-8 lg:-mx-10 lg:px-10">
-          <InputGroup className="h-8 w-full rounded-full sm:w-72">
-            <InputGroupAddon>
-              <SearchIcon />
-            </InputGroupAddon>
-            <InputGroupInput
-              data-page-search
-              placeholder="Search deployments"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value)
-                setLimit(pageSize)
-              }}
-              aria-label="Search deployments"
-            />
-            <InputGroupAddon align="inline-end">
-              <Kbd>/</Kbd>
-            </InputGroupAddon>
-          </InputGroup>
-          <ToggleGroup
-            variant="outline"
-            size="sm"
-            spacing={0}
-            className="max-w-full overflow-x-auto"
-            value={[filter.value]}
-            onValueChange={(v) => v[0] && setStatus(v[0])}
-            aria-label="Status"
-          >
-            {runFilters.map((f) => (
-              <ToggleGroupItem
-                key={f.value}
-                value={f.value}
-                className={cn(segmented, "gap-1.5")}
-              >
-                {f.label}
-                <span className="text-muted-foreground tabular-nums">
-                  {scoped.filter((r) => f.test(r)).length}
+
+        {waiting[0] && (
+          <ApprovalCallout
+            run={waiting[0]}
+            waiting={waiting.length}
+            now={now}
+          />
+        )}
+
+        <section
+          aria-label="Filter deployments"
+          className="rounded-xl bg-card ring-1 ring-border"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b pr-4 pl-2">
+            <div role="tablist" aria-label="Status" className="flex flex-wrap">
+              {runFilters.map((f) => {
+                const on = f.value === filter.value
+                return (
+                  <button
+                    key={f.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => setStatus(f.value)}
+                    className={cn(
+                      "-mb-px flex h-10 items-center gap-1.5 px-3 text-[13.5px] font-medium transition-colors",
+                      on
+                        ? "text-foreground shadow-[inset_0_-2px_0_var(--primary)]"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {f.label}
+                    <span
+                      className={cn(
+                        "min-w-[18px] rounded-full px-1.5 text-center font-mono text-[11px] tabular-nums",
+                        on
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground"
+                      )}
+                    >
+                      {scoped.filter((r) => f.test(r)).length}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="flex flex-wrap gap-x-4 py-2 text-[12.5px] text-muted-foreground">
+              <span>
+                <span className="font-mono text-foreground tabular-nums">
+                  {scoped.length}
+                </span>{" "}
+                deploys
+              </span>
+              {finished.length > 0 && (
+                <span>
+                  <span className="font-mono text-overdye-ink tabular-nums">
+                    {Math.round((succeeded.length / finished.length) * 100)}%
+                  </span>{" "}
+                  succeeded
                 </span>
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <div className="flex gap-2 sm:ml-auto">
-            <Select
-              items={[
-                { label: "All projects", value: "all" },
-                ...projects.map((p) => ({ label: p.name, value: p.id })),
-              ]}
-              value={projectID}
-              onValueChange={(v) => setProjectID(String(v))}
-            >
-              <SelectTrigger
-                size="sm"
-                aria-label="Project"
-                className="w-40 rounded-full"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All projects</SelectItem>
-                {projects.map((p) => {
-                  const s = projectStyle(p)
-                  return (
-                    <SelectItem key={p.id} value={p.id}>
-                      <ProjectIcon icon={s.icon} color={s.color} size="xs" />
-                      {p.name}
-                    </SelectItem>
-                  )
-                })}
-              </SelectContent>
-            </Select>
-            <Select
-              items={[
-                { label: "All environments", value: "all" },
-                ...envs.map((e) => ({ label: e, value: e })),
-              ]}
-              value={env}
-              onValueChange={(v) => setEnv(String(v))}
-            >
-              <SelectTrigger
-                size="sm"
-                aria-label="Environment"
-                className="w-44 rounded-full"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All environments</SelectItem>
-                {envs.map((e) => (
-                  <SelectItem key={e} value={e}>
-                    {e}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              )}
+              {typical !== undefined && (
+                <span>
+                  <span className="font-mono text-foreground tabular-nums">
+                    {duration(typical)}
+                  </span>{" "}
+                  median to live
+                </span>
+              )}
+            </div>
           </div>
-        </div>
+          <div className="flex flex-wrap items-center gap-2 p-2.5">
+            <label className="relative flex min-w-[240px] flex-[1_1_300px] items-center">
+              <SearchIcon className="pointer-events-none absolute left-3 size-4 text-muted-foreground" />
+              <span className="sr-only">Search deployments</span>
+              <input
+                data-page-search
+                type="search"
+                placeholder="Search by plan ID, commit, repository or project"
+                aria-label="Search deployments"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value)
+                  setLimit(pageSize)
+                }}
+                className="h-9 w-full rounded-[10px] border border-transparent bg-muted pr-10 pl-9 text-[13.5px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
+              />
+              <Kbd className="pointer-events-none absolute right-2.5">/</Kbd>
+            </label>
+            <FilterSelect
+              icon={<LayoutGridIcon />}
+              label="Project"
+              value={projectID}
+              onChange={setProjectID}
+              items={[
+                { value: "all", label: "All projects" },
+                ...projects.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+              render={(value) => {
+                const p = projects.find((x) => x.id === value)
+                if (!p) return undefined
+                const s = projectStyle(p)
+                return <ProjectIcon icon={s.icon} color={s.color} size="xs" />
+              }}
+            />
+            <FilterSelect
+              icon={<LayersIcon />}
+              label="Environment"
+              value={env}
+              onChange={setEnv}
+              items={[
+                { value: "all", label: "All environments" },
+                ...envs.map((e) => ({ value: e, label: e })),
+              ]}
+            />
+            <FilterSelect
+              icon={<ClockIcon />}
+              label="Time range"
+              value={range}
+              onChange={(v) => setRange(v as Range)}
+              items={ranges.map((r) => ({ value: r.value, label: r.label }))}
+              neutral="any"
+            />
+          </div>
+          {chips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 px-3 pb-3">
+              <span className="mr-0.5 text-xs text-muted-foreground">
+                Filtered by
+              </span>
+              {chips.map((c) => (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={c.clear}
+                  aria-label={`Remove the ${c.label.toLowerCase()} filter`}
+                  className="flex h-7 items-center gap-1.5 rounded-full bg-brand-soft pr-2 pl-2.5 text-[12.5px] ring-1 ring-brand-line hover:bg-brand-tint"
+                >
+                  <span className="text-muted-foreground">{c.label}</span>
+                  <span className="font-medium">{c.value}</span>
+                  <XIcon className="size-3 text-muted-foreground" />
+                </button>
+              ))}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-brand-ink"
+                onClick={clear}
+              >
+                Clear all
+              </Button>
+            </div>
+          )}
+        </section>
 
         {error !== undefined && (
           <QueryError
@@ -294,8 +438,11 @@ export function Deployments({ status }: { status: RunFilter }) {
           </div>
         ) : error !== undefined && runs.length === 0 ? null : runs.length ===
           0 ? (
-          <Empty className="border border-dashed">
+          <Empty>
             <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <RocketIcon />
+              </EmptyMedia>
               <EmptyTitle>No deployments yet</EmptyTitle>
               <EmptyDescription>
                 A deployment starts as a plan of one environment. Plan one, and
@@ -304,15 +451,16 @@ export function Deployments({ status }: { status: RunFilter }) {
             </EmptyHeader>
             {can("deployment:create") && (
               <EmptyContent>
-                <Button className="rounded-full" onClick={() => openDeploy()}>
-                  New deployment
-                </Button>
+                <Button onClick={() => openDeploy()}>New deployment</Button>
               </EmptyContent>
             )}
           </Empty>
         ) : rows.length === 0 ? (
-          <Empty className="border border-dashed">
+          <Empty>
             <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <SearchXIcon />
+              </EmptyMedia>
               <EmptyTitle>No deployments match</EmptyTitle>
               <EmptyDescription>
                 {older
@@ -321,24 +469,13 @@ export function Deployments({ status }: { status: RunFilter }) {
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-full"
-                onClick={() => {
-                  setStatus("all")
-                  setProjectID("all")
-                  setEnv("all")
-                  setSearch("")
-                }}
-              >
+              <Button variant="outline" size="sm" onClick={clear}>
                 Clear filters
               </Button>
               {older && (
                 <Button
                   variant="outline"
                   size="sm"
-                  className="rounded-full"
                   disabled={loadingMore}
                   onClick={more}
                 >
@@ -348,44 +485,56 @@ export function Deployments({ status }: { status: RunFilter }) {
             </EmptyContent>
           </Empty>
         ) : (
-          <div className="grid gap-8">
-            {groups.map((g) => (
-              <section key={g.label} className="grid gap-3">
-                <h2 className="flex items-baseline gap-2 text-sm font-medium">
-                  {g.label}
-                  <span className="text-xs font-normal text-muted-foreground tabular-nums">
-                    {g.rows.length}
-                  </span>
-                </h2>
-                <Card className="gap-0 py-0">
-                  <ItemGroup className="gap-0">
-                    {g.rows.map((r, i) => (
-                      <Fragment key={r.id}>
-                        {i > 0 && <ItemSeparator className="my-0" />}
-                        <RunRow run={r} now={now} />
-                      </Fragment>
+          <div className="-mx-1 overflow-x-auto px-1">
+            <div className="grid gap-4 md:min-w-[880px]">
+              <div
+                aria-hidden="true"
+                className={cn(
+                  columns,
+                  "-mb-2 px-[17px] text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase max-md:hidden"
+                )}
+              >
+                <span />
+                <span>Deployment</span>
+                <span>Commit</span>
+                <span>Changes</span>
+                <span>Steps</span>
+                <span className="text-right">Took</span>
+                <span className="text-right">Started</span>
+                <span />
+              </div>
+              {groups.map((g) => (
+                <section key={g.label} className="grid gap-1.5">
+                  <h2 className="flex items-baseline gap-2 px-1 text-[13px] font-semibold">
+                    {g.label}
+                    <span className="font-mono text-[11.5px] font-normal text-muted-foreground tabular-nums">
+                      {g.rows.length}
+                    </span>
+                  </h2>
+                  <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
+                    {g.rows.map((r) => (
+                      <RunRow key={r.id} run={r} now={now} />
                     ))}
-                  </ItemGroup>
-                </Card>
-              </section>
-            ))}
-            <div className="flex items-center justify-between text-sm text-muted-foreground">
-              <span className="tabular-nums">
-                {older
-                  ? `Showing ${Math.min(limit, rows.length)}, with older ones still to load`
-                  : `Showing ${Math.min(limit, rows.length)} of ${rows.length}`}
-              </span>
-              {(rows.length > limit || older) && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="rounded-full"
-                  disabled={loadingMore}
-                  onClick={showMore}
-                >
-                  {loadingMore ? "Loading…" : "Show more"}
-                </Button>
-              )}
+                  </div>
+                </section>
+              ))}
+              <div className="flex items-center justify-between px-1 text-[12.5px] text-muted-foreground">
+                <span className="tabular-nums">
+                  {older
+                    ? `Showing ${Math.min(limit, rows.length)}, with older ones still to load`
+                    : `Showing ${Math.min(limit, rows.length)} of ${rows.length}`}
+                </span>
+                {(rows.length > limit || older) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={loadingMore}
+                    onClick={showMore}
+                  >
+                    {loadingMore ? "Loading…" : "Show more"}
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -394,22 +543,53 @@ export function Deployments({ status }: { status: RunFilter }) {
   )
 }
 
-/** changesLine says in a few words what a run's plan does. */
-export function changesLine(r: Run): string {
-  const p = r.plan
-  if (p.status === "planning") return "Working out the plan"
-  if (p.status === "failed") return "Planning failed"
-  if (p.problems.length > 0) {
-    return `${p.problems.length} ${p.problems.length === 1 ? "problem" : "problems"} to fix`
-  }
-  const s = p.summary
-  const parts = [
-    s.create && `${s.create} to create`,
-    s.update && `${s.update} to update`,
-    s.replace && `${s.replace} to replace`,
-    s.delete && `${s.delete} to delete`,
-  ].filter(Boolean)
-  return parts.length ? parts.join(", ") : "Nothing to change"
+/** FilterSelect is one of the filter panel's dropdowns, tinted when set. */
+function FilterSelect({
+  icon,
+  label,
+  value,
+  onChange,
+  items,
+  neutral = "all",
+  render,
+}: {
+  icon: ReactNode
+  label: string
+  value: string
+  onChange: (v: string) => void
+  items: { value: string; label: string }[]
+  /** The value that means "no filter". */
+  neutral?: string
+  /** A leading mark for an item, such as a project's tile. */
+  render?: (value: string) => ReactNode
+}) {
+  const on = value !== neutral
+  return (
+    <Select
+      items={items}
+      value={value}
+      onValueChange={(v) => onChange(String(v))}
+    >
+      <SelectTrigger
+        aria-label={label}
+        className={cn(
+          "h-9 max-w-60 gap-2 rounded-[10px] [&>svg:first-child]:text-muted-foreground",
+          on && "bg-brand-soft font-medium ring-1 ring-brand-line"
+        )}
+      >
+        {icon}
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {items.map((it) => (
+          <SelectItem key={it.value} value={it.value}>
+            {render?.(it.value)}
+            {it.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
 }
 
 export function RunRow({ run: r, now }: { run: Run; now: number }) {
@@ -417,66 +597,61 @@ export function RunRow({ run: r, now }: { run: Run; now: number }) {
   const author = person(r.createdBy)
   const style = r.project ? projectStyle(r.project) : null
   const started = Date.parse(r.createdAt)
+  const tone = toneClass[toneOf(r.status)]
   return (
-    <Item
-      render={<Link to="/deployments/$id" params={{ id: r.id }} />}
-      className="group flex-nowrap gap-4 rounded-none px-4 py-3.5 md:px-5"
+    <Link
+      to="/deployments/$id"
+      params={{ id: r.id }}
+      className={cn(
+        columns,
+        "group px-4 py-2.5 text-foreground transition-colors hover:bg-subtle"
+      )}
     >
-      <ItemMedia>
-        <Tooltip>
-          <TooltipTrigger render={<span className="flex py-1" />}>
-            <RunDot status={r.status} />
-          </TooltipTrigger>
-          <TooltipContent>{runStatusText[r.status]}</TooltipContent>
-        </Tooltip>
-      </ItemMedia>
-      <ItemContent className="min-w-0 md:max-w-56 md:flex-none md:basis-56">
-        <ItemTitle className="w-full min-w-0">
+      <StatusTile status={r.status} />
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="flex min-w-0 items-center gap-2">
           {style && (
             <ProjectIcon icon={style.icon} color={style.color} size="xs" />
           )}
-          <span className="min-w-0 truncate">
+          <span className="min-w-0 truncate text-sm font-medium">
             {r.project?.name ?? "A deleted project"}
           </span>
           <EnvBadge env={r.environment} />
-        </ItemTitle>
-        <ItemDescription className="truncate md:hidden">
-          {r.phase}
-        </ItemDescription>
-      </ItemContent>
-      <ItemContent className="hidden min-w-0 flex-1! md:flex">
-        <ItemTitle className="w-full min-w-0 font-normal">
-          <span className="min-w-0 truncate">{r.phase}</span>
-        </ItemTitle>
-        <ItemDescription className="flex min-w-0 items-center gap-2 text-xs">
-          <Code>{commitLabel(r) || "no commit"}</Code>
-          <span className="truncate">{changesLine(r)}</span>
-        </ItemDescription>
-      </ItemContent>
-      <ItemActions className="shrink-0 gap-4">
-        <span className="hidden w-44 lg:block">
+        </span>
+        <span className={cn("truncate text-[12.5px]", tone.ink)}>
+          {r.status === "running" ? r.phase : runStatusText[r.status]}
+        </span>
+        <span className="mt-1 md:hidden">
           <Thread steps={r.thread} size="sm" />
         </span>
-        <span
-          className={cn(
-            "hidden w-16 text-right text-sm tabular-nums md:block",
-            isLive(r) ? "text-foreground" : "text-muted-foreground"
-          )}
-        >
-          {duration(elapsed(r, now))}
-        </span>
-        <span
-          className="flex items-center justify-end gap-2 text-sm text-muted-foreground"
-          title={dateTime(started)}
-        >
-          <PersonAvatar initials={author.initials} name={author.name} />
-          <span className="hidden w-16 text-right whitespace-nowrap sm:inline">
-            {relative(started, now)}
-          </span>
-          <span className="sr-only">by {author.name}</span>
-        </span>
-        <ChevronRightIcon className="hidden size-4 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground md:block" />
-      </ItemActions>
-    </Item>
+      </span>
+      <span className="flex items-center gap-1.5 font-mono text-[12.5px] text-muted-foreground max-md:hidden">
+        <GitCommitHorizontalIcon className="size-3.5 shrink-0" />
+        <span className="truncate">{commitLabel(r) || "no commit"}</span>
+      </span>
+      <span className="min-w-0 max-md:hidden">
+        <ChangeChips run={r} />
+      </span>
+      <span className="max-md:hidden">
+        <Thread steps={r.thread} size="sm" />
+      </span>
+      <span
+        className={cn(
+          "text-right font-mono text-[12.5px] tabular-nums max-md:hidden",
+          isLive(r) ? "text-foreground" : "text-muted-foreground"
+        )}
+      >
+        {duration(elapsed(r, now))}
+      </span>
+      <span
+        className="flex items-center justify-end gap-2 text-[12.5px] text-muted-foreground"
+        title={dateTime(started)}
+      >
+        <PersonAvatar initials={author.initials} name={author.name} />
+        <span className="whitespace-nowrap">{relative(started, now)}</span>
+        <span className="sr-only">by {author.name}</span>
+      </span>
+      <ChevronRightIcon className="size-4 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground max-md:hidden" />
+    </Link>
   )
 }

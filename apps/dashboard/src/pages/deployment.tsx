@@ -12,11 +12,10 @@ import {
   PlusIcon,
   RefreshCwIcon,
   RotateCcwIcon,
-  ShieldAlertIcon,
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react"
-import { type CSSProperties, type ReactNode, useMemo, useState } from "react"
+import { type ReactNode, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -25,38 +24,27 @@ import {
   useDeploymentsForPlan,
   useDeploymentsList,
   useDeploymentsRetry,
-  usePlansApprove,
   usePlansCreate,
   usePlansGet,
   usePlansList,
-  usePlansReject,
 } from "@/client/forge/loomplane/hooks"
 import type { Action, Finding, Plan } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { ApprovalCard } from "@/components/approval"
 import { Page } from "@/components/page"
 import {
   Code,
   CopyButton,
   EnvBadge,
   PersonAvatar,
-  PhaseRuler,
-  RunBadge,
+  stateLabel,
+  StatusPill,
+  toneOf,
   Thread,
   currentStep,
 } from "@/components/runs"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
@@ -95,8 +83,13 @@ import {
 } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
+import {
+  Tabs,
+  TabsContent,
+  TabsCount,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
 import { commitURL, resourceLabel } from "@/lib/architecture"
 import { cloudLabel } from "@/lib/clouds"
 import { dateTime, duration, relative } from "@/lib/format"
@@ -104,7 +97,13 @@ import { useOrganization } from "@/lib/organization"
 import { scopeBody, planConnections } from "@/lib/plans"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
-import { isLive, type Run, runLog, type ThreadStep } from "@/lib/runs"
+import {
+  isLive,
+  type Run,
+  runLog,
+  runStatusText,
+  type ThreadStep,
+} from "@/lib/runs"
 import { BuildLogPanel } from "@/components/build-log-panel"
 import { useNow, usePeople, useRunFor } from "@/lib/use-runs"
 import { cn } from "@/lib/utils"
@@ -121,7 +120,7 @@ export function DeploymentPage({ id }: { id: string }) {
       <Page>
         {plan.status === "error" ? (
           missing ? (
-            <Empty className="border border-dashed">
+            <Empty preview={false}>
               <EmptyHeader>
                 <EmptyTitle>No deployment here by that ID</EmptyTitle>
                 <EmptyDescription>
@@ -181,22 +180,20 @@ function Loaded({
           { label: run.environment },
         ]}
       />
-      <Page className="gap-6">
+      <Page>
         <Heading run={run} now={now} />
-        <Progression run={run} now={now} />
-        {run.status === "waiting" && <ApprovalAlert run={run} />}
+        <Progression
+          run={run}
+          now={now}
+          selected={step}
+          onSelect={(key) => {
+            setStep((cur) => (cur === key ? null : key))
+            setTab("logs")
+          }}
+        />
+        {run.status === "waiting" && <ApprovalCard run={run} />}
         {run.status === "blocked" && <BlockedAlert run={run} />}
-        <IdStrip run={run} now={now} />
-        <div className="grid items-start gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
-          <Steps
-            run={run}
-            now={now}
-            selected={step}
-            onSelect={(key) => {
-              setStep((cur) => (cur === key ? null : key))
-              setTab("logs")
-            }}
-          />
+        <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
           <Tabs
             value={activeTab}
             onValueChange={(v) => setTab(String(v))}
@@ -211,12 +208,7 @@ function Loaded({
               </TabsTrigger>
               <TabsTrigger value="plan">
                 Plan
-                <Badge
-                  variant="secondary"
-                  className="h-4.5 px-1.5 tabular-nums"
-                >
-                  {run.plan.actions.length}
-                </Badge>
+                <TabsCount>{run.plan.actions.length}</TabsCount>
               </TabsTrigger>
               <TabsTrigger value="services">Services</TabsTrigger>
             </TabsList>
@@ -238,6 +230,18 @@ function Loaded({
               <Services run={run} />
             </TabsContent>
           </Tabs>
+          <aside className="grid gap-4 lg:sticky lg:top-16">
+            <IdStrip run={run} now={now} />
+            <Steps
+              run={run}
+              now={now}
+              selected={step}
+              onSelect={(key) => {
+                setStep((cur) => (cur === key ? null : key))
+                setTab("logs")
+              }}
+            />
+          </aside>
         </div>
       </Page>
     </>
@@ -295,7 +299,9 @@ function Heading({ run, now }: { run: Run; now: number }) {
     <header className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
       <div className="grid min-w-0 gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <RunBadge status={run.status} />
+          <StatusPill tone={toneOf(run.status)}>
+            {runStatusText[run.status]}
+          </StatusPill>
           {run.project && style && (
             <Link
               to="/projects/$id"
@@ -311,7 +317,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
           )}
           <EnvBadge env={run.environment} />
         </div>
-        <h1 className="text-[28px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-[32px]">
+        <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-2xl">
           {run.project?.name ?? "Deploy"} to {run.environment}
         </h1>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
@@ -349,7 +355,6 @@ function Heading({ run, now }: { run: Run; now: number }) {
       <div className="flex shrink-0 items-center gap-2">
         {d?.status === "failed" && can("deployment:approve") && (
           <Button
-            className="rounded-full"
             disabled={retry.isPending}
             onClick={() => void retryDeployment()}
           >
@@ -360,7 +365,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
         {!isLive(run) && can("deployment:create") && (
           <Button
             variant="outline"
-            className="rounded-full"
+
             disabled={replan.isPending}
             onClick={() => void planAgain()}
           >
@@ -374,7 +379,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
               <Button
                 variant="outline"
                 size="icon"
-                className="rounded-full"
+
                 aria-label="More"
               />
             }
@@ -414,72 +419,114 @@ function Heading({ run, now }: { run: Run; now: number }) {
 }
 
 /** Progression is the run's thread across the warp, phases below. */
-function Progression({ run, now }: { run: Run; now: number }) {
+const groupState = (steps: ThreadStep[]): ThreadStep["state"] =>
+  steps.some((s) => s.state === "failed")
+    ? "failed"
+    : steps.some((s) => s.state === "running")
+      ? "running"
+      : steps.some((s) => s.state === "waiting")
+        ? "waiting"
+        : steps.every((s) => s.state === "done" || s.state === "skipped")
+          ? "done"
+          : steps.some((s) => s.state === "canceled")
+            ? "canceled"
+            : "pending"
+
+const groupTone: Record<ThreadStep["state"], string> = {
+  done: "text-overdye-ink",
+  running: "text-flight-ink",
+  waiting: "text-weld-ink",
+  failed: "text-destructive",
+  canceled: "text-muted-foreground",
+  pending: "text-muted-foreground",
+  skipped: "text-muted-foreground",
+}
+
+/**
+ * Progression is the run's phases side by side: each one's thread, where it
+ * stands and how long it took. Picking one filters the logs to its current
+ * step.
+ */
+function Progression({
+  run,
+  now,
+  selected,
+  onSelect,
+}: {
+  run: Run
+  now: number
+  selected: string | null
+  onSelect: (key: string) => void
+}) {
   const steps = run.thread
-  const step = currentStep(steps)
-  const at = step ? steps.indexOf(step) : steps.length - 1
-  // Where the thread is: mid-step while running, the step it stopped on
-  // otherwise, the far end once it's live.
-  const glowAt =
-    run.status === "succeeded"
-      ? 92
-      : Math.min(
-          ((at + (step?.state === "running" ? (step.progress ?? 0.5) : 0.5)) /
-            steps.length) *
-            100,
-          96
-        )
-  const tone =
-    run.status === "failed" || run.status === "blocked"
-      ? "failed"
-      : run.status === "succeeded" || run.status === "approved"
-        ? "quiet"
-        : undefined
   const done = steps.filter((s) => s.state === "done").length
+  const groups = [...new Set(steps.map((s) => s.group))]
   return (
-    <Card className="relative overflow-hidden">
-      {run.status !== "canceled" && (
-        <div
-          aria-hidden="true"
-          data-tone={tone}
-          className="loom-glow pointer-events-none absolute inset-0"
-          style={{ "--glow-x": `${glowAt}%` } as CSSProperties}
-        />
-      )}
-      <CardContent className="relative grid gap-4 py-2">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-          <div className="flex items-baseline gap-2">
-            <span className="text-lg font-semibold tracking-tight">
-              {run.phase}
-            </span>
-            <span className="text-sm text-muted-foreground">
-              {run.status === "succeeded"
-                ? `all ${steps.length} steps`
-                : `${done} of ${steps.length} steps done`}
-            </span>
-          </div>
-          <div className="flex items-baseline gap-4 text-sm text-muted-foreground tabular-nums">
-            <span>
-              <span className="font-medium text-foreground">
-                {duration(
-                  (run.finishedAt ? Date.parse(run.finishedAt) : now) -
-                    Date.parse(run.createdAt)
-                )}
-              </span>{" "}
-              {run.finishedAt ? "in all" : "so far"}
-            </span>
-            {run.finishedAt && (
-              <span>finished {relative(Date.parse(run.finishedAt), now)}</span>
+    <section
+      aria-label="Steps"
+      className="overflow-hidden rounded-xl bg-card ring-1 ring-border"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b px-4 py-2.5">
+        <span className="text-[13.5px] font-semibold">
+          {run.status === "succeeded"
+            ? `All ${steps.length} steps done`
+            : `${done} of ${steps.length} steps done`}
+          <span className="ml-2 font-normal text-muted-foreground">
+            {run.phase}
+          </span>
+        </span>
+        <span className="text-[12.5px] text-muted-foreground tabular-nums">
+          <span className="font-mono text-foreground">
+            {duration(
+              (run.finishedAt ? Date.parse(run.finishedAt) : now) -
+                Date.parse(run.createdAt)
             )}
-          </div>
-        </div>
-        <Thread steps={steps} size="lg" tooltips />
-        <PhaseRuler
-          steps={steps}
-          active={run.status === "succeeded" ? undefined : step?.group}
-        />
-      </CardContent>
-    </Card>
+          </span>{" "}
+          {run.finishedAt
+            ? `in all, finished ${relative(Date.parse(run.finishedAt), now)}`
+            : "so far"}
+        </span>
+      </div>
+      <div className="flex flex-wrap">
+        {groups.map((g, i) => {
+          const inGroup = steps.filter((s) => s.group === g)
+          const state = groupState(inGroup)
+          const head = currentStep(inGroup) ?? inGroup[0]
+          const on = inGroup.some((s) => s.key === selected)
+          const first = inGroup[0]?.startedAt
+          const last = inGroup.at(-1)?.finishedAt
+          const took =
+            first && last && state === "done"
+              ? duration(Date.parse(last) - Date.parse(first))
+              : undefined
+          return (
+            <button
+              key={g}
+              type="button"
+              aria-pressed={on}
+              onClick={() => head && onSelect(head.key)}
+              className={cn(
+                "flex min-w-[200px] flex-1 flex-col gap-1.5 px-4 pt-3 pb-3.5 text-left transition-colors hover:bg-subtle",
+                i > 0 && "border-l",
+                on && "bg-brand-soft shadow-[inset_0_0_0_2px_var(--brand-line)]"
+              )}
+            >
+              <Thread steps={inGroup} size="sm" />
+              <span className="mt-1 text-[11px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
+                {g}
+                {inGroup.length > 1 && ` · ${inGroup.length} steps`}
+              </span>
+              <span className="truncate text-sm font-medium">
+                {head?.name ?? g}
+              </span>
+              <span className={cn("text-[12.5px]", groupTone[state])}>
+                {took ? `Took ${took}` : (head?.detail ?? stateLabel[state])}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -525,130 +572,28 @@ function IdStrip({ run, now }: { run: Run; now: number }) {
     { label: "Deploys with", value: deploysWith || "No connection yet" },
   ]
   return (
-    <dl className="grid grid-cols-2 border-y sm:grid-cols-3 lg:grid-cols-5">
-      {items.map((it, i) => (
-        <div
-          key={it.label}
-          className={cn(
-            "grid min-w-0 gap-1 py-3.5 pr-4",
-            i > 0 && "lg:border-l lg:pl-5"
-          )}
-        >
-          <dt className="text-xs text-muted-foreground">{it.label}</dt>
-          <dd className="flex min-w-0 items-center gap-1 text-sm">
-            <span className="truncate">{it.value}</span>
-            {it.copy && (
-              <CopyButton
-                value={it.copy}
-                label={`Copy the ${it.label.toLowerCase()} ID`}
-              />
-            )}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  )
-}
-
-function ApprovalAlert({ run }: { run: Run }) {
-  const { can } = useOrganization()
-  const approve = useMutation(usePlansApprove)
-  const reject = useMutation(usePlansReject)
-  const invalidate = useInvalidate()
-  const [rejecting, setRejecting] = useState(false)
-  const [note, setNote] = useState("")
-  const p = run.plan
-  const s = p.summary
-  const busy = approve.isPending || reject.isPending
-  const removes = s.delete + s.replace
-
-  const decide = async (yes: boolean) => {
-    try {
-      const body = { revision: p.revision, note: note.trim() || undefined }
-      const out = yes
-        ? await approve.mutateAsync({ path: { id: p.id }, body })
-        : await reject.mutateAsync({ path: { id: p.id }, body })
-      invalidate(usePlansList)
-      invalidate(usePlansGet)
-      setRejecting(false)
-      toast.success(
-        out.status === "stale"
-          ? "What's deployed changed since this plan was made. Plan again."
-          : yes
-            ? p.executable
-              ? "Approved. Deploying now."
-              : "Approved"
-            : "Plan rejected"
-      )
-    } catch (err) {
-      toast.error(messageOf(err, "The decision wasn't recorded."))
-    }
-  }
-
-  return (
-    <Alert className="items-center gap-y-1 rounded-xl border-weld/50 bg-[color-mix(in_oklch,var(--weld)_6%,var(--card))] p-4 has-[>svg]:gap-x-3 md:has-[>svg]:grid-cols-[auto_1fr_auto]">
-      <ShieldAlertIcon className="text-weld-ink size-5!" />
-      <AlertTitle>
-        {removes > 0
-          ? `This plan replaces or removes ${removes} ${removes === 1 ? "thing" : "things"}, so it waits for an approval.`
-          : `Deploying to ${run.environment} waits for someone to approve the plan.`}
-      </AlertTitle>
-      <AlertDescription className="col-start-2">
-        {s.create} to create, {s.update} to update, {s.replace} to replace,{" "}
-        {s.delete} to delete. Nothing has changed in your clouds yet.
-        {p.warnings.length > 0 &&
-          ` ${p.warnings.length} ${p.warnings.length === 1 ? "warning is" : "warnings are"} worth a look in the plan.`}
-      </AlertDescription>
-      {can("deployment:approve") && (
-        <div className="col-start-2 mt-2 flex gap-2 md:col-start-3 md:row-span-2 md:row-start-1 md:mt-0">
-          <Button
-            variant="outline"
-            className="rounded-full"
-            disabled={busy}
-            onClick={() => setRejecting(true)}
+    <section className="rounded-xl bg-card px-4 pt-1 pb-1.5 ring-1 ring-border">
+      <h2 className="pt-3 pb-2 text-[13px] font-semibold">Details</h2>
+      <dl className="grid">
+        {items.map((it) => (
+          <div
+            key={it.label}
+            className="grid min-w-0 grid-cols-[96px_minmax(0,1fr)] items-center gap-2 border-t py-2"
           >
-            Reject
-          </Button>
-          <Button
-            className="rounded-full"
-            disabled={busy}
-            onClick={() => void decide(true)}
-          >
-            {approve.isPending ? <Spinner /> : <CheckIcon />}
-            {p.executable ? "Approve and deploy" : "Approve"}
-          </Button>
-        </div>
-      )}
-      <AlertDialog open={rejecting} onOpenChange={setRejecting}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Reject this plan?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Nothing changes in your clouds. Anyone can plan {run.environment}{" "}
-              again once the manifest or the code is right.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <Textarea
-            aria-label="Why"
-            placeholder="Why, for the record (optional)"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            maxLength={2000}
-          />
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep reviewing</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={busy}
-              onClick={() => void decide(false)}
-            >
-              {reject.isPending && <Spinner />}
-              Reject plan
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </Alert>
+            <dt className="text-[12.5px] text-muted-foreground">{it.label}</dt>
+            <dd className="flex min-w-0 items-center gap-1 text-[13px]">
+              <span className="truncate">{it.value}</span>
+              {it.copy && (
+                <CopyButton
+                  value={it.copy}
+                  label={`Copy the ${it.label.toLowerCase()} ID`}
+                />
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   )
 }
 
@@ -697,7 +642,7 @@ function StepIcon({ s }: { s: ThreadStep }) {
       )
     case "waiting":
       return (
-        <span className={cn(box, "text-weld-ink border-2 border-weld bg-card")}>
+        <span className={cn(box, "border-2 border-weld bg-card text-weld-ink")}>
           <PauseIcon className="size-2.5" fill="currentColor" />
         </span>
       )
@@ -736,7 +681,7 @@ function Steps({
 }) {
   const groups = [...new Set(run.thread.map((s) => s.group))]
   return (
-    <Card className="gap-2 lg:sticky lg:top-16">
+    <Card className="gap-2">
       <CardHeader>
         <CardTitle className="text-sm">Steps</CardTitle>
         <CardDescription className="text-xs">
@@ -1076,7 +1021,7 @@ function Services({ run }: { run: Run }) {
                   className={cn(
                     "gap-1.5 text-xs",
                     s.state === "running"
-                      ? "text-weld-ink font-medium"
+                      ? "font-medium text-weld-ink"
                       : "text-muted-foreground"
                   )}
                 >

@@ -8,6 +8,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation } from "@/client/hooks"
 import { Page } from "@/components/page"
+import { ProductIcon } from "@/components/product-icon"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { buttonVariants } from "@/components/ui/button"
@@ -65,11 +66,14 @@ export function GitHubSetup({ installationId, code, state }: GitHubSetupProps) {
       <Page>
         <Card className="max-w-xl">
           <CardHeader>
-            <CardTitle>
-              {connect.status === "success"
-                ? "GitHub connected"
-                : "Connecting GitHub"}
-            </CardTitle>
+            <div className="flex items-center gap-3">
+              <ProductIcon product="github" size="md" />
+              <CardTitle>
+                {connect.status === "success"
+                  ? "GitHub connected"
+                  : "Connecting GitHub"}
+              </CardTitle>
+            </div>
             <CardDescription>
               Loomplane checks with GitHub that you installed the App and can
               see what it was installed on.

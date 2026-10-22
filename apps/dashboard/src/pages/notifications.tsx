@@ -21,13 +21,15 @@ import {
   useNotificationsWebhooksDeliveries,
   useNotificationsWebhooksList,
   useNotificationsWebhooksRotate,
+  useProjectsList,
 } from "@/client/forge/loomplane/hooks"
 import type {
   WebhookEndpointList,
   WebhookEndpointSecret,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { Page, PageHeading, SectionHeading } from "@/components/page"
+import { Page, PageHeading } from "@/components/page"
+import { StatusPill } from "@/components/runs"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -64,8 +66,10 @@ import {
   ZeroStateMedia,
   ZeroStateTitle,
 } from "@/components/zero-state"
-import { formatDate } from "@/lib/format"
+import { formatDate, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { useNow } from "@/lib/use-runs"
+import { cn } from "@/lib/utils"
 
 // Relay delivery and Herald inbox changes are read through the generated
 // queries until they have bindings on the shared organization stream.
@@ -122,6 +126,11 @@ function NotificationContent({ admin }: { admin: boolean }) {
   const invalidate = useInvalidate()
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
+  const projects = useQuery(useProjectsList)
+  const now = useNow()
+  const projectName = (id: string) =>
+    projects.data?.projects.find((p) => p.id === id)?.name
+  const unread = (inbox.data?.items ?? []).filter((n) => !n.read)
   const inboxDenied = useAuthorizationFailure(inbox)
   const preferencesDenied = useAuthorizationFailure(preferences)
   const accessDenied = inboxDenied || preferencesDenied
@@ -148,6 +157,17 @@ function NotificationContent({ admin }: { admin: boolean }) {
     }
   }
 
+  const markAllRead = async () => {
+    setError("")
+    try {
+      for (const n of unread) await read.mutateAsync({ path: { id: n.id } })
+    } catch (err) {
+      setError(messageOf(err, "Some notifications weren't marked as read."))
+    } finally {
+      invalidate(useNotificationsList)
+    }
+  }
+
   const retryProcessing = async () => {
     setError("")
     setNotice("")
@@ -171,20 +191,6 @@ function NotificationContent({ admin }: { admin: boolean }) {
           description="Deployment results for you, and webhooks for this organization."
           actions={
             <>
-              {admin && !accessDenied && (
-                <AdminReadGate>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={retry.isPending}
-                    title="Retry exhausted email and event processing for this organization. Webhook delivery retries are handled by Relay."
-                    onClick={() => void retryProcessing()}
-                  >
-                    {retry.isPending && <Spinner />}Retry notification
-                    processing
-                  </Button>
-                </AdminReadGate>
-              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -246,89 +252,153 @@ function NotificationContent({ admin }: { admin: boolean }) {
             {notice}
           </p>
         )}
-        <section aria-label="Notification inbox" className="grid gap-3">
-          <SectionHeading
-            title="Your inbox"
-            description="Recent updates refresh every 10 seconds while this page is visible."
-          />
+        <section
+          aria-label="Notification inbox"
+          className="overflow-hidden rounded-[14px] bg-card ring-1 ring-border"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+            <div className="grid gap-0.5">
+              <h2 className="flex items-center gap-2 text-sm font-semibold">
+                Your inbox
+                {unread.length > 0 && (
+                  <span className="rounded-full bg-brand-tint px-2 py-px text-[11.5px] font-medium text-brand-ink">
+                    {unread.length} unread
+                  </span>
+                )}
+              </h2>
+              <span className="text-[12.5px] text-muted-foreground">
+                Recent updates refresh every 10 seconds while this page is
+                visible.
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {admin && !accessDenied && (
+                <AdminReadGate>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={retry.isPending}
+                    title="Retry exhausted email and event processing for this organization. Webhook delivery retries are handled by Relay."
+                    onClick={() => void retryProcessing()}
+                  >
+                    {retry.isPending && <Spinner />}Retry notification
+                    processing
+                  </Button>
+                </AdminReadGate>
+              )}
+              {unread.length > 1 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-brand-ink"
+                  disabled={read.isPending}
+                  onClick={() => void markAllRead()}
+                >
+                  Mark all as read
+                </Button>
+              )}
+            </div>
+          </div>
           {inbox.status === "error" && (
-            <ReadError
-              error={inbox.error}
-              fallback="Your inbox couldn't be loaded."
-              retry={() => void inbox.refetch().catch(() => undefined)}
-              label="Retry inbox"
-            />
+            <div className="p-4">
+              <ReadError
+                error={inbox.error}
+                fallback="Your inbox couldn't be loaded."
+                retry={() => void inbox.refetch().catch(() => undefined)}
+                label="Retry inbox"
+              />
+            </div>
           )}
           {!inbox.data && inbox.status !== "error" && (
-            <Skeleton className="h-36 w-full" />
+            <div className="p-4">
+              <Skeleton className="h-28 w-full" />
+            </div>
           )}
           {inbox.data &&
             inbox.data.items.length === 0 &&
             inbox.status !== "error" && (
-              <Card className="p-0">
-                <ZeroState>
-                  <ZeroStateHeader>
-                    <ZeroStateMedia variant="icon">
-                      <BellIcon />
-                    </ZeroStateMedia>
-                    <ZeroStateTitle>No notifications yet</ZeroStateTitle>
-                    <ZeroStateDescription>
-                      Your deployment results appear here after a deployment
-                      finishes.
-                    </ZeroStateDescription>
-                  </ZeroStateHeader>
-                </ZeroState>
-              </Card>
+              <ZeroState className="py-8">
+                <ZeroStateHeader>
+                  <ZeroStateMedia variant="icon">
+                    <BellIcon />
+                  </ZeroStateMedia>
+                  <ZeroStateTitle>No notifications yet</ZeroStateTitle>
+                  <ZeroStateDescription>
+                    Your deployment results appear here after a deployment
+                    finishes.
+                  </ZeroStateDescription>
+                </ZeroStateHeader>
+              </ZeroState>
             )}
           {inbox.data && !inboxDenied && inbox.data.items.length > 0 && (
-            <Card className="gap-0 overflow-hidden py-0">
-              <ul className="divide-y">
-                {inbox.data.items.map((item) => (
+            <ul className="divide-y">
+              {inbox.data.items.map((item) => {
+                const project = projectName(item.projectId)
+                const email = emailStatus(item.emailStatus)
+                return (
                   <li
                     key={item.id}
-                    className="flex flex-wrap items-start gap-3 px-4 py-3"
+                    title={item.body}
+                    className={cn(
+                      "flex flex-wrap items-center gap-x-3.5 gap-y-2 px-4 py-3",
+                      !item.read && "bg-subtle/60"
+                    )}
                   >
-                    <BellIcon className="mt-1 size-4 shrink-0 text-muted-foreground" />
-                    <div className="grid min-w-0 flex-1 gap-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-medium">
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        noticeTone[item.status] ?? "bg-muted-foreground/50",
+                        item.read && "opacity-40"
+                      )}
+                    />
+                    <span className="grid min-w-0 flex-[1_1_320px] gap-0.5">
+                      <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[13.5px]">
+                        <span
+                          className={cn(
+                            "font-medium",
+                            item.read && "text-muted-foreground"
+                          )}
+                        >
                           {item.title}
                         </span>
-                        {!item.read && (
-                          <Badge variant="secondary">Unread</Badge>
+                        {project && (
+                          <span className="truncate text-muted-foreground">
+                            · {project}
+                          </span>
                         )}
-                        {emailStatus(item.emailStatus) && (
-                          <Badge
-                            variant={
-                              item.emailStatus === "failed"
-                                ? "destructive"
-                                : "outline"
-                            }
-                          >
-                            {emailStatus(item.emailStatus)}
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="text-sm break-words text-muted-foreground">
-                        {item.body}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                        <time dateTime={item.createdAt}>
-                          {formatDate(item.createdAt)}
+                        {!item.read && <span className="sr-only">Unread</span>}
+                      </span>
+                      <span className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-xs text-muted-foreground">
+                        <time
+                          dateTime={item.createdAt}
+                          title={formatDate(item.createdAt)}
+                        >
+                          {relative(Date.parse(item.createdAt), now)}
                         </time>
-                        {safeAction(item.actionUrl) && (
-                          <a
-                            href={item.actionUrl}
-                            className="underline underline-offset-4"
+                        {email && (
+                          <span
+                            className={cn(
+                              item.emailStatus === "failed" &&
+                                "text-destructive"
+                            )}
                           >
-                            View deployment
-                          </a>
+                            {email}
+                          </span>
                         )}
-                      </div>
-                    </div>
+                      </span>
+                    </span>
+                    {safeAction(item.actionUrl) && (
+                      <a
+                        href={item.actionUrl}
+                        className="text-[12.5px] font-medium text-brand-ink hover:underline"
+                      >
+                        View deployment
+                      </a>
+                    )}
                     {!item.read && (
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
                         disabled={read.isPending}
                         onClick={() => void markRead(item.id)}
@@ -338,15 +408,24 @@ function NotificationContent({ admin }: { admin: boolean }) {
                       </Button>
                     )}
                   </li>
-                ))}
-              </ul>
-            </Card>
+                )
+              })}
+            </ul>
           )}
         </section>
         {admin && !accessDenied && <Webhooks />}
       </Page>
     </>
   )
+}
+
+// A deployment's result, in the status colors used everywhere else.
+const noticeTone: Record<string, string> = {
+  succeeded: "bg-overdye",
+  failed: "bg-failed",
+  blocked: "bg-failed",
+  waiting: "bg-weld",
+  canceled: "bg-muted-foreground/50",
 }
 
 function safeAction(value: string): boolean {
@@ -443,40 +522,49 @@ function WebhookContent({
   }
 
   return (
-    <section aria-label="Organization webhooks" className="grid gap-3">
-      <SectionHeading
-        title="Organization webhooks"
-        description="Relay signs deployment events and retries delivery failures."
-        action={
-          !denied && (
-            <Button size="sm" onClick={() => setCreating(true)}>
-              <PlusIcon />
-              Add webhook
-            </Button>
-          )
-        }
-      />
+    <section
+      aria-label="Organization webhooks"
+      className="overflow-hidden rounded-[14px] bg-card ring-1 ring-border"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+        <div className="grid gap-0.5">
+          <h2 className="text-sm font-semibold">Organization webhooks</h2>
+          <span className="text-[12.5px] text-muted-foreground">
+            Relay signs deployment events and retries delivery failures.
+          </span>
+        </div>
+        {!denied && (
+          <Button size="sm" onClick={() => setCreating(true)}>
+            <PlusIcon />
+            Add webhook
+          </Button>
+        )}
+      </div>
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="m-4">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
       {endpoints.status === "error" && (
-        <ReadError
-          error={endpoints.error}
-          fallback="Webhooks couldn't be loaded."
-          retry={() => void endpoints.refetch().catch(() => undefined)}
-          label="Retry webhooks"
-        />
+        <div className="p-4">
+          <ReadError
+            error={endpoints.error}
+            fallback="Webhooks couldn't be loaded."
+            retry={() => void endpoints.refetch().catch(() => undefined)}
+            label="Retry webhooks"
+          />
+        </div>
       )}
       {!endpoints.data && endpoints.status !== "error" && (
-        <Skeleton className="h-28 w-full" />
+        <div className="p-4">
+          <Skeleton className="h-20 w-full" />
+        </div>
       )}
       {endpoints.data &&
         endpoints.data.items.length === 0 &&
         endpoints.status !== "error" && (
-          <Card className="p-0">
-            <ZeroState>
+          <>
+            <ZeroState className="py-8">
               <ZeroStateHeader>
                 <ZeroStateMedia variant="icon">
                   <WebhookIcon />
@@ -488,27 +576,29 @@ function WebhookContent({
                 </ZeroStateDescription>
               </ZeroStateHeader>
             </ZeroState>
-          </Card>
+          </>
         )}
       {endpoints.data && !denied && endpoints.data.items.length > 0 && (
-        <Card className="gap-0 py-0">
+        <>
           <ul className="divide-y">
             {endpoints.data.items.map((endpoint) => (
               <li
                 key={endpoint.id}
                 className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
               >
-                <div className="grid min-w-0 flex-1 basis-48 gap-1">
-                  <span className="text-sm font-medium break-all">
+                <div className="grid min-w-0 flex-1 basis-48 gap-0.5">
+                  <span className="font-mono text-[12.5px] font-medium break-all">
                     {endpoint.url}
                   </span>
                   <span className="text-xs break-words text-muted-foreground">
                     {endpoint.description || "Deployment events"}
                   </span>
-                  {!endpoint.enabled && (
-                    <Badge variant="outline">Disabled by delivery policy</Badge>
-                  )}
                 </div>
+                <StatusPill tone={endpoint.enabled ? "live" : "waiting"}>
+                  {endpoint.enabled
+                    ? "Delivering"
+                    : "Disabled by delivery policy"}
+                </StatusPill>
                 <div className="flex flex-wrap gap-1">
                   <Button
                     variant="outline"
@@ -528,7 +618,7 @@ function WebhookContent({
                     <AlertDialogTrigger
                       render={
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
                           disabled={rotate.isPending}
                         >
@@ -563,8 +653,9 @@ function WebhookContent({
                     <AlertDialogTrigger
                       render={
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
+                          className="text-destructive"
                           disabled={remove.isPending}
                         >
                           Delete
@@ -594,7 +685,7 @@ function WebhookContent({
               </li>
             ))}
           </ul>
-        </Card>
+        </>
       )}
       {creating && <CreateWebhook onClose={() => setCreating(false)} />}
       {secret && (

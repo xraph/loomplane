@@ -70,14 +70,14 @@ export function StatusBar({
   version?: string
 }) {
   return (
-    <footer className="sticky bottom-0 z-20 mt-auto flex h-8 shrink-0 items-center gap-1 border-t bg-background/85 px-2 text-xs text-muted-foreground backdrop-blur-xl md:px-3">
+    <footer className="sticky bottom-0 z-20 mt-auto flex h-8 min-w-0 shrink-0 items-center gap-1 overflow-hidden border-t bg-background/85 px-2 text-xs text-muted-foreground backdrop-blur-xl md:px-3">
       {children}
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-1">
         <Button
           variant="ghost"
           size="xs"
           onClick={onShortcuts}
-          className="hidden h-6 px-1.5 font-normal text-muted-foreground sm:inline-flex"
+          className="hidden h-6 px-1.5 font-normal text-muted-foreground xl:inline-flex"
         >
           ? Shortcuts
         </Button>
@@ -87,7 +87,8 @@ export function StatusBar({
           onClick={onCommand}
           className="h-6 gap-1 px-1.5 font-normal text-muted-foreground"
         >
-          <CommandIcon />K Command menu
+          <CommandIcon />K
+          <span className="hidden lg:inline"> Command menu</span>
         </Button>
         {version && (
           <span className="hidden px-1.5 font-mono lg:inline">{version}</span>

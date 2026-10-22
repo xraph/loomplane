@@ -12,18 +12,40 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * The theme is shadcn preset b1YmpVjlo (nova on Base UI, neutral, Geist).
- * Loomplane adds three colors of its own, from the logo's loom: weld for
- * work still moving or waiting on someone, overdye for work that's done,
- * and warp for what hasn't started. design.css builds on them.
+ * The theme started as shadcn preset b1YmpVjlo (nova on Base UI, Geist) and
+ * now carries Loomplane's own look: warm neutrals, one primary color picked
+ * in code (src/lib/accent.ts sets data-accent on <html>), and four status
+ * colors that never follow it. Weld is work waiting on someone, overdye is
+ * work that's live, flight is work moving, and destructive is work that
+ * failed. Each status has a bar shade (the token itself), an ink shade for
+ * text and a tint for backgrounds. Warp is what hasn't started.
  */
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "Geist Variable", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
   --color-weld: var(--weld);
+  --color-weld-ink: var(--weld-ink);
+  --color-weld-tint: var(--weld-tint);
   --color-overdye: var(--overdye);
+  --color-overdye-ink: var(--overdye-ink);
+  --color-overdye-tint: var(--overdye-tint);
+  --color-flight: var(--flight);
+  --color-flight-ink: var(--flight-ink);
+  --color-flight-tint: var(--flight-tint);
+  --color-failed: var(--failed);
+  --color-failed-tint: var(--failed-tint);
   --color-warp: var(--warp);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-tint: var(--brand-tint);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-line: var(--brand-line);
+  --color-brand-from: var(--brand-from);
+  --color-brand-via: var(--brand-via);
+  --color-brand-to: var(--brand-to);
+  --color-subtle: var(--subtle);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -66,77 +88,169 @@
 
 :root {
   --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --foreground: oklch(0.204 0.008 48.3);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.204 0.008 48.3);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.809 0.105 251.813);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --radius: 0.45rem;
-  --weld: oklch(0.74 0.15 83);
-  --overdye: oklch(0.56 0.11 152);
-  --warp: oklch(0.9 0.004 286);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(0.204 0.008 48.3);
+  --secondary: oklch(0.959 0.003 67.8);
+  --secondary-foreground: oklch(0.204 0.008 48.3);
+  --muted: oklch(0.968 0.003 67.8);
+  --muted-foreground: oklch(0.463 0.013 54.3);
+  --subtle: oklch(0.985 0.002 67.8);
+  --accent: oklch(0.96 0.005 67.8);
+  --accent-foreground: oklch(0.204 0.008 48.3);
+  --destructive: oklch(0.495 0.143 32.8);
+  --border: oklch(0.925 0.007 67.7);
+  --input: oklch(0.915 0.007 67.7);
+  --chart-1: oklch(0.637 0.085 156.4);
+  --chart-2: oklch(0.581 0.147 32.9);
+  --chart-3: oklch(0.596 0.078 237.2);
+  --chart-4: oklch(0.683 0.096 57.8);
+  --chart-5: oklch(0.505 0.014 59.4);
+  --radius: 0.625rem;
+  --weld: oklch(0.683 0.096 57.8);
+  --weld-ink: oklch(0.496 0.089 50.7);
+  --weld-tint: oklch(0.949 0.015 61.3);
+  --overdye: oklch(0.637 0.085 156.4);
+  --overdye-ink: oklch(0.478 0.085 155.6);
+  --overdye-tint: oklch(0.945 0.015 158.2);
+  --flight: oklch(0.596 0.078 237.2);
+  --flight-ink: oklch(0.455 0.068 238);
+  --flight-tint: oklch(0.943 0.014 231.2);
+  --failed: oklch(0.581 0.147 32.9);
+  --failed-tint: oklch(0.94 0.019 33.4);
+  --warp: oklch(0.915 0.007 67.7);
+  --sidebar: oklch(0.976 0.001 67.8);
+  --sidebar-foreground: oklch(0.388 0.013 57.9);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--brand-foreground);
+  --sidebar-accent: oklch(0.943 0.003 84.6);
+  --sidebar-accent-foreground: oklch(0.204 0.008 48.3);
+  --sidebar-border: oklch(0.923 0.006 75.4);
+  --sidebar-ring: var(--ring);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-foreground);
+  /* What dot charts light up in; graphite reads better a shade lighter. */
+  --chart-highlight: color-mix(in oklch, var(--brand) 82%, var(--background));
+  --ring: color-mix(in oklch, var(--brand) 45%, transparent);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.809 0.105 251.813);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --weld: oklch(0.78 0.14 83);
-  --overdye: oklch(0.66 0.11 152);
-  --warp: oklch(0.32 0.006 286);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: oklch(0.194 0.006 56);
+  --foreground: oklch(0.954 0.005 67.8);
+  --card: oklch(0.226 0.007 48.4);
+  --card-foreground: oklch(0.954 0.005 67.8);
+  --popover: oklch(0.226 0.007 48.4);
+  --popover-foreground: oklch(0.954 0.005 67.8);
+  --secondary: oklch(0.256 0.009 53.1);
+  --secondary-foreground: oklch(0.954 0.005 67.8);
+  --muted: oklch(0.256 0.009 53.1);
+  --muted-foreground: oklch(0.692 0.015 60.5);
+  --subtle: oklch(0.21 0.007 55);
+  --accent: oklch(0.27 0.009 53);
+  --accent-foreground: oklch(0.954 0.005 67.8);
+  --destructive: oklch(0.7 0.14 33);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --chart-1: oklch(0.7 0.09 156);
+  --chart-2: oklch(0.68 0.14 33);
+  --chart-3: oklch(0.7 0.08 237);
+  --chart-4: oklch(0.75 0.1 58);
+  --chart-5: oklch(0.65 0.015 60);
+  --weld: oklch(0.74 0.1 58);
+  --weld-ink: oklch(0.8 0.09 60);
+  --weld-tint: oklch(0.32 0.04 58);
+  --overdye: oklch(0.7 0.09 156);
+  --overdye-ink: oklch(0.8 0.08 156);
+  --overdye-tint: oklch(0.3 0.035 156);
+  --flight: oklch(0.7 0.08 237);
+  --flight-ink: oklch(0.8 0.07 237);
+  --flight-tint: oklch(0.3 0.035 237);
+  --failed: oklch(0.68 0.14 33);
+  --failed-tint: oklch(0.31 0.05 33);
+  --warp: oklch(0.32 0.008 56);
+  --sidebar: oklch(0.18 0.004 48.5);
+  --sidebar-foreground: oklch(0.82 0.008 62);
+  --sidebar-accent: oklch(0.25 0.008 53);
+  --sidebar-accent-foreground: oklch(0.954 0.005 67.8);
+  --sidebar-border: oklch(1 0 0 / 8%);
+}
+
+/*
+ * The primary color. src/lib/accent.ts picks one of these; everything that
+ * says "primary" or "brand" follows it. Brand is the solid (buttons, active
+ * tabs), ink is for text and icons, tint and soft are backgrounds, line is a
+ * selected border, and from/via/to paint the logo tile.
+ */
+:root,
+[data-accent="graphite"] {
+  --brand: oklch(0.209 0.01 52.9);
+  --brand-foreground: oklch(1 0 0);
+  --brand-ink: oklch(0.327 0.013 57.8);
+  --brand-tint: oklch(0.944 0.003 67.8);
+  --brand-soft: oklch(0.974 0.002 67.8);
+  --brand-line: oklch(0.839 0.011 67.7);
+  --brand-from: oklch(0.505 0.014 59.4);
+  --brand-via: oklch(0.282 0.011 55.9);
+  --brand-to: oklch(0.181 0.005 39.3);
+}
+
+[data-accent="ocean"] {
+  --brand: oklch(0.455 0.068 238);
+  --brand-foreground: oklch(1 0 0);
+  --brand-ink: oklch(0.455 0.068 238);
+  --brand-tint: oklch(0.943 0.014 231.2);
+  --brand-soft: oklch(0.97 0.007 233.6);
+  --brand-line: oklch(0.811 0.04 235.3);
+  --brand-from: oklch(0.691 0.074 237.1);
+  --brand-via: oklch(0.455 0.068 238);
+  --brand-to: oklch(0.339 0.05 239.7);
+}
+
+[data-accent="plum"] {
+  --brand: oklch(0.445 0.106 317.1);
+  --brand-foreground: oklch(1 0 0);
+  --brand-ink: oklch(0.445 0.106 317.1);
+  --brand-tint: oklch(0.94 0.02 318.4);
+  --brand-soft: oklch(0.97 0.011 316.5);
+  --brand-line: oklch(0.795 0.064 316.7);
+  --brand-from: oklch(0.696 0.098 316.8);
+  --brand-via: oklch(0.445 0.106 317.1);
+  --brand-to: oklch(0.325 0.08 314.6);
+}
+
+/* In the dark the solid turns light so buttons keep their contrast, and the
+   backgrounds become low-chroma washes of the same hue. */
+.dark,
+.dark[data-accent="graphite"],
+[data-accent="graphite"] .dark {
+  --brand: oklch(0.939 0.005 67.8);
+  --brand-foreground: oklch(0.204 0.008 48.3);
+  --brand-ink: oklch(0.9 0.006 67.8);
+  --brand-tint: oklch(0.3 0.008 56);
+  --brand-soft: oklch(0.24 0.007 56);
+  --brand-line: oklch(0.45 0.01 60);
+}
+
+.dark[data-accent="ocean"],
+[data-accent="ocean"] .dark {
+  --brand: oklch(0.734 0.07 237.6);
+  --brand-foreground: oklch(0.2 0.02 238);
+  --brand-ink: oklch(0.78 0.065 237.6);
+  --brand-tint: oklch(0.31 0.035 238);
+  --brand-soft: oklch(0.245 0.02 238);
+  --brand-line: oklch(0.5 0.05 238);
+}
+
+.dark[data-accent="plum"],
+[data-accent="plum"] .dark {
+  --brand: oklch(0.767 0.085 316.3);
+  --brand-foreground: oklch(0.2 0.03 317);
+  --brand-ink: oklch(0.8 0.08 316.3);
+  --brand-tint: oklch(0.31 0.05 317);
+  --brand-soft: oklch(0.245 0.03 317);
+  --brand-line: oklch(0.5 0.07 317);
 }
 
 @layer base {
@@ -144,7 +258,9 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    /* Grayscale smoothing, so text renders at the weight it's set in
+       rather than heavier, as macOS draws it by default. */
+    @apply bg-background text-foreground antialiased;
   }
   html {
     @apply font-sans;

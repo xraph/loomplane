@@ -6,6 +6,7 @@ import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import type { Project } from "@/client/forge/loomplane/types"
 import { useQuery, useRefetchWhile } from "@/client/hooks"
 import { Page, PageHeading } from "@/components/page"
+import { StatusPill, toneOf } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { SiteHeader } from "@/components/site-header"
 import { isReady } from "@/lib/projects"
@@ -24,20 +25,14 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group"
-import {
-  Item,
-  ItemContent,
-  ItemDescription,
-  ItemFooter,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatDate, repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
+import type { Run } from "@/lib/runs"
+import { useRuns } from "@/lib/use-runs"
 
 export function Projects() {
   const { can } = useOrganization()
@@ -46,6 +41,7 @@ export function Projects() {
   const projects = list.data?.projects
   const [query, setQuery] = useState("")
   const mayCreate = can("project:create")
+  const { runs } = useRuns()
 
   // New projects set up in the background; watch until they're ready.
   useRefetchWhile(!!projects?.some((p) => !isReady(p.status)), list.refetch)
@@ -68,7 +64,7 @@ export function Projects() {
           description="Each project is one application, however many services and repositories it spans."
           actions={
             mayCreate && (
-              <Button className="rounded-full" onClick={openNewProject}>
+              <Button onClick={openNewProject}>
                 <PlusIcon />
                 New project
               </Button>
@@ -97,7 +93,7 @@ export function Projects() {
         )}
 
         {projects?.length === 0 && (
-          <Empty className="border border-dashed">
+          <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
                 <FolderGit2Icon />
@@ -111,9 +107,7 @@ export function Projects() {
             </EmptyHeader>
             {mayCreate && (
               <EmptyContent>
-                <Button className="rounded-full" onClick={openNewProject}>
-                  Create a project
-                </Button>
+                <Button onClick={openNewProject}>Create a project</Button>
               </EmptyContent>
             )}
           </Empty>
@@ -121,7 +115,7 @@ export function Projects() {
 
         {projects && projects.length > 0 && (
           <div className="grid gap-4">
-            <InputGroup className="w-full sm:w-72">
+            <InputGroup className="h-9 w-full rounded-[10px] border-transparent bg-muted">
               <InputGroupAddon>
                 <SearchIcon />
               </InputGroupAddon>
@@ -137,13 +131,32 @@ export function Projects() {
               </InputGroupAddon>
             </InputGroup>
             {shown && shown.length > 0 ? (
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {shown.map((p) => (
-                  <ProjectCard key={p.id} project={p} />
+                  <ProjectCard
+                    key={p.id}
+                    project={p}
+                    runs={runs.filter((r) => r.projectId === p.id)}
+                  />
                 ))}
+                {mayCreate && !q && (
+                  <button
+                    type="button"
+                    onClick={openNewProject}
+                    className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-xl border border-dashed text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
+                  >
+                    <span className="flex size-8 items-center justify-center rounded-[9px] bg-brand-tint text-brand-ink">
+                      <PlusIcon className="size-4" />
+                    </span>
+                    New project from a repository
+                    <span className="text-xs font-normal">
+                      Production and preview are set up for you
+                    </span>
+                  </button>
+                )}
               </div>
             ) : (
-              <Empty className="border border-dashed">
+              <Empty>
                 <EmptyHeader>
                   <EmptyTitle>No projects match</EmptyTitle>
                   <EmptyDescription>
@@ -153,7 +166,7 @@ export function Projects() {
                 <EmptyContent>
                   <Button
                     variant="outline"
-                    className="rounded-full"
+
                     onClick={() => setQuery("")}
                   >
                     Clear the search
@@ -168,33 +181,63 @@ export function Projects() {
   )
 }
 
-function ProjectCard({ project: p }: { project: Project }) {
+const envLabel: Partial<Record<Run["status"], string>> = {
+  succeeded: "Live",
+  waiting: "Needs approval",
+  running: "Deploying",
+  approved: "Deploying",
+  failed: "Failed",
+  blocked: "Blocked",
+}
+
+function ProjectCard({ project: p, runs }: { project: Project; runs: Run[] }) {
   const style = projectStyle(p)
   const ready = isReady(p.status)
+  // The newest run of each environment says where it stands.
+  const envs = [...new Set(runs.map((r) => r.environment))].map(
+    (env) => runs.find((r) => r.environment === env) as Run
+  )
   return (
-    <Item
-      variant="outline"
-      className="items-start gap-4 rounded-xl bg-card p-5 shadow-xs transition-shadow hover:shadow-md"
-      render={<Link to="/projects/$id" params={{ id: p.id }} />}
+    <Link
+      to="/projects/$id"
+      params={{ id: p.id }}
+      className="group flex flex-col overflow-hidden rounded-xl bg-card text-foreground ring-1 ring-border transition-shadow hover:shadow-[0_6px_18px_oklch(0.2_0.01_50/0.08)]"
     >
-      <ItemMedia>
-        <ProjectIcon icon={style.icon} color={style.color} size="lg" />
-      </ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="w-full text-base">
-          <span className="truncate">{p.name}</span>
+      <div className="flex flex-1 flex-col gap-2.5 p-4">
+        <div className="flex items-center gap-3">
+          <ProjectIcon icon={style.icon} color={style.color} size="lg" />
+          <div className="grid min-w-0 flex-1 gap-0.5">
+            <span className="truncate text-[14.5px] font-semibold tracking-tight">
+              {p.name}
+            </span>
+            <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+              {p.slug}
+            </span>
+          </div>
           {!ready && (
-            <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs font-normal text-muted-foreground">
+            <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
               <span className="h-1.5 w-3 animate-pulse rounded-full bg-weld motion-reduce:animate-none" />
               Setting up
             </span>
           )}
-        </ItemTitle>
-        <ItemDescription className="line-clamp-2 min-h-10">
+        </div>
+        <p className="line-clamp-2 min-h-10 text-[13px] leading-relaxed text-muted-foreground">
           {p.description || "No description yet."}
-        </ItemDescription>
-      </ItemContent>
-      <ItemFooter className="basis-full gap-3 border-t pt-3 text-xs text-muted-foreground">
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {envs.length === 0 ? (
+            <StatusPill tone="quiet">Not deployed yet</StatusPill>
+          ) : (
+            envs.map((r) => (
+              <StatusPill key={r.environment} tone={toneOf(r.status)}>
+                <span className="capitalize">{r.environment}</span> ·{" "}
+                {envLabel[r.status] ?? "Canceled"}
+              </StatusPill>
+            ))
+          )}
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 border-t bg-subtle px-4 py-2.5 text-xs text-muted-foreground">
         <span className="flex min-w-0 items-center gap-1.5">
           <FolderGit2Icon className="size-3.5 shrink-0" />
           <span className="truncate font-mono">
@@ -204,7 +247,7 @@ function ProjectCard({ project: p }: { project: Project }) {
         <time dateTime={p.createdAt} className="shrink-0">
           {formatDate(p.createdAt)}
         </time>
-      </ItemFooter>
-    </Item>
+      </div>
+    </Link>
   )
 }

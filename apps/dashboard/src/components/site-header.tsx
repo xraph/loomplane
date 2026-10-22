@@ -1,7 +1,7 @@
 // The bar above every page of the dashboard: the shared top bar, with the
 // organization first in the breadcrumbs, what's in flight, search opening
 // the command menu, and the New deployment button.
-import { PlusIcon } from "lucide-react"
+import { BellIcon, KeyboardIcon } from "lucide-react"
 
 import { EnvBadge, Thread } from "@/components/runs"
 import { useShell } from "@/components/shell"
@@ -38,11 +38,14 @@ export type Crumb = {
     | "/integrations"
     | "/variables"
     | "/activity"
+    | "/services"
+    | "/clouds"
+    | "/notifications"
 }
 
 export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
-  const { openCommand, openDeploy } = useShell()
-  const { session, organizations, can } = useOrganization()
+  const { openCommand, openShortcuts } = useShell()
+  const { session, organizations } = useOrganization()
   const org = organizations.find((o) => o.id === session.orgId)
   return (
     <TopBar
@@ -56,17 +59,25 @@ export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
       ]}
       before={<InFlight />}
       after={
-        can("deployment:create") && (
+        <>
           <Button
-            size="sm"
-            className="rounded-full"
-            onClick={() => openDeploy()}
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Activity"
+            nativeButton={false}
+            render={<Link to="/activity" />}
           >
-            <PlusIcon />
-            <span className="hidden sm:inline">New deployment</span>
-            <span className="sm:hidden">Deploy</span>
+            <BellIcon />
           </Button>
-        )
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Keyboard shortcuts"
+            onClick={openShortcuts}
+          >
+            <KeyboardIcon />
+          </Button>
+        </>
       }
     />
   )
@@ -85,7 +96,7 @@ function InFlight() {
           <Button
             variant="ghost"
             size="sm"
-            className="gap-2 rounded-full text-muted-foreground"
+            className="gap-2 text-muted-foreground"
           />
         }
       >

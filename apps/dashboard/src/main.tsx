@@ -12,10 +12,14 @@ import { usePublicConfigGet as publicConfig } from "@/client/forge/loomplane/hoo
 import { forgeClient, setAuthsomeApp } from "@/client/runtime"
 import { SessionRefreshBridge } from "@/client/session-refresh-bridge"
 import { authStorage, forgetStoredSession } from "@/client/auth-storage"
+import { applyAccent } from "@/lib/accent"
 import { captureInvite } from "@/lib/invite"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
+
+// The primary color, before the first paint.
+applyAccent()
 
 const root = createRoot(document.getElementById("root")!)
 

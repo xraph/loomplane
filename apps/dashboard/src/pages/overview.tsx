@@ -1,30 +1,10 @@
-// The overview: what's deploying right now, how often and how fast the
-// organization ships, and where it runs. Cards whose numbers Loomplane
-// doesn't collect yet (spend, latency, traffic, build minutes) keep their
-// place with an empty state that says what they're waiting for, so the
-// layout is the one the data will fill.
+// The overview: what's waiting on you and what went out last, how often and
+// how fast the organization ships, and where it runs. Spend, latency and
+// traffic share one card that says what they're waiting for until Loomplane
+// reads those numbers.
 import { useAuth } from "@authsome/ui-react"
-import {
-  ActivityIcon,
-  CheckIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  CloudIcon,
-  EllipsisIcon,
-  GaugeIcon,
-  type LucideIcon,
-  PauseIcon,
-  PlayIcon,
-  PlusIcon,
-  RocketIcon,
-  RotateCcwIcon,
-  ShieldCheckIcon,
-  TimerIcon,
-  WalletIcon,
-  XIcon,
-  ZapIcon,
-} from "lucide-react"
-import { type ReactNode, useMemo, useState } from "react"
+import { CheckIcon, PlusIcon, ShieldCheckIcon } from "lucide-react"
+import { type ReactNode, useCallback, useMemo } from "react"
 
 import {
   useActivityGet,
@@ -32,66 +12,31 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Binding } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
-import { BrandMark } from "@/components/brand-mark"
+import { useDecision } from "@/components/approval"
 import { CloudGlyph } from "@/components/cloud-glyph"
-import { DotBarChart, DotProgress, GlowBarChart } from "@/components/dots"
+import { DotBarChart, GlowBarChart } from "@/components/dots"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
-import { Code, EnvBadge, RunDot, Thread } from "@/components/runs"
+import { ChangeChips, StatusPill, Thread } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { SiteHeader } from "@/components/site-header"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Empty,
-  EmptyHeader,
-  EmptyTitle,
-  EmptyDescription,
-  EmptyContent,
-} from "@/components/ui/empty"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
 import { cloudLabel } from "@/lib/clouds"
 import { duration, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
-import { Link, useNavigate } from "@/lib/router"
-import {
-  commitLabel,
-  elapsed,
-  isLive,
-  type Run,
-  runStatusText,
-} from "@/lib/runs"
+import { Link } from "@/lib/router"
+import { commitLabel, isLive, type Run } from "@/lib/runs"
 import { useNow, usePeople, useRunning, useRuns } from "@/lib/use-runs"
 import { cn } from "@/lib/utils"
 
-// Twelve weeks of deploys, the span the mock's chart covers.
+// Twelve weeks of deploys, and two weeks of plan-to-live timing.
 const weeks = 12
 const daysShown = weeks * 7
+const timingDays = 14
 
 function greeting(now: number) {
   const h = new Date(now).getHours()
@@ -101,18 +46,72 @@ function greeting(now: number) {
   return "Good evening"
 }
 
+const counted = ["One", "Two", "Three", "Four", "Five"]
+
+/** summary is the line under the greeting: what needs you, then the rest. */
+function summary(runs: Run[]): string {
+  if (runs.length === 0)
+    return "Plan your first deployment and it shows up here."
+  const waiting = runs.filter((r) => r.status === "waiting").length
+  const running = runs.filter((r) => r.status === "running").length
+  // The latest finished run of each environment says whether it's live.
+  const latest = new Map<string, Run>()
+  for (const r of runs) {
+    if (isLive(r)) continue
+    const key = `${r.projectId}:${r.environment}`
+    if (!latest.has(key)) latest.set(key, r)
+  }
+  const failing = [...latest.values()].filter(
+    (r) => r.status === "failed" || r.status === "blocked"
+  ).length
+  const n = (k: number) => counted[k - 1] ?? String(k)
+  const parts: string[] = []
+  if (waiting)
+    parts.push(
+      `${n(waiting)} ${waiting === 1 ? "deploy is" : "deploys are"} waiting on you.`
+    )
+  if (running)
+    parts.push(`${n(running)} ${running === 1 ? "is" : "are"} deploying now.`)
+  if (failing)
+    parts.push(
+      `${n(failing)} ${failing === 1 ? "environment's" : "environments'"} last deploy failed.`
+    )
+  else
+    parts.push(
+      parts.length ? "Everything else is live." : "Everything is live."
+    )
+  return parts.join(" ")
+}
+
 export function Overview() {
   const { user } = useAuth()
   const now = useNow()
   const { runs, projects, loaded, error, refetch } = useRuns()
+  const { can } = useOrganization()
+  const { openDeploy } = useShell()
+  const waiting = runs
+    .filter((r) => r.status === "waiting")
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+  const release = runs.find((r) => r.status === "succeeded")
   const first = user?.first_name?.trim()
   return (
     <>
       <SiteHeader crumbs={[{ label: "Overview" }]} />
-      <Page className="gap-6">
+      <Page>
         <PageHeading
           title={first ? `${greeting(now)}, ${first}` : greeting(now)}
-          description="Here's what's deploying, how often you ship and where it runs."
+          description={loaded ? summary(runs) : "Loading your deployments…"}
+          actions={
+            can("deployment:create") && (
+              <Button onClick={() => openDeploy()}>
+                <PlusIcon />
+                New deployment
+                <Kbd className="ml-0.5 bg-primary-foreground/15 text-primary-foreground">
+                  N
+                </Kbd>
+              </Button>
+            )
+          }
         />
         {error !== undefined && (
           <QueryError
@@ -121,42 +120,33 @@ export function Overview() {
             retry={refetch}
           />
         )}
-        <div className="grid gap-4 lg:grid-cols-12">
-          {(error === undefined || runs.length > 0) && (
-            <Hero runs={runs} loaded={loaded} now={now} />
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
+          {!loaded && runs.length === 0 ? (
+            <>
+              <Skeleton className="h-[188px] rounded-[14px]" />
+              <Skeleton className="h-[188px] rounded-[14px]" />
+            </>
+          ) : (
+            <>
+              <NeedsYou waiting={waiting} runs={runs} now={now} />
+              <LastRelease run={release} now={now} />
+            </>
           )}
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)]">
           <DeploysCard />
-          <div className="grid gap-4 sm:grid-cols-2 lg:col-span-5">
-            <PendingCard
-              icon={WalletIcon}
-              title="Cloud spend"
-              waiting="Spend arrives with billing from your cloud connections."
-              shape="ring"
-            />
-            <PendingCard
-              icon={GaugeIcon}
-              title="p95 latency"
-              waiting="Latency arrives once Loomplane reads your services' metrics."
-              shape="line"
-            />
+          <PlanToLive />
+          <MetricsPending />
+        </div>
+
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
+          <Feed runs={runs} loaded={loaded} now={now} />
+          <div className="grid gap-4">
+            <QuickDeploy projects={projects} loaded={loaded} />
+            <Clouds />
           </div>
-          <PendingCard
-            icon={ActivityIcon}
-            title="Traffic"
-            className="lg:col-span-7 lg:row-span-2"
-            waiting="Requests across every service arrive with the same metrics, by the hour and by the day."
-            shape="area"
-          />
-          <CommitCard />
-          <QuickDeploy
-            runs={runs}
-            projectsLoaded={loaded}
-            projects={projects}
-          />
-          {(error === undefined || runs.length > 0) && (
-            <Feed runs={runs} now={now} />
-          )}
-          <Clouds />
         </div>
       </Page>
     </>
@@ -166,405 +156,308 @@ export function Overview() {
 /* ------------------------------------------------------------------------ */
 /* Shared card parts                                                          */
 
-type MenuItem = { label: string; onSelect: () => void }
-
-function CardMenu({ title, items }: { title: string; items: MenuItem[] }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="-mt-1 -mr-1.5 text-muted-foreground"
-            aria-label={`${title} options`}
-          />
-        }
-      >
-        <EllipsisIcon />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-52">
-        {items.map((m) => (
-          <DropdownMenuItem key={m.label} onClick={m.onSelect}>
-            {m.label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-/** MetricCard is shadcn's Card with the overview's header: icon, title, menu. */
-function MetricCard({
-  icon: Icon,
-  title,
-  menu,
+function Panel({
   className,
+  dashed = false,
   children,
-}: {
-  icon: LucideIcon
-  title: string
-  menu?: MenuItem[]
-  className?: string
-  children: ReactNode
-}) {
+  ...props
+}: React.ComponentProps<"section"> & { dashed?: boolean }) {
   return (
-    <Card className={className}>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-[15px] font-normal text-muted-foreground">
-          <Icon className="size-4" />
-          {title}
-        </CardTitle>
-        {menu && (
-          <CardAction>
-            <CardMenu title={title} items={menu} />
-          </CardAction>
-        )}
-      </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-4">
-        {children}
-      </CardContent>
-    </Card>
+    <section
+      className={cn(
+        "flex min-w-0 flex-col rounded-[14px] px-4 py-3.5",
+        dashed
+          ? "border border-dashed border-border bg-subtle"
+          : "bg-card ring-1 ring-border",
+        className
+      )}
+      {...props}
+    >
+      {children}
+    </section>
   )
 }
 
-function Figure({
-  value,
-  delta,
-  good = true,
-  note,
+function PanelHead({
+  title,
+  aside,
+  className,
 }: {
-  value: ReactNode
-  delta?: string
-  good?: boolean
-  note?: ReactNode
+  title: ReactNode
+  aside?: ReactNode
+  className?: string
 }) {
   return (
-    <div className="grid gap-1.5">
-      <div className="flex items-baseline gap-2">
-        <span className="text-[28px] leading-none font-semibold tracking-[-0.03em] tabular-nums">
-          {value}
-        </span>
-        {delta && (
-          <span
-            className={cn(
-              "text-sm font-medium tabular-nums",
-              good ? "text-overdye" : "text-destructive"
-            )}
-          >
-            {delta}
-          </span>
-        )}
-      </div>
-      {note && <span className="text-xs text-muted-foreground">{note}</span>}
+    <div className={cn("flex items-baseline justify-between gap-3", className)}>
+      <h2 className="text-[13px] font-semibold">{title}</h2>
+      {aside && (
+        <span className="shrink-0 text-xs text-muted-foreground">{aside}</span>
+      )}
     </div>
   )
 }
 
-/**
- * PendingCard holds the place of a metric Loomplane doesn't collect yet:
- * the card, a quiet field of dots in the chart's shape, and what it waits
- * for.
- */
-function PendingCard({
-  icon,
-  title,
-  waiting,
-  shape,
+function Eyebrow({
   className,
+  children,
 }: {
-  icon: LucideIcon
-  title: string
-  waiting: string
-  shape: "ring" | "line" | "area"
   className?: string
+  children: ReactNode
 }) {
   return (
-    <MetricCard icon={icon} title={title} className={className}>
-      <Figure value={<span className="text-muted-foreground">None yet</span>} />
-      <div
-        aria-hidden="true"
-        className={cn(
-          "canvas-dots rounded-lg opacity-60",
-          shape === "ring" && "size-24 rounded-full",
-          shape === "line" && "h-24 w-full",
-          shape === "area" && "min-h-64 w-full flex-1"
-        )}
-      />
-      <p className="text-xs text-muted-foreground">{waiting}</p>
-    </MetricCard>
+    <span
+      className={cn(
+        "text-xs font-semibold tracking-[0.06em] text-muted-foreground uppercase",
+        className
+      )}
+    >
+      {children}
+    </span>
+  )
+}
+
+function Figure({ value, note }: { value: ReactNode; note?: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <span className="font-mono text-[26px] leading-none font-medium tracking-[-0.02em] tabular-nums">
+        {value}
+      </span>
+      {note && (
+        <span className="text-[12.5px] text-muted-foreground">{note}</span>
+      )}
+    </div>
+  )
+}
+
+/** useWho names a person the way the overview reads: you, or a first name. */
+function useWho() {
+  const { user } = useAuth()
+  const person = usePeople()
+  const me = user?.id
+  return useCallback(
+    (id: string, capital = true) =>
+      me && id === me
+        ? capital
+          ? "You"
+          : "you"
+        : (person(id).name.split(" ")[0] ?? "Someone"),
+    [me, person]
   )
 }
 
 /* ------------------------------------------------------------------------ */
-/* Hero: what's in flight                                                     */
+/* What needs you, and what went out last                                     */
 
-function Hero({
+function NeedsYou({
+  waiting,
   runs,
-  loaded,
   now,
 }: {
+  waiting: Run[]
   runs: Run[]
-  loaded: boolean
   now: number
 }) {
-  const navigate = useNavigate()
-  const { can } = useOrganization()
-  const { openDeploy } = useShell()
-  const live = runs.filter(isLive)
-  const tickets = live.length
-    ? live
-    : runs.filter((r) => r.status === "succeeded").slice(0, 1)
-  const [index, setIndex] = useState(0)
-  const current = tickets[Math.min(index, tickets.length - 1)]
-  const waiting = live.filter((r) => r.status === "waiting")
-  const failed = runs.find((r) => r.status === "failed")
+  const run = waiting[0]
+  if (run) return <Waiting run={run} count={waiting.length} now={now} />
+  const running = runs.filter((r) => r.status === "running")
+  if (running[0]) return <InFlight run={running[0]} count={running.length} />
+  return <AllClear />
+}
 
+function Waiting({
+  run,
+  count,
+  now,
+}: {
+  run: Run
+  count: number
+  now: number
+}) {
+  const { can } = useOrganization()
+  const { decide, busy, approving } = useDecision(run)
+  const who = useWho()
+  const p = run.plan
   return (
-    <Card
-      className={cn(
-        "hero-glow isolate lg:col-span-7",
-        (current || !loaded) && "lg:row-span-2"
-      )}
+    <Panel
+      aria-label="Waiting on you"
+      className="gap-3.5 ring-[color-mix(in_oklch,var(--weld)_28%,var(--border))]"
     >
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-[15px] font-normal text-muted-foreground">
-          <RocketIcon className="size-4" />
-          In flight
-        </CardTitle>
-        <CardDescription className="grid gap-2 pt-1">
-          <span className="flex items-baseline gap-2 text-foreground">
-            <span className="text-[44px] leading-none font-semibold tracking-[-0.03em] tabular-nums">
-              {live.length}
-            </span>
-            <span className="text-2xl font-medium tracking-tight text-muted-foreground">
-              {live.length === 1 ? "deployment" : "deployments"}
+      <div className="flex items-baseline justify-between gap-3">
+        <Eyebrow className="text-weld-ink">Waiting on you · {count}</Eyebrow>
+        {p.expiresAt && (
+          <span className="text-xs text-muted-foreground">
+            Open until{" "}
+            {new Date(p.expiresAt).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+            })}
+          </span>
+        )}
+      </div>
+      <div className="flex min-w-0 gap-3">
+        <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] bg-background text-weld-ink shadow-xs ring-1 ring-border">
+          <ShieldCheckIcon className="size-4" />
+        </span>
+        <div className="grid min-w-0 gap-1">
+          <span className="truncate text-[15px] font-semibold tracking-[-0.01em]">
+            {run.project?.name ?? "A project"} to{" "}
+            <span className="capitalize">{run.environment}</span>
+          </span>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted-foreground">
+            <ChangeChips run={run} />
+            {p.warnings.length > 0 && (
+              <span className="text-weld-ink">
+                {p.warnings.length}{" "}
+                {p.warnings.length === 1 ? "warning" : "warnings"}
+              </span>
+            )}
+            <span>
+              Planned {relative(Date.parse(run.createdAt), now)} by{" "}
+              {who(run.createdBy, false)}
             </span>
           </span>
-          {waiting.length
-            ? `${waiting.length} waiting on you, ${live.length - waiting.length} running`
-            : live.length
-              ? "All running, nothing needs you"
-              : current
-                ? "Nothing is deploying. Here's the last release."
-                : "Nothing has been deployed yet."}
-        </CardDescription>
-      </CardHeader>
-
-      <CardContent
-        className={cn(
-          "grid flex-1 content-center gap-4",
-          current && "sm:grid-cols-[minmax(0,1fr)_auto]"
-        )}
-      >
-        <div className="grid gap-2">
-          <div className="relative h-[212px]">
-            {tickets.length > 1 && (
-              <Card className="absolute inset-x-5 -top-2.5 bottom-3 bg-card/50 backdrop-blur-sm" />
-            )}
-            {current ? (
-              <Ticket run={current} now={now} />
-            ) : !loaded ? (
-              <Skeleton className="absolute inset-0 rounded-xl" />
-            ) : (
-              <Empty className="absolute inset-0 bg-background/60 backdrop-blur-xl">
-                <EmptyHeader>
-                  <EmptyTitle>Plan your first deployment</EmptyTitle>
-                  <EmptyDescription>
-                    Choose a project and environment to review what deploying
-                    would change.
-                  </EmptyDescription>
-                </EmptyHeader>
-                {can("deployment:create") && (
-                  <EmptyContent>
-                    <Button size="sm" onClick={() => openDeploy()}>
-                      New deployment
-                    </Button>
-                  </EmptyContent>
-                )}
-              </Empty>
-            )}
-          </div>
-          {tickets.length > 1 && (
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="tabular-nums">
-                {Math.min(index, tickets.length - 1) + 1} of {tickets.length}
-              </span>
-              <div className="flex gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Previous deployment"
-                  onClick={() =>
-                    setIndex((i) => (i - 1 + tickets.length) % tickets.length)
-                  }
-                >
-                  <ChevronLeftIcon />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Next deployment"
-                  onClick={() => setIndex((i) => (i + 1) % tickets.length)}
-                >
-                  <ChevronRightIcon />
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
-        {current && (
-          <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-col">
-            <QuickAction
-              icon={PlusIcon}
-              label="Deploy"
-              disabled={!can("deployment:create")}
-              onClick={() => openDeploy()}
-            />
-            <QuickAction
-              icon={ShieldCheckIcon}
-              label="Approve"
-              badge={waiting.length || undefined}
-              disabled={!waiting.length}
-              onClick={() =>
-                waiting[0] &&
-                void navigate({
-                  to: "/deployments/$id",
-                  params: { id: waiting[0].id },
-                })
-              }
-            />
-            <QuickAction
-              icon={RotateCcwIcon}
-              label="Retry"
-              disabled={!failed}
-              onClick={() =>
-                failed &&
-                void navigate({
-                  to: "/deployments/$id",
-                  params: { id: failed.id },
-                })
-              }
-            />
-          </div>
+      </div>
+      <div className="mt-auto flex flex-wrap gap-2">
+        <Button
+          variant="outline"
+          nativeButton={false}
+          render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+        >
+          Review plan
+        </Button>
+        {can("deployment:approve") && (
+          <Button disabled={busy} onClick={() => void decide(true)}>
+            {approving ? <Spinner /> : <CheckIcon />}
+            {p.executable ? "Approve and deploy" : "Approve"}
+          </Button>
         )}
-      </CardContent>
-
-      <CardFooter className="flex-col items-stretch gap-3 border-t-0 bg-transparent">
-        <div className="flex items-baseline justify-between text-[15px]">
-          <span className="text-muted-foreground">Build minutes</span>
-          <span className="text-sm text-muted-foreground">Not metered yet</span>
-        </div>
-        <DotProgress value={0} label="Build minutes aren't metered yet" />
-      </CardFooter>
-    </Card>
+      </div>
+    </Panel>
   )
 }
 
-function Ticket({ run: r, now }: { run: Run; now: number }) {
-  const person = usePeople()
-  const started = Date.parse(r.createdAt)
+function InFlight({ run, count }: { run: Run; count: number }) {
   return (
-    <Link
-      to="/deployments/$id"
-      params={{ id: r.id }}
-      className="group absolute inset-0 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-    >
-      <Card className="h-full justify-between bg-background/75 shadow-[0_18px_40px_-24px_rgb(0_0_0/0.35)] backdrop-blur-xl transition-transform group-hover:-translate-y-0.5">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-xs tracking-tight">
-            <BrandMark className="size-4" />
-            loomplane
-          </CardTitle>
-          <CardAction className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <RunDot status={r.status} />
-            {runStatusText[r.status]}
-          </CardAction>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          <div className="grid gap-1">
-            <span className="flex items-center gap-2">
-              <span className="truncate text-xl font-semibold tracking-tight">
-                {r.project?.name ?? "A deleted project"}
-              </span>
-              <EnvBadge env={r.environment} />
-            </span>
-            <span className="truncate text-sm text-muted-foreground">
-              {r.phase}
-            </span>
-          </div>
-          <Thread steps={r.thread} />
-          <div className="grid grid-cols-3 gap-3 text-xs">
-            <span className="grid gap-0.5">
-              <span className="text-muted-foreground">Started by</span>
-              <span className="truncate font-medium">
-                {person(r.createdBy).name}
-              </span>
-            </span>
-            <span className="grid gap-0.5">
-              <span className="text-muted-foreground">Commit</span>
-              <Code className="truncate text-xs text-foreground">
-                {commitLabel(r) || "none"}
-              </Code>
-            </span>
-            <span className="grid gap-0.5 text-right">
-              <span className="text-muted-foreground">
-                {r.status === "running"
-                  ? "Running for"
-                  : r.status === "waiting"
-                    ? "Waiting for"
-                    : "Finished"}
-              </span>
-              <span className="font-medium tabular-nums">
-                {isLive(r)
-                  ? duration(elapsed(r, now))
-                  : relative(
-                      Date.parse(r.finishedAt ?? r.createdAt) || started,
-                      now
-                    )}
-              </span>
-            </span>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
+    <Panel aria-label="In flight" className="gap-3.5">
+      <Eyebrow className="text-flight-ink">In flight · {count}</Eyebrow>
+      <div className="grid min-w-0 gap-1">
+        <span className="truncate text-[15px] font-semibold tracking-[-0.01em]">
+          {run.project?.name ?? "A project"} to{" "}
+          <span className="capitalize">{run.environment}</span>
+        </span>
+        <span className="text-[12.5px] text-muted-foreground">{run.phase}</span>
+      </div>
+      <Thread steps={run.thread} />
+      <div className="mt-auto flex flex-wrap gap-2">
+        <Button
+          variant="outline"
+          nativeButton={false}
+          render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+        >
+          Watch deploy
+        </Button>
+      </div>
+    </Panel>
   )
 }
 
-function QuickAction({
-  icon: Icon,
-  label,
-  badge,
-  disabled,
-  onClick,
-}: {
-  icon: LucideIcon
-  label: string
-  badge?: number
-  disabled?: boolean
-  onClick: () => void
-}) {
+function AllClear() {
+  const { can } = useOrganization()
+  const { openDeploy } = useShell()
   return (
-    <Button
-      variant="outline"
-      disabled={disabled}
-      onClick={onClick}
-      className="relative h-14 justify-center gap-3 rounded-2xl bg-background px-4 shadow-[0_6px_16px_-10px_rgb(0_0_0/0.3)] sm:w-36 sm:justify-start"
-    >
-      <Icon className="size-5!" />
-      <span className="hidden sm:inline">{label}</span>
-      <span className="sr-only sm:hidden">{label}</span>
-      {badge !== undefined && (
-        <Badge className="absolute -top-2 -right-2 h-5 min-w-5 justify-center bg-weld px-1 text-black tabular-nums">
-          {badge}
-        </Badge>
+    <Panel aria-label="Waiting on you" className="gap-3.5">
+      <Eyebrow>Waiting on you · 0</Eyebrow>
+      <div className="grid gap-1">
+        <span className="text-[15px] font-semibold tracking-[-0.01em]">
+          Nothing needs your approval
+        </span>
+        <span className="text-[12.5px] text-muted-foreground">
+          Plans that change an environment wait here until someone approves
+          them.
+        </span>
+      </div>
+      {can("deployment:create") && (
+        <div className="mt-auto">
+          <Button variant="outline" onClick={() => openDeploy()}>
+            Plan a deployment
+          </Button>
+        </div>
       )}
-    </Button>
+    </Panel>
+  )
+}
+
+function LastRelease({ run, now }: { run?: Run; now: number }) {
+  const { can } = useOrganization()
+  const { openDeploy } = useShell()
+  const who = useWho()
+  const style = run?.project ? projectStyle(run.project) : null
+  return (
+    <Panel aria-label="Last release" className="gap-3.5">
+      <div className="flex items-center justify-between gap-3">
+        <Eyebrow>Last release</Eyebrow>
+        {run && <StatusPill tone="live">Live</StatusPill>}
+      </div>
+      {!run ? (
+        <p className="text-[12.5px] text-muted-foreground">
+          Nothing has gone live yet. Your first successful deploy shows here.
+        </p>
+      ) : (
+        <>
+          <div className="flex min-w-0 items-center gap-3">
+            {style && (
+              <ProjectIcon icon={style.icon} color={style.color} size="md" />
+            )}
+            <div className="grid min-w-0 gap-0.5">
+              <span className="truncate text-[15px] font-semibold tracking-[-0.01em]">
+                {run.project?.name ?? "A deleted project"}
+              </span>
+              <span className="flex flex-wrap items-center gap-x-3 text-[12.5px] text-muted-foreground">
+                <span className="capitalize">{run.environment}</span>
+                {commitLabel(run) && (
+                  <span className="font-mono text-foreground">
+                    {commitLabel(run)}
+                  </span>
+                )}
+                <span>
+                  Finished{" "}
+                  {relative(Date.parse(run.finishedAt ?? run.createdAt), now)}{" "}
+                  by {who(run.createdBy, false)}
+                </span>
+              </span>
+            </div>
+          </div>
+          <div className="mt-auto flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              nativeButton={false}
+              render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+            >
+              View deploy
+            </Button>
+            {can("deployment:create") && run.project && (
+              <Button
+                variant="outline"
+                onClick={() =>
+                  openDeploy({
+                    project: run.projectId,
+                    environment: run.environment,
+                  })
+                }
+              >
+                Redeploy
+              </Button>
+            )}
+          </div>
+        </>
+      )}
+    </Panel>
   )
 }
 
 /* ------------------------------------------------------------------------ */
-/* Metric cards                                                               */
+/* How often and how fast                                                     */
 
 /** weekOf is the ISO week number of a date, the way the chart labels weeks. */
 function weekOf(d: Date): number {
@@ -591,30 +484,21 @@ function weekly(daily: { date: string; succeeded: number; failed: number }[]) {
 }
 
 function DeploysCard() {
-  const navigate = useNavigate()
   const activity = useQuery(useActivityGet, { query: { days: daysShown } })
   const a = activity.data
-  const weeks = a ? weekly(a.daily) : []
+  const data = a ? weekly(a.daily) : []
   const total = a ? a.deployments.succeeded + a.deployments.failed : 0
-  const last = weeks.at(-1)?.value ?? 0
-  const prev = weeks.at(-2)?.value ?? 0
-  const change = prev ? Math.round(((last - prev) / prev) * 100) : undefined
+  const thisWeek = data.at(-1)?.value ?? 0
   return (
-    <MetricCard
-      icon={RocketIcon}
-      title="Deployments"
-      className="lg:col-span-5"
-      menu={[
-        {
-          label: "View all deployments",
-          onSelect: () => void navigate({ to: "/deployments" }),
-        },
-        {
-          label: "Open activity",
-          onSelect: () => void navigate({ to: "/activity" }),
-        },
-      ]}
-    >
+    <Panel aria-label="Deployments" className="gap-4">
+      <PanelHead
+        title={
+          <Link to="/deployments" className="hover:underline">
+            Deployments
+          </Link>
+        }
+        aside={`Last ${weeks} weeks`}
+      />
       {activity.status === "error" ? (
         <QueryError
           error={activity.error}
@@ -622,42 +506,38 @@ function DeploysCard() {
           retry={activity.refetch}
         />
       ) : !a ? (
-        <Skeleton className="h-52 w-full" />
+        <Skeleton className="h-44 w-full" />
       ) : (
         <>
           <Figure
             value={total.toLocaleString()}
-            delta={
-              change === undefined
-                ? undefined
-                : `${change >= 0 ? "+" : ""}${change}%`
-            }
-            good={(change ?? 0) >= 0}
-            note={`in ${daysShown / 7} weeks, ${last} this week${a.deployments.failed ? `, ${a.deployments.failed} failed` : ""}`}
+            note={`${thisWeek} this week${a.deployments.failed ? ` · ${a.deployments.failed} failed` : ""}`}
           />
-          <DotBarChart data={weeks} floor="zero" />
+          <DotBarChart data={data} floor="zero" />
         </>
       )}
-    </MetricCard>
+    </Panel>
   )
 }
 
-function CommitCard() {
-  const activity = useQuery(useActivityGet, { query: { days: 30 } })
+function PlanToLive() {
+  const activity = useQuery(useActivityGet, { query: { days: timingDays } })
   const a = activity.data
   const median = a?.deployments.medianSeconds ?? 0
   const days = (a?.daily ?? [])
     .slice()
     .sort((x, y) => x.date.localeCompare(y.date))
-    .slice(-12)
+    .slice(-timingDays)
     .map((d) => ({
       label: new Date(`${d.date}T00:00:00`).toLocaleDateString(undefined, {
+        month: "short",
         day: "numeric",
       }),
       value: d.succeeded,
     }))
   return (
-    <MetricCard icon={TimerIcon} title="Plan to live" className="lg:col-span-5">
+    <Panel aria-label="Plan to live" className="gap-4">
+      <PanelHead title="Plan to live" aside={`Last ${timingDays} days`} />
       {activity.status === "error" ? (
         <QueryError
           error={activity.error}
@@ -665,142 +545,94 @@ function CommitCard() {
           retry={activity.refetch}
         />
       ) : !a ? (
-        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-44 w-full" />
       ) : (
         <>
           <Figure
             value={median ? duration(median * 1000) : "None yet"}
             note={
               median
-                ? "median from approval to live, last 30 days"
-                : "Once deployments finish, their median time shows here."
+                ? "median, approval to live"
+                : "Once deployments finish, their median shows here."
             }
           />
-          <GlowBarChart data={days} label="Went live" />
+          <GlowBarChart data={days} label="Went live" ticks="ends" />
         </>
       )}
-    </MetricCard>
+    </Panel>
   )
 }
 
-function QuickDeploy({
-  runs,
-  projects,
-  projectsLoaded,
-}: {
-  runs: Run[]
-  projects: { id: string; name: string; icon: string; color: string }[]
-  projectsLoaded: boolean
-}) {
-  const { can } = useOrganization()
-  const { openDeploy, openNewProject } = useShell()
+const pendingMetrics = ["Cloud spend", "p95 latency", "Traffic"]
+
+/** MetricsPending holds the place of the numbers Loomplane doesn't read yet. */
+function MetricsPending() {
   return (
-    <MetricCard
-      icon={ZapIcon}
-      title="Quick deploy"
-      className="lg:col-span-5"
-      menu={
-        can("project:create")
-          ? [{ label: "New project", onSelect: openNewProject }]
-          : undefined
-      }
+    <Panel
+      dashed
+      aria-label="Spend, latency and traffic"
+      className="gap-3 md:col-span-2 lg:col-span-1"
     >
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-        {!projectsLoaded &&
-          projects.length === 0 &&
-          [0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-[84px] rounded-xl" />
-          ))}
-        {projects.map((p) => {
-          const latest = runs.find((r) => r.projectId === p.id)
-          const s = projectStyle(p)
-          return (
-            <Button
-              key={p.id}
-              variant="outline"
-              onClick={() => openDeploy({ project: p.id })}
-              disabled={!can("deployment:create")}
-              className="h-auto flex-col gap-2 rounded-xl px-2 py-3"
-            >
-              <span className="relative flex">
-                <ProjectIcon icon={s.icon} color={s.color} size="lg" />
-                {latest && (
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-card",
-                      latest.status === "failed" || latest.status === "blocked"
-                        ? "bg-destructive"
-                        : isLive(latest)
-                          ? "bg-weld"
-                          : "bg-overdye"
-                    )}
-                  />
-                )}
-              </span>
-              <span className="w-full truncate">{p.name}</span>
-            </Button>
-          )
-        })}
-        {can("project:create") && (
-          <Button
-            variant="secondary"
-            onClick={openNewProject}
-            className="h-auto flex-col gap-2 rounded-xl px-2 py-3 text-muted-foreground"
-          >
-            <span className="flex size-10 items-center justify-center rounded-xl border border-dashed border-muted-foreground/40 bg-background">
-              <PlusIcon className="size-4" />
-            </span>
-            New
-          </Button>
-        )}
-      </div>
-    </MetricCard>
+      <PanelHead title="Spend, latency and traffic" />
+      <p className="text-[12.5px] leading-normal text-muted-foreground">
+        These show up once Loomplane reads billing and metrics from your cloud
+        accounts. Build minutes aren&apos;t metered yet.
+      </p>
+      <dl className="grid gap-1.5 text-[12.5px]">
+        {pendingMetrics.map((m) => (
+          <div key={m} className="flex items-center justify-between gap-3">
+            <dt>{m}</dt>
+            <dd className="text-muted-foreground">Not connected</dd>
+          </div>
+        ))}
+      </dl>
+      <Link
+        to="/integrations"
+        className="mt-auto self-start text-[12.5px] font-medium text-brand-ink hover:underline"
+      >
+        Connect metrics
+      </Link>
+    </Panel>
   )
 }
 
 /* ------------------------------------------------------------------------ */
-/* Activity and clouds                                                         */
+/* Activity, quick deploy and clouds                                          */
 
 type Event = {
   id: string
   ts: number
-  icon: ReactNode
-  tone: string
+  dot: string
   text: ReactNode
   run: string
 }
 
-// The feed shows the latest few; the Activity page has the counts.
-const eventsShown = 7
+// The feed shows the latest few; the Activity page has the rest.
+const eventsShown = 6
 
 function useEvents(runs: Run[]) {
-  const person = usePeople()
+  const who = useWho()
   return useMemo(() => {
     const out: Event[] = []
-    const where = (r: Run) => (
-      <>
-        <span className="font-medium text-foreground">
-          {r.project?.name ?? "a deleted project"}
-        </span>{" "}
-        to {r.environment}
-      </>
+    const name = (r: Run) => (
+      <span className="font-medium">
+        {r.project?.name ?? "a deleted project"}
+      </span>
     )
-    const first = (id: string) => person(id).name.split(" ")[0]
     for (const r of runs.slice(0, 12)) {
       const ts = Date.parse(r.finishedAt ?? r.createdAt)
-      const name = first(r.createdBy)
       const base = { run: r.id }
+      const by = who(r.createdBy)
       if (r.status === "running") {
         out.push({
           ...base,
           id: `${r.id}-run`,
           ts: Date.parse(r.deployment?.startedAt ?? r.createdAt),
-          icon: <PlayIcon />,
-          tone: "bg-weld/15 text-weld-ink",
+          dot: "bg-flight",
           text: (
             <>
-              {r.deployment ? "Deploying" : "Planning"} {where(r)}
+              {by} {r.deployment ? "started deploying" : "started planning"}{" "}
+              {name(r)} to {r.environment}
             </>
           ),
         })
@@ -809,21 +641,37 @@ function useEvents(runs: Run[]) {
           ...base,
           id: `${r.id}-wait`,
           ts: Date.parse(r.plan.plannedAt ?? r.createdAt),
-          icon: <PauseIcon />,
-          tone: "bg-weld/15 text-weld-ink",
-          text: <>The plan for {where(r)} needs approval</>,
+          dot: "bg-weld",
+          text: (
+            <>
+              {by} planned {name(r)} to {r.environment}. It needs approval.
+            </>
+          ),
         })
-      } else if (r.status === "failed" || r.status === "blocked") {
+      } else if (r.status === "blocked") {
+        const n = r.plan.problems.length
+        out.push({
+          ...base,
+          id: `${r.id}-block`,
+          ts,
+          dot: "bg-failed",
+          text: (
+            <>
+              A plan for {name(r)} was blocked
+              {n > 0 && ` by ${n} ${n === 1 ? "problem" : "problems"}`}
+            </>
+          ),
+        })
+      } else if (r.status === "failed") {
         out.push({
           ...base,
           id: `${r.id}-fail`,
           ts,
-          icon: <XIcon />,
-          tone: "bg-destructive/12 text-destructive",
+          dot: "bg-failed",
           text: (
             <>
-              {name}&rsquo;s deploy of {where(r)}{" "}
-              {r.status === "blocked" ? "is blocked" : "failed"}
+              {by === "You" ? "Your" : `${by}'s`} deploy of {name(r)} to{" "}
+              {r.environment} failed
             </>
           ),
         })
@@ -832,11 +680,10 @@ function useEvents(runs: Run[]) {
           ...base,
           id: `${r.id}-cancel`,
           ts,
-          icon: <RotateCcwIcon />,
-          tone: "bg-muted text-muted-foreground",
+          dot: "bg-muted-foreground/50",
           text: (
             <>
-              The plan for {where(r)} was {r.plan.status}
+              The plan for {name(r)} to {r.environment} was {r.plan.status}
             </>
           ),
         })
@@ -845,11 +692,10 @@ function useEvents(runs: Run[]) {
           ...base,
           id: `${r.id}-ok`,
           ts,
-          icon: <CheckIcon />,
-          tone: "bg-overdye/12 text-overdye",
+          dot: "bg-overdye",
           text: (
             <>
-              {name} deployed {where(r)}
+              {by} deployed {name(r)} to {r.environment}
             </>
           ),
         })
@@ -863,90 +709,126 @@ function useEvents(runs: Run[]) {
           ...base,
           id: `${r.id}-approve`,
           ts: Date.parse(r.plan.decidedAt),
-          icon: <CheckIcon />,
-          tone: "bg-muted text-foreground",
+          dot: "bg-flight",
           text: (
             <>
-              {first(r.plan.decidedBy)} approved the plan for {where(r)}
+              {who(r.plan.decidedBy)} approved the plan for {name(r)} to{" "}
+              {r.environment}
             </>
           ),
         })
       }
     }
     return out.sort((a, b) => b.ts - a.ts).slice(0, eventsShown)
-  }, [runs, person])
+  }, [runs, who])
 }
 
-function Feed({ runs, now }: { runs: Run[]; now: number }) {
-  const navigate = useNavigate()
+function Feed({
+  runs,
+  loaded,
+  now,
+}: {
+  runs: Run[]
+  loaded: boolean
+  now: number
+}) {
   const events = useEvents(runs)
   return (
-    <MetricCard
-      icon={ActivityIcon}
-      title="Activity"
-      className="lg:col-span-7"
-      menu={[
-        {
-          label: "Open activity",
-          onSelect: () => void navigate({ to: "/activity" }),
-        },
-        {
-          label: "View all deployments",
-          onSelect: () => void navigate({ to: "/deployments" }),
-        },
-      ]}
-    >
-      {events.length === 0 ? (
-        <Empty className="p-0">
-          <EmptyHeader>
-            <EmptyTitle>No activity yet</EmptyTitle>
-            <EmptyDescription>
-              Plans, approvals and deployments appear here as they happen.
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Link
-              to="/deployments"
-              className="text-sm underline underline-offset-4"
-            >
-              Open deployments
-            </Link>
-          </EmptyContent>
-        </Empty>
+    <Panel aria-label="Activity" className="gap-0 p-0">
+      <PanelHead
+        className="border-b px-4 py-3"
+        title="Activity"
+        aside={
+          <Link
+            to="/activity"
+            className="text-[12.5px] font-medium text-brand-ink hover:underline"
+          >
+            See all
+          </Link>
+        }
+      />
+      {!loaded && events.length === 0 ? (
+        <div className="grid gap-3 px-4 py-3.5">
+          <Skeleton className="h-5 w-3/4" />
+          <Skeleton className="h-5 w-2/3" />
+        </div>
+      ) : events.length === 0 ? (
+        <p className="px-4 py-3.5 text-[12.5px] text-muted-foreground">
+          Plans, approvals and deployments appear here as they happen.
+        </p>
       ) : (
-        <ItemGroup className="gap-0.5">
+        <ul className="divide-y divide-border/70">
           {events.map((e) => (
-            <Item
-              key={e.id}
-              size="sm"
-              className="-mx-3 py-2"
-              render={<Link to="/deployments/$id" params={{ id: e.run }} />}
-            >
-              <ItemMedia
-                className={cn("size-7 rounded-full [&_svg]:size-3.5", e.tone)}
+            <li key={e.id}>
+              <Link
+                to="/deployments/$id"
+                params={{ id: e.run }}
+                className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-subtle"
               >
-                {e.icon}
-              </ItemMedia>
-              <ItemContent>
-                <ItemDescription className="line-clamp-1 text-sm">
-                  {e.text}
-                </ItemDescription>
-              </ItemContent>
-              <ItemActions className="text-xs text-muted-foreground tabular-nums">
-                {relative(e.ts, now)}
-              </ItemActions>
-            </Item>
+                <span
+                  aria-hidden="true"
+                  className={cn("size-2 shrink-0 rounded-full", e.dot)}
+                />
+                <span className="min-w-0 flex-1 truncate">{e.text}</span>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                  {relative(e.ts, now)}
+                </span>
+              </Link>
+            </li>
           ))}
-        </ItemGroup>
+        </ul>
       )}
-    </MetricCard>
+    </Panel>
+  )
+}
+
+function QuickDeploy({
+  projects,
+  loaded,
+}: {
+  projects: { id: string; name: string; icon: string; color: string }[]
+  loaded: boolean
+}) {
+  const { can } = useOrganization()
+  const { openDeploy, openNewProject } = useShell()
+  return (
+    <Panel aria-label="Quick deploy" className="gap-3.5">
+      <PanelHead title="Quick deploy" />
+      <div className="flex flex-wrap gap-2">
+        {!loaded &&
+          projects.length === 0 &&
+          [0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-8 w-36 rounded-[9px]" />
+          ))}
+        {projects.map((p) => {
+          const s = projectStyle(p)
+          return (
+            <Button
+              key={p.id}
+              variant="outline"
+              disabled={!can("deployment:create")}
+              onClick={() => openDeploy({ project: p.id })}
+              className="h-8 max-w-full gap-2 rounded-[9px] pr-2.5 pl-1.5 text-[13px]"
+            >
+              <ProjectIcon icon={s.icon} color={s.color} size="xs" />
+              <span className="truncate">{p.name}</span>
+            </Button>
+          )
+        })}
+        {loaded && projects.length === 0 && can("project:create") && (
+          <Button variant="outline" onClick={openNewProject}>
+            <PlusIcon />
+            New project
+          </Button>
+        )}
+      </div>
+    </Panel>
   )
 }
 
 function Clouds() {
-  const navigate = useNavigate()
   const connections = useQuery(useConnectionsList)
-  const { bindings, error, refetch } = useRunning()
+  const { bindings } = useRunning()
   const byConnection = useMemo(() => {
     const m = new Map<string, Binding[]>()
     for (const b of bindings) {
@@ -957,102 +839,85 @@ function Clouds() {
   const list = connections.data?.connections ?? []
 
   return (
-    <MetricCard
-      icon={CloudIcon}
-      title="Clouds"
-      className="lg:col-span-5"
-      menu={[
-        {
-          label: "Open infrastructure",
-          onSelect: () => void navigate({ to: "/infrastructure" }),
-        },
-      ]}
-    >
+    <Panel aria-label="Clouds" className="gap-0 p-0">
+      <PanelHead
+        className="border-b px-4 py-3"
+        title={
+          <>
+            Clouds{" "}
+            {list.length > 0 && (
+              <span className="font-normal text-muted-foreground tabular-nums">
+                {list.length}
+              </span>
+            )}
+          </>
+        }
+        aside={
+          <Link
+            to="/clouds"
+            className="text-[12.5px] font-medium text-brand-ink hover:underline"
+          >
+            Manage
+          </Link>
+        }
+      />
       {connections.status === "error" ? (
-        <QueryError
-          error={connections.error}
-          fallback="Cloud connections couldn't be loaded."
-          retry={connections.refetch}
-        />
-      ) : error !== undefined ? (
-        <QueryError
-          error={error}
-          fallback="Running services couldn't be loaded."
-          retry={refetch}
-        />
+        <div className="p-4">
+          <QueryError
+            error={connections.error}
+            fallback="Cloud connections couldn't be loaded."
+            retry={connections.refetch}
+          />
+        </div>
       ) : !connections.data ? (
-        <Skeleton className="h-40 w-full" />
+        <div className="p-4">
+          <Skeleton className="h-24 w-full" />
+        </div>
       ) : list.length === 0 ? (
-        <Empty className="p-0">
-          <EmptyHeader>
-            <EmptyTitle>No clouds connected yet</EmptyTitle>
-            <EmptyDescription>
-              Connect Google Cloud, AWS, Vercel or Render to deploy there.
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button
-              variant="outline"
-              size="sm"
-              className="rounded-full"
-              onClick={() => void navigate({ to: "/integrations" })}
-            >
-              Connect a cloud
-            </Button>
-          </EmptyContent>
-        </Empty>
+        <div className="grid gap-3 px-4 py-3.5 text-[12.5px] text-muted-foreground">
+          Connect Google Cloud, AWS, Vercel or Render to deploy there.
+          <Link
+            to="/integrations"
+            className="font-medium text-foreground hover:underline"
+          >
+            Connect a cloud
+          </Link>
+        </div>
       ) : (
-        <ItemGroup className="gap-0.5">
+        <ul className="divide-y divide-border/70">
           {list.map((c) => {
-            const running = byConnection.get(c.id) ?? []
-            const drifted = running.filter((b) => !!b.drift)
+            const running = byConnection.get(c.id)?.length ?? 0
             return (
-              <Item
-                key={c.id}
-                size="sm"
-                className="-mx-3"
-                render={<Link to="/infrastructure" />}
-              >
-                <ItemMedia>
-                  <CloudGlyph
-                    cloud={c.cloud}
-                    className="size-8 rounded-lg text-[10px]"
-                  />
-                </ItemMedia>
-                <ItemContent>
-                  <ItemTitle>
-                    {c.name}
-                    <span
-                      className={cn(
-                        "size-1.5 rounded-full",
-                        c.status === "ready" ? "bg-overdye" : "bg-weld"
-                      )}
-                    />
-                  </ItemTitle>
-                  <ItemDescription className="line-clamp-1 text-xs">
-                    {c.status === "ready"
-                      ? `${cloudLabel(c.cloud)}, ${c.account}`
-                      : c.message || "Needs attention"}
-                  </ItemDescription>
-                </ItemContent>
-                <ItemActions className="grid justify-items-end gap-0.5 text-right">
-                  <span className="text-sm tabular-nums">
-                    {running.length}{" "}
-                    <span className="text-muted-foreground">
-                      {running.length === 1 ? "service" : "services"}
+              <li key={c.id}>
+                <Link
+                  to="/clouds/accounts/$id"
+                  params={{ id: c.id }}
+                  className="flex items-center gap-3 px-4 py-2.5 text-foreground transition-colors hover:bg-subtle"
+                >
+                  <CloudGlyph cloud={c.cloud} size="md" />
+                  <span className="grid min-w-0 flex-1 gap-0.5">
+                    <span className="truncate text-[13px] font-medium">
+                      {c.name}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {c.status === "ready"
+                        ? [cloudLabel(c.cloud), c.account]
+                            .filter(Boolean)
+                            .join(" · ")
+                        : c.message || "Needs attention"}
                     </span>
                   </span>
-                  {drifted.length > 0 && (
-                    <span className="text-weld-ink text-xs">
-                      {drifted.length} drifted
-                    </span>
-                  )}
-                </ItemActions>
-              </Item>
+                  <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                    {running
+                      ? `${running} ${running === 1 ? "service" : "services"}`
+                      : "No services"}
+                  </span>
+                </Link>
+              </li>
             )
           })}
-        </ItemGroup>
+        </ul>
       )}
-    </MetricCard>
+    </Panel>
   )
 }

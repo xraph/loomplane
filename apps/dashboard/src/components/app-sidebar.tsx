@@ -12,7 +12,6 @@ import {
   KeyboardIcon,
   LayoutDashboardIcon,
   LayoutGridIcon,
-  PlusIcon,
   RocketIcon,
   ServerIcon,
   Settings2Icon,
@@ -50,7 +49,6 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
   SidebarRail,
@@ -72,7 +70,7 @@ const settingsPaths = [
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
   const { can } = useOrganization()
-  const { openDeploy, openNewProject } = useShell()
+  const { openNewProject } = useShell()
   const { runs } = useRuns()
   const status = useRouterState({
     select: (s) =>
@@ -189,22 +187,8 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
 
   return (
     <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader className="gap-3">
+      <SidebarHeader className="gap-3 pt-3">
         <Organizations />
-        {can("deployment:create") && (
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="New deployment"
-                onClick={() => openDeploy()}
-                className="justify-center border bg-background font-medium shadow-xs group-data-[collapsible=icon]:justify-start hover:bg-background hover:shadow-sm"
-              >
-                <PlusIcon />
-                <span>New deployment</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        )}
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={nav} />

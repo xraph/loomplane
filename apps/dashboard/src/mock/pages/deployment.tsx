@@ -115,7 +115,7 @@ export function DeploymentPage({ id }: { id: string }) {
           ]}
         />
         <Page>
-          <Empty className="border border-dashed">
+          <Empty>
             <EmptyHeader>
               <EmptyTitle>No deployment called {id}</EmptyTitle>
               <EmptyDescription>
@@ -502,7 +502,7 @@ function ApprovalAlert({ d }: { d: DeploymentView }) {
       : "Production deploys wait for an admin to approve the plan."
   return (
     <Alert className="items-center gap-y-1 rounded-xl border-weld/50 bg-[color-mix(in_oklch,var(--weld)_6%,var(--card))] p-4 has-[>svg]:gap-x-3 md:has-[>svg]:grid-cols-[auto_1fr_auto]">
-      <ShieldAlertIcon className="text-weld-ink size-5!" />
+      <ShieldAlertIcon className="size-5! text-weld-ink" />
       <AlertTitle>{why}</AlertTitle>
       <AlertDescription className="col-start-2">
         {c.create} to create, {c.update} to change, {c.destroy} to remove.
@@ -576,7 +576,7 @@ function StepIcon({ s }: { s: StepView }) {
       )
     case "waiting":
       return (
-        <span className={cn(box, "text-weld-ink border-2 border-weld bg-card")}>
+        <span className={cn(box, "border-2 border-weld bg-card text-weld-ink")}>
           <PauseIcon className="size-2.5" fill="currentColor" />
         </span>
       )
@@ -844,7 +844,7 @@ function Services({ d }: { d: DeploymentView }) {
                   className={cn(
                     "gap-1.5 text-xs",
                     state === "Rolling out"
-                      ? "text-weld-ink font-medium"
+                      ? "font-medium text-weld-ink"
                       : "text-muted-foreground"
                   )}
                 >

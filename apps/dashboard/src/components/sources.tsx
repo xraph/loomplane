@@ -128,7 +128,7 @@ export function SourcesCard({ project }: { project: Project }) {
             <Button
               size="sm"
               variant="outline"
-              className="rounded-full"
+
               disabled={analyses.running || start.isPending}
               onClick={() => void analyze()}
             >
@@ -139,7 +139,7 @@ export function SourcesCard({ project }: { project: Project }) {
           {mayEdit && (
             <Button
               size="sm"
-              className="rounded-full"
+
               onClick={() => setAdding(true)}
             >
               <PlusIcon />

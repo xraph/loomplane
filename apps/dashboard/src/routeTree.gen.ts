@@ -12,17 +12,17 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
-import { Route as CloudsRouteImport } from "./routes/clouds"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
 import { Route as NotificationsRouteImport } from "./routes/notifications"
 import { Route as ResetPasswordRouteImport } from "./routes/reset-password"
-import { Route as ServicesRouteImport } from "./routes/services"
 import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
 import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as VerifyEmailRouteImport } from "./routes/verify-email"
+import { Route as CloudsIndexRouteImport } from "./routes/clouds.index"
+import { Route as CloudsIdRouteImport } from "./routes/clouds.$id"
 import { Route as DeploymentsIndexRouteImport } from "./routes/deployments.index"
 import { Route as DeploymentsIdRouteImport } from "./routes/deployments.$id"
 import { Route as DeploymentsNewRouteImport } from "./routes/deployments.new"
@@ -31,6 +31,9 @@ import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.ind
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
+import { Route as ServicesIndexRouteImport } from "./routes/services.index"
+import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
+import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
 
 const IndexRoute = IndexRouteImport.update({
@@ -46,11 +49,6 @@ const ActivityRoute = ActivityRouteImport.update({
 const ApiKeysRoute = ApiKeysRouteImport.update({
   id: "/api-keys",
   path: "/api-keys",
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CloudsRoute = CloudsRouteImport.update({
-  id: "/clouds",
-  path: "/clouds",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -78,11 +76,6 @@ const ResetPasswordRoute = ResetPasswordRouteImport.update({
   path: "/reset-password",
   getParentRoute: () => rootRouteImport,
 } as any)
-const ServicesRoute = ServicesRouteImport.update({
-  id: "/services",
-  path: "/services",
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SignInRoute = SignInRouteImport.update({
   id: "/sign-in",
   path: "/sign-in",
@@ -101,6 +94,16 @@ const VariablesRoute = VariablesRouteImport.update({
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
   id: "/verify-email",
   path: "/verify-email",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CloudsIndexRoute = CloudsIndexRouteImport.update({
+  id: "/clouds/",
+  path: "/clouds/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CloudsIdRoute = CloudsIdRouteImport.update({
+  id: "/clouds/$id",
+  path: "/clouds/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeploymentsIndexRoute = DeploymentsIndexRouteImport.update({
@@ -143,6 +146,21 @@ const ProjectsIdRoute = ProjectsIdRouteImport.update({
   path: "/projects/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
+const ServicesIndexRoute = ServicesIndexRouteImport.update({
+  id: "/services/",
+  path: "/services/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ServicesKindRoute = ServicesKindRouteImport.update({
+  id: "/services/$kind",
+  path: "/services/$kind",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CloudsAccountsIdRoute = CloudsAccountsIdRouteImport.update({
+  id: "/clouds/accounts/$id",
+  path: "/clouds/accounts/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IntegrationsGithubSetupRoute = IntegrationsGithubSetupRouteImport.update({
   id: "/integrations/github/setup",
   path: "/integrations/github/setup",
@@ -153,50 +171,56 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
-  "/clouds": typeof CloudsRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
   "/notifications": typeof NotificationsRoute
   "/reset-password": typeof ResetPasswordRoute
-  "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/services/$kind": typeof ServicesKindRoute
+  "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
+  "/services/": typeof ServicesIndexRoute
+  "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
-  "/clouds": typeof CloudsRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
   "/notifications": typeof NotificationsRoute
   "/reset-password": typeof ResetPasswordRoute
-  "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/services/$kind": typeof ServicesKindRoute
+  "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
   "/integrations": typeof IntegrationsIndexRoute
   "/projects": typeof ProjectsIndexRoute
+  "/services": typeof ServicesIndexRoute
+  "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRoutesById {
@@ -204,25 +228,28 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
-  "/clouds": typeof CloudsRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
   "/notifications": typeof NotificationsRoute
   "/reset-password": typeof ResetPasswordRoute
-  "/services": typeof ServicesRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/services/$kind": typeof ServicesKindRoute
+  "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
+  "/services/": typeof ServicesIndexRoute
+  "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
 }
 export interface FileRouteTypes {
@@ -231,75 +258,84 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
-    | "/clouds"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
     | "/notifications"
     | "/reset-password"
-    | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
     | "/verify-email"
+    | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/services/$kind"
+    | "/clouds/"
     | "/deployments/"
     | "/integrations/"
     | "/projects/"
+    | "/services/"
+    | "/clouds/accounts/$id"
     | "/integrations/github/setup"
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
     | "/activity"
     | "/api-keys"
-    | "/clouds"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
     | "/notifications"
     | "/reset-password"
-    | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
     | "/verify-email"
+    | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/services/$kind"
+    | "/clouds"
     | "/deployments"
     | "/integrations"
     | "/projects"
+    | "/services"
+    | "/clouds/accounts/$id"
     | "/integrations/github/setup"
   id:
     | "__root__"
     | "/"
     | "/activity"
     | "/api-keys"
-    | "/clouds"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
     | "/notifications"
     | "/reset-password"
-    | "/services"
     | "/sign-in"
     | "/sign-up"
     | "/variables"
     | "/verify-email"
+    | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
     | "/invitations/accept"
     | "/projects/$id"
+    | "/services/$kind"
+    | "/clouds/"
     | "/deployments/"
     | "/integrations/"
     | "/projects/"
+    | "/services/"
+    | "/clouds/accounts/$id"
     | "/integrations/github/setup"
   fileRoutesById: FileRoutesById
 }
@@ -307,25 +343,28 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
-  CloudsRoute: typeof CloudsRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
   NotificationsRoute: typeof NotificationsRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
-  ServicesRoute: typeof ServicesRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   VariablesRoute: typeof VariablesRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
+  CloudsIdRoute: typeof CloudsIdRoute
   DeploymentsIdRoute: typeof DeploymentsIdRoute
   DeploymentsNewRoute: typeof DeploymentsNewRoute
   DesignDeploymentRoute: typeof DesignDeploymentRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
+  ServicesKindRoute: typeof ServicesKindRoute
+  CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
+  ServicesIndexRoute: typeof ServicesIndexRoute
+  CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
 }
 
@@ -350,13 +389,6 @@ declare module "@tanstack/react-router" {
       path: "/api-keys"
       fullPath: "/api-keys"
       preLoaderRoute: typeof ApiKeysRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/clouds": {
-      id: "/clouds"
-      path: "/clouds"
-      fullPath: "/clouds"
-      preLoaderRoute: typeof CloudsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/forgot-password": {
@@ -394,13 +426,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/services": {
-      id: "/services"
-      path: "/services"
-      fullPath: "/services"
-      preLoaderRoute: typeof ServicesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     "/sign-in": {
       id: "/sign-in"
       path: "/sign-in"
@@ -427,6 +452,20 @@ declare module "@tanstack/react-router" {
       path: "/verify-email"
       fullPath: "/verify-email"
       preLoaderRoute: typeof VerifyEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/clouds/": {
+      id: "/clouds/"
+      path: "/clouds"
+      fullPath: "/clouds/"
+      preLoaderRoute: typeof CloudsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/clouds/$id": {
+      id: "/clouds/$id"
+      path: "/clouds/$id"
+      fullPath: "/clouds/$id"
+      preLoaderRoute: typeof CloudsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/deployments/": {
@@ -485,6 +524,27 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ProjectsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/services/": {
+      id: "/services/"
+      path: "/services"
+      fullPath: "/services/"
+      preLoaderRoute: typeof ServicesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/services/$kind": {
+      id: "/services/$kind"
+      path: "/services/$kind"
+      fullPath: "/services/$kind"
+      preLoaderRoute: typeof ServicesKindRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/clouds/accounts/$id": {
+      id: "/clouds/accounts/$id"
+      path: "/clouds/accounts/$id"
+      fullPath: "/clouds/accounts/$id"
+      preLoaderRoute: typeof CloudsAccountsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/integrations/github/setup": {
       id: "/integrations/github/setup"
       path: "/integrations/github/setup"
@@ -499,25 +559,28 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
-  CloudsRoute: CloudsRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
   NotificationsRoute: NotificationsRoute,
   ResetPasswordRoute: ResetPasswordRoute,
-  ServicesRoute: ServicesRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   VariablesRoute: VariablesRoute,
   VerifyEmailRoute: VerifyEmailRoute,
+  CloudsIdRoute: CloudsIdRoute,
   DeploymentsIdRoute: DeploymentsIdRoute,
   DeploymentsNewRoute: DeploymentsNewRoute,
   DesignDeploymentRoute: DesignDeploymentRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   ProjectsIdRoute: ProjectsIdRoute,
+  ServicesKindRoute: ServicesKindRoute,
+  CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
+  ServicesIndexRoute: ServicesIndexRoute,
+  CloudsAccountsIdRoute: CloudsAccountsIdRoute,
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
 }
 export const routeTree = rootRouteImport

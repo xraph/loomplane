@@ -326,7 +326,7 @@ export function CloudsPage() {
                 </button>
               ))}
               {visible.length === 0 && (
-                <ZeroState className="px-2">
+                <ZeroState variant="inline" className="px-2">
                   <ZeroStateHeader>
                     <ZeroStateTitle>No matching targets</ZeroStateTitle>
                     <ZeroStateDescription>
@@ -523,7 +523,7 @@ export function CloudsPage() {
                     ))}
                   </div>
                 ) : (
-                  <ZeroState className="px-0">
+                  <ZeroState variant="inline" className="px-0">
                     <ZeroStateHeader>
                       <ZeroStateTitle>
                         Ready for your first service

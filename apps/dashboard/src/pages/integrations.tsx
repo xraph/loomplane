@@ -31,6 +31,8 @@ import type {
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudConnections, ConnectDialog } from "@/components/cloud-connections"
 import { DotProgress } from "@/components/dots"
+import { IntegrationCatalog } from "@/components/integration-catalog"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Figure, MetricCard, QuickAction } from "@/components/metric-card"
 import { NewProjectDialog } from "@/components/new-project-dialog"
 import { Page, PageHeading } from "@/components/page"
@@ -93,8 +95,20 @@ import { cloudHealth, groupRepositories } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
 
-export function Integrations() {
+export type IntegrationsTab = "catalog" | "connected"
+
+export function Integrations({
+  tab = "catalog",
+  onTab,
+}: {
+  tab?: IntegrationsTab
+  onTab?: (tab: IntegrationsTab) => void
+} = {}) {
   const [connecting, setConnecting] = useState(false)
+  const [connectCloud, setConnectCloud] = useState<string | undefined>()
+  const [shown, setShown] = useState<IntegrationsTab>(tab)
+  const current = onTab ? tab : shown
+  const go = (t: IntegrationsTab) => (onTab ? onTab(t) : setShown(t))
   // The repository a new project starts with, while its dialog is open.
   const [starting, setStarting] = useState<string | null>(null)
 
@@ -106,23 +120,54 @@ export function Integrations() {
           title="Integrations"
           description="Where Loomplane reads your code from, and the clouds it deploys to."
         />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-12">
-          <Summary
-            className="sm:col-span-2 lg:col-span-6"
-            onConnectCloud={() => setConnecting(true)}
-            onNewProject={() => setStarting("")}
-          />
-          <RepositoryFigure className="lg:col-span-3" />
-          <CloudFigure className="lg:col-span-3" />
-          <GitHubCard className="sm:col-span-2 lg:col-span-7" />
-          <RepositoriesCard
-            className="sm:col-span-2 lg:col-span-5"
-            onStart={setStarting}
-          />
-          <CloudConnections className="sm:col-span-2 lg:col-span-12" />
-        </div>
+        <Tabs
+          value={current}
+          onValueChange={(v) => go(v as IntegrationsTab)}
+          className="gap-5"
+        >
+          <TabsList variant="line">
+            <TabsTrigger value="catalog">Catalog</TabsTrigger>
+            <TabsTrigger value="connected">Connected</TabsTrigger>
+          </TabsList>
+          <TabsContent value="catalog">
+            <IntegrationCatalog
+              onConnect={(cloud) => {
+                setConnectCloud(cloud)
+                setConnecting(true)
+              }}
+              onManage={() => go("connected")}
+            />
+          </TabsContent>
+          <TabsContent value="connected">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-12">
+              <Summary
+                className="sm:col-span-2 lg:col-span-6"
+                onConnectCloud={() => {
+                  setConnectCloud(undefined)
+                  setConnecting(true)
+                }}
+                onNewProject={() => setStarting("")}
+              />
+              <RepositoryFigure className="lg:col-span-3" />
+              <CloudFigure className="lg:col-span-3" />
+              <GitHubCard className="sm:col-span-2 lg:col-span-7" />
+              <RepositoriesCard
+                className="sm:col-span-2 lg:col-span-5"
+                onStart={setStarting}
+              />
+              <CloudConnections className="sm:col-span-2 lg:col-span-12" />
+            </div>
+          </TabsContent>
+        </Tabs>
       </Page>
-      <ConnectDialog open={connecting} onOpenChange={setConnecting} />
+      <ConnectDialog
+        open={connecting}
+        onOpenChange={(open) => {
+          setConnecting(open)
+          if (!open) setConnectCloud(undefined)
+        }}
+        cloud={connectCloud}
+      />
       <NewProjectDialog
         open={starting !== null}
         repository={starting ?? undefined}
@@ -375,7 +420,7 @@ function GitHubCard({ className }: { className?: string }) {
       )}
       {status.data && !status.data.configured && <SetUpGitHub />}
       {status.data?.configured && !has && (
-        <Empty className="flex-1 border border-dashed">
+        <Empty className="flex-1">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <GitHubMark className="size-4" />
@@ -494,7 +539,7 @@ function Installation({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  className="rounded-full text-muted-foreground"
+                  className="text-muted-foreground"
                   aria-label={`${inst.account} options`}
                 />
               }
@@ -672,7 +717,7 @@ function RepositoriesCard({
       ) : installations.length > 0 ? (
         <RepositoryBrowser installations={installations} onStart={onStart} />
       ) : (
-        <Empty className="p-0">
+        <Empty variant="inline" className="p-0">
           <EmptyHeader>
             <EmptyTitle>No repositories connected</EmptyTitle>
             <EmptyDescription>
@@ -733,7 +778,7 @@ function RepositoryBrowser({
   }
   if (all.length === 0) {
     return (
-      <Empty className="p-0">
+      <Empty variant="inline" className="p-0">
         <EmptyHeader>
           <EmptyTitle>No repositories available</EmptyTitle>
           <EmptyDescription>
@@ -771,7 +816,7 @@ function RepositoryBrowser({
       </InputGroup>
       <div className="-mx-3 grid max-h-[26rem] content-start gap-4 overflow-y-auto px-3">
         {groups.length === 0 && (
-          <Empty className="p-0">
+          <Empty variant="inline" className="p-0">
             <EmptyHeader>
               <EmptyTitle>No repositories match</EmptyTitle>
               <EmptyDescription>
@@ -842,7 +887,7 @@ function RepositoryRow({
           <Button
             variant="ghost"
             size="sm"
-            className="rounded-full"
+
             onClick={() => onStart(r.fullName)}
           >
             <PlusIcon />

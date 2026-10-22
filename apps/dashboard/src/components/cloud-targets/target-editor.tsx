@@ -1,3 +1,4 @@
+import { PlusIcon } from "lucide-react"
 import { useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
@@ -7,6 +8,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { messageOf } from "@/client/errors"
+import { CloudGlyph } from "@/components/cloud-glyph"
 import { ConnectDialog } from "@/components/cloud-connections"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
@@ -21,19 +23,24 @@ import {
 } from "@/components/ui/dialog"
 import { cloudDeletionError } from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
+import { cn } from "@/lib/utils"
 import { ChangeReview } from "./change-review"
+import { TagInput } from "./tag-input"
 import { selectClass } from "./workspace"
 
 export function TargetEditor({
   projectId,
   profile,
   target,
+  siblingTags = [],
   onClose,
   onSaved,
 }: {
   projectId: string
   profile: Profile
   target?: Target
+  /** Tags on this Cloud's other targets, offered as shortcuts. */
+  siblingTags?: string[]
   onClose: () => void
   onSaved: () => void
 }) {
@@ -44,11 +51,17 @@ export function TargetEditor({
   const create = useMutation(api.useCloudTargetsCreate)
   const update = useMutation(api.useCloudTargetsUpdate)
   const remove = useMutation(api.useCloudTargetsDelete)
+  const createOrg = useMutation(api.useOrganizationCloudTargetsCreate)
+  const updateOrg = useMutation(api.useOrganizationCloudTargetsUpdate)
+  const removeOrg = useMutation(api.useOrganizationCloudTargetsDelete)
+  // An empty project means a Cloud the organization owns.
+  const org = projectId === ""
   const [name, setName] = useState(target?.name ?? "")
   const [label, setLabel] = useState(target?.displayName ?? "")
   const [provider, setProvider] = useState(target?.provider ?? "")
   const [connectionId, setConnection] = useState(target?.connectionId ?? "")
   const [region, setRegion] = useState(target?.region ?? "")
+  const [tags, setTags] = useState<string[]>(target?.tags ?? [])
   const [error, setError] = useState("")
   const [connecting, setConnecting] = useState(false)
   const [review, setReview] = useState(false)
@@ -66,25 +79,50 @@ export function TargetEditor({
     (provider !== target.provider ||
       connectionId !== target.connectionId ||
       region !== target.region)
-  const busy = create.isPending || update.isPending || remove.isPending
+  // The name and tags save with the target; a placement switch is reviewed.
+  const detailsChanged =
+    !!target &&
+    (label !== target.displayName ||
+      tags.join(",") !== [...(target.tags ?? [])].sort().join(","))
+  const busy =
+    create.isPending ||
+    update.isPending ||
+    remove.isPending ||
+    createOrg.isPending ||
+    updateOrg.isPending ||
+    removeOrg.isPending
   const save = async () => {
     setError("")
     try {
-      if (target)
+      const body = {
+        name: name.trim(),
+        displayName: label.trim() || name.trim(),
+        provider,
+        connectionId,
+        region,
+        tags,
+      }
+      const rename = {
+        displayName: label.trim(),
+        tags,
+        revision: target?.revision,
+      }
+      if (target && org)
+        await updateOrg.mutateAsync({
+          path: { cloudId: profile.id, targetId: target.id },
+          body: rename,
+        })
+      else if (target)
         await update.mutateAsync({
           path: { id: projectId, cloudId: profile.id, targetId: target.id },
-          body: { displayName: label.trim(), revision: target.revision },
+          body: rename,
         })
+      else if (org)
+        await createOrg.mutateAsync({ path: { cloudId: profile.id }, body })
       else
         await create.mutateAsync({
           path: { id: projectId, cloudId: profile.id },
-          body: {
-            name: name.trim(),
-            displayName: label.trim() || name.trim(),
-            provider,
-            connectionId,
-            region,
-          },
+          body,
         })
       onSaved()
     } catch (err) {
@@ -94,9 +132,14 @@ export function TargetEditor({
   const destroy = async () => {
     setError("")
     try {
-      await remove.mutateAsync({
-        path: { id: projectId, cloudId: profile.id, targetId: target!.id },
-      })
+      if (org)
+        await removeOrg.mutateAsync({
+          path: { cloudId: profile.id, targetId: target!.id },
+        })
+      else
+        await remove.mutateAsync({
+          path: { id: projectId, cloudId: profile.id, targetId: target!.id },
+        })
       onSaved()
     } catch (err) {
       setError(cloudDeletionError(err, "target"))
@@ -149,73 +192,138 @@ export function TargetEditor({
                 />
               </label>
             </div>
-            <label className="grid gap-1 text-xs">
-              Provider
-              <select
-                className={selectClass}
-                aria-label="Target provider"
+            <div className="grid gap-1">
+              <span className="text-xs">Tags</span>
+              <TagInput
+                tags={tags}
+                onChange={setTags}
+                suggestions={siblingTags}
                 disabled={!manage || busy}
-                value={provider}
-                onChange={(e) => {
-                  setProvider(e.target.value)
-                  setConnection("")
-                  setRegion("")
-                }}
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <span className="text-xs">Provider</span>
+              <div
+                role="radiogroup"
+                aria-label="Target provider"
+                className="grid gap-2 sm:grid-cols-2"
               >
-                <option value="">Choose provider</option>
                 {providers.data?.providers
                   .filter((p) => p.available && p.runs?.length)
-                  .map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.title}
-                    </option>
+                  .map((p) => {
+                    const ready = (connections.data?.connections ?? []).filter(
+                      (c) => c.status === "ready" && c.cloud === p.cloud
+                    ).length
+                    return (
+                      <Choice
+                        key={p.name}
+                        checked={provider === p.name}
+                        disabled={!manage || busy}
+                        onSelect={() => {
+                          if (provider === p.name) return
+                          setProvider(p.name)
+                          setConnection("")
+                          setRegion("")
+                        }}
+                      >
+                        <CloudGlyph cloud={p.cloud} size="sm" />
+                        <span className="grid min-w-0 gap-0.5">
+                          <span className="truncate text-[13px] font-medium">
+                            {p.title}
+                          </span>
+                          <span className="truncate text-xs text-muted-foreground">
+                            {ready
+                              ? `${ready} ${ready === 1 ? "account" : "accounts"} ready`
+                              : "No account yet"}
+                          </span>
+                        </span>
+                      </Choice>
+                    )
+                  })}
+              </div>
+            </div>
+            {selected && (
+              <div className="grid gap-1.5">
+                <span className="text-xs">
+                  Account
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · any {selected.title} account you&apos;ve connected
+                  </span>
+                </span>
+                <div
+                  role="radiogroup"
+                  aria-label="Desired account"
+                  className="grid gap-2"
+                >
+                  {accounts.map((c) => (
+                    <Choice
+                      key={c.id}
+                      checked={connectionId === c.id}
+                      disabled={!manage || busy}
+                      onSelect={() => setConnection(c.id)}
+                    >
+                      <CloudGlyph cloud={c.cloud} size="sm" />
+                      <span className="grid min-w-0 flex-1 gap-0.5">
+                        <span className="truncate text-[13px] font-medium">
+                          {c.name}
+                        </span>
+                        <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+                          {c.account}
+                        </span>
+                      </span>
+                      {target?.connectionId === c.id && (
+                        <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                          Current
+                        </span>
+                      )}
+                    </Choice>
                   ))}
-              </select>
-            </label>
-            {target && (
-              <p className="text-xs break-words text-muted-foreground">
-                Current desired account:{" "}
-                {connections.data?.connections.find(
-                  (c) => c.id === target.connectionId
-                )?.name ?? target.connectionId}
-              </p>
-            )}
-            <label className="grid gap-1 text-xs">
-              Desired account
-              <select
-                className={selectClass}
-                aria-label="Desired account"
-                disabled={!manage || busy || !selected}
-                value={connectionId}
-                onChange={(e) => setConnection(e.target.value)}
-              >
-                <option value="">Choose a ready account</option>
-                {accounts.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.account})
-                  </option>
-                ))}
-              </select>
-            </label>
-            {manage && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!selected || busy}
-                onClick={() => setConnecting(true)}
-              >
-                Connect a new account
-              </Button>
+                  {manage && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setConnecting(true)}
+                      className="flex h-12 items-center gap-2.5 rounded-xl border border-dashed px-3 text-left text-[13px] text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:opacity-50"
+                    >
+                      <PlusIcon className="size-4" />
+                      {accounts.length
+                        ? `Connect another ${selected.title} account`
+                        : `Connect a ${selected.title} account`}
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
             <label className="grid gap-1 text-xs">
               Region
-              <Input
-                aria-label="Target region"
-                disabled={!manage || busy}
-                value={region}
-                onChange={(e) => setRegion(e.target.value)}
-                placeholder="Provider default"
-              />
+              {selected?.regions?.length ? (
+                <select
+                  className={selectClass}
+                  aria-label="Target region"
+                  disabled={!manage || busy}
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                >
+                  <option value="">Provider default</option>
+                  {selected.regions.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                  {region && !selected.regions.includes(region) && (
+                    <option value={region}>{region}</option>
+                  )}
+                </select>
+              ) : (
+                <Input
+                  aria-label="Target region"
+                  disabled={!manage || busy}
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                  placeholder="Provider default"
+                />
+              )}
             </label>
           </div>
           {error && (
@@ -243,9 +351,7 @@ export function TargetEditor({
                   !provider ||
                   !accounts.some((c) => c.id === connectionId) ||
                   (!target && !/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(name)) ||
-                  (changed &&
-                    (!can("deployment:approve") ||
-                      label !== target?.displayName))
+                  (changed && (!can("deployment:approve") || detailsChanged))
                 }
                 onClick={() => (changed ? setReview(true) : void save())}
               >
@@ -253,9 +359,9 @@ export function TargetEditor({
               </Button>
             )}
           </DialogFooter>
-          {changed && label !== target?.displayName && (
+          {changed && detailsChanged && (
             <p className="text-xs text-muted-foreground">
-              Save the display name before changing placement.
+              Save the display name and tags before changing placement.
             </p>
           )}
         </DialogContent>
@@ -294,5 +400,34 @@ export function TargetEditor({
         />
       )}
     </>
+  )
+}
+
+/** Choice is one pickable card in a radio group. */
+export function Choice({
+  checked,
+  disabled,
+  onSelect,
+  children,
+}: {
+  checked: boolean
+  disabled?: boolean
+  onSelect: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onSelect}
+      className={cn(
+        "flex h-12 min-w-0 items-center gap-2.5 rounded-xl bg-card px-2.5 text-left ring-1 transition-shadow disabled:opacity-60",
+        checked ? "ring-2 ring-primary" : "ring-border hover:ring-foreground/25"
+      )}
+    >
+      {children}
+    </button>
   )
 }

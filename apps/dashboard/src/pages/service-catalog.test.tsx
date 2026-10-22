@@ -1,10 +1,11 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { act, render, screen } from "@testing-library/react"
+import { act, cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
-import { ServiceCatalog } from "@/pages/service-catalog"
+import { ServiceCatalog, ServiceRecovery } from "@/pages/service-catalog"
 import * as catalog from "@/lib/catalog"
+import type { DatabaseKind } from "@/lib/catalog-recipes"
 import { useProvidersList } from "@/client/forge/loomplane/hooks"
 import {
   managedDatabaseFixture,
@@ -36,13 +37,26 @@ afterEach(() => {
   permissions.allowed = true
   vi.restoreAllMocks()
 })
-function mount() {
+function mount(kind: DatabaseKind = "postgres") {
   return render(
     <ClientProvider client={forgeClient}>
-      <ServiceCatalog />
+      <ServiceCatalog kind={kind} />
     </ClientProvider>
   )
 }
+// Recovery lives on the service's project, under Backups.
+function mountRecovery(project = "p") {
+  return render(
+    <ClientProvider client={forgeClient}>
+      <ServiceRecovery project={project} />
+    </ClientProvider>
+  )
+}
+const chosen = (name: string | RegExp) =>
+  expect(screen.getByRole("radio", { name })).toHaveAttribute(
+    "aria-checked",
+    "true"
+  )
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -69,9 +83,7 @@ for (const target of ["rds", "cloud-sql"] as const) {
     expect(
       await screen.findByRole("button", { name: "Deploy PostgreSQL" })
     ).toBeEnabled()
-    expect(
-      screen.getByRole("combobox", { name: "Deployment target" })
-    ).toHaveTextContent("Selected account")
+    chosen(/Selected account/)
     expect(screen.getByText(fixture.profile.computeClass)).toBeInTheDocument()
     expect(
       screen.getByText(new RegExp(`${fixture.profile.storageGb} GiB`))
@@ -99,13 +111,12 @@ for (const target of ["rds", "cloud-sql"] as const) {
         screen.getByRole("combobox", { name: "Region" })
       ).toHaveTextContent("europe-west1")
     }
-    await userEvent.click(
-      screen.getByRole("combobox", { name: "Database engine" })
-    )
-    await userEvent.click(
-      await screen.findByRole("option", { name: "MySQL 8.4" })
-    )
-    expect(screen.getByText("Connect a Docker server")).toBeInTheDocument()
+    // MySQL runs only on a Docker server, so the cloud account can't hold it.
+    cleanup()
+    mount("mysql")
+    expect(
+      await screen.findByText("Connect a Docker server")
+    ).toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: "Deploy MySQL" })
     ).not.toBeInTheDocument()
@@ -171,7 +182,7 @@ it("identifies managed recovery as pending instead of offering container backups
       policies: [],
     })
   })
-  mount()
+  mountRecovery()
   expect(
     await screen.findByText("Managed database recovery")
   ).toBeInTheDocument()
@@ -185,28 +196,21 @@ it("identifies managed recovery as pending instead of offering container backups
     screen.queryByRole("heading", { name: "Isolated recovery copies" })
   ).not.toBeInTheDocument()
 })
-it("keeps empty projects distinct from a failed read and offers retry", async () => {
-  let failed = true
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
-    String(input).endsWith("/projects")
-      ? response(
-          failed ? { error: "Projects unavailable" } : { projects: [] },
-          failed ? 503 : 200
-        )
-      : response({ connections: [] })
-  )
+it("deploys one engine per page, with no project or recovery reads", async () => {
+  const requests: string[] = []
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    requests.push(String(input))
+    return response({ connections: [] })
+  })
   mount()
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Projects unavailable"
-  )
-  expect(screen.queryByText("No service projects yet")).not.toBeInTheDocument()
-  failed = false
-  await userEvent.click(screen.getByRole("button", { name: "Retry" }))
-  expect(await screen.findByText("No service projects yet")).toBeInTheDocument()
-  expect(screen.getByText("Connect a database target")).toBeInTheDocument()
   expect(
-    screen.getByRole("combobox", { name: "Database engine" })
-  ).toBeEnabled()
+    await screen.findByText("Connect a database target")
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("combobox", { name: "Database engine" })
+  ).not.toBeInTheDocument()
+  expect(requests.some((url) => url.endsWith("/projects"))).toBe(false)
+  expect(requests.some((url) => url.includes("service-backups"))).toBe(false)
 })
 it("does not request recovery data or show deployment controls without grants", async () => {
   permissions.allowed = false
@@ -222,9 +226,7 @@ it("does not request recovery data or show deployment controls without grants", 
   })
   mount()
   expect(
-    await screen.findByText(
-      "You need service backup read access to view recovery points."
-    )
+    await screen.findByText(/Deployment requires project creation/)
   ).toBeInTheDocument()
   expect(requests.some((url) => url.includes("service-backups"))).toBe(false)
   expect(
@@ -232,7 +234,7 @@ it("does not request recovery data or show deployment controls without grants", 
   ).not.toBeInTheDocument()
 })
 
-it("selects the database engine in the shared deployment form", async () => {
+it("gives each engine its own page with its name as the project name", async () => {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
     response(
       String(input).endsWith("/projects")
@@ -254,23 +256,17 @@ it("selects the database engine in the shared deployment form", async () => {
   expect(
     await screen.findByRole("button", { name: "Deploy PostgreSQL" })
   ).toBeEnabled()
-  await userEvent.click(
-    screen.getByRole("combobox", { name: "Database engine" })
-  )
-  await userEvent.click(
-    await screen.findByRole("option", { name: "MySQL 8.4" })
-  )
-  expect(screen.getByRole("button", { name: "Deploy MySQL" })).toBeEnabled()
-  expect(screen.getByLabelText("Project name")).toHaveValue("MySQL")
-  for (const [engine, name] of [
-    ["Redis 8.2", "Redis"],
-    ["Valkey 8.1", "Valkey"],
-  ]) {
-    await userEvent.click(
-      screen.getByRole("combobox", { name: "Database engine" })
-    )
-    await userEvent.click(await screen.findByRole("option", { name: engine }))
-    expect(screen.getByRole("button", { name: `Deploy ${name}` })).toBeEnabled()
+  chosen(/Docker acceptance/)
+  for (const [kind, name] of [
+    ["mysql", "MySQL"],
+    ["redis", "Redis"],
+    ["valkey", "Valkey"],
+  ] as const) {
+    cleanup()
+    mount(kind)
+    expect(
+      await screen.findByRole("button", { name: `Deploy ${name}` })
+    ).toBeEnabled()
     expect(screen.getByLabelText("Project name")).toHaveValue(name)
   }
 })
@@ -325,7 +321,7 @@ it("shows verified cache restores without claiming SQL verification", async () =
       })
     return response({ connections: [], policies: [] })
   })
-  mount()
+  mountRecovery()
   expect(
     await screen.findByRole("button", { name: "Back up now" })
   ).toBeEnabled()
@@ -364,20 +360,14 @@ it("offers a checked Kubernetes PostgreSQL target and removes it for other engin
   expect(
     await screen.findByRole("button", { name: "Deploy PostgreSQL" })
   ).toBeEnabled()
-  expect(
-    screen.getByRole("combobox", { name: "Deployment target" })
-  ).toHaveTextContent("Cluster acceptance")
+  chosen(/Cluster acceptance/)
   expect(screen.getByText(/10 GiB retained PVC/)).toBeInTheDocument()
-  await userEvent.click(
-    screen.getByRole("combobox", { name: "Database engine" })
-  )
-  await userEvent.click(
-    await screen.findByRole("option", { name: "MySQL 8.4" })
-  )
+  cleanup()
+  mount("mysql")
+  expect(await screen.findByText("Connect a Docker server")).toBeInTheDocument()
   expect(
     screen.queryByRole("button", { name: "Deploy MySQL" })
   ).not.toBeInTheDocument()
-  expect(screen.getByText("Connect a Docker server")).toBeInTheDocument()
 })
 
 it("preserves a failed service project without offering another implicit creation", async () => {
@@ -460,9 +450,7 @@ it("does not silently replace the default cloud account with a server after prof
   expect(
     await screen.findByRole("button", { name: "Deploy PostgreSQL" })
   ).toBeEnabled()
-  expect(
-    screen.getByRole("combobox", { name: "Deployment target" })
-  ).toHaveTextContent("Selected account")
+  chosen(/Selected account/)
   denied = true
   await act(async () => {
     await useProvidersList()
@@ -473,8 +461,8 @@ it("does not silently replace the default cloud account with a server after prof
     "Profiles unavailable"
   )
   expect(
-    screen.getByRole("combobox", { name: "Deployment target" })
-  ).not.toHaveTextContent("Other server")
+    screen.queryByRole("radio", { name: /Other server/, checked: true })
+  ).not.toBeInTheDocument()
   expect(
     screen.getByRole("button", { name: "Deploy PostgreSQL" })
   ).toBeDisabled()

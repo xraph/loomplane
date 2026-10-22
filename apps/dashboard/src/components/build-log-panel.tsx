@@ -72,7 +72,7 @@ export function BuildLogPanel({
   )
   if (connection.status === "denied" || statusOf(output.error) === 403)
     return (
-      <Empty>
+      <Empty preview={false}>
         <EmptyHeader>
           <EmptyTitle>Build logs are restricted</EmptyTitle>
           <EmptyDescription>
@@ -132,7 +132,7 @@ export function BuildLogPanel({
         </Alert>
       )}
       {!!output.error && (
-        <Empty>
+        <Empty preview={false}>
           <EmptyHeader>
             <EmptyTitle>Build output couldn't be loaded</EmptyTitle>
             <EmptyDescription>
@@ -154,7 +154,7 @@ export function BuildLogPanel({
             (!step || collection.actionId === step)
         )
         .map((collection) => (
-          <Empty key={collection.id} className="border py-3">
+          <Empty key={collection.id} className="py-4">
             <EmptyHeader>
               <EmptyTitle>
                 {collection.state === "unavailable"
@@ -166,7 +166,7 @@ export function BuildLogPanel({
           </Empty>
         ))}
       {lines.length === 0 && output.loaded && !output.error ? (
-        <Empty>
+        <Empty preview={false}>
           <EmptyHeader>
             <EmptyTitle>No output recorded yet</EmptyTitle>
             <EmptyDescription>

@@ -1,35 +1,26 @@
 .auth-layout {
-  --background: #fafafa;
-  --foreground: #171717;
-  --card: #fafafa;
-  --card-foreground: #171717;
-  --primary: #d8a00d;
-  --primary-foreground: #171717;
-  --ring: #b58200;
-  --input: #d9d9d6;
-  --muted-foreground: #696963;
-  --auth-thread-paper: #c9c9bf;
-  --auth-thread-gold: #e3ae3b;
+  /* The app's own tokens, so sign-in follows the accent and dark mode. */
+  --auth-thread-paper: color-mix(in oklch, var(--foreground) 22%, transparent);
+  --auth-thread-gold: var(--brand);
 
   position: relative;
   isolation: isolate;
   display: flex;
   overflow: hidden;
   min-height: 100svh;
-  background: var(--background);
+  background:
+    radial-gradient(
+      ellipse 70% 55% at 0% 0%,
+      var(--brand-tint),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 60% 50% at 100% 100%,
+      var(--flight-tint),
+      transparent 70%
+    ),
+    var(--subtle);
   color: var(--foreground);
-}
-
-.dark .auth-layout {
-  --background: #171717;
-  --foreground: #fafafa;
-  --card: #171717;
-  --card-foreground: #fafafa;
-  --primary: #e3ae3b;
-  --primary-foreground: #171717;
-  --ring: #e3ae3b;
-  --input: #454540;
-  --muted-foreground: #aaa9a1;
 }
 
 .auth-access {
@@ -50,13 +41,26 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   justify-content: center;
+  width: 100%;
+  padding-block: 32px;
+}
+
+.auth-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 20px;
   width: 100%;
-  max-width: 360px;
-  margin-inline: auto;
-  padding-block: 32px;
+  max-width: 400px;
+  padding: 32px 28px 28px;
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow:
+    0 0 0 1px var(--border),
+    0 12px 32px -12px color-mix(in oklch, var(--foreground) 14%, transparent);
 }
 
 .auth-footer {
@@ -145,7 +149,7 @@
   right: -160px;
   bottom: -120px;
   width: clamp(480px, 60vw, 880px);
-  opacity: 0.08;
+  opacity: 0.1;
   pointer-events: none;
 }
 
@@ -163,7 +167,11 @@
 
 @media (max-width: 479px) {
   .auth-access {
-    padding: 16px 24px 24px;
+    padding: 16px;
+  }
+
+  .auth-panel {
+    padding: 24px 20px 20px;
   }
 
   .auth-watermark {

@@ -1,13 +1,17 @@
-// The pieces every deployment view draws a run with. The loom thread is
-// the run's steps as one line across the warp: done is overdye green, the
-// running step carries a glowing weld shuttle at its head, a plan waiting
-// for approval holds a gold ring, and what's left is a hairline of warp.
+// The pieces every deployment view draws a run with. The thread is the
+// run's steps as a row of short bars: overdye green when done, flight blue
+// while running, weld while waiting on someone, red when it failed, and
+// warp for what's left. The status tile and pill say the same in words.
 import {
   ArrowDownIcon,
+  BanIcon,
   CheckIcon,
   CopyIcon,
   DownloadIcon,
+  HourglassIcon,
+  LoaderCircleIcon,
   SearchIcon,
+  TriangleAlertIcon,
   XIcon,
 } from "lucide-react"
 import {
@@ -39,6 +43,7 @@ import {
 } from "@/components/ui/tooltip"
 import { clock, duration } from "@/lib/format"
 import {
+  type Run,
   type RunStatus,
   runStatusText,
   type ThreadState,
@@ -46,7 +51,7 @@ import {
 } from "@/lib/runs"
 import { cn } from "@/lib/utils"
 
-const stateLabel: Record<ThreadState, string> = {
+export const stateLabel: Record<ThreadState, string> = {
   done: "Done",
   running: "Running",
   waiting: "Waiting for approval",
@@ -57,69 +62,50 @@ const stateLabel: Record<ThreadState, string> = {
 }
 
 const sizes = {
-  sm: { line: "h-[3px]", head: "size-2", ring: "size-2.5" },
-  md: { line: "h-[3px]", head: "size-2.5", ring: "size-3" },
-  lg: { line: "h-1", head: "size-3", ring: "size-3.5" },
+  sm: { line: "h-[5px]" },
+  md: { line: "h-[5px]" },
+  lg: { line: "h-1.5" },
 } as const
 
+// Each step is a short bar: overdye when done, flight blue while it runs,
+// weld while it waits on someone, failed red, and warp until it starts.
 function Cell({ s, size }: { s: ThreadStep; size: keyof typeof sizes }) {
-  const z = sizes[size]
-  const line = cn("w-full rounded-full", z.line)
+  const line = cn("w-full rounded-full", sizes[size].line)
   switch (s.state) {
     case "done":
       return <span className={cn(line, "bg-overdye")} />
     case "failed":
-      return (
-        <span className="relative flex w-full items-center">
-          <span className={cn(line, "bg-destructive")} />
-          <span
-            className={cn(
-              "absolute right-0 rounded-full bg-destructive ring-4 ring-destructive/15",
-              z.head
-            )}
-          />
-        </span>
-      )
+      return <span className={cn(line, "bg-failed")} />
     case "canceled":
       return <span className={cn(line, "bg-muted-foreground/40")} />
     case "waiting":
       return (
-        <span className="relative flex w-full items-center">
-          <span className={cn(line, "bg-weld/15")} />
-          <span
-            className={cn(
-              "absolute left-0 animate-pulse rounded-full border-2 border-weld bg-background motion-reduce:animate-none",
-              z.ring
-            )}
-          />
-        </span>
+        <span
+          className={cn(
+            line,
+            "animate-pulse bg-weld motion-reduce:animate-none"
+          )}
+        />
       )
     case "running": {
-      const pct = Math.max((s.progress ?? 0) * 100, 4)
+      const pct = Math.max((s.progress ?? 0) * 100, 8)
       return (
-        <span className="relative flex w-full items-center">
-          <span className={cn(line, "bg-weld/20")} />
+        <span className={cn("relative flex w-full items-center")}>
+          <span className={cn(line, "bg-flight/25")} />
           <span
             className={cn(
-              "absolute left-0 rounded-full bg-weld transition-[width] duration-1000 ease-linear",
-              z.line
+              "thread-shuttle absolute left-0 rounded-full bg-flight transition-[width] duration-1000 ease-linear",
+              sizes[size].line
             )}
             style={{ width: `${pct}%` }}
-          />
-          <span
-            className={cn(
-              "shuttle-glow absolute -translate-x-1/2 rounded-full bg-weld transition-[left] duration-1000 ease-linear",
-              z.head
-            )}
-            style={{ left: `${pct}%` }}
           />
         </span>
       )
     }
     case "skipped":
-      return <span className="h-px w-full bg-warp opacity-50" />
+      return <span className={cn(line, "bg-warp opacity-50")} />
     case "pending":
-      return <span className="h-px w-full bg-warp" />
+      return <span className={cn(line, "bg-warp")} />
   }
 }
 
@@ -156,7 +142,7 @@ export function Thread({
       aria-label={label}
       className={cn(
         "flex w-full items-center",
-        size === "sm" ? "gap-1.5" : "gap-3",
+        size === "sm" ? "gap-1" : "gap-1.5",
         draw && "loom-draw",
         className
       )}
@@ -168,7 +154,7 @@ export function Thread({
             key={g}
             className={cn(
               "flex items-center",
-              size === "sm" ? "gap-px" : "gap-1"
+              size === "sm" ? "gap-0.5" : "gap-1"
             )}
             // The deploy phase can have dozens of steps; plan and approval
             // keep a readable width beside it.
@@ -276,6 +262,154 @@ export function RunBadge({ status }: { status: RunStatus }) {
   )
 }
 
+/** The fixed status colors: tone is what a run's state is drawn in. */
+export type Tone = "live" | "waiting" | "flight" | "failed" | "quiet"
+
+export function toneOf(status: RunStatus): Tone {
+  switch (status) {
+    case "succeeded":
+      return "live"
+    case "waiting":
+      return "waiting"
+    case "running":
+    case "approved":
+      return "flight"
+    case "failed":
+    case "blocked":
+      return "failed"
+    default:
+      return "quiet"
+  }
+}
+
+export const toneClass: Record<
+  Tone,
+  { ink: string; tint: string; dot: string }
+> = {
+  live: { ink: "text-overdye-ink", tint: "bg-overdye-tint", dot: "bg-overdye" },
+  waiting: { ink: "text-weld-ink", tint: "bg-weld-tint", dot: "bg-weld" },
+  flight: { ink: "text-flight-ink", tint: "bg-flight-tint", dot: "bg-flight" },
+  failed: { ink: "text-destructive", tint: "bg-failed-tint", dot: "bg-failed" },
+  quiet: {
+    ink: "text-muted-foreground",
+    tint: "bg-muted",
+    dot: "bg-muted-foreground/50",
+  },
+}
+
+const statusIcons: Record<RunStatus, typeof CheckIcon> = {
+  succeeded: CheckIcon,
+  waiting: HourglassIcon,
+  running: LoaderCircleIcon,
+  approved: LoaderCircleIcon,
+  failed: XIcon,
+  blocked: TriangleAlertIcon,
+  canceled: BanIcon,
+}
+
+/** StatusTile is a run's state as an icon on its tint, for list rows. */
+export function StatusTile({
+  status,
+  className,
+}: {
+  status: RunStatus
+  className?: string
+}) {
+  const t = toneClass[toneOf(status)]
+  const Icon = statusIcons[status]
+  return (
+    <span
+      className={cn(
+        "inline-flex size-7 shrink-0 items-center justify-center rounded-lg",
+        t.tint,
+        t.ink,
+        className
+      )}
+    >
+      <Icon
+        aria-hidden="true"
+        className={cn(
+          "size-3.5",
+          status === "running" && "animate-spin motion-reduce:animate-none"
+        )}
+        strokeWidth={2.4}
+      />
+      <span className="sr-only">{runStatusText[status]}</span>
+    </span>
+  )
+}
+
+/** StatusPill names a state in its tone, with a dot so it isn't color alone. */
+export function StatusPill({
+  tone,
+  children,
+  className,
+}: {
+  tone: Tone
+  children: ReactNode
+  className?: string
+}) {
+  const t = toneClass[tone]
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 w-fit shrink-0 items-center gap-1.5 rounded-full px-2 text-xs font-medium whitespace-nowrap",
+        t.tint,
+        t.ink,
+        className
+      )}
+    >
+      <span className={cn("size-1.5 rounded-full", t.dot)} aria-hidden="true" />
+      {children}
+    </span>
+  )
+}
+
+/** ChangeChips are what a run's plan does, as short counts. */
+export function ChangeChips({ run: r }: { run: Run }) {
+  const p = r.plan
+  const chip =
+    "inline-flex h-5 items-center rounded-md px-1.5 font-mono text-xs"
+  if (p.problems.length > 0) {
+    return (
+      <span className={cn(chip, "bg-failed-tint text-destructive")}>
+        {p.problems.length} {p.problems.length === 1 ? "problem" : "problems"}
+      </span>
+    )
+  }
+  const s = p.summary
+  const parts = [
+    s.create > 0 && (
+      <span key="c" className={cn(chip, "bg-flight-tint text-flight-ink")}>
+        +{s.create} create
+      </span>
+    ),
+    s.update > 0 && (
+      <span key="u" className={cn(chip, "bg-muted text-foreground")}>
+        ~{s.update} update
+      </span>
+    ),
+    s.replace > 0 && (
+      <span key="r" className={cn(chip, "bg-weld-tint text-weld-ink")}>
+        {s.replace} replace
+      </span>
+    ),
+    s.delete > 0 && (
+      <span key="d" className={cn(chip, "bg-failed-tint text-destructive")}>
+        −{s.delete} delete
+      </span>
+    ),
+  ].filter(Boolean)
+  if (parts.length === 0) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        {p.status === "planning" ? "Planning" : "No changes"}
+      </span>
+    )
+  }
+  return <span className="inline-flex flex-wrap gap-1">{parts}</span>
+}
+
 /** EnvBadge names an environment; production stands out a little. */
 export function EnvBadge({
   env,
@@ -288,9 +422,9 @@ export function EnvBadge({
     <Badge
       variant="outline"
       className={cn(
-        "font-normal capitalize",
+        "rounded-md px-1.5 font-medium capitalize",
         env === "production"
-          ? "border-foreground/25 text-foreground"
+          ? "border-border text-foreground"
           : "text-muted-foreground",
         className
       )}
@@ -475,7 +609,7 @@ export function LogViewer({
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <InputGroup className="h-8 w-full rounded-full sm:w-56">
+        <InputGroup className="h-8 w-full sm:w-56">
           <InputGroupAddon>
             <SearchIcon />
           </InputGroupAddon>
@@ -524,7 +658,7 @@ export function LogViewer({
           <Button
             variant="secondary"
             size="sm"
-            className="rounded-full"
+
             onClick={onClearStep}
           >
             {stepName ?? step}
@@ -624,7 +758,7 @@ export function LogViewer({
           <Button
             size="sm"
             variant="secondary"
-            className="absolute right-4 bottom-4 rounded-full shadow-lg"
+            className="absolute right-4 bottom-4 shadow-lg"
             onClick={() => setFollow(true)}
           >
             <ArrowDownIcon />

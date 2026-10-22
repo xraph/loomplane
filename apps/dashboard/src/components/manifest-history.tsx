@@ -28,7 +28,7 @@ export function ManifestHistory({ projectId }: { projectId: string }) {
     <>
       <Button
         variant="ghost"
-        className="rounded-full"
+
         onClick={() => setOpen(true)}
       >
         <HistoryIcon />

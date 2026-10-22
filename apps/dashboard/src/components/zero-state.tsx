@@ -1,18 +1,62 @@
 import { cva, type VariantProps } from "class-variance-authority"
-import { Children, isValidElement } from "react"
+import {
+  Children,
+  createContext,
+  isValidElement,
+  type ReactNode,
+  useContext,
+} from "react"
 import { LayersIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-function ZeroState({ className, ...props }: React.ComponentProps<"div">) {
+type Variant = "panel" | "inline"
+
+// The header draws the preview on the page and only the icon inside a card.
+const VariantContext = createContext<{ variant: Variant; preview: boolean }>({
+  variant: "panel",
+  preview: true,
+})
+
+const zeroStateVariants = cva(
+  "flex w-full min-w-0 flex-col justify-center gap-5",
+  {
+    variants: {
+      variant: {
+        // On the page: centred under a faded preview of the list that will
+        // fill this space. No border, no fill.
+        panel: "items-center px-4 py-12 text-center",
+        // Already inside a card, so just the content.
+        inline: "items-start p-5 text-left",
+      },
+    },
+    defaultVariants: { variant: "panel" },
+  }
+)
+
+function ZeroState({
+  className,
+  variant = "panel",
+  preview = true,
+  ...props
+}: React.ComponentProps<"div"> &
+  VariantProps<typeof zeroStateVariants> & {
+    /**
+     * Draw the faded rows of what will fill this space. Turn it off for an
+     * error, a missing permission or a page that isn't there.
+     */
+    preview?: boolean
+  }) {
+  const v = variant ?? "panel"
   return (
-    <div
-      data-slot="empty"
-      className={cn(
-        "flex w-full min-w-0 flex-1 flex-col items-start justify-center gap-3 rounded-xl border-dashed p-5 text-left",
-        className
-      )}
-      {...props}
-    />
+    <VariantContext.Provider value={{ variant: v, preview }}>
+      <div
+        data-slot="empty"
+        data-variant={v}
+        data-preview={preview}
+        className={cn(zeroStateVariants({ variant: v }), className)}
+        {...props}
+      />
+    </VariantContext.Provider>
   )
 }
 
@@ -21,31 +65,78 @@ function ZeroStateHeader({
   children,
   ...props
 }: React.ComponentProps<"div">) {
+  const { variant, preview } = useContext(VariantContext)
+  const items = Children.toArray(children)
+  const media = items.find(
+    (child) => isValidElement(child) && child.type === ZeroStateMedia
+  ) ?? (
+    <ZeroStateMedia variant="icon">
+      <LayersIcon />
+    </ZeroStateMedia>
+  )
+  const rest = items.filter((child) => child !== media)
   return (
     <div
       data-slot="empty-header"
-      className={cn("flex max-w-md flex-col items-start gap-2", className)}
+      className={cn(
+        "flex max-w-md flex-col gap-1.5",
+        variant === "panel" ? "items-center" : "items-start",
+        className
+      )}
       {...props}
     >
-      {!Children.toArray(children).some(
-        (child) => isValidElement(child) && child.type === ZeroStateMedia
-      ) && (
-        <ZeroStateMedia variant="icon">
-          <LayersIcon />
-        </ZeroStateMedia>
+      {variant === "panel" && preview ? <Preview>{media}</Preview> : media}
+      {rest}
+    </div>
+  )
+}
+
+// Three placeholder rows, fading out, with the state's icon leading the
+// first: where the first item will show up.
+function Preview({ children }: { children: ReactNode }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="mb-1 grid w-[min(320px,100%)] gap-2 [mask-image:linear-gradient(to_bottom,black_30%,transparent)]"
+    >
+      <GhostRow lead={children} />
+      <GhostRow className="scale-[0.95] opacity-70" />
+      <GhostRow className="scale-[0.9] opacity-40" />
+    </div>
+  )
+}
+
+function GhostRow({
+  lead,
+  className,
+}: {
+  lead?: ReactNode
+  className?: string
+}) {
+  return (
+    <div
+      className={cn(
+        "flex h-12 items-center gap-3 rounded-xl bg-card px-2.5 shadow-[0_1px_2px_oklch(0.2_0.01_50/0.05)] ring-1 ring-border",
+        className
       )}
-      {children}
+    >
+      {lead ?? <span className="size-7 shrink-0 rounded-lg bg-muted" />}
+      <span className="grid flex-1 gap-1.5">
+        <span className="h-2 w-3/5 rounded-full bg-muted-foreground/20" />
+        <span className="h-1.5 w-2/5 rounded-full bg-muted-foreground/12" />
+      </span>
+      <span className="h-4 w-10 shrink-0 rounded-md bg-muted" />
     </div>
   )
 }
 
 const emptyMediaVariants = cva(
-  "mb-1 flex shrink-0 items-center justify-center [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "flex shrink-0 items-center justify-center [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {
         default: "bg-transparent",
-        icon: "canvas-dots flex h-14 w-20 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground [&_svg:not([class*='size-'])]:size-6",
+        icon: "size-7 rounded-lg bg-brand-tint text-brand-ink in-data-[preview=false]:mb-3 in-data-[preview=false]:size-11 in-data-[preview=false]:rounded-xl in-data-[variant=inline]:mb-2 in-data-[variant=inline]:size-9 in-data-[variant=inline]:rounded-[10px] [&_svg:not([class*='size-'])]:size-4 in-data-[preview=false]:[&_svg:not([class*='size-'])]:size-5",
       },
     },
     defaultVariants: {
@@ -74,7 +165,7 @@ function ZeroStateTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="empty-title"
       className={cn(
-        "font-heading text-sm font-medium tracking-tight",
+        "font-heading text-[15px] font-semibold tracking-[-0.01em]",
         className
       )}
       {...props}
@@ -90,7 +181,7 @@ function ZeroStateDescription({
     <div
       data-slot="empty-description"
       className={cn(
-        "text-sm/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+        "max-w-sm text-[13px]/relaxed text-pretty text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
         className
       )}
       {...props}
@@ -106,7 +197,7 @@ function ZeroStateContent({
     <div
       data-slot="empty-content"
       className={cn(
-        "flex w-full max-w-sm min-w-0 flex-col items-start gap-2 text-sm",
+        "flex w-full max-w-sm min-w-0 flex-wrap items-center gap-2 text-[13px] in-data-[variant=panel]:justify-center",
         className
       )}
       {...props}
