@@ -23,7 +23,10 @@ const (
 	pathToken  = "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
 	botAPI     = "https://api.chat.example/bot123456:" + pathToken + "/sendMessage?chat_id=12345678&next=Lm3kQ9zR"
 	secretPath = "sEcr3tPathToken99"
-	userRepo   = "https://" + registryToken + "@git.example.com/acme/" + secretPath + "/app.git"
+	mongo      = "mongodb://app:pw-Secret-1@db.example/app?authSource=admin&sslkey=/etc/ssl/client.key&sslcert=/etc/ssl/client.crt" +
+		"&region=us-east-1&since=2024-01-01T00:00:00Z&chat_id=87654321&monkey=bananas&design=cards&apiKey=Abc12345&access_token=xyz9" +
+		"&X-Amz-Signature=d3adb33f&sslpassword=s3cr3tPw&cursor=Qx7pRt9z"
+	userRepo = "https://" + registryToken + "@git.example.com/acme/" + secretPath + "/app.git"
 )
 
 func TestSensitivePartsOfAnAddress(t *testing.T) {
@@ -36,7 +39,11 @@ func TestSensitivePartsOfAnAddress(t *testing.T) {
 		// Query values: one under a secret's name at any length, others
 		// of eight or more that look like a token. Not a plain word.
 		webhook: {webhook, queryKey, "a1B2", "Lm3kQ9zR"},
-		botAPI:  {botAPI, "12345678", "Lm3kQ9zR"},
+		botAPI:  {botAPI, "Lm3kQ9zR"},
+		// A parameter's name says it's secret only as a whole word, and
+		// a value that's only digits, or has the separators of a region
+		// or a time, isn't a token.
+		mongo: {"pw-Secret-1", "Abc12345", "xyz9", "d3adb33f", "s3cr3tPw", "Qx7pRt9z"},
 		// An escaped value counts as it's spelled too.
 		"https://hooks.example.com/x?token=Ab%2BCd%2FEf12": {"https://hooks.example.com/x?token=Ab%2BCd%2FEf12", "Ab+Cd/Ef12", "Ab%2BCd%2FEf12"},
 		// A short user is an ordinary word, beside a password.
@@ -100,11 +107,14 @@ func TestJobOutputNeverShowsFourBytesOfAURLsToken(t *testing.T) {
 
 func TestJobOutputLeavesAnAddressesOrdinaryWords(t *testing.T) {
 	// Addresses with a password: what isn't secret in them stays.
-	secrets := map[string]string{"GIT_REMOTE": gitRemote, "DATABASE_URL": dsn}
+	secrets := map[string]string{"GIT_REMOTE": gitRemote, "DATABASE_URL": dsn, "MONGO_URL": mongo}
 	const ordinary = "connecting to postgres://db:5432\n" +
 		"pushing to git.example.com/acme/app.git\n" +
 		"lp-inst-db:5432/app__postgres sslmode=disable: connected successfully\n" +
-		"user loomplane signed in\n"
+		"user loomplane signed in\n" +
+		"signed in as admin with /etc/ssl/client.key and /etc/ssl/client.crt\n" +
+		"region us-east-1 since 2024-01-01T00:00:00Z, chat_id=87654321 ignored\n" +
+		"monkey sees bananas in the design cards\n"
 	if output := tailed(secrets, ordinary); output != ordinary {
 		t.Fatalf("output: %q", output)
 	}

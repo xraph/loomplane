@@ -116,31 +116,83 @@ func sensitiveParts(value string) []string {
 // names, such as postgres.
 const urlTokenUser = 16
 
-// secretQueryKeys are words in a query parameter's name that make its
-// value a secret.
-var secretQueryKeys = []string{"token", "key", "secret", "password", "passwd", "pwd", "auth", "signature", "sig", "credential"}
+// secretQueryWords are words of a query parameter's name that make its
+// value a secret, such as api_key, access-token or X-Amz-Signature.
+var secretQueryWords = map[string]bool{
+	"token": true, "key": true, "secret": true, "password": true, "passwd": true, "pwd": true, "pass": true,
+	"auth": true, "signature": true, "sig": true, "credential": true, "credentials": true,
+}
+
+// secretQueryNames are whole parameter names, lower case without
+// separators, that are secrets though no word of them says so alone.
+var secretQueryNames = map[string]bool{
+	"apikey": true, "accesstoken": true, "authtoken": true, "refreshtoken": true, "idtoken": true, "sessiontoken": true,
+	"clientsecret": true, "secretkey": true, "privatekey": true, "accesskey": true, "sslpassword": true,
+}
+
+// plainQueryNames are parameters whose values aren't secrets though a
+// word of their name says otherwise: file paths and settings.
+var plainQueryNames = map[string]bool{
+	"sslkey": true, "sslcert": true, "sslrootcert": true, "sslcrl": true,
+	"authsource": true, "authmechanism": true, "authmechanismproperties": true,
+}
 
 // secretQueryValue reports whether a query value is a secret: any value
-// of a parameter whose name says so, such as api_key or access_token, and
-// any other of eight bytes or more that looks like a token rather than a
-// word. A word, such as verify-full or a service's name, is only lower
-// case letters and - _ . and a value with a space in it isn't a token.
+// of a parameter whose name says so (secretQueryWords, secretQueryNames),
+// and any other of eight bytes or more that looks like a token: letters
+// and digits both, with no space, and no - or : such as a region
+// (us-east-1) or a time (2024-01-01T00:00:00Z) has.
 func secretQueryValue(key, value string) bool {
 	if value == "" {
 		return false
 	}
-	key = strings.ToLower(key)
-	for _, word := range secretQueryKeys {
-		if strings.Contains(key, word) {
-			return true
-		}
-	}
-	if len(value) < 8 || strings.ContainsAny(value, " \t\r\n") {
+	words := queryKeyWords(key)
+	name := strings.Join(words, "")
+	if plainQueryNames[name] {
 		return false
 	}
-	return strings.ContainsFunc(value, func(r rune) bool {
-		return ('0' <= r && r <= '9') || ('A' <= r && r <= 'Z')
-	})
+	if secretQueryNames[name] || slices.ContainsFunc(words, func(w string) bool { return secretQueryWords[w] }) {
+		return true
+	}
+	if len(value) < 8 || strings.ContainsAny(value, " \t\r\n-:") {
+		return false
+	}
+	letter := strings.ContainsFunc(value, func(r rune) bool { return ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') })
+	digit := strings.ContainsFunc(value, func(r rune) bool { return '0' <= r && r <= '9' })
+	return letter && digit
+}
+
+// queryKeyWords splits a parameter's name into lower case words at
+// anything but a letter or digit, and where camelCase turns upper:
+// "X-Amz-Signature" is x amz signature, "apiKey" is api key.
+func queryKeyWords(key string) []string {
+	var words []string
+	var word []rune
+	flush := func() {
+		if len(word) > 0 {
+			words = append(words, strings.ToLower(string(word)))
+			word = word[:0]
+		}
+	}
+	prevLower := false
+	for _, r := range key {
+		switch {
+		case 'A' <= r && r <= 'Z':
+			if prevLower {
+				flush()
+			}
+			word = append(word, r)
+			prevLower = false
+		case ('a' <= r && r <= 'z') || ('0' <= r && r <= '9'):
+			word = append(word, r)
+			prevLower = true
+		default:
+			flush()
+			prevLower = false
+		}
+	}
+	flush()
+	return words
 }
 
 // redactPieces replaces each run of text covered by pieces with
