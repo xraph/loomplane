@@ -22,9 +22,9 @@ import (
 
 // requestMessage is the documented message a request signature covers, built
 // here from scratch so the test doesn't lean on SignRequest.
-func requestMessage(method, path, timestamp string, body []byte) []byte {
+func requestMessage(method, uri, timestamp string, body []byte) []byte {
 	sum := sha256.Sum256(body)
-	return []byte("loomplane/dbgateway/request/v1\x00" + method + "\n" + path + "\n" + timestamp + "\n" + hex.EncodeToString(sum[:]))
+	return []byte("loomplane/dbgateway/request/v1\x00" + method + "\n" + uri + "\n" + timestamp + "\n" + hex.EncodeToString(sum[:]))
 }
 
 // checkSignedRequest reports why req was not signed by pub as gateway id, or
@@ -45,7 +45,7 @@ func checkSignedRequest(req *http.Request, body []byte, pub ed25519.PublicKey, i
 	if err != nil {
 		return "Loomplane-Signature is not base64"
 	}
-	if !ed25519.Verify(pub, requestMessage(req.Method, req.URL.Path, ts, body), sig) {
+	if !ed25519.Verify(pub, requestMessage(req.Method, req.RequestURI, ts, body), sig) {
 		return "signature does not verify"
 	}
 	return ""
@@ -75,16 +75,19 @@ func TestSignRequestVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Loomplane-Signature is not base64: %v", err)
 	}
-	// The query isn't signed; the path is.
-	msg := requestMessage("POST", "/api/v1/db-gateways/gw-1/hold", ts, body)
+	// The whole request URI is signed: the path and the query.
+	const uri = "/api/v1/db-gateways/gw-1/hold?x=1"
+	msg := requestMessage("POST", uri, ts, body)
 	if !ed25519.Verify(pub, msg, sig) {
 		t.Fatal("signature does not verify over the documented message")
 	}
 	for name, other := range map[string][]byte{
-		"another body":   requestMessage("POST", "/api/v1/db-gateways/gw-1/hold", ts, []byte("{}")),
-		"another method": requestMessage("GET", "/api/v1/db-gateways/gw-1/hold", ts, body),
-		"another path":   requestMessage("POST", "/api/v1/db-gateways/gw-2/hold", ts, body),
-		"another time":   requestMessage("POST", "/api/v1/db-gateways/gw-1/hold", "1", body),
+		"another body":   requestMessage("POST", uri, ts, []byte("{}")),
+		"another method": requestMessage("GET", uri, ts, body),
+		"another path":   requestMessage("POST", "/api/v1/db-gateways/gw-2/hold?x=1", ts, body),
+		"another query":  requestMessage("POST", "/api/v1/db-gateways/gw-1/hold?x=2", ts, body),
+		"query dropped":  requestMessage("POST", "/api/v1/db-gateways/gw-1/hold", ts, body),
+		"another time":   requestMessage("POST", uri, "1", body),
 	} {
 		if ed25519.Verify(pub, other, sig) {
 			t.Errorf("signature also verifies over %s", name)

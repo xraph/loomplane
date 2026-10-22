@@ -185,8 +185,6 @@ func (c Config) validate() error {
 	switch {
 	case !gatewayIDPattern.MatchString(c.GatewayID):
 		return errors.New("run: bad gateway ID")
-	case c.ControlURL == "":
-		return errors.New("run: no control URL")
 	case len(c.SigningKey) != ed25519.PrivateKeySize:
 		return errors.New("run: bad signing key")
 	case c.SealingKey == nil || c.SealingKey.Curve() != ecdh.X25519():
@@ -199,6 +197,16 @@ func (c Config) validate() error {
 		return errors.New("run: no state directory")
 	case c.Port < 0 || c.Port > 65535:
 		return errors.New("run: bad port")
+	}
+	// The same rules as ConfigFromEnv, so a Config built in code can't send
+	// signed requests over plain http to another host.
+	if _, err := parseControlURL(c.ControlURL); err != nil {
+		return fmt.Errorf("run: control URL: %w", err)
+	}
+	for _, k := range c.TrustKeys {
+		if len(k.PublicKey) != ed25519.PublicKeySize {
+			return errors.New("run: every trust key is a 32-byte Ed25519 key")
+		}
 	}
 	return nil
 }
@@ -258,6 +266,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) error {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
+	cfg.ControlURL, _ = parseControlURL(cfg.ControlURL) // validated above
 	opts = opts.withDefaults()
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		return fmt.Errorf("run: state directory: %w", err)

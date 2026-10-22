@@ -203,6 +203,9 @@ type runSetup struct {
 	trust TrustKey
 	priv  ed25519.PrivateKey
 	pub   ed25519.PublicKey // the gateway's request key
+
+	// minBackoff and maxBackoff override the short test timings when set.
+	minBackoff, maxBackoff time.Duration
 }
 
 func newRunSetup(t *testing.T, controlURL string) runSetup {
@@ -259,6 +262,9 @@ func (s runSetup) start(t *testing.T) *startedRun {
 		listener: ln, store: r.store, routerHook: func(rt *Router) { r.router.Store(rt) },
 		minBackoff: 2 * time.Millisecond, maxBackoff: 10 * time.Millisecond,
 		reportEvery: 20 * time.Millisecond, pollGap: 2 * time.Millisecond,
+	}
+	if s.minBackoff != 0 {
+		opts.minBackoff, opts.maxBackoff = s.minBackoff, s.maxBackoff
 	}
 	go func() {
 		r.err = run(ctx, s.cfg, opts)
@@ -371,26 +377,27 @@ func TestRunIgnoresUntrustedLastGood(t *testing.T) {
 
 func TestRunRejectsBadSnapshot(t *testing.T) {
 	otherTrust, otherPriv := newCurrentTrustKey(t)
+	// Each case is a refusable version 2, served after version 1 was applied.
 	for name, mk := range map[string]func(s runSetup, t *testing.T) Snapshot{
 		"unsigned": func(s runSetup, t *testing.T) Snapshot {
-			snap := s.snapshot(t, 3)
+			snap := s.snapshot(t, 2)
 			snap.Signature, snap.KeyID = nil, ""
 			return snap
 		},
 		"signed by an untrusted key": func(s runSetup, t *testing.T) Snapshot {
-			snap, err := SignSnapshot(s.snapshot(t, 3), otherPriv, otherTrust.ID())
+			snap, err := SignSnapshot(s.snapshot(t, 2), otherPriv, otherTrust.ID())
 			if err != nil {
 				t.Fatal(err)
 			}
 			return snap
 		},
 		"tampered": func(s runSetup, t *testing.T) Snapshot {
-			snap := s.snapshot(t, 3)
+			snap := s.snapshot(t, 2)
 			snap.Routes[0].Backend.Host = "10.9.9.9"
 			return snap
 		},
 		"for another gateway": func(s runSetup, t *testing.T) Snapshot {
-			other := s.snapshot(t, 3)
+			other := s.snapshot(t, 2)
 			other.GatewayID = "gw-2"
 			snap, err := SignSnapshot(other, s.priv, s.trust.ID())
 			if err != nil {
@@ -401,25 +408,72 @@ func TestRunRejectsBadSnapshot(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newRunSetup(t, "")
+			// Long enough that a tight loop is easy to tell from a backoff.
+			s.minBackoff, s.maxBackoff = 20*time.Millisecond, 40*time.Millisecond
 			ctrl := newFakeControl(t, "gw-1", s.pub)
 			s.cfg.ControlURL = ctrl.srv.URL
-			snap := mk(s, t)
-			ctrl.snapshot = func(uint64) *Snapshot { return &snap }
+			good, bad := s.snapshot(t, 1), mk(s, t)
+			ctrl.snapshot = func(after uint64) *Snapshot {
+				if after < 1 {
+					return &good
+				}
+				return &bad
+			}
 			r := s.start(t)
 
-			// Wait for several polls, so the bad snapshot has been seen,
-			// refused and asked for again.
-			waitUntil(t, "three polls", func() bool { return ctrl.pollCount() >= 3 })
-			if cur := r.store.Current(); cur != nil {
-				t.Fatalf("Current() = version %d, want it unchanged (none)", cur.Version)
+			// Version 1 is applied and saved; version 2 is then refused.
+			waitUntil(t, "version 1 to be saved", func() bool {
+				saved, err := LoadLastGood(filepath.Join(r.dir, "last-good"), s.cfg.SealingKey)
+				return err == nil && saved.Version == 1
+			})
+			waitUntil(t, "version 2 to be polled for", func() bool { return ctrl.pollCount() >= 3 })
+
+			// A refused snapshot is not asked for again faster than the
+			// backoff allows. Gaps are at least minBackoff, so a window of
+			// w holds at most w/minBackoff polls (plus one at the edge).
+			const window = 400 * time.Millisecond
+			before := ctrl.pollCount()
+			time.Sleep(window)
+			polls := ctrl.pollCount() - before
+			if limit := int(window/s.minBackoff) + 1; polls > limit {
+				t.Errorf("%d polls in %v after a refused snapshot, want at most %d", polls, window, limit)
 			}
-			if got := r.healthz(); got != http.StatusServiceUnavailable {
-				t.Errorf("healthz = %d, want 503", got)
+			if polls == 0 {
+				t.Error("the gateway stopped polling after a refused snapshot")
 			}
-			if _, err := os.Stat(filepath.Join(r.dir, "last-good")); !errors.Is(err, fs.ErrNotExist) {
-				t.Errorf("a refused snapshot was saved as last-good: %v", err)
+
+			if cur := r.store.Current(); cur == nil || cur.Version != 1 {
+				t.Fatalf("Current() = %+v, want version 1 unchanged", cur)
+			}
+			if got := r.healthz(); got != http.StatusOK {
+				t.Errorf("healthz = %d, want 200 (version 1 is still served)", got)
+			}
+			saved, err := LoadLastGood(filepath.Join(r.dir, "last-good"), s.cfg.SealingKey)
+			if err != nil || saved.Version != 1 {
+				t.Errorf("last-good = version %d, %v; want version 1", saved.Version, err)
 			}
 		})
+	}
+}
+
+func TestRunRefusesBadFirstSnapshot(t *testing.T) {
+	s := newRunSetup(t, "")
+	ctrl := newFakeControl(t, "gw-1", s.pub)
+	s.cfg.ControlURL = ctrl.srv.URL
+	bad := s.snapshot(t, 3)
+	bad.Signature, bad.KeyID = nil, ""
+	ctrl.snapshot = func(uint64) *Snapshot { return &bad }
+	r := s.start(t)
+
+	waitUntil(t, "three polls", func() bool { return ctrl.pollCount() >= 3 })
+	if cur := r.store.Current(); cur != nil {
+		t.Fatalf("Current() = version %d, want none", cur.Version)
+	}
+	if got := r.healthz(); got != http.StatusServiceUnavailable {
+		t.Errorf("healthz = %d, want 503", got)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "last-good")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a refused snapshot was saved as last-good: %v", err)
 	}
 }
 
@@ -599,13 +653,22 @@ func TestHealthzFollowsReadinessAndDrain(t *testing.T) {
 func TestRunRejectsBadConfig(t *testing.T) {
 	s := newRunSetup(t, "http://127.0.0.1:1")
 	for name, mut := range map[string]func(*Config){
-		"no id":          func(c *Config) { c.GatewayID = "" },
-		"no control url": func(c *Config) { c.ControlURL = "" },
-		"no signing key": func(c *Config) { c.SigningKey = nil },
-		"no sealing key": func(c *Config) { c.SealingKey = nil },
-		"no trust keys":  func(c *Config) { c.TrustKeys = nil },
-		"no suffix":      func(c *Config) { c.Suffix = "" },
-		"no state dir":   func(c *Config) { c.StateDir = "" },
+		"no id":            func(c *Config) { c.GatewayID = "" },
+		"no control url":   func(c *Config) { c.ControlURL = "" },
+		"no signing key":   func(c *Config) { c.SigningKey = nil },
+		"no sealing key":   func(c *Config) { c.SealingKey = nil },
+		"no trust keys":    func(c *Config) { c.TrustKeys = nil },
+		"no suffix":        func(c *Config) { c.Suffix = "" },
+		"no state dir":     func(c *Config) { c.StateDir = "" },
+		"http control url": func(c *Config) { c.ControlURL = "http://loomplane.example.com" },
+		"control url with a password": func(c *Config) {
+			c.ControlURL = "https://user:pw@loomplane.example.com"
+		},
+		"control url with a query":     func(c *Config) { c.ControlURL = "https://loomplane.example.com/?a=1" },
+		"control url without a scheme": func(c *Config) { c.ControlURL = "loomplane.example.com" },
+		"short trust key": func(c *Config) {
+			c.TrustKeys = []TrustKey{{PublicKey: make([]byte, 8), NotAfter: time.Now().Add(time.Hour)}}
+		},
 	} {
 		cfg := s.cfg
 		mut(&cfg)

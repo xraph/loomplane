@@ -40,10 +40,11 @@ const (
 
 // SignRequest signs req for the control plane and sets its Loomplane-Gateway,
 // Loomplane-Timestamp (unix seconds) and Loomplane-Signature (base64) headers.
-// The signature is Ed25519 over the request context, the method, the path
-// without its query, the timestamp and the hex SHA-256 of body, with a
-// newline between each of the last four. body is the bytes the request will
-// send, or nil.
+// The signature is Ed25519 over the request context, the method, the request
+// URI, the timestamp and the hex SHA-256 of body, with a newline between each
+// of the last four. The request URI is the escaped path plus "?" and the raw
+// query when there is one, which is what a server reads as r.RequestURI, so
+// the query is covered too. body is the bytes the request will send, or nil.
 func SignRequest(req *http.Request, body []byte, id string, key ed25519.PrivateKey, now time.Time) {
 	method := req.Method
 	if method == "" {
@@ -51,7 +52,7 @@ func SignRequest(req *http.Request, body []byte, id string, key ed25519.PrivateK
 	}
 	ts := strconv.FormatInt(now.Unix(), 10)
 	sum := sha256.Sum256(body)
-	msg := requestContext + method + "\n" + req.URL.Path + "\n" + ts + "\n" + hex.EncodeToString(sum[:])
+	msg := requestContext + method + "\n" + req.URL.RequestURI() + "\n" + ts + "\n" + hex.EncodeToString(sum[:])
 	req.Header.Set(headerGateway, id)
 	req.Header.Set(headerTimestamp, ts)
 	req.Header.Set(headerSignature, base64.StdEncoding.EncodeToString(ed25519.Sign(key, []byte(msg))))
