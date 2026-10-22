@@ -31,6 +31,11 @@ function view(protection: Protection): ProtectionView {
   return { protection, label: protectionLabels[protection] }
 }
 
+/** isRecord reports whether a value is a JSON object: not null, not an array. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 /** bindingConfig is a binding's config as an object, whether it arrived as JSON text or already parsed. */
 export function bindingConfig(
   binding: Binding
@@ -40,27 +45,27 @@ export function bindingConfig(
       typeof binding.config === "string"
         ? JSON.parse(binding.config)
         : binding.config
-    return typeof config === "object" &&
-      config !== null &&
-      !Array.isArray(config)
-      ? (config as Record<string, unknown>)
-      : undefined
+    return isRecord(config) ? config : undefined
   } catch {
     return undefined
   }
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
-}
-
 /**
- * protectionOf says what recovery keeps of a binding, the same way the API
- * decides it. A component keeps nothing unless it's rebuilt, a composed
- * resource's parent keeps nothing, and a database is native where recovery
- * supports its engine on that target. An external dependency has no
- * binding, so its choice says it. Undefined means there is nothing to say:
- * the dependency is off, or what it points at isn't deployed.
+ * protectionOf says what recovery keeps of a binding. It follows the API's
+ * recovery.Protection (a component keeps nothing unless it's rebuilt, a
+ * composed resource's parent keeps nothing, a database is native where
+ * recovery supports it on that target), with these differences:
+ *
+ *   - native is decided for the five built-in engine kinds only. The API
+ *     also maps engine families, such as an engine registered as postgres
+ *     under another name, which this doesn't know about.
+ *   - native reads the binding's provider, as recoverySelection always has,
+ *     not the provider in its config.
+ *   - an external dependency has no binding, so its choice stands in for
+ *     the API's synthetic external config.
+ *   - it returns undefined where the API has nothing to decide: the
+ *     dependency is off, or what it points at isn't deployed.
  */
 export function protectionOf(
   binding: Binding | undefined,
@@ -72,14 +77,14 @@ export function protectionOf(
   if (!config) return undefined
   if (config.provider === "external" || binding.provider === "external")
     return view("external")
-  if (isObject(config.component))
+  if (isRecord(config.component))
     return view(
       config.component.protection === "rebuildable" ? "rebuildable" : "none"
     )
-  if (isObject(config.composition)) return view("none")
+  if (isRecord(config.composition)) return view("none")
   if (
     isDatabaseKind(config.kind) &&
-    isObject(config.catalog) &&
+    isRecord(config.catalog) &&
     (binding.provider === "server" ||
       (binding.provider === "kubernetes" && config.kind === "postgres"))
   )

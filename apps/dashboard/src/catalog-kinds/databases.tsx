@@ -5,11 +5,15 @@ import {
   type CatalogKindModule,
   type CatalogPanel,
 } from "@/lib/catalog-kinds"
+import { protectionOf } from "@/lib/service-recovery"
 import { ServiceRecovery } from "@/pages/service-catalog"
 
 const recovery: CatalogPanel = {
   id: "recovery",
   title: "Recovery",
+  // Only where Loomplane backs the engine up on its target: not Redis or
+  // Valkey on Kubernetes, and not a managed or external database.
+  when: (props) => protectionOf(props.binding)?.protection === "native",
   component: (props) => (
     <ServiceRecovery
       project={props.projectId}

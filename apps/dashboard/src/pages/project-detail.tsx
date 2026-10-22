@@ -44,6 +44,7 @@ import {
 } from "@/components/architecture"
 import { DeployTab } from "@/components/deploy"
 import { ProductIcon } from "@/components/product-icon"
+import { QueryError } from "@/components/query-error"
 import { EnvironmentCards } from "@/components/environment-manager"
 import { Page, PageHeading } from "@/components/page"
 import { ProjectStylePopover } from "@/components/project-style-picker"
@@ -545,31 +546,53 @@ function Body({
 
 /**
  * Resources lists what runs as a resource in each environment, each row
- * opening its service page. It shows nothing until something is deployed.
+ * opening its service page. It shows nothing once every environment has
+ * answered with nothing deployed; an environment that couldn't be read or
+ * can't be seen says so, so it never reads as empty.
  */
-function Resources({
+export function Resources({
   project,
   environments,
 }: {
   project: Project
   environments?: Environment[]
 }) {
+  const list = useMemo(() => environments ?? [], [environments])
   const args = useMemo(
     () =>
-      (environments ?? []).map((e) => ({
+      list.map((e) => ({
         path: { id: project.id },
         query: { environment: e.name },
       })),
-    [environments, project.id]
+    [list, project.id]
   )
-  const { states } = useQueries(useBindingsList, args)
-  const rows = (environments ?? []).flatMap((environment, i) =>
+  const { states, refetch } = useQueries(useBindingsList, args)
+  const rows = list.flatMap((environment, i) =>
     catalogResources(states[i]?.data?.bindings ?? []).map((binding) => ({
       environment,
       binding,
     }))
   )
-  if (rows.length === 0) return null
+  const failures = list.flatMap((environment, i) => {
+    const state = states[i]
+    return state?.status === "error"
+      ? [{ environment, error: state.error }]
+      : []
+  })
+  const forbidden = (error: unknown) => [401, 403].includes(statusOf(error))
+  const denied = failures.filter((f) => forbidden(f.error))
+  const failed = failures.filter((f) => !forbidden(f.error))
+  const loading = !environments || states.some((s) => s?.status === "pending")
+  if (rows.length === 0 && failures.length === 0)
+    return loading ? (
+      <Skeleton
+        role="status"
+        aria-label="Loading resources"
+        className="h-12 w-full rounded-xl"
+      />
+    ) : null
+  const names = (items: { environment: Environment }[]) =>
+    items.map((f) => f.environment.name).join(", ")
   return (
     <section aria-label="Resources" className="grid gap-2">
       <h2 className="text-[15px] font-semibold">
@@ -578,16 +601,30 @@ function Resources({
           {rows.length}
         </span>
       </h2>
-      <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
-        {rows.map(({ environment, binding }) => (
-          <ResourceRow
-            key={`${environment.id}:${binding.id}`}
-            project={project}
-            environment={environment}
-            binding={binding}
-          />
-        ))}
-      </div>
+      {failed.length > 0 && (
+        <QueryError
+          error={failed[0].error}
+          fallback={`What runs in ${names(failed)} couldn't be loaded.`}
+          retry={refetch}
+        />
+      )}
+      {denied.length > 0 && (
+        <p className="text-[13px] text-muted-foreground">
+          Your role can&apos;t see what runs in {names(denied)}.
+        </p>
+      )}
+      {rows.length > 0 && (
+        <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
+          {rows.map(({ environment, binding }) => (
+            <ResourceRow
+              key={`${environment.id}:${binding.id}`}
+              project={project}
+              environment={environment}
+              binding={binding}
+            />
+          ))}
+        </div>
+      )}
     </section>
   )
 }

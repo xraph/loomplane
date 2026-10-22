@@ -540,7 +540,9 @@ function DatabaseDeployment({
 /**
  * ServiceRecovery is a project's database recovery. It opens on production
  * and the first database there, unless environment (an environment ID) and
- * resource choose where it starts; both can still be changed.
+ * resource choose where it starts; both can still be changed. A chosen
+ * environment or resource that isn't there says so rather than opening on
+ * another one.
  */
 export function ServiceRecovery({
   project,
@@ -589,9 +591,16 @@ function PreselectedRecovery({
       />
     )
   if (!environments.data) return <p role="status">Loading recovery state…</p>
-  const name =
-    environments.data.environments.find((e) => e.id === environment)?.name ??
-    "production"
+  const name = environments.data.environments.find(
+    (e) => e.id === environment
+  )?.name
+  if (!name)
+    return (
+      <CatalogEmpty
+        title="This environment isn't in the project"
+        description="It may have been deleted, so there is no recovery to show for it."
+      />
+    )
   return (
     <Recovery
       key={`${environment}:${resource}`}
@@ -718,25 +727,42 @@ function Recovery({
     )
   )
     return <p role="status">Loading recovery state…</p>
+  const environmentSelect = (
+    <Select
+      value={environment}
+      disabled={busy}
+      onValueChange={(value) => setEnvironment(value ?? "production")}
+    >
+      <SelectTrigger aria-label="Recovery environment" className="w-44">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {environments.data?.environments.map((e) => (
+          <SelectItem key={e.id} value={e.name}>
+            {e.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+  // A resource chosen by the caller that has no recovery here isn't
+  // swapped for another database.
+  if (initialResource && !resources.includes(resource))
+    return (
+      <div className="grid min-w-0 gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {environmentSelect}
+        </div>
+        <CatalogEmpty
+          title={`No recovery for ${resource} in ${environment}`}
+          description="Loomplane doesn't back it up in this environment, and it has no backups kept here. Choose the environment where it runs."
+        />
+      </div>
+    )
   return (
     <div className="grid min-w-0 gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Select
-          value={environment}
-          disabled={busy}
-          onValueChange={(value) => setEnvironment(value ?? "production")}
-        >
-          <SelectTrigger aria-label="Recovery environment" className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {environments.data?.environments.map((e) => (
-              <SelectItem key={e.id} value={e.name}>
-                {e.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {environmentSelect}
         <Button
           size="sm"
           variant="outline"

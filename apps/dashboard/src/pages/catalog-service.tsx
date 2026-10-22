@@ -52,6 +52,7 @@ import { formatDate } from "@/lib/format"
 import { Link } from "@/lib/router"
 import {
   bindingConfig,
+  isRecord,
   protectionOf,
   type DependencyChoice,
 } from "@/lib/service-recovery"
@@ -105,6 +106,12 @@ export function CatalogService({
           />
         ) : !environments.data ? (
           <Loading resource={resource} />
+        ) : list.length === 0 ? (
+          <Missing
+            projectId={projectId}
+            title="This project has no environments yet"
+            description="Nothing can run until it has one. The project's page shows its environments once they're set up."
+          />
         ) : !environment ? (
           <Missing
             projectId={projectId}
@@ -546,9 +553,7 @@ function versionOf(
   const raw = bindingConfig(binding)
   const catalog = raw?.catalog
   if (
-    typeof catalog === "object" &&
-    catalog !== null &&
-    "product_version" in catalog &&
+    isRecord(catalog) &&
     typeof catalog.product_version === "string" &&
     catalog.product_version
   )

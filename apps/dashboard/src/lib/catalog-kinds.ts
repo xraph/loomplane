@@ -7,7 +7,11 @@ import type { ComponentType } from "react"
 
 import type { Binding } from "@/client/forge/loomplane/types"
 import type { ProductKey } from "@/components/product-logos"
-import { bindingConfig, type DependencyChoice } from "@/lib/service-recovery"
+import {
+  bindingConfig,
+  isRecord,
+  type DependencyChoice,
+} from "@/lib/service-recovery"
 
 /** The part of a resource binding's config the service page reads. */
 export type ResourceConfigView = {
@@ -124,10 +128,6 @@ export function catalogKinds(): CatalogKindModule[] {
   return [...(registered?.values() ?? [])]
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
 /**
  * parseResourceConfig reads a resource binding's config, or returns
  * undefined when it has no kind and provider. A composition or component
@@ -147,14 +147,14 @@ export function parseResourceConfig(
   const { composition, component } = config
   if (
     composition !== undefined &&
-    !(isObject(composition) && typeof composition.kind === "string")
+    !(isRecord(composition) && typeof composition.kind === "string")
   )
     delete out.composition
   if (
     component !== undefined &&
     !(
-      isObject(component) &&
-      isObject(component.component) &&
+      isRecord(component) &&
+      isRecord(component.component) &&
       typeof component.component.name === "string"
     )
   )
@@ -167,9 +167,9 @@ export function dependencyChoices(
   config: ResourceConfigView
 ): [string, DependencyChoice][] {
   const deps = config.composition?.dependencies
-  if (!isObject(deps)) return []
+  if (!isRecord(deps)) return []
   return Object.entries(deps)
-    .filter((entry): entry is [string, DependencyChoice] => isObject(entry[1]))
+    .filter((entry): entry is [string, DependencyChoice] => isRecord(entry[1]))
     .sort(([a], [b]) => a.localeCompare(b))
 }
 

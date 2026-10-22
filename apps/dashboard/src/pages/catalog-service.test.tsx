@@ -77,13 +77,14 @@ const environments = [
 function binding(
   name: string,
   config: Record<string, unknown>,
-  environment = "env_prod"
+  environment = "env_prod",
+  provider = "server"
 ) {
   return {
     id: `binding-${name}`,
     name,
     subject: "resource",
-    provider: "server",
+    provider,
     environment_id: environment,
     drift: "",
     drift_message: "",
@@ -138,15 +139,21 @@ const databases = [
 type Fixture = {
   bindings?: Record<string, unknown[]>
   status?: number
+  projectEnvironments?: { id: string; name: string }[]
 }
 
-function serve({ bindings = {}, status = 200 }: Fixture) {
+function serve({
+  bindings = {},
+  status = 200,
+  projectEnvironments = environments,
+}: Fixture) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost")
     let body: unknown = {}
     if (url.pathname.endsWith("/projects/p"))
       body = { id: "p", name: "Shop", repositories: [] }
-    if (url.pathname.endsWith("/environments")) body = { environments }
+    if (url.pathname.endsWith("/environments"))
+      body = { environments: projectEnvironments }
     if (url.pathname.endsWith("/bindings")) {
       if (status !== 200)
         return new Response(
@@ -272,4 +279,38 @@ test("denied access and a failed request read differently", async () => {
   expect(
     screen.queryByText("You can't see this service")
   ).not.toBeInTheDocument()
+})
+
+test("recovery stays off databases Loomplane doesn't back up there", async () => {
+  serve({
+    bindings: {
+      production: [
+        binding(
+          "cache",
+          {
+            kind: "valkey",
+            provider: "kubernetes",
+            catalog: { id: "valkey-8.1-kubernetes" },
+          },
+          "env_prod",
+          "kubernetes"
+        ),
+        binding("db", {
+          kind: "postgres",
+          provider: "server",
+          catalog: { id: "postgresql-17" },
+        }),
+      ],
+    },
+  })
+  open("cache", "env_prod")
+  expect(await tabNames()).toEqual(["Overview"])
+})
+
+test("a project without environments says so", async () => {
+  serve({ projectEnvironments: [] })
+  open("app", "")
+  expect(
+    await screen.findByText("This project has no environments yet")
+  ).toBeInTheDocument()
 })
