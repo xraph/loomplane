@@ -5677,6 +5677,58 @@
         }
       }
     },
+    "/api/v1/projects/{projectId}/domain-routes/{routeId}/ttl": {
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainRoutes.updateTTL",
+        "operationId": "domainRoutes.updateTTL",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteTTLInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudinfraRoute"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{projectId}/domain-routes/{routeId}/verify": {
       "post": {
         "tags": [
@@ -7517,6 +7569,9 @@
           "connection_id": {
             "type": "string"
           },
+          "default": {
+            "type": "boolean"
+          },
           "environment_id": {
             "type": "string"
           },
@@ -7552,6 +7607,9 @@
           },
           "connection_id": {
             "type": "string"
+          },
+          "default": {
+            "type": "boolean"
           },
           "environment_id": {
             "type": "string"
@@ -10886,11 +10944,17 @@
           "after_assignment": {
             "$ref": "#/components/schemas/Assignment"
           },
+          "after_default": {
+            "$ref": "#/components/schemas/DefaultPlacement"
+          },
           "before": {
             "$ref": "#/components/schemas/Target"
           },
           "before_assignment": {
             "$ref": "#/components/schemas/Assignment"
+          },
+          "before_default": {
+            "$ref": "#/components/schemas/DefaultPlacement"
           },
           "blockers": {
             "type": "array",
@@ -12218,6 +12282,9 @@
           "environment_id": {
             "type": "string"
           },
+          "external_ttl_seconds": {
+            "type": "integer"
+          },
           "hostname": {
             "type": "string"
           },
@@ -12248,6 +12315,9 @@
           },
           "environment_id": {
             "type": "string"
+          },
+          "external_ttl_seconds": {
+            "type": "integer"
           },
           "hostname": {
             "type": "string"
@@ -12339,6 +12409,21 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "RouteTTLInputBody": {
+        "type": "object",
+        "required": [
+          "revision",
+          "external_ttl_seconds"
+        ],
+        "properties": {
+          "external_ttl_seconds": {
+            "type": "integer"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -13519,11 +13604,17 @@
           "after": {
             "$ref": "#/components/schemas/Target"
           },
+          "after_default": {
+            "$ref": "#/components/schemas/DefaultPlacement"
+          },
           "attempt": {
             "type": "integer"
           },
           "before": {
             "$ref": "#/components/schemas/Target"
+          },
+          "before_default": {
+            "$ref": "#/components/schemas/DefaultPlacement"
           },
           "cloud_id": {
             "type": "string"
@@ -13534,6 +13625,9 @@
           },
           "created_by": {
             "type": "string"
+          },
+          "default": {
+            "type": "boolean"
           },
           "environments": {
             "type": "array",
