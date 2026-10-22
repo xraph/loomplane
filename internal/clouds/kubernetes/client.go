@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/version"
+	"k8s.io/client-go/dynamic"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -25,6 +26,8 @@ var ErrRejected = errors.New("the cluster refused the credential")
 type Client struct {
 	Config *Config
 	Kube   kubeclient.Interface
+	// Dynamic reaches cert-manager objects, which have no typed client here.
+	Dynamic dynamic.Interface
 }
 
 // Result contains only safe metadata and missing permissions.
@@ -51,12 +54,17 @@ func New(cfg *Config) (*Client, error) {
 		httpClient.CloseIdleConnections()
 		return nil, fmt.Errorf("create Kubernetes client: %w", err)
 	}
+	dynamicClient, err := dynamic.NewForConfigAndClient(rc, httpClient)
+	if err != nil {
+		httpClient.CloseIdleConnections()
+		return nil, fmt.Errorf("create Kubernetes client: %w", err)
+	}
 	copyConfig := *cfg
 	copyConfig.REST, copyConfig.Details = rc, maps.Clone(cfg.Details)
 	if copyConfig.Details == nil {
 		copyConfig.Details = map[string]string{}
 	}
-	return &Client{Config: &copyConfig, Kube: client}, nil
+	return &Client{Config: &copyConfig, Kube: client, Dynamic: dynamicClient}, nil
 }
 
 // Check validates namespace access and each lifecycle permission. Optional
@@ -137,6 +145,15 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	}
 	if err := c.checkPostgresPermissions(ctx, out); err != nil {
 		return nil, err
+	}
+	// Routes are optional, so what they need is a detail and never Missing.
+	routes, err := c.CheckRoutePrerequisites(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out.Details["route_prerequisites"] = "ready"
+	if !routes.Ready {
+		out.Details["route_prerequisites"] = "missing: " + strings.Join(routes.Missing, ", ")
 	}
 	return out, nil
 }
