@@ -92,3 +92,25 @@ func TestAuditIsOptional(t *testing.T) {
 	}
 	svc.RecordCheck(t.Context(), admin, CheckInput{DSN: testDSN}, OutcomeSuccess)
 }
+
+func TestDSNAddressNamesNothingWhenItsUserInfoIsAmbiguous(t *testing.T) {
+	for dsn, want := range map[string]string{
+		"postgres://u:hunter2@db.example:6543/app?sslmode=require": "db.example:6543",
+		"rediss://:hunter2@cache.example/0":                        "cache.example:6379",
+		// An unescaped ?, / or # in a password ends the address early:
+		// what's before it would read as user:digits for host:port.
+		"postgres://admin:9999?x@db.example/app":         "",
+		"postgres://admin:9999/x@db.example/app":         "",
+		"postgres://admin:9999#x@db.example/app":         "",
+		"postgres://admin:pa/ss@db.example/app":          "",
+		"postgres://u:p@ss/word@db.example/app":          "",
+		"postgres://u:hunter2@db.example/app?x=a@b":      "",
+		"postgres://u:hunter2@db.example/app#a@b":        "",
+		"postgres://db.example/app?sslmode=disable":      "db.example:5432",
+		"host=db.example user=u password=hunter2 dbname": "",
+	} {
+		if got := dsnAddress(dsn); got != want {
+			t.Fatalf("%s: got %q, want %q", dsn, got, want)
+		}
+	}
+}

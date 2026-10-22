@@ -81,10 +81,18 @@ func outcomeOf(err error) string {
 
 // dsnAddress is the host:port a DSN names, with its scheme's port when it
 // names none, or "" for a DSN that isn't a URL with a host. It never
-// holds more of the DSN: no user, password, path or query.
+// holds more of the DSN: no user, password, path or query. An @ where
+// the parsed address has no user info, or in its path, query or
+// fragment, means a password with an unescaped ?, / or # ended the
+// address early, so what parsed as host:port may be user:password: it
+// names nothing then.
 func dsnAddress(dsn string) string {
-	u, err := url.Parse(strings.TrimSpace(dsn))
+	dsn = strings.TrimSpace(dsn)
+	u, err := url.Parse(dsn)
 	if err != nil || u.Opaque != "" || u.Hostname() == "" {
+		return ""
+	}
+	if (u.User == nil && strings.Contains(dsn, "@")) || strings.Contains(u.Path+u.RawPath+u.RawQuery+u.Fragment+u.RawFragment, "@") {
 		return ""
 	}
 	port := u.Port()
