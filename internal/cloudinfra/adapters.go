@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -24,15 +25,26 @@ func NewAdapters() *Adapters {
 	return &Adapters{servers: map[string]provider.ServerAdapter{}, dns: map[string]provider.DNSAdapter{}, registrars: map[string]provider.DomainRegistrar{}, capabilities: map[string][]provider.InfrastructureCapability{}}
 }
 
+// Endpoints are the provider API addresses the application is configured
+// with. An empty one means the provider's own.
+type Endpoints struct {
+	DigitalOcean, Vercel, Cloudflare string
+	// CloudflareRegistrarSandbox sends Cloudflare registrar calls to its
+	// sandbox, which never charges anyone.
+	CloudflareRegistrarSandbox bool
+}
+
 // BuiltinAdapters preserves the application's configured provider endpoints.
-func BuiltinAdapters(digitalOceanEndpoint, vercelEndpoint string) *Adapters {
+func BuiltinAdapters(e Endpoints) *Adapters {
 	r := NewAdapters()
-	d := digitalocean.New(digitalOceanEndpoint)
+	d := digitalocean.New(e.DigitalOcean)
 	r.servers["digitalocean"] = d
 	r.dns["digitalocean"] = d
-	r.dns["vercel"] = vercel.New(vercelEndpoint)
+	r.dns["vercel"] = vercel.New(e.Vercel)
+	r.dns["cloudflare"] = cloudflare.New(e.Cloudflare, e.CloudflareRegistrarSandbox)
 	r.capabilities["digitalocean"] = digitalocean.InfrastructureCapabilities()
 	r.capabilities["vercel"] = vercel.InfrastructureCapabilities()
+	r.capabilities["cloudflare"] = cloudflare.InfrastructureCapabilities()
 	return r
 }
 

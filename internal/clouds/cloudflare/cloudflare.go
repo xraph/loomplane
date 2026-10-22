@@ -110,18 +110,31 @@ type envelope struct {
 	Errors  []struct {
 		Code int `json:"code"`
 	} `json:"errors"`
-	Result json.RawMessage `json:"result"`
+	Result     json.RawMessage `json:"result"`
+	ResultInfo struct {
+		Page       int `json:"page"`
+		TotalPages int `json:"total_pages"`
+	} `json:"result_info"`
 }
 
 // do sends a request for token and decodes the envelope's result into out.
 func (c *Client) do(ctx context.Context, token, method, path string, query url.Values, body io.Reader, out any) error {
+	_, err := c.send(ctx, token, method, path, query, body, out)
+	return err
+}
+
+// pageInfo is where a page sits among a list's pages.
+type pageInfo struct{ Page, TotalPages int }
+
+// send is do, and also reports the page the answer was for.
+func (c *Client) send(ctx context.Context, token, method, path string, query url.Values, body io.Reader, out any) (pageInfo, error) {
 	u := c.endpoint + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
-		return err
+		return pageInfo{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	if body != nil {
@@ -134,12 +147,12 @@ func (c *Client) do(ctx context.Context, token, method, path string, query url.V
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return fmt.Errorf("cloudflare: %w", err)
+		return pageInfo{}, fmt.Errorf("cloudflare: %w", err)
 	}
 	defer res.Body.Close() // read-only; errors surface through ReadAll
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
 	if err != nil {
-		return fmt.Errorf("cloudflare: read response: %w", err)
+		return pageInfo{}, fmt.Errorf("cloudflare: read response: %w", err)
 	}
 	var env envelope
 	decoded := json.Unmarshal(data, &env) == nil
@@ -149,17 +162,18 @@ func (c *Client) do(ctx context.Context, token, method, path string, query url.V
 			ae.Codes = append(ae.Codes, e.Code)
 		}
 		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
-			return fmt.Errorf("%w: %w", ErrRejected, ae)
+			return pageInfo{}, fmt.Errorf("%w: %w", ErrRejected, ae)
 		}
-		return ae
+		return pageInfo{}, ae
 	}
+	info := pageInfo{Page: env.ResultInfo.Page, TotalPages: env.ResultInfo.TotalPages}
 	if out == nil || !decoded || len(env.Result) == 0 || string(env.Result) == "null" {
-		return nil
+		return info, nil
 	}
 	if err := json.Unmarshal(env.Result, out); err != nil {
-		return fmt.Errorf("cloudflare: decode response: %w", err)
+		return pageInfo{}, fmt.Errorf("cloudflare: decode response: %w", err)
 	}
-	return nil
+	return info, nil
 }
 
 func (c *Client) json(ctx context.Context, token, method, path string, query url.Values, in, out any) error {

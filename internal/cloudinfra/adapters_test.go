@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/connections"
@@ -19,8 +22,8 @@ import (
 )
 
 func TestRegistryExposesOnlyImplementedCapabilities(t *testing.T) {
-	registry := cloudinfra.BuiltinAdapters("", "")
-	if !slices.Equal(registry.Providers(), []string{"digitalocean", "vercel"}) {
+	registry := cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{})
+	if !slices.Equal(registry.Providers(), []string{"cloudflare", "digitalocean", "vercel"}) {
 		t.Fatal(registry.Providers())
 	}
 	for _, name := range []string{"vercel", "server", "gcp", "aws", "unknown"} {
@@ -38,7 +41,7 @@ func TestRegistryExposesOnlyImplementedCapabilities(t *testing.T) {
 			t.Fatal("changed App Platform meaning")
 		}
 	}
-	if !slices.Equal(digitalocean.InfrastructureCapabilities(), registry.Capabilities("digitalocean")) || !slices.Equal(vercel.InfrastructureCapabilities(), registry.Capabilities("vercel")) {
+	if !slices.Equal(digitalocean.InfrastructureCapabilities(), registry.Capabilities("digitalocean")) || !slices.Equal(vercel.InfrastructureCapabilities(), registry.Capabilities("vercel")) || !slices.Equal(cloudflare.InfrastructureCapabilities(), registry.Capabilities("cloudflare")) {
 		t.Fatal("adapter metadata drift")
 	}
 }
@@ -285,10 +288,12 @@ func TestRegistryChecksIndividualOperations(t *testing.T) {
 	if !slices.Equal(registry.Capabilities("discovery-only"), []provider.InfrastructureCapability{provider.ServerDiscovery}) {
 		t.Fatal("discovery-only metadata contains writes")
 	}
-	builtins := cloudinfra.BuiltinAdapters("", "")
+	builtins := cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{})
 	for _, operation := range []provider.InfrastructureCapability{provider.DNSZoneDiscovery, provider.DNSZoneCreation, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSRecordDeletion} {
-		if _, err := builtins.DNS("vercel", operation); err != nil {
-			t.Fatalf("missing implemented DNS operation %s: %v", operation, err)
+		for _, name := range []string{"vercel", "cloudflare"} {
+			if _, err := builtins.DNS(name, operation); err != nil {
+				t.Fatalf("missing implemented DNS operation %s on %s: %v", operation, name, err)
+			}
 		}
 	}
 	for _, operation := range []provider.InfrastructureCapability{provider.ServerAdoption, provider.ManagedDomainAttachment, provider.IngressManagement, provider.TLSManagement} {
@@ -367,5 +372,207 @@ func TestRegistryRegistrarIsSeparateCapability(t *testing.T) {
 	}
 	if err := r.RegisterRegistrar("", &fixtureRegistrar{}); err == nil {
 		t.Fatal("empty registrar name")
+	}
+}
+
+func reply(w http.ResponseWriter, body any) { _ = json.NewEncoder(w).Encode(body) }
+
+type vercelRecord struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	RecordType string `json:"recordType,omitempty"`
+	Value      string `json:"value"`
+	TTL        int    `json:"ttl"`
+	Comment    string `json:"comment"`
+	Domain     string `json:"domain,omitempty"`
+}
+
+func vercelDNSFixture(t *testing.T) (provider.DNSAdapter, provider.InfrastructureCredential, provider.DNSZone) {
+	t.Helper()
+	var records []vercelRecord
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		decode := func() vercelRecord {
+			var in vercelRecord
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			return in
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2/teams/team_a":
+			reply(w, map[string]any{"id": "team_a", "slug": "renamed"})
+		case "GET /v5/domains/example.test":
+			reply(w, map[string]any{"domain": map[string]any{"id": "zone_a", "name": "example.test", "teamId": "team_a", "verified": true, "serviceType": "zeit.world"}})
+		case "GET /v5/domains/example.test/records":
+			reply(w, map[string]any{"records": records, "pagination": map[string]any{"next": nil}})
+		case "POST /v2/domains/example.test/records":
+			in := decode()
+			in.ID = "rec_a"
+			records = append(records, in)
+			reply(w, map[string]any{"uid": in.ID})
+		case "PATCH /v1/domains/records/rec_a":
+			in := decode()
+			in.ID, in.Domain, in.RecordType, in.Type = "rec_a", "example.test", in.Type, "record"
+			records = []vercelRecord{in}
+			reply(w, in)
+		case "DELETE /v2/domains/example.test/records/rec_a":
+			records = nil
+		default:
+			t.Errorf("unexpected fixture call %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(api.Close)
+	return vercel.New(api.URL), provider.InfrastructureCredential{Provider: "vercel", AccountID: "team_a", TeamID: "team_a", Token: "fixture-token"}, provider.DNSZone{ID: "zone_a", Name: "example.test", AccountID: "team_a", Verified: true}
+}
+
+type digitalOceanRecord struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Data string `json:"data"`
+	TTL  int    `json:"ttl"`
+}
+
+func digitalOceanDNSFixture(t *testing.T) (provider.DNSAdapter, provider.InfrastructureCredential, provider.DNSZone) {
+	t.Helper()
+	var records []digitalOceanRecord
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		decode := func() digitalOceanRecord {
+			var in digitalOceanRecord
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			return in
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2/account":
+			reply(w, map[string]any{"account": map[string]any{"uuid": "account"}})
+		case "GET /v2/domains/example.test":
+			reply(w, map[string]any{"domain": map[string]any{"name": "example.test"}})
+		case "GET /v2/domains/example.test/records":
+			reply(w, map[string]any{"domain_records": records, "links": map[string]any{}})
+		case "POST /v2/domains/example.test/records":
+			in := decode()
+			in.ID = 7
+			records = append(records, in)
+			reply(w, map[string]any{"domain_record": in})
+		case "PUT /v2/domains/example.test/records/7":
+			in := decode()
+			in.ID = 7
+			records = []digitalOceanRecord{in}
+			reply(w, map[string]any{"domain_record": in})
+		case "DELETE /v2/domains/example.test/records/7":
+			records = nil
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected fixture call %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(api.Close)
+	return digitalocean.New(api.URL), provider.InfrastructureCredential{Provider: "digitalocean", AccountID: "account", Token: "fixture"}, provider.DNSZone{ID: "example.test", Name: "example.test", AccountID: "account", Verified: true}
+}
+
+type cloudflareRecord struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Content string `json:"content"`
+	TTL     int    `json:"ttl"`
+	Proxied bool   `json:"proxied"`
+	Comment string `json:"comment"`
+}
+
+func cloudflareDNSFixture(t *testing.T) (provider.DNSAdapter, provider.InfrastructureCredential, provider.DNSZone) {
+	t.Helper()
+	var records []cloudflareRecord
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ok := func(result any) {
+			reply(w, map[string]any{"success": true, "errors": []any{}, "result": result, "result_info": map[string]any{"page": 1, "total_pages": 1}})
+		}
+		decode := func() cloudflareRecord {
+			var in cloudflareRecord
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			return in
+		}
+		const base = "/zones/zone1/dns_records"
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/zones/zone1":
+			ok(map[string]any{"id": "zone1", "name": "example.test", "status": "active", "account": map[string]any{"id": "acct1"}})
+		case r.Method == http.MethodGet && r.URL.Path == base:
+			ok(records)
+		case r.Method == http.MethodPost && r.URL.Path == base:
+			in := decode()
+			in.ID = "rec" + strconv.Itoa(len(records)+1)
+			records = append(records, in)
+			ok(in)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, base+"/"):
+			in := decode()
+			in.ID = strings.TrimPrefix(r.URL.Path, base+"/")
+			records = []cloudflareRecord{in}
+			ok(in)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, base+"/"):
+			records = nil
+			ok(map[string]any{"id": strings.TrimPrefix(r.URL.Path, base+"/")})
+		default:
+			t.Errorf("unexpected fixture call %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(api.Close)
+	return cloudflare.New(api.URL, false), provider.InfrastructureCredential{Provider: "cloudflare", AccountID: "acct1", Token: "fixture-token"}, provider.DNSZone{ID: "zone1", Name: "example.test", AccountID: "acct1", Verified: true}
+}
+
+// TestDNSAdapterConformance runs one record lifecycle against each real
+// adapter's HTTP fixture.
+func TestDNSAdapterConformance(t *testing.T) {
+	factories := map[string]func(*testing.T) (provider.DNSAdapter, provider.InfrastructureCredential, provider.DNSZone){
+		"vercel": vercelDNSFixture, "digitalocean": digitalOceanDNSFixture, "cloudflare": cloudflareDNSFixture,
+	}
+	for name, factory := range factories {
+		t.Run(name, func(t *testing.T) {
+			adapter, cred, zone := factory(t)
+			owned := false
+			if o, ok := adapter.(provider.DNSRecordOwnership); ok {
+				owned = o.SupportsDNSRecordOwnership()
+			}
+			record := provider.DNSRecord{ZoneID: zone.ID, Name: "app", Type: "A", Value: "192.0.2.1", TTL: 60}
+			if owned {
+				record.Owner = "loomplane:route:route_1"
+			}
+			created, err := adapter.UpsertRecord(t.Context(), cred, provider.DNSUpsertRequest{Zone: zone, Record: record})
+			if err != nil || created.ID == "" {
+				t.Fatalf("create: %+v %v", created, err)
+			}
+			if owned {
+				again, err := adapter.UpsertRecord(t.Context(), cred, provider.DNSUpsertRequest{Zone: zone, Record: record, ReconcileOnly: true})
+				if err != nil || again != created {
+					t.Fatalf("reconcile: %+v %v", again, err)
+				}
+			}
+			desired := created
+			desired.Value = "192.0.2.2"
+			updated, err := adapter.UpsertRecord(t.Context(), cred, provider.DNSUpsertRequest{Zone: zone, Record: desired, Expected: &created})
+			if err != nil || updated.Value != "192.0.2.2" {
+				t.Fatalf("update: %+v %v", updated, err)
+			}
+			if err = adapter.DeleteRecord(t.Context(), cred, provider.DNSDeleteRequest{Zone: zone, Expected: created}); !errors.Is(err, provider.ErrInfrastructureDrift) && created.ID == updated.ID {
+				t.Fatalf("stale delete: %v", err)
+			}
+			if err = adapter.DeleteRecord(t.Context(), cred, provider.DNSDeleteRequest{Zone: zone, Expected: updated}); err != nil {
+				t.Fatal(err)
+			}
+			if err = adapter.DeleteRecord(t.Context(), cred, provider.DNSDeleteRequest{Zone: zone, Expected: updated}); err != nil {
+				t.Fatalf("idempotent delete: %v", err)
+			}
+			wrong := cred
+			wrong.AccountID = "other"
+			if _, err = adapter.ListRecords(t.Context(), wrong, zone); !errors.Is(err, provider.ErrInfrastructureIdentity) {
+				t.Fatalf("foreign account: %v", err)
+			}
+			canceled, cancel := context.WithCancel(t.Context())
+			cancel()
+			if _, err = adapter.ListRecords(canceled, cred, zone); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancel: %v", err)
+			}
+		})
 	}
 }

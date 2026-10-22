@@ -81,7 +81,7 @@ func (e *Extension) Register(app forge.App) error {
 	if endpoint == "" {
 		endpoint = e.cfg.PublicURL
 	}
-	e.svc = cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(e.cfg.Clouds.DigitalOceanEndpoint, e.cfg.Clouds.VercelEndpoint), Workflow: e.workflows, EnrollmentURL: endpoint, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger())})
+	e.svc = cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox}), Workflow: e.workflows, EnrollmentURL: endpoint, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger())})
 	e.workflows.BindInfrastructure(e.svc)
 	if err = forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide cloud infrastructure: %w", err)
