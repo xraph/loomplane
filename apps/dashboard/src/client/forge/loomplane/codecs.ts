@@ -102,7 +102,7 @@ export const CODECS: Record<string, Codec> = {
   "DatabaseGateway": {"kind": "object", "fields": {"cloud_tags": {"ts": "cloudTags", "codec": () => CODECS["DatabaseGateway.cloud_tags"]}, "environments": {"ts": "environments", "codec": () => CODECS["DatabaseGateway.environments"]}, "provider": {"ts": "provider"}, "region": {"ts": "region"}}},
   "DatabaseGateway.cloud_tags": {"kind": "array"},
   "DatabaseGateway.environments": {"kind": "record"},
-  "DatabaseGatewayConfig": {"kind": "object", "fields": {"name": {"ts": "name"}, "resources": {"ts": "resources", "codec": () => CODECS["DatabaseGatewayConfig.resources"]}, "suffix": {"ts": "suffix"}}, "required": ["name", "resources", "suffix"]},
+  "DatabaseGatewayConfig": {"kind": "object", "fields": {"name": {"ts": "name"}, "program": {"ts": "program"}, "resources": {"ts": "resources", "codec": () => CODECS["DatabaseGatewayConfig.resources"]}, "suffix": {"ts": "suffix"}}, "required": ["name", "program", "resources", "suffix"]},
   "DatabaseGatewayConfig.resources": {"kind": "array"},
   "DecideInputBody": {"kind": "object", "fields": {"note": {"ts": "note"}, "revision": {"ts": "revision"}}},
   "DefaultPlacement": {"kind": "object", "fields": {"connection_id": {"ts": "connectionId"}, "provider": {"ts": "provider"}, "region": {"ts": "region"}}, "required": ["connection_id", "provider", "region"]},

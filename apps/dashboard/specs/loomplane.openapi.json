@@ -8593,10 +8593,14 @@
         "required": [
           "name",
           "suffix",
-          "resources"
+          "resources",
+          "program"
         ],
         "properties": {
           "name": {
+            "type": "string"
+          },
+          "program": {
             "type": "string"
           },
           "resources": {
@@ -9118,7 +9122,7 @@
             "type": "string"
           },
           "gateway": {
-            "type": "boolean"
+            "type": "string"
           },
           "key": {
             "type": "string"

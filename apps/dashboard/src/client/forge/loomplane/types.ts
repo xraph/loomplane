@@ -502,6 +502,7 @@ export interface DatabaseGateway {
 
 export interface DatabaseGatewayConfig {
   name: string;
+  program: string;
   resources: string[];
   suffix: string;
 }
@@ -649,7 +650,7 @@ export interface EnrollmentBody {
 export interface EnvLink {
   address?: string;
   from: string;
-  gateway?: boolean;
+  gateway?: string;
   key: string;
   subject: string;
 }
