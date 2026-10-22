@@ -1,6 +1,6 @@
 # Deploy to Azure Container Apps
 
-Loomplane can build your services and run them on Azure Container Apps. It uploads the approved commit to a container registry in your subscription, ACR Tasks builds the service there, and a container app runs the image. Nothing from your repository runs on a Loomplane machine.
+Loomplane can build your services and run them on Azure Container Apps, and give them Postgres, MySQL and Redis. It uploads the approved commit to a container registry in your subscription, ACR Tasks builds the service there, and a container app runs the image. Nothing from your repository runs on a Loomplane machine.
 
 ## Connect Azure
 
@@ -56,6 +56,41 @@ Secret variables go in as app secrets, which Azure never shows again. The rest a
 
 Removing a service from the manifest deletes its container app. The registry and the environment stay for the group's other apps.
 
+## Databases
+
+| Manifest kind | Made on Azure | Provider | Versions |
+| --- | --- | --- | --- |
+| `postgres` | Azure Database for PostgreSQL flexible server | `azure-database` | 17, 16, 15 |
+| `mysql` | Azure Database for MySQL flexible server | `azure-database` | 8.4, 8.0.21 |
+| `redis` | Azure Managed Redis | `azure-managed-redis` | Azure's current one |
+
+You place a database with `provider` and `region`, the same way as a service without a Cloud target:
+
+```yaml
+resources:
+  db:
+    kind: postgres
+    version: "16"
+    provider: azure-database
+    region: westeurope
+  cache:
+    kind: redis
+    provider: azure-managed-redis
+    region: westeurope
+```
+
+Leave `version` out and you get Postgres 17 or MySQL 8.4. Each database goes in the connection's resource group, next to your apps. A service that needs one has to run on Azure in the same account, or the plan stops with a finding. It gets the database's address as an app secret.
+
+Postgres and MySQL run on one `Standard_B1ms` Burstable server, with 32 GiB of storage for Postgres and 20 GiB for MySQL. The admin user is `loomplane`. Its password is 32 random characters that Loomplane makes on the first deployment, keeps in Vault and sends again on every later one, so redeploying never changes it. Each server has public network access and one firewall rule, `AllowAllAzureServicesAndResourcesWithinAzureIps`, which runs from `0.0.0.0` to `0.0.0.0`. That rule is how your container apps get in, and it lets in traffic from every other Azure customer's resources too, in any subscription. Only the password and TLS stand between them and your data. Loomplane leaves the servers' `require_secure_transport` parameter at Azure's default, which is on, and the addresses ask for TLS too, with `sslmode=require` for Postgres and `tls=true` for MySQL.
+
+Redis is an Azure Managed Redis cluster on the `Balanced_B0` size, with one database called `default`. It only takes TLS connections, on port 10000, and it authenticates with an access key, so the address looks like `rediss://:<key>@<host>:10000`. The database uses Azure's enterprise clustering policy, which gives you a single endpoint, so a client that doesn't speak Redis Cluster works fine. Loomplane reads the key from Azure on every deployment and keeps nothing but the address. If you regenerate the key in Azure, the next deployment hands out the new one. Loomplane sets no network rule on the cluster, so its endpoint takes connections from anywhere that has the key. Managed Redis isn't offered in every region. If yours doesn't have it, the deployment fails with a message that names the region and suggests another one.
+
+Server and cluster names are DNS names across all of Azure, so two customers can't both have `db-production`. Each name is built from the resource, the environment and the project, and ends in a hyphen and six hex characters of a hash of your subscription ID.
+
+The databases need the `Microsoft.DBforPostgreSQL`, `Microsoft.DBforMySQL` and `Microsoft.Cache` resource providers. Loomplane registers each one on the first deployment that makes that kind of database, not when it checks the connection, so a connection that only runs apps stays ready without them. With Contributor on just a resource group, register them yourself under the subscription's **Resource providers**. The check does ask for the actions that make and read the databases, and Contributor has them all.
+
+Removing a database from the manifest deletes it with its data, so take a backup first if you need one.
+
 ## What it can't do yet
 
-Container Apps runs HTTP services, web apps, workers and static sites for now, but not databases. Build logs are under **Services**, **Tasks**, **Runs** in the container registry, and Loomplane shows the deployment's progress.
+Container Apps runs HTTP services, web apps, workers and static sites. Databases only have public endpoints for now. VNet integration and private endpoints aren't there yet, so the Azure services firewall rule is what lets your apps reach Postgres and MySQL. Every database gets the smallest size, and you can't pick another one yet. Build logs are under **Services**, **Tasks**, **Runs** in the container registry, and Loomplane shows the deployment's progress.

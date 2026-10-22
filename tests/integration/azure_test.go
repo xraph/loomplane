@@ -20,7 +20,9 @@ import (
 // API's Dockerfile through it: built with ACR Tasks from the approved
 // commit, and run as container apps in the target's region. The API is
 // private, so it takes internal ingress and the gateway in the same
-// environment reaches it at the address its binding recorded.
+// environment reaches it at the address its binding recorded. The API
+// needs Postgres, which azure-database makes as a flexible server, and
+// gets its address as an app secret.
 func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 	az := azuretest.New(t)
 	cfg, r, c, _, project := cloudAPISetup(t)
@@ -108,12 +110,15 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 		t.Fatalf("contributor %+v", conn)
 	}
 
-	// A Cloud whose one target is the subscription, in West Europe.
+	// A Cloud whose targets are the subscription, in West Europe: one for
+	// apps and one for databases.
 	var cloud cloudprofiles.Profile
 	c.must(http.StatusCreated, http.MethodPost, base+"/clouds", cloudprofiles.CreateInput{Name: "Production"}, &cloud)
-	var target cloudprofiles.Target
+	var target, data cloudprofiles.Target
 	c.must(http.StatusCreated, http.MethodPost, base+"/clouds/"+cloud.ID+"/targets",
 		cloudprofiles.CreateTargetInput{Name: "backend", Provider: "azure-container-apps", ConnectionID: conn.ID, Region: "westeurope"}, &target)
+	c.must(http.StatusCreated, http.MethodPost, base+"/clouds/"+cloud.ID+"/targets",
+		cloudprofiles.CreateTargetInput{Name: "data", Provider: "azure-database", ConnectionID: conn.ID, Region: "westeurope"}, &data)
 	var envs struct{ Environments []struct{ ID, Name string } }
 	c.must(http.StatusOK, http.MethodGet, base+"/environments", nil, &envs)
 	env := ""
@@ -128,12 +133,18 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 		t.Fatalf("assignment %+v", got)
 	}
 
-	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 1\nservices:\n  api:\n    source: go:services/api\n    public: false\n    cloud_target: backend\n  gateway:\n    source: apps/gateway\n    needs: [api]\n    cloud_target: backend\nignore:\n  resources: [postgres, redis, kafka]\n"}, nil)
+	// A manifest places a resource by its provider, not a Cloud target, so
+	// db names the data target's provider and region.
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": "version: 1\nservices:\n  api:\n    source: go:services/api\n    public: false\n    needs: [db]\n    cloud_target: backend\n  gateway:\n    source: apps/gateway\n    needs: [api]\n    cloud_target: backend\nresources:\n  db:\n    kind: postgres\n    version: \"16\"\n    provider: " + data.Provider + "\n    region: " + data.Region + "\nignore:\n  resources: [redis, kafka]\n"}, nil)
 	c.must(http.StatusCreated, http.MethodPost, base+"/variables", map[string]any{"key": "API_TOKEN", "value": "kept-in-azure", "secret": true, "environment": "production"}, nil)
 	var plan planBody
 	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 	waitPlanned(t, c, &plan)
-	if !plan.Executable || len(plan.Actions) != 2 || plan.Actions[0].Provider != "azure-container-apps" || plan.Actions[1].Provider != "azure-container-apps" {
+	providers := map[string]int{}
+	for _, a := range plan.Actions {
+		providers[a.Provider]++
+	}
+	if !plan.Executable || len(plan.Actions) != 3 || providers["azure-container-apps"] != 2 || providers["azure-database"] != 1 {
 		t.Fatalf("plan %+v", plan)
 	}
 	if d := approveAndWait(t, c, plan); d.Status != "succeeded" {
@@ -141,25 +152,31 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 	}
 	var bound struct{ Bindings []planning.Binding }
 	c.must(http.StatusOK, http.MethodGet, base+"/bindings?environment=production", nil, &bound)
-	if len(bound.Bindings) != 2 {
+	if len(bound.Bindings) != 3 {
 		t.Fatalf("bindings %+v", bound.Bindings)
 	}
-	var b, gw planning.Binding
+	var b, gw, db planning.Binding
 	for _, got := range bound.Bindings {
 		switch got.Name {
 		case "api":
 			b = got
 		case "gateway":
 			gw = got
+		case "db":
+			db = got
 		}
 	}
+	if db.Provider != "azure-database" || db.Region != "westeurope" || !strings.Contains(db.ExternalID, "/providers/Microsoft.DBforPostgreSQL/flexibleServers/db-production-") {
+		t.Fatalf("db binding %+v", db)
+	}
+	server := db.ExternalID[strings.LastIndex(db.ExternalID, "/")+1:]
 	registry := azure.RegistryName(azuretest.Subscription, "loomplane")
 	if b.ConnectionID != conn.ID || b.Region != "westeurope" || !strings.Contains(b.ExternalID, "/providers/Microsoft.App/containerApps/api-production-") ||
 		!strings.HasPrefix(b.Revision, registry+".azurecr.io/api-") || !strings.HasPrefix(b.URL, az.URL()+"/apps/api-production-") {
 		t.Fatalf("binding %+v", b)
 	}
 
-	if !az.Registered("Microsoft.App") || !az.Registered("Microsoft.ContainerRegistry") {
+	if !az.Registered("Microsoft.App") || !az.Registered("Microsoft.ContainerRegistry") || !az.Registered("Microsoft.DBforPostgreSQL") {
 		t.Fatal("the resource providers weren't registered")
 	}
 	az.Lock()
@@ -194,12 +211,35 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 	if api["location"] != "westeurope" || conf["ingress"].(map[string]any)["external"] != false {
 		t.Fatalf("app %v", api)
 	}
-	// The secret variable is an app secret, not a plain value.
+	// The secret variable and the database's address are app secrets,
+	// not plain values.
 	container := props["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	refs := map[string]string{}
 	for _, e := range container["env"].([]any) {
-		if v := e.(map[string]any); v["name"] == "API_TOKEN" && (v["value"] != nil || v["secretRef"] == nil) {
-			t.Fatalf("API_TOKEN %v", v)
+		v := e.(map[string]any)
+		if v["name"] == "API_TOKEN" || v["name"] == "DATABASE_URL" {
+			if v["value"] != nil || v["secretRef"] == nil {
+				t.Fatalf("%s %v", v["name"], v)
+			}
+			refs[v["name"].(string)] = v["secretRef"].(string)
 		}
+	}
+	if len(refs) != 2 {
+		t.Fatalf("env %v", container["env"])
+	}
+	// The address Loomplane kept, and gave the API, is the server's, over
+	// TLS.
+	var dbURL string
+	for _, sec := range conf["secrets"].([]any) {
+		if v := sec.(map[string]any); v["name"] == refs["DATABASE_URL"] {
+			dbURL, _ = v["value"].(string)
+		}
+	}
+	if !strings.HasPrefix(dbURL, "postgresql://loomplane:") || !strings.HasSuffix(dbURL, "@"+server+".postgres.database.azure.com:5432/postgres?sslmode=require") {
+		t.Fatalf("DATABASE_URL %q", dbURL)
+	}
+	if len(az.ServerPuts) != 1 || az.FirewallRules[server+"/"+azure.AllowAzureServices] == nil {
+		t.Fatalf("servers %d, firewall rules %v", len(az.ServerPuts), az.FirewallRules)
 	}
 	// The gateway reaches the private API at the address its binding
 	// recorded, which is the API's internal ingress address.
