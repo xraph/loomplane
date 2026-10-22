@@ -19,6 +19,13 @@ import (
 // dbGatewayName is the service the database gateway runs as.
 const dbGatewayName = "db-gateway"
 
+// dbGatewayMinInstances keeps two gateway instances running: Cloud Run's
+// minimum instances, and ECS's desired count. One instance draining, or
+// one that's cold, then never leaves every app without its database, and
+// none of them waits on a cold start. There's no maximum, so each
+// platform's own applies.
+const dbGatewayMinInstances = 2
+
 // planDatabaseGateway plans the database gateway when a Postgres resource
 // opts into it here: a service Loomplane generates, on Cloud Run or ECS,
 // that serves each opted-in resource at <resource>.<region>.db.<domain>.
@@ -85,6 +92,7 @@ func (p *planner) planDatabaseGateway() {
 		Provider: prov.Name, Region: p.place(ServiceSubject, dbGatewayName, base+".region", prov, set.Region),
 		Workload: runs.Workload, Execution: runs.Execution,
 		Source: ".", Ecosystem: "go", Image: dbgateway.Dockerfile, Port: dbgateway.Port, Public: true,
+		Scale: &manifest.Scale{Min: dbGatewayMinInstances},
 	}
 	if placement, pinned := p.in.CloudPlacements[dbGatewayName]; pinned {
 		placement.Region = cfg.Region

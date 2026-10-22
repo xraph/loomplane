@@ -97,6 +97,11 @@ func TestPlanDatabaseGateway(t *testing.T) {
 	if cfg.Source != "." || cfg.Ecosystem != "go" || cfg.Image != dbgateway.Dockerfile || cfg.Port != dbgateway.Port || !cfg.Public {
 		t.Fatalf("db-gateway config %+v", cfg)
 	}
+	// Two instances at least, so one draining or cold never leaves apps
+	// without their database.
+	if cfg.Scale == nil || cfg.Scale.Min != 2 || cfg.Scale.Max != 0 {
+		t.Fatalf("db-gateway scale %+v, want at least 2 instances", cfg.Scale)
+	}
 	want := DatabaseGatewayConfig{Name: "db-gateway", Suffix: "us-east1.db.example.com", Resources: []string{"db"}}
 	if d := cfg.DatabaseGateway; d == nil || d.Name != want.Name || d.Suffix != want.Suffix || !slices.Equal(d.Resources, want.Resources) {
 		t.Fatalf("DatabaseGateway = %+v, want %+v", cfg.DatabaseGateway, want)
@@ -240,8 +245,8 @@ func TestDatabaseGatewayRDSOnECS(t *testing.T) {
 	if len(r.Problems) > 0 {
 		t.Fatalf("problems: %+v", r.Problems)
 	}
-	if gw := action(t, r, "service:db-gateway"); gw.Service.DatabaseGateway.Suffix != "us-east-1.db.example.com" {
-		t.Fatalf("suffix = %s", gw.Service.DatabaseGateway.Suffix)
+	if gw := action(t, r, "service:db-gateway"); gw.Service.DatabaseGateway.Suffix != "us-east-1.db.example.com" || gw.Service.Scale == nil || gw.Service.Scale.Min != 2 {
+		t.Fatalf("suffix = %s, scale %+v", gw.Service.DatabaseGateway.Suffix, gw.Service.Scale)
 	}
 	if slices.ContainsFunc(r.Warnings, func(f Finding) bool { return f.Code == "db-gateway-region-mismatch" }) {
 		t.Fatalf("warned about a region match: %+v", r.Warnings)

@@ -410,6 +410,10 @@ Anything else that opens a TCP connection, a migration step for example, should 
 
 `LISTEN` and `NOTIFY` go through a listener shared by every session on the route. If that listener loses its connection and redials, or a `LISTEN` is refused on the way back, notifications sent in the gap can be dropped. Postgres doesn't keep notifications for absent listeners anyway, so don't rely on a notification as your only signal. Read the table again after a reconnect.
 
+Loomplane runs at least two instances of the gateway, so one that's draining or starting cold never leaves your apps without a database. That's the minimum instance count on Cloud Run and the desired count on ECS. It sets no maximum, so the platform's own applies.
+
+On Cloud Run, Loomplane doesn't set the request timeout or keep CPU allocated between requests yet, so the gateway runs with Cloud Run's defaults. Cloud Run counts a WebSocket session as one request, which means it cuts the session when the request timeout runs out (five minutes by default) and your driver has to connect again. Keep transactions short and let the pool reconnect. Outside requests Cloud Run also throttles the CPU, so an idle instance polls Loomplane for its routes slowly. A paused route or a changed password can take a while to reach an instance that's had no traffic. ECS has neither limit.
+
 A gateway keeps the last routes it was given in memory, and in a sealed file under `/tmp/dbgw`. Cloud Run and Fargate start every new instance with an empty disk, so a new instance has to fetch its routes from Loomplane before it serves anything. While Loomplane is unreachable, running instances carry on with what they have. Instances that start in that window, whether from scaling up, a crash or a deploy, can't start serving until Loomplane answers. Keep `public_url` reachable from the cloud the gateway runs on.
 
 You'll find each gateway on the project's Services tab, with the instances seen in the last hour and a route for each database. Anyone with `infrastructure:modify` can pause a route there, and resume it from the same place. While a route is paused, new transactions wait up to 30 seconds and then fail.
