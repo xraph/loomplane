@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	neturl "net/url"
 	"slices"
 	"strings"
@@ -81,7 +82,9 @@ func (r *Runner) ensureDatabaseGateway(ctx context.Context, d *Deployment, a *pl
 	}
 	var trust []plane.TrustKey
 	if r.dbTrust != nil {
-		trust = r.dbTrust()
+		if trust, err = r.dbTrust(); err != nil {
+			return nil, nil, fmt.Errorf("this Loomplane can't deploy a database gateway: %w", err)
+		}
 	}
 	if len(trust) == 0 {
 		return nil, nil, dbgateway.ErrNotConfigured
@@ -98,20 +101,14 @@ func (r *Runner) ensureDatabaseGateway(ctx context.Context, d *Deployment, a *pl
 	if err != nil {
 		return nil, nil, err
 	}
-	// The record follows the plan: where the gateway runs, the suffix its
-	// hosts are named under, and the resources it serves. The keys stay.
-	if gw.Provider != a.Provider || gw.Region != a.Region || gw.Suffix != cfg.Suffix {
-		if err = r.dbGateways.UpdateGatewayPlacement(ctx, d.OrgID, gw.ID, a.Provider, a.Region, cfg.Suffix); err != nil {
-			return nil, nil, fmt.Errorf("record where the database gateway runs: %w", err)
-		}
-	}
+	// The new gateway's first snapshot needs a route for each resource it
+	// serves. Dropping the others, and moving the recorded placement, wait
+	// until it's applied (settleDatabaseGateway), so a failed Apply leaves
+	// the running gateway's record as it was.
 	for _, resource := range cfg.Resources {
 		if _, err = r.dbGateways.EnsureRoute(ctx, d.OrgID, gw.ID, resource); err != nil {
 			return nil, nil, fmt.Errorf("record the database gateway's route to %s: %w", resource, err)
 		}
-	}
-	if _, err = r.dbGateways.DeleteRoutesExcept(ctx, d.OrgID, gw.ID, cfg.Resources); err != nil {
-		return nil, nil, fmt.Errorf("drop the database gateway's routes to resources it no longer serves: %w", err)
 	}
 	env = map[string]string{
 		"LOOMPLANE_DBGW_ID":          gw.ID,
@@ -128,6 +125,32 @@ func (r *Runner) ensureDatabaseGateway(ctx context.Context, d *Deployment, a *pl
 		return nil, nil, fmt.Errorf("the database gateway's configuration is invalid: %w", err)
 	}
 	return env, map[string]bool{"LOOMPLANE_DBGW_SIGNING_KEY": true, "LOOMPLANE_DBGW_SEALING_KEY": true}, nil
+}
+
+// settleDatabaseGateway brings the gateway's record in line with the plan
+// once the action has been applied: where it runs, the suffix its hosts are
+// named under, and only the routes of the resources it serves now. The keys
+// stay. It runs again on a retry, and changes nothing the second time.
+func (r *Runner) settleDatabaseGateway(ctx context.Context, d *Deployment, a *planning.Action) error {
+	cfg := a.Service.DatabaseGateway
+	recorded, err := r.dbGateways.Gateways(ctx, d.OrgID, d.EnvironmentID)
+	if err != nil {
+		return fmt.Errorf("read the database gateway: %w", err)
+	}
+	i := slices.IndexFunc(recorded, func(g dbgateway.Gateway) bool { return g.Name == cfg.Name })
+	if i < 0 {
+		return fmt.Errorf("%w: the database gateway %s is no longer recorded", dbgateway.ErrNotFound, cfg.Name)
+	}
+	gw := recorded[i]
+	if gw.Provider != a.Provider || gw.Region != a.Region || gw.Suffix != cfg.Suffix {
+		if err = r.dbGateways.UpdateGatewayPlacement(ctx, d.OrgID, gw.ID, a.Provider, a.Region, cfg.Suffix); err != nil {
+			return fmt.Errorf("record where the database gateway runs: %w", err)
+		}
+	}
+	if _, err = r.dbGateways.DeleteRoutesExcept(ctx, d.OrgID, gw.ID, cfg.Resources); err != nil {
+		return fmt.Errorf("drop the database gateway's routes to resources it no longer serves: %w", err)
+	}
+	return nil
 }
 
 // databaseGatewayIdentity returns the environment's recorded gateway of the
@@ -332,15 +355,15 @@ func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string,
 }
 
 // servingGateway returns the database gateway binding that serves resource,
-// and the suffix its hosts are named under, or nil.
+// and the suffix its hosts are named under, or nil. An environment has one
+// database gateway; should two bindings claim the resource, the first by
+// name wins, so the answer never depends on map order.
 func servingGateway(services map[string]*planning.Binding, resource string) (gw *planning.Binding, suffix string) {
-	for _, b := range services {
-		var cfg planning.ServiceConfig
-		if len(b.Config) == 0 || json.Unmarshal(b.Config, &cfg) != nil || cfg.DatabaseGateway == nil {
-			continue
-		}
-		if slices.Contains(cfg.DatabaseGateway.Resources, resource) {
-			return b, cfg.DatabaseGateway.Suffix
+	bindings := slices.Collect(maps.Values(services))
+	slices.SortFunc(bindings, func(x, y *planning.Binding) int { return strings.Compare(x.Name, y.Name) })
+	for _, b := range bindings {
+		if cfg := databaseGatewayOf(b); cfg != nil && slices.Contains(cfg.Resources, resource) {
+			return b, cfg.Suffix
 		}
 	}
 	return nil, ""

@@ -34,6 +34,8 @@ type fakeDBGateways struct {
 	// unreported stores the gateway but reports it as not created, like a
 	// store that couldn't read how many rows it inserted.
 	unreported bool
+	// failDelete is how many DeleteGateway calls fail before one works.
+	failDelete int
 }
 
 func (f *fakeDBGateways) Gateways(_ context.Context, org, env string) ([]dbgateway.Gateway, error) {
@@ -79,6 +81,10 @@ func (f *fakeDBGateways) UpdateGatewayPlacement(_ context.Context, org, id, prov
 func (f *fakeDBGateways) DeleteGateway(_ context.Context, org, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failDelete > 0 {
+		f.failDelete--
+		return errors.New("the database is down")
+	}
 	f.gateways = slices.DeleteFunc(f.gateways, func(g dbgateway.Gateway) bool { return g.OrgID == org && g.ID == id })
 	delete(f.routes, id)
 	return nil
@@ -128,7 +134,7 @@ func dbGatewayAction() planning.Action {
 func dbGatewayRunner(store *fakeDBGateways, secrets snapshotSecrets, trust ...plane.TrustKey) *Runner {
 	return NewRunner(RunnerDeps{
 		Resources: secrets, DatabaseGateways: store, PublicURL: "https://loomplane.example.com/",
-		DatabaseGatewayTrust: func() []plane.TrustKey { return trust },
+		DatabaseGatewayTrust: func() ([]plane.TrustKey, error) { return trust, nil },
 	})
 }
 
@@ -312,6 +318,24 @@ func TestEnsureDatabaseGatewayNeedsASigningKey(t *testing.T) {
 	}
 }
 
+// A Loomplane whose database gateway service isn't wired in is a wiring
+// error, not a missing signing key, and says so.
+func TestEnsureDatabaseGatewayTellsAMissingServiceFromAMissingKey(t *testing.T) {
+	store, secrets := &fakeDBGateways{}, snapshotSecrets{}
+	r := NewRunner(RunnerDeps{
+		Resources: secrets, DatabaseGateways: store, PublicURL: "https://loomplane.example.com",
+		DatabaseGatewayTrust: func() ([]plane.TrustKey, error) { return nil, errors.New("not registered") },
+	})
+	a := dbGatewayAction()
+	_, _, err := r.ensureDatabaseGateway(t.Context(), gatewayDeployment, &a)
+	if err == nil || errors.Is(err, dbgateway.ErrNotConfigured) || !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("err %v", err)
+	}
+	if store.ensures != 0 || len(secrets) != 0 {
+		t.Fatal("minted without the service")
+	}
+}
+
 func TestEnsureDatabaseGatewayNeedsAnHTTPSPublicURL(t *testing.T) {
 	for public, ok := range map[string]bool{
 		"https://loomplane.example.com":        true,
@@ -419,7 +443,15 @@ func TestEnsureDatabaseGatewayKeepsRoutesAndPlacementCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Nothing moves until the gateway is applied.
 	gw := store.gateways[0]
+	if !slices.Equal(store.routes[gw.ID], []string{"orders", "users"}) || gw.Region != "us-central1" {
+		t.Fatalf("changed before the gateway was applied: routes %v, %+v", store.routes[gw.ID], gw)
+	}
+	if err = r.settleDatabaseGateway(t.Context(), gatewayDeployment, &moved); err != nil {
+		t.Fatal(err)
+	}
+	gw = store.gateways[0]
 	if !slices.Equal(store.routes[gw.ID], []string{"orders"}) {
 		t.Fatalf("routes %v: the dropped resource kept its route", store.routes[gw.ID])
 	}
@@ -666,7 +698,7 @@ func TestRunDeploysTheDatabaseGatewayAndPointsAppsAtIt(t *testing.T) {
 	r := NewRunner(RunnerDeps{
 		Store: store, Plans: plans, Credentials: fakeCredentials{}, Variables: fakeVariables{}, Sources: &fakeSources{},
 		Providers: available(t), Executors: map[string]Executor{"cloud-run": exec}, Resources: secrets,
-		DatabaseGateways: gateways, DatabaseGatewayTrust: func() []plane.TrustKey { return []plane.TrustKey{trust} },
+		DatabaseGateways: gateways, DatabaseGatewayTrust: func() ([]plane.TrustKey, error) { return []plane.TrustKey{trust}, nil },
 		PublicURL: "https://loomplane.example.com",
 	})
 	r.http, r.verifyWait = srv.Client(), time.Second
@@ -704,5 +736,133 @@ func TestRunDeploysTheDatabaseGatewayAndPointsAppsAtIt(t *testing.T) {
 	}
 	if captured.ResourceValues["DATABASE_URL"] != apiJob.Env["DATABASE_URL"] || captured.GatewayValues["DATABASE_URL_GATEWAY"] != gwURL {
 		t.Fatalf("captured %+v, the api got %v", captured, apiJob.Env)
+	}
+}
+
+// tlsAnswering is an https server that answers 200, and a client for it.
+func tlsAnswering(t *testing.T) (string, *http.Client) {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(srv.Close)
+	return srv.URL, srv.Client()
+}
+
+// R86: a gateway whose Apply fails keeps the routes and placement it was
+// recorded with, and the retry that applies it moves them.
+func TestRunAFailedApplyLeavesTheGatewayRecordAlone(t *testing.T) {
+	ctx := t.Context()
+	secrets := snapshotSecrets{}
+	gw, _, _ := mintGateway(t, secrets, dbgateway.Gateway{OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Name: "db-gateway",
+		Provider: "cloud-run", Region: "us-central1", Suffix: "us-central1.db.example.com"})
+	store := &fakeDBGateways{gateways: []dbgateway.Gateway{gw}, routes: map[string][]string{gw.ID: {"orders", "users"}}}
+	url, client := tlsAnswering(t)
+	exec := &recorder{url: url, fail: map[string]error{"db-gateway": errors.New("quota exceeded")}}
+	moved := dbGatewayAction()
+	moved.Op, moved.Region, moved.Service.Region = planning.Update, "europe-west1", "europe-west1"
+	moved.Service.DatabaseGateway.Suffix = "europe-west1.db.example.com"
+	moved.Service.DatabaseGateway.Resources = []string{"orders"}
+	plan := &planning.Plan{
+		ID: "plan_move", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production",
+		Status: planning.StatusApproved, Executable: true, Connections: map[string]string{"gcp": "conn_g"},
+		Actions: []planning.Action{moved},
+	}
+	deployments := &memStore{d: map[string]*Deployment{}}
+	r := NewRunner(RunnerDeps{
+		Store: deployments, Plans: &fakePlans{plan: plan, bindings: map[string]*planning.Binding{}}, Credentials: fakeCredentials{},
+		Variables: fakeVariables{}, Sources: &fakeSources{}, Providers: available(t), Executors: map[string]Executor{"cloud-run": exec},
+		Resources: secrets, DatabaseGateways: store, PublicURL: "https://loomplane.example.com",
+		DatabaseGatewayTrust: func() ([]plane.TrustKey, error) { return []plane.TrustKey{testTrustKey(t)}, nil },
+	})
+	r.http, r.verifyWait = client, time.Second
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := deployments.GetDeployment(ctx, "org_1", id); d.Status != StatusFailed {
+		t.Fatalf("deployment %s", d.Status)
+	}
+	if got := store.gateways[0]; !slices.Equal(store.routes[gw.ID], []string{"orders", "users"}) ||
+		got.Region != "us-central1" || got.Suffix != "us-central1.db.example.com" {
+		t.Fatalf("a failed apply moved the record: routes %v, %+v", store.routes[gw.ID], got)
+	}
+
+	// The retry applies it, and the record follows.
+	exec.fail = nil
+	if ok, rerr := deployments.Reopen(ctx, "org_1", id); !ok || rerr != nil {
+		t.Fatalf("reopen: %v %v", ok, rerr)
+	}
+	if err = r.Run(ctx, "org_1", id, moved.ID, nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.gateways[0]; !slices.Equal(store.routes[gw.ID], []string{"orders"}) ||
+		got.Region != "europe-west1" || got.Suffix != "europe-west1.db.example.com" {
+		t.Fatalf("the applied gateway's record didn't follow: routes %v, %+v", store.routes[gw.ID], got)
+	}
+}
+
+// R86: which gateway serves a resource doesn't depend on map order, and
+// only a service binding can be one.
+func TestServingGatewayIsDeterministic(t *testing.T) {
+	asResource := gatewayBinding(t, "https://resource.example")
+	asResource.Subject = planning.ResourceSubject
+	zz, aa := gatewayBinding(t, "https://zz.example"), gatewayBinding(t, "https://aa.example")
+	zz.Name, aa.Name = "zz-gateway", "aa-gateway"
+	services := map[string]*planning.Binding{"zz-gateway": zz, "aa-gateway": aa, "0-resource": asResource}
+	for range 50 {
+		if b, suffix := servingGateway(services, "db"); b != aa || suffix != "nyc3.db.example.com" {
+			t.Fatalf("served by %+v", b)
+		}
+	}
+	if b, _ := servingGateway(map[string]*planning.Binding{"x": asResource}, "db"); b != nil {
+		t.Fatal("a resource binding served as the gateway")
+	}
+}
+
+// R86: a delete that removed the keys but not the record is finished by its
+// retry, which deletes the record and then the binding.
+func TestRunRetriesAPartialDatabaseGatewayDelete(t *testing.T) {
+	ctx := t.Context()
+	secrets := snapshotSecrets{}
+	gw, _, _ := mintGateway(t, secrets, dbgateway.Gateway{OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Name: "db-gateway"})
+	store := &fakeDBGateways{gateways: []dbgateway.Gateway{gw}, routes: map[string][]string{gw.ID: {"orders"}}, failDelete: 1}
+	exec := &removing{recorder: &recorder{}, gateways: store}
+	cfg, err := json.Marshal(dbGatewayAction().Service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &planning.Plan{
+		ID: "plan_del", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production",
+		Status: planning.StatusApproved, Executable: true, Connections: map[string]string{"gcp": "conn_g"},
+		Actions: []planning.Action{{ID: "service:db-gateway", Op: planning.Delete, Subject: planning.ServiceSubject,
+			Name: "db-gateway", Provider: "cloud-run", Region: "us-central1", ConnectionID: "conn_g", Step: 1}},
+	}
+	plans := &fakePlans{plan: plan, bindings: map[string]*planning.Binding{"service:db-gateway": {
+		ID: "bind_gw", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject, Name: "db-gateway",
+		Provider: "cloud-run", Region: "us-central1", ConnectionID: "conn_g", ExternalID: "ext-db-gateway", Config: cfg,
+	}}}
+	deployments := &memStore{d: map[string]*Deployment{}}
+	r := NewRunner(RunnerDeps{
+		Store: deployments, Plans: plans, Credentials: fakeCredentials{}, Variables: fakeVariables{},
+		Sources: &fakeSources{}, Providers: available(t), Executors: map[string]Executor{"cloud-run": exec}, Resources: secrets,
+		DatabaseGateways: store, PublicURL: "https://loomplane.example.com",
+	})
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := deployments.GetDeployment(ctx, "org_1", id); d.Status != StatusFailed || !strings.Contains(d.Error, "the database is down") {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if len(store.gateways) != 1 || plans.bindings["service:db-gateway"] == nil || len(secrets) != 0 {
+		t.Fatalf("after the failure: %d gateways, binding %v, %d Vault entries", len(store.gateways), plans.bindings["service:db-gateway"] != nil, len(secrets))
+	}
+	if ok, rerr := deployments.Reopen(ctx, "org_1", id); !ok || rerr != nil {
+		t.Fatalf("reopen: %v %v", ok, rerr)
+	}
+	if err = r.Run(ctx, "org_1", id, "service:db-gateway", nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.gateways) != 0 || plans.bindings["service:db-gateway"] != nil || exec.removed != 2 {
+		t.Fatalf("after the retry: %d gateways, binding %v, %d removes", len(store.gateways), plans.bindings["service:db-gateway"] != nil, exec.removed)
 	}
 }

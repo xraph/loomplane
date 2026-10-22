@@ -187,7 +187,7 @@ type Runner struct {
 	executors     map[string]Executor
 	resources     ResourceSecrets
 	dbGateways    DatabaseGatewayStore
-	dbTrust       func() []plane.TrustKey
+	dbTrust       func() ([]plane.TrustKey, error)
 	publicURL     string
 	telemetry     *telemetry.Recorder
 	logs          LogSink
@@ -220,8 +220,9 @@ type RunnerDeps struct {
 	DatabaseGateways DatabaseGatewayStore
 	// DatabaseGatewayTrust returns the keys a database gateway trusts the
 	// control plane's snapshots with. None means no signing key is
-	// configured, and a database gateway can't deploy.
-	DatabaseGatewayTrust func() []plane.TrustKey
+	// configured, and an error that the service holding them isn't
+	// available; either way a database gateway can't deploy.
+	DatabaseGatewayTrust func() ([]plane.TrustKey, error)
 	// PublicURL is Loomplane's own address, which a database gateway polls.
 	PublicURL string
 	// Telemetry records how deployments go. It may be nil.
@@ -790,6 +791,12 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		progress(StepVerifying, "Checking "+out.URL+" answers")
 		if verr := r.verifyService(ctx, out.URL, a); verr != nil {
 			return verr
+		}
+	}
+	// The database gateway is up, so its record can follow the plan.
+	if a.Service != nil && a.Service.DatabaseGateway != nil {
+		if serr := r.settleDatabaseGateway(ctx, d, &a); serr != nil {
+			return serr
 		}
 	}
 	old := job.Replaces

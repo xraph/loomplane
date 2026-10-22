@@ -306,22 +306,13 @@ func (e *Extension) Register(fapp forge.App) error {
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
 		},
-		Providers: catalog,
-		Executors: executors,
-		Resources: resourceSecrets,
-		// The database gateway extension registers after this one and
-		// provides the service that holds the trust keys, so they're
-		// looked up when a gateway deploys.
-		DatabaseGateways: dbgateway.NewStore(pg),
-		DatabaseGatewayTrust: func() []plane.TrustKey {
-			svc, injectErr := forge.InjectType[*dbgateway.Service](c)
-			if injectErr != nil {
-				return nil
-			}
-			return svc.TrustKeys()
-		},
-		PublicURL: e.cfg.PublicURL,
-		Telemetry: metrics,
+		Providers:            catalog,
+		Executors:            executors,
+		Resources:            resourceSecrets,
+		DatabaseGateways:     dbgateway.NewStore(pg),
+		DatabaseGatewayTrust: databaseGatewayTrust(c),
+		PublicURL:            e.cfg.PublicURL,
+		Telemetry:            metrics,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err
@@ -341,6 +332,21 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	return e.routes(fapp.Router(), guard)
+}
+
+// databaseGatewayTrust returns the trust keys of the database gateway
+// service, looked up when a gateway deploys: the database gateway extension
+// registers after this one and provides the service then. A service that
+// isn't there is a wiring error, which it reports; one with no signing key
+// gives no keys, which the deploy reports as that.
+func databaseGatewayTrust(c forge.Container) func() ([]plane.TrustKey, error) {
+	return func() ([]plane.TrustKey, error) {
+		svc, err := forge.InjectType[*dbgateway.Service](c)
+		if err != nil {
+			return nil, fmt.Errorf("the database gateway extension isn't registered: %w", err)
+		}
+		return svc.TrustKeys(), nil
+	}
 }
 
 // Start schedules the drift check. Dispatch runs the workflow and the
