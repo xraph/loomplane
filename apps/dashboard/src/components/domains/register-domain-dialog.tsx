@@ -131,6 +131,13 @@ function Flow({ onClose }: { onClose: () => void }) {
   // What a fresh check said about a name, over what the search said.
   const [checked, setChecked] = useState<Record<string, DomainOffer>>({})
   const [chosen, setChosen] = useState("")
+  // The account the review was quoted on. It never follows the live list.
+  const [quotedOn, setQuotedOn] = useState<Connection>()
+  const stillEligible =
+    !!quotedOn &&
+    accounts.some(
+      (c) => c.id === quotedOn.id && accountID(c) === accountID(quotedOn)
+    )
 
   const [renew, setRenew] = useState(true)
   const [privacy, setPrivacy] = useState(true)
@@ -199,15 +206,15 @@ function Flow({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const review = (name: string) => {
-    if (!account) return
+  const review = (name: string, connection: Connection) => {
+    setQuotedOn(connection)
     setChosen(name)
     shownPrice.current = ""
     setQuoted(undefined)
     setAgree(false)
     setNotice("")
     setStep("review")
-    void runPreview(account, name, renew, privacy)
+    void runPreview(connection, name, renew, privacy)
   }
 
   const back = () => {
@@ -218,22 +225,30 @@ function Flow({ onClose }: { onClose: () => void }) {
     setAgree(false)
     setError("")
     setNotice("")
+    setQuotedOn(undefined)
     setStep("search")
   }
 
   const flip = (which: "renew" | "privacy") => {
     // What's approved must be what's shown, so nothing changes mid-purchase.
-    if (!account || approving.current) return
+    if (!quotedOn || !stillEligible || approving.current) return
     const nextRenew = which === "renew" ? !renew : renew
     const nextPrivacy = which === "privacy" ? !privacy : privacy
     setRenew(nextRenew)
     setPrivacy(nextPrivacy)
-    void runPreview(account, chosen, nextRenew, nextPrivacy)
+    void runPreview(quotedOn, chosen, nextRenew, nextPrivacy)
   }
 
   const price = priceOf(quoted?.quote)
   const canBuy =
-    agree && !!quoted && !!price && !previewing && !error && !lapsed && !buying
+    agree &&
+    stillEligible &&
+    !!quoted &&
+    !!price &&
+    !previewing &&
+    !error &&
+    !lapsed &&
+    !buying
 
   const buy = async () => {
     const reg = quoted
@@ -257,14 +272,14 @@ function Flow({ onClose }: { onClose: () => void }) {
       invalidate(useDomainRegistrationsList)
       setStep("pending")
     } catch (err) {
-      if (statusOf(err) === 409 && account) {
+      if (statusOf(err) === 409 && quotedOn) {
         // The quote moved. Review it again; the approval is never retried.
         // Not in the mock.
         setNotice(
           "The price or the review changed before purchase. Nothing was charged. Check the new price and approve it again."
         )
         setAgree(false)
-        void runPreview(account, reg.name, renew, privacy)
+        if (stillEligible) void runPreview(quotedOn, reg.name, renew, privacy)
       } else {
         // Not in the mock.
         setError(messageOf(err, "The registration wasn't approved."))
@@ -306,7 +321,7 @@ function Flow({ onClose }: { onClose: () => void }) {
     )
   }
 
-  if (step === "review" && account) {
+  if (step === "review" && quotedOn) {
     const facts: [string, string][] = [
       ["Domain", chosen],
       [
@@ -318,7 +333,7 @@ function Flow({ onClose }: { onClose: () => void }) {
             ? "Checking the price with Cloudflare…"
             : "No price yet",
       ],
-      ["Account", `Cloudflare · ${accountLabel(account)}`],
+      ["Account", `Cloudflare · ${accountLabel(quotedOn)}`],
       ["Contacts", "The default contact on this Cloudflare account"],
       [
         "After purchase",
@@ -350,7 +365,7 @@ function Flow({ onClose }: { onClose: () => void }) {
               type="checkbox"
               checked={renew}
               onChange={() => flip("renew")}
-              disabled={buying}
+              disabled={buying || !stillEligible}
               className={box}
             />
             <span>
@@ -366,7 +381,7 @@ function Flow({ onClose }: { onClose: () => void }) {
               type="checkbox"
               checked={privacy}
               onChange={() => flip("privacy")}
-              disabled={buying}
+              disabled={buying || !stillEligible}
               className={box}
             />
             <span>
@@ -401,11 +416,21 @@ function Flow({ onClose }: { onClose: () => void }) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => void runPreview(account, chosen, renew, privacy)}
+                disabled={!stillEligible}
+                onClick={() =>
+                  void runPreview(quotedOn, chosen, renew, privacy)
+                }
               >
                 Check the price again
               </Button>
             </div>
+          )}
+          {!stillEligible && (
+            // Not in the mock: the account changed under the review.
+            <p role="alert" className="text-[12.5px] text-destructive">
+              This Cloudflare account can&apos;t register domains any more, so
+              this price can&apos;t be approved.
+            </p>
           )}
           {(notice || error) && (
             <p role="alert" className="text-[12.5px] text-destructive">
@@ -547,7 +572,8 @@ function Search({
   ownedLoading: boolean
   checked: Record<string, DomainOffer>
   onChecked: (offer: DomainOffer) => void
-  onAvailable: (name: string) => void
+  /** The name passed its check on this connection. */
+  onAvailable: (name: string, connection: Connection) => void
 }) {
   const term = useDebounced(q.trim().toLowerCase(), 300)
   if (!term) return null
@@ -569,7 +595,8 @@ function Results({
   ownedLoading: boolean
   checked: Record<string, DomainOffer>
   onChecked: (offer: DomainOffer) => void
-  onAvailable: (name: string) => void
+  /** The name passed its check on this connection. */
+  onAvailable: (name: string, connection: Connection) => void
 }) {
   const extensions = useQuery(useDomainRegistrationExtensions, {
     query: { connection_id: account.id },
@@ -599,7 +626,7 @@ function Results({
       onChecked(offer)
       // A name that's gone since the search stays here, its pill updated.
       if (offerStatus(offer, owned, tlds) === "available" && offer.price)
-        onAvailable(name)
+        onAvailable(name, account)
     } catch (err) {
       // Not in the mock.
       setError(messageOf(err, `Cloudflare couldn't check ${name}.`))

@@ -66,7 +66,7 @@ type Calls = { method: string; path: string; body?: unknown }[]
 
 function stubRegistration(
   options: {
-    connections?: unknown[]
+    connections?: unknown[] | (() => unknown[])
     offers?: Offer[]
     extensions?: string[]
     check?: (name: string) => Offer
@@ -89,7 +89,10 @@ function stubRegistration(
       calls.push({ method, path: path + url.search, body })
       if (path === "/api/v1/connections")
         return Response.json({
-          connections: options.connections ?? [cloudflare("cf")],
+          connections:
+            typeof options.connections === "function"
+              ? options.connections()
+              : (options.connections ?? [cloudflare("cf")]),
         })
       if (path === "/api/v1/connection-clouds")
         return Response.json({
@@ -539,6 +542,55 @@ it("shows the pending state after approval and goes back to Domains", async () =
   ).toBeTruthy()
   await userEvent.click(screen.getByRole("button", { name: "Go to Domains" }))
   expect(onOpenChange).toHaveBeenCalledWith(false)
+})
+
+it("keeps the quoted account when the connection list changes", async () => {
+  let aGranted = true
+  const calls = stubRegistration({
+    connections: () => [
+      {
+        ...cloudflare("a", aGranted ? { registrar: "granted" } : {}),
+        account: "Acme A",
+      },
+      { ...cloudflare("b"), account: "Acme B" },
+    ],
+  })
+  mount()
+  await userEvent.selectOptions(
+    await screen.findByRole("combobox", { name: "Cloudflare account" }),
+    "a"
+  )
+  await searchAndSelect("acmeshop.app")
+  await userEvent.click(await screen.findByRole("checkbox", { name: consent }))
+  const buy = screen.getByRole("button", {
+    name: "Buy acmeshop.app for USD 10.11",
+  })
+  expect(buy).toHaveProperty("disabled", false)
+
+  // Account A loses its Registrar permission while the review is open.
+  aGranted = false
+  await act(async () => {
+    forgeClient.invalidate(["Connection[]"])
+  })
+  await screen.findByText(
+    "This Cloudflare account can't register domains any more, so this price can't be approved."
+  )
+  expect(screen.getByText("Cloudflare · Acme A · acct-a")).toBeTruthy()
+  expect(screen.queryByText(/Acme B/)).toBeNull()
+  expect(buy).toHaveProperty("disabled", true)
+  const privacy = screen.getByRole("checkbox", {
+    name: /Hide my contact details in WHOIS/,
+  })
+  expect(privacy).toHaveProperty("disabled", true)
+  await userEvent.click(privacy)
+  await userEvent.click(buy)
+  const previews = posts(calls, "/preview")
+  expect(previews).toHaveLength(1)
+  expect(previews[0].body).toMatchObject({ connection_id: "a" })
+  expect(posts(calls, "/approve")).toHaveLength(0)
+  expect(posts(calls, "/check").map((c) => c.body)).toEqual([
+    { connection_id: "a", domains: ["acmeshop.app"] },
+  ])
 })
 
 it("marks a sandbox account", async () => {

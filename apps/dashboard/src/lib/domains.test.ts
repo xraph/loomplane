@@ -379,7 +379,13 @@ describe("offers", () => {
         reg("Bought.app", "succeeded"),
         reg("buying.app", "registering"),
         reg("unsure.app", "unconfirmed"),
+        reg("pending.app", "zone_pending"),
+        reg("stuck.app", "action_required"),
+        reg("held.app", "blocked"),
+        reg("ordered.app", "approved"),
         reg("looked.app", "preview"),
+        reg("lapsed.app", "expired"),
+        reg("future.app", "some_new_status"),
         reg("declined.app", "failed"),
         reg("moved.app", "price_changed"),
       ]
@@ -388,6 +394,10 @@ describe("offers", () => {
       "acme.dev",
       "bought.app",
       "buying.app",
+      "held.app",
+      "ordered.app",
+      "pending.app",
+      "stuck.app",
       "unsure.app",
     ])
   })

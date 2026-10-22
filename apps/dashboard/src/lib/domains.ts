@@ -260,8 +260,17 @@ export function offerTone(s: OfferStatus): PillTone {
   return s === "available" ? "ok" : s === "owned" ? "own" : "idle"
 }
 
-// Registrations that ended without buying anything, or never started.
-const notHeld = ["preview", "failed", "price_changed"]
+// Registrations that bought the name, are buying it, or may have. Listed
+// rather than excluded, so a status added later doesn't block a name.
+const held = [
+  "approved",
+  "registering",
+  "zone_pending",
+  "succeeded",
+  "unconfirmed",
+  "action_required",
+  "blocked",
+]
 
 /**
  * ownedNames is every name already a zone of the organization or a
@@ -274,7 +283,7 @@ export function ownedNames(
   const names = new Set<string>()
   for (const z of zones) if (z.zone?.name) names.add(z.zone.name.toLowerCase())
   for (const r of registrations)
-    if (!notHeld.includes(r.status)) names.add(r.name.toLowerCase())
+    if (held.includes(r.status)) names.add(r.name.toLowerCase())
   return names
 }
 
