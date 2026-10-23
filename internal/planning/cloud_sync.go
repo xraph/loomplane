@@ -586,7 +586,7 @@ func (s *Service) RetryCloudSync(ctx context.Context, p security.Principal, proj
 	if authErr := s.authorizeStoredCloudSync(ctx, p, sync, snapshot); authErr != nil {
 		return nil, authErr
 	}
-	if sync.Status != cloudprofiles.SyncFailed && sync.Status != cloudprofiles.SyncCleanup {
+	if sync.Status != cloudprofiles.SyncFailed && sync.Status != cloudprofiles.SyncCleanup && sync.Status != cloudprofiles.SyncRouting {
 		return nil, cloudprofiles.ErrConflict
 	}
 	snapshot.Actor = p
@@ -631,6 +631,18 @@ func (s *Service) CompleteCloudRouting(ctx context.Context, p security.Principal
 	i := slices.IndexFunc(sync.Environments, func(e cloudprofiles.EnvironmentChange) bool { return e.EnvironmentID == environment })
 	if i < 0 || !sync.Environments[i].ExternalRouting {
 		return nil, cloudprofiles.ErrNotFound
+	}
+	for _, env := range snapshot.Environments {
+		if env.EnvironmentID != environment {
+			continue
+		}
+		var plan Plan
+		if err := json.Unmarshal(env.Plan, &plan); err != nil {
+			return nil, err
+		}
+		if slices.ContainsFunc(plan.Actions, func(a Action) bool { return len(a.Routes) > 0 }) {
+			return nil, cloudprofiles.ErrConflict
+		}
 	}
 	sync.Environments[i].RoutingEvidence = strings.TrimSpace(evidence)
 	snapshot.Actor = p

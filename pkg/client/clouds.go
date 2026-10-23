@@ -94,6 +94,23 @@ type CloudEnvironmentChange struct {
 	Error           string           `json:"error,omitempty"`
 	ExternalRouting bool             `json:"external_routing"`
 	RoutingEvidence string           `json:"routing_evidence,omitempty"`
+	RoutingStatus   string           `json:"routing_status,omitempty"`
+	Routes          []CloudSyncRoute `json:"routes,omitempty"`
+}
+
+// CloudSyncRoute records the accepted route operations and pending DNS instructions.
+type CloudSyncRoute struct {
+	RouteID    string    `json:"route_id"`
+	PrepareID  string    `json:"prepare_id"`
+	CutoverID  string    `json:"cutover_id,omitempty"`
+	ReleaseID  string    `json:"release_id,omitempty"`
+	Status     string    `json:"status"`
+	Message    string    `json:"message,omitempty"`
+	Hostname   string    `json:"hostname"`
+	RecordType string    `json:"record_type,omitempty"`
+	Value      string    `json:"value,omitempty"`
+	TTL        int       `json:"ttl,omitempty"`
+	NotBefore  time.Time `json:"not_before"`
 }
 
 // CloudPreview is the public Cloud API record.

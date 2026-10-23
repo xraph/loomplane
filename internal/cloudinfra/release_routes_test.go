@@ -133,3 +133,16 @@ func TestReleaseCoordinatorHonorsLongManagedReceiptTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestReleaseCoordinatorCleanupCannotCreateRouteEffects(t *testing.T) {
+	source := Route{ID: "route", OrgID: "org", ProjectID: "project", Status: "ready", Input: RouteInput{EnvironmentID: "env", Service: "web", ExternalTTLSeconds: 60}, Binding: RouteBinding{InstanceID: "old"}}
+	destination := source
+	destination.Binding.InstanceID = "new"
+	destination.Revision = 2
+	st := &ttlReleaseStore{source: source, destination: destination}
+	svc := NewService(Deps{Store: st, Domains: st, Authz: cleanupTestAuth{}})
+	err := svc.ReconcileReleaseRoutes(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, ReleaseRouteRequest{Key: "plan/action", ProjectID: "project", EnvironmentID: "env", Service: "web", InstanceID: "new", Routes: []Route{source}, DrainSeconds: 60, CleanupOnly: true})
+	if !errors.Is(err, ErrConflict) || st.accepted != nil {
+		t.Fatal("cleanup created a new operation", err, st.accepted)
+	}
+}
