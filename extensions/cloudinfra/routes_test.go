@@ -25,6 +25,10 @@ func (c zoneCredentials) Credential(context.Context, string, string) (*connectio
 // missingZoneDNS hosts no zones at all.
 type missingZoneDNS struct{ provider.DNSAdapter }
 
+func (missingZoneDNS) ListZones(context.Context, provider.InfrastructureCredential) ([]provider.DNSZone, error) {
+	return nil, nil
+}
+
 func (missingZoneDNS) GetZone(context.Context, provider.InfrastructureCredential, string) (provider.DNSZone, error) {
 	return provider.DNSZone{}, provider.ErrInfrastructureNotFound
 }
@@ -62,7 +66,8 @@ func TestCreateZoneProviderErrorStatuses(t *testing.T) {
 type wildcardStore struct{ infra.DomainStore }
 
 func (wildcardStore) Zone(_ context.Context, org, id string) (*infra.Zone, error) {
-	return &infra.Zone{ID: id, OrgID: org, Name: "acme.dev", Mode: "external", ProjectIDs: []string{"shop"}, VerifiedAt: time.Now(), Revision: 1}, nil
+	return &infra.Zone{ID: id, OrgID: org, Name: "acme.dev", Mode: "external", ProjectIDs: []string{"shop"}, VerifiedAt: time.Now(), Revision: 1,
+		ProofName: "_loomplane.acme.dev", ProofValue: "proof", ProofExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 func (wildcardStore) OrgRoutes(context.Context, string) ([]*infra.Route, error) {
 	return []*infra.Route{{ID: "route_w", Status: "ready", Input: infra.RouteInput{ZoneID: "zone", Hostname: "*.acme.dev"}}}, nil
