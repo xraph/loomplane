@@ -379,6 +379,9 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 			value = labelPort(labels[owned.LabelHostPort])
 		}
 		protocol := "http"
+		if labels[owned.LabelHealthProtocol] == "memcached" && port.Container == labelPort(labels[owned.LabelHealthPort]) {
+			protocol = "memcached"
+		}
 		if labels[LabelDatabase] != "" {
 			protocol = "postgresql"
 		}

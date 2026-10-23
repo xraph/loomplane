@@ -46,6 +46,9 @@ type infrastructureState struct {
 	PrivateRegistryPort int    `json:"private_registry_port"`
 	HostAddress         string `json:"host_address"`
 	ServicePort         int    `json:"service_port"`
+	// HostLoopback is for a local Engine socket, whose published ports live on the host.
+	HostLoopback bool   `json:"host_loopback,omitempty"`
+	DockerHost   string `json:"docker_host,omitempty"`
 }
 
 // fixtureSSH forwards authenticated SSH channels to the disposable real Docker
@@ -145,6 +148,10 @@ func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]str
 							OriginPort uint32
 						}
 						if ssh.Unmarshal(request.ExtraData(), &payload) == nil && payload.Host == "127.0.0.1" && payload.Port > 0 && payload.Port <= 65535 {
+							if state.HostLoopback {
+								address = net.JoinHostPort(payload.Host, strconv.FormatUint(uint64(payload.Port), 10))
+								break
+							}
 							channel, requests, channelErr := request.Accept()
 							if channelErr != nil {
 								continue
@@ -154,7 +161,7 @@ func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]str
 								defer channel.Close()
 								ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 								defer cancel()
-								command := exec.CommandContext(ctx, "docker", "exec", "-i", state.Builder, "nc", "-w", "5", payload.Host, strconv.FormatUint(uint64(payload.Port), 10))
+								command := fixtureDockerCommand(ctx, state, "exec", "-i", state.Builder, "nc", "-w", "5", payload.Host, strconv.FormatUint(uint64(payload.Port), 10))
 								command.Stdin = channel
 								command.Stdout = channel
 								command.Stderr = io.Discard
@@ -191,6 +198,13 @@ func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]str
 	return private, map[string]string{"host": address, "port": port, "user": "deploy", "host_key": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(host.PublicKey()))), "docker_socket": "/var/run/docker.sock", "advertise_host": "127.0.0.1"}
 }
 
+func fixtureDockerCommand(ctx context.Context, state infrastructureState, args ...string) *exec.Cmd {
+	if state.DockerHost != "" {
+		args = append([]string{"--host", state.DockerHost}, args...)
+	}
+	return exec.CommandContext(ctx, "docker", args...)
+}
+
 // fixtureExec runs one exec request of an SSH session inside the
 // disposable builder, which stands in for the server, and reports its exit
 // status. Shells and other session requests are refused.
@@ -207,7 +221,7 @@ func fixtureExec(t *testing.T, state infrastructureState, channel ssh.Channel, r
 			return
 		}
 		_ = request.Reply(true, nil)
-		command := exec.CommandContext(t.Context(), "docker", "exec", "-i", state.Builder, "sh", "-c", payload.Command)
+		command := fixtureDockerCommand(t.Context(), state, "exec", "-i", state.Builder, "sh", "-c", payload.Command)
 		command.Stdin, command.Stdout, command.Stderr = channel, channel, channel.Stderr()
 		status := uint32(0)
 		if err := command.Run(); err != nil {

@@ -135,7 +135,7 @@ function statusOf(plan: Plan, d?: Deployment): RunStatus {
   }
 }
 
-/** thread lays a run out as the loom draws it: plan, approval, each action. */
+/** thread lays out the plan, approval and actions that change a service. */
 export function thread(plan: Plan, d?: Deployment): ThreadStep[] {
   const planning = plan.status === "planning"
   const out: ThreadStep[] = [
@@ -186,7 +186,9 @@ export function thread(plan: Plan, d?: Deployment): ThreadStep[] {
   }
   out.push(approval)
 
-  const actions = [...plan.actions].sort((a, b) => a.step - b.step)
+  const actions = plan.actions
+    .filter((a) => a.op !== "keep")
+    .sort((a, b) => a.step - b.step)
   const stepsByAction = new Map(d?.steps.map((s) => [s.actionId, s]))
   const stopped = closed.has(plan.status) || plan.status === "failed"
   if (actions.length === 0) {

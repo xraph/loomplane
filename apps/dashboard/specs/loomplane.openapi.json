@@ -10918,6 +10918,7 @@
           "engine",
           "version",
           "created_at",
+          "expires_at",
           "encrypted",
           "present",
           "last_seen_at"
@@ -10932,6 +10933,10 @@
           },
           "engine": {
             "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "nullable": true
           },
           "id": {
             "type": "string",

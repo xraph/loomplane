@@ -53,9 +53,15 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 				proof["project"] = "another"
 			}
 			point := func(name string) map[string]any {
-				return map[string]any{"name": "projects/acme-prod/backups/" + name, "kind": "sql#backup", "instance": originalSource["name"], "type": "FINAL", "state": "SUCCESSFUL", "databaseVersion": "POSTGRES_17", "instanceSettings": proof, "backupInterval": map[string]string{"startTime": "2026-10-21T02:00:00Z", "endTime": "2026-10-21T02:00:01Z"}}
+				return map[string]any{"name": "projects/acme-prod/backups/" + name, "kind": "sql#backup", "instance": originalSource["name"], "type": "FINAL", "state": "SUCCESSFUL", "databaseVersion": "POSTGRES_17", "instanceSettings": proof, "expiryTime": "2026-10-21T03:00:00Z", "backupInterval": map[string]string{"startTime": "2026-10-21T02:00:00Z", "endTime": "2026-10-21T02:00:01Z"}}
 			}
 			first := point("daily")
+			if mode == "bad-expiry" {
+				first["expiryTime"] = "2026-10-21T01:00:00Z"
+			}
+			if mode == "missing-expiry" {
+				delete(first, "expiryTime")
+			}
 			if mode == "contradictory-instance" {
 				first["instance"] = "other"
 			}
@@ -146,6 +152,12 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 		t.Fatalf("native backup missing: %+v", inventory)
 	}
 	original := inventory.Points[0].ID
+	if inventory.Points[0].ExpiresAt == nil || inventory.Points[0].ExpiresAt.Format(time.RFC3339Nano) != "2026-10-21T03:00:00Z" {
+		t.Fatal("native expiry was dropped or expired history erased", inventory.Points)
+	}
+	if !strings.Contains(lc.must("backups", "native-inventory", source.ID, "--json"), `"expires_at": "2026-10-21T03:00:00Z"`) {
+		t.Fatal("CLI dropped native expiry")
+	}
 	if !strings.Contains(lc.must("backups", "native-inventory", source.ID, "--json"), original) || !strings.Contains(lc.must("backups", "native-refresh", source.ID, "--json"), original) {
 		t.Fatal("shared CLI lost Cloud SQL backup")
 	}
@@ -158,7 +170,7 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 			t.Fatalf("partial scan erased prior observation: %+v", inventory)
 		}
 	}
-	for _, failure := range []string{"denied", "foreign-project", "wrong-engine", "contradictory-instance", "malformed-instance"} {
+	for _, failure := range []string{"denied", "foreign-project", "wrong-engine", "contradictory-instance", "malformed-instance", "bad-expiry"} {
 		mu.Lock()
 		mode = failure
 		mu.Unlock()
@@ -179,6 +191,9 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 		c.must(http.StatusOK, http.MethodGet, path, nil, &inventory)
 		if inventory.Source.State != "failed" || inventory.Source.Complete || len(inventory.Points) != 1 || inventory.Points[0].ID != original || strings.Contains(inventory.Source.Error, "private") {
 			t.Fatal("failed scan erased history or leaked provider diagnostic")
+		}
+		if inventory.Points[0].ExpiresAt == nil || inventory.Points[0].ExpiresAt.Format(time.RFC3339Nano) != "2026-10-21T03:00:00Z" {
+			t.Fatal("failed refresh replaced the last observed expiry")
 		}
 	}
 	mu.Lock()
@@ -212,6 +227,16 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 	if beforeReads != afterReads || inventory.Source.PhysicalID != source.PhysicalID || len(inventory.Points) != 1 || inventory.Points[0].ID != original {
 		t.Fatal("deleted original required reusable instance lookup or lost its history")
 	}
+	if inventory.Points[0].ExpiresAt == nil || inventory.Points[0].ExpiresAt.Format(time.RFC3339Nano) != "2026-10-21T03:00:00Z" {
+		t.Fatal("restart lost retained expiry")
+	}
+	mu.Lock()
+	mode = "missing-expiry"
+	mu.Unlock()
+	c.must(http.StatusOK, http.MethodPost, path+"/refresh", nil, &inventory)
+	if len(inventory.Points) != 1 || inventory.Points[0].ID != original || inventory.Points[0].ExpiresAt != nil {
+		t.Fatal("missing native expiry became a claimed retention window")
+	}
 	mu.Lock()
 	mode = "empty"
 	mu.Unlock()
@@ -243,8 +268,10 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 	other.must(http.StatusNotFound, http.MethodGet, path, nil, nil)
 	other.must(http.StatusNotFound, http.MethodPost, path+"/refresh", nil, nil)
 	mu.Lock()
-	defer mu.Unlock()
-	if reads != before {
+	after := reads
+	mu.Unlock()
+	if after != before {
 		t.Fatal("foreign organization reached native backup API")
 	}
+	holdCatalogBrowser(t, running.srv.URL, plan.ProjectID, connection.ID)
 }

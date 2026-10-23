@@ -194,6 +194,30 @@ func TestServicesAddRefusesBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestServicesAddPlansResourceOnlyConfigurationWithoutRepositories(t *testing.T) {
+	app, _ := recipesCLI(t, recipestest.Registry(t), func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/manifest/edits"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "rev_1", "yaml": "version: 1\nresources: {cache: {kind: sample}}\n"})
+		case strings.HasSuffix(r.URL.Path, "/plans"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["catalog"] != true {
+				t.Errorf("repository-free manifest lost catalog mode: %+v", body)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"plan_1","status":"planning"}`))
+		case r.URL.Path == "/api/v1/plans/plan_1":
+			_, _ = w.Write([]byte(`{"id":"plan_1","status":"ready","executable":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	if err := app.Run([]string{"services", "add", "shop", "--kind", "sample", "--name", "cache", "--target", "conn_1", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestServicesCreateTakesServiceProjectKindsOnly(t *testing.T) {
 	reg := recipestest.Registry(t)
 	for kind, want := range map[string]string{"postgres": "17", "valkey": "8.1", "sample": "", "nothing": ""} {

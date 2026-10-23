@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 type forwardExecutor struct {
@@ -66,7 +67,7 @@ func (e *forwardExecutor) Apply(ctx context.Context, job *deployments.Job) (*dep
 	if err := job.Checkpoint([]byte(`{"candidate":"accepted"}`)); err != nil {
 		return nil, err
 	}
-	return &deployments.Outcome{ExternalID: "candidate-" + key, Revision: "accepted-revision"}, nil
+	return &deployments.Outcome{ExternalID: "candidate-" + key + "-" + job.Action.Name, Revision: "accepted-revision"}, nil
 }
 func (e *forwardExecutor) Remove(ctx context.Context, job *deployments.Job, b *planning.Binding) error {
 	if e.expectedActor != "" && job.Deployment.StartedBy != e.expectedActor {
@@ -278,10 +279,9 @@ func addForwardRoute(t *testing.T, f *forwardFixture) {
 		t.Fatal(err)
 	}
 }
-func TestSharedSyncRoutingRetainsSourceAndUnrelatedProject(t *testing.T) {
-	f := newForwardFixture(t)
+func retainUnrelatedForwardProject(t *testing.T, f *forwardFixture) json.RawMessage {
+	t.Helper()
 	ctx := t.Context()
-	// Both projects share server-1. Only the reviewed target migrates.
 	target, err := f.clouds.GetTarget(ctx, "org", "", "cloud", "pool-target")
 	if err != nil {
 		t.Fatal(err)
@@ -297,6 +297,14 @@ func TestSharedSyncRoutingRetainsSourceAndUnrelatedProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return unrelated
+}
+
+func TestSharedSyncRoutingRetainsSourceAndUnrelatedProject(t *testing.T) {
+	f := newForwardFixture(t)
+	ctx := t.Context()
+	// Both projects share server-1. Only the reviewed target migrates.
+	unrelated := retainUnrelatedForwardProject(t, f)
 	addForwardRoute(t, f)
 	f.routes.pending = true
 	p := reviewPoolChange(t, f.service)
@@ -495,5 +503,189 @@ func TestSharedSyncRouteHistoryIsProjectScoped(t *testing.T) {
 	full, err := manager.CloudSync(t.Context(), actor, "", saved.ID)
 	if err != nil || len(full.Environments) != 2 || len(full.Environments[1].Routes) != 1 {
 		t.Fatal("manager lost route history", err)
+	}
+}
+
+func TestSharedSyncMixedRoutingEvidenceCannotBypassRecordedRoutes(t *testing.T) {
+	f := newForwardFixture(t)
+	ctx := t.Context()
+	addForwardRoute(t, f)
+	// Add a public service without recorded routes through a real accepted source plan.
+	retainUnrelatedForwardProject(t, f)
+	host, err := f.store.GetServer(ctx, "org", "cloud", "server-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.Health.EffectiveCPUMillis = 3000
+	if err = f.store.SaveServer(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	f.pool.Members[0].CPUMillis = 3000
+	if err = f.store.SavePool(ctx, f.pool, f.pool.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	req := f.request("env", "public")
+	req.CPUMillis = 500
+	req.StickyServerID = "server-1"
+	placement, err := f.store.PreviewPlacement(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := f.plan(t, "source-public", req, placement)
+	f.accept(t, "source-public")
+	if _, err = f.sql.Exec(ctx, `INSERT INTO loomplane_deployments(id,org_id,project_id,environment_id,environment,plan_id,commit_sha,status,started_by,started_at) VALUES('source-public','org','proj','env','production','source-public','reviewed','succeeded','usr',now())`); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := f.plans.ListBindings(ctx, "org", "env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := *bindings[0]
+	var cfg planning.ServiceConfig
+	if err = json.Unmarshal(source.Config, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Service, cfg.Public, cfg.Port = "public", true, 8080
+	cfg.Size = &manifest.Size{CPU: 0.5, Memory: 512}
+	cfg.Endpoint = &manifest.Endpoint{HostPort: 18080}
+	cfg.Target, cfg.CloudPlacement = placement.ConnectionID, pin
+	cfg.TargetSettings = map[string]string{"docker_id": placement.ConnectionID, "architecture": "amd64"}
+	source.ID, source.Name, source.ExternalID, source.PlanID, source.ConnectionID = "binding-public", "public", "instance-public", "source-public", placement.ConnectionID
+	source.Config, err = json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.plans.PutBinding(ctx, &source); err != nil {
+		t.Fatal(err)
+	}
+	p := reviewPoolChange(t, f.service)
+	if !slices.ContainsFunc(p.Environments, func(e cloudprofiles.EnvironmentChange) bool {
+		return e.EnvironmentID == "env" && e.ExternalRouting && len(e.Services) == 2
+	}) {
+		t.Fatalf("mixed preview missing unmanaged requirement: %+v", p.Environments)
+	}
+	actor := security.Principal{OrgID: "org", UserID: "usr"}
+	sync, err := f.service.ApplyCloudChange(ctx, actor, "", p.ID, p.Revision, "mixed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.routes.pending = true
+	f.executor.failCleanup = false
+	if err = f.service.ReconcileCloudSync(ctx, "org", "", sync.ID, nil); !errors.Is(err, cloudinfra.ErrPending) {
+		t.Fatal("recorded route did not wait", err)
+	}
+	f.routes.pending = false
+	if err = f.service.ReconcileCloudSync(ctx, "org", "", sync.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	waiting, _, err := f.clouds.GetSync(ctx, "org", "", sync.ID)
+	if err != nil || waiting.Status != cloudprofiles.SyncRouting || len(f.executor.removals) != 0 || !slices.ContainsFunc(waiting.Environments, func(e cloudprofiles.EnvironmentChange) bool {
+		return e.EnvironmentID == "env" && e.RoutingStatus == cloudprofiles.SyncSucceeded && e.RoutingEvidence == "" && len(e.Routes) == 1
+	}) {
+		t.Fatal("recorded readiness bypassed unmanaged evidence", waiting, err)
+	}
+	f.routes.pending = true
+	if _, err = f.service.CompleteCloudRouting(ctx, actor, "", sync.ID, "env", "unmanaged service independently verified"); err != nil {
+		t.Fatal("mixed environment cannot submit unmanaged evidence", err)
+	}
+	if err = f.service.ReconcileCloudSync(ctx, "org", "", sync.ID, nil); !errors.Is(err, cloudinfra.ErrPending) || len(f.executor.removals) != 0 {
+		t.Fatal("manual evidence bypassed recorded wait", err, f.executor.removals)
+	}
+	if _, err = f.service.RetryCloudSync(ctx, actor, "", sync.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.routes.pending, f.routes.drift = false, true
+	f.service.BindCloudSyncRunner(f.runner(), f.runner())
+	if err = f.service.ReconcileCloudSync(ctx, "org", "", sync.ID, nil); !errors.Is(err, cloudinfra.ErrPending) || len(f.executor.removals) != 0 {
+		t.Fatal("manual evidence bypassed drift after restart", err)
+	}
+	f.routes.drift = false
+	if err = f.service.ReconcileCloudSync(ctx, "org", "", sync.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	done, _, err := f.clouds.GetSync(ctx, "org", "", sync.ID)
+	if err != nil || done.Status != cloudprofiles.SyncSucceeded || len(f.executor.removals) != 2 {
+		t.Fatal("mixed routing did not finish", done, err, f.executor.removals)
+	}
+}
+
+type routeRetryAuth struct {
+	actors []string
+	denied string
+}
+
+func (a *routeRetryAuth) Require(_ context.Context, p security.Principal, _ security.Permission, _ string) error {
+	a.actors = append(a.actors, p.UserID)
+	if p.UserID == a.denied {
+		return security.ErrForbidden
+	}
+	return nil
+}
+func TestSharedRouteRetryPersistsExecutionActorAndRejectsStaleWorker(t *testing.T) {
+	f := newForwardFixture(t)
+	addForwardRoute(t, f)
+	ctx := t.Context()
+	route, err := f.store.Route(ctx, "org", "proj", "route-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := security.Principal{OrgID: "org", UserID: "original"}
+	current := security.Principal{OrgID: "org", UserID: "current"}
+	op := &cloudinfra.RouteOperation{ID: "accepted-retry", Kind: "prepare", Status: "waiting", Attempt: 1, Revision: 1, Principal: original, Route: *route, Source: route}
+	if err = f.store.PreviewRoute(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := f.store.RouteOperation(ctx, "org", op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := &routeRetryAuth{denied: "original"}
+	svc := cloudinfra.NewService(cloudinfra.Deps{Store: f.store, Domains: f.store, Authz: auth})
+	if _, err = svc.RetryRoute(ctx, original, "proj", op.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatal("revoked retry accepted", err)
+	}
+	unchanged, err := f.store.RouteOperation(ctx, "org", op.ID)
+	if err != nil || !reflect.DeepEqual(stale, unchanged) {
+		t.Fatal("denied retry changed durable operation", err)
+	}
+	accepted, err := svc.RetryRoute(ctx, current, "proj", op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedStore := cloudinfra.NewPgStore(f.db)
+	saved, err := restartedStore.RouteOperation(ctx, "org", op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ExecutionPrincipal == nil || *saved.ExecutionPrincipal != current || saved.Principal != original || saved.ID != op.ID || !reflect.DeepEqual(saved.Route, op.Route) || saved.Attempt != 2 || saved.Revision != accepted.Revision {
+		t.Fatalf("retry storage lost current actor or accepted inputs: %+v", saved)
+	}
+	public, err := json.Marshal(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(public), "current") || strings.Contains(string(public), "execution_principal") {
+		t.Fatal("private actor leaked", string(public))
+	}
+	stale.Status = "succeeded"
+	if err = f.store.SaveRouteOperation(ctx, stale); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("stale worker overwrote retry", err)
+	}
+	if _, err = f.store.BeginIngress(ctx, stale); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("stale worker reclaimed execution", err)
+	}
+	auth.actors = nil
+	worker := cloudinfra.NewService(cloudinfra.Deps{Store: restartedStore, Domains: restartedStore, Authz: auth})
+	// Binding resolution stops this fixture before DNS or SSH. Authorization runs in the real worker.
+	if err = worker.ReconcileRoute(ctx, "org", op.ID, nil); err != nil && !errors.Is(err, cloudinfra.ErrPending) {
+		t.Fatal(err)
+	}
+	if len(auth.actors) == 0 || slices.Contains(auth.actors, "original") {
+		t.Fatal("restarted worker did not use durable retry actor", auth.actors)
+	}
+	final, err := restartedStore.RouteOperation(ctx, "org", op.ID)
+	if err != nil || final.Principal != original || final.ExecutionPrincipal == nil || *final.ExecutionPrincipal != current {
+		t.Fatal("worker changed audit or execution actor", err)
 	}
 }

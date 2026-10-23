@@ -166,12 +166,16 @@ func (a *App) addCatalogService(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	if _, err = c.EditManifest(bounded, projectID, client.ManifestEdit{AddResource: &client.NewResource{
+	revision, err := c.EditManifest(bounded, projectID, client.ManifestEdit{AddResource: &client.NewResource{
 		Name: name, Kind: kind, Provider: targetProvider, Target: target, Version: version,
-	}}); err != nil {
+	}})
+	if err != nil {
 		return fmt.Errorf("add %s to the configuration of project %s: %w", name, projectID, err)
 	}
-	plan, err := c.CreatePlan(bounded, projectID, client.NewPlan{Environment: ctx.String("env")})
+	configuration, parseErr := manifest.Parse([]byte(revision.YAML))
+	// An unknown configuration keeps normal source-pinning requirements.
+	catalog := parseErr == nil && configuration.CatalogOnly()
+	plan, err := c.CreatePlan(bounded, projectID, client.NewPlan{Environment: ctx.String("env"), Catalog: catalog})
 	if err != nil {
 		return fmt.Errorf("plan project %s: %w", projectID, err)
 	}

@@ -1107,6 +1107,7 @@ export interface NativePoint {
   createdAt: string;
   encrypted: boolean;
   engine: string;
+  expiresAt: string | null;
   id: string;
   kind: string;
   kmsKey?: string;

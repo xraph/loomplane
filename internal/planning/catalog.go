@@ -71,5 +71,5 @@ func (p *planner) configureCatalog(name, base string, resource manifest.Resource
 }
 
 func catalogOnly(m *manifest.Manifest) bool {
-	return m != nil && m.Version == manifest.Version && len(m.Services) == 0 && len(m.Gateways) == 0 && len(m.Links) == 0
+	return m.CatalogOnly()
 }

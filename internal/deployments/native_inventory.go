@@ -94,7 +94,7 @@ func (n *NativeDatabases) cloudSQLSnapshots(ctx context.Context, b *planning.Bin
 		if cfg.Kind != "postgres" || version == point.DatabaseVersion || version != cfg.Version {
 			return nil, false, fmt.Errorf("%w: native backup engine does not match the reviewed source", recovery.ErrInvalid)
 		}
-		points = append(points, recovery.NativePoint{ProviderID: point.Name, Name: strings.TrimPrefix(point.Name, "projects/"+key.ProjectID+"/backups/"), Kind: point.Type, Status: point.State, Engine: cfg.Kind, Version: version, CreatedAt: point.CreatedAt, Encrypted: true, KMSKey: point.KMSKey})
+		points = append(points, recovery.NativePoint{ProviderID: point.Name, Name: strings.TrimPrefix(point.Name, "projects/"+key.ProjectID+"/backups/"), Kind: point.Type, Status: point.State, Engine: cfg.Kind, Version: version, CreatedAt: point.CreatedAt, ExpiresAt: point.ExpiresAt, Encrypted: true, KMSKey: point.KMSKey})
 	}
 	return points, complete, nil
 }

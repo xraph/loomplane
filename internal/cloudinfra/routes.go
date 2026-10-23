@@ -51,30 +51,39 @@ type Route struct {
 }
 
 type RouteOperation struct {
-	CreatedAt        time.Time               `json:"created_at"`
-	Source           *Route                  `json:"source,omitempty"`
-	HandoffID        string                  `json:"handoff_id,omitempty"`
-	NotBefore        time.Time               `json:"not_before"`
-	CancelledIngress *IngressTransition      `json:"-"`
-	SourceTransition *IngressTransition      `json:"-"`
-	ID               string                  `json:"id" forge:"id"`
-	Route            Route                   `json:"route"`
-	Kind             string                  `json:"kind"`
-	Status           string                  `json:"status"`
-	Message          string                  `json:"message"`
-	Review           string                  `json:"review"`
-	ExpiresAt        time.Time               `json:"expires_at"`
-	Attempt          int                     `json:"attempt"`
-	Revision         int64                   `json:"revision"`
-	Generation       int64                   `json:"generation"`
-	DNSAttempted     bool                    `json:"dns_attempted"`
-	DesiredRecord    provider.DNSRecord      `json:"desired_record"`
-	PreviousReceipt  *provider.DNSRecord     `json:"previous_receipt,omitempty"`
-	Receipt          *provider.DNSRecord     `json:"receipt,omitempty"`
-	DesiredConfig    *server.IngressConfig   `json:"-"`
-	PreviousConfig   *server.IngressSnapshot `json:"-"`
-	AppliedConfig    *server.IngressSnapshot `json:"-"`
-	Principal        security.Principal      `json:"-"`
+	CreatedAt          time.Time               `json:"created_at"`
+	Source             *Route                  `json:"source,omitempty"`
+	HandoffID          string                  `json:"handoff_id,omitempty"`
+	NotBefore          time.Time               `json:"not_before"`
+	CancelledIngress   *IngressTransition      `json:"-"`
+	SourceTransition   *IngressTransition      `json:"-"`
+	ID                 string                  `json:"id" forge:"id"`
+	Route              Route                   `json:"route"`
+	Kind               string                  `json:"kind"`
+	Status             string                  `json:"status"`
+	Message            string                  `json:"message"`
+	Review             string                  `json:"review"`
+	ExpiresAt          time.Time               `json:"expires_at"`
+	Attempt            int                     `json:"attempt"`
+	Revision           int64                   `json:"revision"`
+	Generation         int64                   `json:"generation"`
+	DNSAttempted       bool                    `json:"dns_attempted"`
+	DesiredRecord      provider.DNSRecord      `json:"desired_record"`
+	PreviousReceipt    *provider.DNSRecord     `json:"previous_receipt,omitempty"`
+	Receipt            *provider.DNSRecord     `json:"receipt,omitempty"`
+	DesiredConfig      *server.IngressConfig   `json:"-"`
+	PreviousConfig     *server.IngressSnapshot `json:"-"`
+	AppliedConfig      *server.IngressSnapshot `json:"-"`
+	Principal          security.Principal      `json:"-"`
+	ExecutionPrincipal *security.Principal     `json:"-"`
+}
+
+// executionPrincipal falls back for operations accepted before retry actors were stored.
+func (op *RouteOperation) executionPrincipal() security.Principal {
+	if op.ExecutionPrincipal != nil {
+		return *op.ExecutionPrincipal
+	}
+	return op.Principal
 }
 
 type IngressState struct {
@@ -214,6 +223,7 @@ func (s *Service) ApplyRoute(ctx context.Context, p security.Principal, project,
 		return nil, checkErr
 	}
 	op.Status, op.Attempt = "pending", 1
+	op.ExecutionPrincipal = &p
 	if checkErr := st.AcceptRoute(ctx, op); checkErr != nil {
 		return nil, checkErr
 	}
@@ -225,7 +235,7 @@ func (s *Service) ApplyRoute(ctx context.Context, p security.Principal, project,
 func (s *Service) enqueueRoute(ctx context.Context, op *RouteOperation) {
 	if workflow, ok := s.Workflow.(RouteWorkflow); ok {
 		if err := workflow.StartRoute(ctx, op.Route.OrgID, op.ID, op.Attempt); err != nil {
-			s.domainAudit(ctx, op.Principal, "domain.route.enqueue_pending", op.ID, op.Route.ProjectID)
+			s.domainAudit(ctx, op.executionPrincipal(), "domain.route.enqueue_pending", op.ID, op.Route.ProjectID)
 		}
 	}
 }
@@ -239,6 +249,7 @@ func (s *Service) RetryRoute(ctx context.Context, p security.Principal, project,
 		return nil, ErrConflict
 	}
 	op.Status, op.Message, op.Attempt = "pending", "", op.Attempt+1
+	op.ExecutionPrincipal = &p
 	if checkErr := st.SaveRouteOperation(ctx, op); checkErr != nil {
 		return nil, checkErr
 	}

@@ -86,6 +86,18 @@ test("adds the resource with uses, then plans without catalog mode", async () =>
   expect(progress).toHaveBeenCalled()
 })
 
+test("uses catalog mode only when the edited manifest is resource-only", async () => {
+  const calls = serve(() =>
+    json({
+      id: "rev_2",
+      revision: 2,
+      manifest: { version: 1, resources: { cache: { kind: "memcached" } } },
+    })
+  )
+  await addCatalogService(input, vi.fn())
+  expect(calls[1].body).toEqual({ environment: "staging", catalog: true })
+})
+
 test("refuses a name the manifest already uses", async () => {
   const calls = serve(() => json({ message: "gateway is taken" }, 422))
   await expect(addCatalogService(input, vi.fn())).rejects.toThrow(

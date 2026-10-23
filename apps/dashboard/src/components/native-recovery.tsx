@@ -245,6 +245,12 @@ function NativePoints({
               <p className="text-xs text-muted-foreground">
                 {source.provider === "cloud-sql" ? "Point time" : "Created"}{" "}
                 {formatDate(point.createdAt)} · {point.engine} {point.version}
+                {" · "}
+                <span>
+                  {point.expiresAt
+                    ? `Provider expiry ${formatDate(point.expiresAt)}`
+                    : "Expiry not reported"}
+                </span>
               </p>
               <details className="text-xs">
                 <summary className="cursor-pointer text-muted-foreground">

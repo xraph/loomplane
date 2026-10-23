@@ -11,7 +11,19 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-function fixture({ fail = false, empty = false, cloudSQL = false } = {}) {
+function fixture({
+  fail = false,
+  empty = false,
+  cloudSQL = false,
+  expiresAt,
+  dropExpiryOnRefresh = false,
+}: {
+  fail?: boolean
+  empty?: boolean
+  cloudSQL?: boolean
+  expiresAt?: string
+  dropExpiryOnRefresh?: boolean
+} = {}) {
   let refreshes = 0
   const source = {
     id: "source",
@@ -52,14 +64,18 @@ function fixture({ fail = false, empty = false, cloudSQL = false } = {}) {
                 source_id: "source",
                 provider_id: "arn:snapshot",
                 name: "daily",
-                kind: "manual",
-                status: "available",
+                kind: cloudSQL ? "FINAL" : "manual",
+                status: cloudSQL ? "SUCCESSFUL" : "available",
                 engine: "postgres",
                 version: "17.2",
                 encrypted: true,
                 created_at: "2026-10-20T00:00:00Z",
                 last_seen_at: "2026-10-21T00:00:00Z",
                 present: true,
+                expires_at:
+                  expiresAt && !(dropExpiryOnRefresh && refreshes)
+                    ? expiresAt
+                    : null,
               },
             ],
           }
@@ -145,4 +161,38 @@ it("explains missing source proof in partial Cloud SQL inventory", async () => {
   ).toBeInTheDocument()
   expect(screen.getByText(/point time/i)).toBeInTheDocument()
   expect(screen.getByText(/partial scan/i)).toBeInTheDocument()
+})
+
+it("keeps unknown expiry separate from permanent retention", async () => {
+  fixture()
+  show()
+  await screen.findByText("daily")
+  expect(screen.getByText(/expiry not reported/i)).toBeInTheDocument()
+})
+
+it.each(["2026-10-21T03:00:00Z", "2099-10-21T03:00:00Z"])(
+  "shows provider expiry without erasing historical points: %s",
+  async (expiresAt) => {
+    fixture({ cloudSQL: true, expiresAt })
+    show()
+    await screen.findByText("daily")
+    expect(screen.getByText(/provider expiry/i)).toBeInTheDocument()
+    expect(screen.queryByText(/expiry not reported/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/^SUCCESSFUL · FINAL/)).toBeInTheDocument()
+  }
+)
+
+it("clears a formerly reported expiry after refresh through the normalized cache", async () => {
+  fixture({
+    cloudSQL: true,
+    expiresAt: "2026-10-21T03:00:00Z",
+    dropExpiryOnRefresh: true,
+  })
+  show()
+  expect(await screen.findByText(/provider expiry/i)).toBeInTheDocument()
+  await userEvent.click(
+    screen.getByRole("button", { name: "Refresh cloud snapshots" })
+  )
+  expect(await screen.findByText(/expiry not reported/i)).toBeInTheDocument()
+  expect(screen.queryByText(/provider expiry/i)).not.toBeInTheDocument()
 })
