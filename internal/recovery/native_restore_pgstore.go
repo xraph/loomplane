@@ -149,7 +149,7 @@ func (s *PgStore) SaveNativeCheckpoint(ctx context.Context, r *NativeRestore, st
 	if len(trimmed) == 0 || len(trimmed) > 64<<10 || trimmed[0] != '{' || !json.Valid(trimmed) {
 		return ErrInvalid
 	}
-	return nativeRestoreWrite(s.db.Exec(ctx, `UPDATE loomplane_native_restores SET checkpoint=$4 WHERE org_id=$1 AND id=$2 AND token=$3 AND status IN ('running','deleting') AND lease_until>now()`, r.OrgID, r.ID, r.Token, state))
+	return nativeRestoreWrite(s.db.Exec(ctx, `UPDATE loomplane_native_restores SET checkpoint=$4 WHERE org_id=$1 AND id=$2 AND token=$3 AND status IN ('running','deleting') AND lease_until>now() AND (status='deleting' OR expires_at>now())`, r.OrgID, r.ID, r.Token, state))
 }
 
 func (s *PgStore) FinishNativeRestore(ctx context.Context, r *NativeRestore, result NativeRestoreResult, duration time.Duration, cause error) error {
@@ -165,7 +165,7 @@ func (s *PgStore) FinishNativeRestore(ctx context.Context, r *NativeRestore, res
 		status, message = "failed", "Native restore did not finish. Check the saved operation and remove or reconcile the temporary copy."
 	}
 	return nativeRestoreWrite(s.db.Exec(ctx, `UPDATE loomplane_native_restores SET status=$4,error=$5,external_id=$6,physical_id=$7,verified_at=$8,duration_ms=$9,lease_until=NULL
- WHERE org_id=$1 AND id=$2 AND token=$3 AND status='running' AND lease_until>now()`, r.OrgID, r.ID, r.Token, status, message, result.ExternalID, result.PhysicalID, verified, max(duration.Milliseconds(), 0)))
+ WHERE org_id=$1 AND id=$2 AND token=$3 AND status='running' AND lease_until>now() AND ($4='failed' OR expires_at>now())`, r.OrgID, r.ID, r.Token, status, message, result.ExternalID, result.PhysicalID, verified, max(duration.Milliseconds(), 0)))
 }
 
 func (s *PgStore) ClaimNativeCleanup(ctx context.Context, org, id, token string) (*NativeRestore, error) {

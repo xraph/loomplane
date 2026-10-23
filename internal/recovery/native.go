@@ -92,10 +92,13 @@ type NativeBackend interface {
 	CheckNativeSnapshot(context.Context, *planning.Binding, NativePoint) (*NativePoint, error)
 }
 type NativeService struct {
-	Store    NativeStore
-	Authz    Authorizer
-	Projects Projects
-	Backend  NativeBackend
+	Store       NativeStore
+	Authz       Authorizer
+	Projects    Projects
+	Backend     NativeBackend
+	Copies      NativeCopyWorkStore
+	CopyBackend NativeCopyBackend
+	EnqueueCopy func(context.Context, string, string) error
 }
 
 func (s *NativeService) List(ctx context.Context, p security.Principal, project string, page NativePageInput) (*NativeSourcesPage, error) {
