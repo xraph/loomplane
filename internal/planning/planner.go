@@ -1493,7 +1493,7 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 			Message: fmt.Sprintf("Nothing says how to start %s, so its buildpack runs gunicorn with main:app. Add a Procfile with a web: line, or a Dockerfile, if that's wrong.", name),
 		})
 	}
-	if prov.Scaling {
+	if prov.Scaling || prov.Cloud == "server" {
 		cfg.Scale, cfg.Size = set.Scale, set.Size
 	} else if set.Scale != nil || set.Size != nil {
 		p.warn(Finding{
