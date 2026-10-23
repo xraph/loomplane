@@ -40,7 +40,6 @@ type Host = {
   size: string
   status: string
   draining: boolean
-  workloads: number
 }
 type Domain = {
   hostname: string
@@ -55,7 +54,7 @@ type Domain = {
 type MovePin = {
   sourceId: string
   destinationId: string
-  workloads: number
+  workloadId: string
   authority: string
   expiresAt: number
 }
@@ -74,7 +73,6 @@ const initialHosts: Host[] = [
     size: "2 CPU / 4 GiB",
     status: "ready",
     draining: false,
-    workloads: 2,
   },
   {
     id: "us-2",
@@ -83,8 +81,17 @@ const initialHosts: Host[] = [
     size: "4 CPU / 8 GiB",
     status: "ready",
     draining: false,
-    workloads: 0,
   },
+]
+type Workload = {
+  id: string
+  project: string
+  service: string
+  serverId: string
+}
+const initialWorkloads: Workload[] = [
+  { id: "web-api", project: "Web app", service: "api", serverId: "us-1" },
+  { id: "jobs-worker", project: "Jobs", service: "worker", serverId: "us-1" },
 ]
 export function MockCloudInfrastructure({
   tab,
@@ -96,6 +103,10 @@ export function MockCloudInfrastructure({
   onPoolsChange?: (names: string[]) => void
 }) {
   const [hosts, setHosts] = useState(initialHosts)
+  const [workloads, setWorkloads] = useState(initialWorkloads)
+  const workloadsOn = (serverId: string) =>
+    workloads.filter((workload) => workload.serverId === serverId)
+  const workloadCount = (serverId: string) => workloadsOn(serverId).length
   const [pool, setPool] = useState(false)
   const [poolDialog, setPoolDialog] = useState(false)
   const [poolMembers, setPoolMembers] = useState(
@@ -132,7 +143,13 @@ export function MockCloudInfrastructure({
   const [zoneVerified, setZoneVerified] = useState(false)
   const [routeReview, setRouteReview] = useState(false)
   const now = useNow()
-  const moveSource = hosts.find((host) => host.draining && host.workloads > 0)
+  const moveSource = hosts.find(
+    (host) =>
+      host.draining &&
+      workloads.some(
+        (workload) => workload.id === "web-api" && workload.serverId === host.id
+      )
+  )
   const moveEligible = hosts.filter(
     (host) =>
       host.status === "ready" &&
@@ -148,13 +165,13 @@ export function MockCloudInfrastructure({
   const moveAuthority = JSON.stringify({
     generation,
     members: poolMembers,
+    workloads,
     hosts: hosts.map((host) => [
       host.id,
       host.status,
       host.draining,
       host.ownership,
       host.size,
-      host.workloads,
     ]),
   })
   const currentMove = (at: number) =>
@@ -162,7 +179,12 @@ export function MockCloudInfrastructure({
     moveReviewed.authority === moveAuthority &&
     moveReviewed.sourceId === moveSource?.id &&
     moveReviewed.destinationId === moveTarget?.id &&
-    moveReviewed.workloads === moveSource?.workloads &&
+    workloads.some(
+      (workload) =>
+        workload.id === moveReviewed.workloadId &&
+        workload.id === "web-api" &&
+        workload.serverId === moveReviewed.sourceId
+    ) &&
     at < moveReviewed.expiresAt
   const moveValid = currentMove(now)
 
@@ -200,7 +222,6 @@ export function MockCloudInfrastructure({
           size,
           status: "waiting",
           draining: false,
-          workloads: 0,
         },
       ])
     else if (kind === "delete" || kind === "disconnect")
@@ -261,17 +282,25 @@ export function MockCloudInfrastructure({
                     {host.draining ? " · draining" : ""}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {host.ownership} · us-east · {host.size} · {host.workloads}{" "}
-                    workloads
+                    {host.ownership} · us-east · {host.size} ·{" "}
+                    {workloadCount(host.id)} workloads
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Reserved {host.workloads * 500} mCPU /{" "}
-                    {host.workloads * 256} MiB · available{" "}
+                    {workloadsOn(host.id)
+                      .map(
+                        (workload) =>
+                          `${workload.project} / ${workload.service}`
+                      )
+                      .join(" · ") || "No active services"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Reserved {workloadCount(host.id) * 500} mCPU /{" "}
+                    {workloadCount(host.id) * 256} MiB · available{" "}
                     {(host.size.startsWith("4") ? 4000 : 2000) -
-                      host.workloads * 500}{" "}
+                      workloadCount(host.id) * 500}{" "}
                     mCPU /{" "}
                     {(host.size.startsWith("4") ? 8192 : 4096) -
-                      host.workloads * 256}{" "}
+                      workloadCount(host.id) * 256}{" "}
                     MiB
                   </p>
                 </div>
@@ -314,7 +343,8 @@ export function MockCloudInfrastructure({
                     size="sm"
                     variant="ghost"
                     disabled={
-                      host.workloads > 0 || (host.id === "us-1" && retained)
+                      workloadCount(host.id) > 0 ||
+                      (host.id === "us-1" && retained)
                     }
                     onClick={() =>
                       open(
@@ -387,7 +417,7 @@ export function MockCloudInfrastructure({
                       setMoveReviewed({
                         sourceId: moveSource.id,
                         destinationId: moveTarget.id,
-                        workloads: moveSource.workloads,
+                        workloadId: "web-api",
                         authority: moveAuthority,
                         expiresAt: Date.now() + 15 * 60 * 1000,
                       })
@@ -421,9 +451,10 @@ export function MockCloudInfrastructure({
                 {moveValid && (
                   <p className="basis-full text-xs">
                     Move Web app / api from {moveSource?.name} to{" "}
-                    {moveTarget?.name}, {moveReviewed?.workloads} workloads.
-                    Persisted release and destination authority are pinned;
-                    storage migration stays explicit.
+                    {moveTarget?.name}. One service moves; other project
+                    services keep their current bindings. Persisted release and
+                    destination authority are pinned; storage migration stays
+                    explicit.
                   </p>
                 )}
                 {moveAccepted && moveValid && (
@@ -456,19 +487,12 @@ export function MockCloudInfrastructure({
                         onClick={() => {
                           if (!currentMove(Date.now()) || !moveReviewed) return
                           const pin = moveReviewed
-                          setHosts(
-                            hosts.map((host) =>
-                              host.id === pin.sourceId
-                                ? {
-                                    ...host,
-                                    workloads: host.workloads - pin.workloads,
-                                  }
-                                : host.id === pin.destinationId
-                                  ? {
-                                      ...host,
-                                      workloads: host.workloads + pin.workloads,
-                                    }
-                                  : host
+                          setWorkloads((current) =>
+                            current.map((workload) =>
+                              workload.id === pin.workloadId &&
+                              workload.serverId === pin.sourceId
+                                ? { ...workload, serverId: pin.destinationId }
+                                : workload
                             )
                           )
                           setMoveAccepted(false)
@@ -496,7 +520,7 @@ export function MockCloudInfrastructure({
                   size="sm"
                   variant="outline"
                   disabled={hosts.some(
-                    (h) => h.id === "us-1" && h.workloads > 0
+                    (h) => h.id === "us-1" && workloadCount(h.id) > 0
                   )}
                   onClick={() =>
                     open(
@@ -852,12 +876,15 @@ export function MockCloudInfrastructure({
                 )}
                 {editing.server && (
                   <p className="text-xs">
-                    {editing.server.workloads > 0
-                      ? "Web app / api and Jobs / worker"
-                      : "No active services"}
-                    : {editing.server.workloads} workloads. Drain prevents new
-                    placement; it does not migrate data. Retained cleanup must
-                    finish before removal.
+                    {workloadsOn(editing.server.id)
+                      .map(
+                        (workload) =>
+                          `${workload.project} / ${workload.service}`
+                      )
+                      .join(", ") || "No active services"}
+                    : {workloadCount(editing.server.id)} workloads. Drain
+                    prevents new placement; it does not migrate data. Retained
+                    cleanup must finish before removal.
                   </p>
                 )}
                 {review && (

@@ -140,7 +140,7 @@ it("invalidates a move when its reviewed destination leaves the pool and does no
   expect(screen.getByText(/2 workloads/)).toBeInTheDocument()
 })
 
-it("pins the selected eligible destination and keeps staging separate from deployment completion", async () => {
+it("moves only the reviewed API service to the selected host and preserves the unrelated Jobs workload", async () => {
   const user = userEvent.setup()
   render(<MockCloudInfrastructure tab="Servers" failure={false} />)
   await user.click(screen.getByRole("button", { name: "Create server" }))
@@ -188,7 +188,28 @@ it("pins the selected eligible destination and keeps staging separate from deplo
   )
   expect(
     screen.getByText("third-host · ready").parentElement
-  ).toHaveTextContent("2 workloads")
+  ).toHaveTextContent("1 workloads")
+  const source = screen
+    .getByText("shared-us-1 · ready · draining")
+    .closest("[role=listitem]")
+  const destination = screen
+    .getByText("third-host · ready")
+    .closest("[role=listitem]")
+  expect(source).toHaveTextContent("1 workloads")
+  expect(source).toHaveTextContent("Jobs / worker")
+  expect(source).not.toHaveTextContent("Web app / api")
+  expect(destination).toHaveTextContent("Web app / api")
+  expect(destination).not.toHaveTextContent("Jobs / worker")
+  expect(screen.getAllByText("Web app / api", { exact: true })).toHaveLength(1)
+  expect(screen.getAllByText("Jobs / worker", { exact: true })).toHaveLength(1)
+  expect(
+    screen.queryByRole("button", {
+      name: "Simulate reviewed deployment completion",
+    })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.getByRole("button", { name: "Preview reservation recovery" })
+  ).toBeDisabled()
   expect(
     screen.getByText("shared-us-2 · ready").parentElement
   ).toHaveTextContent("0 workloads")
