@@ -1293,6 +1293,32 @@ func TestRunner_aDeleteWhoseConnectionIsGoneStopsTrackingIt(t *testing.T) {
 	}
 }
 
+// Deleting a database forgets every credential kept for it, the
+// administrator's password of one Loomplane runs itself included.
+func TestRunner_deletingADatabaseForgetsEveryCredential(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-sql", log: log}
+	plan, was := dbMoves()
+	plan.Actions[0].Op, plan.Actions[0].Provider, plan.Actions[0].Region, plan.Actions[0].Resource = planning.Delete, was.Provider, was.Region, nil
+	r, store, _, secrets := moveRunner(t, plan, was, map[string]Executor{was.Provider: exec})
+	for _, field := range resourceCredentialFields {
+		secrets.m[resourceKey("org_1", "env_1", "db", field)] = []byte("secret")
+	}
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	for _, field := range resourceCredentialFields {
+		if _, ok := secrets.m[resourceKey("org_1", "env_1", "db", field)]; ok {
+			t.Errorf("db's %s is still kept", field)
+		}
+	}
+}
+
 // projectSQL provisions databases the way Cloud SQL does: in the project
 // the job's connection reaches, under cloudSQLInstance's name, creating
 // one when that project has none by that name.

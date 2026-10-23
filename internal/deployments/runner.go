@@ -636,7 +636,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			if r.resources == nil {
 				return nil
 			}
-			for _, field := range []string{ResourceURL, passwordField} {
+			for _, field := range resourceCredentialFields {
 				if derr := r.resources.Delete(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field)); derr != nil {
 					return derr
 				}
