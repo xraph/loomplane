@@ -493,6 +493,14 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			action = a
 		}
 	}
+	if action.Compensation != nil {
+		if checkErr := r.validateCompensationCapability(ctx, d, plan, action); checkErr != nil {
+			return checkErr
+		}
+	}
+	if action.Compensation != nil && action.Provider == "server" && action.Compensation.ServerAttempt && ctx.Value(compensationRunKey{}) == nil {
+		return r.runCloudCompensation(ctx, d, plan, action, step, heartbeat)
+	}
 	poolLock, err := r.beginPoolExecution(ctx, plan, action)
 	if err != nil {
 		return err
@@ -505,7 +513,9 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, finishAttempt(runErr == nil && len(action.Routes) == 0)) }()
+	defer func() {
+		runErr = errors.Join(runErr, finishAttempt(runErr == nil && len(action.Routes) == 0 && plan.CloudSyncID == ""))
+	}()
 	admission, err := r.directServerAdmission(ctx, plan, action)
 	if err != nil {
 		return err
@@ -1030,6 +1040,9 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 	left := slices.Clone(bound.Replaced)
 	var errs []error
 	for _, old := range bound.Replaced {
+		if c := job.Action.Compensation; c != nil && c.Retained && (old.PlanID != c.Candidate.PlanID || bindingIdentity(&old) != bindingIdentity(&c.Candidate)) {
+			continue
+		}
 		done := true
 		same, identityErr := r.sameBindingResource(ctx, job.Deployment.OrgID, &old, bound)
 		if identityErr != nil {

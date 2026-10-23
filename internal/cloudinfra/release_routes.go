@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -18,6 +19,8 @@ type ReleaseRouteRequest struct {
 	Key, ProjectID, EnvironmentID, Service, CloudID, InstanceID string
 	Routes                                                      []Route
 	DrainSeconds                                                int
+	CleanupOnly                                                 bool
+	Checkpoint                                                  func(cloudprofiles.SyncRoute) error
 }
 
 func releasePrepareID(key, route string) string {
@@ -38,6 +41,11 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		if source.Binding.BackendName() == RouteBackendKubernetes {
 			continue
 		}
+		progress := cloudprofiles.SyncRoute{RouteID: source.ID, Hostname: source.Input.Hostname, PrepareID: releasePrepareID(in.Key, source.ID)}
+		reconcile := func(op *RouteOperation) error {
+			return s.reconcileReleaseProgress(ctx, p, op, &progress, in.Checkpoint)
+		}
+
 		drain, drainErr := ReviewedRouteDrain(source, in.DrainSeconds)
 		if drainErr != nil {
 			return drainErr
@@ -48,6 +56,9 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		preparedID := releasePrepareID(in.Key, source.ID)
 		prepared, readErr := st.RouteOperation(ctx, p.OrgID, preparedID)
 		if errors.Is(readErr, ErrNotFound) {
+			if in.CleanupOnly {
+				return ErrConflict
+			}
 			current, getErr := st.Route(ctx, p.OrgID, in.ProjectID, source.ID)
 			if getErr != nil {
 				return getErr
@@ -65,7 +76,10 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		if prepared.Source == nil || !reflect.DeepEqual(*prepared.Source, source) || prepared.Route.Binding.InstanceID != in.InstanceID {
 			return ErrConflict
 		}
-		if reconcileErr := s.reconcileReleaseOperation(ctx, p, prepared); reconcileErr != nil {
+		if in.CleanupOnly && prepared.Status != "succeeded" {
+			return ErrConflict
+		}
+		if reconcileErr := reconcile(prepared); reconcileErr != nil {
 			return reconcileErr
 		}
 		operations, listErr := st.RouteOperations(ctx, p.OrgID, in.ProjectID, source.ID)
@@ -86,21 +100,30 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 			}
 		}
 		if cutover == nil {
+			if in.CleanupOnly {
+				return ErrConflict
+			}
 			cutover, err = s.CutoverRoute(ctx, p, in.ProjectID, preparedID)
 			if err != nil {
 				return err
 			}
 		}
-		if reconcileErr := s.reconcileReleaseOperation(ctx, p, cutover); reconcileErr != nil {
+		if in.CleanupOnly && cutover.Status != "succeeded" {
+			return ErrConflict
+		}
+		if reconcileErr := reconcile(cutover); reconcileErr != nil {
 			return reconcileErr
 		}
 		if release == nil {
+			if in.CleanupOnly {
+				return ErrConflict
+			}
 			release, err = s.ReleaseRouteHandoff(ctx, p, in.ProjectID, preparedID, drain)
 			if err != nil {
 				return err
 			}
 		}
-		if reconcileErr := s.reconcileReleaseOperation(ctx, p, release); reconcileErr != nil {
+		if reconcileErr := reconcile(release); reconcileErr != nil {
 			return reconcileErr
 		}
 		// A completed checkpoint is not proof that DNS has stayed put since restart.
@@ -123,12 +146,14 @@ func (s *Service) reconcileReleaseOperation(ctx context.Context, p security.Prin
 		}
 		*op = *retried
 	}
-	if reconcileErr := s.ReconcileRoute(ctx, p.OrgID, op.ID, nil); reconcileErr != nil {
-		return reconcileErr
-	}
+	reconcileErr := s.ReconcileRoute(ctx, p.OrgID, op.ID, nil)
 	current, err := st.RouteOperation(ctx, p.OrgID, op.ID)
 	if err != nil {
-		return err
+		return errors.Join(reconcileErr, err)
+	}
+	*op = *current
+	if reconcileErr != nil {
+		return reconcileErr
 	}
 	if current.Status != "succeeded" {
 		return fmt.Errorf("%w: route %s is %s", ErrPending, op.Route.Input.Hostname, current.Status)
@@ -207,4 +232,22 @@ func ReviewedRouteDrain(source Route, minimum int) (int, error) {
 		return 0, fmt.Errorf("%w: reviewed drain exceeds the supported 86400 second bound", ErrInvalid)
 	}
 	return drain, nil
+}
+
+func (s *Service) reconcileReleaseProgress(ctx context.Context, p security.Principal, op *RouteOperation, progress *cloudprofiles.SyncRoute, checkpoint func(cloudprofiles.SyncRoute) error) error {
+	err := s.reconcileReleaseOperation(ctx, p, op)
+	progress.Status, progress.Message = op.Status, op.Message
+	switch op.Kind {
+	case "cutover":
+		progress.CutoverID = op.ID
+	case "release":
+		progress.ReleaseID, progress.NotBefore = op.ID, op.NotBefore
+	}
+	if op.Kind != "release" {
+		progress.RecordType, progress.Value, progress.TTL = op.DesiredRecord.Type, op.DesiredRecord.Value, op.DesiredRecord.TTL
+	}
+	if checkpoint != nil {
+		err = errors.Join(err, checkpoint(*progress))
+	}
+	return err
 }

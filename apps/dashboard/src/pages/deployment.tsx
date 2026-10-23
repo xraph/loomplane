@@ -43,6 +43,7 @@ import {
   Thread,
   currentStep,
 } from "@/components/runs"
+import { ServiceAddress } from "@/components/service-address"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -1007,14 +1008,10 @@ function Services({ run }: { run: Run }) {
                     {a.region ? `, ${a.region}` : ""}
                   </ItemDescription>
                   {s.step?.url && s.state === "done" && (
-                    <a
-                      href={s.step.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-fit text-xs underline-offset-4 hover:underline"
-                    >
-                      {s.step.url.replace(/^https?:\/\//, "")}
-                    </a>
+                    <ServiceAddress
+                      address={s.step.url}
+                      className="w-fit text-xs"
+                    />
                   )}
                 </ItemContent>
                 <ItemActions

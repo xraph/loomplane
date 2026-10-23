@@ -30,6 +30,7 @@ export interface Action {
   adoptCloudPlacement?: boolean;
   changes?: Change[];
   cloudAdoption?: CloudAdoption;
+  compensation?: CloudCompensation;
   connectionId?: string;
   creates: string;
   dependsOn?: string[];
@@ -306,6 +307,17 @@ export interface CloudAdoption {
   externalId: string;
   planId: string;
   revision: string;
+}
+
+export interface CloudCompensation {
+  actionId: string;
+  candidate: Binding;
+  originalCompleted: boolean;
+  planId: string;
+  retained: boolean;
+  routes?: CloudinfraRoute[];
+  serverAttempt: boolean;
+  source: Binding;
 }
 
 export interface CloudForm {
@@ -802,6 +814,8 @@ export interface Environment {
 }
 
 export interface EnvironmentChange {
+  compensationMessage?: string;
+  compensationMode?: string;
   deploymentId?: string;
   environment: string;
   environmentId: string;
@@ -809,7 +823,9 @@ export interface EnvironmentChange {
   externalRouting: boolean;
   planId?: string;
   projectId?: string;
+  routes?: SyncRoute[];
   routingEvidence?: string;
+  routingStatus?: string;
   services: string[];
   status: string;
   summary: PlanSummary;
@@ -1093,6 +1109,40 @@ export interface MoveReview {
   sourceServerId: string;
 }
 
+export interface NativeCopyCapacity {
+  availability: string;
+  computeClass: string;
+  profileId: string;
+  profileRevision: string;
+  storageGb: number;
+  storageType: string;
+}
+
+export interface NativeCopyCreateInputBody {
+  acknowledgeCharges: boolean;
+  requestId: string;
+  reviewToken: string;
+}
+
+export interface NativeCopyReview {
+  capacity: NativeCopyCapacity;
+  notice: string;
+  pointId: string;
+  requestId: string;
+  reviewToken: string;
+  sourceId: string;
+  target: NativeRestoreTarget;
+  ttlHours: number;
+  validUntil: string;
+}
+
+export interface NativeCopyReviewInputBody {
+  cloudId: string;
+  requestId: string;
+  targetId: string;
+  ttlHours: number;
+}
+
 export interface NativeInventory {
   nextBefore?: string;
   points: NativePoint[];
@@ -1103,6 +1153,7 @@ export interface NativePoint {
   createdAt: string;
   encrypted: boolean;
   engine: string;
+  expiresAt: string | null;
   id: string;
   kind: string;
   kmsKey?: string;
@@ -1115,9 +1166,48 @@ export interface NativePoint {
   version: string;
 }
 
+export interface NativeRecoveryCopies {
+  copies: NativeRestore[];
+  nextBefore?: string;
+}
+
 export interface NativeRecoverySources {
   nextBefore?: string;
   sources: NativeSource[];
+}
+
+export interface NativeRestore {
+  cleanupBy?: string;
+  cleanupRequestedAt?: string;
+  createdAt: string;
+  createdBy: string;
+  durationMs: number;
+  environmentId: string;
+  error?: string;
+  expiresAt: string;
+  externalId?: string;
+  id: string;
+  orgId: string;
+  physicalId?: string;
+  pointId: string;
+  projectId: string;
+  sourceId: string;
+  status: string;
+  target: NativeRestoreTarget;
+  verifiedAt?: string;
+}
+
+export interface NativeRestoreTarget {
+  accountIdentity: string;
+  cloudId?: string;
+  cloudRevision?: number;
+  connectionId: string;
+  grantRevision?: number;
+  nativeProject?: string;
+  provider: string;
+  region: string;
+  targetId?: string;
+  targetRevision?: number;
 }
 
 export interface NativeSource {
@@ -2359,6 +2449,20 @@ export interface Sync {
   status: string;
   targetId?: string;
   updatedAt: string;
+}
+
+export interface SyncRoute {
+  cutoverId?: string;
+  hostname: string;
+  message?: string;
+  notBefore: string;
+  prepareId: string;
+  recordType?: string;
+  releaseId?: string;
+  routeId: string;
+  status: string;
+  ttl?: number;
+  value?: string;
 }
 
 export interface Target {

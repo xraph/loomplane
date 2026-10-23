@@ -3,7 +3,7 @@
 // projects already deployed. Kinds registered with the API after the five
 // databases follow them, each opening a page that adds it to a project.
 import { ChevronRightIcon, SearchIcon } from "lucide-react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 
 import { statusOf } from "@/client/errors"
 import {
@@ -20,6 +20,7 @@ import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
@@ -159,6 +160,7 @@ export function Services() {
   const kinds = useQuery(useCatalogKindsList)
   const [group, setGroup] = useState<"all" | Group>("all")
   const [query, setQuery] = useState("")
+  const search = useRef<HTMLInputElement>(null)
   const q = query.trim().toLowerCase()
   const searched = catalog.filter(
     (e) =>
@@ -193,7 +195,7 @@ export function Services() {
       <Page>
         <PageHeading
           title="Services"
-          description="Databases and caches Loomplane runs for you, with persistent storage and native backups. Each one's backups are on its project, under Backups."
+          description="Choose a service, then review where it runs and how its data is protected."
         />
 
         <section aria-label="Your services" className="grid gap-2">
@@ -212,14 +214,23 @@ export function Services() {
           ) : !projects.data ? (
             <Skeleton className="h-16 rounded-xl" />
           ) : yours.length === 0 ? (
-            <Empty className="py-6">
+            <Empty className="py-8">
               <EmptyHeader>
                 <EmptyTitle>No service projects yet</EmptyTitle>
                 <EmptyDescription>
-                  Deploy a database or a cache below to create a project with
-                  persistent storage.
+                  Deploy a database or cache below, or add a service to an
+                  existing project.
                 </EmptyDescription>
               </EmptyHeader>
+              <EmptyContent>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => search.current?.focus()}
+                >
+                  Browse catalog
+                </Button>
+              </EmptyContent>
             </Empty>
           ) : (
             <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
@@ -258,6 +269,7 @@ export function Services() {
                 <span className="sr-only">Search the catalog</span>
                 <input
                   data-page-search
+                  ref={search}
                   type="search"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -301,13 +313,26 @@ export function Services() {
           </div>
 
           {shown.length === 0 && registeredShown.length === 0 ? (
-            <Empty className="py-6">
+            <Empty className="py-8">
               <EmptyHeader>
                 <EmptyTitle>Nothing in the catalog matches</EmptyTitle>
                 <EmptyDescription>
                   Try another name, or pick All.
                 </EmptyDescription>
               </EmptyHeader>
+              <EmptyContent>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setQuery("")
+                    setGroup("all")
+                    search.current?.focus()
+                  }}
+                >
+                  Clear filters
+                </Button>
+              </EmptyContent>
             </Empty>
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -399,9 +424,8 @@ export function Services() {
               />
             ))}
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Every service gets a private endpoint and a volume that outlives the
-            container. Point-in-time recovery isn&apos;t available yet, so keep
-            backups somewhere other than the host.
+            Each service lists its storage and backup support. Keep supported
+            backups off the host.
           </p>
         </section>
       </Page>

@@ -197,7 +197,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			return nil, checkErr
 		}
 		if previousRunning {
-			if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(previous.ID)+"/start", nil, nil); checkErr != nil {
+			if checkErr := dockerSetRunning(ctx, c, previous.ID, true); checkErr != nil {
 				return nil, checkErr
 			}
 		}
@@ -249,7 +249,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 				return
 			}
 			if wasRunning {
-				err = errors.Join(err, dockerJSON(cleanup, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/start", nil, nil))
+				err = errors.Join(err, dockerSetRunning(cleanup, c, old.ID, true))
 			}
 		}
 		if reserved && cleaned && (old == nil || old.Config.Labels[owned.LabelHostPort] != strconv.Itoa(reservation.Port)) {
@@ -330,7 +330,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: old.ID}, Endpoints: r.endpoints(c, iid, spec, labels)}, nil
 		}
 		changed = true
-		if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/stop?t=10", nil, nil); checkErr != nil {
+		if checkErr := dockerSetRunning(ctx, c, old.ID, false); checkErr != nil {
 			return nil, checkErr
 		}
 		if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/rename?name="+backup, nil, nil); checkErr != nil {
@@ -347,7 +347,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := uploadFiles(ctx, c, result.ID, values); checkErr != nil {
 		return nil, checkErr
 	}
-	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(result.ID)+"/start", nil, nil); checkErr != nil {
+	if checkErr := dockerSetRunning(ctx, c, result.ID, true); checkErr != nil {
 		return nil, checkErr
 	}
 	if checkErr := r.wait(ctx, c, name, iid, labels); checkErr != nil {
@@ -379,6 +379,9 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 			value = labelPort(labels[owned.LabelHostPort])
 		}
 		protocol := "http"
+		if labels[owned.LabelHealthProtocol] == "memcached" && port.Container == labelPort(labels[owned.LabelHealthPort]) {
+			protocol = "memcached"
+		}
 		if labels[LabelDatabase] != "" {
 			protocol = "postgresql"
 		}
@@ -614,11 +617,24 @@ func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]s
 	if err != nil {
 		return err
 	}
+	return dockerSetRunning(ctx, c, info.ID, running)
+}
+
+func dockerSetRunning(ctx context.Context, c *Client, container string, running bool) error {
 	action := "stop?t=10"
 	if running {
 		action = "start"
 	}
-	return dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(info.ID)+"/"+action, nil, nil)
+	res, err := c.Request(ctx, http.MethodPost, "/containers/"+url.PathEscape(container)+"/"+action, nil)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode == http.StatusNotModified {
+		// Docker returns 304 when the container already has the requested state.
+		defer res.Body.Close()
+		return nil
+	}
+	return dockerResult(res, nil)
 }
 func (*Runtime) Scale(context.Context, id.ID, map[string]string, cpprovider.ResourceSpec) error {
 	return ctrlplane.ErrProviderUnavail

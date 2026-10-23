@@ -201,17 +201,18 @@ func (s *Session) EnsureDBInstance(ctx context.Context, spec DBInstanceSpec, tra
 
 // DBSnapshot is native recovery metadata. It is separate from Trove backup files.
 type DBSnapshot struct {
-	ID            string    `json:"id"`
-	ARN           string    `json:"arn"`
-	InstanceID    string    `json:"instance_id"`
-	ResourceID    string    `json:"resource_id"`
-	Status        string    `json:"status"`
-	Type          string    `json:"type"`
-	Engine        string    `json:"engine,omitempty"`
-	EngineVersion string    `json:"engine_version,omitempty"`
-	Encrypted     bool      `json:"encrypted"`
-	KMSKey        string    `json:"kms_key,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	ARN             string    `json:"arn"`
+	InstanceID      string    `json:"instance_id"`
+	ResourceID      string    `json:"resource_id"`
+	Status          string    `json:"status"`
+	Type            string    `json:"type"`
+	Engine          string    `json:"engine,omitempty"`
+	EngineVersion   string    `json:"engine_version,omitempty"`
+	Encrypted       bool      `json:"encrypted"`
+	EncryptionKnown bool      `json:"-"`
+	KMSKey          string    `json:"kms_key,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // FinalDBSnapshotID remains stable across retries and changes with incarnation.

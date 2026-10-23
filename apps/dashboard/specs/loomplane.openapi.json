@@ -3038,6 +3038,97 @@
         }
       }
     },
+    "/api/v1/native-recovery-copies": {
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryCopies.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeCopyCreateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Admitted temporary native copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRestore"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-copies/{id}": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryCopies.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native copy and cleanup status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRestore"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryCopies.cleanup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Requested temporary copy cleanup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRestore"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/native-recovery-sources/{id}": {
       "get": {
         "tags": [
@@ -3053,6 +3144,34 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "environment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3062,6 +3181,57 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NativeInventory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-sources/{id}/points/{pointId}/copy-review": {
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryCopies.review",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pointId",
+            "in": "path",
+            "description": "Path parameter: pointId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeCopyReviewInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Checked temporary native copy review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeCopyReview"
                 }
               }
             }
@@ -5362,6 +5532,65 @@
         }
       }
     },
+    "/api/v1/projects/{id}/native-recovery-copies": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryCopies.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retained native recovery copies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRecoveryCopies"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/native-recovery-sources": {
       "get": {
         "tags": [
@@ -5374,6 +5603,34 @@
             "in": "path",
             "description": "Path parameter: id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
             "schema": {
               "type": "string"
             }
@@ -7557,6 +7814,9 @@
           "cloud_adoption": {
             "$ref": "#/components/schemas/CloudAdoption"
           },
+          "compensation": {
+            "$ref": "#/components/schemas/CloudCompensation"
+          },
           "connection_id": {
             "type": "string"
           },
@@ -8484,6 +8744,47 @@
           },
           "revision": {
             "type": "string"
+          }
+        }
+      },
+      "CloudCompensation": {
+        "type": "object",
+        "required": [
+          "plan_id",
+          "action_id",
+          "source",
+          "candidate",
+          "retained",
+          "server_attempt",
+          "original_completed"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/Binding"
+          },
+          "original_completed": {
+            "type": "boolean"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "retained": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudinfraRoute"
+            }
+          },
+          "server_attempt": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Binding"
           }
         }
       },
@@ -10177,6 +10478,12 @@
           "external_routing"
         ],
         "properties": {
+          "compensation_message": {
+            "type": "string"
+          },
+          "compensation_mode": {
+            "type": "string"
+          },
           "deployment_id": {
             "type": "string"
           },
@@ -10198,7 +10505,16 @@
           "project_id": {
             "type": "string"
           },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncRoute"
+            }
+          },
           "routing_evidence": {
+            "type": "string"
+          },
+          "routing_status": {
             "type": "string"
           },
           "services": {
@@ -11178,6 +11494,123 @@
           }
         }
       },
+      "NativeCopyCapacity": {
+        "type": "object",
+        "required": [
+          "profile_id",
+          "profile_revision",
+          "compute_class",
+          "storage_gb",
+          "storage_type",
+          "availability"
+        ],
+        "properties": {
+          "availability": {
+            "type": "string"
+          },
+          "compute_class": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_revision": {
+            "type": "string"
+          },
+          "storage_gb": {
+            "type": "integer"
+          },
+          "storage_type": {
+            "type": "string"
+          }
+        }
+      },
+      "NativeCopyCreateInputBody": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "review_token",
+          "acknowledge_charges"
+        ],
+        "properties": {
+          "acknowledge_charges": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "review_token": {
+            "type": "string"
+          }
+        }
+      },
+      "NativeCopyReview": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "review_token",
+          "source_id",
+          "point_id",
+          "target",
+          "capacity",
+          "ttl_hours",
+          "valid_until",
+          "notice"
+        ],
+        "properties": {
+          "capacity": {
+            "$ref": "#/components/schemas/NativeCopyCapacity"
+          },
+          "notice": {
+            "type": "string"
+          },
+          "point_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "review_token": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/NativeRestoreTarget"
+          },
+          "ttl_hours": {
+            "type": "integer"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NativeCopyReviewInputBody": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "cloud_id",
+          "target_id",
+          "ttl_hours"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "ttl_hours": {
+            "type": "integer"
+          }
+        }
+      },
       "NativeInventory": {
         "type": "object",
         "required": [
@@ -11211,6 +11644,7 @@
           "engine",
           "version",
           "created_at",
+          "expires_at",
           "encrypted",
           "present",
           "last_seen_at"
@@ -11225,6 +11659,10 @@
           },
           "engine": {
             "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "nullable": true
           },
           "id": {
             "type": "string",
@@ -11260,6 +11698,24 @@
           }
         }
       },
+      "NativeRecoveryCopies": {
+        "properties": {
+          "copies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativeRestore"
+            }
+          },
+          "next_before": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "copies"
+        ],
+        "type": "object",
+        "x-forge-envelope": "copies"
+      },
       "NativeRecoverySources": {
         "properties": {
           "next_before": {
@@ -11277,6 +11733,123 @@
         ],
         "type": "object",
         "x-forge-envelope": "sources"
+      },
+      "NativeRestore": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "source_id",
+          "point_id",
+          "target",
+          "status",
+          "created_by",
+          "created_at",
+          "expires_at",
+          "duration_ms"
+        ],
+        "properties": {
+          "cleanup_by": {
+            "type": "string"
+          },
+          "cleanup_requested_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "physical_id": {
+            "type": "string"
+          },
+          "point_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/NativeRestoreTarget"
+          },
+          "verified_at": {
+            "type": "string"
+          }
+        }
+      },
+      "NativeRestoreTarget": {
+        "type": "object",
+        "required": [
+          "provider",
+          "connection_id",
+          "account_identity",
+          "region"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "cloud_revision": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "native_project": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_revision": {
+            "type": "integer"
+          }
+        }
       },
       "NativeSource": {
         "type": "object",
@@ -15668,6 +16241,52 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SyncRoute": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "prepare_id",
+          "status",
+          "hostname",
+          "not_before"
+        ],
+        "properties": {
+          "cutover_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "not_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "prepare_id": {
+            "type": "string"
+          },
+          "record_type": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
           }
         }
       },

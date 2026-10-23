@@ -12,7 +12,7 @@ In **Services**, you can also deploy PostgreSQL 17 through a checked AWS RDS or 
 
 The form keeps a link to your project if creation fails or takes longer than its wait limit. Once a project exists, use that project to inspect the result. **New service** starts a separate creation and requires a new name. Managed operations can take up to 45 minutes before the form stops waiting; this limit does not cancel a cloud operation.
 
-Managed creation has been checked through the actual API and dashboard against controlled provider endpoints, at desktop and narrow widths. Live cloud creation and recovery remain unqualified. You can also use project manifests or prepare standalone plans with `loomctl`, as shown below. The recovery controls in this guide apply to the Docker and Kubernetes profiles. Managed services keep their provider-native backups separate from Trove exports.
+Managed creation has been checked through the actual API and dashboard against controlled provider endpoints, at desktop and narrow widths. Live cloud creation and recovery remain unqualified. You can also use project manifests or prepare standalone plans with `loomctl`, as shown below. The export and file-restore controls below apply to the Docker and Kubernetes profiles. Managed services keep their provider-native backups separate from Trove exports.
 
 | Connected provider | Existing resource adapters                                       |
 | ------------------ | ---------------------------------------------------------------- |
@@ -27,35 +27,69 @@ RDS saves a creation intent before sending the request, then captures the provid
 
 RDS retries require the original password in Vault. They cannot reset it implicitly or publish a new password. Protected removal also keeps its intent before requesting deletion, so retry can inspect the original final snapshot without sending another delete. Older bindings without a physical ID pin the currently observed database during explicit execution; they cannot prove ownership of an earlier incarnation. These paths have been checked through the actual API, deployment store and Vault against controlled AWS endpoints, including restart and lost responses. Live AWS creation, SQL persistence and snapshot restore remain unqualified.
 
-Cloud SQL deployments save the account, region, resource settings and each native operation before moving to the next setup step. A retry follows the captured operation for instance creation, database creation, user setup or protected removal. Checkpoint failures stop further work. If a request may have reached Google but its operation ID was not saved, Loomplane blocks replay and asks you to reconcile the original operation. Older operation-only checkpoints also need reconciliation. Automatic discovery for these uncertain requests is still pending.
+Cloud SQL deployments save the account, region, resource settings and each native operation before moving to the next setup step. A retry follows the captured operation for instance creation, database creation, user setup or protected removal. Checkpoint failures stop further work.
+
+If a new instance's create response loses its operation ID, Retry can read Google's operation history using the saved request time and original service account. The scan must return every page within its limit of ten pages of 100 operations, with one possible CREATE after that request. The operation must have succeeded, its native time interval must contain the instance's creation time, and the instance must match the saved intent label, placement and engine. Multiple possible creates, missing metadata, provider warnings or failed reads block setup. Loomplane rereads the selected operation and instance, then saves the recovered operation and creation pin before database or user setup. It never sends the create request again.
+
+This discovery uses the native history Google returns. It does not establish how long Google retains that history, or prove ownership after an external recreation whose earlier operation has disappeared. Reconcile externally recreated instances before Retry. A lost database, user or removal operation ID still requires reconciliation because those operation records do not identify the complete original mutation payload. Version 2 checkpoints can follow a captured operation, but cannot discover an unknown one without the original request context.
 
 Cloud SQL saves a creation intent label with each new instance. Before it polls further or creates your database and user, it pins the provider's creation time, project, region and instance name. Retry checks that pin again, including after an app restart. A reused name or a missing original blocks setup and removal. Your bound instance and a resumed user operation require the original password in Vault; a missing password cannot trigger a reset. New services refuse an existing instance without a saved operation or binding.
 
-This pin identifies an observed creation, not a provider-issued immutable UUID. Cloud SQL writes address instances by name, so the checks are fresh reads rather than atomic write preconditions. A replacement between a check and Google's write remains a provider API limitation. Older bindings can capture the currently observed creation during explicit execution, but cannot prove an earlier instance's ownership. Version 1 checkpoints have no creation pin and need reconciliation before retry; their saved operations are retained. Unknown create responses still block replay.
+This pin identifies an observed creation, not a provider-issued immutable UUID. Cloud SQL writes address instances by name, so the checks are fresh reads rather than atomic write preconditions. A replacement between a check and Google's write remains a provider API limitation. Older bindings can capture the currently observed creation during explicit execution, but cannot prove an earlier instance's ownership. Version 1 checkpoints have no creation pin and need reconciliation before retry; their saved operations are retained.
 
-These paths have controlled endpoint and actual API restart tests. Live Google Cloud creation, SQL persistence and restore remain unqualified. Cloud SQL backup inventory and recovery controls are pending. See Google's [instance identity fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/instances) and [operation identities](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/operations).
+These paths have controlled endpoint and actual API restart tests. Live Google Cloud creation, SQL persistence and restore remain unqualified. Cloud SQL backup inventory is available for pinned, reviewed sources; isolated restore controls remain pending. See Google's [instance identity fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/instances) and [operation identities](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/operations).
 
-Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane's Cloud SQL inventory, isolated native restore controls and live cloud recovery qualification remain pending.
+Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane can retain their metadata with matching source identity in Cloud snapshots. Isolated native restore controls and live cloud recovery qualification remain pending.
 
 ## Native cloud snapshot history
 
-Open **Cloud snapshots** under **Service recovery** to inspect captured RDS histories in the selected environment. Choose the physical database history, then select **Refresh cloud snapshots**. This reads manual and automated snapshots from the original checked account and region. It does not create or remove a snapshot.
+Open **Cloud snapshots** under **Service recovery** to inspect captured RDS and Cloud SQL histories in the selected environment. Choose the physical database history, then select **Refresh cloud snapshots**. This reads native recovery points from the original checked account and region. It does not create or remove a snapshot.
 
 The history stays after you remove a service binding. Each saved point keeps its native reference and creation time, so a reused snapshot name gets a separate record. A complete scan can mark earlier points **No longer observed**. A partial scan cannot prove that a point disappeared, and a failed refresh preserves the last successful observations. Check the observation time and completeness before relying on the list.
 
-You need service backup read access. The saved managed account review must still match the connection; a changed account or unready credential blocks refresh. Old unpinned databases and Cloud SQL do not yet have qualified inventory. RDS discovery follows up to ten pages of 100 snapshots per refresh, reports an incomplete scan when more exist, and excludes shared and public snapshots.
+When you open recovery for a named service, Cloud snapshots and copy history stay scoped to that resource, including after its live binding is removed. Changing the resource clears the previous page and any open copy review.
+
+Creation times retain the provider's full nanosecond precision for identity and pagination. The `native_point_creation_identity` migration derives an exact key from the retained point JSON and keeps existing point IDs. Stop older API and worker processes before upgrading: their inventory writes use the previous uniqueness constraint. Allow time for the table rewrite and exclusive lock. The migration cannot recover points overwritten before this upgrade, and downgrade refuses while any native point history remains.
+
+You need service backup read access. The saved managed account review must still match the connection; a changed account or unready credential blocks refresh. Old unpinned databases cannot refresh until an explicit execution captures their current identity. RDS discovery follows up to ten pages of 100 snapshots per refresh, reports an incomplete scan when more exist, and excludes shared and public snapshots.
+
+Cloud SQL reads up to ten pages of 100 backups from the saved Google project. Each point must include source settings that match the original creation pin. If a list entry omits those settings, Loomplane reads that backup's own details. It never asks the current instance to prove an old backup's source. A backup from a newer instance that reused the name is excluded.
+
+Missing source proof, unavailable point times, provider warnings or more pages leave the scan partial. Partial and failed scans preserve earlier observations. Only a complete scan can mark an earlier point no longer observed; the record stays in history. Cloud SQL's point time is the backup interval start, not a measured export completion or a promised PITR window. Google encrypts Cloud SQL backups by default, and Loomplane retains the optional KMS key reference. See Google's [backup fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/Backups), [project backup listing](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/Backups/ListBackups) and [backup encryption](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/backups).
+
+Cloud SQL points retain the provider's absolute expiry time when reported. The dashboard and CLI show missing expiry as not reported, including RDS snapshots without an absolute expiry. Requested retention days do not supply that timestamp. Expired observations stay in history; refresh the original account to inspect current provider metadata before planning recovery. Inventory does not establish that a point can still be restored.
+
+Your Google account needs permission to list and read these backups. A failed permission check leaves saved observations available so you can correct the account and retry. API, CLI, deletion and restart checks use controlled Google endpoints with a real local control-plane database. Live Google Cloud inventory and recovery remain unqualified.
 
 You can read and refresh the same history with the CLI:
 
 ```sh
-loomctl backups native-sources PROJECT_ID --json
+loomctl backups native-sources PROJECT_ID --environment-id ENVIRONMENT_ID --resource DATABASE_NAME --json
 loomctl backups native-inventory SOURCE_ID --limit 50 --json
 loomctl backups native-refresh SOURCE_ID --json
 ```
 
-Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. Isolated native restore, PITR, deletion and retention controls remain unavailable in Loomplane; use your provider's controls until those paths are qualified.
+Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. RDS native restore, PITR and native-backup deletion and retention controls remain unavailable in Loomplane.
 
-Live AWS snapshot and recovery qualification remain pending.
+The source and copy list commands accept `--environment-id` and `--resource` independently. Resource names match exactly. Each page and its cursor use the same scope, so a page cannot silently continue into another resource's history. Omit these filters to list the project's retained histories.
+
+For Cloud SQL PostgreSQL 17, open **Cloud snapshots** in the project's recovery screen, then **Review native copy** on a saved point. Choose a project-granted Cloud and a managed Cloud SQL target in a separate recovery project. Review its compute, disk, region and lifetime, then acknowledge charges before creating the copy. A review lasts ten minutes; the copy's requested lifetime can be one to 24 hours. These capacity details do not include a price estimate.
+
+You can save and submit the same review with `loomctl`:
+
+```sh
+loomctl backups native-copies review SOURCE_ID POINT_ID --cloud CLOUD_ID --target TARGET_ID --ttl-hours 2 --out recovery-review.json
+loomctl backups native-copies create --review-file recovery-review.json --acknowledge-charges --wait
+loomctl backups native-copies PROJECT_ID --environment-id ENVIRONMENT_ID --resource DATABASE_NAME --limit 25 --json
+loomctl backups native-copies show COPY_ID --wait
+loomctl backups native-copies cleanup COPY_ID --yes --wait
+```
+
+The review file is created with owner-only permissions and will not overwrite an existing file. Keep it if admission loses its response: retrying the same file returns the original copy without extending its expiry. In the dashboard, **Retry same request** does the same. Check retained copy history before starting a separate request.
+
+**Native recovery copies** records status independently of snapshot inventory. A queued or available cloud instance is not SQL proof; the copy needs a recorded verification time. **Clean up copy** requires confirmation. **Cleanup needs attention** keeps the error and offers a retry. Charges can continue after expiry until deletion is confirmed. A revoked placement grant blocks new copy work, but an administrator with current recovery permission can still finish cleanup.
+
+Native copy API, CLI, Dispatch and Vault checks use a real local control-plane database with controlled Google endpoints. The SQL verifier and backend also run against a private PostgreSQL fixture. Live Cloud SQL restore, IAM/TLS, privilege authority and cost qualification remain unverified; unsafe inherited SQL privileges cause verification to fail. Browser rendering of the native-copy UI and credential access for a verified copy remain unfinished. Live AWS snapshot and recovery qualification also remain pending.
 
 ## Persistence and backup storage
 
@@ -266,6 +300,10 @@ Worker loss keeps an accepted point unavailable for restore. On the Docker/local
 | Create a recovery copy        | `POST /api/v1/service-backups/:id/restore`                                                                     | `service_restore:manage`                        |
 | List/read copies              | `GET /api/v1/projects/:id/service-restores`, `GET /api/v1/service-restores/:id`                                | `service_backup:read`                           |
 | Remove a copy                 | `DELETE /api/v1/service-restores/:id`                                                                          | `service_restore:manage`                        |
+| Review a native copy          | `POST /api/v1/native-recovery-sources/:id/points/:pointId/copy-review`                                          | `service_restore:manage`                        |
+| Admit a native copy           | `POST /api/v1/native-recovery-copies`                                                                         | `service_restore:manage`                        |
+| List/read native copies       | `GET /api/v1/projects/:id/native-recovery-copies`, `GET /api/v1/native-recovery-copies/:id`                       | `service_backup:read`                           |
+| Clean up a native copy        | `DELETE /api/v1/native-recovery-copies/:id`                                                                    | `service_restore:manage`                        |
 
 Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Project retirement lists also accept `backup_id` to resolve one recovery point without scanning other histories. Backup schedule updates accept `environment`, `resource`, `every_hours` and `enabled`. Retention policy updates accept the observed `revision`, `policy` (`older_than_days`, `keep_last`) and `enabled`. Retention history accepts `before` and `limit` (1 to 100). Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
 

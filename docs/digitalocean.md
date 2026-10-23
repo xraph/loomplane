@@ -1,4 +1,4 @@
-# Deploy to DigitalOcean App Platform
+# Deploy to DigitalOcean
 
 Loomplane can run your services on DigitalOcean App Platform and give them Managed PostgreSQL, MySQL and Valkey databases. App Platform builds each service from your repository, so you don't need a registry or a builder of your own.
 
@@ -48,16 +48,30 @@ A brand-new app's `ondigitalocean.app` address takes a few minutes to appear in 
 
 ## Databases
 
-| Manifest kind | Made on DigitalOcean | Versions |
-| --- | --- | --- |
-| `postgres` | Managed PostgreSQL | 17, 16, 15 |
-| `mysql` | Managed MySQL | 8 |
-| `redis` | Managed Valkey, which speaks the Redis protocol | DigitalOcean's current one |
+| Manifest kind | Made on DigitalOcean                            | Versions                   |
+| ------------- | ----------------------------------------------- | -------------------------- |
+| `postgres`    | Managed PostgreSQL                              | 17, 16, 15                 |
+| `mysql`       | Managed MySQL                                   | 8                          |
+| `redis`       | Managed Valkey, which speaks the Redis protocol | DigitalOcean's current one |
 
 Each is a single `db-s-1vcpu-1gb` node in the datacenter that matches the region: `nyc` gets `nyc3`, `ams` gets `ams3`, `fra` gets `fra1`, and so on. You can name a datacenter outright, such as `nyc1`, as a resource's region. The services that need a database get its connection string as a secret, with TLS required. Loomplane doesn't set trusted sources, so add them in DigitalOcean if you want only your apps to reach it.
 
 Removing a database from the manifest deletes it with its data, so take a backup first if you need one.
 
-## What it can't do yet
+## App Platform limits
 
-A private service is only reachable from inside its own App Platform app, and each service here gets its own app, so nothing can call one. The planner says so and asks you to make it public. Loomplane doesn't attach custom domains; add them to the app in DigitalOcean. Build logs stay on the app's **Activity** tab, and Loomplane shows the deployment's progress.
+A private service is only reachable from inside its own App Platform app, and each service here gets its own app, so nothing can call one. The planner says so and asks you to make it public. App Platform custom domain attachment remains a separate managed-platform capability; server ingress routes below do not configure App Platform domains. Build logs stay on the app's **Activity** tab, and Loomplane shows the deployment's progress.
+
+## Shared Droplet capacity and independent DNS
+
+You can also provision managed Droplets in an organization Cloud, adopt a pinned SSH/Docker host, and place services through server pools. This uses the server runtime. Your existing App Platform manifests keep using the managed runtime.
+
+Start with `loomctl clouds create --organization --name Shared`, then run `loomctl cloud-servers options cloud_... conn_...` for the connected DigitalOcean account's supported regions, sizes and bootstrap images. Review a typed server creation input with `cloud-servers preview`, accept its returned review with `cloud-servers apply`, and follow the persisted operation through provider actions and enrollment. A provider action can complete before Docker is ready. Read [Clouds and deployment targets](clouds.md#manage-servers-and-pools) for the complete commands, pool budgets and adoption rules.
+
+DigitalOcean compute and DNS capabilities are checked independently. Your App Platform token scopes do not establish Droplet or DNS permissions: the selected operation must have the required account permission, and unsupported or denied operations fail before new effects. Keep credentials in Integrations.
+
+For a managed DNS zone, use `loomctl dns-zones create --file zone.json` with `mode: "managed"`, the zone name, your DNS connection ID and allowed project IDs. You can use a different account for compute and DNS. An external zone instead returns an ownership proof and manual record instructions. Neither mode buys a domain or changes registrar nameservers.
+
+Routes use reviewed server ingress and retain exact provider DNS receipts. DNS, TLS and backend status are reported independently. Follow route history and any drain deadline before removing old capacity, and supply the maximum previously served external TTL when you manage DNS yourself. The new record's TTL does not tell you what clients still have cached.
+
+Stop older app and worker binaries before upgrading the database. Pending mixed managed/server attempts without provider quiescence proof and legacy unfenced attempts require reconciliation; they are not repaired by blindly retrying. Fixture-backed provider and ACME checks do not qualify your DigitalOcean account, DNS propagation or public certificate issuance. Verify those with your own authorized live scope before a production move.

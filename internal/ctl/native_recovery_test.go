@@ -1,10 +1,47 @@
 package ctl
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 )
+
+func TestNativeInventoryCLIKeepsReportedAndUnknownExpiry(t *testing.T) {
+	for _, expiry := range []string{"", "2026-10-21T03:00:00Z"} {
+		for _, jsonOutput := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/json=%t", expiry, jsonOutput), func(t *testing.T) {
+				app, out := recoveryCLI(t, func(w http.ResponseWriter, _ *http.Request) {
+					field := ""
+					if expiry != "" {
+						field = fmt.Sprintf(`,"expires_at":%q`, expiry)
+					}
+					fmt.Fprintf(w, `{"source":{"id":"source","state":"ready"},"points":[{"id":"point","name":"daily","status":"SUCCESSFUL","created_at":"2026-10-21T02:00:00Z"%s}]}`, field)
+				})
+				args := []string{"backups", "native-inventory", "source"}
+				if jsonOutput {
+					args = append(args, "--json")
+				}
+				if err := app.Run(args); err != nil {
+					t.Fatal(err)
+				}
+				wanted := "not reported"
+				if expiry != "" {
+					wanted = "2026-10-21 03:00Z"
+					if jsonOutput {
+						wanted = expiry
+					}
+				}
+				if (!jsonOutput || expiry != "") && !strings.Contains(out.String(), wanted) {
+					t.Fatalf("native expiry lost: %s", out.String())
+				}
+				if jsonOutput && expiry == "" && !strings.Contains(out.String(), `"expires_at": null`) {
+					t.Fatal("unknown expiry cannot clear earlier cached metadata")
+				}
+			})
+		}
+	}
+}
 
 func TestNativeRecoveryCLIUsesScopedPagesAndExplicitRefresh(t *testing.T) {
 	for _, command := range []string{"native-sources", "native-inventory", "native-refresh"} {

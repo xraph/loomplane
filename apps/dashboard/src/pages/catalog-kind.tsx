@@ -303,7 +303,7 @@ function AddForm({
           className="h-40"
         />
       ) : !project ? (
-        <ZeroState variant="inline" preview={false}>
+        <ZeroState preview={false} surface={false}>
           <ZeroStateHeader>
             <ZeroStateTitle>No projects yet</ZeroStateTitle>
             <ZeroStateDescription>
@@ -443,7 +443,7 @@ function ProjectForm({
     )
   if (current.status === "error" && statusOf(current.error) === 404)
     return (
-      <ZeroState variant="inline" preview={false}>
+      <ZeroState preview={false} surface={false}>
         <ZeroStateHeader>
           <ZeroStateTitle>{project.name} isn&apos;t set up yet</ZeroStateTitle>
           <ZeroStateDescription>
@@ -615,7 +615,7 @@ function Choices({
             className="h-14"
           />
         ) : targets.length === 0 ? (
-          <ZeroState variant="inline" preview={false}>
+          <ZeroState preview={false} surface={false}>
             <ZeroStateHeader>
               <ZeroStateTitle>Connect a server or a cluster</ZeroStateTitle>
               <ZeroStateDescription>
@@ -894,7 +894,7 @@ function Missing({
   description: string
 }) {
   return (
-    <ZeroState preview={false}>
+    <ZeroState preview={false} surface={false}>
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
           <BoxIcon />

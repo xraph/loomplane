@@ -142,6 +142,8 @@ func TestNativeSourceHistoryRetainsEveryPinnedIncarnation(t *testing.T) {
 		t.Fatalf("source escaped organization: %v", foreignErr)
 	}
 	point := recovery.NativePoint{ProviderID: "arn:aws:rds:us-east-1:123456789012:snapshot:database", Name: "database", Status: "available", Kind: "manual", Engine: "postgres", Version: "17.2", CreatedAt: now.Add(-time.Hour), Encrypted: true}
+	expiry := now.Add(24 * time.Hour).In(time.FixedZone("fixture", 3600))
+	point.ExpiresAt = &expiry
 	refresh := func(points []recovery.NativePoint, complete bool, cause error) error {
 		return native.RefreshNativeInventory(ctx, "org", sourceID, func(context.Context, *recovery.NativeSource) ([]recovery.NativePoint, bool, error) {
 			return points, complete, cause
@@ -155,6 +157,14 @@ func TestNativeSourceHistoryRetainsEveryPinnedIncarnation(t *testing.T) {
 		t.Fatalf("inventory not retained: %+v %v", original, readErr)
 	}
 	originalID := original.Points[0].ID
+	if original.Points[0].ExpiresAt == nil || !original.Points[0].ExpiresAt.Equal(expiry) || original.Points[0].ExpiresAt.Location() != time.UTC {
+		t.Fatal("stored point lost the provider's absolute expiry", original.Points)
+	}
+	invalid := point
+	invalid.ExpiresAt = &invalid.CreatedAt
+	if refreshErr := refresh([]recovery.NativePoint{invalid}, true, nil); !errors.Is(refreshErr, recovery.ErrNativeUnavailable) {
+		t.Fatal("invalid backend expiry replaced previously captured metadata", refreshErr)
+	}
 	if refreshErr := refresh(nil, false, errors.New("private provider credential")); !errors.Is(refreshErr, recovery.ErrNativeUnavailable) {
 		t.Fatal(refreshErr)
 	}
@@ -190,5 +200,18 @@ func TestNativeSourceHistoryRetainsEveryPinnedIncarnation(t *testing.T) {
 	persisted, persistErr := recovery.NewPgStore(db).ReadNativeInventory(ctx, "org", sourceID, recovery.NativePageInput{})
 	if persistErr != nil || len(persisted.Points) != 2 {
 		t.Fatalf("stored history not readable: %+v %v", persisted, persistErr)
+	}
+	for _, kept := range persisted.Points {
+		if kept.ExpiresAt == nil || !kept.ExpiresAt.Equal(expiry) {
+			t.Fatal("failed scans or reopening dropped native expiry", persisted.Points)
+		}
+	}
+	point.ExpiresAt = nil
+	if refreshErr := refresh([]recovery.NativePoint{point}, true, nil); refreshErr != nil {
+		t.Fatal(refreshErr)
+	}
+	unknown, readErr := recovery.NewPgStore(db).ReadNativeInventory(ctx, "org", sourceID, recovery.NativePageInput{})
+	if readErr != nil || len(unknown.Points) != 2 || unknown.Points[0].ExpiresAt != nil || unknown.Points[1].ExpiresAt == nil {
+		t.Fatalf("latest missing expiry changed another point's history: %+v %v", unknown, readErr)
 	}
 }

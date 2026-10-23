@@ -30,7 +30,7 @@ var (
 	// builtinOrder is how the five built-in engines are listed.
 	builtinOrder = []string{"postgres", "mysql", "mariadb", "redis", "valkey"}
 
-	protocols = []string{"http", "tcp", "redis"}
+	protocols = []string{"http", "tcp", "redis", "memcached"}
 	// dependencyFields are what a Ref reads from a dependency other than a
 	// dependency-only kind.
 	dependencyFields = []string{FieldURL, FieldHost, FieldPort, FieldHostPort, FieldUsername, FieldPassword, FieldDatabase, FieldAdminURL, FieldQuery}
@@ -402,6 +402,9 @@ func validateKind(k Kind) []error {
 	}
 	for i := range k.Components {
 		validateComponent(f, &k.Components[i], components, dependencies, secrets)
+		if slices.Contains(k.Targets, "kubernetes") && slices.ContainsFunc(k.Components[i].Ports, func(p Port) bool { return p.Protocol == "memcached" }) {
+			f.add("component %q uses Memcached readiness, which is qualified only on server targets", k.Components[i].Name)
+		}
 	}
 	if cycle := afterCycle(k.Components, components); cycle != nil {
 		f.add("components %s form a cycle through after", strings.Join(cycle, " -> "))
@@ -517,7 +520,7 @@ func validateComponent(f *findings, c *Component, components map[string]*Compone
 		}
 		containerPorts[p.Container] = true
 		if !slices.Contains(protocols, p.Protocol) {
-			f.add("%s port %q protocol %q is not http, tcp or redis", what, p.Name, p.Protocol)
+			f.add("%s port %q protocol %q is not http, tcp, redis or memcached", what, p.Name, p.Protocol)
 		}
 		if p.Routable && p.Control {
 			f.add("%s port %q is both routable and control; a control port is never routed", what, p.Name)
@@ -531,12 +534,12 @@ func validateComponent(f *findings, c *Component, components map[string]*Compone
 		switch {
 		case !ok:
 			f.add("%s readiness names port %q, which it doesn't declare", what, probe.Port)
-		case port.Protocol == "redis":
+		case port.Protocol == "redis" || port.Protocol == "memcached":
 			if probe.Path != "" {
-				f.add("%s readiness port %q speaks redis, so its path %q must be empty", what, probe.Port, probe.Path)
+				f.add("%s readiness port %q speaks %s, so its path %q must be empty", what, probe.Port, port.Protocol, probe.Path)
 			}
 		case port.Protocol != "http":
-			f.add("%s readiness port %q is not an http or redis port", what, probe.Port)
+			f.add("%s readiness port %q is not an http, redis or memcached port", what, probe.Port)
 		case !strings.HasPrefix(probe.Path, "/"):
 			f.add("%s readiness path %q must start with /", what, probe.Path)
 		}

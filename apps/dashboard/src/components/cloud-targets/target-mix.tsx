@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge"
 // A Cloud can spread its targets over any number of connected accounts,
 // several of one provider among them. These show that spread: which
 // accounts a Cloud's targets point at, grouped by provider.
@@ -45,26 +46,36 @@ export function AccountSummary({
   connections: Connection[]
   className?: string
 }) {
-  const list = groups(targets, connections)
-  if (list.length === 0) return null
-  const accounts = new Set(targets.map((t) => t.connectionId)).size
+  const managed = targets.filter((t) => t.runtime !== "server")
+  const pools = targets.filter((t) => t.runtime === "server")
+  const list = groups(managed, connections)
+  if (targets.length === 0) return null
+  const accounts = new Set(managed.map((t) => t.connectionId)).size
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
-      <span className="text-[12.5px] text-muted-foreground">
-        {plural(targets.length, "target")} across {plural(accounts, "account")}{" "}
-        on {plural(list.length, "provider")}
-      </span>
+      {managed.length > 0 && (
+        <span className="text-[12.5px] text-muted-foreground">
+          {plural(managed.length, "target")} across{" "}
+          {plural(accounts, "account")} on {plural(list.length, "provider")}
+        </span>
+      )}
+      {pools.length > 0 && (
+        <span className="text-[12.5px] text-muted-foreground">
+          {plural(pools.length, "server pool target")}
+        </span>
+      )}
       {list.map((g) => (
-        <span
+        <Badge
+          variant="outline"
           key={g.cloud}
-          className="inline-flex h-7 items-center gap-2 rounded-[9px] bg-card pr-2.5 pl-1 text-[12.5px] ring-1 ring-border"
+          className="h-7 gap-2 pr-2.5 pl-1"
         >
           <CloudGlyph cloud={g.cloud} size="xs" />
           <span className="font-medium">{cloudLabel(g.cloud)}</span>
           <span className="text-muted-foreground">
             {plural(g.accounts.size, "account")}
           </span>
-        </span>
+        </Badge>
       ))}
     </div>
   )

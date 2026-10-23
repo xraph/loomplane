@@ -255,7 +255,7 @@ function TargetRow({
       onPendingChange?.(false)
     }
   }
-  if (value.cloudTarget)
+  if (value.cloudTarget || value.cloudTags?.length)
     return (
       <section
         aria-label={`${row.name} configuration`}
@@ -264,7 +264,10 @@ function TargetRow({
         <div className="min-w-0">
           <p className="text-sm font-medium">{row.name}</p>
           <p className="text-xs text-muted-foreground">
-            Cloud target: {value.cloudTarget} · {environment}
+            {value.cloudTarget
+              ? `Cloud target: ${value.cloudTarget}`
+              : `Cloud tags: ${value.cloudTags!.join(", ")}`}{" "}
+            · {environment}
           </p>
         </div>
         <Link

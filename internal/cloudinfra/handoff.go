@@ -2,6 +2,7 @@ package cloudinfra
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -146,7 +147,7 @@ func (s *Service) RollbackRoute(ctx context.Context, p security.Principal, proje
 	if err != nil {
 		return nil, err
 	}
-	if cutover.Kind != "cutover" || cutover.Source == nil || (cutover.Status != "succeeded" && cutover.Status != "waiting" && cutover.Status != "failed") {
+	if cutover.Kind != "cutover" || cutover.Source == nil || (cutover.Status != "succeeded" && cutover.Status != "waiting" && cutover.Status != "failed" && (cutover.Status != "cancelled" || !cutover.DNSAttempted && cutover.DesiredConfig == nil && cutover.AppliedConfig == nil)) {
 		return nil, ErrConflict
 	}
 	if cutover.DNSAttempted && cutover.Receipt == nil {
@@ -303,6 +304,26 @@ func (s *Service) ReleaseRouteHandoff(ctx context.Context, p security.Principal,
 	}
 	if prepared.PreviousReceipt != nil {
 		drainSeconds = max(drainSeconds, prepared.PreviousReceipt.TTL)
+	}
+	// Accepted handoff receipts can outlive the route's current receipt. Keep
+	// their trusted maximum separate from the bounded caller drain interval.
+	operations, err := st.RouteHandoffReceipts(ctx, p.OrgID, project, current.ID, prepared.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, operation := range operations {
+		if operation.HandoffID != prepared.ID || operation.Source == nil || operation.Route.ID != current.ID || operation.Route.OrgID != p.OrgID || operation.Route.ProjectID != project {
+			continue
+		}
+		linked := operation.Kind == "cutover" && reflect.DeepEqual(operation.Source.Binding, prepared.Source.Binding) && reflect.DeepEqual(operation.Route.Binding, prepared.Route.Binding) || operation.Kind == "rollback" && reflect.DeepEqual(operation.Source.Binding, prepared.Route.Binding) && reflect.DeepEqual(operation.Route.Binding, prepared.Source.Binding)
+		if !linked {
+			continue
+		}
+		for _, receipt := range []*provider.DNSRecord{operation.PreviousReceipt, operation.Receipt} {
+			if receipt != nil {
+				drainSeconds = max(drainSeconds, receipt.TTL)
+			}
+		}
 	}
 	opID, err := randomID("routeop")
 	if err != nil {
@@ -478,7 +499,7 @@ func ingressReferences(config server.IngressConfig, backend server.IngressBacken
 // clearInactivePreparation removes only the accepted candidate probe reference.
 // It preserves the public upstream and unrelated routes even without a grant.
 func (s *Service) clearInactivePreparation(ctx context.Context, st DomainStore, c *server.Client, op *RouteOperation, state *IngressState) error {
-	if op.Source == nil || op.Source.Binding.ServerID != op.Route.Binding.ServerID {
+	if op.Source == nil {
 		return nil
 	}
 	if state.Current == nil {
@@ -505,18 +526,53 @@ func (s *Service) clearInactivePreparation(ctx context.Context, st DomainStore, 
 		return ErrConflict
 	}
 	index := slices.IndexFunc(state.Config.Routes, func(r server.IngressRoute) bool { return r.ID == op.Route.ID })
-	candidate := state.Config.Routes[index].PreparedBackend
-	if candidate == nil {
-		return nil
-	}
-	accepted := *candidate
-	accepted.Address = ""
-	if !reflect.DeepEqual(accepted, routeBackend(*op.Source)) {
-		return ErrConflict
-	}
 	desired := state.Config
 	desired.Routes = slices.Clone(state.Config.Routes)
-	desired.Routes[index].PreparedBackend = nil
+	if op.Source.Binding.ServerID == op.Route.Binding.ServerID {
+		candidate := state.Config.Routes[index].PreparedBackend
+		if candidate == nil {
+			return nil
+		}
+		accepted := *candidate
+		accepted.Address = ""
+		if !reflect.DeepEqual(accepted, routeBackend(*op.Source)) {
+			return ErrConflict
+		}
+		desired.Routes[index].PreparedBackend = nil
+	} else {
+		if state.Config.Routes[index].ChallengeAddress == "" {
+			return nil
+		}
+		prepared, readErr := st.RouteOperation(ctx, op.Route.OrgID, op.HandoffID)
+		if readErr != nil {
+			return readErr
+		}
+		if prepared.Source == nil || prepared.SourceTransition == nil || prepared.SourceTransition.Previous == nil || !reflect.DeepEqual(prepared.Source.Binding, op.Route.Binding) || !reflect.DeepEqual(prepared.Route.Binding, op.Source.Binding) {
+			return ErrConflict
+		}
+		transition := prepared.SourceTransition
+		owned := slices.IndexFunc(transition.Desired.Routes, func(r server.IngressRoute) bool { return r.ID == op.Route.ID })
+		if owned < 0 || !reflect.DeepEqual(transition.Desired.Routes[owned], state.Config.Routes[index]) || transition.Desired.Routes[owned].ChallengeAddress != op.Source.Binding.Address {
+			return ErrConflict
+		}
+		// Source preparation changes only this challenge and the config version.
+		// Prove the accepted predecessor had no forwarding before clearing it.
+		var predecessor struct {
+			Version string `json:"@id"`
+		}
+		if json.Unmarshal(transition.Previous.Config, &predecessor) != nil {
+			return ErrConflict
+		}
+		before := transition.Desired
+		before.Routes = slices.Clone(before.Routes)
+		before.Routes[owned].ChallengeAddress = ""
+		before.Version = predecessor.Version
+		raw, encodeErr := before.JSON()
+		if encodeErr != nil || !server.SameIngressConfig(raw, transition.Previous.Config) {
+			return ErrConflict
+		}
+		desired.Routes[index].ChallengeAddress = ""
+	}
 	desired.Version = op.ID + "-abandoned"
 	op.DesiredConfig, op.PreviousConfig = &desired, actual
 	if checkpointErr := st.SaveRouteOperation(ctx, op); checkpointErr != nil {

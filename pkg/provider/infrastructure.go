@@ -153,6 +153,7 @@ type ServerAdapter interface {
 
 // DNSZone identifies a zone in its account. Name is also the request locator on
 // APIs that address domains by name. Nameservers are read-only metadata here.
+// Verified describes provider hosting metadata, not public control of the name.
 type DNSZone struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`

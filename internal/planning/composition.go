@@ -177,6 +177,9 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 	placement, placed := p.in.CloudPlacements[name]
 	placed = placed && placement.Provider == prov.Name
 	placement.Region = region
+	if placed {
+		p.checkCloudServer(ResourceSubject, name, base+".target", placement)
+	}
 	resource := func() *ResourceConfig {
 		cfg := &ResourceConfig{Provider: prov.Name, Region: region, Target: connection.ID, TargetSettings: settings, Kind: kind.Name, Version: version}
 		if placed {

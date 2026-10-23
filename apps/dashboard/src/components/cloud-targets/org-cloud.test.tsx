@@ -71,6 +71,7 @@ function fixture({ granted = false, inUse = false, noTargets = false } = {}) {
         })
       }
       let body: unknown = {}
+      if (path.endsWith("/environments")) body = { environments: [] }
       if (path === "/api/v1/providers")
         body = {
           providers: [
@@ -167,7 +168,8 @@ it("shows an organization's Cloud with the projects allowed on each target", asy
   expect(
     await screen.findByText("3 targets across 3 accounts on 2 providers")
   ).toBeInTheDocument()
-  expect(await screen.findByText("Web app")).toBeInTheDocument()
+  await userEvent.click(screen.getByRole("tab", { name: "Projects" }))
+  expect((await screen.findAllByText("Web app")).length).toBeGreaterThan(0)
   // Web app may use frontend and api, not worker.
   const chips = screen.getAllByText(/^(Frontend|Api|Worker)$/)
   expect(chips.length).toBeGreaterThan(0)
@@ -180,16 +182,15 @@ it("gives a project access to only the targets you tick", async () => {
   const user = userEvent.setup()
   const { writes } = fixture()
   show()
+  await user.click(screen.getByRole("tab", { name: "Projects" }))
   expect(
     await screen.findByText("No project uses this Cloud yet")
   ).toBeInTheDocument()
   await user.click(
     await screen.findByRole("button", { name: "Give a project access" })
   )
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Project" }),
-    "jobs"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Project" }))
+  await user.click(await screen.findByRole("option", { name: /Jobs/ }))
   // Every target starts ticked; leave worker out.
   await user.click(screen.getByRole("checkbox", { name: /Worker/ }))
   await user.click(screen.getByRole("button", { name: "Give access" }))
@@ -201,6 +202,51 @@ it("gives a project access to only the targets you tick", async () => {
         body: { target_ids: ["frontend", "api"] },
       },
     ])
+  )
+})
+
+it("disables target choices for whole Cloud access and all grant choices while saving", async () => {
+  const user = userEvent.setup()
+  fixture()
+  const fetch = globalThis.fetch
+  let finishSave!: (response: Response) => void
+  const pendingSave = new Promise<Response>((resolve) => {
+    finishSave = resolve
+  })
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/projects/"))
+      return pendingSave
+    return fetch(input, init)
+  })
+  show()
+  await user.click(screen.getByRole("tab", { name: "Projects" }))
+  await user.click(
+    await screen.findByRole("button", { name: "Give a project access" })
+  )
+  const wholeCloud = screen.getByRole("checkbox", { name: /Whole Cloud/ })
+  const frontend = screen.getByRole("checkbox", { name: /Frontend/ })
+  await user.click(wholeCloud)
+  expect(frontend).toHaveAttribute("aria-disabled", "true")
+  await user.click(frontend)
+  expect(frontend).toBeChecked()
+  await user.click(wholeCloud)
+  expect(frontend).not.toHaveAttribute("aria-disabled", "true")
+  await user.click(screen.getByRole("button", { name: "Give access" }))
+  await waitFor(() =>
+    expect(wholeCloud).toHaveAttribute("aria-disabled", "true")
+  )
+  expect(frontend).toHaveAttribute("aria-disabled", "true")
+  expect(screen.getByRole("combobox", { name: "Project" })).toBeDisabled()
+  finishSave(
+    Response.json({
+      cloud_id: "c",
+      project_id: "web",
+      target_ids: ["frontend", "api", "worker"],
+      revision: 2,
+    })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   )
 })
 
@@ -216,10 +262,8 @@ it("sets a targetless Cloud's one provider and account", async () => {
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
   )
   await user.click(screen.getByRole("radio", { name: /DO EU/ }))
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Default region" }),
-    "ams"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Default region" }))
+  await user.click(await screen.findByRole("option", { name: /ams/ }))
   await user.click(screen.getByRole("button", { name: "Set default" }))
   await waitFor(() =>
     expect(writes).toEqual([
@@ -256,4 +300,33 @@ it("explains why a default can't move while an environment uses the Cloud", asyn
   expect(await screen.findByRole("alert")).toHaveTextContent(
     /Unassign the Cloud from those environments first/
   )
+})
+
+it("reviews a default provider switch through the organization Cloud change contract", async () => {
+  fixture()
+  const user = userEvent.setup()
+  render(
+    <ClientProvider client={forgeClient}>
+      <OrganizationCloud
+        cloud={
+          {
+            ...cloud,
+            defaultPlacement: {
+              provider: "vercel",
+              connectionId: "v",
+              region: "",
+            },
+          } as never
+        }
+      />
+    </ClientProvider>
+  )
+  await user.click(await screen.findByRole("button", { name: "Change" }))
+  await user.click(
+    await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
+  )
+  await user.click(screen.getByRole("radio", { name: /DO US/ }))
+  expect(
+    screen.getByRole("button", { name: "Review default switch" })
+  ).toBeInTheDocument()
 })

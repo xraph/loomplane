@@ -34,22 +34,46 @@ func scanNativeSource(row pgx.Row) (*NativeSource, error) {
 func (s *PgStore) GetNativeSource(ctx context.Context, org, id string) (*NativeSource, error) {
 	return scanNativeSource(s.db.QueryRow(ctx, `SELECT `+nativeSourceColumns+` FROM loomplane_native_sources WHERE org_id=$1 AND id=$2`, org, id))
 }
+
+func scanNativePoint(row pgx.Row) (*NativePoint, error) {
+	var point NativePoint
+	var raw []byte
+	var id, source string
+	var present bool
+	var seen time.Time
+	if err := row.Scan(&id, &source, &raw, &present, &seen); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, &point); err != nil {
+		return nil, err
+	}
+	point.ID, point.SourceID, point.Present, point.LastSeenAt = id, source, present, seen.UTC()
+	return &point, nil
+}
+
+func (s *PgStore) GetNativePoint(ctx context.Context, org, source, id string) (*NativePoint, error) {
+	return scanNativePoint(s.db.QueryRow(ctx, `SELECT id,source_id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3`, org, source, id))
+}
 func (s *PgStore) ListNativeSources(ctx context.Context, org, project string, page NativePageInput) (*NativeSourcesPage, error) {
 	limit, err := page.pageSize()
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT ` + nativeSourceColumns + ` FROM loomplane_native_sources WHERE org_id=$1 AND project_id=$2 AND ($3='' OR environment_id=$3)`
-	args := []any{org, project, page.EnvironmentID}
+	scope := ` FROM loomplane_native_sources WHERE org_id=$1 AND project_id=$2 AND ($3='' OR environment_id=$3) AND ($4='' OR name=$4)`
+	query := `SELECT ` + nativeSourceColumns + scope
+	args := []any{org, project, page.EnvironmentID, page.Resource}
 	if page.Before != "" {
 		var captured time.Time
-		if pageErr := s.db.QueryRow(ctx, `SELECT captured_at FROM loomplane_native_sources WHERE org_id=$1 AND project_id=$2 AND id=$4 AND ($3='' OR environment_id=$3)`, org, project, page.EnvironmentID, page.Before).Scan(&captured); pageErr != nil {
+		if pageErr := s.db.QueryRow(ctx, `SELECT captured_at`+scope+` AND id=$5`, append(args, page.Before)...).Scan(&captured); pageErr != nil {
 			if errors.Is(pageErr, pgx.ErrNoRows) {
 				return nil, ErrNotFound
 			}
 			return nil, pageErr
 		}
-		query += ` AND (captured_at,id)<($4,$5)`
+		query += ` AND (captured_at,id)<($5,$6)`
 		args = append(args, captured, page.Before)
 	}
 	// Limits have already been validated and remain parameters.
@@ -88,24 +112,24 @@ func (s *PgStore) ReadNativeInventory(ctx context.Context, org, id string, page 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // A no-op after commit.
-	source, err := scanNativeSource(tx.QueryRow(ctx, `SELECT `+nativeSourceColumns+` FROM loomplane_native_sources WHERE org_id=$1 AND id=$2 FOR SHARE`, org, id))
+	source, err := scanNativeSource(tx.QueryRow(ctx, `SELECT `+nativeSourceColumns+` FROM loomplane_native_sources WHERE org_id=$1 AND id=$2 AND ($3='' OR environment_id=$3) AND ($4='' OR name=$4) FOR SHARE`, org, id, page.EnvironmentID, page.Resource))
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2`
+	query := `SELECT id,source_id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2`
 	args := []any{org, id}
 	if page.Before != "" {
-		var created time.Time
-		if pageErr := tx.QueryRow(ctx, `SELECT created_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3`, org, id, page.Before).Scan(&created); pageErr != nil {
+		var created string
+		if pageErr := tx.QueryRow(ctx, `SELECT creation_identity FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3`, org, id, page.Before).Scan(&created); pageErr != nil {
 			if errors.Is(pageErr, pgx.ErrNoRows) {
 				return nil, ErrNotFound
 			}
 			return nil, pageErr
 		}
-		query += ` AND (created_at,id)<($3,$4)`
+		query += ` AND (creation_identity,id)<($3,$4)`
 		args = append(args, created, page.Before)
 	}
-	query += ` ORDER BY created_at DESC,id DESC LIMIT ` + nativeLimitPlaceholder(len(args)+1)
+	query += ` ORDER BY creation_identity DESC,id DESC LIMIT ` + nativeLimitPlaceholder(len(args)+1)
 	args = append(args, limit+1)
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
@@ -114,19 +138,11 @@ func (s *PgStore) ReadNativeInventory(ctx context.Context, org, id string, page 
 	defer rows.Close()
 	out := &NativeInventory{Source: *source, Points: []NativePoint{}}
 	for rows.Next() {
-		var point NativePoint
-		var raw []byte
-		var key string
-		var present bool
-		var seen time.Time
-		if err := rows.Scan(&key, &raw, &present, &seen); err != nil {
+		point, err := scanNativePoint(rows)
+		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(raw, &point); err != nil {
-			return nil, err
-		}
-		point.ID, point.SourceID, point.Present, point.LastSeenAt = key, id, present, seen.UTC()
-		out.Points = append(out.Points, point)
+		out.Points = append(out.Points, *point)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -163,6 +179,9 @@ func (s *PgStore) RefreshNativeInventory(ctx context.Context, org, id string, fe
 		if point.ProviderID == "" || point.CreatedAt.IsZero() || point.Name == "" || point.Status == "" || seen[identity] {
 			fetchErr = ErrNativeUnavailable
 		}
+		if point.ExpiresAt != nil && (point.ExpiresAt.IsZero() || !point.ExpiresAt.After(point.CreatedAt)) {
+			fetchErr = ErrNativeUnavailable
+		}
 		seen[identity] = true
 	}
 	if len(points) > 1000 {
@@ -186,12 +205,16 @@ func (s *PgStore) RefreshNativeInventory(ctx context.Context, org, id string, fe
 	for _, point := range points {
 		point.ID, point.SourceID, point.Present, point.LastSeenAt = "", id, true, now
 		point.CreatedAt = point.CreatedAt.UTC()
+		if point.ExpiresAt != nil {
+			utc := point.ExpiresAt.UTC()
+			point.ExpiresAt = &utc
+		}
 		raw, err := json.Marshal(point)
 		if err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO loomplane_native_points(org_id,source_id,provider_id,created_at,body,last_seen_at) VALUES($1,$2,$3,$4,$5,$6)
- ON CONFLICT(source_id,provider_id,created_at) DO UPDATE SET body=EXCLUDED.body,present=true,last_seen_at=EXCLUDED.last_seen_at WHERE loomplane_native_points.org_id=EXCLUDED.org_id`, org, id, point.ProviderID, point.CreatedAt, raw, now); err != nil {
+ ON CONFLICT(source_id,provider_id,creation_identity) DO UPDATE SET body=EXCLUDED.body,present=true,last_seen_at=EXCLUDED.last_seen_at WHERE loomplane_native_points.org_id=EXCLUDED.org_id`, org, id, point.ProviderID, point.CreatedAt, raw, now); err != nil {
 			return err
 		}
 	}

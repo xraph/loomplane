@@ -15,7 +15,8 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-// Zone grants domain use independently of the compute account or Cloud.
+// Zone grants its Name namespace independently of the compute account or Cloud.
+// ProviderZone identifies the hosting zone, which may be an ancestor of Name.
 type Zone struct {
 	ID                   string           `json:"id" forge:"id"`
 	OrgID                string           `json:"org_id"`
@@ -165,8 +166,9 @@ func zoneProjects(ctx context.Context, st DomainStore, org string, projectIDs []
 	return nil
 }
 
-// createManagedZone builds a verified zone the connection's DNS provider
-// hosts. The caller stores it.
+// createManagedZone builds a zone in the most specific zone the connection's
+// DNS provider hosts. It waits on the TXT proof like an external zone. The
+// caller stores it.
 func (s *Service) createManagedZone(ctx context.Context, p security.Principal, name, connectionID string, projectIDs []string) (*Zone, error) {
 	st, err := s.domainStore()
 	if err != nil {
@@ -195,15 +197,32 @@ func (s *Service) createManagedZone(ctx context.Context, p security.Principal, n
 	if ownership, ok := adapter.(provider.DNSRecordOwnership); ok {
 		zone.RecordOwnership = ownership.SupportsDNSRecordOwnership()
 	}
-	zone.ProviderZone, err = adapter.GetZone(ctx, cred, name)
+	// Hosting access selects the record-writing account. Public TXT proves
+	// control only over the requested namespace, even in a larger hosted zone.
+	zones, err := adapter.ListZones(ctx, cred)
 	if err != nil {
 		return nil, err
 	}
-	if !zone.ProviderZone.Verified || zone.ProviderZone.Name != name || zone.ProviderZone.AccountID != cred.AccountID {
+	for _, candidate := range zones {
+		if _, scopeErr := zoneRelative(name, candidate.Name); scopeErr == nil && len(candidate.Name) > len(zone.ProviderZone.Name) {
+			zone.ProviderZone = candidate
+		}
+	}
+	if zone.ProviderZone.ID == "" {
+		return nil, provider.ErrInfrastructureNotFound
+	}
+	current, err := adapter.GetZone(ctx, cred, zone.ProviderZone.Name)
+	if err != nil {
+		return nil, err
+	}
+	if current.ID != zone.ProviderZone.ID || current.Name != zone.ProviderZone.Name || current.AccountID != cred.AccountID {
 		return nil, provider.ErrInfrastructureIdentity
 	}
+	zone.ProviderZone = current
 	zone.Provider, zone.AccountID, zone.ConnectionGeneration = conn.Cloud, cred.AccountID, conn.Generation
-	zone.VerifiedAt = s.now().UTC()
+	if err = s.renewZoneProof(zone); err != nil {
+		return nil, err
+	}
 	return zone, nil
 }
 
@@ -218,12 +237,11 @@ func (s *Service) externalZone(ctx context.Context, st DomainStore, p security.P
 	if in.ConnectionID != "" {
 		return nil, ErrInvalid
 	}
-	token, err := reviewToken()
-	if err != nil {
+	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: "external", ProjectIDs: append([]string{}, in.ProjectIDs...), Revision: 1}
+	if err = s.renewZoneProof(zone); err != nil {
 		return nil, err
 	}
-	return &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: "external", ProjectIDs: append([]string{}, in.ProjectIDs...), Revision: 1,
-		ProofName: "_loomplane." + name, ProofValue: "loomplane=" + id + "-" + token, ProofExpiresAt: s.now().UTC().Add(24 * time.Hour)}, nil
+	return zone, nil
 }
 
 func (s *Service) VerifyZone(ctx context.Context, p security.Principal, id string) (*Zone, error) {
@@ -261,14 +279,19 @@ func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
 		if err != nil {
 			return err
 		}
-		current, err := adapter.GetZone(ctx, credential, zone.ProviderZone.ID)
+		current, err := adapter.GetZone(ctx, credential, zone.ProviderZone.Name)
 		if err != nil {
 			return err
 		}
-		if current.ID != zone.ProviderZone.ID || current.Name != zone.Name || current.AccountID != zone.AccountID || !current.Verified {
+		if current.ID != zone.ProviderZone.ID || current.Name != zone.ProviderZone.Name || current.AccountID != zone.AccountID {
 			return provider.ErrInfrastructureIdentity
 		}
-		return nil
+		if _, err = zoneRelative(zone.Name, current.Name); err != nil {
+			return err
+		}
+	}
+	if !zone.hasControlProof() {
+		return ErrConflict
 	}
 	if zone.VerifiedAt.IsZero() && !s.now().Before(zone.ProofExpiresAt) {
 		return ErrConflict
@@ -280,6 +303,23 @@ func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
 	if !slices.Contains(values, zone.ProofValue) {
 		return ErrConflict
 	}
+	return nil
+}
+
+// hasControlProof rejects legacy hosting-only verification and malformed scope.
+func (z *Zone) hasControlProof() bool {
+	return z.ProofName == "_loomplane."+z.Name && z.ProofValue != "" && !z.ProofExpiresAt.IsZero()
+}
+
+func (s *Service) renewZoneProof(zone *Zone) error {
+	token, err := reviewToken()
+	if err != nil {
+		return err
+	}
+	zone.ProofName = "_loomplane." + zone.Name
+	zone.ProofValue = "loomplane=" + zone.ID + "-" + token
+	zone.ProofExpiresAt = s.now().UTC().Add(24 * time.Hour)
+	zone.VerifiedAt = time.Time{}
 	return nil
 }
 
@@ -325,15 +365,12 @@ func (s *Service) UpdateZone(ctx context.Context, p security.Principal, id strin
 	}
 	zone.ProjectIDs = append([]string{}, in.ProjectIDs...)
 	if in.RenewProof {
-		if zone.Mode != "external" || !zone.VerifiedAt.IsZero() {
+		if !zone.VerifiedAt.IsZero() && zone.hasControlProof() {
 			return nil, ErrConflict
 		}
-		token, tokenErr := reviewToken()
-		if tokenErr != nil {
-			return nil, tokenErr
+		if proofErr := s.renewZoneProof(zone); proofErr != nil {
+			return nil, proofErr
 		}
-		zone.ProofValue = "loomplane=" + zone.ID + "-" + token
-		zone.ProofExpiresAt = s.now().UTC().Add(24 * time.Hour)
 	}
 	if checkErr := st.SaveZone(ctx, zone); checkErr != nil {
 		return nil, checkErr
@@ -382,7 +419,7 @@ func (s *Service) ProjectZones(ctx context.Context, p security.Principal, projec
 	out := []ProjectZone{}
 	for _, zone := range zones {
 		if slices.Contains(zone.ProjectIDs, project) {
-			out = append(out, ProjectZone{zone.ID, zone.Name, zone.Mode, !zone.VerifiedAt.IsZero()})
+			out = append(out, ProjectZone{zone.ID, zone.Name, zone.Mode, zone.hasControlProof() && !zone.VerifiedAt.IsZero()})
 		}
 	}
 	return out, nil

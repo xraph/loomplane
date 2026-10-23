@@ -6,42 +6,40 @@ If you change a pin, update this file in the same commit.
 
 ## Versions
 
-Go 1.26.9 is pinned in `go.mod` and in CI. The versions below were checked against the module proxy and downloaded source on October 18, 2026.
+Go 1.26.9 is pinned in `go.mod` and in CI. The versions below were checked against the module proxy and downloaded source on October 22, 2026.
 
 | Library | Module | Pinned | License at that version |
 |---|---|---|---|
-| Forge | `github.com/xraph/forge` | v1.12.9 | Apache-2.0 file; see the note below |
-| Grove | `github.com/xraph/grove`, `.../drivers/pgdriver`, `.../extension` | v1.8.0 | MIT |
-| Authsome | `github.com/xraph/authsome` | v1.7.3-0.20261013045248-b3fd5f9edebc (main) | no license file; README says all rights reserved |
-| Warden | `github.com/xraph/warden` | v1.8.0 | Apache-2.0 |
-| Chronicle | `github.com/xraph/chronicle` | v1.9.0 | no license file |
-| Dispatch | `github.com/xraph/dispatch` | v1.9.1 | no license file (its SDKs say MIT) |
-| Ctrl Plane | `github.com/xraph/ctrlplane` | v1.8.0 | Apache-2.0 |
+| Forge | `github.com/xraph/forge` | v1.13.0 | Apache-2.0 file; see the note below |
+| Grove | `github.com/xraph/grove`, `.../drivers/pgdriver`, `.../extension` | v1.9.1 | MIT |
+| Authsome | `github.com/xraph/authsome` | v1.8.3 | no license file; README points at the repository for terms |
+| Warden | `github.com/xraph/warden` | v1.8.1 | Apache-2.0 |
+| Chronicle | `github.com/xraph/chronicle` | v1.9.1 | no license file |
+| Dispatch | `github.com/xraph/dispatch` | v1.9.2 | no license file (its SDKs say MIT) |
+| Ctrl Plane | `github.com/xraph/ctrlplane` | v1.8.1 | Apache-2.0 |
 | Confy | `github.com/xraph/confy` | v1.1.0 | MIT per README, no license file |
-| Conduit | `github.com/xraph/forge/extensions/conduit` | v1.12.9 | Apache-2.0 |
-| Herald | `github.com/xraph/herald` | v1.8.0 | no license file |
-| Relay | `github.com/xraph/relay` | v1.8.0 | no license file |
+| Conduit | `github.com/xraph/forge/extensions/conduit` | v1.13.0 | Apache-2.0 |
+| Herald | `github.com/xraph/herald` | v1.8.1 | no license file |
+| Relay | `github.com/xraph/relay` | v1.8.1 | no license file |
 
 The dashboard (`apps/dashboard`) pins:
 
 | Package | Version |
 |---|---|
-| `@forge-go/client-core`, `@forge-go/client-react` | 1.12.8 |
-| `@authsome/ui-core`, `@authsome/ui-react`, `@authsome/ui-components` | 1.7.2, two of them patched |
+| `@forge-go/client-core`, `@forge-go/client-react` | 1.13.0 |
+| `@authsome/ui-core`, `@authsome/ui-react`, `@authsome/ui-components` | 1.8.3, ui-core patched |
 | shadcn CLI | 4.21.4, preset `b1YmpVjlo` (nova, neutral, Geist) |
 | `@base-ui/react` | 1.9, the primitives under every shadcn component |
 | React, Vite, Tailwind, TypeScript | 19.3, 8.3, 4, 6.0 |
 | pnpm | 11.5.0, declared in `packageManager` |
 
-pnpm 11 refuses any package published in the last 24 hours, and the dashboard keeps that policy on. The Forge client sat at 1.12.7 for a day because of it, since 1.12.8 was too new when the lockfile was made; it's on 1.12.8 now. Expect the same wait whenever you take a Forge release on the day it ships. The `packageManager` field makes any pnpm switch to 11.5.0, so everyone resolves under the same policy.
+pnpm 11 refuses any package published in the last 24 hours, and the dashboard keeps that policy on. The Forge client sat at 1.12.7 for a day because of it, since 1.12.8 was too new when the lockfile was made. The same thing will happen with 1.13.0, which sits in `minimumReleaseAgeExclude` in `apps/dashboard/pnpm-workspace.yaml` until it's old enough. Expect the same wait whenever you take a Forge release on the day it ships. The `packageManager` field makes any pnpm switch to 11.5.0, so everyone resolves under the same policy.
 
-There are no `replace` directives. Loomplane resolves these versions through the module proxy. Forge, Conduit, Grove, Dispatch and CtrlPlane use released versions; Authsome remains on the commit listed above. The indirect `mimetype` dependency is v1.4.16 because its author retracted v1.4.15 for quadratic processing of crafted CDF files.
-
-Authsome is pinned to a commit on its `main` because its latest tag, v1.7.2, imports `forge/extensions/dashboard/contributor`, a package Forge removed in v1.12.0. Nothing in released authsome compiles against Forge 1.12. Move to a tag as soon as authsome cuts one.
+There are no `replace` directives. Loomplane resolves these versions through the module proxy. Every xraph module is on a released version. The indirect `mimetype` dependency is v1.4.16 because its author retracted v1.4.15 for quadratic processing of crafted CDF files.
 
 ### Licenses
 
-This needs sorting out before Loomplane is published as open source. Authsome's README says "Copyright (c) Xraph. All rights reserved." and the module ships no license, so its redistribution terms need upstream clarification. Dispatch, Chronicle, Confy, Herald and Relay ship no license file at these versions either. Forge's `LICENSE` is Apache-2.0, while its `LICENSE_FAQ.md` describes MIT for the core and a commercial license for the AI extension. Loomplane uses no Forge AI extension, so the commercial part doesn't touch it, but the two documents should agree.
+Loomplane itself is source-available under FSL-1.1-ALv2 (see [LICENSE](../LICENSE)), not open source, but it still redistributes these libraries, so their terms need to be clear. Authsome, Chronicle, Dispatch, Herald and Relay had no license file at the versions pinned above. All five added an MIT license on their `main` branches on October 23, 2026, and the gap closes once Loomplane moves to releases cut after that date. Confy still ships no license file, though its README says MIT. Forge's `LICENSE` is Apache-2.0, while its `LICENSE_FAQ.md` describes MIT for the core and a commercial license for the AI extension. Loomplane uses no Forge AI extension, so the commercial part doesn't touch it, but the two documents should agree.
 
 ## How the pieces fit
 
@@ -75,7 +73,7 @@ What we found:
 
 - Forge's router is forgemux, and `Router.Handle("/", h)` mounts only the wildcard `/*`, which doesn't match `/` itself (`internal/router/forgemux/mux.go:84` trims the trailing slash, then fails to parse the empty base). Fixed in Forge (c96a1075), so `extensions/web` mounts its catch-all with `Handle("/")` alone.
 - Vessel starts a lazily provided service that has a `Start` method the first time anything resolves it (`vessel/type_registry.go:213`). Dispatch provides its engine and Ctrl Plane its `*app.CtrlPlane` that way. Resolve either from DI while extensions register and you start their workers before the migration pass has made their tables. Loomplane takes them from the extensions' own accessors (`dispatchext.Extension.Engine`, `cpext.Extension.CtrlPlane`).
-- Grove v1.8.0 provides its registry as Forge's `CentralMigrator`. Loomplane keeps its own operational migration and restore commands in `internal/ops`, and disables Forge's overlapping command names. Migrations also run on every API start.
+- Grove v1.9.1 provides its registry as Forge's `CentralMigrator`. Loomplane keeps its own operational migration and restore commands in `internal/ops`, and disables Forge's overlapping command names. Migrations also run on every API start.
 - A middleware that was nil during Register (authsome builds its own only when its engine starts) made `app.Start` hang instead of failing.
 - The client generator types a Go slice of pointers as `T | null[]`, which TypeScript reads as `T | (null[])`. List responses use value slices to avoid it.
 
@@ -105,14 +103,14 @@ The guard on Loomplane's routes is authsome's session chain as authsome's own ex
 
 What we found:
 
-- The tagged v1.7.2 doesn't build against Forge 1.12 (above).
+- Tags before v1.8 don't build against Forge 1.12, because they import `forge/extensions/dashboard/contributor`, which Forge removed in v1.12.0. Loomplane sat on a `main` commit until v1.8 shipped.
 - Several organization handlers write their JSON twice, so a client can't parse the body even though the write succeeded. Fixed in authsome (e371f402); Loomplane's `FirstJSON` workaround is gone.
 - Creating an organization with a slug that's taken answers 500, not 409. The dashboard checks the slug first with `GET /authsome/v1/orgs/check-slug`.
 - `engine.AuthMiddleware()` is nil until the engine starts, so the guard looks it up per request.
 - Most of authsome's hook events (`session.create`, `device.register`, `org.create`, `rbac.role.assign`, `org.invitation.accept`) carry no audit category, and Chronicle refuses an event without one. Every one of them was logged as `audit record failed` and never stored. `extensions/identity/audit.go` hands authsome an emitter that files them under `auth`; an event that names its own category keeps it.
 - Sign-up doesn't sign you in; the dashboard sends you to sign in afterwards.
 - authsome's own invitation endpoint sets no expiry, so its links never lapse. Loomplane creates invitations itself (`POST /api/v1/invitations` in `extensions/identity/members.go`) with a week's expiry and no role above your own. Herald sends the invitation when SMTP is configured. You also get a manual link and an explicit delivery outcome.
-- Accepting (`POST /authsome/v1/orgs/invitations/accept`) adds the account with the invited email, whoever is signed in. The dashboard asks before accepting and tells you when the invitation went to a different account.
+- Accepting (`POST /authsome/v1/orgs/invitations/accept`) adds you to the organization, but only if you're signed in as the invited account. Any other account gets a 403 on the email mismatch. The dashboard asks before accepting and tells you when the invitation went to a different account.
 - Removing a member leaves their session alone, still naming the organization. `GET /api/v1/session` answers 403 for someone who isn't a member any more, which the dashboard treats like a session with no organization.
 
 Config: `identity.base_path`, `identity.app_id`, `identity.publishable_key`, `identity.require_email_verification`, and `secret_key`, from which authsome's token encryption key is derived with HKDF (`internal/security/keys.go`).
@@ -123,12 +121,11 @@ Tests: `tests/integration` signs up, creates organizations and switches between 
 
 The dashboard's own components are shadcn on Base UI. A shadcn preset code carries no base library, so it's `components.json` (`"style": "base-nova"`) that keeps `shadcn apply` and `shadcn add` on Base UI. authsome's components bring their own Radix primitives with them, which is fine: they're authsome's dependency, not the dashboard's.
 
-The dashboard signs you in with `@authsome/ui-components` (`SignInForm`, `SignUpForm`, `OrgSwitcher`, `UserButton`) over `@authsome/ui-react`. Tailwind scans those components (`@source` in `src/index.css`), so they render in the shadcn preset's tokens. The SDK keeps the session in local storage, because it only restores a session from its own storage.
+The dashboard signs you in with `@authsome/ui-components` (`SignInForm`, `SignUpForm`, `OrgSwitcher`, `UserButton`) over `@authsome/ui-react`. Tailwind scans those components (`@source` in `src/index.css`), so they render in the shadcn preset's tokens. The session stays in the httpOnly cookie the backend sets on sign-in, so no token reaches local storage.
 
-Two patches, both in `apps/dashboard/patches`:
+One patch, in `apps/dashboard/patches`: `@authsome/ui-core` gets a `session: "cookie"` mode on `AuthManager`. Requests carry the cookie, a reload asks `/v1/me` who's signed in, and nothing is stored or sent as a bearer token. The SDK has no cookie mode of its own, and without one it only restores a session from its storage. `src/client/cookie-session.test.ts` covers it.
 
-- `@authsome/ui-core`: tap's patch. It fixes the client config URL dropping the `/authsome` base path, and adds a cross-tab lock around refresh, so two tabs can't spend the same rotating refresh token.
-- `@authsome/ui-react`: `useOrganizations` reads `{ items, total }`, but the authsome commit Loomplane pins pages its organization list as `{ organizations, next_cursor }`. Unpatched, `OrgSwitcher` lists nothing. authsome's own SDK source still has the old shape, so this is a bug to fix upstream.
+On 1.7.2 the patches did more. They kept the `/authsome` base path on the client config URL, put a cross-tab lock around refresh so two tabs couldn't spend the same rotating refresh token, and made `useOrganizations` read the `{ organizations, next_cursor }` page the endpoint answers with (unpatched, `OrgSwitcher` listed nothing). authsome 1.8 has all three, so the ui-react patch is gone and only the cookie mode is left.
 
 ## Warden
 
@@ -160,7 +157,7 @@ Every `Set` archives the previous value as a version, so changing a secret keeps
 
 What we found:
 
-- Vault's README says tenant isolation is by design and cross-tenant reads are structurally impossible. For secrets they aren't: `vault_secrets` is unique by key and app, with no tenant column, and the store never reads the tenant from the context. Loomplane builds every key as `<organization>/<variable ID>` from its own records, so a caller can't name another organization's secret. Worth fixing upstream, or the README should say secrets are app-scoped only.
+- Before v1.8 a Vault secret had no tenant: `vault_secrets` was unique by key and app, whatever the README said about tenant isolation. v1.8 adds a `tenant_id` column (migration `scope_secrets_by_tenant`, which gives every existing row the empty, app-level tenant) and reads the tenant from Vault's own `scope.WithTenantID` on the context. Loomplane never sets it, so every secret it keeps is app-level, and it still builds every key as `<organization>/<variable ID>` from its own records, so a caller can't name another organization's secret. Moving to Vault's tenant would mean re-keying the secrets already stored.
 - `secret.ListOpts` can't filter by key prefix, so the sweep that removes orphaned secrets pages through the whole `loomplane-variables` app and filters by organization itself.
 - Its runtime config has app-wide values with per-tenant overrides. That doesn't reach Loomplane's layers (organization, project, service, each per environment), so the variables themselves are Loomplane's, and Vault holds only the secret values.
 
@@ -217,7 +214,7 @@ Tests: `internal/config`.
 
 ## Bastion
 
-Loomplane doesn't run Bastion itself. A `gateways:` entry in `loomplane.yaml` becomes a small Go program on Bastion (`internal/gateway`), generated with the routes baked in and built on the cloud's own builder like any service, so application traffic never passes through Loomplane. Each route's target arrives in a variable, the way any service finds what it needs. The program pins Bastion and Forge at their main commits, with its own `go.sum`; the embedded files are named `.txt` so Go doesn't treat them as part of this module, and one test builds the generated program with `-mod=readonly`, and another runs it in front of two upstreams and checks what each receives.
+Loomplane doesn't run Bastion itself. A `gateways:` entry in `loomplane.yaml` becomes a small Go program on Bastion (`internal/gateway`), generated with the routes baked in and built on the cloud's own builder like any service, so application traffic never passes through Loomplane. Each route's target arrives in a variable, the way any service finds what it needs. The program pins Bastion v1.4.1 and Forge v1.13.0, with its own `go.sum`; the embedded files are named `.txt` so Go doesn't treat them as part of this module, and one test builds the generated program with `-mod=readonly`, and another runs it in front of two upstreams and checks what each receives.
 
 What we found wiring it, and where it stands:
 
@@ -263,7 +260,7 @@ CI installs the forge CLI at a pinned commit (`FORGE_CLI` in `.github/workflows/
 
 ## Herald and Relay
 
-`extensions/notifications` composes Herald v1.8.0 and Relay v1.8.0 around Loomplane's existing identity and PostgreSQL lifecycle. The delivery extension prepares Herald before Authsome starts; the authenticated extension starts the outbox and Relay after identity is ready. Their stores join the central migration pass. Loomplane exposes its own organization-scoped routes rather than either library's unrestricted administration API.
+`extensions/notifications` composes Herald v1.8.1 and Relay v1.8.1 around Loomplane's existing identity and PostgreSQL lifecycle. The delivery extension prepares Herald before Authsome starts; the authenticated extension starts the outbox and Relay after identity is ready. Their stores join the central migration pass. Loomplane exposes its own organization-scoped routes rather than either library's unrestricted administration API.
 
 Herald delivers SMTP account mail and deployment alerts and stores the user inbox. Its `Send` result can report a failed delivery with no Go error, so the Authsome bridge checks the result status as well. A store wrapper redacts security mail before persistence. Deployment email preferences belong to Loomplane and cannot suppress account security mail.
 

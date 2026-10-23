@@ -442,7 +442,7 @@ func (s *PgStore) PendingSyncs(ctx context.Context) ([]*Sync, error) {
 		return nil, err
 	}
 
-	return s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE status IN ('pending','running','cleanup_pending') ORDER BY created_at LIMIT 100`)
+	return s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE status IN ('pending','running','cleanup_pending','routing_pending') ORDER BY created_at LIMIT 100`)
 }
 func (s *PgStore) listSyncRows(ctx context.Context, query string, args ...any) ([]*Sync, error) {
 	rows, err := s.db.Query(ctx, query, args...)

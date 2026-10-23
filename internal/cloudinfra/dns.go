@@ -29,11 +29,11 @@ func (s *Service) zoneCredentialFor(ctx context.Context, zone *Zone, cleanup boo
 	}
 	adapter, err := s.Adapters.DNS(zone.Provider)
 	if err == nil && cleanup {
-		current, checkErr := adapter.GetZone(ctx, credential, zone.ProviderZone.ID)
+		current, checkErr := adapter.GetZone(ctx, credential, zone.ProviderZone.Name)
 		if checkErr != nil {
 			return nil, credential, checkErr
 		}
-		if current.ID != zone.ProviderZone.ID || current.Name != zone.Name || current.AccountID != zone.AccountID {
+		if current.ID != zone.ProviderZone.ID || current.Name != zone.ProviderZone.Name || current.AccountID != zone.AccountID {
 			return nil, credential, provider.ErrInfrastructureIdentity
 		}
 	}
@@ -44,6 +44,12 @@ func routeDNSRecord(zone *Zone, hostname, address, owner string) (provider.DNSRe
 	relative, err := zoneRelative(hostname, zone.Name)
 	if err != nil {
 		return provider.DNSRecord{}, err
+	}
+	if zone.Mode == "managed" {
+		relative, err = zoneRelative(hostname, zone.ProviderZone.Name)
+		if err != nil {
+			return provider.DNSRecord{}, err
+		}
 	}
 	kind, value := "A", ""
 	if ip := net.ParseIP(address); ip != nil {

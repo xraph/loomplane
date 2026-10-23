@@ -17,6 +17,7 @@ func readDBSnapshot(in rdstypes.DBSnapshot) *DBSnapshot {
 	if in.SnapshotCreateTime != nil {
 		point.CreatedAt = in.SnapshotCreateTime.UTC()
 	}
+	point.EncryptionKnown = in.Encrypted != nil
 	return point
 }
 
@@ -29,6 +30,34 @@ func (s *Session) checkSnapshotIdentity(point *DBSnapshot, physical string) erro
 		return errors.New("RDS snapshot does not match its account, region and native identity")
 	}
 	return nil
+}
+
+// ReadDBSnapshot rereads one retained snapshot and requires its original source,
+// creation time and encryption metadata before admitting a recovery operation.
+func (s *Session) ReadDBSnapshot(ctx context.Context, physical string, selected DBSnapshot) (*DBSnapshot, error) {
+	if err := s.checkSnapshotIdentity(&selected, physical); err != nil {
+		return nil, err
+	}
+	if selected.CreatedAt.IsZero() || selected.Engine == "" || selected.EngineVersion == "" || selected.InstanceID == "" || (selected.Type != "manual" && selected.Type != "automated") {
+		return nil, errors.New("RDS selected snapshot requires retained creation and engine metadata")
+	}
+	if selected.Encrypted && selected.KMSKey == "" || !selected.Encrypted && selected.KMSKey != "" {
+		return nil, errors.New("RDS selected snapshot requires consistent encryption key metadata")
+	}
+	point, err := s.GetDBSnapshot(ctx, selected.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkSnapshotIdentity(point, physical); err != nil {
+		return nil, err
+	}
+	if !point.EncryptionKnown || point.ARN != selected.ARN || point.InstanceID != selected.InstanceID || !point.CreatedAt.Equal(selected.CreatedAt) || point.Type != selected.Type || point.Engine != selected.Engine || point.EngineVersion != selected.EngineVersion || point.Encrypted != selected.Encrypted || point.KMSKey != selected.KMSKey {
+		return nil, errors.New("RDS selected snapshot no longer matches its retained identity")
+	}
+	if point.Status != "available" {
+		return nil, errors.New("RDS selected snapshot is not currently available for recovery")
+	}
+	return point, nil
 }
 
 // ListDBSnapshots discovers owned manual and automated points by physical ID,
