@@ -237,53 +237,91 @@ func (f *recoveryFixture) physical() string {
 	return combinedExec(f.t, f.ssh, nil, "docker ps -aq --no-trunc | xargs -r docker inspect --format '{{.Id}} {{.State.Running}} {{.RestartCount}}' | sort")
 }
 
+func (f *recoveryFixture) verifyDirectContainer(receipt, deployment string) string {
+	t := f.t
+	t.Helper()
+	id := f.container()
+	var instance, release, connection string
+	if err := f.sql.QueryRow(t.Context(), `SELECT i.id,i.labels->>$4,b.connection_id
+ FROM cp_instances i JOIN loomplane_bindings b ON b.external_id=i.id AND b.org_id=i.tenant_id
+ WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name='web'`,
+		f.org, f.project, f.environment, owned.LabelReceiptRelease).Scan(&instance, &release, &connection); err != nil {
+		t.Fatal(err)
+	}
+	if instance == "" || release == "" || connection != f.connections["host1"].ID {
+		t.Fatal("missing exact direct instance/release identity")
+	}
+	daemon := combinedExec(t, f.ssh, nil, "docker info --format '{{.ID}}'")
+	if daemon != f.state.Hosts["host1"].Daemon {
+		t.Fatal("direct inspection reached another Docker daemon")
+	}
+	var inspected []struct {
+		ID     string `json:"Id"`
+		State  struct{ Running bool }
+		Config struct{ Labels map[string]string }
+	}
+	if err := json.Unmarshal([]byte(combinedExec(t, f.ssh, nil, "docker inspect "+combinedQuote(id))), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	if len(inspected) != 1 || inspected[0].ID != id || !inspected[0].State.Running {
+		t.Fatal("ready receipt lacks its exact running physical container", inspected)
+	}
+	for key, expected := range map[string]string{owned.LabelOrg: f.org, owned.LabelProject: f.project, owned.LabelEnvironment: f.environment, owned.LabelInstance: instance, owned.LabelRevision: release, owned.LabelConnection: connection} {
+		if inspected[0].Config.Labels[key] != expected {
+			t.Fatalf("physical container %s has wrong %s", id, key)
+		}
+	}
+	f.record(receipt, map[string]any{"daemon": daemon, "deployment": deployment, "instance": instance, "release": release, "inspection": inspected[0]})
+	return id
+}
+
 // The relay records only the selected Docker stop path and peer PID. Every byte
 // still reaches the real daemon; it never waits on a test barrier or invents a reply.
-const recoveryRelay = `import os,socket,select,threading,json,re,struct
-path='/tmp/loomplane-recovery-relay.sock'
-server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
-server.bind(path);server.listen(64)
-open('/tmp/loomplane-recovery-relay.pid','w').write(str(os.getpid()))
-def handle(client):
- upstream=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+const recoveryRelay = `import os,socket,select,threading,json,re,struct,signal
+observation_errors=[]
+observation_lock=threading.Lock()
+def observation_failed(error):
+ with observation_lock:observation_errors.append(type(error).__name__)
+def observer(pid):
+ pending=b'';remaining=0;inspect=True
+ def record(head):
+  line=head.split(b'\r\n',1)[0].decode('ascii')
+  match=re.fullmatch(r'POST (/containers/([a-f0-9]{64})/stop\?t=10) HTTP/1\.[01]',line)
+  if match:
+   ancestry=[];current=pid
+   while current>1:
+    with open('/proc/'+str(current)+'/cmdline','rb') as source:command=source.read().replace(b'\0',b' ').decode()
+    with open('/proc/'+str(current)+'/status') as source:status=source.read()
+    parent=int(re.search(r'^PPid:\s+(\d+)',status,re.M).group(1))
+    ancestry.append({'pid':current,'parent':parent,'command':command.split(' ',1)[0]})
+    if 'sshd' in command.split(' ',1)[0]:break
+    current=parent
+   receipt={'method':'POST','path':match.group(1),'container':match.group(2),'helper':pid,'ancestry':ancestry}
+   fd=os.open('/tmp/loomplane-recovery-stop.jsonl',os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
+   try:os.write(fd,(json.dumps(receipt)+'\n').encode())
+   finally:os.close(fd)
+ def observe(data):
+  nonlocal pending,remaining,inspect
+  if not inspect:return
+  pending+=data
+  while pending:
+   if remaining:
+    size=min(remaining,len(pending));pending=pending[size:];remaining-=size
+    continue
+   end=pending.find(b'\r\n\r\n')
+   if end<0:
+    if len(pending)>1048576:inspect=False;pending=b''
+    return
+   head=pending[:end+4];pending=pending[end+4:]
+   headers=head.lower()
+   if b'transfer-encoding: chunked' in headers or b'upgrade:' in headers:
+    inspect=False;pending=b'';return
+   length=re.search(rb'\r\ncontent-length:\s*(\d+)',headers)
+   remaining=int(length.group(1)) if length else 0
+   record(head)
+ return observe
+def forward(client,upstream,observe):
  try:
-  pid,uid,gid=struct.unpack('3i',client.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
-  upstream.connect('/var/run/docker.sock')
-  pending=b'';remaining=0;inspect=True
-  def observe(data):
-   nonlocal pending,remaining,inspect
-   if not inspect:return
-   pending+=data
-   while pending:
-    if remaining:
-     size=min(remaining,len(pending));pending=pending[size:];remaining-=size
-     continue
-    end=pending.find(b'\r\n\r\n')
-    if end<0:
-     if len(pending)>1048576:inspect=False;pending=b''
-     return
-    head=pending[:end+4];pending=pending[end+4:]
-    headers=head.lower()
-    if b'transfer-encoding: chunked' in headers or b'upgrade:' in headers:
-     inspect=False;pending=b'';return
-    length=re.search(rb'\r\ncontent-length:\s*(\d+)',headers)
-    remaining=int(length.group(1)) if length else 0
-    record(head)
-  def record(head):
-   line=head.split(b'\r\n',1)[0].decode('ascii')
-   match=re.fullmatch(r'POST (/containers/([a-f0-9]{64})/stop\?t=10) HTTP/1\.[01]',line)
-   if match:
-    ancestry=[];current=pid
-    while current>1:
-     command=open('/proc/'+str(current)+'/cmdline','rb').read().replace(b'\0',b' ').decode()
-     status=open('/proc/'+str(current)+'/status').read()
-     parent=int(re.search(r'^PPid:\s+(\d+)',status,re.M).group(1))
-     ancestry.append({'pid':current,'parent':parent,'command':command.split(' ',1)[0]})
-     if 'sshd' in command.split(' ',1)[0]:break
-     current=parent
-    record={'method':'POST','path':match.group(1),'container':match.group(2),'helper':pid,'ancestry':ancestry}
-    fd=os.open('/tmp/loomplane-recovery-stop.jsonl',os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
-    os.write(fd,(json.dumps(record)+'\n').encode());os.close(fd)
   readers=[client,upstream]
   while readers:
    ready,_,_=select.select(readers,[],[],60)
@@ -293,15 +331,42 @@ def handle(client):
     chunk=source.recv(65536)
     if chunk:
      destination.sendall(chunk)
-     if source is client:observe(chunk)
+     if source is client and observe is not None:
+      try:observe(chunk)
+      except Exception as error:
+       observation_failed(error);observe=None
     else:
      readers.remove(source)
      destination.shutdown(socket.SHUT_WR)
- except (OSError,ValueError):pass
+ except OSError:pass
  finally:client.close();upstream.close()
-while True:
- client,_=server.accept()
- threading.Thread(target=handle,args=(client,),daemon=True).start()
+def handle(client):
+ upstream=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+ try:
+  upstream.connect('/var/run/docker.sock')
+  observe=None
+  try:
+   pid,uid,gid=struct.unpack('3i',client.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+   observe=observer(pid)
+  except Exception as error:observation_failed(error)
+  forward(client,upstream,observe)
+ except OSError:pass
+ finally:client.close();upstream.close()
+def observation_summary():
+ with observation_lock:return {'error_count':len(observation_errors),'errors':list(observation_errors)}
+def finish(signum,frame):
+ # A missing or unreadable final summary also fails qualification after teardown.
+ with open('/tmp/loomplane-recovery-observation.json','w') as target:json.dump(observation_summary(),target)
+ raise SystemExit(0)
+if __name__=='__main__':
+ path='/tmp/loomplane-recovery-relay.sock'
+ server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+ server.bind(path);server.listen(64)
+ open('/tmp/loomplane-recovery-relay.pid','w').write(str(os.getpid()))
+ signal.signal(signal.SIGTERM,finish)
+ while True:
+  client,_=server.accept()
+  threading.Thread(target=handle,args=(client,),daemon=True).start()
 `
 
 func (f *recoveryFixture) startRelay() {
@@ -316,7 +381,7 @@ func (f *recoveryFixture) startRelay() {
 
 func (f *recoveryFixture) cleanupRelay() {
 	// The app has stopped before this exact PID/socket cleanup runs.
-	script := `import os,signal,time
+	script := `import os,signal,time,json
 p='/tmp/loomplane-recovery-relay.pid'
 if os.path.exists(p):
  pid=int(open(p).read())
@@ -327,11 +392,29 @@ if os.path.exists(p):
   if not os.path.exists('/proc/'+str(pid)) or '\nState:\tZ' in open('/proc/'+str(pid)+'/status').read():break
   time.sleep(.02)
  else:raise RuntimeError('owned relay process did not exit')
-for p in ('/tmp/loomplane-recovery-relay.sock','/tmp/loomplane-recovery-relay.pid','/tmp/loomplane-recovery-relay.py','/var/run/loomplane-recovery-drift.sock'):
+try:
+ with open('/tmp/loomplane-recovery-observation.json') as source:summary=json.load(source)
+ assert isinstance(summary['errors'],list) and summary['error_count']==len(summary['errors'])
+except Exception as error:summary={'error_count':1,'errors':['summary_'+type(error).__name__]}
+for p in ('/tmp/loomplane-recovery-relay.sock','/tmp/loomplane-recovery-relay.pid','/tmp/loomplane-recovery-relay.py','/tmp/loomplane-recovery-observation.json','/var/run/loomplane-recovery-drift.sock'):
  if os.path.lexists(p):os.unlink(p)
  assert not os.path.lexists(p)
-print('exact relay process and sockets removed')`
-	f.record("relay_cleanup", combinedExec(f.t, f.ssh, []byte(script), "python3 -"))
+print(json.dumps({'cleanup':'exact relay process and sockets removed','observation':summary}))`
+	var receipt struct {
+		Cleanup     string `json:"cleanup"`
+		Observation struct {
+			ErrorCount int      `json:"error_count"`
+			Errors     []string `json:"errors"`
+		} `json:"observation"`
+	}
+	if err := json.Unmarshal([]byte(combinedExec(f.t, f.ssh, []byte(script), "python3 -")), &receipt); err != nil {
+		f.t.Fatal(err)
+	}
+	f.record("relay_cleanup", receipt.Cleanup)
+	f.record("relay_observation", receipt.Observation)
+	if receipt.Observation.ErrorCount != 0 || len(receipt.Observation.Errors) != 0 {
+		f.t.Errorf("relay observation failed without interrupting forwarding: %+v", receipt.Observation)
+	}
 }
 
 type recoveryResponse struct {

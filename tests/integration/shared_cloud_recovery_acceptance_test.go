@@ -328,7 +328,7 @@ os.kill(pid,signal.SIGKILL)
 	if isDirty || current[operationHash] != currentGeneration {
 		t.Fatal("recovered deployment lacks physical quiescence", current, isDirty)
 	}
-	recoveredContainer := f.container()
+	recoveredContainer := f.verifyDirectContainer("caller_loss_recovered_physical", result.ID)
 	if recoveredContainer == oldContainer {
 		t.Fatal("recovery did not publish its new release")
 	}
@@ -373,10 +373,11 @@ os.kill(pid,signal.SIGKILL)
 	if err := f.sql.QueryRow(t.Context(), `SELECT active,settled FROM loomplane_workload_attempts WHERE org_id=$1 AND plan_id=$2 AND service='web'`, f.org, successor.ID).Scan(&active, &settled); err != nil {
 		t.Fatal(err)
 	}
-	if active || !settled || f.container() == recoveredContainer {
+	successorContainer := f.verifyDirectContainer("caller_loss_successor_physical", result.ID)
+	if active || !settled || successorContainer == recoveredContainer {
 		t.Fatal("fresh release did not settle and publish its new container")
 	}
-	f.record("caller_loss_successor", map[string]any{"deployment": result.ID, "plan": successor.ID, "container": f.container(), "generation": generation, "settled": settled})
+	f.record("caller_loss_successor", map[string]any{"deployment": result.ID, "plan": successor.ID, "container": successorContainer, "generation": generation, "settled": settled})
 }
 
 func (f *recoveryFixture) acceptRouteRace() {
