@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/recovery"
+	lpclient "github.com/xraph/loomplane/pkg/client"
 )
 
-func checkNativeCopyReviewAPI(t *testing.T, c *client, dsn string, source recovery.NativeSource, point, google string, mode func(string, bool)) {
+func checkNativeCopyReviewAPI(t *testing.T, c *client, lc loomctl, dsn string, source recovery.NativeSource, point, google string, mode func(string, bool)) {
 	t.Helper()
 	mode("copy-review", false)
 	defer mode("original", false)
@@ -33,7 +35,15 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, dsn string, source recove
 	var review recovery.NativeCopyReview
 	path := "/api/v1/native-recovery-sources/" + source.ID + "/points/" + point + "/copy-review"
 	reviewInput := recovery.NativeCopyReviewInput{RequestID: "public-native-copy", CloudID: cloud.ID, TargetID: target.ID, TTLHours: 1}
-	c.must(http.StatusOK, http.MethodPost, path, reviewInput, &review)
+	reviewFile := filepath.Join(t.TempDir(), "native-review.json")
+	lc.must("backups", "native-copies", "review", source.ID, point, "--cloud", cloud.ID, "--target", target.ID, "--request-id", reviewInput.RequestID, "--out", reviewFile)
+	savedReview, err := os.ReadFile(reviewFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(savedReview, &review); err != nil {
+		t.Fatal(err)
+	}
 	if review.Target.NativeProject != "recovery-project" || review.Capacity.StorageGB != 10 || review.Target.GrantRevision < 1 {
 		t.Fatal("public review lost granted scope and bounded capacity", review)
 	}
@@ -46,7 +56,9 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, dsn string, source recove
 	reader.must(http.StatusForbidden, http.MethodPost, path, reviewInput, nil)
 	reader.must(http.StatusForbidden, http.MethodPost, "/api/v1/native-recovery-copies", input, nil)
 	var restored recovery.NativeRestore
-	c.must(http.StatusAccepted, http.MethodPost, "/api/v1/native-recovery-copies", input, &restored)
+	if decodeErr := json.Unmarshal([]byte(lc.must("backups", "native-copies", "create", "--review-file", reviewFile, "--acknowledge-charges", "--json")), &restored); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
 	copyPath := "/api/v1/native-recovery-copies/" + restored.ID
 	wait := func(status string) {
 		t.Helper()
@@ -63,6 +75,18 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, dsn string, source recove
 		}
 	}
 	wait("failed")
+	sdk := lpclient.New(lc.url, lc.key)
+	retained, readErr := sdk.WaitNativeRecoveryCopy(t.Context(), restored.ID)
+	if readErr != nil || retained.Status != "failed" || retained.VerifiedAt != nil {
+		t.Fatalf("SDK lost failed status: %+v %v", retained, readErr)
+	}
+	var replay recovery.NativeRestore
+	if decodeErr := json.Unmarshal([]byte(lc.must("backups", "native-copies", "create", "--review-file", reviewFile, "--acknowledge-charges", "--json")), &replay); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if replay.ID != restored.ID || !replay.ExpiresAt.Equal(restored.ExpiresAt) {
+		t.Fatal("CLI replay changed copy or expiry")
+	}
 	reader.must(http.StatusOK, http.MethodGet, copyPath, nil, nil)
 	reader.must(http.StatusForbidden, http.MethodDelete, copyPath, nil, nil)
 	var public map[string]any
@@ -101,13 +125,15 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, dsn string, source recove
 		t.Fatal("failed absence observation discarded copy credentials")
 	}
 	mode("copy-review", true)
-	c.must(http.StatusAccepted, http.MethodDelete, copyPath, nil, &restored)
+	lc.must("backups", "native-copies", "cleanup", restored.ID, "--yes", "--json")
 	wait("deleted")
 	if secretExists() {
 		t.Fatal("confirmed absence retained native copy credential")
 	}
-	var copies recovery.NativeCopiesPage
-	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+source.ProjectID+"/native-recovery-copies?environment_id="+source.EnvironmentID+"&limit=1", nil, &copies)
+	copies, listErr := sdk.NativeRecoveryCopies(t.Context(), source.ProjectID, lpclient.NativeCopyPage{EnvironmentID: source.EnvironmentID, Limit: 1})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
 	if len(copies.Copies) != 1 || copies.Copies[0].ID != restored.ID || copies.Copies[0].Status != "deleted" {
 		t.Fatal("public history lost cleanup result")
 	}
@@ -116,8 +142,9 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, dsn string, source recove
 	var schema struct {
 		Paths map[string]map[string]struct {
 			Parameters []struct {
-				Name string `json:"name"`
-				In   string `json:"in"`
+				Name     string `json:"name"`
+				In       string `json:"in"`
+				Required bool   `json:"required"`
 			} `json:"parameters"`
 		} `json:"paths"`
 	}
@@ -127,6 +154,9 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, dsn string, source recove
 	query := map[string]bool{}
 	for _, parameter := range schema.Paths["/api/v1/projects/{id}/native-recovery-copies"]["get"].Parameters {
 		if parameter.In == "query" {
+			if parameter.Required {
+				t.Fatalf("native copy query %s must be optional", parameter.Name)
+			}
 			query[parameter.Name] = true
 		}
 	}

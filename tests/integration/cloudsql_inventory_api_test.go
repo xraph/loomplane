@@ -190,7 +190,7 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 	if !strings.Contains(lc.must("backups", "native-inventory", source.ID, "--json"), original) || !strings.Contains(lc.must("backups", "native-refresh", source.ID, "--json"), original) {
 		t.Fatal("shared CLI lost Cloud SQL backup")
 	}
-	checkNativeCopyReviewAPI(t, c, cfg.Database.URL, source, original, google.srv.URL, func(next string, absent bool) {
+	checkNativeCopyReviewAPI(t, c, lc, cfg.Database.URL, source, original, google.srv.URL, func(next string, absent bool) {
 		mu.Lock()
 		mode, targetAbsent = next, absent
 		mu.Unlock()

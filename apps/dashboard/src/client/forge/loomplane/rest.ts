@@ -2036,12 +2036,18 @@ export class RESTClient extends Client {
 
     /**
      */
-    list: async (id: string, environmentId?: string, before?: string, limit?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoveryCopies> => {
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoveryCopies> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-copies`;
       const queryParams: Record<string, any> = {};
-      queryParams['environment_id'] = environmentId;
-      queryParams['before'] = before;
-      queryParams['limit'] = limit;
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -2079,12 +2085,18 @@ export class RESTClient extends Client {
   public readonly nativeRecoverySources = {
     /**
      */
-    inventory: async (id: string, environmentId?: string, before?: string, limit?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
+    inventory: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}`;
       const queryParams: Record<string, any> = {};
-      queryParams['environment_id'] = environmentId;
-      queryParams['before'] = before;
-      queryParams['limit'] = limit;
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -2102,12 +2114,18 @@ export class RESTClient extends Client {
 
     /**
      */
-    list: async (id: string, environmentId?: string, before?: string, limit?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-sources`;
       const queryParams: Record<string, any> = {};
-      queryParams['environment_id'] = environmentId;
-      queryParams['before'] = before;
-      queryParams['limit'] = limit;
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
