@@ -25,6 +25,17 @@ func TestMigrationReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	// Apply everything else first, so db_gateways is the last applied
+	// migration and one rollback undoes exactly it, whatever lands above it.
+	others := migrate.NewGroup(GroupName)
+	for _, step := range Group().Migrations() {
+		if step.Name != "db_gateways" {
+			others.MustRegister(step)
+		}
+	}
+	if _, err = migrate.NewOrchestrator(pgmigrate.New(db), others).Migrate(ctx); err != nil {
+		t.Fatalf("up others: %v", err)
+	}
 	o := migrate.NewOrchestrator(pgmigrate.New(db), Group())
 
 	tables := func() []string {
@@ -50,7 +61,6 @@ func TestMigrationReplay(t *testing.T) {
 		t.Fatalf("after up: %v", got)
 	}
 
-	// This migration is the newest, so one rollback undoes exactly it.
 	res, err := o.Rollback(ctx)
 	if err != nil || len(res.Rollback) != 1 || res.Rollback[0].Name != "db_gateways" {
 		t.Fatalf("down: %+v %v", res, err)
