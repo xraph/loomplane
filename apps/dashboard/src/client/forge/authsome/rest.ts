@@ -6,7 +6,7 @@ import { CODECS } from './codecs';
 export class RESTClient extends Client {
   /**
    * Accept invitation
-   * Accepts a pending organization invitation using the invitation token.
+   * Accepts a pending organization invitation using the invitation token. The signed-in user must own the email the invitation was sent to.
    */
   public readonly acceptInvitation = async (body: types.AcceptInvitationRequest, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Member> => {
     let __path = `/authsome/v1/orgs/invitations/accept`;

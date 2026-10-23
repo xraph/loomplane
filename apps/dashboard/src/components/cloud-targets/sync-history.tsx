@@ -36,6 +36,7 @@ export function SyncHistory({
     />
   ) : (
     <EmptyClouds
+      kind="notice"
       title="Sync history is restricted"
       description="You need deployment read permission to view applied results."
     />

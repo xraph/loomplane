@@ -52,16 +52,30 @@ type NativeRecoveryInventory struct {
 	NextBefore string                `json:"next_before,omitempty"`
 }
 
-func nativeRecoveryQuery(before string, limit int) (string, error) {
-	if limit < 0 || limit > 100 {
+// NativeRecoveryPage keeps each cursor inside its environment and resource.
+type NativeRecoveryPage struct {
+	EnvironmentID string
+	Resource      string
+	Before        string
+	Limit         int
+}
+
+func nativeRecoveryQuery(page NativeRecoveryPage) (string, error) {
+	if page.Limit < 0 || page.Limit > 100 {
 		return "", fmt.Errorf("limit must be from 1 to 100")
 	}
 	query := url.Values{}
-	if before != "" {
-		query.Set("before", before)
+	if page.EnvironmentID != "" {
+		query.Set("environment_id", page.EnvironmentID)
 	}
-	if limit > 0 {
-		query.Set("limit", strconv.Itoa(limit))
+	if page.Resource != "" {
+		query.Set("resource", page.Resource)
+	}
+	if page.Before != "" {
+		query.Set("before", page.Before)
+	}
+	if page.Limit > 0 {
+		query.Set("limit", strconv.Itoa(page.Limit))
 	}
 	if len(query) == 0 {
 		return "", nil
@@ -69,7 +83,11 @@ func nativeRecoveryQuery(before string, limit int) (string, error) {
 	return "?" + query.Encode(), nil
 }
 func (c *Client) NativeRecoverySources(ctx context.Context, project, before string, limit int) (*NativeRecoverySources, error) {
-	query, err := nativeRecoveryQuery(before, limit)
+	return c.NativeRecoverySourcesPage(ctx, project, NativeRecoveryPage{Before: before, Limit: limit})
+}
+
+func (c *Client) NativeRecoverySourcesPage(ctx context.Context, project string, page NativeRecoveryPage) (*NativeRecoverySources, error) {
+	query, err := nativeRecoveryQuery(page)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +96,11 @@ func (c *Client) NativeRecoverySources(ctx context.Context, project, before stri
 	return &out, err
 }
 func (c *Client) NativeRecoveryInventory(ctx context.Context, source, before string, limit int) (*NativeRecoveryInventory, error) {
-	query, err := nativeRecoveryQuery(before, limit)
+	return c.NativeRecoveryInventoryPage(ctx, source, NativeRecoveryPage{Before: before, Limit: limit})
+}
+
+func (c *Client) NativeRecoveryInventoryPage(ctx context.Context, source string, page NativeRecoveryPage) (*NativeRecoveryInventory, error) {
+	query, err := nativeRecoveryQuery(page)
 	if err != nil {
 		return nil, err
 	}

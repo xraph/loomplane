@@ -3,6 +3,7 @@ import type {
   Environment,
   Manifest,
   Sync,
+  Target,
 } from "@/client/forge/loomplane/types"
 import { placementSettings } from "@/lib/placement"
 
@@ -21,13 +22,34 @@ export const syncLabel = (status: string) =>
     failed: "Failed",
   })[status] ?? status
 
+/** A service picks its Cloud target by name, or by tags a target carries. */
+export type CloudChoice = string | { tags: string[] }
+
+/**
+ * TagMatch mirrors the planner: tags select the one granted target that
+ * carries every tag. None or several fail the plan rather than guessing.
+ */
+export type TagMatch =
+  | { kind: "one"; target: Target }
+  | { kind: "none" }
+  | { kind: "many"; targets: Target[] }
+
+export function matchCloudTags(targets: Target[], tags: string[]): TagMatch {
+  const found = targets.filter((t) =>
+    tags.every((tag) => (t.tags ?? []).includes(tag))
+  )
+  if (found.length === 1) return { kind: "one", target: found[0] }
+  if (found.length === 0) return { kind: "none" }
+  return { kind: "many", targets: found }
+}
+
 /** Adopt only the selected environment and preserve effective placement elsewhere. */
 export function adoptServiceTarget(
   manifest: Manifest,
   environments: Environment[],
   environment: string,
   service: string,
-  target: string
+  choice: CloudChoice
 ): Manifest {
   const next = structuredClone(manifest)
   if (!next.services?.[service])
@@ -67,7 +89,15 @@ export function adoptServiceTarget(
     if (name === environment) {
       delete override.provider
       delete override.target
-      override.cloud_target = target
+      delete override.cloudTarget
+      delete override.cloudTags
+      if (typeof choice === "string") {
+        override.cloud_target = choice
+        delete override.cloud_tags
+      } else {
+        override.cloud_tags = [...choice.tags]
+        delete override.cloud_target
+      }
     } else {
       if (settings.provider) override.provider = settings.provider
       if (settings.target) override.target = settings.target
@@ -92,13 +122,18 @@ export function adoptServiceTarget(
         }
       }
       if (settings.cloudTarget) override.cloud_target = settings.cloudTarget
+      if (settings.cloudTags) override.cloud_tags = settings.cloudTags
     }
-    entry.environments[name] = override
+    // An environment with nothing to pin needs no override of its own.
+    if (Object.keys(override).length || previous.environments?.[name])
+      entry.environments[name] = override
   }
   delete entry.provider
   delete entry.target
   delete entry.cloud_target
   delete entry.cloudTarget
+  delete entry.cloud_tags
+  delete entry.cloudTags
   return next
 }
 

@@ -31,27 +31,27 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spiffe/go-spiffe/v2 v2.9.0
 	github.com/spiffe/spire-api-sdk v1.15.3
-	github.com/xraph/authsome v1.7.3-0.20261013045248-b3fd5f9edebc
-	github.com/xraph/bastion v1.2.3-0.20261013131827-23c004a37e64
-	github.com/xraph/chronicle v1.9.0
+	github.com/xraph/authsome v1.8.3
+	github.com/xraph/bastion v1.4.1
+	github.com/xraph/chronicle v1.9.1
 	github.com/xraph/confy v1.1.0
-	github.com/xraph/ctrlplane v1.8.0
-	github.com/xraph/dispatch v1.9.1
+	github.com/xraph/ctrlplane v1.8.1
+	github.com/xraph/dispatch v1.9.2
 	github.com/xraph/forge v1.13.0
 	github.com/xraph/forge/extensions/conduit v1.13.0
 	github.com/xraph/go-utils v1.5.0
-	github.com/xraph/grove v1.8.0
-	github.com/xraph/grove/drivers/pgdriver v1.8.0
-	github.com/xraph/grove/drivers/sqlitedriver v1.8.0
-	github.com/xraph/grove/extension v1.8.0
-	github.com/xraph/herald v1.8.0
-	github.com/xraph/keysmith v1.7.1
-	github.com/xraph/relay v1.8.0
-	github.com/xraph/trove v1.7.1
-	github.com/xraph/trove/drivers/s3driver v1.7.1
-	github.com/xraph/trove/extension v1.7.1
-	github.com/xraph/vault v1.7.1
-	github.com/xraph/warden v1.8.0
+	github.com/xraph/grove v1.9.1
+	github.com/xraph/grove/drivers/pgdriver v1.9.1
+	github.com/xraph/grove/drivers/sqlitedriver v1.9.1
+	github.com/xraph/grove/extension v1.9.1
+	github.com/xraph/herald v1.8.1
+	github.com/xraph/keysmith v1.8.1
+	github.com/xraph/relay v1.8.1
+	github.com/xraph/trove v1.8.1
+	github.com/xraph/trove/drivers/s3driver v1.8.1
+	github.com/xraph/trove/extension v1.8.1
+	github.com/xraph/vault v1.8.1
+	github.com/xraph/warden v1.8.1
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3
 	golang.org/x/crypto v0.58.0
 	golang.org/x/mod v0.41.0
@@ -200,9 +200,10 @@ require (
 	github.com/xraph/farp/discovery v1.3.1 // indirect
 	github.com/xraph/forge/extensions/auth v1.13.0 // indirect
 	github.com/xraph/forge/extensions/discovery v1.13.0 // indirect
-	github.com/xraph/grove/drivers/mongodriver v1.8.0 // indirect
-	github.com/xraph/grove/kv v1.8.0 // indirect
-	github.com/xraph/ledger v1.7.0 // indirect
+	github.com/xraph/grove/drivers/mongodriver v1.9.1 // indirect
+	github.com/xraph/grove/kv v1.9.1 // indirect
+	github.com/xraph/grove/kv/drivers/redisdriver v1.9.1 // indirect
+	github.com/xraph/ledger v1.8.1 // indirect
 	github.com/xraph/vessel v1.0.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect

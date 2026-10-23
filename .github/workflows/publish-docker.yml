@@ -81,7 +81,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ inputs.tag }}
-            org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.licenses=FSL-1.1-ALv2
       - name: Export digest
         env:
           DIGEST: ${{ steps.image.outputs.digest }}

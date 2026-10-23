@@ -54,9 +54,10 @@ type NativePoint struct {
 }
 
 type NativePageInput struct {
-	EnvironmentID string `json:"environment_id,omitempty" query:"environment_id"`
-	Before        string `json:"before,omitempty" query:"before"`
-	Limit         int    `json:"limit,omitempty" query:"limit"`
+	EnvironmentID string `json:"environment_id,omitempty" query:"environment_id,omitempty"`
+	Before        string `json:"before,omitempty" query:"before,omitempty"`
+	Limit         int    `json:"limit,omitempty" query:"limit,omitempty"`
+	Resource      string `json:"resource,omitempty" query:"resource,omitempty"`
 }
 
 func (p NativePageInput) pageSize() (int, error) {

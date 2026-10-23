@@ -80,6 +80,21 @@ type ConnectionOption struct {
 	Region string
 	// Details are checked, non-secret placement and capability settings.
 	Details map[string]string
+	// Servers are the Cloud servers this is the runtime connection of.
+	Servers []CloudServer
+}
+
+// CloudServer is a Cloud server a connection reaches as its runtime.
+type CloudServer struct {
+	ID      string
+	CloudID string
+}
+
+// ConnectionHost is what runs behind a server connection: whether it
+// reaches a pool member, and the Cloud servers it's the runtime of.
+type ConnectionHost struct {
+	Pooled  bool
+	Servers []CloudServer
 }
 
 // connectionRegions are the clouds whose connection decides the region.
@@ -628,6 +643,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	if placement, ok := p.in.CloudPlacements[name]; ok {
 		placement.Region = cfg.Region
 		cfg.CloudPlacement = &placement
+		p.checkCloudServer(ServiceSubject, name, base, placement)
 	}
 	p.checkRender(name, base, cfg)
 	p.checkAzure(name, base, cfg)

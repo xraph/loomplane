@@ -475,6 +475,73 @@ it("saves an adopted service through the optimistic generated manifest API", asy
   })
 })
 
+it("selects a service's target by tags and previews where they land", async () => {
+  const user = userEvent.setup()
+  const writes: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        writes.push(JSON.parse(String(init.body)))
+        return Response.json({ id: "next", revision: 4, manifest: {} })
+      }
+      return Response.json({
+        id: "saved",
+        revision: 3,
+        manifest: {
+          version: 1,
+          services: { web: { source: "apps/web", cloud_target: "frontend" } },
+        },
+      })
+    }
+  )
+  const { ServiceAdoption } =
+    await import("@/components/cloud-targets/service-adoption")
+  const environments = [
+    { id: "prod", name: "production" },
+  ] as import("@/client/forge/loomplane/types").Environment[]
+  const targets = [
+    { id: "a", name: "frontend", displayName: "Frontend", tags: ["eu", "web"] },
+    { id: "b", name: "edge", displayName: "Edge", tags: ["us", "web"] },
+  ] as import("@/client/forge/loomplane/types").Target[]
+  show(
+    <ServiceAdoption
+      projectId="p"
+      environment={environments[0]}
+      environments={environments}
+      targets={targets}
+      onSaved={async () => undefined}
+    />
+  )
+  await user.click(
+    await screen.findByRole("combobox", { name: "Select web's target by" })
+  )
+  await user.click(await screen.findByRole("option", { name: "Target tags" }))
+  const input = screen.getByRole("textbox", { name: "Cloud tags for web" })
+  await user.type(input, "web{Enter}")
+  expect(screen.getByText(/Frontend, Edge all carry these tags/)).toBeVisible()
+  await user.type(input, "eu{Enter}")
+  expect(screen.getByText(/Runs on/)).toHaveTextContent("Runs on Frontend.")
+  await user.click(screen.getByRole("button", { name: "Review service edit" }))
+  expect(
+    screen.getByRole("heading", { name: "Select web's target by eu, web" })
+  ).toBeVisible()
+  await user.click(screen.getByRole("button", { name: "Save service target" }))
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0]).toMatchObject({
+    base_revision: 3,
+    manifest: {
+      services: {
+        web: { environments: { production: { cloud_tags: ["eu", "web"] } } },
+      },
+    },
+  })
+  expect(
+    (writes[0] as { manifest: { services: { web: Record<string, unknown> } } })
+      .manifest.services.web.cloud_target
+  ).toBeUndefined()
+})
+
 it("requires routing evidence and sends it for the selected environment", async () => {
   const user = userEvent.setup()
   const writes: Record<string, unknown>[] = []

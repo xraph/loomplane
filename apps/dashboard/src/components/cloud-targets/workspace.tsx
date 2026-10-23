@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/select"
 import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { type ReactNode, useEffect, useState } from "react"
-import { CloudIcon, PlusIcon } from "lucide-react"
+import { PlusIcon } from "lucide-react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
   Connection,
@@ -44,6 +44,7 @@ import {
 import { cloudDeletionError } from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { CloudsIcon } from "@/components/icons"
 import { cloudLabel } from "@/lib/clouds"
 
 import { AccountSummary, cloudOf } from "./target-mix"
@@ -56,16 +57,19 @@ export function EmptyClouds({
   title,
   description,
   children,
+  kind = "list",
 }: {
   title: string
   description: string
   children?: ReactNode
+  /** A list that will fill gets the faded preview; a notice doesn't. */
+  kind?: "list" | "notice"
 }) {
   return (
-    <ZeroState variant="inline" preview={false}>
+    <ZeroState preview={kind === "list"}>
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
-          <CloudIcon />
+          <CloudsIcon />
         </ZeroStateMedia>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{description}</ZeroStateDescription>

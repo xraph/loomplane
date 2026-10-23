@@ -556,6 +556,7 @@ export function ServiceRecovery({
   if (!environment)
     return (
       <Recovery
+        key={`${project}:${resource ?? ""}`}
         project={project}
         initialEnvironment="production"
         initialResource={resource ?? ""}
@@ -753,9 +754,11 @@ function Recovery({
         <div className="flex flex-wrap items-center gap-2">
           {environmentSelect}
         </div>
-        <CatalogEmpty
-          title={`No recovery for ${resource} in ${environment}`}
-          description="Loomplane doesn't back it up in this environment, and it has no backups kept here. Choose the environment where it runs."
+        <NativeRecovery
+          key={`${project}:${environmentID}:${resource}`}
+          project={project}
+          environment={environmentID}
+          resource={resource}
         />
       </div>
     )
@@ -828,12 +831,13 @@ function Recovery({
           key={`${project}:${environmentID}`}
           project={project}
           environment={environmentID}
+          resource={initialResource ? resource : undefined}
         />
       )}
       {managedRecovery ? (
         <CatalogEmpty
           title="Managed database recovery"
-          description="Open Cloud snapshots to inspect captured RDS and Cloud SQL history. Restore and PITR controls remain in your cloud account."
+          description="Open Cloud snapshots for captured RDS and Cloud SQL history and temporary Cloud SQL PostgreSQL 17 copies. PITR and RDS restore controls remain in your cloud account."
         >
           <Button
             variant="outline"

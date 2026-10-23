@@ -32,7 +32,7 @@ func (e *Extension) nativeBackupRoutes(group forge.Router) error {
 	return e.nativeCopyRoutes(group)
 }
 func nativePage(c forge.Context) (recovery.NativePageInput, error) {
-	page := recovery.NativePageInput{Before: c.Query("before"), EnvironmentID: c.Query("environment_id")}
+	page := recovery.NativePageInput{Before: c.Query("before"), EnvironmentID: c.Query("environment_id"), Resource: c.Query("resource")}
 	if raw := c.Query("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil || limit < 1 || limit > 100 {

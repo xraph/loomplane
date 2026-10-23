@@ -2780,7 +2780,6 @@
           {
             "name": "environment_id",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -2788,7 +2787,6 @@
           {
             "name": "before",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -2796,9 +2794,15 @@
           {
             "name": "limit",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -5308,7 +5312,6 @@
           {
             "name": "environment_id",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -5316,7 +5319,6 @@
           {
             "name": "before",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -5324,9 +5326,15 @@
           {
             "name": "limit",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -5363,7 +5371,6 @@
           {
             "name": "environment_id",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -5371,7 +5378,6 @@
           {
             "name": "before",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -5379,9 +5385,15 @@
           {
             "name": "limit",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           }
         ],

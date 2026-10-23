@@ -1,4 +1,4 @@
-// The cookie mode patches/@authsome__ui-core@1.7.2.patch adds to authsome's
+// The cookie mode patches/@authsome__ui-core@1.8.3.patch adds to authsome's
 // AuthManager: the session stays in the backend's httpOnly cookie, so no
 // token is stored, sent or kept, and a reload asks the backend who's signed
 // in. These drive the real manager over a fake fetch that records every

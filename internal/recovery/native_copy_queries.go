@@ -17,17 +17,18 @@ func (s *PgStore) ListNativeCopies(ctx context.Context, org, project string, pag
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT ` + nativeRestoreColumns + ` FROM loomplane_native_restores WHERE org_id=$1 AND project_id=$2 AND ($3='' OR environment_id=$3)`
-	args := []any{org, project, page.EnvironmentID}
+	scope := ` FROM loomplane_native_restores WHERE org_id=$1 AND project_id=$2 AND ($3='' OR environment_id=$3) AND ($4='' OR source->>'name'=$4)`
+	query := `SELECT ` + nativeRestoreColumns + scope
+	args := []any{org, project, page.EnvironmentID, page.Resource}
 	if page.Before != "" {
 		var created time.Time
-		if err = s.db.QueryRow(ctx, `SELECT created_at FROM loomplane_native_restores WHERE org_id=$1 AND project_id=$2 AND ($3='' OR environment_id=$3) AND id=$4`, org, project, page.EnvironmentID, page.Before).Scan(&created); err != nil {
+		if err = s.db.QueryRow(ctx, `SELECT created_at`+scope+` AND id=$5`, append(args, page.Before)...).Scan(&created); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil, ErrNotFound
 			}
 			return nil, err
 		}
-		query += ` AND (created_at,id)<($4,$5)`
+		query += ` AND (created_at,id)<($5,$6)`
 		args = append(args, created, page.Before)
 	}
 	query += ` ORDER BY created_at DESC,id DESC LIMIT ` + nativeLimitPlaceholder(len(args)+1)

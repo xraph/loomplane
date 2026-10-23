@@ -144,7 +144,7 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
-	if !slices.Contains(zone.ProjectIDs, project) || zone.VerifiedAt.IsZero() {
+	if !slices.Contains(zone.ProjectIDs, project) || zone.VerifiedAt.IsZero() || !zone.hasControlProof() {
 		return nil, ErrNotFound
 	}
 	if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {

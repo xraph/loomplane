@@ -581,3 +581,76 @@ func TestSharedCloudHistoryTargetGrantProjection(t *testing.T) {
 		t.Fatal("public history projection changed private operation state")
 	}
 }
+
+func TestSharedCloudPreviewDefaultFollowsCurrentGrant(t *testing.T) {
+	st, conn, db := cloudSyncDatabase(t)
+	ctx := t.Context()
+	if _, err := conn.Exec(ctx, `UPDATE loomplane_cloud_profiles SET default_provider='vercel',default_connection_id='old',default_region='private-region',revision=revision+1 WHERE id='cloud'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`); err != nil {
+		t.Fatal(err)
+	}
+	assignment, err := st.RetainedAssignment(ctx, "org", "proj", "env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview := &cloudprofiles.Preview{ID: "default-review", OrgID: "org", ProjectID: "proj", Revision: "immutable-review", BeforeAssignment: assignment, AfterAssignment: assignment, Input: cloudprofiles.ChangeInput{EnvironmentID: "env"}, CreatedAt: time.Now().UTC()}
+	snapshot := &cloudprofiles.Snapshot{Connections: []string{"old"}}
+	if err = st.SavePreview(ctx, preview, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	before, beforeSnapshot, err := st.GetPreview(ctx, "org", "proj", preview.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := json.Marshal([]any{before, beforeSnapshot})
+	service := planning.NewService(planning.Deps{Store: planning.NewPgStore(db), Projects: projects.NewPgStore(db), CloudProfiles: st, Connections: &syncAccounts{store: connections.NewPgStore(db)}, Providers: providers.Registry(), Authz: sharedProjectAuthorizer{}})
+	actor := security.Principal{OrgID: "org", UserID: "developer"}
+	for _, tc := range []struct {
+		name        string
+		targets     []string
+		revoked     bool
+		wantDefault bool
+		wantTargets int
+	}{
+		{"whole", nil, false, true, 1}, {"restricted", []string{"target"}, false, false, 1}, {"revoked", nil, true, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, grantErr := st.SetProjectGrant(ctx, "org", "cloud", "proj", tc.targets, tc.revoked); grantErr != nil {
+				t.Fatal(grantErr)
+			}
+			public, readErr := service.CloudPreview(ctx, actor, "proj", preview.ID)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			for _, a := range []*cloudprofiles.Assignment{public.BeforeAssignment, public.AfterAssignment} {
+				if a == nil || (a.DefaultPlacement != nil) != tc.wantDefault || len(a.Targets) != tc.wantTargets {
+					t.Fatalf("grant leaked placement: %+v", a)
+				}
+			}
+			if tc.revoked {
+				removal, removalErr := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", Revision: 1})
+				if removalErr != nil {
+					t.Fatal(removalErr)
+				}
+				if removal.BeforeAssignment == nil || removal.BeforeAssignment.DefaultPlacement != nil || len(removal.BeforeAssignment.Targets) != 0 {
+					t.Fatalf("removal leaked retained placement: %+v", removal.BeforeAssignment)
+				}
+			}
+		})
+	}
+	manager := planning.NewService(planning.Deps{Projects: projects.NewPgStore(db), CloudProfiles: st, Authz: &syncAuth{}})
+	public, err := manager.CloudPreview(ctx, security.Principal{OrgID: "org", UserID: "manager"}, "proj", preview.ID)
+	if err != nil || public.BeforeAssignment.DefaultPlacement == nil || public.AfterAssignment.DefaultPlacement == nil {
+		t.Fatalf("manager lost full view: %+v %v", public, err)
+	}
+	after, afterSnapshot, err := st.GetPreview(ctx, "org", "proj", preview.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged, _ := json.Marshal([]any{after, afterSnapshot})
+	if string(original) != string(unchanged) {
+		t.Fatal("public filtering changed persisted review or private snapshot")
+	}
+}

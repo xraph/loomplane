@@ -68,3 +68,27 @@ it("caps a target at sixteen tags", () => {
   expect(tagProblem("a".repeat(33), [])).toMatch(/32 characters/)
   expect(tagProblem("ok-tag", [])).toBe("")
 })
+
+it("limits a service's selection to the manifest's eight tags", async () => {
+  const user = userEvent.setup()
+  function Service() {
+    const [tags, setTags] = useState(["a", "b", "c", "d", "e", "f", "g", "h"])
+    return (
+      <TagInput
+        tags={tags}
+        onChange={setTags}
+        owner="service"
+        label="Cloud tags for web"
+      />
+    )
+  }
+  render(<Service />)
+  await user.type(
+    screen.getByRole("textbox", { name: "Cloud tags for web" }),
+    "extra"
+  )
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "A service selects with at most 8 tags."
+  )
+  expect(tagProblem("a", ["a"], 8, "service")).toBe("a is already selected.")
+})

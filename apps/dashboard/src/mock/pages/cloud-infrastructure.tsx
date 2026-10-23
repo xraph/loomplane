@@ -1,3 +1,7 @@
+import {
+  ActivityIcon as ActivityPulseIcon,
+  RoutesIcon,
+} from "@/components/icons"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -361,19 +365,43 @@ export function MockCloudInfrastructure({
               </Row>
             ))}
           </Rows>
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted p-3 text-sm">
-            <p>
-              {pool
-                ? `shared-services pool · ${poolMembers.length} members · reviewed CPU and memory budgets`
-                : "No server pool yet"}
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setPoolDialog(true)}
-            >
-              {pool ? "Edit pool budgets" : "Add pool"}
-            </Button>
+          <div
+            className={
+              pool
+                ? "flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted p-3 text-sm"
+                : "grid gap-3"
+            }
+          >
+            {pool ? (
+              <>
+                <p>
+                  {`shared-services pool · ${poolMembers.length} members · reviewed CPU and memory budgets`}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPoolDialog(true)}
+                >
+                  Edit pool budgets
+                </Button>
+              </>
+            ) : (
+              <CloudEmpty
+                kind="inline"
+                title="No server pool yet"
+                action={
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPoolDialog(true)}
+                  >
+                    Add pool
+                  </Button>
+                }
+              >
+                Group servers and set CPU and memory budgets for placement.
+              </CloudEmpty>
+            )}
             {pool && (
               <>
                 <Field label="Move destination server">
@@ -552,47 +580,67 @@ export function MockCloudInfrastructure({
               Add route
             </Button>
           </div>
-          <div className="grid gap-2 rounded-lg bg-muted p-3 text-sm">
-            <p>
-              {zone
-                ? `example.test · ${mode} DNS · ${zoneVerified ? "ownership verified" : "ownership pending"}`
-                : "No DNS zone yet"}
-            </p>
-            {zone && mode === "external" && !zoneVerified && (
-              <p className="text-xs break-all">
-                Publish TXT _loomplane.example.test = fixture-proof, then verify
-                ownership.
+          {zone ? (
+            <div className="grid gap-2 rounded-lg bg-muted p-3 text-sm">
+              <p>
+                {`example.test · ${mode} DNS · ${zoneVerified ? "ownership verified" : "ownership pending"}`}
               </p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setZone(true)
-                  record("DNS zone saved independently of compute account.")
-                }}
-              >
-                Save DNS zone
-              </Button>
-              {zone && (
+              {zone && mode === "external" && !zoneVerified && (
+                <p className="text-xs break-all">
+                  Publish TXT _loomplane.example.test = fixture-proof, then
+                  verify ownership.
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => {
-                    setZoneVerified(true)
-                    record(
-                      "Zone ownership verified. Route DNS, TLS and backend remain separate."
-                    )
+                    setZone(true)
+                    record("DNS zone saved independently of compute account.")
                   }}
                 >
-                  Verify zone
+                  Save DNS zone
                 </Button>
-              )}
+                {zone && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setZoneVerified(true)
+                      record(
+                        "Zone ownership verified. Route DNS, TLS and backend remain separate."
+                      )
+                    }}
+                  >
+                    Verify zone
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <CloudEmpty
+              kind="inline"
+              icon={RoutesIcon}
+              title="No DNS zone yet"
+              action={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setZone(true)
+                    record("DNS zone saved independently of compute account.")
+                  }}
+                >
+                  Save DNS zone
+                </Button>
+              }
+            >
+              Save a zone, then verify ownership before adding routes.
+            </CloudEmpty>
+          )}
           {!domains.length ? (
-            <CloudEmpty title="No routes yet">
+            <CloudEmpty kind="list" icon={RoutesIcon} title="No routes yet">
               Grant zone access, then review a deployed service's hostname and
               DNS authority.
             </CloudEmpty>
@@ -732,7 +780,11 @@ export function MockCloudInfrastructure({
               ))}
             </Rows>
           ) : (
-            <CloudEmpty title="No infrastructure activity">
+            <CloudEmpty
+              kind="list"
+              icon={ActivityPulseIcon}
+              title="No infrastructure activity"
+            >
               Review and apply a server, route or project change to see its
               checkpoints.
             </CloudEmpty>

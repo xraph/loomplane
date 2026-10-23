@@ -301,12 +301,15 @@ it("uses an independent DNS account and an explicit project grant when saving a 
   )
   await user.click(screen.getByRole("combobox", { name: "DNS mode" }))
   await user.click(await screen.findByRole("option", { name: /Managed DNS/ }))
-  expect(
-    screen.queryByRole("option", { name: "Compute only" })
-  ).not.toBeInTheDocument()
   expect(screen.getByRole("button", { name: "Save DNS zone" })).toBeDisabled()
   await user.click(await screen.findByRole("checkbox", { name: "Web app" }))
   await user.click(screen.getByRole("combobox", { name: "DNS account" }))
+  expect(
+    await screen.findByRole("option", { name: /Independent DNS/ })
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("option", { name: "Compute only" })
+  ).not.toBeInTheDocument()
   await user.click(
     await screen.findByRole("option", { name: /Independent DNS/ })
   )
@@ -390,11 +393,15 @@ it("refreshes cached shared inventory after an operation retry completes enrollm
       <InfrastructureActivity cloudId="c" />
     </>
   )
-  expect(await screen.findByText("1 servers")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("heading", { name: "Servers 1" })
+  ).toBeInTheDocument()
   await user.click(
     await screen.findByRole("button", { name: "Retry operation" })
   )
-  expect(await screen.findByText("2 servers")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("heading", { name: "Servers 2" })
+  ).toBeInTheDocument()
 })
 
 it("releases a handoff through its exact preparation with a bounded reviewed drain interval", async () => {

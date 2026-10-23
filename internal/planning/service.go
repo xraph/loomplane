@@ -694,11 +694,11 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	if err != nil {
 		return nil, fmt.Errorf("list cloud connections: %w", err)
 	}
-	pooled := map[string]bool{}
+	hosts := map[string]ConnectionHost{}
 	if reader, ok := s.store.(interface {
-		PooledConnections(context.Context, string) (map[string]bool, error)
+		ConnectionHosts(context.Context, string) (map[string]ConnectionHost, error)
 	}); ok {
-		pooled, err = reader.PooledConnections(ctx, orgID)
+		hosts, err = reader.ConnectionHosts(ctx, orgID)
 		if err != nil {
 			return nil, err
 		}
@@ -706,7 +706,7 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	out := make([]ConnectionOption, 0, len(all))
 	for _, c := range all {
 		out = append(out, ConnectionOption{
-			Pooled: pooled[c.ID], Account: c.Account, ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
+			Pooled: hosts[c.ID].Pooled, Servers: slices.Clone(hosts[c.ID].Servers), Account: c.Account, ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
 			PullReady: connections.RegistryPullReady(c),
 			HTTPS:     c.Details["certificate_arn"] != "", Region: c.Details["region"],
 			Details: maps.Clone(c.Details),
