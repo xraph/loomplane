@@ -155,7 +155,7 @@ func TestKubernetesRouteBindingQuery(t *testing.T) {
 
 	// Preview and apply recheck the same binding. Apply stores the backend and
 	// the empty Cloud of an environment-connection route.
-	exec(`INSERT INTO loomplane_dns_zones(id,org_id,name,connection_id,revision,body) VALUES('zone','org','example.com','',1,$1)`, `{"id":"zone","org_id":"org","name":"example.com","mode":"external","project_ids":["shop"],"verified_at":"2026-11-05T12:00:00Z","revision":1}`)
+	exec(`INSERT INTO loomplane_dns_zones(id,org_id,name,connection_id,revision,body) VALUES('zone','org','example.com','',1,$1)`, `{"id":"zone","org_id":"org","name":"example.com","mode":"external","project_ids":["shop"],"proof_name":"_loomplane.example.com","proof_value":"proof","proof_expires_at":"2026-11-06T12:00:00Z","verified_at":"2026-11-05T12:00:00Z","revision":1}`)
 	looseBinding := check("before apply", environment, loose)
 	input := environment
 	input.ZoneID, input.Hostname = "zone", "api.example.com"
