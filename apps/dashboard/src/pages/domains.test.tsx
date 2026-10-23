@@ -88,6 +88,7 @@ function zoneWith(
     verified?: boolean
     registration?: string
     proof?: boolean
+    hostedIn?: string
   } = {}
 ) {
   const proof = options.proof ?? options.external
@@ -106,7 +107,12 @@ function zoneWith(
       proof_value: proof ? "lp-proof-123" : "",
       proof_checked_at: zero,
       proof_expires_at: zero,
-      provider_zone: {},
+      provider_zone: options.external
+        ? {}
+        : {
+            id: `cf-${options.hostedIn ?? name}`,
+            name: options.hostedIn ?? name,
+          },
       record_ownership: true,
       registration_id: options.registration ?? "",
       revision: 2,
@@ -536,6 +542,34 @@ it("shows TXT instructions for a managed zone awaiting its proof", async () => {
   expect(within(card).getByText("Awaiting TXT record")).toBeTruthy()
   expect(within(card).getByText("_loomplane.acme.dev")).toBeTruthy()
   expect(within(card).getByRole("button", { name: "Check again" })).toBeTruthy()
+})
+
+it("offers wildcard certificates only on a domain that is its own Cloudflare zone", async () => {
+  stubFetch({
+    "/api/v1/domains": overviewWith(
+      zoneWith("acme.dev"),
+      zoneWith("shop.acme.org", [], { hostedIn: "acme.org" })
+    ),
+  })
+  const setUp = { name: "Set up wildcard certificates" }
+  const view = render(
+    <Wrapped>
+      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
+    </Wrapped>
+  )
+  const own = await screen.findByRole("region", { name: "acme.dev" })
+  expect(await within(own).findByRole("button", setUp)).toBeTruthy()
+  view.unmount()
+  render(
+    <Wrapped>
+      <Domains search={{ zone: "zone-shop.acme.org" }} onSearch={() => {}} />
+    </Wrapped>
+  )
+  const inside = await screen.findByRole("region", { name: "shop.acme.org" })
+  expect(
+    await within(inside).findByText(/No hostnames use this domain yet/)
+  ).toBeTruthy()
+  expect(within(inside).queryByRole("button", setUp)).toBeNull()
 })
 
 it("saves grants with the zone's revision after a failed check", async () => {

@@ -45,7 +45,14 @@ type Zone struct {
 // Wildcards reports whether routes under the zone may use wildcard
 // hostnames: a Cloudflare zone with a DNS challenge connection attached.
 func (z Zone) Wildcards() bool {
-	return z.Mode == "managed" && z.Provider == connections.Cloudflare && z.ChallengeConnectionID != ""
+	return z.Mode == "managed" && z.Provider == connections.Cloudflare && z.ChallengeConnectionID != "" && z.ownsProviderZone()
+}
+
+// ownsProviderZone is a zone that is its Cloudflare zone, not a namespace
+// inside a larger one. A Cloudflare token reaches whole zones, so a
+// challenge token for shop.acme.dev would edit all of acme.dev.
+func (z Zone) ownsProviderZone() bool {
+	return z.ProviderZone.ID != "" && z.ProviderZone.Name == z.Name
 }
 
 type ZoneInput struct {

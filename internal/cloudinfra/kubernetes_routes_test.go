@@ -622,3 +622,31 @@ func TestKubernetesWildcardUsesDNSIssuer(t *testing.T) {
 		t.Fatal("removal order", *log)
 	}
 }
+
+// A wildcard accepted on a zone inside a larger Cloudflare zone never puts
+// the challenge token on the cluster.
+func TestKubernetesWildcardRefusesAZoneInsideAnother(t *testing.T) {
+	svc, st, kube, dns := kubernetesRouteFixture(t)
+	zone := st.zone
+	zone.Name, zone.ProofName = "shop.example.com", "_loomplane.shop.example.com"
+	zone.Provider, zone.ConnectionID, zone.ChallengeConnectionID = "cloudflare", "dns", "cf-dns"
+	cf := func(id string) *connections.Connection {
+		return &connections.Connection{ID: id, OrgID: "org", Cloud: connections.Cloudflare, Generation: 1, Status: "ready", Details: map[string]string{"account_id": "account"}}
+	}
+	svc.Connections = challengeConnections{"dns": cf("dns"), "cf-dns": cf("cf-dns")}
+	registry := NewAdapters()
+	if err := registry.RegisterDNS("cloudflare", challengeRouteDNS{orderedDNS{dns, kube.log}, map[string]cloudflare.ChallengeScope{tokenFor("cf-dns", 1): zoneScoped("zone")}}); err != nil {
+		t.Fatal(err)
+	}
+	svc.Adapters = registry
+	op := st.op
+	op.Route.Input.Hostname = "*.shop.example.com"
+	op.DesiredRecord.Name = "*.shop"
+	st.op = op
+	if err := svc.ReconcileRoute(t.Context(), "org", op.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if st.op.Status != "failed" || len(kube.dnsTokens) != 0 || dns.writes != 0 || !strings.Contains(st.op.Message, "didn't put its token on the cluster") {
+		t.Fatalf("status=%s tokens=%v writes=%d %s", st.op.Status, kube.dnsTokens, dns.writes, st.op.Message)
+	}
+}

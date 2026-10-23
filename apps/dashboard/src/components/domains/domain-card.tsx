@@ -51,11 +51,13 @@ export function DomainCard({
   // Managed zones wait on the same TXT proof as external ones.
   const verifying = zone.state !== "ready" && !!z?.proofName
   const [settingUp, setSettingUp] = useState(false)
-  // Wildcards need a second, zone-scoped token on a Cloudflare zone.
+  // Wildcards need a second, zone-scoped token on a Cloudflare zone, and
+  // that token reaches all of its Cloudflare zone, so the domain must be one.
   const needsChallenge =
     zone.state === "ready" &&
     z?.mode === "managed" &&
     z.provider === "cloudflare" &&
+    z.providerZone?.name === z.name &&
     !z.challengeConnectionId
   return (
     <section

@@ -307,3 +307,42 @@ func TestZoneTokenIsRecheckedBeforeEveryWrite(t *testing.T) {
 		t.Fatal("a refused token reached the server", written, state.DNSTokens)
 	}
 }
+
+// A Cloudflare token reaches whole zones, so a Loomplane zone inside a larger
+// Cloudflare zone takes no challenge token: it would edit the parent's apex
+// and every sibling zone.
+func TestWildcardsNeedTheirOwnCloudflareZone(t *testing.T) {
+	svc, base, dns := challengeFixture(t)
+	shop := base.zones[0]
+	shop.Name, shop.ProofName = "shop.acme.dev", "_loomplane.shop.acme.dev"
+	if _, err := svc.SetZoneChallengeCredential(t.Context(), overviewAdmin, "zone", ChallengeCredentialInput{ConnectionID: "cf-dns", Revision: 1}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "shop.acme.dev to be its own Cloudflare zone, not part of acme.dev") {
+		t.Fatal("a challenge token for a zone inside acme.dev", err)
+	}
+	if shop.ChallengeConnectionID != "" || shop.Revision != 1 || len(dns.probed) != 0 {
+		t.Fatalf("a refused credential was probed or saved: %+v %v", shop, dns.probed)
+	}
+
+	// One attached before the rule still serves no wildcard and is never read.
+	shop.ChallengeConnectionID = "cf-dns"
+	if shop.Wildcards() {
+		t.Fatal("wildcards on a zone inside acme.dev")
+	}
+	if _, err := ValidateRouteHostname(shop, "*.shop.acme.dev"); !errors.Is(err, ErrWildcardUnsupported) {
+		t.Fatal("wildcard hostname on a zone inside acme.dev", err)
+	}
+	if token, err := svc.zoneChallengeToken(t.Context(), shop); !errors.Is(err, ErrWildcardUnsupported) || token != nil {
+		t.Fatal("challenge token read for a zone inside acme.dev", err)
+	}
+	st := &gatewayStore{overviewStore: base, clouds: map[string]string{"octo--gateway": "cloud_1"}}
+	svc.Domains = st
+	svc.ingressImagePinned = func() bool { return true }
+	svc.ingressNeedsUpgrade = func(context.Context, Route) (bool, error) { return false, nil }
+	in := RouteInput{ZoneID: "zone", EnvironmentID: "prod", Service: "octo--gateway", Hostname: "*.shop.acme.dev", Port: 8080}
+	if _, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in); !errors.Is(err, ErrWildcardUnsupported) || len(st.previewed) != 0 {
+		t.Fatal("wildcard preview on a zone inside acme.dev", err)
+	}
+	in.Hostname = "api.shop.acme.dev"
+	if _, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in); err != nil {
+		t.Fatal("an exact hostname on the same zone", err)
+	}
+}

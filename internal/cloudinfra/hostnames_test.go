@@ -5,10 +5,12 @@ import (
 	"regexp"
 	"testing"
 	"time"
+
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 func TestValidateRouteHostnameKeepsClaimsExact(t *testing.T) {
-	cf := provenZone(&Zone{Name: "acme.dev", Mode: "managed", Provider: "cloudflare", ChallengeConnectionID: "cf-dns", VerifiedAt: time.Now()})
+	cf := provenZone(&Zone{Name: "acme.dev", Mode: "managed", Provider: "cloudflare", ProviderZone: provider.DNSZone{ID: "cf", Name: "acme.dev"}, ChallengeConnectionID: "cf-dns", VerifiedAt: time.Now()})
 	if _, err := NormalizeHostname("*.acme.dev"); !errors.Is(err, ErrInvalid) {
 		t.Fatal("claim path accepts wildcards")
 	}

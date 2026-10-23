@@ -71,6 +71,9 @@ func (s *Service) checkChallengeCredential(ctx context.Context, st DomainStore, 
 	if zone.Mode != "managed" || zone.Provider != connections.Cloudflare || zone.ProviderZone.ID == "" {
 		return fmt.Errorf("%w: wildcard certificates need a Cloudflare zone", ErrInvalid)
 	}
+	if !zone.ownsProviderZone() {
+		return fmt.Errorf("%w: wildcard certificates need %s to be its own Cloudflare zone, not part of %s", ErrInvalid, zone.Name, zone.ProviderZone.Name)
+	}
 	if connectionID == zone.ConnectionID {
 		return fmt.Errorf("%w: use a second connection, not the zone's own", ErrInvalid)
 	}
