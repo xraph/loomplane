@@ -248,6 +248,10 @@ func TestNativeRestoreCleanupProtectsAccountsUntilConfirmedDeletion(t *testing.T
 	if err = store.FinishNativeRestore(t.Context(), claimed, recovery.NativeRestoreResult{}, time.Second, errors.New("SQL probe failed")); err != nil {
 		t.Fatal(err)
 	}
+	cleanupRequests := nativeCleanupStore(t, f)
+	if _, err = cleanupRequests.RequestNativeCleanup(t.Context(), "org", r.ID, "operator", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
 	cleanup, err := store.ClaimNativeCleanup(t.Context(), "org", r.ID, "cleanup-one")
 	if err != nil {
 		t.Fatal(err)
@@ -261,6 +265,9 @@ func TestNativeRestoreCleanupProtectsAccountsUntilConfirmedDeletion(t *testing.T
 	}
 	if deleteErr := connections.NewPgStore(f.db).DeleteConnection(t.Context(), "org", "recovery-account"); !errors.Is(deleteErr, connections.ErrInUse) {
 		t.Fatal("failed cleanup released target credentials", deleteErr)
+	}
+	if _, err = cleanupRequests.RequestNativeCleanup(t.Context(), "org", r.ID, "operator", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
 	}
 	current, err := store.ClaimNativeCleanup(t.Context(), "org", r.ID, "cleanup-two")
 	if err != nil {

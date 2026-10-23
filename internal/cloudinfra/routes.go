@@ -110,6 +110,7 @@ type DomainStore interface {
 	AcceptRoute(context.Context, *RouteOperation) error
 	RouteOperation(context.Context, string, string) (*RouteOperation, error)
 	RouteOperations(context.Context, string, string, string) ([]*RouteOperation, error)
+	RouteHandoffReceipts(context.Context, string, string, string, string) ([]*RouteOperation, error)
 	SaveRouteOperation(context.Context, *RouteOperation) error
 	Route(context.Context, string, string, string) (*Route, error)
 	Routes(context.Context, string, string) ([]*Route, error)

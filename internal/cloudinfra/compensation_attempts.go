@@ -42,7 +42,7 @@ func TransferWorkloadAttempt(ctx context.Context, tx driver.Tx, previous, next W
 	}
 	var err error
 	var authorized bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_plans n JOIN loomplane_cloud_syncs c ON c.org_id=n.org_id AND c.id=n.result->>'cloud_sync_id' JOIN loomplane_plans p ON p.org_id=n.org_id AND p.id=$5 JOIN loomplane_cloud_syncs o ON o.org_id=p.org_id AND o.id=p.result->>'cloud_sync_id' WHERE n.org_id=$1 AND n.project_id=$2 AND n.environment_id=$3 AND n.id=$4 AND c.status='running' AND loomplane_accepted_pool_sync(n) AND o.status='reverting' AND c.body->>'reverts'=o.id AND EXISTS(SELECT 1 FROM jsonb_array_elements(n.result->'actions') a WHERE a->>'name'=$6 AND a->'compensation'->>'plan_id'=p.id))`, next.Org, next.Project, next.Environment, next.Plan, previous.Plan, next.Service).Scan(&authorized)
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_plans n JOIN loomplane_cloud_syncs c ON c.org_id=n.org_id AND c.id=n.result->>'cloud_sync_id' JOIN loomplane_plans p ON p.org_id=n.org_id AND p.id=$5 JOIN loomplane_cloud_syncs o ON o.org_id=p.org_id AND o.id=p.result->>'cloud_sync_id' WHERE n.org_id=$1 AND n.project_id=$2 AND n.environment_id=$3 AND n.id=$4 AND c.status='running' AND loomplane_compensation_execution(n) AND o.status='reverting' AND c.body->>'reverts'=o.id AND EXISTS(SELECT 1 FROM jsonb_array_elements(n.result->'actions') a WHERE a->>'name'=$6 AND a->'compensation'->>'plan_id'=p.id))`, next.Org, next.Project, next.Environment, next.Plan, previous.Plan, next.Service).Scan(&authorized)
 	if err != nil {
 		return nil, err
 	}

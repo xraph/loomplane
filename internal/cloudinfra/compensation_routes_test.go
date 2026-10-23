@@ -3,9 +3,12 @@ package cloudinfra
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -95,4 +98,86 @@ func TestCloudCompensationMissingExternalTTLCanSettleUnchangedRoute(t *testing.T
 
 func (*compensationRouteStore) ClaimCompensationHandoff(context.Context, *RouteOperation, *Route, *RouteOperation) error {
 	return nil
+}
+
+type compensationReceiptStore struct {
+	compensationRouteStore
+	rolled    *RouteOperation
+	unrelated []*RouteOperation
+}
+
+func (s *compensationReceiptStore) RouteOperations(context.Context, string, string, string) ([]*RouteOperation, error) {
+	ops := []*RouteOperation{&s.prepared, &s.cutover}
+	if s.rolled != nil {
+		ops = append(ops, s.rolled)
+	}
+	return append(ops, s.unrelated...), nil
+}
+func (s *compensationReceiptStore) RouteOperation(ctx context.Context, org, id string) (*RouteOperation, error) {
+	if s.rolled != nil && id == s.rolled.ID {
+		cloned := *s.rolled
+		return &cloned, nil
+	}
+	return s.compensationRouteStore.RouteOperation(ctx, org, id)
+}
+func TestCloudCompensationSameHostBeforePublication(t *testing.T) {
+	for _, dns := range []bool{false, true} {
+		t.Run(fmt.Sprint(dns), func(t *testing.T) {
+			source := Route{ID: "route", OrgID: "org", ProjectID: "project", Revision: 1, Status: "ready", Input: RouteInput{ZoneID: "zone", Hostname: "app.example.com", EnvironmentID: "env", Service: "web", ExternalTTLSeconds: 3600}, Binding: RouteBinding{InstanceID: "source", Address: "192.0.2.1", ServerID: "same-host"}}
+			candidate := source
+			candidate.Binding.InstanceID = "candidate"
+			st := &compensationReceiptStore{compensationRouteStore: compensationRouteStore{source: source, destination: source}}
+			st.prepared = RouteOperation{ID: releasePrepareID("old/action", source.ID), Kind: "prepare", Source: &source, Route: candidate, Status: "succeeded"}
+			st.cutover = RouteOperation{ID: "cutover", Kind: "cutover", HandoffID: st.prepared.ID, Source: &source, Route: candidate, Status: "cancelled", DNSAttempted: true, Receipt: &provider.DNSRecord{ID: "latest", Type: "A", Name: source.Input.Hostname, Value: source.Binding.Address, TTL: 60}}
+			if !dns {
+				st.cutover.DNSAttempted = false
+				st.cutover.Receipt = nil
+				st.cutover.AppliedConfig = &server.IngressSnapshot{ContainerID: "proxy", ETag: "candidate"}
+			}
+			svc := NewService(Deps{Store: st, Domains: st, Authz: cleanupTestAuth{}})
+			err := svc.ReconcileCompensationRoutes(t.Context(), security.Principal{OrgID: "org", UserID: "current"}, ReleaseRouteRequest{Key: "old/action", ProjectID: "project", EnvironmentID: "env", Service: "web", InstanceID: "source", Routes: []Route{source}, DrainSeconds: 60})
+			if !errors.Is(err, ErrPending) || st.accepted == nil || st.accepted.Kind != "rollback" {
+				kind := "none"
+				if st.accepted != nil {
+					kind = st.accepted.Kind
+				}
+				t.Fatalf("same-host cutover skipped rollback: accepted=%s err=%v", kind, err)
+			}
+		})
+	}
+}
+func TestCloudCompensationTrustedTTLAboveReviewedLimit(t *testing.T) {
+	for _, previous := range []int{60, 90000} {
+		t.Run(fmt.Sprint(previous), func(t *testing.T) {
+			source := Route{ID: "route", OrgID: "org", ProjectID: "project", Revision: 2, Status: "ready", Input: RouteInput{ZoneID: "zone", Hostname: "app.example.com", EnvironmentID: "env", Service: "web", ExternalTTLSeconds: 3600}, Binding: RouteBinding{InstanceID: "source", Address: "192.0.2.1", ServerID: "source-host"}}
+			source.UpdatedAt = time.Now().UTC()
+			source.Receipt = &provider.DNSRecord{TTL: 90000}
+			if previous == 90000 {
+				source.Receipt.TTL = 60
+			}
+			candidate := source
+			candidate.Binding = RouteBinding{InstanceID: "candidate", Address: "192.0.2.2", ServerID: "candidate-host"}
+			st := &compensationReceiptStore{compensationRouteStore: compensationRouteStore{source: source, destination: source}}
+			st.prepared = RouteOperation{ID: releasePrepareID("old/action", source.ID), Kind: "prepare", Source: &source, Route: candidate, Status: "succeeded"}
+			st.cutover = RouteOperation{ID: "cutover", Kind: "cutover", HandoffID: st.prepared.ID, Source: &source, Route: candidate, Status: "succeeded", DNSAttempted: true, Receipt: &provider.DNSRecord{ID: "latest", Type: "A", Name: source.Input.Hostname, Value: candidate.Binding.Address, TTL: previous}}
+			st.unrelated = []*RouteOperation{{ID: "other-handoff", Kind: "cutover", HandoffID: "other", Source: &source, Route: candidate, Receipt: &provider.DNSRecord{TTL: 180000}}, {ID: "other-backend", Kind: "cutover", HandoffID: st.prepared.ID, Source: &candidate, Route: candidate, Receipt: &provider.DNSRecord{TTL: 180000}}}
+			st.rolled = &RouteOperation{ID: "rollback", Kind: "rollback", HandoffID: st.prepared.ID, Source: &candidate, Route: source, Status: "succeeded", PreviousReceipt: st.cutover.Receipt}
+			svc := NewService(Deps{Store: st, Domains: st, Authz: cleanupTestAuth{}})
+			err := svc.ReconcileCompensationRoutes(t.Context(), security.Principal{OrgID: "org", UserID: "current"}, ReleaseRouteRequest{Key: "old/action", ProjectID: "project", EnvironmentID: "env", Service: "web", InstanceID: "source", Routes: []Route{source}, DrainSeconds: 60})
+			if !errors.Is(err, ErrPending) || st.accepted == nil || st.accepted.Kind != "release" {
+				t.Fatalf("trusted receipt TTL blocks compensation: accepted=%v err=%v", st.accepted, err)
+			}
+			if !st.accepted.NotBefore.Equal(source.UpdatedAt.Add(90000 * time.Second)) {
+				t.Fatal("trusted maximum lost", st.accepted.NotBefore)
+			}
+		})
+	}
+}
+
+func (s *compensationRouteStore) RouteHandoffReceipts(ctx context.Context, org, project, route, _ string) ([]*RouteOperation, error) {
+	return s.RouteOperations(ctx, org, project, route)
+}
+
+func (s *compensationReceiptStore) RouteHandoffReceipts(ctx context.Context, org, project, route, _ string) ([]*RouteOperation, error) {
+	return s.RouteOperations(ctx, org, project, route)
 }

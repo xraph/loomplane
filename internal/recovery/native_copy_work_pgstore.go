@@ -23,10 +23,14 @@ func (s *PgStore) CheckNativeLease(ctx context.Context, r *NativeRestore, status
 }
 
 func (s *PgStore) PendingNativeRestores(ctx context.Context, page NativeCopyPage) ([]NativeRestore, error) {
+	return s.pendingNativeCopies(ctx, `expires_at>now() AND (status='queued' OR status='running' AND lease_until<now())`, page)
+}
+
+func (s *PgStore) pendingNativeCopies(ctx context.Context, predicate string, page NativeCopyPage) ([]NativeRestore, error) {
 	if page.Through.IsZero() {
 		page.Through = time.Now().UTC()
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+nativeRestoreColumns+` FROM loomplane_native_restores WHERE expires_at>now() AND (status='queued' OR status='running' AND lease_until<now()) AND created_at<=$1 AND (created_at,id)>($2,$3) ORDER BY created_at,id LIMIT $4`, page.Through, page.AfterCreated, page.AfterID, nativeCopyPageSize)
+	rows, err := s.db.Query(ctx, `SELECT `+nativeRestoreColumns+` FROM loomplane_native_restores WHERE (`+predicate+`) AND created_at<=$1 AND (created_at,id)>($2,$3) ORDER BY created_at,id LIMIT $4`, page.Through, page.AfterCreated, page.AfterID, nativeCopyPageSize)
 	if err != nil {
 		return nil, err
 	}

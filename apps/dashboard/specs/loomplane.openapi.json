@@ -7245,6 +7245,9 @@
           "cloud_adoption": {
             "$ref": "#/components/schemas/CloudAdoption"
           },
+          "compensation": {
+            "$ref": "#/components/schemas/CloudCompensation"
+          },
           "connection_id": {
             "type": "string"
           },
@@ -8142,6 +8145,47 @@
           },
           "revision": {
             "type": "string"
+          }
+        }
+      },
+      "CloudCompensation": {
+        "type": "object",
+        "required": [
+          "plan_id",
+          "action_id",
+          "source",
+          "candidate",
+          "retained",
+          "server_attempt",
+          "original_completed"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/Binding"
+          },
+          "original_completed": {
+            "type": "boolean"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "retained": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudinfraRoute"
+            }
+          },
+          "server_attempt": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Binding"
           }
         }
       },
@@ -9781,6 +9825,12 @@
           "external_routing"
         ],
         "properties": {
+          "compensation_message": {
+            "type": "string"
+          },
+          "compensation_mode": {
+            "type": "string"
+          },
           "deployment_id": {
             "type": "string"
           },
