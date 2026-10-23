@@ -30,7 +30,7 @@ func (s *NativeService) CheckPoint(ctx context.Context, p security.Principal, so
 	if err != nil || current == nil {
 		return nil, ErrNativeUnavailable
 	}
-	if selected.ProviderID == "" || selected.CreatedAt.IsZero() || current.ProviderID != selected.ProviderID || current.Name != selected.Name || !current.CreatedAt.Equal(selected.CreatedAt) || current.Kind != selected.Kind || current.Engine != selected.Engine || current.Version != selected.Version || current.Encrypted != selected.Encrypted || current.KMSKey != selected.KMSKey {
+	if !sameNativePointIdentity(*selected, *current) {
 		return nil, ErrNativeUnavailable
 	}
 	status := "available"
@@ -43,4 +43,8 @@ func (s *NativeService) CheckPoint(ctx context.Context, p security.Principal, so
 	}
 	current.ID, current.SourceID, current.Present, current.LastSeenAt = pointID, sourceID, true, now
 	return current, nil
+}
+
+func sameNativePointIdentity(a, b NativePoint) bool {
+	return a.ProviderID != "" && !a.CreatedAt.IsZero() && a.ProviderID == b.ProviderID && a.Name == b.Name && a.CreatedAt.Equal(b.CreatedAt) && a.Kind == b.Kind && a.Engine == b.Engine && a.Version == b.Version && a.Encrypted == b.Encrypted && a.KMSKey == b.KMSKey
 }

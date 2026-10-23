@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 // SQLInstance is the part of a Cloud SQL instance Loomplane reads.
 type SQLInstance struct {
+	Kind            string `json:"kind"`
 	Name            string `json:"name"`
 	Project         string `json:"project"`
 	Region          string `json:"region"`
@@ -24,8 +26,21 @@ type SQLInstance struct {
 	DatabaseVersion string `json:"databaseVersion"`
 	State           string `json:"state"`
 	Settings        struct {
-		UserLabels map[string]string `json:"userLabels"`
+		UserLabels           map[string]string   `json:"userLabels"`
+		Tier                 string              `json:"tier"`
+		ConnectorEnforcement string              `json:"connectorEnforcement"`
+		IPConfiguration      *SQLIPConfiguration `json:"ipConfiguration"`
 	} `json:"settings"`
+}
+
+// SQLIPConfiguration is observed network metadata for native recovery copies.
+type SQLIPConfiguration struct {
+	IPv4Enabled        *bool             `json:"ipv4Enabled"`
+	AuthorizedNetworks []json.RawMessage `json:"authorizedNetworks"`
+	PrivateNetwork     string            `json:"privateNetwork"`
+	PSC                *struct {
+		Enabled bool `json:"pscEnabled"`
+	} `json:"pscConfig"`
 }
 
 // SQLInstanceSpec is what Loomplane creates an instance from.
@@ -64,7 +79,8 @@ type SQLMutation struct {
 	Before  func() error
 	Started func(string) error
 	// Check guards name-addressed writes and operation polling with a fresh read.
-	Check func(context.Context) error
+	Check          func(context.Context) error
+	strictIdentity bool
 }
 
 func (m SQLMutation) check(ctx context.Context) error {
@@ -93,13 +109,16 @@ type sqlOperation struct {
 	} `json:"error"`
 }
 
-func (s *Session) validateSQLOperation(op sqlOperation, name, instance string, types []string) error {
+func (s *Session) validateSQLOperation(op sqlOperation, name, instance string, types []string, strict bool) error {
 	if !validSQLPathID(op.Name) || (name != "" && name != op.Name) ||
 		!slices.Contains([]string{"PENDING", "RUNNING", "DONE"}, op.Status) ||
 		(op.TargetProject != "" && op.TargetProject != s.key.ProjectID) ||
 		(op.TargetID != "" && op.TargetID != instance) ||
 		(op.Type != "" && !slices.Contains(types, op.Type)) {
 		return errors.New("cloud sql operation does not match the requested instance and mutation")
+	}
+	if strict && (op.Kind != "sql#operation" || op.TargetProject != s.key.ProjectID || op.TargetID != instance || !slices.Contains(types, op.Type)) {
+		return errors.New("cloud sql recovery operation has no complete target and mutation identity")
 	}
 	return nil
 }
@@ -137,7 +156,7 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 			return nil
 		}
 	}
-	if err := s.validateSQLOperation(op, track.Resume, instance, types); err != nil {
+	if err := s.validateSQLOperation(op, track.Resume, instance, types, track.strictIdentity); err != nil {
 		return err
 	}
 	if track.Resume == "" {
@@ -160,7 +179,7 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 		if err := s.do(ctx, http.MethodGet, s.sqlPath("/operations/"+url.PathEscape(op.Name)), nil, &next); err != nil {
 			return err
 		}
-		if err := s.validateSQLOperation(next, op.Name, instance, types); err != nil {
+		if err := s.validateSQLOperation(next, op.Name, instance, types, track.strictIdentity); err != nil {
 			return err
 		}
 		op = next
