@@ -34,6 +34,29 @@ func scanNativeSource(row pgx.Row) (*NativeSource, error) {
 func (s *PgStore) GetNativeSource(ctx context.Context, org, id string) (*NativeSource, error) {
 	return scanNativeSource(s.db.QueryRow(ctx, `SELECT `+nativeSourceColumns+` FROM loomplane_native_sources WHERE org_id=$1 AND id=$2`, org, id))
 }
+
+func scanNativePoint(row pgx.Row) (*NativePoint, error) {
+	var point NativePoint
+	var raw []byte
+	var id, source string
+	var present bool
+	var seen time.Time
+	if err := row.Scan(&id, &source, &raw, &present, &seen); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, &point); err != nil {
+		return nil, err
+	}
+	point.ID, point.SourceID, point.Present, point.LastSeenAt = id, source, present, seen.UTC()
+	return &point, nil
+}
+
+func (s *PgStore) GetNativePoint(ctx context.Context, org, source, id string) (*NativePoint, error) {
+	return scanNativePoint(s.db.QueryRow(ctx, `SELECT id,source_id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3`, org, source, id))
+}
 func (s *PgStore) ListNativeSources(ctx context.Context, org, project string, page NativePageInput) (*NativeSourcesPage, error) {
 	limit, err := page.pageSize()
 	if err != nil {
@@ -92,7 +115,7 @@ func (s *PgStore) ReadNativeInventory(ctx context.Context, org, id string, page 
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2`
+	query := `SELECT id,source_id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2`
 	args := []any{org, id}
 	if page.Before != "" {
 		var created string
@@ -114,19 +137,11 @@ func (s *PgStore) ReadNativeInventory(ctx context.Context, org, id string, page 
 	defer rows.Close()
 	out := &NativeInventory{Source: *source, Points: []NativePoint{}}
 	for rows.Next() {
-		var point NativePoint
-		var raw []byte
-		var key string
-		var present bool
-		var seen time.Time
-		if err := rows.Scan(&key, &raw, &present, &seen); err != nil {
+		point, err := scanNativePoint(rows)
+		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(raw, &point); err != nil {
-			return nil, err
-		}
-		point.ID, point.SourceID, point.Present, point.LastSeenAt = key, id, present, seen.UTC()
-		out.Points = append(out.Points, point)
+		out.Points = append(out.Points, *point)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
