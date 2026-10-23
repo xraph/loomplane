@@ -1,5 +1,7 @@
 """Check private fixture boundaries and resumable cleanup without Docker."""
 
+import datetime
+import http.client
 import importlib.util
 import json
 import socket
@@ -9,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -101,6 +104,47 @@ class DNSBoundaryTests(unittest.TestCase):
             )[0],
             0,
         )
+
+
+class DNSReceiptTests(unittest.TestCase):
+    def test_receipt_timestamp_brackets_actual_record_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "records.json").write_text("{}")
+            with (
+                patch.object(fixture, "DIRECTORY", root),
+                ThreadingHTTPServer(("127.0.0.1", 0), fixture.Control) as server,
+            ):
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                connection = http.client.HTTPConnection(
+                    *server.server_address, timeout=2
+                )
+                try:
+                    before = datetime.datetime.now(datetime.UTC)
+                    connection.request(
+                        "POST",
+                        "/records",
+                        json.dumps(
+                            {"name": "app.test", "values": {"A": ["172.20.0.22"]}}
+                        ),
+                    )
+                    response = connection.getresponse()
+                    changed_at = datetime.datetime.fromisoformat(
+                        response.getheader("X-Fixture-Changed-At")
+                    )
+                    after = datetime.datetime.now(datetime.UTC)
+                    self.assertEqual(response.status, 204)
+                    self.assertLessEqual(before, changed_at)
+                    self.assertLessEqual(changed_at, after)
+                    self.assertEqual(
+                        json.loads((root / "records.json").read_text()),
+                        {"app.test": {"A": ["172.20.0.22"]}},
+                    )
+                finally:
+                    connection.close()
+                    server.shutdown()
+                    thread.join()
 
 
 class GatewayBoundaryTests(unittest.TestCase):

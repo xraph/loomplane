@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Private DNS and ACME transport for the shared-cloud acceptance network."""
 
+import datetime
 import http.client
 import json
 import socketserver
@@ -92,7 +93,9 @@ class Control(BaseHTTPRequestHandler):
             records = json.loads((DIRECTORY / "records.json").read_text())
             records[record["name"]] = record["values"]
             (DIRECTORY / "records.json").write_text(json.dumps(records))
+            changed_at = datetime.datetime.now(datetime.UTC).isoformat()
         self.send_response(204)
+        self.send_header("X-Fixture-Changed-At", changed_at)
         self.end_headers()
 
 
