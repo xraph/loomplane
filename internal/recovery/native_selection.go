@@ -30,19 +30,28 @@ func (s *NativeService) CheckPoint(ctx context.Context, p security.Principal, so
 	if err != nil || current == nil {
 		return nil, ErrNativeUnavailable
 	}
-	if !sameNativePointIdentity(*selected, *current) {
-		return nil, ErrNativeUnavailable
-	}
-	status := "available"
-	if source.Provider == "cloud-sql" {
-		status = "SUCCESSFUL"
-	}
 	now := time.Now().UTC()
-	if current.Status != status || current.ExpiresAt != nil && (current.ExpiresAt.IsZero() || !current.ExpiresAt.After(now) || !current.ExpiresAt.After(current.CreatedAt)) {
-		return nil, ErrNativeUnavailable
+	if err := checkNativePoint(source.Provider, *selected, current, now); err != nil {
+		return nil, err
 	}
 	current.ID, current.SourceID, current.Present, current.LastSeenAt = pointID, sourceID, true, now
 	return current, nil
+}
+
+func checkNativePoint(provider string, selected NativePoint, current *NativePoint, now time.Time) error {
+	if current == nil || !sameNativePointIdentity(selected, *current) {
+		return ErrNativeUnavailable
+	}
+	status := "available"
+	if provider == "cloud-sql" {
+		status = "SUCCESSFUL"
+	} else if provider != "rds" {
+		return ErrInvalid
+	}
+	if current.Status != status || current.ExpiresAt != nil && (current.ExpiresAt.IsZero() || !current.ExpiresAt.After(now) || !current.ExpiresAt.After(current.CreatedAt)) {
+		return ErrNativeUnavailable
+	}
+	return nil
 }
 
 func sameNativePointIdentity(a, b NativePoint) bool {

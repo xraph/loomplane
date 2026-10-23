@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // NativeRestoreTarget is the checked destination retained before a native copy.
@@ -58,4 +59,32 @@ type NativeRestoreStore interface {
 	FinishNativeRestore(context.Context, *NativeRestore, NativeRestoreResult, time.Duration, error) error
 	ClaimNativeCleanup(context.Context, string, string, string) (*NativeRestore, error)
 	FinishNativeCleanup(context.Context, *NativeRestore, error) error
+}
+
+// NativeCopyWorkStore keeps abandoned jobs discoverable and fences every write.
+type NativeCopyWorkStore interface {
+	NativeRestoreStore
+	CheckNativeLease(context.Context, *NativeRestore, string) error
+	PendingNativeRestores(context.Context, NativeCopyPage) ([]NativeRestore, error)
+}
+
+// NativeCopyPage bounds each pending scan and retains a stable upper cutoff.
+type NativeCopyPage struct {
+	Through      time.Time
+	AfterCreated time.Time
+	AfterID      string
+}
+
+const nativeCopyPageSize = 100
+
+// NativeCopyControl must guard provider writes and operation polls. Selected
+// rechecks the original backup before the first native copy request.
+type NativeCopyControl struct {
+	Check    func(context.Context) error
+	Selected func(context.Context) (*NativePoint, error)
+	Save     func(context.Context, json.RawMessage) error
+}
+
+type NativeCopyBackend interface {
+	RestoreNative(context.Context, security.Principal, NativeRestore, NativeCopyControl) (NativeRestoreResult, error)
 }
