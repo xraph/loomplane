@@ -1,10 +1,10 @@
 """Cohort discovery and distribution must preserve every test exactly once."""
 
 import importlib.util
-from pathlib import Path
-import unittest
-from unittest import mock
 import subprocess
+import unittest
+from pathlib import Path
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     "cohorts", Path(__file__).with_name("integration-cohorts.py")
@@ -102,7 +102,7 @@ class CohortTests(unittest.TestCase):
             ):
                 paths = []
 
-                def run(command, **kwargs):
+                def run(command, phase=phase, failure=failure, paths=paths, **kwargs):
                     if command[0] == "go":
                         binary = Path(command[-2])
                         paths.append(binary)
@@ -112,7 +112,7 @@ class CohortTests(unittest.TestCase):
                     elif phase == "runtime":
                         raise failure
 
-                def listing(*args, **kwargs):
+                def listing(*args, phase=phase, failure=failure, **kwargs):
                     if phase == "list":
                         raise failure
                     return "TestA\n"
@@ -122,9 +122,9 @@ class CohortTests(unittest.TestCase):
                     mock.patch.object(
                         cohorts.subprocess, "check_output", side_effect=listing
                     ),
+                    self.assertRaises(type(failure)),
                 ):
-                    with self.assertRaises(type(failure)):
-                        cohorts.run_cohorts(0, 1)
+                    cohorts.run_cohorts(0, 1)
                 self.assertEqual(len(paths), 1)
                 self.assertFalse(paths[0].parent.exists())
 
