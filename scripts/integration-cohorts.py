@@ -4,6 +4,8 @@
 import argparse
 import re
 import subprocess
+import tempfile
+from pathlib import Path
 
 PACKAGE = "./tests/integration/"
 
@@ -30,37 +32,49 @@ def select(cohorts, shard, count):
     ]
 
 
+def run_cohorts(shard, count):
+    select([], shard, count)  # Reject invalid arguments before compiling.
+    root = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory(prefix="loomplane-integration-") as directory:
+        binary = str(Path(directory) / "integration.test")
+        print("Compiling race-enabled integration binary (600s limit)", flush=True)
+        subprocess.run(
+            ["go", "test", "-c", "-race", "-tags=integration", "-o", binary, PACKAGE],
+            cwd=root,
+            check=True,
+            timeout=600,
+        )
+        output = subprocess.check_output(
+            [binary, "-test.list=^Test"],
+            cwd=root / "tests/integration",
+            text=True,
+            timeout=30,
+        )
+        names = discover(output)
+        groups = partition(names)
+        print(f"Discovered {len(names)} tests in {len(groups)} cohorts", flush=True)
+        for index, group in select(groups, shard, count):
+            expression = "^(" + "|".join(re.escape(name) for name in group) + ")$"
+            print(f"Cohort {index + 1}/{len(groups)}: {', '.join(group)}", flush=True)
+            subprocess.run(
+                [
+                    binary,
+                    "-test.count=1",
+                    "-test.timeout=10m",
+                    "-test.run=" + expression,
+                ],
+                cwd=root / "tests/integration",
+                check=True,
+                timeout=660,
+            )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--shards", type=int, default=1)
     args = parser.parse_args()
-    output = subprocess.check_output(
-        ["go", "test", "-race", "-tags=integration", "-list", "^Test", PACKAGE],
-        text=True,
-        timeout=300,
-    )
-    names = discover(output)
-    cohorts = partition(names)
-    print(f"Discovered {len(names)} tests in {len(cohorts)} cohorts", flush=True)
-    for index, group in select(cohorts, args.shard, args.shards):
-        expression = "^(" + "|".join(re.escape(name) for name in group) + ")$"
-        print(f"Cohort {index + 1}/{len(cohorts)}: {', '.join(group)}", flush=True)
-        subprocess.run(
-            [
-                "go",
-                "test",
-                "-race",
-                "-count=1",
-                "-tags=integration",
-                "-timeout=10m",
-                "-run",
-                expression,
-                PACKAGE,
-            ],
-            check=True,
-            timeout=660,
-        )
+    run_cohorts(args.shard, args.shards)
 
 
 if __name__ == "__main__":
