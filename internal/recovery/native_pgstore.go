@@ -95,17 +95,17 @@ func (s *PgStore) ReadNativeInventory(ctx context.Context, org, id string, page 
 	query := `SELECT id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2`
 	args := []any{org, id}
 	if page.Before != "" {
-		var created time.Time
-		if pageErr := tx.QueryRow(ctx, `SELECT created_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3`, org, id, page.Before).Scan(&created); pageErr != nil {
+		var created string
+		if pageErr := tx.QueryRow(ctx, `SELECT creation_identity FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3`, org, id, page.Before).Scan(&created); pageErr != nil {
 			if errors.Is(pageErr, pgx.ErrNoRows) {
 				return nil, ErrNotFound
 			}
 			return nil, pageErr
 		}
-		query += ` AND (created_at,id)<($3,$4)`
+		query += ` AND (creation_identity,id)<($3,$4)`
 		args = append(args, created, page.Before)
 	}
-	query += ` ORDER BY created_at DESC,id DESC LIMIT ` + nativeLimitPlaceholder(len(args)+1)
+	query += ` ORDER BY creation_identity DESC,id DESC LIMIT ` + nativeLimitPlaceholder(len(args)+1)
 	args = append(args, limit+1)
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
@@ -198,7 +198,7 @@ func (s *PgStore) RefreshNativeInventory(ctx context.Context, org, id string, fe
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO loomplane_native_points(org_id,source_id,provider_id,created_at,body,last_seen_at) VALUES($1,$2,$3,$4,$5,$6)
- ON CONFLICT(source_id,provider_id,created_at) DO UPDATE SET body=EXCLUDED.body,present=true,last_seen_at=EXCLUDED.last_seen_at WHERE loomplane_native_points.org_id=EXCLUDED.org_id`, org, id, point.ProviderID, point.CreatedAt, raw, now); err != nil {
+ ON CONFLICT(source_id,provider_id,creation_identity) DO UPDATE SET body=EXCLUDED.body,present=true,last_seen_at=EXCLUDED.last_seen_at WHERE loomplane_native_points.org_id=EXCLUDED.org_id`, org, id, point.ProviderID, point.CreatedAt, raw, now); err != nil {
 			return err
 		}
 	}
