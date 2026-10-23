@@ -613,6 +613,35 @@ it("renews a managed zone's proof once it expires", async () => {
   expect(within(card).getByRole("button", { name: "Check again" })).toBeTruthy()
 })
 
+it("offers a proof to a zone verified before proofs were required", async () => {
+  const writes = stubFetch({
+    "/api/v1/domains": overviewWith(
+      // The API reads a verified zone with no proof as awaiting verification.
+      { ...zoneWith("acme.dev"), state: "awaiting_verification" }
+    ),
+    "POST /api/v1/dns-zones/zone-acme.dev/update": () =>
+      Response.json(zoneWith("acme.dev", [], { proof: true }).zone),
+  })
+  render(
+    <Wrapped>
+      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
+    </Wrapped>
+  )
+  const card = await screen.findByRole("region", { name: "acme.dev" })
+  expect(within(card).getByText("Awaiting verification")).toBeTruthy()
+  expect(await within(card).findByText(/doesn't have one yet/)).toBeTruthy()
+  await userEvent.click(
+    within(card).getByRole("button", { name: "Renew proof" })
+  )
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/dns-zones/zone-acme.dev/update",
+      body: { project_ids: ["shop"], renew_proof: true, revision: 2 },
+    },
+  ])
+})
+
 it("saves grants with the zone's revision after a failed check", async () => {
   let revision = 2
   const external = () => {

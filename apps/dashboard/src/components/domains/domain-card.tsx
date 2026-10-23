@@ -15,7 +15,10 @@ import {
   DomainStatePill,
   RouteStates,
 } from "@/components/domains/domain-states"
-import { TxtInstructions } from "@/components/domains/txt-instructions"
+import {
+  RenewProof,
+  TxtInstructions,
+} from "@/components/domains/txt-instructions"
 import { ZoneGrants } from "@/components/domains/zone-grants"
 import { Button } from "@/components/ui/button"
 import {
@@ -50,6 +53,8 @@ export function DomainCard({
   const name = z?.name ?? ""
   // Managed zones wait on the same TXT proof as external ones.
   const verifying = zone.state !== "ready" && !!z?.proofName
+  // A zone verified before TXT proofs were required has none to publish.
+  const unproven = zone.state !== "ready" && !!z && !z.proofName
   const [settingUp, setSettingUp] = useState(false)
   // Wildcards need a second, zone-scoped token on a Cloudflare zone, and
   // that token reaches all of its Cloudflare zone, so the domain must be one.
@@ -100,7 +105,18 @@ export function DomainCard({
             <HostnameTable hostnames={zone.hostnames} />
           )}
           {verifying && z && <TxtInstructions zone={z} />}
-          {zone.hostnames.length === 0 && !verifying && (
+          {unproven && z && (
+            // Not in the mock: zones there were all verified by TXT record.
+            <div className="flex flex-col gap-2.5 px-4 py-3">
+              <p className="text-[13px] leading-normal text-foreground/80">
+                Loomplane now checks a TXT record before projects can use a
+                domain, and this one doesn&apos;t have one yet. Renew its proof
+                to get the record to add.
+              </p>
+              <RenewProof zone={z} />
+            </div>
+          )}
+          {zone.hostnames.length === 0 && !verifying && !unproven && (
             // Not in the mock: a verified domain nothing points at yet.
             <p className="px-4 py-3 text-[12.5px] text-muted-foreground">
               No hostnames use this domain yet. Grant it to a project, then add
