@@ -326,7 +326,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Endpoints: checker,
 		Dialer:    dialer,
 	})
-	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), Credentials: clouds}, auditor); err != nil {
+	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), Credentials: clouds, Secrets: resourceSecrets}, auditor); err != nil {
 		return err
 	}
 	e.restoreTargets = func(ctx context.Context) error {

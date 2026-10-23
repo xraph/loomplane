@@ -10,6 +10,12 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
+// Reconcile repairs copy and cleanup enqueue gaps independently. A copy scan
+// failure must not keep an expired temporary database from reaching cleanup.
+func (s *NativeService) Reconcile(ctx context.Context) error {
+	return errors.Join(s.ReconcileCopies(ctx), s.ReconcileCleanups(ctx))
+}
+
 func copyNativeRestore(r NativeRestore) NativeRestore {
 	r.Checkpoint = bytes.Clone(r.Checkpoint)
 	r.Source.Config = bytes.Clone(r.Source.Config)
