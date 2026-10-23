@@ -28,9 +28,35 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 	cfg.Clouds.GoogleEndpoint = google.srv.URL
 	var mu sync.Mutex
 	mode := "original"
+	targetAbsent := false
 	reads, instanceReads := 0, 0
 	var originalSource map[string]any
 	google.deploy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/projects/recovery-project:testIamPermissions" {
+			var input struct {
+				Permissions []string `json:"permissions"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Error(err)
+			}
+			_ = json.NewEncoder(w).Encode(input)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v1/projects/recovery-project/") {
+			if r.Method != http.MethodGet {
+				t.Error("denied target admitted a native mutation", r.Method)
+			}
+			mu.Lock()
+			absent := targetAbsent
+			mu.Unlock()
+			status := http.StatusForbidden
+			if absent {
+				status = http.StatusNotFound
+			}
+			w.WriteHeader(status)
+			fmt.Fprint(w, `{"error":{"message":"target observation unavailable"}}`)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/v1/projects/acme-prod/backups") {
 			mu.Lock()
 			defer mu.Unlock()
@@ -56,6 +82,9 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 				return map[string]any{"name": "projects/acme-prod/backups/" + name, "kind": "sql#backup", "instance": originalSource["name"], "type": "FINAL", "state": "SUCCESSFUL", "databaseVersion": "POSTGRES_17", "instanceSettings": proof, "expiryTime": "2026-10-21T03:00:00Z", "backupInterval": map[string]string{"startTime": "2026-10-21T02:00:00Z", "endTime": "2026-10-21T02:00:01Z"}}
 			}
 			first := point("daily")
+			if mode == "copy-review" {
+				first["expiryTime"] = time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+			}
 			if mode == "bad-expiry" {
 				first["expiryTime"] = "2026-10-21T01:00:00Z"
 			}
@@ -161,6 +190,11 @@ func TestNativeCloudSQLInventoryKeepsPinnedHistoryAcrossRemovalAndRestart(t *tes
 	if !strings.Contains(lc.must("backups", "native-inventory", source.ID, "--json"), original) || !strings.Contains(lc.must("backups", "native-refresh", source.ID, "--json"), original) {
 		t.Fatal("shared CLI lost Cloud SQL backup")
 	}
+	checkNativeCopyReviewAPI(t, c, cfg.Database.URL, source, original, google.srv.URL, func(next string, absent bool) {
+		mu.Lock()
+		mode, targetAbsent = next, absent
+		mu.Unlock()
+	})
 	for _, partial := range []string{"no-proof", "warning-empty"} {
 		mu.Lock()
 		mode = partial

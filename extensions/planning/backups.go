@@ -53,8 +53,13 @@ func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects
 		return err
 	}
 	records := recovery.NewPgStore(pg)
+	reviewKey, err := security.DeriveKey(e.cfg.SecretKey, recovery.NativeReviewKeyLabel)
+	if err != nil {
+		return err
+	}
 	e.nativeBackups = &recovery.NativeService{
-		Store: records, Authz: authz, Projects: prj, Backend: native,
+		Store: records, Authz: authz, Projects: prj, Backend: native, Admission: records,
+		ReviewKey: reviewKey, Audit: audit,
 		Copies: records, CopyBackend: native, EnqueueCopy: e.enqueueRecovery(nativeRestoreJob, 0),
 		Cleanups: records, CleanupBackend: native, EnqueueCleanup: e.enqueueRecovery(nativeCleanupJob, 0),
 	}

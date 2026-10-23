@@ -16,6 +16,11 @@ type NativeRestoreTarget struct {
 	AccountIdentity string `json:"account_identity"`
 	NativeProject   string `json:"native_project,omitempty"`
 	Region          string `json:"region"`
+	CloudID         string `json:"cloud_id,omitempty"`
+	TargetID        string `json:"target_id,omitempty"`
+	CloudRevision   int64  `json:"cloud_revision,omitempty"`
+	TargetRevision  int64  `json:"target_revision,omitempty"`
+	GrantRevision   int64  `json:"grant_revision,omitempty"`
 }
 
 // NativeRestore retains the selected provider backup independently of Trove.

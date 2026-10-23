@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativeRecoverySources, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -90,7 +90,11 @@ export const useInfrastructureEnrollmentComplete = mutation(ops['infrastructureE
 export const useInvitationsList = query<OrgInvitationList>(ops['invitations.list']);
 export const useInvitationsCreate = mutation(ops['invitations.create']);
 export const useMembersList = query<OrgMemberList>(ops['members.list']);
+export const useNativeRecoveryCopiesCreate = mutation<NativeRestore, NativeRestore>(ops['nativeRecoveryCopies.create']);
+export const useNativeRecoveryCopiesGet = query<NativeRestore>(ops['nativeRecoveryCopies.get']);
+export const useNativeRecoveryCopiesCleanup = mutation<NativeRestore, NativeRestore>(ops['nativeRecoveryCopies.cleanup']);
 export const useNativeRecoverySourcesInventory = query<NativeInventory>(ops['nativeRecoverySources.inventory']);
+export const useNativeRecoveryCopiesReview = mutation(ops['nativeRecoveryCopies.review']);
 export const useNativeRecoverySourcesRefresh = mutation(ops['nativeRecoverySources.refresh']);
 export const useNotificationsList = query<NotificationList>(ops['notifications.list']);
 export const useNotificationsPreferencesGet = query<Preferences>(ops['notifications.preferences.get']);
@@ -154,6 +158,7 @@ export const useManifestsSave = mutation<Revision, Revision>(ops['manifests.save
 export const useManifestsDraft = query<ManifestDraft>(ops['manifests.draft']);
 export const useManifestsEdit = mutation<Revision, Revision>(ops['manifests.edit']);
 export const useManifestsHistory = query<RevisionList>(ops['manifests.history']);
+export const useNativeRecoveryCopiesList = query<NativeRecoveryCopies>(ops['nativeRecoveryCopies.list']);
 export const useNativeRecoverySourcesList = query<NativeRecoverySources>(ops['nativeRecoverySources.list']);
 export const usePlansList = query<PlanList>(ops['plans.list']);
 export const usePlansCreate = mutation<Plan, Plan>(ops['plans.create']);

@@ -14,7 +14,6 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/connections"
-	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/internal/nativepg"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recovery"
@@ -61,15 +60,11 @@ func nativeSQLCopyScope(r recovery.NativeRestore) (string, *planning.ResourceCon
 			return "", nil, recovery.ErrInvalid
 		}
 	}
-	var cfg planning.ResourceConfig
-	profile, err := manageddb.Postgres("cloud-sql", "17")
-	if err != nil || json.Unmarshal(r.Source.Config, &cfg) != nil || cfg.Kind != "postgres" || cfg.Version != "17" || cfg.Provider != "cloud-sql" || cfg.Region != r.Source.Region || cfg.Managed == nil || cfg.Managed.Profile != *profile || cfg.Managed.ConnectionID != r.Source.ConnectionID || cfg.Managed.AccountIdentity == "" {
-		return "", nil, fmt.Errorf("%w: native copy requires its original reviewed PostgreSQL profile", recovery.ErrInvalid)
+	cfg, err := recovery.NativeSQLCopyConfig(r.Source, r.Point, r.Target)
+	if err != nil {
+		return "", nil, err
 	}
 	parts := strings.Split(r.Point.ProviderID, "/")
-	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "backups" || parts[1] == "" || parts[3] != r.Point.Name || r.Target.NativeProject == parts[1] {
-		return "", nil, recovery.ErrInvalid
-	}
 	if _, _, err = boundSQLInstance(r.Source.ExternalID, parts[1], r.Source.Region); err != nil {
 		return "", nil, err
 	}
@@ -84,7 +79,7 @@ func nativeSQLCopyScope(r recovery.NativeRestore) (string, *planning.ResourceCon
 	if err != nil {
 		return "", nil, err
 	}
-	return fmt.Sprintf("%x", sha256.Sum256(raw)), &cfg, nil
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), cfg, nil
 }
 
 func readNativeSQLCopy(r recovery.NativeRestore) (*nativeSQLCopyState, *planning.ResourceConfig, error) {

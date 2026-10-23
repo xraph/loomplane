@@ -66,6 +66,10 @@ func nativeCopyScope(r NativeRestore) error {
 }
 
 func (s *NativeService) requireNative(ctx context.Context, p security.Principal, projectID string) error {
+	return s.requireNativePermission(ctx, p, projectID, security.RestoreManage)
+}
+
+func (s *NativeService) requireNativePermission(ctx context.Context, p security.Principal, projectID string, permission security.Permission) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -75,7 +79,7 @@ func (s *NativeService) requireNative(ctx context.Context, p security.Principal,
 	if s.Authz == nil || s.Projects == nil {
 		return ErrInvalid
 	}
-	if err := s.Authz.Require(ctx, p, security.RestoreManage, projectID); err != nil {
+	if err := s.Authz.Require(ctx, p, permission, projectID); err != nil {
 		return err
 	}
 	project, err := s.Projects.GetProject(ctx, p.OrgID, projectID)
@@ -97,6 +101,14 @@ func (s *NativeService) nativeControl(p security.Principal, r NativeRestore, sta
 	check := func(ctx context.Context) error {
 		if err := s.requireNative(ctx, p, r.ProjectID); err != nil {
 			return err
+		}
+		if status == "running" && nativeTargetHasReview(r.Target) {
+			if s.Admission == nil {
+				return ErrInvalid
+			}
+			if err := s.Admission.CheckNativeTarget(ctx, &r); err != nil {
+				return err
+			}
 		}
 		return store.CheckNativeLease(ctx, &r, status)
 	}

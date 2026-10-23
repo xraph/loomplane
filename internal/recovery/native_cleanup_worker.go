@@ -7,6 +7,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -28,6 +29,9 @@ func (s *NativeService) RequestCopyCleanup(ctx context.Context, p security.Princ
 	r, err = s.Cleanups.RequestNativeCleanup(ctx, p.OrgID, id, p.UserID, guard)
 	if err != nil {
 		return nil, err
+	}
+	if s.Audit != nil {
+		s.Audit.Record(ctx, projects.AuditEvent{Action: "service.native_restore.cleanup", Severity: "info", Principal: p, ProjectID: r.ProjectID, Attributes: map[string]any{"restore_id": r.ID, "source_id": r.SourceID, "point_id": r.PointID}})
 	}
 	if r.Status == "cleanup_queued" {
 		return r, s.EnqueueCleanup(ctx, p.OrgID, r.ID)
