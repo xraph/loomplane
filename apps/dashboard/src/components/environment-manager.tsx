@@ -12,6 +12,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Environment, Project } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { ServiceAddress } from "@/components/service-address"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -437,21 +438,17 @@ function Deployed({
           />
           <span className="font-medium">{b.name}</span>
           {b.drift && (
-            <span className="text-weld-ink shrink-0">
+            <span className="shrink-0 text-weld-ink">
               {b.drift === "missing"
                 ? "deleted outside Loomplane"
                 : "changed outside Loomplane"}
             </span>
           )}
           {b.url ? (
-            <a
-              href={b.url}
-              target="_blank"
-              rel="noreferrer"
-              className="truncate text-muted-foreground underline-offset-4 hover:underline"
-            >
-              {b.url.replace(/^https?:\/\//, "")}
-            </a>
+            <ServiceAddress
+              address={b.url}
+              className="truncate text-muted-foreground"
+            />
           ) : (
             <span className="text-muted-foreground">on {b.provider}</span>
           )}

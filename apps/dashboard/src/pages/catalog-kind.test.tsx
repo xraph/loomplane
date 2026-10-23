@@ -736,3 +736,33 @@ test("database service projects aren't offered for an app-project kind", async (
     (await screen.findAllByRole("option")).map((o) => o.textContent)
   ).toEqual(["Shop"])
 })
+
+test("disposable catalog services don't inherit blanket durability claims", async () => {
+  serve({ kinds: () => json({ kinds: [appKind("memcached", "Memcached")] }) })
+  render(
+    <ClientProvider client={forgeClient}>
+      <Services />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByRole("button", { name: "Add Memcached" })
+  ).toBeEnabled()
+  expect(
+    screen.queryByText(/Every service gets a private endpoint and a volume/)
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByText(
+      /Databases and caches Loomplane runs for you, with persistent storage/
+    )
+  ).not.toBeInTheDocument()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Browse catalog" })
+  )
+  const search = screen.getByRole("searchbox", { name: "Search the catalog" })
+  expect(search).toHaveFocus()
+  await userEvent.type(search, "not-a-real-service")
+  expect(screen.getByText("Nothing in the catalog matches")).toBeVisible()
+  await userEvent.click(screen.getByRole("button", { name: "Clear filters" }))
+  expect(search).toHaveValue("")
+  expect(screen.getByRole("button", { name: "Add Memcached" })).toBeEnabled()
+})

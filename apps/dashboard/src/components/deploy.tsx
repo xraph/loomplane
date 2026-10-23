@@ -44,6 +44,7 @@ import {
   useRefetchWhile,
 } from "@/client/hooks"
 import { EvidenceList } from "@/components/architecture"
+import { ServiceAddress } from "@/components/service-address"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -1427,14 +1428,7 @@ function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
                 </p>
               ))}
               {s.url && s.status === "succeeded" && (
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-fit text-sm underline-offset-4 hover:underline"
-                >
-                  {s.url.replace(/^https?:\/\//, "")}
-                </a>
+                <ServiceAddress address={s.url} className="w-fit text-sm" />
               )}
               {s.image && (
                 <code className="font-mono text-xs wrap-anywhere text-muted-foreground">
