@@ -94,15 +94,52 @@ func (s *Session) sqlBackupPoint(in sqlBackup, region, instance, physical string
 	return &SQLBackup{Name: in.Name, Type: in.Type, State: in.State, DatabaseVersion: in.DatabaseVersion, CreatedAt: in.Interval.Start.UTC(), ExpiresAt: expires, KMSKey: in.KMSKey}, false, nil
 }
 
+func (s *Session) checkSQLBackupSource(region, instance, physical string) error {
+	digest, ok := strings.CutPrefix(physical, "cloud-sql:")
+	raw, err := hex.DecodeString(digest)
+	if s.key.ProjectID == "" || region == "" || !sqlNativeName(instance) || !ok || err != nil || len(raw) != 32 {
+		return errors.New("cloud sql backup inventory requires the original scoped creation pin")
+	}
+	return nil
+}
+
+// ReadSQLBackup revalidates one retained point against that backup's own source
+// metadata. It does not list backups or read the current reusable instance name.
+func (s *Session) ReadSQLBackup(ctx context.Context, region, instance, physical string, selected SQLBackup) (*SQLBackup, error) {
+	if err := s.checkSQLBackupSource(region, instance, physical); err != nil {
+		return nil, err
+	}
+	id, err := s.sqlBackupID(selected.Name)
+	if err != nil {
+		return nil, err
+	}
+	if selected.CreatedAt.IsZero() || selected.DatabaseVersion == "" || !slices.Contains([]string{"AUTOMATED", "ON_DEMAND", "FINAL"}, selected.Type) {
+		return nil, errors.New("cloud sql selected backup requires retained creation and engine metadata")
+	}
+	var detail sqlBackup
+	if readErr := s.do(ctx, http.MethodGet, s.sqlPath("/backups/"+url.PathEscape(id)), nil, &detail); readErr != nil {
+		return nil, fmt.Errorf("read selected cloud sql backup: %w", readErr)
+	}
+	point, partial, err := s.sqlBackupPoint(detail, region, instance, physical)
+	if err != nil {
+		return nil, err
+	}
+	if partial || point == nil || point.Name != selected.Name || !point.CreatedAt.Equal(selected.CreatedAt) || point.Type != selected.Type || point.DatabaseVersion != selected.DatabaseVersion || point.KMSKey != selected.KMSKey {
+		return nil, errors.New("cloud sql selected backup no longer matches its retained identity")
+	}
+	if point.State != "SUCCESSFUL" || point.ExpiresAt != nil && !point.ExpiresAt.After(time.Now()) {
+		return nil, errors.New("cloud sql selected backup is not currently available for recovery")
+	}
+	return point, nil
+}
+
 // ListSQLBackups reads project-owned backups, including deleted-instance points.
 // Optional source settings are fetched by canonical backup reference, never by
 // the current instance name. Unverifiable points, provider warnings and a ten
 // page bound report complete=false and cannot erase retained observations.
 func (s *Session) ListSQLBackups(ctx context.Context, region, instance, physical string) ([]SQLBackup, bool, error) {
-	digest, ok := strings.CutPrefix(physical, "cloud-sql:")
-	raw, err := hex.DecodeString(digest)
-	if s.key.ProjectID == "" || region == "" || !sqlNativeName(instance) || !ok || err != nil || len(raw) != 32 {
-		return nil, false, errors.New("cloud sql backup inventory requires the original scoped creation pin")
+	if err := s.checkSQLBackupSource(region, instance, physical); err != nil {
+		return nil, false, err
 	}
 	points := []SQLBackup{}
 	complete := true
