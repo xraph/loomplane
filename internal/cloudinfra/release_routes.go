@@ -38,21 +38,9 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 	for _, source := range in.Routes {
 		progress := cloudprofiles.SyncRoute{RouteID: source.ID, Hostname: source.Input.Hostname, PrepareID: releasePrepareID(in.Key, source.ID)}
 		reconcile := func(op *RouteOperation) error {
-			routeErr := s.reconcileReleaseOperation(ctx, p, op)
-			progress.Status, progress.Message = op.Status, op.Message
-			if op.Kind == "cutover" {
-				progress.CutoverID = op.ID
-			}
-			if op.Kind == "release" {
-				progress.ReleaseID, progress.NotBefore = op.ID, op.NotBefore
-			} else {
-				progress.RecordType, progress.Value, progress.TTL = op.DesiredRecord.Type, op.DesiredRecord.Value, op.DesiredRecord.TTL
-			}
-			if in.Checkpoint != nil {
-				routeErr = errors.Join(routeErr, in.Checkpoint(progress))
-			}
-			return routeErr
+			return s.reconcileReleaseProgress(ctx, p, op, &progress, in.Checkpoint)
 		}
+
 		drain, drainErr := ReviewedRouteDrain(source, in.DrainSeconds)
 		if drainErr != nil {
 			return drainErr
@@ -239,4 +227,22 @@ func ReviewedRouteDrain(source Route, minimum int) (int, error) {
 		return 0, fmt.Errorf("%w: reviewed drain exceeds the supported 86400 second bound", ErrInvalid)
 	}
 	return drain, nil
+}
+
+func (s *Service) reconcileReleaseProgress(ctx context.Context, p security.Principal, op *RouteOperation, progress *cloudprofiles.SyncRoute, checkpoint func(cloudprofiles.SyncRoute) error) error {
+	err := s.reconcileReleaseOperation(ctx, p, op)
+	progress.Status, progress.Message = op.Status, op.Message
+	switch op.Kind {
+	case "cutover":
+		progress.CutoverID = op.ID
+	case "release":
+		progress.ReleaseID, progress.NotBefore = op.ID, op.NotBefore
+	}
+	if op.Kind != "release" {
+		progress.RecordType, progress.Value, progress.TTL = op.DesiredRecord.Type, op.DesiredRecord.Value, op.DesiredRecord.TTL
+	}
+	if checkpoint != nil {
+		err = errors.Join(err, checkpoint(*progress))
+	}
+	return err
 }

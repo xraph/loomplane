@@ -83,19 +83,21 @@ type CloudPlanSummary struct {
 
 // CloudEnvironmentChange is the public Cloud API record.
 type CloudEnvironmentChange struct {
-	ProjectID       string           `json:"project_id,omitempty"`
-	EnvironmentID   string           `json:"environment_id"`
-	Environment     string           `json:"environment"`
-	Services        []string         `json:"services"`
-	Summary         CloudPlanSummary `json:"summary"`
-	PlanID          string           `json:"plan_id,omitempty"`
-	DeploymentID    string           `json:"deployment_id,omitempty"`
-	Status          string           `json:"status"`
-	Error           string           `json:"error,omitempty"`
-	ExternalRouting bool             `json:"external_routing"`
-	RoutingEvidence string           `json:"routing_evidence,omitempty"`
-	RoutingStatus   string           `json:"routing_status,omitempty"`
-	Routes          []CloudSyncRoute `json:"routes,omitempty"`
+	CompensationMode    string           `json:"compensation_mode,omitempty"`
+	CompensationMessage string           `json:"compensation_message,omitempty"`
+	ProjectID           string           `json:"project_id,omitempty"`
+	EnvironmentID       string           `json:"environment_id"`
+	Environment         string           `json:"environment"`
+	Services            []string         `json:"services"`
+	Summary             CloudPlanSummary `json:"summary"`
+	PlanID              string           `json:"plan_id,omitempty"`
+	DeploymentID        string           `json:"deployment_id,omitempty"`
+	Status              string           `json:"status"`
+	Error               string           `json:"error,omitempty"`
+	ExternalRouting     bool             `json:"external_routing"`
+	RoutingEvidence     string           `json:"routing_evidence,omitempty"`
+	RoutingStatus       string           `json:"routing_status,omitempty"`
+	Routes              []CloudSyncRoute `json:"routes,omitempty"`
 }
 
 // CloudSyncRoute records the accepted route operations and pending DNS instructions.
