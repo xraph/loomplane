@@ -1,3 +1,14 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
@@ -28,14 +39,13 @@ import {
 } from "@/lib/cloud-infrastructure"
 import { useNow } from "@/lib/use-runs"
 import { useOrganization } from "@/lib/organization"
-import { selectClass } from "./workspace"
 import {
   SetupReads,
   CloudEmpty,
   CloudError,
   Field,
   Rows,
-  rowClass,
+  Row,
   useInfrastructureRefresh,
 } from "./infrastructure-ui"
 import { MoveEnvironment } from "./pools"
@@ -134,7 +144,7 @@ function Zones({ onCreate }: { onCreate: () => void }) {
           retry={zones.refetch}
         />
       ) : !zones.data ? (
-        <p role="status">Loading DNS zones...</p>
+        <CloudLoading>Loading DNS zones...</CloudLoading>
       ) : !list.length ? (
         <CloudEmpty title="No DNS zones">
           Choose managed DNS with a separate provider account, or prove
@@ -143,7 +153,7 @@ function Zones({ onCreate }: { onCreate: () => void }) {
       ) : (
         <Rows>
           {list.map((zone) => (
-            <div key={zone.id} className="grid gap-2 p-3 text-[13px]">
+            <Row key={zone.id} className="grid gap-2 p-3 text-[13px]">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="font-medium">
@@ -198,7 +208,7 @@ function Zones({ onCreate }: { onCreate: () => void }) {
                 </div>
               </div>
               {zone.proofName && (
-                <p className="break-all">
+                <p className="wrap-anywhere">
                   Publish TXT {zone.proofName} = {zone.proofValue}. Proof
                   expires {zone.proofExpiresAt}. Then verify ownership.
                 </p>
@@ -209,7 +219,7 @@ function Zones({ onCreate }: { onCreate: () => void }) {
                   Provider hosting alone does not confirm external delegation.
                 </p>
               )}
-            </div>
+            </Row>
           ))}
         </Rows>
       )}
@@ -229,20 +239,25 @@ function Zones({ onCreate }: { onCreate: () => void }) {
                 </CloudEmpty>
               )}
               {projects.data?.projects.map((p) => (
-                <label className="flex items-center gap-2 text-sm" key={p.id}>
-                  <input
-                    type="checkbox"
-                    checked={projectIds.includes(p.id)}
-                    onChange={(e) =>
-                      setProjects(
-                        e.target.checked
-                          ? [...projectIds, p.id]
-                          : projectIds.filter((id) => id !== p.id)
-                      )
-                    }
-                  />
-                  {p.name}
-                </label>
+                <FormField
+                  orientation="horizontal"
+                  className="flex items-center gap-2 text-sm"
+                  key={p.id}
+                >
+                  <FieldLabel className="contents">
+                    <Checkbox
+                      checked={projectIds.includes(p.id)}
+                      onCheckedChange={(e) =>
+                        setProjects(
+                          e
+                            ? [...projectIds, p.id]
+                            : projectIds.filter((id) => id !== p.id)
+                        )
+                      }
+                    />
+                    {p.name}
+                  </FieldLabel>
+                </FormField>
               ))}
             </SetupReads>
             <CloudError message={error} />
@@ -302,7 +317,7 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
           <div role="status" className="grid gap-2 text-sm">
             <p>{zone.name} saved. Verify ownership before adding routes.</p>
             {zone.proofName && (
-              <p className="break-all">
+              <p className="wrap-anywhere">
                 Publish TXT {zone.proofName} = {zone.proofValue}, then use
                 Verify zone.
               </p>
@@ -322,21 +337,27 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
               />
             </Field>
             <Field label="DNS mode">
-              <select
-                aria-label="DNS mode"
-                className={selectClass}
+              <Select
                 value={input.mode}
-                onChange={(e) =>
+                onValueChange={(e) =>
                   setInput({
                     ...input,
-                    mode: e.target.value,
+                    mode: e ?? "",
                     connectionId: undefined,
                   })
                 }
               >
-                <option value="external">External DNS</option>
-                <option value="managed">Managed DNS</option>
-              </select>
+                <SelectTrigger
+                  aria-label="DNS mode"
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="external">External DNS</SelectItem>
+                  <SelectItem value="managed">Managed DNS</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             {input.mode === "managed" && (
               <SetupReads
@@ -361,21 +382,27 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
                   </CloudEmpty>
                 ) : (
                   <Field label="DNS account">
-                    <select
-                      aria-label="DNS account"
-                      className={selectClass}
+                    <Select
                       value={input.connectionId ?? ""}
-                      onChange={(e) =>
-                        setInput({ ...input, connectionId: e.target.value })
+                      onValueChange={(e) =>
+                        setInput({ ...input, connectionId: e ?? "" })
                       }
                     >
-                      <option value="">Choose DNS account</option>
-                      {accounts.map((c) => (
-                        <option value={c.id} key={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger
+                        aria-label="DNS account"
+                        className={"w-full min-w-0"}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">Choose DNS account</SelectItem>
+                        {accounts.map((c) => (
+                          <SelectItem value={c.id} key={c.id}>
+                            {c.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </Field>
                 )}
               </SetupReads>
@@ -401,21 +428,26 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
                   </CloudEmpty>
                 )}
                 {projects.data?.projects.map((p) => (
-                  <label key={p.id} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={input.projectIds.includes(p.id)}
-                      onChange={(e) =>
-                        setInput({
-                          ...input,
-                          projectIds: e.target.checked
-                            ? [...input.projectIds, p.id]
-                            : input.projectIds.filter((id) => id !== p.id),
-                        })
-                      }
-                    />
-                    {p.name}
-                  </label>
+                  <FormField
+                    orientation="horizontal"
+                    key={p.id}
+                    className="flex items-center gap-2"
+                  >
+                    <FieldLabel className="contents">
+                      <Checkbox
+                        checked={input.projectIds.includes(p.id)}
+                        onCheckedChange={(e) =>
+                          setInput({
+                            ...input,
+                            projectIds: e
+                              ? [...input.projectIds, p.id]
+                              : input.projectIds.filter((id) => id !== p.id),
+                          })
+                        }
+                      />
+                      {p.name}
+                    </FieldLabel>
+                  </FormField>
                 ))}
               </SetupReads>
             </div>
@@ -484,7 +516,7 @@ function ProjectRoutes({
           retry={routes.refetch}
         />
       ) : !routes.data ? (
-        <p role="status">Loading project routes...</p>
+        <CloudLoading>Loading project routes...</CloudLoading>
       ) : !list.length ? (
         <CloudEmpty title="No routes for this project">
           Review a hostname for a deployed service using a zone granted to this
@@ -493,7 +525,7 @@ function ProjectRoutes({
       ) : (
         <Rows>
           {list.map((route) => (
-            <div key={route.id} className={rowClass}>
+            <Row key={route.id}>
               <div className="grid min-w-0 gap-1">
                 <p className="font-medium break-all">{route.input.hostname}</p>
                 <p className="text-xs text-muted-foreground">
@@ -530,7 +562,7 @@ function ProjectRoutes({
                     </Button>
                   )}
               </div>
-            </div>
+            </Row>
           ))}
         </Rows>
       )}
@@ -575,9 +607,13 @@ export function RouteStatus({ route }: { route: CloudinfraRoute }) {
       ]
         .filter(Boolean)
         .map((e, i) => (
-          <span role="alert" className="basis-full text-destructive" key={i}>
-            {e}
-          </span>
+          <Alert
+            variant="destructive"
+            className="basis-full text-destructive"
+            key={i}
+          >
+            <AlertDescription>{e}</AlertDescription>
+          </Alert>
         ))}
     </div>
   )
@@ -757,24 +793,30 @@ function RouteEditor({
               />
             </Field>
             <Field label="Route zone">
-              <select
-                aria-label="Route zone"
-                className={selectClass}
+              <Select
                 value={input.zoneId}
-                onChange={(e) =>
+                onValueChange={(e) =>
                   change({
-                    zoneId: e.target.value,
+                    zoneId: e ?? "",
                     externalTtlSeconds: undefined,
                   })
                 }
               >
-                <option value="">Choose granted DNS zone</option>
-                {zones.data?.zones.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.name} · {z.mode}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  aria-label="Route zone"
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Choose granted DNS zone</SelectItem>
+                  {zones.data?.zones.map((z) => (
+                    <SelectItem key={z.id} value={z.id}>
+                      {z.name} · {z.mode}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             {zones.status === "error" && (
               <QueryError
@@ -843,7 +885,7 @@ export function RouteOperationProgress({
       </p>
       <p className="break-words">{operation.message}</p>
       {operation.desiredRecord?.name && (
-        <p className="break-all">
+        <p className="wrap-anywhere">
           DNS: {operation.desiredRecord.type} {operation.desiredRecord.name} ={" "}
           {operation.desiredRecord.value} · TTL {operation.desiredRecord.ttl}s
         </p>
@@ -1015,7 +1057,7 @@ function RouteDetails({
             retry={history.refetch}
           />
         ) : !history.data ? (
-          <p role="status">Loading route history...</p>
+          <CloudLoading>Loading route history...</CloudLoading>
         ) : (
           <div className="grid gap-3">
             {list.map((op) => (

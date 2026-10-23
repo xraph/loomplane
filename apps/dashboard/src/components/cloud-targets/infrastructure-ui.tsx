@@ -1,4 +1,9 @@
-import { useEffect, type ReactNode } from "react"
+import { cn } from "@/lib/utils"
+import { Item, ItemGroup } from "@/components/ui/item"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Spinner } from "@/components/ui/spinner"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
+import { useEffect, type ReactNode, type ComponentProps } from "react"
 import { statusOf } from "@/client/errors"
 import { QueryError } from "@/components/query-error"
 import { CloudIcon } from "lucide-react"
@@ -77,9 +82,9 @@ export function CloudEmpty({
 }
 export function CloudError({ message }: { message: string }) {
   return message ? (
-    <p role="alert" className="text-sm text-destructive">
-      {message}
-    </p>
+    <Alert variant="destructive">
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
   ) : null
 }
 export function Field({
@@ -90,15 +95,38 @@ export function Field({
   children: ReactNode
 }) {
   return (
-    <label className="grid min-w-0 gap-1 text-xs">
-      {label}
-      {children}
-    </label>
+    <FormField className="grid min-w-0 gap-1 text-xs">
+      <FieldLabel className="contents">
+        {label}
+        {children}
+      </FieldLabel>
+    </FormField>
   )
 }
 export function Rows({ children }: { children: ReactNode }) {
   return (
-    <div className="divide-y rounded-xl bg-card ring-1 ring-border">
+    <ItemGroup className="gap-0 divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
+      {children}
+    </ItemGroup>
+  )
+}
+export function Row({ className, ...props }: ComponentProps<typeof Item>) {
+  return (
+    <Item
+      role="listitem"
+      size="sm"
+      className={cn("justify-between", className)}
+      {...props}
+    />
+  )
+}
+export function CloudLoading({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="status"
+      className="flex items-center gap-2 text-[13px] text-muted-foreground"
+    >
+      <Spinner />
       {children}
     </div>
   )
@@ -157,9 +185,9 @@ export function SetupReads({
     )
   if (reads.some((read) => !read.query.data))
     return (
-      <p role="status">
+      <CloudLoading>
         Loading {reads.map((read) => read.label.toLowerCase()).join(", ")}...
-      </p>
+      </CloudLoading>
     )
   return children
 }

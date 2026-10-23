@@ -1,3 +1,13 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
@@ -23,14 +33,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { QueryError } from "@/components/query-error"
-import { selectClass } from "./workspace"
 import {
   SetupReads,
   CloudEmpty,
   CloudError,
   Field,
   Rows,
-  rowClass,
+  Row,
 } from "./infrastructure-ui"
 
 export function Pools({
@@ -76,7 +85,7 @@ export function Pools({
           retry={pools.refetch}
         />
       ) : !pools.data ? (
-        <p role="status">Loading pools...</p>
+        <CloudLoading>Loading pools...</CloudLoading>
       ) : !list.length ? (
         <CloudEmpty title="No server pools">
           Add ready servers to a pool and choose their usable CPU and memory
@@ -85,7 +94,7 @@ export function Pools({
       ) : (
         <Rows>
           {list.map((p) => (
-            <div className={rowClass} key={p.id}>
+            <Row key={p.id}>
               <div>
                 <p className="font-medium">{p.name}</p>
                 <p className="text-xs text-muted-foreground">
@@ -110,7 +119,7 @@ export function Pools({
                   Review service move
                 </Button>
               </div>
-            </div>
+            </Row>
           ))}
         </Rows>
       )}
@@ -208,29 +217,33 @@ function PoolEditor({
             const member = input.members.find((m) => m.serverId === s.id)
             return (
               <div key={s.id} className="grid gap-2 rounded-lg bg-muted p-3">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={!!member}
-                    onChange={(e) =>
-                      setInput({
-                        ...input,
-                        members: e.target.checked
-                          ? [
-                              ...input.members,
-                              {
-                                serverId: s.id,
-                                cpuMillis: s.health.effectiveCpuMillis,
-                                memoryBytes: s.health.effectiveMemoryBytes,
-                                draining: s.draining,
-                              },
-                            ]
-                          : input.members.filter((m) => m.serverId !== s.id),
-                      })
-                    }
-                  />
-                  {s.name}
-                </label>
+                <FormField
+                  orientation="horizontal"
+                  className="flex items-center gap-2 text-sm"
+                >
+                  <FieldLabel className="contents">
+                    <Checkbox
+                      checked={!!member}
+                      onCheckedChange={(e) =>
+                        setInput({
+                          ...input,
+                          members: e
+                            ? [
+                                ...input.members,
+                                {
+                                  serverId: s.id,
+                                  cpuMillis: s.health.effectiveCpuMillis,
+                                  memoryBytes: s.health.effectiveMemoryBytes,
+                                  draining: s.draining,
+                                },
+                              ]
+                            : input.members.filter((m) => m.serverId !== s.id),
+                        })
+                      }
+                    />
+                    {s.name}
+                  </FieldLabel>
+                </FormField>
                 {member && (
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Field label="CPU budget (millicores)">
@@ -273,23 +286,25 @@ function PoolEditor({
                         }
                       />
                     </Field>
-                    <label className="flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={member.draining}
-                        onChange={(e) =>
-                          setInput({
-                            ...input,
-                            members: input.members.map((m) =>
-                              m.serverId === s.id
-                                ? { ...m, draining: e.target.checked }
-                                : m
-                            ),
-                          })
-                        }
-                      />
-                      Drain member
-                    </label>
+                    <FormField
+                      orientation="horizontal"
+                      className="flex items-center gap-2 text-xs"
+                    >
+                      <FieldLabel className="contents">
+                        <Checkbox
+                          checked={member.draining}
+                          onCheckedChange={(e) =>
+                            setInput({
+                              ...input,
+                              members: input.members.map((m) =>
+                                m.serverId === s.id ? { ...m, draining: e } : m
+                              ),
+                            })
+                          }
+                        />
+                        Drain member
+                      </FieldLabel>
+                    </FormField>
                   </div>
                 )}
               </div>
@@ -423,21 +438,27 @@ function MoveEditor({
                 </CloudEmpty>
               ) : (
                 <Field label="Move project">
-                  <select
-                    aria-label="Move project"
-                    className={selectClass}
+                  <Select
                     value={input.projectId}
-                    onChange={(e) =>
-                      change({ projectId: e.target.value, environmentId: "" })
+                    onValueChange={(e) =>
+                      change({ projectId: e ?? "", environmentId: "" })
                     }
                   >
-                    <option value="">Choose project</option>
-                    {projects.data?.projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger
+                      aria-label="Move project"
+                      className={"w-full min-w-0"}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Choose project</SelectItem>
+                      {projects.data?.projects.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </Field>
               )}
             </SetupReads>
@@ -459,24 +480,28 @@ function MoveEditor({
               />
             </Field>
             <Field label="Destination server">
-              <select
-                aria-label="Destination server"
-                className={selectClass}
+              <Select
                 value={input.destinationServerId}
-                onChange={(e) =>
-                  change({ destinationServerId: e.target.value })
-                }
+                onValueChange={(e) => change({ destinationServerId: e ?? "" })}
               >
-                <option value="">Choose server</option>
-                {pool.members
-                  .filter((m) => !m.draining)
-                  .map((m) => (
-                    <option key={m.serverId} value={m.serverId}>
-                      {servers.find((s) => s.id === m.serverId)?.name ??
-                        m.serverId}
-                    </option>
-                  ))}
-              </select>
+                <SelectTrigger
+                  aria-label="Destination server"
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Choose server</SelectItem>
+                  {pool.members
+                    .filter((m) => !m.draining)
+                    .map((m) => (
+                      <SelectItem key={m.serverId} value={m.serverId}>
+                        {servers.find((s) => s.id === m.serverId)?.name ??
+                          m.serverId}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
             </Field>
             {review && (
               <p className="text-sm">
@@ -526,26 +551,32 @@ export function MoveEnvironment({
             Add an environment in this project before reviewing a route or move.
           </CloudEmpty>
         ) : (
-          <select
-            aria-label="Route environment"
-            className={selectClass}
+          <Select
             value={value}
-            onChange={(event) =>
+            onValueChange={(event) =>
               onChange(
-                event.target.value,
+                event ?? "",
                 environments.data?.environments.find(
-                  (environment) => environment.id === event.target.value
+                  (environment) => environment.id === (event ?? "")
                 )?.name
               )
             }
           >
-            <option value="">Choose environment</option>
-            {environments.data?.environments.map((environment) => (
-              <option key={environment.id} value={environment.id}>
-                {environment.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label="Route environment"
+              className={"w-full min-w-0"}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Choose environment</SelectItem>
+              {environments.data?.environments.map((environment) => (
+                <SelectItem key={environment.id} value={environment.id}>
+                  {environment.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
       </SetupReads>
     </Field>

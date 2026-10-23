@@ -1,3 +1,12 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
 import { useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Environment, Target } from "@/client/forge/loomplane/types"
@@ -16,7 +25,7 @@ import {
 import { useOrganization } from "@/lib/organization"
 import { adoptServiceTarget } from "@/lib/cloud-targets"
 import { placementSettings } from "@/lib/placement"
-import { EmptyClouds, selectClass } from "./workspace"
+import { EmptyClouds } from "./workspace"
 
 export function ServiceAdoption({
   projectId,
@@ -86,11 +95,7 @@ export function ServiceAdoption({
       />
     )
   if (!manifest.data)
-    return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Loading service placement...
-      </p>
-    )
+    return <CloudLoading>Loading service placement...</CloudLoading>
   return (
     <section className="grid gap-2">
       <h3 className="text-sm font-medium">Services in {environment.name}</h3>
@@ -117,24 +122,30 @@ export function ServiceAdoption({
                       : `Direct: ${settings.provider || "automatic"}`}
                   </p>
                 </div>
-                <select
-                  className={`${selectClass} w-40`}
-                  aria-label={`Cloud target for ${name}`}
+                <Select
                   disabled={
                     !can("project:update") || save.isPending || !targets.length
                   }
                   value={choices[name] ?? settings.cloudTarget ?? ""}
-                  onChange={(e) =>
-                    setChoices((c) => ({ ...c, [name]: e.target.value }))
+                  onValueChange={(e) =>
+                    setChoices((c) => ({ ...c, [name]: e ?? "" }))
                   }
                 >
-                  <option value="">Choose target</option>
-                  {targets.map((t) => (
-                    <option key={t.id} value={t.name}>
-                      {t.displayName || t.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger
+                    aria-label={`Cloud target for ${name}`}
+                    className={`${"w-full min-w-0"} w-40`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Choose target</SelectItem>
+                    {targets.map((t) => (
+                      <SelectItem key={t.id} value={t.name}>
+                        {t.displayName || t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Button
                   size="sm"
                   variant="outline"
@@ -157,9 +168,9 @@ export function ServiceAdoption({
         </div>
       )}
       {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive" className="text-sm text-destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
       {reviewing && next && (
         <Dialog
@@ -192,9 +203,9 @@ export function ServiceAdoption({
               entries retain their provider and region.
             </p>
             {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
+              <Alert variant="destructive" className="text-sm text-destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
             )}
             <DialogFooter>
               <Button

@@ -1,3 +1,15 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { Card } from "@/components/ui/card"
+import { Item, ItemGroup } from "@/components/ui/item"
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { type ReactNode, useEffect, useState } from "react"
 import { CloudIcon, PlusIcon } from "lucide-react"
 import * as api from "@/client/forge/loomplane/hooks"
@@ -40,8 +52,6 @@ import { ChangeReview } from "./change-review"
 import { ServiceAdoption } from "./service-adoption"
 import { SyncHistory } from "./sync-history"
 
-export const selectClass =
-  "h-9 min-w-0 rounded-md border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 export function EmptyClouds({
   title,
   description,
@@ -109,24 +119,32 @@ export function CloudWorkspace({
         scopeControls={
           <>
             {projectControl}
-            <label className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
-              Environment
-              <select
-                className={selectClass}
-                aria-label="Environment"
-                value={environment.id}
-                onChange={(e) => {
-                  setChosen(e.target.value)
-                  window.localStorage.setItem(preference, e.target.value)
-                }}
-              >
-                {environments.data.environments.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <FormField className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
+              <FieldLabel className="contents">
+                Environment
+                <Select
+                  value={environment.id}
+                  onValueChange={(e) => {
+                    setChosen(e ?? "")
+                    window.localStorage.setItem(preference, e ?? "")
+                  }}
+                >
+                  <SelectTrigger
+                    aria-label="Environment"
+                    className={"w-full min-w-0"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {environments.data.environments.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FieldLabel>
+            </FormField>
           </>
         }
       />
@@ -209,22 +227,30 @@ function EnvironmentWorkspace({
         <>
           <section className="flex flex-wrap items-end gap-2">
             {scopeControls}
-            <label className="grid min-w-36 flex-1 gap-1 text-xs text-muted-foreground">
-              Cloud
-              <select
-                className={selectClass}
-                aria-label="Cloud"
-                value={profile?.id ?? ""}
-                onChange={(e) => setChosen(e.target.value)}
-              >
-                {!profile && <option value="">No Clouds</option>}
-                {list.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <FormField className="grid min-w-36 flex-1 gap-1 text-xs text-muted-foreground">
+              <FieldLabel className="contents">
+                Cloud
+                <Select
+                  value={profile?.id ?? ""}
+                  onValueChange={(e) => setChosen(e ?? "")}
+                >
+                  <SelectTrigger
+                    aria-label="Cloud"
+                    className={"w-full min-w-0"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {!profile && <SelectItem value="">No Clouds</SelectItem>}
+                    {list.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FieldLabel>
+            </FormField>
             {manage && (
               <>
                 <Button
@@ -404,19 +430,21 @@ export function CloudForm({
               : "Create a named set of deployment targets for this project."}
           </DialogDescription>
         </DialogHeader>
-        <label className="grid gap-1 text-sm">
-          Name
-          <Input
-            aria-label="Cloud name"
-            value={name}
-            maxLength={64}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
+        <FormField className="grid gap-1 text-sm">
+          <FieldLabel className="contents">
+            Name
+            <Input
+              aria-label="Cloud name"
+              value={name}
+              maxLength={64}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </FieldLabel>
+        </FormField>
         {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
+          <Alert variant="destructive" className="text-sm text-destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
         <DialogFooter className="flex-wrap">
           {profile && (
@@ -607,11 +635,7 @@ function AppliedPlacement({
       />
     )
   if (!bindings.data)
-    return (
-      <p role="status" className="text-xs text-muted-foreground">
-        Loading applied accounts...
-      </p>
-    )
+    return <CloudLoading>Loading applied accounts...</CloudLoading>
   const services = bindings.data.bindings.filter((b) => b.subject === "service")
   return (
     <section className="grid gap-2">
@@ -675,7 +699,7 @@ export function TargetTable({
   return (
     <div className="grid gap-2.5">
       <AccountSummary targets={all} connections={accounts} />
-      <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
+      <Card size="sm" className="gap-0 py-0">
         <div
           aria-hidden="true"
           className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto] gap-4 border-b px-4 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase max-md:hidden"
@@ -685,7 +709,7 @@ export function TargetTable({
           <span>Region</span>
           <span className="w-[86px]" />
         </div>
-        <ul className="divide-y">
+        <ItemGroup className="gap-0 divide-y">
           {[...visible]
             .sort((a, b) =>
               `${cloudOf(a, accounts)}:${a.connectionId}:${a.name}`.localeCompare(
@@ -696,7 +720,9 @@ export function TargetTable({
               const account = accounts.find((c) => c.id === t.connectionId)
               const cloud = cloudOf(t, accounts)
               return (
-                <li
+                <Item
+                  role="listitem"
+                  size="sm"
                   key={t.id}
                   className="grid items-center gap-x-4 gap-y-2 px-4 py-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto]"
                 >
@@ -747,11 +773,11 @@ export function TargetTable({
                   >
                     {manage ? "Edit target" : "View target"}
                   </Button>
-                </li>
+                </Item>
               )
             })}
-        </ul>
-      </div>
+        </ItemGroup>
+      </Card>
     </div>
   )
 }

@@ -166,10 +166,8 @@ it("pins the selected eligible destination and keeps staging separate from deplo
   const target = screen.getByRole("combobox", {
     name: "Move destination server",
   })
-  const option = screen.getByRole("option", {
-    name: "third-host",
-  }) as HTMLOptionElement
-  await user.selectOptions(target, option.value)
+  await user.click(target)
+  await user.click(await screen.findByRole("option", { name: "third-host" }))
   await user.click(screen.getByRole("button", { name: "Preview service move" }))
   await user.click(
     screen.getByRole("button", { name: "Accept reviewed service move" })
@@ -222,4 +220,32 @@ it("invalidates staged movement when its destination host is disconnected", asyn
   expect(
     screen.getByText("shared-us-1 · ready · draining").parentElement
   ).toHaveTextContent("2 workloads")
+})
+
+it("uses shared controls with keyboard selection and clickable checkbox labels", async () => {
+  const user = userEvent.setup()
+  render(<MockCloudInfrastructure tab="Servers" failure={false} />)
+  expect(screen.getAllByRole("list")[0]).toHaveAttribute(
+    "data-slot",
+    "item-group"
+  )
+  await user.click(screen.getByRole("button", { name: "Create server" }))
+  const size = screen.getByRole("combobox", { name: "Server size" })
+  expect(size).toHaveAttribute("data-slot", "select-trigger")
+  size.focus()
+  await user.keyboard("{ArrowDown}")
+  await screen.findByRole("option", { name: "4 CPU / 8 GiB" })
+  await user.keyboard("{End}{Enter}")
+  expect(size).toHaveTextContent("4 CPU / 8 GiB")
+  await user.click(screen.getByRole("button", { name: "Close" }))
+  await user.click(
+    screen.getByRole("button", { name: "Connect existing server" })
+  )
+  const trust = screen.getByRole("checkbox", { name: /Confirm pinned SSH/ })
+  expect(trust).toHaveAttribute("data-slot", "checkbox")
+  expect(trust.closest("[data-slot=field]")).toBeInTheDocument()
+  await user.click(
+    screen.getByText("Confirm pinned SSH access and Docker installation")
+  )
+  expect(trust).toBeChecked()
 })

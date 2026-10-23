@@ -1,3 +1,20 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { Card } from "@/components/ui/card"
+import { Item, ItemGroup } from "@/components/ui/item"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Field as FormField,
+  FieldLabel,
+  FieldSet,
+  FieldLegend,
+} from "@/components/ui/field"
 // A Cloud the organization owns: its targets, and the projects allowed to
 // place services on them. A project gets the Cloud with a chosen set of its
 // targets, so one Cloud can serve many projects, each on only what it needs.
@@ -48,7 +65,7 @@ import { CloudWorkspace } from "./workspace"
 
 import { ChangeReview } from "./change-review"
 import { Choice, TargetEditor } from "./target-editor"
-import { TargetTable, cloudTags, selectClass } from "./workspace"
+import { TargetTable, cloudTags } from "./workspace"
 
 export function OrganizationCloud({
   cloud,
@@ -85,22 +102,27 @@ export function OrganizationCloud({
           />
         )}
       {["Domains", "Projects", "Activity"].includes(tab) && (
-        <label className="grid max-w-sm gap-1 text-xs">
-          Project context
-          <select
-            aria-label="Cloud project context"
-            className={selectClass}
-            value={selected}
-            onChange={(e) => setChosen(e.target.value)}
-          >
-            <option value="">Choose a granted project</option>
-            {permitted.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FormField className="grid max-w-sm gap-1 text-xs">
+          <FieldLabel className="contents">
+            Project context
+            <Select value={selected} onValueChange={(e) => setChosen(e ?? "")}>
+              <SelectTrigger
+                aria-label="Cloud project context"
+                className={"w-full min-w-0"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Choose a granted project</SelectItem>
+                {permitted.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldLabel>
+        </FormField>
       )}
       <div className="grid min-w-0 gap-4">
         {tab === "Targets" && (
@@ -317,13 +339,15 @@ function ProjectAccess({
           )}
         </Empty>
       ) : (
-        <ul className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
+        <ItemGroup className="gap-0 divide-y rounded-xl bg-card ring-1 ring-border">
           {active.map((g) => {
             const p = projectOf(g.projectId)
             const s = p ? projectStyle(p) : null
             const allowed = targets.filter((t) => g.targetIds.includes(t.id))
             return (
-              <li
+              <Item
+                role="listitem"
+                size="sm"
                 key={g.projectId}
                 className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
               >
@@ -368,10 +392,10 @@ function ProjectAccess({
                     Edit access
                   </Button>
                 )}
-              </li>
+              </Item>
             )
           })}
-        </ul>
+        </ItemGroup>
       )}
       {editing && (
         <GrantDialog
@@ -464,67 +488,82 @@ function GrantDialog({
         </DialogHeader>
         <div className="grid gap-4">
           {!grant && (
-            <label className="grid gap-1 text-xs">
-              Project
-              <select
-                className={selectClass}
-                aria-label="Project"
-                value={projectId}
-                disabled={busy}
-                onChange={(e) => setProjectId(e.target.value)}
-              >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <FormField className="grid gap-1 text-xs">
+              <FieldLabel className="contents">
+                Project
+                <Select
+                  value={projectId}
+                  disabled={busy}
+                  onValueChange={(e) => setProjectId(e ?? "")}
+                >
+                  <SelectTrigger
+                    aria-label="Project"
+                    className={"w-full min-w-0"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FieldLabel>
+            </FormField>
           )}
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              checked={wholeCloud}
-              onChange={(e) => setWholeCloud(e.target.checked)}
-            />
-            Whole Cloud, including its default provider and future targets
-          </label>
-          <fieldset
+          <FormField
+            orientation="horizontal"
+            className="flex items-center gap-2 text-xs"
+          >
+            <FieldLabel className="contents">
+              <Checkbox
+                checked={wholeCloud}
+                onCheckedChange={(e) => setWholeCloud(e)}
+              />
+              Whole Cloud, including its default provider and future targets
+            </FieldLabel>
+          </FormField>
+          <FieldSet
             disabled={wholeCloud}
             className="grid gap-1.5 disabled:opacity-50"
           >
-            <legend className="mb-1.5 text-xs">Targets it may use</legend>
+            <FieldLegend className="mb-1.5 text-xs">
+              Targets it may use
+            </FieldLegend>
             {targets.map((t) => {
               const on = chosen.includes(t.id)
               return (
-                <label
+                <FormField
+                  orientation="horizontal"
                   key={t.id}
                   className={cn(
                     "flex h-11 cursor-pointer items-center gap-3 rounded-xl bg-card px-3 ring-1 transition-shadow",
                     on ? "ring-2 ring-primary" : "ring-border"
                   )}
                 >
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    disabled={busy}
-                    onChange={() => toggle(t.id)}
-                    className="size-4 accent-[var(--primary)]"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-                    {t.displayName || t.name}
-                  </span>
-                  <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-                    {t.name}
-                  </span>
-                </label>
+                  <FieldLabel className="contents">
+                    <Checkbox
+                      checked={on}
+                      disabled={busy}
+                      onCheckedChange={() => toggle(t.id)}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                      {t.displayName || t.name}
+                    </span>
+                    <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+                      {t.name}
+                    </span>
+                  </FieldLabel>
+                </FormField>
               )
             })}
-          </fieldset>
+          </FieldSet>
           {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
+            <Alert variant="destructive" className="text-sm text-destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
         </div>
         <DialogFooter className="flex-wrap">
@@ -615,9 +654,11 @@ function DefaultPlacementCard({
     }
   }
   return (
-    <section
+    <Card
+      size="sm"
+      role="region"
       aria-label="Default provider"
-      className="grid gap-2 rounded-[14px] bg-card p-3 ring-1 ring-border"
+      className="grid gap-2 p-3"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid max-w-[64ch] gap-0.5">
@@ -683,19 +724,20 @@ function DefaultPlacementCard({
         <p className="text-xs text-muted-foreground">
           Clearing leaves services without a target of their own with nowhere to
           run.{" "}
-          <button
+          <Button
+            variant="ghost"
             type="button"
             className="underline underline-offset-4"
             onClick={() => setConfirmClear(false)}
           >
             Keep it
-          </button>
+          </Button>
         </p>
       )}
       {error && !editing && (
-        <p role="alert" className="text-[13px] text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive" className="text-[13px] text-destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
       {pendingDefault !== undefined && (
         <ChangeReview
@@ -741,7 +783,7 @@ function DefaultPlacementCard({
           }}
         />
       )}
-    </section>
+    </Card>
   )
 }
 
@@ -879,33 +921,41 @@ export function PlacementPicker({
         </div>
       )}
       {selected && (
-        <label className="grid gap-1 text-xs">
-          Region
-          {selected.regions?.length ? (
-            <select
-              className={selectClass}
-              aria-label={`${label} region`}
-              disabled={disabled}
-              value={value.region}
-              onChange={(e) => emit({ ...value, region: e.target.value })}
-            >
-              <option value="">Provider default</option>
-              {selected.regions.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <Input
-              aria-label={`${label} region`}
-              disabled={disabled}
-              value={value.region}
-              onChange={(e) => emit({ ...value, region: e.target.value })}
-              placeholder="Provider default"
-            />
-          )}
-        </label>
+        <FormField className="grid gap-1 text-xs">
+          <FieldLabel className="contents">
+            Region
+            {selected.regions?.length ? (
+              <Select
+                disabled={disabled}
+                value={value.region}
+                onValueChange={(e) => emit({ ...value, region: e ?? "" })}
+              >
+                <SelectTrigger
+                  aria-label={`${label} region`}
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Provider default</SelectItem>
+                  {selected.regions.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                aria-label={`${label} region`}
+                disabled={disabled}
+                value={value.region}
+                onChange={(e) => emit({ ...value, region: e.target.value })}
+                placeholder="Provider default"
+              />
+            )}
+          </FieldLabel>
+        </FormField>
       )}
     </div>
   )
@@ -952,9 +1002,9 @@ function DefaultPlacementDialog({
           }}
         />
         {error && (
-          <p role="alert" className="text-[13px] text-destructive">
-            {error}
-          </p>
+          <Alert variant="destructive" className="text-[13px] text-destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>

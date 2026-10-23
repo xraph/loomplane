@@ -1,3 +1,12 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { PlusIcon } from "lucide-react"
 import { useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
@@ -26,7 +35,6 @@ import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
 import { ChangeReview } from "./change-review"
 import { TagInput } from "./tag-input"
-import { selectClass } from "./workspace"
 
 export function TargetEditor({
   projectId,
@@ -180,25 +188,29 @@ export function TargetEditor({
           )}
           <div className="grid gap-3">
             <div className="grid gap-2 sm:grid-cols-2">
-              <label className="grid gap-1 text-xs">
-                Target slug
-                <Input
-                  aria-label="Target slug"
-                  disabled={!!target || !manage}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="frontend"
-                />
-              </label>
-              <label className="grid gap-1 text-xs">
-                Display name
-                <Input
-                  aria-label="Target display name"
-                  disabled={!manage || busy}
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                />
-              </label>
+              <FormField className="grid gap-1 text-xs">
+                <FieldLabel className="contents">
+                  Target slug
+                  <Input
+                    aria-label="Target slug"
+                    disabled={!!target || !manage}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="frontend"
+                  />
+                </FieldLabel>
+              </FormField>
+              <FormField className="grid gap-1 text-xs">
+                <FieldLabel className="contents">
+                  Display name
+                  <Input
+                    aria-label="Target display name"
+                    disabled={!manage || busy}
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                  />
+                </FieldLabel>
+              </FormField>
             </div>
             <div className="grid gap-1">
               <span className="text-xs">Tags</span>
@@ -209,28 +221,37 @@ export function TargetEditor({
                 disabled={!manage || busy}
               />
             </div>
-            <label className="grid gap-1 text-xs">
-              Placement runtime
-              <select
-                aria-label="Placement runtime"
-                className={selectClass}
-                value={runtime}
-                disabled={!manage || busy}
-                onChange={(e) => {
-                  const value = e.target.value
-                  setRuntime(value)
-                  setProvider(value === "server" ? "server" : "")
-                  setConnection("")
-                  setRegion("")
-                  setPool("")
-                }}
-              >
-                <option value="managed">Managed deployment</option>
-                {(can("organization_cloud:manage") || runtime === "server") && (
-                  <option value="server">Server pool</option>
-                )}
-              </select>
-            </label>
+            <FormField className="grid gap-1 text-xs">
+              <FieldLabel className="contents">
+                Placement runtime
+                <Select
+                  value={runtime}
+                  disabled={!manage || busy}
+                  onValueChange={(e) => {
+                    const value = e ?? ""
+                    setRuntime(value)
+                    setProvider(value === "server" ? "server" : "")
+                    setConnection("")
+                    setRegion("")
+                    setPool("")
+                  }}
+                >
+                  <SelectTrigger
+                    aria-label="Placement runtime"
+                    className={"w-full min-w-0"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="managed">Managed deployment</SelectItem>
+                    {(can("organization_cloud:manage") ||
+                      runtime === "server") && (
+                      <SelectItem value="server">Server pool</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </FieldLabel>
+            </FormField>
             {runtime === "server" ? (
               <PoolChoice
                 cloudId={profile.id}
@@ -321,7 +342,8 @@ export function TargetEditor({
                         </Choice>
                       ))}
                       {manage && (
-                        <button
+                        <Button
+                          variant="ghost"
                           type="button"
                           disabled={busy}
                           onClick={() => setConnecting(true)}
@@ -331,48 +353,56 @@ export function TargetEditor({
                           {accounts.length
                             ? `Connect another ${selected.title} account`
                             : `Connect a ${selected.title} account`}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
                 )}
-                <label className="grid gap-1 text-xs">
-                  Region
-                  {selected?.regions?.length ? (
-                    <select
-                      className={selectClass}
-                      aria-label="Target region"
-                      disabled={!manage || busy}
-                      value={region}
-                      onChange={(e) => setRegion(e.target.value)}
-                    >
-                      <option value="">Provider default</option>
-                      {selected.regions.map((r) => (
-                        <option key={r} value={r}>
-                          {r}
-                        </option>
-                      ))}
-                      {region && !selected.regions.includes(region) && (
-                        <option value={region}>{region}</option>
-                      )}
-                    </select>
-                  ) : (
-                    <Input
-                      aria-label="Target region"
-                      disabled={!manage || busy}
-                      value={region}
-                      onChange={(e) => setRegion(e.target.value)}
-                      placeholder="Provider default"
-                    />
-                  )}
-                </label>
+                <FormField className="grid gap-1 text-xs">
+                  <FieldLabel className="contents">
+                    Region
+                    {selected?.regions?.length ? (
+                      <Select
+                        disabled={!manage || busy}
+                        value={region}
+                        onValueChange={(e) => setRegion(e ?? "")}
+                      >
+                        <SelectTrigger
+                          aria-label="Target region"
+                          className={"w-full min-w-0"}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Provider default</SelectItem>
+                          {selected.regions.map((r) => (
+                            <SelectItem key={r} value={r}>
+                              {r}
+                            </SelectItem>
+                          ))}
+                          {region && !selected.regions.includes(region) && (
+                            <SelectItem value={region}>{region}</SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        aria-label="Target region"
+                        disabled={!manage || busy}
+                        value={region}
+                        onChange={(e) => setRegion(e.target.value)}
+                        placeholder="Provider default"
+                      />
+                    )}
+                  </FieldLabel>
+                </FormField>
               </>
             )}
           </div>
           {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
+            <Alert variant="destructive" className="text-sm text-destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
           <DialogFooter className="flex-wrap">
             {target && manage && (
@@ -463,19 +493,20 @@ export function Choice({
   children: React.ReactNode
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
       role="radio"
       aria-checked={checked}
       disabled={disabled}
       onClick={onSelect}
       className={cn(
-        "flex h-12 min-w-0 items-center gap-2.5 rounded-xl bg-card px-2.5 text-left ring-1 transition-shadow disabled:opacity-60",
-        checked ? "ring-2 ring-primary" : "ring-border hover:ring-foreground/25"
+        "h-auto min-h-12 min-w-0 justify-start gap-2.5 px-2.5 text-left whitespace-normal",
+        checked && "border-primary ring-1 ring-primary"
       )}
     >
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -492,37 +523,45 @@ function PoolChoice({
 }) {
   const pools = useQuery(api.useCloudPoolsList, { path: { cloudId } })
   return (
-    <label className="grid gap-1 text-xs">
-      Server pool
-      {pools.status === "error" ? (
-        <QueryError
-          error={pools.error}
-          fallback="Pools couldn't be loaded."
-          retry={pools.refetch}
-        />
-      ) : (
-        <select
-          aria-label="Target server pool"
-          className={selectClass}
-          disabled={disabled || !pools.data}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">Choose a server pool</option>
-          {pools.data?.pools.map(
-            (pool) =>
-              pool && (
-                <option key={pool.id} value={pool.id}>
-                  {pool.name} · {pool.members.length} servers
-                </option>
-              )
-          )}
-        </select>
-      )}
-      <span className="text-muted-foreground">
-        Services reserve CPU and memory on one eligible server. Existing data
-        requires explicit migration.
-      </span>
-    </label>
+    <FormField className="grid gap-1 text-xs">
+      <FieldLabel className="contents">
+        Server pool
+        {pools.status === "error" ? (
+          <QueryError
+            error={pools.error}
+            fallback="Pools couldn't be loaded."
+            retry={pools.refetch}
+          />
+        ) : (
+          <Select
+            disabled={disabled || !pools.data}
+            value={value}
+            onValueChange={(e) => onChange(e ?? "")}
+          >
+            <SelectTrigger
+              aria-label="Target server pool"
+              className={"w-full min-w-0"}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Choose a server pool</SelectItem>
+              {pools.data?.pools.map(
+                (pool) =>
+                  pool && (
+                    <SelectItem key={pool.id} value={pool.id}>
+                      {pool.name} · {pool.members.length} servers
+                    </SelectItem>
+                  )
+              )}
+            </SelectContent>
+          </Select>
+        )}
+        <span className="text-muted-foreground">
+          Services reserve CPU and memory on one eligible server. Existing data
+          requires explicit migration.
+        </span>
+      </FieldLabel>
+    </FormField>
   )
 }

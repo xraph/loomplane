@@ -1,3 +1,5 @@
+import { CloudLoading } from "./infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useEffect, useRef, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { ChangeInputBody, Preview } from "@/client/forge/loomplane/types"
@@ -204,11 +206,7 @@ function ReviewContent({
             placement and syncing its applied release.
           </DialogDescription>
         </DialogHeader>
-        {loading && (
-          <p role="status" className="text-sm">
-            Building preview...
-          </p>
-        )}
+        {loading && <CloudLoading>Building preview...</CloudLoading>}
         {preview && (
           <div className="grid gap-3 text-sm">
             {(preview.beforeDefault ||
@@ -249,9 +247,9 @@ function ReviewContent({
               <AssignmentPreview preview={preview} accountName={accountName} />
             )}
             {(preview.blockers ?? []).map((blocker, i) => (
-              <p role="alert" key={i} className="text-destructive">
-                {blocker}
-              </p>
+              <Alert variant="destructive" key={i} className="text-destructive">
+                <AlertDescription>{blocker}</AlertDescription>
+              </Alert>
             ))}
             {(preview.environments ?? []).map((env) => (
               <div key={env.environmentId} className="rounded-lg border p-3">
@@ -286,14 +284,16 @@ function ReviewContent({
           </div>
         )}
         {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
+          <Alert variant="destructive" className="text-sm text-destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
         {stale && (
-          <p role="alert" className="text-sm">
-            This review is out of date. Refresh it before applying.
-          </p>
+          <Alert variant="destructive" className="text-sm">
+            <AlertDescription>
+              This review is out of date. Refresh it before applying.
+            </AlertDescription>
+          </Alert>
         )}
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>

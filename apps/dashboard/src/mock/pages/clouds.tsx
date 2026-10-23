@@ -1,3 +1,14 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { Card } from "@/components/ui/card"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, useState } from "react"
 import {
   ArrowRightIcon,
@@ -28,6 +39,7 @@ import {
   ZeroStateContent,
   ZeroStateDescription,
   ZeroStateHeader,
+  ZeroStateMedia,
   ZeroStateTitle,
 } from "@/components/zero-state"
 import { cn } from "@/lib/utils"
@@ -91,8 +103,6 @@ const steps = [
   "Switch traffic",
   "Clean up previous deployment",
 ]
-const selectClass =
-  "h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
 export function CloudsPage() {
   const [tab, setTab] = useState<CloudTab>("Targets")
@@ -225,16 +235,20 @@ export function CloudsPage() {
             and deployments
           </span>
           <div className="flex flex-wrap items-center gap-3">
-            <label className="flex min-h-8 items-center gap-2">
-              <input
-                type="checkbox"
-                checked={simulateFailure}
-                disabled={busy}
-                onChange={(event) => setSimulateFailure(event.target.checked)}
-                className="size-4 accent-current"
-              />{" "}
-              Simulate readiness failure
-            </label>
+            <FormField
+              orientation="horizontal"
+              className="flex min-h-8 items-center gap-2"
+            >
+              <FieldLabel className="contents">
+                <Checkbox
+                  checked={simulateFailure}
+                  disabled={busy}
+                  onCheckedChange={(event) => setSimulateFailure(event)}
+                  className="size-4 accent-current"
+                />{" "}
+                Simulate readiness failure
+              </FieldLabel>
+            </FormField>
             <Button variant="ghost" size="sm" onClick={reset}>
               <RotateCcwIcon /> Reset
             </Button>
@@ -311,18 +325,24 @@ export function CloudsPage() {
                     <PlusIcon /> Add target
                   </Button>
                 </div>
-                <select
-                  aria-label="Selected target"
-                  className={cn(selectClass, "lg:hidden")}
+                <Select
                   value={selected}
-                  onChange={(event) => setSelected(event.target.value)}
+                  onValueChange={(event) => setSelected(event ?? "")}
                 >
-                  {targets.map((item) => (
-                    <option key={item.name} value={item.name}>
-                      {item.name} · {item.provider}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger
+                    aria-label="Selected target"
+                    className={cn("w-full min-w-0", "lg:hidden")}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {targets.map((item) => (
+                      <SelectItem key={item.name} value={item.name}>
+                        {item.name} · {item.provider}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Input
                   className="hidden lg:block"
                   aria-label="Filter targets"
@@ -332,7 +352,8 @@ export function CloudsPage() {
                 />
                 <div className="hidden gap-1 lg:grid">
                   {visible.map((item) => (
-                    <button
+                    <Button
+                      variant="ghost"
                       key={item.name}
                       type="button"
                       aria-pressed={selected === item.name}
@@ -358,11 +379,14 @@ export function CloudsPage() {
                       ) : (
                         <span className="size-1.5 rounded-full bg-overdye" />
                       )}
-                    </button>
+                    </Button>
                   ))}
                   {visible.length === 0 && (
                     <ZeroState variant="inline" className="px-2">
                       <ZeroStateHeader>
+                        <ZeroStateMedia variant="icon">
+                          <CloudIcon />
+                        </ZeroStateMedia>
                         <ZeroStateTitle>No matching targets</ZeroStateTitle>
                         <ZeroStateDescription>
                           Try another name or provider.
@@ -386,9 +410,11 @@ export function CloudsPage() {
                 </p>
               </section>
 
-              <section
+              <Card
+                size="sm"
+                role="region"
                 aria-label={`${target.name} details`}
-                className="min-w-0 overflow-hidden rounded-xl border"
+                className="min-w-0 gap-0 py-0"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
                   <div className="flex items-center gap-2">
@@ -560,6 +586,9 @@ export function CloudsPage() {
                     ) : (
                       <ZeroState variant="inline" className="px-0">
                         <ZeroStateHeader>
+                          <ZeroStateMedia variant="icon">
+                            <CloudIcon />
+                          </ZeroStateMedia>
                           <ZeroStateTitle>
                             Ready for your first service
                           </ZeroStateTitle>
@@ -582,7 +611,7 @@ export function CloudsPage() {
                     ready.
                   </p>
                 </div>
-              </section>
+              </Card>
             </div>
           )}
         </CloudTabs>
@@ -605,34 +634,49 @@ export function CloudsPage() {
               {chosen || "New account"}
             </span>
           </div>
-          <label className="grid gap-2 text-sm font-medium">
-            New {target.provider} account
-            <select
-              className={selectClass}
-              value={destination}
-              onChange={(event) => setDestination(event.target.value)}
-            >
-              {target.accounts
-                .filter((account) => account !== target.account)
-                .map((account) => (
-                  <option key={account}>{account}</option>
-                ))}
-              <option value="new">Connect another account...</option>
-            </select>
-          </label>
+          <FormField className="grid gap-2 text-sm font-medium">
+            <FieldLabel className="contents">
+              New {target.provider} account
+              <Select
+                value={destination}
+                onValueChange={(event) => setDestination(event ?? "")}
+              >
+                <SelectTrigger
+                  aria-label={`New ${target.provider} account`}
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {target.accounts
+                    .filter((account) => account !== target.account)
+                    .map((account) => (
+                      <SelectItem key={account} value={account}>
+                        {account}
+                      </SelectItem>
+                    ))}
+                  <SelectItem value="new">
+                    Connect another account...
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </FieldLabel>
+          </FormField>
           {destination === "new" && (
-            <label className="grid gap-2 text-sm font-medium">
-              Account name
-              <Input
-                value={newAccount}
-                onChange={(event) => setNewAccount(event.target.value)}
-                placeholder="e.g. Forge production"
-                maxLength={60}
-              />
-              <span className="text-xs font-normal text-muted-foreground">
-                This mock adds a sample connection. No credentials required.
-              </span>
-            </label>
+            <FormField className="grid gap-2 text-sm font-medium">
+              <FieldLabel className="contents">
+                Account name
+                <Input
+                  value={newAccount}
+                  onChange={(event) => setNewAccount(event.target.value)}
+                  placeholder="e.g. Forge production"
+                  maxLength={60}
+                />
+                <span className="text-xs font-normal text-muted-foreground">
+                  This mock adds a sample connection. No credentials required.
+                </span>
+              </FieldLabel>
+            </FormField>
           )}
           <div className="grid gap-2 text-sm">
             <p className="font-medium">What changes</p>
@@ -667,31 +711,46 @@ export function CloudsPage() {
               Give a group of services a stable destination.
             </DialogDescription>
           </DialogHeader>
-          <label className="grid gap-2 text-sm font-medium">
-            Target name
-            <Input
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
-              placeholder="e.g. preview"
-              maxLength={40}
-            />
-            <span className="text-xs font-normal text-muted-foreground">
-              Lowercase letters, numbers and hyphens. Start with a letter.
-            </span>
-          </label>
-          <label className="grid gap-2 text-sm font-medium">
-            Provider
-            <select
-              className={selectClass}
-              value={newProvider}
-              onChange={(event) => setNewProvider(event.target.value)}
-            >
-              {initialTargets.map((item) => (
-                <option key={item.provider}>{item.provider}</option>
-              ))}
-              {pools.length > 0 && <option>Server pool</option>}
-            </select>
-          </label>
+          <FormField className="grid gap-2 text-sm font-medium">
+            <FieldLabel className="contents">
+              Target name
+              <Input
+                value={newName}
+                onChange={(event) => setNewName(event.target.value)}
+                placeholder="e.g. preview"
+                maxLength={40}
+              />
+              <span className="text-xs font-normal text-muted-foreground">
+                Lowercase letters, numbers and hyphens. Start with a letter.
+              </span>
+            </FieldLabel>
+          </FormField>
+          <FormField className="grid gap-2 text-sm font-medium">
+            <FieldLabel className="contents">
+              Provider
+              <Select
+                value={newProvider}
+                onValueChange={(event) => setNewProvider(event ?? "")}
+              >
+                <SelectTrigger
+                  aria-label="Provider"
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {initialTargets.map((item) => (
+                    <SelectItem key={item.provider} value={item.provider}>
+                      {item.provider}
+                    </SelectItem>
+                  ))}
+                  {pools.length > 0 && (
+                    <SelectItem value="Server pool">Server pool</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </FieldLabel>
+          </FormField>
           <p className="text-sm text-muted-foreground">
             Connected account:{" "}
             {newProvider === "Server pool"
@@ -700,9 +759,11 @@ export function CloudsPage() {
                   ?.account}
           </p>
           {targets.some((item) => item.name === newName.trim()) && (
-            <p role="alert" className="text-xs text-destructive">
-              That target name is already in use.
-            </p>
+            <Alert variant="destructive" className="text-xs text-destructive">
+              <AlertDescription>
+                That target name is already in use.
+              </AlertDescription>
+            </Alert>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setAdding(false)}>

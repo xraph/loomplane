@@ -1,3 +1,13 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useState } from "react"
 import {
   validExternalTTL,
@@ -10,7 +20,7 @@ import {
   CloudError,
   Field,
   Rows,
-  rowClass,
+  Row,
 } from "@/components/cloud-targets/infrastructure-ui"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -22,7 +32,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
-import { selectClass } from "@/components/cloud-targets/workspace"
 
 type Host = {
   id: string
@@ -245,7 +254,7 @@ export function MockCloudInfrastructure({
           </div>
           <Rows>
             {hosts.map((host) => (
-              <div className={rowClass} key={host.id}>
+              <Row key={host.id}>
                 <div className="grid gap-1">
                   <p className="font-medium">
                     {host.name} · {host.status}
@@ -319,7 +328,7 @@ export function MockCloudInfrastructure({
                       : "Review disconnect"}
                   </Button>
                 </div>
-              </div>
+              </Row>
             ))}
           </Rows>
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted p-3 text-sm">
@@ -338,19 +347,27 @@ export function MockCloudInfrastructure({
             {pool && (
               <>
                 <Field label="Move destination server">
-                  <select
-                    aria-label="Move destination server"
-                    className={selectClass}
+                  <Select
                     value={moveTarget?.id ?? ""}
-                    onChange={(event) => setMoveDestination(event.target.value)}
+                    onValueChange={(event) => setMoveDestination(event ?? "")}
                   >
-                    <option value="">Choose eligible destination</option>
-                    {moveEligible.map((host) => (
-                      <option key={host.id} value={host.id}>
-                        {host.name}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger
+                      aria-label="Move destination server"
+                      className={"w-full min-w-0"}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">
+                        Choose eligible destination
+                      </SelectItem>
+                      {moveEligible.map((host) => (
+                        <SelectItem key={host.id} value={host.id}>
+                          {host.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </Field>
                 {!moveEligible.length && (
                   <p className="basis-full text-xs">
@@ -394,10 +411,12 @@ export function MockCloudInfrastructure({
                     : "Preview service move"}
                 </Button>
                 {moveReviewed && !moveValid && (
-                  <p role="alert" className="basis-full text-xs">
-                    Pool membership, server authority or expiry changed. Review
-                    the move again.
-                  </p>
+                  <Alert variant="destructive" className="basis-full text-xs">
+                    <AlertDescription>
+                      Pool membership, server authority or expiry changed.
+                      Review the move again.
+                    </AlertDescription>
+                  </Alert>
                 )}
                 {moveValid && (
                   <p className="basis-full text-xs">
@@ -556,7 +575,7 @@ export function MockCloudInfrastructure({
           ) : (
             <Rows>
               {domains.map((domain) => (
-                <div key={domain.hostname} className={rowClass}>
+                <Row key={domain.hostname}>
                   <div className="grid gap-1">
                     <p className="font-medium break-all">
                       {domain.hostname} · {domain.status}
@@ -619,7 +638,7 @@ export function MockCloudInfrastructure({
                       Remove route
                     </Button>
                   </div>
-                </div>
+                </Row>
               ))}
             </Rows>
           )}
@@ -634,7 +653,7 @@ export function MockCloudInfrastructure({
           </p>
           <Rows>
             {["Web app", "Jobs"].map((project) => (
-              <div key={project} className={rowClass}>
+              <Row key={project}>
                 <div>
                   <p>{project}</p>
                   <p className="text-xs text-muted-foreground">
@@ -659,7 +678,7 @@ export function MockCloudInfrastructure({
                 >
                   {grant.includes(project) ? "Revoke access" : "Give access"}
                 </Button>
-              </div>
+              </Row>
             ))}
           </Rows>
         </section>
@@ -683,9 +702,9 @@ export function MockCloudInfrastructure({
           {events.length ? (
             <Rows>
               {events.map((event, i) => (
-                <p className="p-3 text-[13px]" key={i}>
+                <Row className="p-3 text-[13px]" key={i}>
                   {event}
-                </p>
+                </Row>
               ))}
             </Rows>
           ) : (
@@ -793,29 +812,43 @@ export function MockCloudInfrastructure({
                 </Field>
                 {["resize", "create"].includes(editing.kind) && (
                   <Field label="Size">
-                    <select
-                      aria-label="Server size"
-                      className={selectClass}
+                    <Select
                       value={size}
-                      onChange={(e) => {
-                        setSize(e.target.value)
+                      onValueChange={(e) => {
+                        setSize(e ?? "")
                         setReview(null)
                       }}
                     >
-                      <option>2 CPU / 4 GiB</option>
-                      <option>4 CPU / 8 GiB</option>
-                    </select>
+                      <SelectTrigger
+                        aria-label="Server size"
+                        className={"w-full min-w-0"}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="2 CPU / 4 GiB">
+                          2 CPU / 4 GiB
+                        </SelectItem>
+                        <SelectItem value="4 CPU / 8 GiB">
+                          4 CPU / 8 GiB
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                   </Field>
                 )}
                 {editing.kind === "adopt" && (
-                  <label className="flex items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={confirmed}
-                      onChange={(e) => setConfirmed(e.target.checked)}
-                    />
-                    Confirm pinned SSH access and Docker installation
-                  </label>
+                  <FormField
+                    orientation="horizontal"
+                    className="flex items-center gap-2 text-xs"
+                  >
+                    <FieldLabel className="contents">
+                      <Checkbox
+                        checked={confirmed}
+                        onCheckedChange={(e) => setConfirmed(e)}
+                      />
+                      Confirm pinned SSH access and Docker installation
+                    </FieldLabel>
+                  </FormField>
                 )}
                 {editing.server && (
                   <p className="text-xs">
@@ -889,30 +922,34 @@ export function MockCloudInfrastructure({
                     key={host.id}
                     className="grid gap-2 rounded-lg bg-muted p-3"
                   >
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={!!member}
-                        onChange={(e) =>
-                          setPoolMembers(
-                            e.target.checked
-                              ? [
-                                  ...poolMembers,
-                                  {
-                                    serverId: host.id,
-                                    cpuMillis: 1000,
-                                    memoryMib: 2048,
-                                    draining: host.draining,
-                                  },
-                                ]
-                              : poolMembers.filter(
-                                  (m) => m.serverId !== host.id
-                                )
-                          )
-                        }
-                      />
-                      {host.name}
-                    </label>
+                    <FormField
+                      orientation="horizontal"
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <FieldLabel className="contents">
+                        <Checkbox
+                          checked={!!member}
+                          onCheckedChange={(e) =>
+                            setPoolMembers(
+                              e
+                                ? [
+                                    ...poolMembers,
+                                    {
+                                      serverId: host.id,
+                                      cpuMillis: 1000,
+                                      memoryMib: 2048,
+                                      draining: host.draining,
+                                    },
+                                  ]
+                                : poolMembers.filter(
+                                    (m) => m.serverId !== host.id
+                                  )
+                            )
+                          }
+                        />
+                        {host.name}
+                      </FieldLabel>
+                    </FormField>
                     {member && (
                       <div className="grid gap-2 sm:grid-cols-2">
                         <Field label="CPU budget (millicores)">
@@ -1000,18 +1037,26 @@ export function MockCloudInfrastructure({
               />
             </Field>
             <Field label="DNS mode">
-              <select
-                aria-label="DNS mode"
-                className={selectClass}
+              <Select
                 value={mode}
-                onChange={(e) => {
-                  setMode(e.target.value)
+                onValueChange={(e) => {
+                  setMode(e ?? "")
                   setRouteReview(false)
                 }}
               >
-                <option value="external">External DNS</option>
-                <option value="managed">Managed DNS, separate account</option>
-              </select>
+                <SelectTrigger
+                  aria-label="DNS mode"
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="external">External DNS</SelectItem>
+                  <SelectItem value="managed">
+                    Managed DNS, separate account
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             {mode === "external" && (
               <Field label="Maximum previously served TTL (seconds)">
@@ -1029,9 +1074,11 @@ export function MockCloudInfrastructure({
               </Field>
             )}
             {!zoneVerified && (
-              <p role="alert" className="text-xs">
-                Save and verify the DNS zone before reviewing a route.
-              </p>
+              <Alert variant="destructive" className="text-xs">
+                <AlertDescription>
+                  Save and verify the DNS zone before reviewing a route.
+                </AlertDescription>
+              </Alert>
             )}
             {routeReview && (
               <p className="rounded-lg bg-muted p-3 text-sm">

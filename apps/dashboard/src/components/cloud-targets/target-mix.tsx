@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge"
 // A Cloud can spread its targets over any number of connected accounts,
 // several of one provider among them. These show that spread: which
 // accounts a Cloud's targets point at, grouped by provider.
@@ -64,16 +65,17 @@ export function AccountSummary({
         </span>
       )}
       {list.map((g) => (
-        <span
+        <Badge
+          variant="outline"
           key={g.cloud}
-          className="inline-flex h-7 items-center gap-2 rounded-[9px] bg-card pr-2.5 pl-1 text-[12.5px] ring-1 ring-border"
+          className="h-7 gap-2 pr-2.5 pl-1"
         >
           <CloudGlyph cloud={g.cloud} size="xs" />
           <span className="font-medium">{cloudLabel(g.cloud)}</span>
           <span className="text-muted-foreground">
             {plural(g.accounts.size, "account")}
           </span>
-        </span>
+        </Badge>
       ))}
     </div>
   )

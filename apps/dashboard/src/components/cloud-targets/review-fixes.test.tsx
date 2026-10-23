@@ -148,19 +148,15 @@ it("stages a 15-minute move and links to the existing deployment planner with th
   await user.click(
     await screen.findByRole("button", { name: "Review service move" })
   )
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Move project" }),
-    "p"
+  await user.click(screen.getByRole("combobox", { name: "Move project" }))
+  await user.click(await screen.findByRole("option", { name: /Project/ }))
+  await user.click(
+    await screen.findByRole("combobox", { name: "Route environment" })
   )
-  await user.selectOptions(
-    await screen.findByRole("combobox", { name: "Route environment" }),
-    "env-id"
-  )
+  await user.click(await screen.findByRole("option", { name: /production/ }))
   await user.type(screen.getByRole("textbox", { name: "Move service" }), "api")
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Destination server" }),
-    "host"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Destination server" }))
+  await user.click(await screen.findByRole("option", { name: /Host/ }))
   await user.click(screen.getByRole("button", { name: "Preview move" }))
   await user.click(
     await screen.findByRole("button", { name: "Accept reviewed move" })
@@ -205,11 +201,12 @@ it.each(["projects", "providers", "connections"])(
     await user.click(
       await screen.findByRole("button", { name: "Add DNS zone" })
     )
-    if (failure !== "projects")
-      await user.selectOptions(
-        screen.getByRole("combobox", { name: "DNS mode" }),
-        "managed"
+    if (failure !== "projects") {
+      await user.click(screen.getByRole("combobox", { name: "DNS mode" }))
+      await user.click(
+        await screen.findByRole("option", { name: /Managed DNS/ })
       )
+    }
     expect(
       await screen.findByText(new RegExp(`${failure} unavailable`, "i"))
     ).toBeInTheDocument()
