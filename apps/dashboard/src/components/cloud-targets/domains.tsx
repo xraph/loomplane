@@ -22,10 +22,15 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
+import {
+  validExternalTTL,
+  canUpdateExternalTTL,
+} from "@/lib/cloud-infrastructure"
 import { useNow } from "@/lib/use-runs"
 import { useOrganization } from "@/lib/organization"
 import { selectClass } from "./workspace"
 import {
+  SetupReads,
   CloudEmpty,
   CloudError,
   Field,
@@ -217,25 +222,36 @@ function Zones({ onCreate }: { onCreate: () => void }) {
                 Choose which projects may use {editing.name}.
               </DialogDescription>
             </DialogHeader>
-            {projects.data?.projects.map((p) => (
-              <label className="flex items-center gap-2 text-sm" key={p.id}>
-                <input
-                  type="checkbox"
-                  checked={projectIds.includes(p.id)}
-                  onChange={(e) =>
-                    setProjects(
-                      e.target.checked
-                        ? [...projectIds, p.id]
-                        : projectIds.filter((id) => id !== p.id)
-                    )
-                  }
-                />
-                {p.name}
-              </label>
-            ))}
+            <SetupReads reads={[{ label: "Projects", query: projects }]}>
+              {projects.data?.projects.length === 0 && (
+                <CloudEmpty title="No projects available">
+                  Create a project before changing zone access.
+                </CloudEmpty>
+              )}
+              {projects.data?.projects.map((p) => (
+                <label className="flex items-center gap-2 text-sm" key={p.id}>
+                  <input
+                    type="checkbox"
+                    checked={projectIds.includes(p.id)}
+                    onChange={(e) =>
+                      setProjects(
+                        e.target.checked
+                          ? [...projectIds, p.id]
+                          : projectIds.filter((id) => id !== p.id)
+                      )
+                    }
+                  />
+                  {p.name}
+                </label>
+              ))}
+            </SetupReads>
             <CloudError message={error} />
             <Button
-              disabled={update.isPending}
+              disabled={
+                update.isPending ||
+                projects.status !== "success" ||
+                !projects.data?.projects.length
+              }
               onClick={() => void act(editing, "save")}
             >
               Save zone access
@@ -323,60 +339,85 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
               </select>
             </Field>
             {input.mode === "managed" && (
-              <Field label="DNS account">
-                <select
-                  aria-label="DNS account"
-                  className={selectClass}
-                  value={input.connectionId ?? ""}
-                  onChange={(e) =>
-                    setInput({ ...input, connectionId: e.target.value })
-                  }
-                >
-                  <option value="">Choose DNS account</option>
-                  {accounts.map((c) => (
-                    <option value={c.id} key={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              <SetupReads
+                reads={[
+                  { label: "Providers", query: providers },
+                  { label: "Connections", query: connections },
+                ]}
+              >
+                {accounts.length === 0 ? (
+                  <CloudEmpty
+                    title="No eligible DNS accounts"
+                    action={
+                      <Button
+                        nativeButton={false}
+                        render={<Link to="/integrations" />}
+                      >
+                        Open Integrations
+                      </Button>
+                    }
+                  >
+                    Connect a ready account that supports DNS record updates.
+                  </CloudEmpty>
+                ) : (
+                  <Field label="DNS account">
+                    <select
+                      aria-label="DNS account"
+                      className={selectClass}
+                      value={input.connectionId ?? ""}
+                      onChange={(e) =>
+                        setInput({ ...input, connectionId: e.target.value })
+                      }
+                    >
+                      <option value="">Choose DNS account</option>
+                      {accounts.map((c) => (
+                        <option value={c.id} key={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+              </SetupReads>
             )}
             <div className="grid gap-2 text-xs">
               <span>Projects allowed to use this zone</span>
-              {projects.data?.projects.length === 0 && (
-                <CloudEmpty
-                  title="Create a project for this zone"
-                  action={
-                    <Button
-                      nativeButton={false}
-                      variant="outline"
-                      render={<Link to="/projects" />}
-                    >
-                      Open projects
-                    </Button>
-                  }
-                >
-                  DNS zones require explicit project grants. Create a project,
-                  then return to choose its access.
-                </CloudEmpty>
-              )}
-              {projects.data?.projects.map((p) => (
-                <label key={p.id} className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={input.projectIds.includes(p.id)}
-                    onChange={(e) =>
-                      setInput({
-                        ...input,
-                        projectIds: e.target.checked
-                          ? [...input.projectIds, p.id]
-                          : input.projectIds.filter((id) => id !== p.id),
-                      })
+              <SetupReads reads={[{ label: "Projects", query: projects }]}>
+                {projects.data?.projects.length === 0 && (
+                  <CloudEmpty
+                    title="Create a project for this zone"
+                    action={
+                      <Button
+                        nativeButton={false}
+                        variant="outline"
+                        render={<Link to="/projects" />}
+                      >
+                        Open projects
+                      </Button>
                     }
-                  />
-                  {p.name}
-                </label>
-              ))}
+                  >
+                    DNS zones require explicit project grants. Create a project,
+                    then return to choose its access.
+                  </CloudEmpty>
+                )}
+                {projects.data?.projects.map((p) => (
+                  <label key={p.id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={input.projectIds.includes(p.id)}
+                      onChange={(e) =>
+                        setInput({
+                          ...input,
+                          projectIds: e.target.checked
+                            ? [...input.projectIds, p.id]
+                            : input.projectIds.filter((id) => id !== p.id),
+                        })
+                      }
+                    />
+                    {p.name}
+                  </label>
+                ))}
+              </SetupReads>
             </div>
             <CloudError message={error} />
             <DialogFooter>
@@ -386,6 +427,10 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
               <Button
                 disabled={
                   create.isPending ||
+                  projects.status !== "success" ||
+                  (input.mode === "managed" &&
+                    (providers.status !== "success" ||
+                      connections.status !== "success")) ||
                   !input.projectIds.length ||
                   !input.name.trim() ||
                   (input.mode === "managed" && !input.connectionId)
@@ -470,13 +515,12 @@ function ProjectRoutes({
                   Inspect route
                 </Button>
                 {can("infrastructure:modify") &&
-                  route.status === "ready" &&
-                  (route.input.externalTtlSeconds !== undefined ||
-                    zones.data?.zones.some(
-                      (zone) =>
-                        zone.id === route.input.zoneId &&
-                        zone.mode === "external"
-                    )) && (
+                  canUpdateExternalTTL(
+                    route.status,
+                    zones.data?.zones.find(
+                      (zone) => zone.id === route.input.zoneId
+                    )?.mode
+                  ) && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -602,11 +646,7 @@ function TTLDialog({
           )}
           <Button
             disabled={
-              stale ||
-              update.isPending ||
-              !Number.isInteger(Number(ttl)) ||
-              Number(ttl) < 60 ||
-              Number(ttl) > 86400
+              stale || update.isPending || !validExternalTTL(Number(ttl))
             }
             onClick={() => void save()}
           >
@@ -779,9 +819,7 @@ function RouteEditor({
                 !input.service ||
                 !input.zoneId ||
                 (zone?.mode === "external" &&
-                  (!input.externalTtlSeconds ||
-                    input.externalTtlSeconds < 60 ||
-                    input.externalTtlSeconds > 86400))
+                  !validExternalTTL(input.externalTtlSeconds ?? 0))
               }
               onClick={() => void act()}
             >

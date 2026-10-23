@@ -1,4 +1,6 @@
 import { useEffect, type ReactNode } from "react"
+import { statusOf } from "@/client/errors"
+import { QueryError } from "@/components/query-error"
 import { CloudIcon } from "lucide-react"
 import {
   ZeroState,
@@ -117,4 +119,47 @@ export function useInfrastructureRefresh(
     }, 5000)
     return () => window.clearInterval(timer)
   }, [active, refetch])
+}
+
+/** Setup selectors must not turn a failed read into an empty choice list. */
+export function SetupReads({
+  reads,
+  children,
+}: {
+  reads: {
+    label: string
+    query: {
+      status: string
+      data?: unknown
+      error?: unknown
+      refetch: () => Promise<unknown>
+    }
+  }[]
+  children: ReactNode
+}) {
+  const failed = reads.filter((read) => read.query.status === "error")
+  if (failed.length)
+    return (
+      <div className="grid gap-2">
+        {failed.map(({ label, query }) => (
+          <div key={label}>
+            {statusOf(query.error) === 403 && (
+              <p className="mb-1 text-xs">{label} access is restricted.</p>
+            )}
+            <QueryError
+              error={query.error}
+              fallback={`${label} couldn't be loaded.`}
+              retry={query.refetch}
+            />
+          </div>
+        ))}
+      </div>
+    )
+  if (reads.some((read) => !read.query.data))
+    return (
+      <p role="status">
+        Loading {reads.map((read) => read.label.toLowerCase()).join(", ")}...
+      </p>
+    )
+  return children
 }

@@ -1,4 +1,9 @@
 import { useState } from "react"
+import {
+  validExternalTTL,
+  canUpdateExternalTTL,
+} from "@/lib/cloud-infrastructure"
+import { useNow } from "@/lib/use-runs"
 import type { CloudTab } from "@/components/cloud-targets/infrastructure-ui"
 import {
   CloudEmpty,
@@ -37,6 +42,13 @@ type Domain = {
   backend: boolean
   ttl: number
   revision: number
+}
+type MovePin = {
+  sourceId: string
+  destinationId: string
+  workloads: number
+  authority: string
+  expiresAt: number
 }
 type Review = {
   kind: string
@@ -85,7 +97,9 @@ export function MockCloudInfrastructure({
       draining: h.draining,
     }))
   )
-  const [moveReviewed, setMoveReviewed] = useState(false)
+  const [moveReviewed, setMoveReviewed] = useState<MovePin | null>(null)
+  const [moveDestination, setMoveDestination] = useState("")
+  const [movePlanned, setMovePlanned] = useState(false)
   const [moveAccepted, setMoveAccepted] = useState(false)
   const [retained, setRetained] = useState(true)
   const [grant, setGrant] = useState(["Web app"])
@@ -108,6 +122,41 @@ export function MockCloudInfrastructure({
   const [zone, setZone] = useState(false)
   const [zoneVerified, setZoneVerified] = useState(false)
   const [routeReview, setRouteReview] = useState(false)
+  const now = useNow()
+  const moveSource = hosts.find((host) => host.draining && host.workloads > 0)
+  const moveEligible = hosts.filter(
+    (host) =>
+      host.status === "ready" &&
+      !host.draining &&
+      host.id !== moveSource?.id &&
+      poolMembers.some(
+        (member) => member.serverId === host.id && !member.draining
+      )
+  )
+  const moveTarget = moveDestination
+    ? moveEligible.find((host) => host.id === moveDestination)
+    : moveEligible[0]
+  const moveAuthority = JSON.stringify({
+    generation,
+    members: poolMembers,
+    hosts: hosts.map((host) => [
+      host.id,
+      host.status,
+      host.draining,
+      host.ownership,
+      host.size,
+      host.workloads,
+    ]),
+  })
+  const currentMove = (at: number) =>
+    !!moveReviewed &&
+    moveReviewed.authority === moveAuthority &&
+    moveReviewed.sourceId === moveSource?.id &&
+    moveReviewed.destinationId === moveTarget?.id &&
+    moveReviewed.workloads === moveSource?.workloads &&
+    at < moveReviewed.expiresAt
+  const moveValid = currentMove(now)
+
   const record = (event: string) => setEvents((events) => [event, ...events])
   const open = (kind: string, server?: Host) => {
     setEditing({ kind, server })
@@ -287,59 +336,136 @@ export function MockCloudInfrastructure({
               {pool ? "Edit pool budgets" : "Add pool"}
             </Button>
             {pool && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={
-                  !hosts.some((h) => h.draining && h.workloads > 0) ||
-                  moveAccepted
-                }
-                onClick={() => {
-                  if (!moveReviewed) {
-                    setMoveReviewed(true)
-                    return
+              <>
+                <Field label="Move destination server">
+                  <select
+                    aria-label="Move destination server"
+                    className={selectClass}
+                    value={moveTarget?.id ?? ""}
+                    onChange={(event) => setMoveDestination(event.target.value)}
+                  >
+                    <option value="">Choose eligible destination</option>
+                    {moveEligible.map((host) => (
+                      <option key={host.id} value={host.id}>
+                        {host.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                {!moveEligible.length && (
+                  <p className="basis-full text-xs">
+                    No eligible destination. Add a ready, non-draining server to
+                    this pool.
+                  </p>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    !moveSource || !moveTarget || (moveAccepted && moveValid)
                   }
-                  setMoveAccepted(true)
-                  record(
-                    "Reviewed api move accepted. Desired destination advanced; prior applied release and routes still serve."
-                  )
-                }}
-              >
-                {moveReviewed
-                  ? "Accept reviewed service move"
-                  : "Preview service move"}
-              </Button>
-            )}
-            {moveReviewed && !moveAccepted && (
-              <p className="basis-full text-xs">
-                Move Web app / api from shared-us-1 to shared-us-2. Persisted
-                release and route authority are pinned; storage migration stays
-                explicit.
-              </p>
-            )}
-            {moveAccepted && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setHosts(
-                    hosts.map((h) =>
-                      h.draining
-                        ? { ...h, workloads: 0 }
-                        : h.id === "us-2"
-                          ? { ...h, workloads: h.workloads + 2 }
-                          : h
+                  onClick={() => {
+                    if (!currentMove(Date.now())) {
+                      if (!moveSource || !moveTarget) return
+                      setMoveReviewed({
+                        sourceId: moveSource.id,
+                        destinationId: moveTarget.id,
+                        workloads: moveSource.workloads,
+                        authority: moveAuthority,
+                        expiresAt: Date.now() + 15 * 60 * 1000,
+                      })
+                      setMoveAccepted(false)
+                      setMovePlanned(false)
+                      return
+                    }
+                    setMoveReviewed((pin) =>
+                      pin
+                        ? { ...pin, expiresAt: Date.now() + 15 * 60 * 1000 }
+                        : null
                     )
-                  )
-                  setMoveAccepted(false)
-                  setMoveReviewed(false)
-                  record(
-                    "Destination release and routes verified. Applied placement advanced; retained cleanup still needs recovery."
-                  )
-                }}
-              >
-                Verify moved release and routes
-              </Button>
+                    setMoveAccepted(true)
+                    record(
+                      `Reviewed api move staged for ${moveTarget?.name}. Source still serves until a deployment plan is reviewed.`
+                    )
+                  }}
+                >
+                  {moveValid
+                    ? "Accept reviewed service move"
+                    : "Preview service move"}
+                </Button>
+                {moveReviewed && !moveValid && (
+                  <p role="alert" className="basis-full text-xs">
+                    Pool membership, server authority or expiry changed. Review
+                    the move again.
+                  </p>
+                )}
+                {moveValid && (
+                  <p className="basis-full text-xs">
+                    Move Web app / api from {moveSource?.name} to{" "}
+                    {moveTarget?.name}, {moveReviewed?.workloads} workloads.
+                    Persisted release and destination authority are pinned;
+                    storage migration stays explicit.
+                  </p>
+                )}
+                {moveAccepted && moveValid && (
+                  <>
+                    <p role="status" className="basis-full text-xs">
+                      Move intent staged. It expires 15 minutes after
+                      acceptance.{" "}
+                      {movePlanned
+                        ? "Deployment plan awaits review; the source still serves."
+                        : "No deployment has started; the source still serves."}
+                    </p>
+                    {!movePlanned ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          if (!currentMove(Date.now())) return
+                          setMovePlanned(true)
+                          record(
+                            "Deployment plan created for review. The source still serves."
+                          )
+                        }}
+                      >
+                        Create deployment plan
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          if (!currentMove(Date.now()) || !moveReviewed) return
+                          const pin = moveReviewed
+                          setHosts(
+                            hosts.map((host) =>
+                              host.id === pin.sourceId
+                                ? {
+                                    ...host,
+                                    workloads: host.workloads - pin.workloads,
+                                  }
+                                : host.id === pin.destinationId
+                                  ? {
+                                      ...host,
+                                      workloads: host.workloads + pin.workloads,
+                                    }
+                                  : host
+                            )
+                          )
+                          setMoveAccepted(false)
+                          setMovePlanned(false)
+                          setMoveReviewed(null)
+                          record(
+                            "Reviewed deployment completed: destination release and routes verified. Retained cleanup still needs recovery."
+                          )
+                        }}
+                      >
+                        Simulate reviewed deployment completion
+                      </Button>
+                    )}
+                  </>
+                )}
+              </>
             )}
             {retained && (
               <>
@@ -467,18 +593,20 @@ export function MockCloudInfrastructure({
                         Retry route operation
                       </Button>
                     )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setHostname(domain.hostname)
-                        setTTL(String(domain.ttl))
-                        setEditing({ kind: "ttl" })
-                        setError("")
-                      }}
-                    >
-                      Update external TTL
-                    </Button>
+                    {canUpdateExternalTTL(domain.status, domain.mode) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setHostname(domain.hostname)
+                          setTTL(String(domain.ttl))
+                          setEditing({ kind: "ttl" })
+                          setError("")
+                        }}
+                      >
+                        Update external TTL
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -593,7 +721,8 @@ export function MockCloudInfrastructure({
                   <Input
                     aria-label="Maximum previously served TTL (seconds)"
                     type="number"
-                    min={1}
+                    min={60}
+                    max={86400}
                     value={ttl}
                     onChange={(e) => setTTL(e.target.value)}
                   />
@@ -603,8 +732,17 @@ export function MockCloudInfrastructure({
                   resolver response cannot establish this bound.
                 </p>
                 <Button
-                  disabled={Number(ttl) <= 0}
+                  disabled={!validExternalTTL(Number(ttl))}
                   onClick={() => {
+                    const route = domains.find(
+                      (domain) => domain.hostname === hostname
+                    )
+                    if (
+                      !route ||
+                      !canUpdateExternalTTL(route.status, route.mode) ||
+                      !validExternalTTL(Number(ttl))
+                    )
+                      return
                     setDomains(
                       domains.map((d) =>
                         d.hostname === hostname
@@ -880,7 +1018,8 @@ export function MockCloudInfrastructure({
                 <Input
                   aria-label="Maximum previously served TTL (seconds)"
                   type="number"
-                  min={1}
+                  min={60}
+                  max={86400}
                   value={ttl}
                   onChange={(e) => {
                     setTTL(e.target.value)
@@ -901,8 +1040,14 @@ export function MockCloudInfrastructure({
               </p>
             )}
             <Button
-              disabled={!zoneVerified || !hostname || Number(ttl) <= 0}
+              disabled={
+                !zoneVerified ||
+                !hostname ||
+                (mode === "external" && !validExternalTTL(Number(ttl)))
+              }
               onClick={() => {
+                if (mode === "external" && !validExternalTTL(Number(ttl)))
+                  return
                 if (!routeReview) {
                   setRouteReview(true)
                   return
@@ -912,7 +1057,7 @@ export function MockCloudInfrastructure({
                   {
                     hostname,
                     mode,
-                    ttl: Number(ttl),
+                    ttl: mode === "external" ? Number(ttl) : 300,
                     status: "pending",
                     dns: false,
                     tls: false,

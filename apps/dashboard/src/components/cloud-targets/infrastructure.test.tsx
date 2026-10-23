@@ -68,7 +68,19 @@ function fixture(stale = false) {
       if (path.endsWith("/pools")) return Response.json({ pools: [] })
       if (path.endsWith("/infrastructure-operations"))
         return Response.json({ operations: [] })
-      if (path.endsWith("/dns-zones")) return Response.json({ zones: [] })
+      if (path.endsWith("/dns-zones"))
+        return Response.json({
+          zones: path.includes("/projects/")
+            ? [
+                {
+                  id: "external",
+                  name: "example.test",
+                  mode: "external",
+                  verified: true,
+                },
+              ]
+            : [],
+        })
       if (path.endsWith("/domain-routes"))
         return Response.json({
           routes: [
@@ -80,6 +92,7 @@ function fixture(stale = false) {
               input: {
                 cloud_id: "c",
                 hostname: "app.example.test",
+                zone_id: "external",
                 service: "api",
                 environment_id: "env",
                 external_ttl_seconds: 300,
@@ -267,7 +280,19 @@ it("uses an independent DNS account and an explicit project grant when saving a 
         })
       if (path.endsWith("/projects"))
         return Response.json({ projects: [{ id: "p", name: "Web app" }] })
-      if (path.endsWith("/dns-zones")) return Response.json({ zones: [] })
+      if (path.endsWith("/dns-zones"))
+        return Response.json({
+          zones: path.includes("/projects/")
+            ? [
+                {
+                  id: "external",
+                  name: "example.test",
+                  mode: "external",
+                  verified: true,
+                },
+              ]
+            : [],
+        })
       return Response.json({ routes: [] })
     }
   )

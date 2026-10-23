@@ -10,6 +10,7 @@ import type {
   ReservationRecovery,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
+import { Link } from "@/lib/router"
 import { messageOf } from "@/client/errors"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -24,6 +25,7 @@ import {
 import { QueryError } from "@/components/query-error"
 import { selectClass } from "./workspace"
 import {
+  SetupReads,
   CloudEmpty,
   CloudError,
   Field,
@@ -333,6 +335,7 @@ function MoveEditor({
   const [review, setReview] = useState<MoveReview | null>(null)
   const [error, setError] = useState("")
   const [accepted, setAccepted] = useState(false)
+  const [environmentName, setEnvironmentName] = useState("")
   const change = (p: Partial<MoveInputBody>) => {
     setInput({ ...input, ...p })
     setReview(null)
@@ -374,34 +377,78 @@ function MoveEditor({
           </DialogDescription>
         </DialogHeader>
         {accepted ? (
-          <p role="status">
-            Move accepted. Review applied deployment and routes in the project's
-            Activity before treating the destination as serving.
-          </p>
+          <div className="grid gap-3 text-sm">
+            <p role="status">
+              Move intent staged for {input.service}. It expires 15 minutes
+              after acceptance. No deployment has started; the source still
+              serves.
+            </p>
+            <p>
+              Create and review a deployment plan for this project and
+              environment before the intent expires. The plan consumes the
+              reviewed destination intent and checks current capacity.
+            </p>
+            <Button
+              nativeButton={false}
+              render={
+                <Link
+                  to="/deployments/new"
+                  search={{
+                    project: input.projectId,
+                    environment: environmentName,
+                  }}
+                />
+              }
+            >
+              Create deployment plan
+            </Button>
+          </div>
         ) : (
           <>
-            <Field label="Move project">
-              <select
-                aria-label="Move project"
-                className={selectClass}
-                value={input.projectId}
-                onChange={(e) =>
-                  change({ projectId: e.target.value, environmentId: "" })
-                }
-              >
-                <option value="">Choose project</option>
-                {projects.data?.projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            <SetupReads reads={[{ label: "Projects", query: projects }]}>
+              {projects.data?.projects.length === 0 ? (
+                <CloudEmpty
+                  title="No projects for this move"
+                  action={
+                    <Button
+                      nativeButton={false}
+                      render={<Link to="/projects" />}
+                    >
+                      Open projects
+                    </Button>
+                  }
+                >
+                  Create a project and deploy its service before reviewing a
+                  move.
+                </CloudEmpty>
+              ) : (
+                <Field label="Move project">
+                  <select
+                    aria-label="Move project"
+                    className={selectClass}
+                    value={input.projectId}
+                    onChange={(e) =>
+                      change({ projectId: e.target.value, environmentId: "" })
+                    }
+                  >
+                    <option value="">Choose project</option>
+                    {projects.data?.projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+            </SetupReads>
             {input.projectId && (
               <MoveEnvironment
                 projectId={input.projectId}
                 value={input.environmentId}
-                onChange={(environmentId) => change({ environmentId })}
+                onChange={(environmentId, name) => {
+                  setEnvironmentName(name ?? "")
+                  change({ environmentId })
+                }}
               />
             )}
             <Field label="Service">
@@ -442,6 +489,8 @@ function MoveEditor({
               disabled={
                 preview.isPending ||
                 apply.isPending ||
+                projects.status !== "success" ||
+                !environmentName ||
                 !input.environmentId ||
                 !input.service ||
                 !input.destinationServerId
@@ -464,34 +513,41 @@ export function MoveEnvironment({
 }: {
   projectId: string
   value: string
-  onChange: (v: string) => void
+  onChange: (v: string, name?: string) => void
 }) {
   const environments = useQuery(api.useEnvironmentsList, {
     path: { id: projectId },
   })
   return (
     <Field label="Environment">
-      {environments.status === "error" ? (
-        <QueryError
-          error={environments.error}
-          fallback="Environments couldn't be loaded."
-          retry={environments.refetch}
-        />
-      ) : (
-        <select
-          aria-label="Route environment"
-          className={selectClass}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">Choose environment</option>
-          {environments.data?.environments.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.name}
-            </option>
-          ))}
-        </select>
-      )}
+      <SetupReads reads={[{ label: "Environments", query: environments }]}>
+        {environments.data?.environments.length === 0 ? (
+          <CloudEmpty title="No environments">
+            Add an environment in this project before reviewing a route or move.
+          </CloudEmpty>
+        ) : (
+          <select
+            aria-label="Route environment"
+            className={selectClass}
+            value={value}
+            onChange={(event) =>
+              onChange(
+                event.target.value,
+                environments.data?.environments.find(
+                  (environment) => environment.id === event.target.value
+                )?.name
+              )
+            }
+          >
+            <option value="">Choose environment</option>
+            {environments.data?.environments.map((environment) => (
+              <option key={environment.id} value={environment.id}>
+                {environment.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </SetupReads>
     </Field>
   )
 }
@@ -522,13 +578,30 @@ export function Recovery({
         ...(review ? { review: review.review } : {}),
       }
       if (review) {
-        setReview(
-          (await recover.mutateAsync({
-            path: { cloudId },
-            body,
-          })) as ReservationRecovery
-        )
+        const recovered = (await recover.mutateAsync({
+          path: { cloudId },
+          body,
+        })) as ReservationRecovery
+        setReview(recovered)
         setDone(true)
+        try {
+          await Promise.all([
+            api
+              .useCloudServersUsage({
+                path: { cloudId, serverId: recovered.serverId },
+              })
+              .refetch(),
+            api.useCloudServersList({ path: { cloudId } }).refetch(),
+            api.useCloudPoolsList({ path: { cloudId } }).refetch(),
+          ])
+        } catch (refreshError) {
+          setError(
+            messageOf(
+              refreshError,
+              "Recovery was recorded, but current usage couldn't be refreshed. Reopen the server and retry its usage read."
+            )
+          )
+        }
       } else
         setReview(
           (await preview.mutateAsync({
