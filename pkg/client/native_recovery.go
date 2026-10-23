@@ -27,19 +27,20 @@ type NativeRecoverySource struct {
 	Error         string     `json:"error,omitempty"`
 }
 type NativeRecoveryPoint struct {
-	ID         string    `json:"id"`
-	SourceID   string    `json:"source_id"`
-	ProviderID string    `json:"provider_id"`
-	Name       string    `json:"name"`
-	Kind       string    `json:"kind"`
-	Status     string    `json:"status"`
-	Engine     string    `json:"engine"`
-	Version    string    `json:"version"`
-	CreatedAt  time.Time `json:"created_at"`
-	Encrypted  bool      `json:"encrypted"`
-	KMSKey     string    `json:"kms_key,omitempty"`
-	Present    bool      `json:"present"`
-	LastSeenAt time.Time `json:"last_seen_at"`
+	ID         string     `json:"id"`
+	SourceID   string     `json:"source_id"`
+	ProviderID string     `json:"provider_id"`
+	Name       string     `json:"name"`
+	Kind       string     `json:"kind"`
+	Status     string     `json:"status"`
+	Engine     string     `json:"engine"`
+	Version    string     `json:"version"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  *time.Time `json:"expires_at"`
+	Encrypted  bool       `json:"encrypted"`
+	KMSKey     string     `json:"kms_key,omitempty"`
+	Present    bool       `json:"present"`
+	LastSeenAt time.Time  `json:"last_seen_at"`
 }
 type NativeRecoverySources struct {
 	Sources    []NativeRecoverySource `json:"sources"`

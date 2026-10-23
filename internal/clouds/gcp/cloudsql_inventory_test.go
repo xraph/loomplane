@@ -7,7 +7,72 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCloudSQLBackupInventoryRejectsContradictoryExpiry(t *testing.T) {
+	for _, expiry := range []string{"not-a-time", "0001-01-01T00:00:00Z", "2026-10-21T01:00:00Z", "2026-10-21T02:00:00Z", "2026-10-21T02:00:00.5Z"} {
+		t.Run(expiry, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				point := sqlBackupFixture()
+				point["expiryTime"] = expiry
+				_ = json.NewEncoder(w).Encode(map[string]any{"backups": []any{point}})
+			}))
+			defer srv.Close()
+			s := &Session{c: New(srv.URL), key: &Key{ProjectID: "project"}, http: srv.Client()}
+			original := &SQLInstance{Name: "database", Project: "project", Region: "europe-west1", ConnectionName: "project:europe-west1:database", CreateTime: "2026-10-21T00:00:00Z"}
+			pin, err := original.Incarnation("project", "europe-west1", "database")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, complete, readErr := s.ListSQLBackups(t.Context(), "europe-west1", "database", pin); readErr == nil || complete {
+				t.Fatalf("untrusted expiry accepted: complete=%v err=%v", complete, readErr)
+			}
+		})
+	}
+}
+
+func TestCloudSQLBackupInventoryKeepsReportedExpiryWithoutAssumingRetention(t *testing.T) {
+	for _, expiry := range []string{"", "2026-10-21T03:00:00Z", "2099-10-21T03:00:00+01:00"} {
+		t.Run(expiry, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				point := sqlBackupFixture()
+				point["ttlDays"] = "30"
+				if expiry != "" {
+					point["expiryTime"] = expiry
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"backups": []any{point}})
+			}))
+			defer srv.Close()
+			s := &Session{c: New(srv.URL), key: &Key{ProjectID: "project"}, http: srv.Client()}
+			original := &SQLInstance{Name: "database", Project: "project", Region: "europe-west1", ConnectionName: "project:europe-west1:database", CreateTime: "2026-10-21T00:00:00Z"}
+			pin, err := original.Incarnation("project", "europe-west1", "database")
+			if err != nil {
+				t.Fatal(err)
+			}
+			points, complete, err := s.ListSQLBackups(t.Context(), "europe-west1", "database", pin)
+			if err != nil || !complete || len(points) != 1 {
+				t.Fatalf("expiry erased historical point: %+v %v", points, err)
+			}
+			// Observe the wire projection so this regression fails before the field exists.
+			raw, err := json.Marshal(points)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var projected []struct{ ExpiresAt *time.Time }
+			if err = json.Unmarshal(raw, &projected); err != nil {
+				t.Fatal(err)
+			}
+			if expiry == "" {
+				if projected[0].ExpiresAt != nil {
+					t.Fatal("input TTL fabricated an absolute expiry")
+				}
+			} else if wanted, parseErr := time.Parse(time.RFC3339Nano, expiry); parseErr != nil || projected[0].ExpiresAt == nil || !projected[0].ExpiresAt.Equal(wanted) || projected[0].ExpiresAt.Location() != time.UTC {
+				t.Fatalf("native expiry was dropped or changed: %s %+v %v", expiry, projected, parseErr)
+			}
+		})
+	}
+}
 
 func sqlBackupFixture() map[string]any {
 	return map[string]any{

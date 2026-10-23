@@ -53,6 +53,8 @@ Cloud SQL reads up to ten pages of 100 backups from the saved Google project. Ea
 
 Missing source proof, unavailable point times, provider warnings or more pages leave the scan partial. Partial and failed scans preserve earlier observations. Only a complete scan can mark an earlier point no longer observed; the record stays in history. Cloud SQL's point time is the backup interval start, not a measured export completion or a promised PITR window. Google encrypts Cloud SQL backups by default, and Loomplane retains the optional KMS key reference. See Google's [backup fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/Backups), [project backup listing](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/Backups/ListBackups) and [backup encryption](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/backups).
 
+Cloud SQL points retain the provider's absolute expiry time when reported. The dashboard and CLI show missing expiry as not reported, including RDS snapshots without an absolute expiry. Requested retention days do not supply that timestamp. Expired observations stay in history; refresh the original account to inspect current provider metadata before planning recovery. Inventory does not establish that a point can still be restored.
+
 Your Google account needs permission to list and read these backups. A failed permission check leaves saved observations available so you can correct the account and retry. API, CLI, deletion and restart checks use controlled Google endpoints with a real local control-plane database. Live Google Cloud inventory and recovery remain unqualified.
 
 You can read and refresh the same history with the CLI:

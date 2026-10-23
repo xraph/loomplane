@@ -20,17 +20,19 @@ type SQLBackup struct {
 	State           string
 	DatabaseVersion string
 	CreatedAt       time.Time
+	ExpiresAt       *time.Time
 	KMSKey          string
 }
 
 type sqlBackup struct {
-	Name            string `json:"name"`
-	Kind            string `json:"kind"`
-	Instance        string `json:"instance"`
-	Type            string `json:"type"`
-	State           string `json:"state"`
-	DatabaseVersion string `json:"databaseVersion"`
-	KMSKey          string `json:"kmsKey"`
+	Name            string     `json:"name"`
+	Kind            string     `json:"kind"`
+	Instance        string     `json:"instance"`
+	Type            string     `json:"type"`
+	State           string     `json:"state"`
+	DatabaseVersion string     `json:"databaseVersion"`
+	KMSKey          string     `json:"kmsKey"`
+	ExpiresAt       *time.Time `json:"expiryTime"`
 	Interval        struct {
 		Start time.Time `json:"startTime"`
 		End   time.Time `json:"endTime"`
@@ -78,10 +80,18 @@ func (s *Session) sqlBackupPoint(in sqlBackup, region, instance, physical string
 	if in.Interval.Start.IsZero() || in.State == "SUCCESSFUL" && in.Interval.End.IsZero() {
 		return nil, true, nil
 	}
+	var expires *time.Time
+	if in.ExpiresAt != nil {
+		if in.ExpiresAt.IsZero() || !in.ExpiresAt.After(in.Interval.Start) || !in.Interval.End.IsZero() && in.ExpiresAt.Before(in.Interval.End) {
+			return nil, false, errors.New("cloud sql backup expiry contradicts its recovery interval")
+		}
+		utc := in.ExpiresAt.UTC()
+		expires = &utc
+	}
 	if in.DatabaseVersion == "" || in.DatabaseVersion != p.DatabaseVersion && p.DatabaseVersion != "" {
 		return nil, false, errors.New("cloud sql backup engine metadata is inconsistent")
 	}
-	return &SQLBackup{Name: in.Name, Type: in.Type, State: in.State, DatabaseVersion: in.DatabaseVersion, CreatedAt: in.Interval.Start.UTC(), KMSKey: in.KMSKey}, false, nil
+	return &SQLBackup{Name: in.Name, Type: in.Type, State: in.State, DatabaseVersion: in.DatabaseVersion, CreatedAt: in.Interval.Start.UTC(), ExpiresAt: expires, KMSKey: in.KMSKey}, false, nil
 }
 
 // ListSQLBackups reads project-owned backups, including deleted-instance points.

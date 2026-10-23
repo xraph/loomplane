@@ -163,6 +163,9 @@ func (s *PgStore) RefreshNativeInventory(ctx context.Context, org, id string, fe
 		if point.ProviderID == "" || point.CreatedAt.IsZero() || point.Name == "" || point.Status == "" || seen[identity] {
 			fetchErr = ErrNativeUnavailable
 		}
+		if point.ExpiresAt != nil && (point.ExpiresAt.IsZero() || !point.ExpiresAt.After(point.CreatedAt)) {
+			fetchErr = ErrNativeUnavailable
+		}
 		seen[identity] = true
 	}
 	if len(points) > 1000 {
@@ -186,6 +189,10 @@ func (s *PgStore) RefreshNativeInventory(ctx context.Context, org, id string, fe
 	for _, point := range points {
 		point.ID, point.SourceID, point.Present, point.LastSeenAt = "", id, true, now
 		point.CreatedAt = point.CreatedAt.UTC()
+		if point.ExpiresAt != nil {
+			utc := point.ExpiresAt.UTC()
+			point.ExpiresAt = &utc
+		}
 		raw, err := json.Marshal(point)
 		if err != nil {
 			return err
