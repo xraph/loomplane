@@ -302,7 +302,7 @@ To recover an unfinished accepted reservation, use `loomctl cloud-pools recover 
 
 ## Keep domain authority separate
 
-DNS zones belong to the organization independently of a Cloud or compute connection. Grant zones to projects explicitly. Managed mode uses a supported DNS account; external mode returns a TXT ownership proof that you publish yourself. This configures DNS for a domain you already own, not domain registration or registrar nameserver changes.
+DNS zones belong to the organization independently of a Cloud or compute connection. Grant zones to projects explicitly. Managed mode uses a supported DNS account. Both modes return a TXT ownership challenge that you publish and verify before using the namespace. Provider hosting access alone does not prove control. This configures DNS for a domain you already own, not domain registration or registrar nameserver changes.
 
 ```sh
 loomctl dns-zones
@@ -313,7 +313,9 @@ loomctl dns-zones update zone_... --file zone-update.json
 loomctl dns-zones remove zone_... --revision 3 --yes
 ```
 
-Use `{"name":"example.com","mode":"external","project_ids":["project_..."]}` for an external zone, or `mode: "managed"` with `connection_id` for a DNS adapter. A zone update carries `revision`, `project_ids` and `renew_proof`. Renew an expired unverified external proof with `renew_proof: true`, then publish the returned replacement TXT value. Referenced zones cannot be removed.
+Use `{"name":"example.com","mode":"external","project_ids":["project_..."]}` for an external zone, or `mode: "managed"` with `connection_id` for a DNS adapter. A zone update carries `revision`, `project_ids` and `renew_proof`. Renew an expired unverified proof with `renew_proof: true`, then publish the returned replacement TXT value. Managed zones saved by older versions with only a provider verification timestamp also need Renew proof and public verification. Referenced zones cannot be removed.
+
+The zone name is the namespace you grant to projects. For managed DNS, Loomplane selects the most specific containing hosted zone and pins its provider ID, account and connection generation separately. You can grant `app.example.com` while writing records in the hosted zone `example.com`: publish the challenge at `_loomplane.app.example.com`. That proof covers `app.example.com` and its children, never `example.com` or sibling names. Record names remain relative to the provider hosted zone. Each new route review and acceptance rechecks the public challenge and provider identity. Removing or changing the TXT blocks new work; previously accepted exact cleanup keeps its retained authority.
 
 ```json
 {

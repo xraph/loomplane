@@ -208,7 +208,7 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if checkErr := json.Unmarshal(rawZone, &zone); checkErr != nil {
 			return checkErr
 		}
-		if !slices.Contains(zone.ProjectIDs, route.ProjectID) || zone.VerifiedAt.IsZero() {
+		if !slices.Contains(zone.ProjectIDs, route.ProjectID) || zone.VerifiedAt.IsZero() || !zone.hasControlProof() {
 			return ErrNotFound
 		}
 		raw, encodeErr := json.Marshal(route)
