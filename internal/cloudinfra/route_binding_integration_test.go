@@ -98,6 +98,9 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 	instance("pg", "postgres", `[{"container":5432}]`)
 	instance("web", "main", `[{"container":8080}]`)
 	instance("side", "sidecar", `[{"container":8080}]`)
+	// A component whose routable port sits on a service other than main.
+	exec(`INSERT INTO cp_instances VALUES('split','org',NULL,'{"main":"split-main","api":"split-api"}',` +
+		`'[{"name":"main","ports":[{"container":9000,"protocol":"tcp"}]},{"name":"api","ports":[{"container":8080,"protocol":"tcp"}]}]','{"loomplane.revision":"split/release"}','running')`)
 	placement := `"cloud_placement":{"cloud_id":"cloud_1","target_id":"target_1","server_id":"srv_1"}`
 	binding := func(id, subject, name, instanceID, config string) {
 		t.Helper()
@@ -113,6 +116,9 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 		`"component":{"kind":"octopus","resource":"octo","revision":"1","component":{"name":"gateway","role":"process","ports":[{"name":"http","container":8080,"protocol":"http","routable":true},{"name":"admin","container":9090,"protocol":"http","control":true}],"protection":"none","image":"octopus/gateway:1","step":0},"protection":"none"},`+
 		`"routable_ports":[8080],`+planned+`}`)
 	binding("b_octo", "resource", "octo", "gw", `{`+settings+`,"kind":"octopus","version":"1","composition":{"kind":"octopus","version":"1","revision":"1"},`+planned+`}`)
+	binding("b_split", "resource", "octo--split", "split", `{`+settings+`,"kind":"octopus","version":"1",`+
+		`"component":{"kind":"octopus","resource":"octo","revision":"1","component":{"name":"split","role":"process","ports":[{"name":"health","container":9000,"protocol":"http"},{"name":"http","container":8080,"protocol":"http","routable":true}],"protection":"none","image":"octopus/split:1","step":1},"protection":"none"},`+
+		`"routable_ports":[8080],`+planned+`}`)
 	binding("b_pg", "resource", "postgres", "pg", `{`+placement+`}`)
 	binding("b_web", "service", "web", "web", `{`+planned+`,`+settings+`,"health_path":"/_/health","workload":"http-service","execution":"container","service":"svc:go:cmd/web","source":"cmd/web","image":"Dockerfile","port":8080,"public":false}`)
 	// A service binding keeps routing only its main service, whatever its config says.
@@ -165,6 +171,24 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 	webRoute := Route{ID: "route_web", OrgID: "org", ProjectID: "shop", Input: RouteInput{EnvironmentID: "prod", Service: "web", CloudID: "cloud_1", Port: 8080}, Binding: web}
 	if checkErr := st.ValidateRetainedRoute(ctx, webRoute); checkErr != nil {
 		t.Fatal("retained service route", checkErr)
+	}
+	// The split component routes its api service, the one declaring the port.
+	splitIn := RouteInput{EnvironmentID: "prod", Service: "octo--split", CloudID: "cloud_1", Port: 8080}
+	split, err := st.ResolveRouteBinding(ctx, "org", "shop", splitIn)
+	if err != nil || split.BindingID != "b_split" || split.InstanceID != "split" || split.ContainerID != "split-api" || split.ReleaseID != "split/release" {
+		t.Fatalf("component routed on a service other than main: %+v %v", split, err)
+	}
+	splitRoute := Route{ID: "route_split", OrgID: "org", ProjectID: "shop", Input: splitIn, Binding: split}
+	if checkErr := st.ValidateRetainedRoute(ctx, splitRoute); checkErr != nil {
+		t.Fatal("retained route on a service other than main", checkErr)
+	}
+	if checkErr := st.ValidateRouteCleanup(ctx, splitRoute); checkErr != nil {
+		t.Fatal("cleanup on a service other than main", checkErr)
+	}
+	splitMain := splitRoute
+	splitMain.Binding.ContainerID = "split-main"
+	if checkErr := st.ValidateRetainedRoute(ctx, splitMain); !errors.Is(checkErr, ErrNotFound) {
+		t.Fatal("retained route on the main container, which doesn't declare the port", checkErr)
 	}
 	side := gateway
 	side.Input.Service, side.Binding.BindingID, side.Binding.InstanceID, side.Binding.ContainerID, side.Binding.ReleaseID = "side", "b_side", "side", "side-container", "side/release"
