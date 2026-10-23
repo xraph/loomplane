@@ -1,10 +1,16 @@
 // The service catalog: every database and cache Loomplane can run, each
 // opening its own page to deploy it and recover it, above the service
-// projects already deployed.
-import { ChevronRightIcon, SearchIcon, ZapIcon } from "lucide-react"
+// projects already deployed. Kinds registered with the API after the five
+// databases follow them, each opening a page that adds it to a project.
+import { ChevronRightIcon, SearchIcon } from "lucide-react"
 import { useState } from "react"
 
-import { useProjectsList } from "@/client/forge/loomplane/hooks"
+import { statusOf } from "@/client/errors"
+import {
+  useCatalogKindsList,
+  useProjectsList,
+} from "@/client/forge/loomplane/hooks"
+import type { KindInfo } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { Page, PageHeading } from "@/components/page"
 import { ProductIcon } from "@/components/product-icon"
@@ -19,6 +25,14 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  catalogKind,
+  groupIcons,
+  inCatalog,
+  kindIcon,
+  targetLabels,
+  type CatalogKindModule,
+} from "@/lib/catalog-kinds"
 import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
@@ -85,15 +99,65 @@ export const catalog: Entry[] = [
   },
 ]
 
-const groups = [
+type Group = CatalogKindModule["group"]
+
+const groups: { value: "all" | Group; label: string }[] = [
   { value: "all", label: "All" },
   { value: "database", label: "Databases" },
   { value: "cache", label: "Caches" },
-] as const
+  { value: "gateway", label: "Gateways" },
+  { value: "data", label: "Data" },
+]
+
+const groupLabels: Record<Group, string> = {
+  database: "Database",
+  cache: "Cache",
+  gateway: "Gateway",
+  data: "Data",
+}
+
+/** A kind the API registered beyond the five databases. */
+type Registered = {
+  kind: string
+  title: string
+  version?: string
+  module?: CatalogKindModule
+  group?: Group
+  runsOn: string
+  blurb: string
+  features: string[]
+}
+
+// Kinds added to an existing project. The five databases keep their own
+// cards above, and neither a kind provisioned only as another's
+// dependency nor one whose module is hidden shows. Read when rendering:
+// kind modules import this page.
+function registeredKinds(kinds: KindInfo[]): Registered[] {
+  const builtIn = new Set<string>(catalog.map((e) => e.kind))
+  return kinds
+    .filter(
+      (k) =>
+        !builtIn.has(k.name) && k.placement === "app-project" && inCatalog(k)
+    )
+    .map((k) => {
+      const module = catalogKind(k.name)
+      return {
+        kind: k.name,
+        title: module?.title ?? k.title,
+        version: k.versions[0],
+        module,
+        group: module?.group,
+        runsOn: k.targets.map((t) => targetLabels[t] ?? t).join(" or "),
+        blurb: module?.blurb ?? k.description ?? "",
+        features: module?.features ?? [],
+      }
+    })
+}
 
 export function Services() {
   const projects = useQuery(useProjectsList)
-  const [group, setGroup] = useState<(typeof groups)[number]["value"]>("all")
+  const kinds = useQuery(useCatalogKindsList)
+  const [group, setGroup] = useState<"all" | Group>("all")
   const [query, setQuery] = useState("")
   const q = query.trim().toLowerCase()
   const searched = catalog.filter(
@@ -102,6 +166,23 @@ export function Services() {
       `${databaseRecipes[e.kind].title} ${e.blurb}`.toLowerCase().includes(q)
   )
   const shown = searched.filter((e) => group === "all" || e.group === group)
+  const registered = registeredKinds(kinds.data?.kinds ?? [])
+  const registeredSearched = registered.filter(
+    (e) => !q || `${e.title} ${e.blurb}`.toLowerCase().includes(q)
+  )
+  const registeredShown = registeredSearched.filter(
+    (e) => group === "all" || e.group === group
+  )
+  // A group shows once something is in it.
+  const offered = groups.filter(
+    (g) =>
+      g.value === "all" ||
+      g.value === "database" ||
+      g.value === "cache" ||
+      registered.some((e) => e.group === g.value)
+  )
+  const kindsDenied =
+    kinds.status === "error" && [401, 403].includes(statusOf(kinds.error))
   // Catalog deploys make their own project with the database icon.
   const yours =
     projects.data?.projects.filter((p) => p.icon === "database") ?? []
@@ -189,9 +270,9 @@ export function Services() {
                 aria-label="Kind"
                 className="flex gap-0.5 rounded-[10px] bg-muted p-[3px]"
               >
-                {groups.map((g) => {
+                {offered.map((g) => {
                   const on = g.value === group
-                  const n = searched.filter(
+                  const n = [...searched, ...registeredSearched].filter(
                     (e) => g.value === "all" || e.group === g.value
                   ).length
                   return (
@@ -219,7 +300,7 @@ export function Services() {
             </div>
           </div>
 
-          {shown.length === 0 ? (
+          {shown.length === 0 && registeredShown.length === 0 ? (
             <Empty className="py-6">
               <EmptyHeader>
                 <EmptyTitle>Nothing in the catalog matches</EmptyTitle>
@@ -241,7 +322,7 @@ export function Services() {
                       <div className="flex items-center gap-3">
                         <ProductIcon
                           product={e.product}
-                          fallback={ZapIcon}
+                          fallback={groupIcons[e.group]}
                           label={r.title}
                           size="lg"
                         />
@@ -292,8 +373,31 @@ export function Services() {
                   </article>
                 )
               })}
+              {registeredShown.map((e) => (
+                <RegisteredCard key={e.kind} entry={e} />
+              ))}
+              {kinds.status === "pending" && !q && group === "all" && (
+                <Skeleton
+                  role="status"
+                  aria-label="Loading more of the catalog"
+                  className="min-h-48 rounded-xl"
+                />
+              )}
             </div>
           )}
+          {kinds.status === "error" &&
+            (kindsDenied ? (
+              <p className="text-[12.5px] text-muted-foreground">
+                Your role can&apos;t read the rest of the catalog, so only the
+                databases and caches show.
+              </p>
+            ) : (
+              <QueryError
+                error={kinds.error}
+                fallback="The rest of the catalog couldn't be loaded."
+                retry={kinds.refetch}
+              />
+            ))}
           <p className="text-xs leading-relaxed text-muted-foreground">
             Every service gets a private endpoint and a volume that outlives the
             container. Point-in-time recovery isn&apos;t available yet, so keep
@@ -302,5 +406,65 @@ export function Services() {
         </section>
       </Page>
     </>
+  )
+}
+
+/** RegisteredCard is a registered kind's card, opening its add page. */
+function RegisteredCard({ entry: e }: { entry: Registered }) {
+  return (
+    <article className="flex flex-col overflow-hidden rounded-xl bg-card ring-1 ring-border transition-shadow hover:shadow-[0_6px_18px_oklch(0.2_0.01_50/0.08)]">
+      <div className="flex flex-1 flex-col gap-2.5 p-4">
+        <div className="flex items-center gap-3">
+          <ProductIcon
+            product={e.module?.logo}
+            fallback={kindIcon(e.module)}
+            label={e.title}
+            size="lg"
+          />
+          <div className="grid min-w-0 flex-1 gap-0.5">
+            <span className="text-[15px] font-semibold tracking-tight">
+              {e.title}{" "}
+              {e.version && (
+                <span className="font-mono text-xs font-normal text-muted-foreground">
+                  {e.version}
+                </span>
+              )}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {e.group ? groupLabels[e.group] : "Service"} · {e.runsOn}
+            </span>
+          </div>
+        </div>
+        {e.blurb && (
+          <p className="text-[13px] leading-relaxed text-muted-foreground">
+            {e.blurb}
+          </p>
+        )}
+        {e.features.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {e.features.map((f) => (
+              <span
+                key={f}
+                className="rounded-md bg-muted px-2 py-0.5 text-[11.5px] text-foreground/80"
+              >
+                {f}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center justify-between gap-2 border-t bg-subtle px-4 py-2.5">
+        <span className="text-xs text-muted-foreground">
+          Added to a project
+        </span>
+        <Button
+          size="sm"
+          nativeButton={false}
+          render={<Link to="/services/$kind" params={{ kind: e.kind }} />}
+        >
+          Add {e.title}
+        </Button>
+      </div>
+    </article>
   )
 }

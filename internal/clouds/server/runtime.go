@@ -32,11 +32,12 @@ var ErrMissing = errors.New("the Docker resource is absent")
 type Session func(context.Context, map[string]string) (*Client, error)
 
 type Runtime struct {
-	Session Session
-	Values  owned.Values
-	Ports   owned.PortReservations
-	Probe   func(context.Context, *Client, int, string) error
-	Wait    time.Duration
+	Session   Session
+	Values    owned.Values
+	Ports     owned.PortReservations
+	Probe     func(context.Context, *Client, int, string) error
+	ProbeRESP func(context.Context, *Client, int) error
+	Wait      time.Duration
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -343,6 +344,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/create?name="+name, body, &result); checkErr != nil {
 		return nil, checkErr
 	}
+	if checkErr := uploadFiles(ctx, c, result.ID, values); checkErr != nil {
+		return nil, checkErr
+	}
 	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(result.ID)+"/start", nil, nil); checkErr != nil {
 		return nil, checkErr
 	}
@@ -405,22 +409,17 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 				if probeErr := databaseReady(ctx, c, name, labels); probeErr == nil {
 					return nil
 				}
-			} else if labels[owned.LabelHealth] == "" {
+			} else if !probed(labels) {
 				return nil
 			}
 			if !isDatabase(labels) {
-				probe := r.Probe
-				if probe == nil {
-					probe = probeServer
+				probe, probeErr := r.healthProbe(labels)
+				if probeErr != nil {
+					return probeErr
 				}
-				for _, ports := range info.NetworkSettings.Ports {
-					for _, port := range ports {
-						value, parseErr := strconv.Atoi(port.HostPort)
-						if parseErr == nil && value > 0 {
-							if err = probe(ctx, c, value, labels[owned.LabelHealth]); err == nil {
-								return nil
-							}
-						}
+				for _, value := range healthPorts(info, labels) {
+					if err = probe(ctx, c, value); err == nil {
+						return nil
 					}
 				}
 			}
@@ -436,6 +435,24 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// healthPorts are the host ports a readiness probe may answer on: the one
+// published for LabelHealthPort when the container declares it, otherwise
+// every published port.
+func healthPorts(info *containerInfo, labels map[string]string) []int {
+	var out []int
+	for key, ports := range info.NetworkSettings.Ports {
+		if declared := labels[owned.LabelHealthPort]; declared != "" && key != declared+"/tcp" {
+			continue
+		}
+		for _, port := range ports {
+			if value, err := strconv.Atoi(port.HostPort); err == nil && value > 0 {
+				out = append(out, value)
+			}
+		}
+	}
+	return out
 }
 
 func probeServer(ctx context.Context, c *Client, port int, path string) error {
@@ -530,18 +547,12 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 				state = cpprovider.StateStarting
 			}
 		}
-		if labels[owned.LabelHealth] != "" {
+		if probed(labels) {
 			ready = false
-			probe := r.Probe
-			if probe == nil {
-				probe = probeServer
-			}
-			for _, ports := range info.NetworkSettings.Ports {
-				for _, port := range ports {
-					value, parseErr := strconv.Atoi(port.HostPort)
-					if parseErr == nil && value > 0 && probe(ctx, c, value, labels[owned.LabelHealth]) == nil {
-						ready = true
-					}
+			probe, probeErr := r.healthProbe(labels)
+			for _, value := range healthPorts(info, labels) {
+				if probeErr == nil && probe(ctx, c, value) == nil {
+					ready = true
 				}
 			}
 			if !ready {
@@ -626,6 +637,11 @@ func dockerJSON(ctx context.Context, c *Client, method, path string, body, out a
 	if err != nil {
 		return err
 	}
+	return dockerResult(res, out)
+}
+
+// dockerResult reads a Docker response into out, or the error it reports.
+func dockerResult(res *http.Response, out any) error {
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
 		return ErrMissing

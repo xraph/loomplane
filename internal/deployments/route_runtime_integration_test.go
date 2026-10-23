@@ -28,6 +28,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
@@ -144,6 +145,29 @@ func (s *lostReleaseCreate) Create(ctx context.Context, r instance.CreateRequest
 }
 
 func TestRoutedReleaseRetainsRealSourceThroughDependentRetry(t *testing.T) {
+	testRetainedRuntime(t, false)
+}
+func TestSharedSyncRetainsRealSourceThroughRoutingRetry(t *testing.T) {
+	testRetainedRuntime(t, true)
+}
+
+type releaseCloudAuthority struct{}
+
+func (releaseCloudAuthority) ValidateCloudSync(context.Context, *planning.Plan) error { return nil }
+func (releaseCloudAuthority) ValidateCloudSyncRoutes(context.Context, *planning.Plan) (security.Principal, error) {
+	return security.Principal{OrgID: "org", UserID: "usr"}, nil
+}
+func (releaseCloudAuthority) ValidateCloudSyncSourceCleanup(context.Context, *planning.Plan) (security.Principal, error) {
+	return security.Principal{OrgID: "org", UserID: "usr"}, nil
+}
+
+type retainedRuntimeCloud struct{ *cloudResolver }
+
+func (c retainedRuntimeCloud) RetainedAssignment(ctx context.Context, org, project, env string) (*cloudprofiles.Assignment, error) {
+	return c.Resolve(ctx, org, project, env)
+}
+
+func testRetainedRuntime(t *testing.T, shared bool) {
 	client, host, _ := releaseRuntimeFixture(t)
 	ctx := server.WithEffectFence(t.Context(), server.EffectFence{Operation: "org/fixture/api", Generation: 1})
 	if err := client.ArmEffectFence(ctx, server.EffectFence{Operation: "org/fixture/api", Generation: 1}); err != nil {
@@ -168,6 +192,9 @@ func TestRoutedReleaseRetainsRealSourceThroughDependentRetry(t *testing.T) {
 	secrets := &memSecrets{m: map[string][]byte{}}
 	executor := &OwnedTarget{Cloud: connections.Server, Ctrl: CtrlPlane{Instances: instances, Deploys: deploys, Providers: registry}, Secrets: secrets, Backend: func(string, string) owned.Backend { return backend }}
 	cfg := &planning.ServiceConfig{Provider: "server", Target: "runtime", Service: "api", Port: 80, Workload: provider.Worker, BuildTarget: &planning.BuildTarget{Image: image}, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud"}}
+	conn := &connections.Connection{ID: "runtime", OrgID: "org", Cloud: "server", Status: "ready", Account: "fixture", Details: map[string]string{"docker_id": client.Config.Details["docker_id"]}}
+	cfg.TargetSettings = planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)
+	cfg.CloudPlacement = &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "runtime", Provider: "server", ConnectionID: "runtime", AccountIdentity: connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details)}
 	job := &Job{Deployment: &Deployment{ID: "source-deployment", StartedBy: "usr", PlanID: "source", OrgID: "org", ProjectID: "proj", EnvironmentID: "env"}, Plan: &planning.Plan{ID: "source"}, Connection: &connections.Connection{ID: "runtime"}, Action: planning.Action{ID: "service:api", Name: "api", Subject: planning.ServiceSubject, Provider: "server", ConnectionID: "runtime", Service: cfg}, Progress: func(string, string) {}}
 	var checkpoint []byte
 	job.Checkpoint = func(raw []byte) error { checkpoint = append([]byte(nil), raw...); return nil }
@@ -218,25 +245,48 @@ func TestRoutedReleaseRetainsRealSourceThroughDependentRetry(t *testing.T) {
 	plans := &fakePlans{plan: plan, bindings: map[string]*planning.Binding{"service:api": &current}}
 	routes := &releaseRoutesFixture{pending: true}
 	runner := NewRunner(RunnerDeps{Store: store, Plans: plans, Routes: routes, Providers: providers.Registry(), Executors: map[string]Executor{"server": executor}, Credentials: buildCredentialFunc(func(context.Context, string, string) (*connections.Connection, []byte, error) {
-		return &connections.Connection{ID: "runtime", OrgID: "org", Cloud: "server", Status: "ready"}, nil, nil
+		return conn, nil, nil
 	})})
+	finalize := func() error { return runner.finishRoutedRelease(ctx, d) }
+	if shared {
+		plan.CloudSyncID = "sync"
+		plan.Actions[1].Provider = "server"
+		plan.Actions[1].ConnectionID = "runtime"
+		plan.Actions[1].Service = cfg
+		consumer := current
+		consumer.Subject, consumer.Name = planning.ServiceSubject, "consumer"
+		consumer.Replaced = nil
+		plans.bindings["service:consumer"] = &consumer
+		runner.cloudSyncAuth = releaseCloudAuthority{}
+		runner.cloudProfiles = retainedRuntimeCloud{&cloudResolver{assignment: &cloudprofiles.Assignment{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "runtime", Provider: "server", ConnectionID: "runtime", Revision: 1}}}}}
+		finalize = func() error {
+			if routeErr := runner.ReconcileCloudPlanRoutes(ctx, "org", plan.ID, nil, nil); routeErr != nil {
+				return routeErr
+			}
+			// Ready routes alone must not remove the retained source runtime.
+			if n := releaseDocker(t, "exec", host, "docker", "ps", "-q", "--filter", "label=loomplane.environment=env"); len(strings.Fields(n)) != 2 {
+				t.Fatal("shared route phase removed the source", n)
+			}
+			return runner.CleanupCloudPlan(ctx, "org", plan.ID, nil)
+		}
+	}
 	assertTwo := func() {
 		t.Helper()
 		if n := releaseDocker(t, "exec", host, "docker", "ps", "-q", "--filter", "label=loomplane.environment=env"); len(strings.Fields(n)) != 2 {
 			t.Fatal("source/candidate not retained", n)
 		}
 	}
-	if err = runner.finishRoutedRelease(ctx, d); err == nil || routes.calls != 0 {
+	if err = finalize(); err == nil || routes.calls != 0 {
 		t.Fatal("failed dependent allowed cleanup", err)
 	}
 	assertTwo()
 	d.Steps[1].Status = StepSucceeded
-	if err = runner.finishRoutedRelease(ctx, d); !errors.Is(err, cloudinfra.ErrPending) {
+	if err = finalize(); !errors.Is(err, cloudinfra.ErrPending) {
 		t.Fatal("route readiness refusal", err)
 	}
 	assertTwo()
 	routes.pending = false
-	if err = runner.finishRoutedRelease(ctx, d); err != nil {
+	if err = finalize(); err != nil {
 		t.Fatal("cleanup after retry", err)
 	}
 	if n := releaseDocker(t, "exec", host, "docker", "ps", "-q", "--filter", "label=loomplane.environment=env"); len(strings.Fields(n)) != 1 {
@@ -262,7 +312,7 @@ func TestRoutedReleaseRetainsRealSourceThroughDependentRetry(t *testing.T) {
 	futureBinding.Replaced = []planning.Binding{retained}
 	plans.bindings["service:api"] = &futureBinding
 	calls := routes.calls
-	if err = runner.finishRoutedRelease(ctx, d); err == nil || routes.calls != calls {
+	if err = finalize(); err == nil || routes.calls != calls {
 		t.Fatal("stale finalizer touched newer binding", err)
 	}
 	futurePlan := &planning.Plan{ID: "future", OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Actions: []planning.Action{job.Action}}

@@ -25,7 +25,7 @@ type cloudCleanupAuthorizer interface {
 
 func (r *Runner) authorizeCloudRemoval(ctx context.Context, job *Job) error {
 	if job.cleanupSyncID == "" {
-		return r.authorizeSync(ctx, job.Plan)
+		return r.authorizeCloudSourceCleanup(ctx, job.Plan)
 	}
 	auth, ok := r.cloudSyncAuth.(cloudCleanupAuthorizer)
 	if !ok {

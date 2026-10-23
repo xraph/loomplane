@@ -18,11 +18,23 @@ The harness records a unique cluster, namespace, Docker-in-Docker builder, regis
 
 The Forge HTTP and worker applications are real. The harness drives connection checks, manifests, plans, approvals and retries through the application API, builds on Docker, pushes to the OCI registry and waits for real Kubernetes pods. It verifies WS/SSE output before completion, cursor replay on a second API after the first worker stops, private dependencies, failed replacement, build retry history, read revocation, organization isolation, expired cursors, truncation and product-driven removal.
 
-There are fixture boundaries: a source server replaces GitHub, an authenticated SSH bridge forwards channels to the isolated Docker daemon, and a small HTTP build dependency lets the test cause and recover an actual Docker build failure. Cursor floors and log budgets are advanced in the isolated database to test expiry and limits without waiting seven days or storing megabytes of filler. No Docker build, registry push, Kubernetes rollout or readiness response is fabricated.
+There are fixture boundaries: a source server replaces GitHub, an authenticated SSH bridge forwards channels to the isolated Docker daemon and runs exec requests (the deployment's python3 effect-fence helper) in its builder, and a small HTTP build dependency lets the test cause and recover an actual Docker build failure. Cursor floors and log budgets are advanced in the isolated database to test expiry and limits without waiting seven days or storing megabytes of filler. No Docker build, registry push, Kubernetes rollout or readiness response is fabricated.
 
 Cleanup uses the recorded names and labels and checks that the containers present before the run still exist. It never prunes Docker globally or edits your kubeconfig. A failed run keeps its ownership record and diagnostics under `.superpowers/sdd/2026-10-13-own-infrastructure-live-deployments/`; `state.json` identifies exactly what its cleanup script may remove.
 
 For a rendered browser run, set `LOOMPLANE_ACCEPTANCE_BROWSER=1`. The harness serves an isolated dashboard at `http://127.0.0.1:5190` and writes `browser.json` beside its ownership record. Use the disposable account `acceptance@example.test`, password `Acceptance-Build-logs-42`. At each checkpoint, inspect the view and create the named `continue-<stage>` file. A `disable-ws` file in that directory makes only this test proxy reject WebSockets, so you can verify the generated client's SSE fallback. The dashboard process stops with the run. Using `127.0.0.1` keeps its session separate from your localhost dashboard.
+
+### Verify a composed catalog kind on SSH/Docker and kind
+
+```bash
+make acceptance-catalog
+```
+
+This uses the same harness, ownership record and cleanup as `make acceptance-infrastructure`, with a different test. You get a composed kind that exists only in this test binary: it's registered from a file built with the `integration` and `acceptance` tags, so the product's catalog never lists it. Its image is a small Go command built for amd64 and arm64, pushed to the run's own registry, and pinned by the digests the pushes report.
+
+The test runs on the kind cluster first, then on the SSH/Docker server. On each, it adds the kind to a project, plans, approves and applies it. The kind provisions a Postgres, runs a `migrate` job that records one row, and starts an `api` that refuses to start without that row and answers `/readyz` only after a short warm-up. The test checks the declared readiness probe on the runtime object and reads the api's control port through the admin proxy and through `CatalogAccess.InternalChannel`. Then it removes the resource. Every binding has to go, with the containers on the server and the workloads, Services, Secrets and ConfigMaps on the cluster, and the Postgres data volume has to stay, as database retention says. On kind, the test makes a retained storage class first, since the default one deletes its volumes.
+
+Only the kind leg passes today. The server leg is wired the same way, but a first deployment to a server hangs on the host-admission lock on main: the admission transaction holds a share lock on the connection row while the step update's connection-use trigger asks for an update lock on it. Until that's fixed, expect the server subtest to wait out its 20 minute deadline and fail, and the app's shutdown to hang after it. You can stop it then; `run.py` still cleans up.
 
 ### Verify the dashboard flow on Vercel
 

@@ -170,3 +170,28 @@ func TestFromSource_dbGatewaySigningKeyFile(t *testing.T) {
 		}
 	}
 }
+
+func TestFromSource_endpointDeniedCIDRs(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if len(c.Planning.EndpointDeniedCIDRs) != 0 {
+		t.Fatalf("denied by default: %v", c.Planning.EndpointDeniedCIDRs)
+	}
+	for _, v := range []any{"10.9.0.0/16, 192.0.2.7", []any{"10.9.0.0/16", "192.0.2.7"}} {
+		c, err := FromSource(mapGetter{"database.url": testDSN, "planning.endpoint_denied_cidrs": v})
+		if err != nil {
+			t.Fatalf("FromSource: %v", err)
+		}
+		got := c.Planning.EndpointDeniedCIDRs
+		if len(got) != 2 || got[0].String() != "10.9.0.0/16" || got[1].String() != "192.0.2.7/32" {
+			t.Fatalf("denied from %#v: %v", v, got)
+		}
+	}
+	for _, v := range []any{"10.9.0.0/33", "db.internal", 3} {
+		if _, err := FromSource(mapGetter{"database.url": testDSN, "planning.endpoint_denied_cidrs": v}); err == nil || !strings.Contains(err.Error(), "planning.endpoint_denied_cidrs") {
+			t.Fatalf("%#v: %v", v, err)
+		}
+	}
+}

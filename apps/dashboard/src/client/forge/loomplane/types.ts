@@ -208,6 +208,36 @@ export interface BuildTarget {
   registrySettings?: Record<string, any>;
 }
 
+export interface CatalogKindList {
+  kinds: KindInfo[];
+}
+
+export interface CatalogconnectCreateInputBody {
+  dsn: string;
+  engine: string;
+  name: string;
+}
+
+export interface CatalogconnectEndpoint {
+  createdAt: string;
+  createdBy: string;
+  database?: string;
+  engine: string;
+  host: string;
+  id: string;
+  name: string;
+  orgId: string;
+  port: number;
+  revision: number;
+  tls: string;
+  username?: string;
+}
+
+export interface CatalogproxySession {
+  expiresAt: string;
+  url: string;
+}
+
 export interface Change {
   field: string;
   from: string;
@@ -238,6 +268,22 @@ export interface ChangeInputBody {
   revision: number;
   runtime?: string;
   targetId?: string;
+}
+
+export interface CheckInputBody {
+  dependency: string;
+  dsn: string;
+  engine: string;
+  kind: string;
+  target: string;
+}
+
+export interface CheckResult {
+  missing?: string[];
+  notes?: string[];
+  ok: boolean;
+  problems?: string[];
+  version?: string;
 }
 
 export interface ChooseConnectionInputBody {
@@ -362,6 +408,31 @@ export interface CompleteCloudRoutingInputBody {
   evidence: string;
 }
 
+export interface ComponentConfig {
+  component: ResolvedComponent;
+  dependencies?: Record<string, any>;
+  kind: string;
+  protection: string;
+  resource: string;
+  revision: string;
+}
+
+export interface ComponentInfo {
+  name: string;
+  protection: string;
+  role: string;
+  stateful: boolean;
+}
+
+export interface CompositionConfig {
+  dependencies?: Record<string, any>;
+  kind: string;
+  outputs?: Output[];
+  revision: string;
+  secrets?: GeneratedSecret[];
+  version: string;
+}
+
 export interface ConnectGitHubInputBody {
   code: string;
   installationId: number;
@@ -411,6 +482,13 @@ export interface ConnectionsCreateInputBody {
   credential: string;
   name: string;
   settings?: Record<string, any>;
+}
+
+export interface ConsumerOption {
+  name: string;
+  pattern?: string;
+  required?: boolean;
+  title: string;
 }
 
 export interface CreateEnvironmentInputBody {
@@ -540,6 +618,15 @@ export interface DeliveryList {
   items: Delivery[];
 }
 
+export interface DependencyInfo {
+  default: boolean;
+  external: boolean;
+  kinds: string[];
+  name: string;
+  optional: boolean;
+  title: string;
+}
+
 export interface DeployedList {
   sources: DeployedRepository[];
 }
@@ -619,14 +706,22 @@ export interface EditInputBody {
   kind: string;
   name: string;
   provider?: string;
+  target?: string;
+  uses?: Record<string, any>;
+  version?: string;
 };
   ignore?: string;
+  link?: {
+  need: string;
+  options?: Record<string, any>;
+  service: string;
+};
   placement?: {
   build?: Build;
   cloudTags?: string[];
   cloudTarget?: string;
   enabled?: boolean;
-  endpoint?: Endpoint;
+  endpoint?: ManifestEndpoint;
   environment?: string;
   healthPath?: string;
   name: string;
@@ -635,13 +730,20 @@ export interface EditInputBody {
   section: string;
   target?: string;
 };
+  setUse?: {
+  dependency: string;
+  resource: string;
+  use: Use;
+};
+  unlink?: {
+  need: string;
+  options?: Record<string, any>;
+  service: string;
+};
 }
 
-export interface Endpoint {
-  hostPort?: number;
-  hostname?: string;
-  ingressClass?: string;
-  tlsSecret?: string;
+export interface EndpointList {
+  endpoints: (CatalogconnectEndpoint | null)[];
 }
 
 export interface EnrollmentBody {
@@ -650,10 +752,21 @@ export interface EnrollmentBody {
 
 export interface EnvLink {
   address?: string;
+  field?: string;
   from: string;
   gateway?: string;
   key: string;
+  options?: Record<string, any>;
   subject: string;
+}
+
+export interface EnvVar {
+  from?: Ref;
+  name: string;
+  requires?: string;
+  secret?: string;
+  template?: string;
+  value?: string;
 }
 
 export interface Environment {
@@ -674,7 +787,9 @@ export interface EnvironmentChange {
   externalRouting: boolean;
   planId?: string;
   projectId?: string;
+  routes?: SyncRoute[];
   routingEvidence?: string;
+  routingStatus?: string;
   services: string[];
   status: string;
   summary: PlanSummary;
@@ -722,6 +837,11 @@ export interface Federation {
   serviceExports?: Record<string, any>;
 }
 
+export interface File {
+  mode?: number;
+  path: string;
+}
+
 export interface Finding {
   code: string;
   evidence?: Evidence[];
@@ -751,6 +871,13 @@ export interface GatewayStatus {
   region: string;
   routes: RouteStatus[];
   snapshotVersion: number;
+}
+
+export interface GeneratedSecret {
+  bytes?: number;
+  encoding?: string;
+  name: string;
+  prefix?: string;
 }
 
 export interface GitHubInstallation {
@@ -788,6 +915,11 @@ export interface GraphSummary {
   services: number;
 }
 
+export interface HTTPProbe {
+  path: string;
+  port: string;
+}
+
 export interface HandoffInputBody {
   destinationCloudId: string;
   revision: number;
@@ -799,6 +931,12 @@ export interface HandoffReleaseInputBody {
 
 export interface Held {
   sameAddress?: string;
+}
+
+export interface IdentitySession {
+  orgId: string;
+  permissions: string[];
+  userId: string;
 }
 
 export interface Ignore {
@@ -836,6 +974,26 @@ export interface InstanceStatus {
   reporting: boolean;
   routes: InstanceRouteStats[];
   snapshotVersion: number;
+}
+
+export interface KindInfo {
+  components?: ComponentInfo[];
+  consumerOptions?: ConsumerOption[];
+  dependencies?: DependencyInfo[];
+  description?: string;
+  engine: boolean;
+  name: string;
+  outputs?: OutputInfo[];
+  placement: string;
+  targets: string[];
+  title: string;
+  versions: string[];
+}
+
+export interface KubernetesRule {
+  apiGroups: string[];
+  resources: string[];
+  verbs: string[];
 }
 
 export interface Log {
@@ -905,6 +1063,13 @@ export interface ManifestDraft {
   projectId: string;
   sources: SourceRef[];
   yaml: string;
+}
+
+export interface ManifestEndpoint {
+  hostPort?: number;
+  hostname?: string;
+  ingressClass?: string;
+  tlsSecret?: string;
 }
 
 export interface MoveInput {
@@ -1071,6 +1236,22 @@ export interface OrgMemberList {
   members: OrgMember[];
 }
 
+export interface Output {
+  envKey: string;
+  from?: Ref;
+  name: string;
+  perConsumer?: boolean;
+  requires?: string;
+  secret?: boolean;
+  template?: string;
+}
+
+export interface OutputInfo {
+  envKey: string;
+  name: string;
+  perConsumer: boolean;
+}
+
 export interface Package {
   ecosystem: string;
   evidence: Evidence[];
@@ -1223,6 +1404,14 @@ export interface PoolMember {
   draining: boolean;
   memoryBytes: number;
   serverId: string;
+}
+
+export interface Port {
+  container: number;
+  control?: boolean;
+  name: string;
+  protocol: string;
+  routable?: boolean;
 }
 
 export interface PreferenceInputBody {
@@ -1387,6 +1576,9 @@ export interface RealtimeSend {
 export interface Recipe {
   architecture: string;
   backupFormat: string;
+  extensions?: string[];
+  family?: string;
+  fsGroup?: number;
   id: string;
   image: string;
   mountPath: string;
@@ -1399,6 +1591,12 @@ export interface RecoveryInputBody {
   planId: string;
   review?: string;
   service: string;
+}
+
+export interface Ref {
+  component?: string;
+  dependency?: string;
+  field: string;
 }
 
 export interface RemoveRouteInputBody {
@@ -1436,6 +1634,26 @@ export interface Resolution {
   variables: ResolvedVariable[];
 }
 
+export interface ResolvedComponent {
+  after?: string[];
+  args?: string[];
+  command?: string[];
+  env?: EnvVar[];
+  files?: File[];
+  image: string;
+  kubernetesRules?: KubernetesRule[];
+  name: string;
+  ports?: Port[];
+  protection?: string;
+  readiness?: HTTPProbe;
+  requires?: string;
+  resources: Resources;
+  role: string;
+  step: number;
+  timeout?: number;
+  volume?: Volume;
+}
+
 export interface ResolvedVariable {
   key: string;
   overrides: Variable[];
@@ -1452,13 +1670,22 @@ export interface Resource {
 
 export interface ResourceConfig {
   catalog?: Recipe;
+  cloudPlacement?: CloudPlacement;
+  component?: ComponentConfig;
+  composition?: CompositionConfig;
   kind: string;
   managed?: ManagedDatabaseConfig;
   provider: string;
   region?: string;
+  routablePorts?: number[];
   target?: string;
   targetSettings?: Record<string, any>;
   version?: string;
+}
+
+export interface Resources {
+  cpuMillis: number;
+  memoryMb: number;
 }
 
 export interface Restore {
@@ -1890,10 +2117,11 @@ export interface ServiceConfig {
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
   commitSha?: string;
+  component?: ComponentConfig;
   context?: string;
   databaseGateway?: DatabaseGatewayConfig;
   ecosystem: string;
-  endpoint?: Endpoint;
+  endpoint?: ManifestEndpoint;
   env?: EnvLink[];
   execution: string;
   framework?: string;
@@ -1915,12 +2143,6 @@ export interface ServiceConfig {
   target?: string;
   targetSettings?: Record<string, any>;
   workload: string;
-}
-
-export interface Session {
-  orgId: string;
-  permissions: string[];
-  userId: string;
 }
 
 export interface SetDefaultPlacementInputBody {
@@ -2059,6 +2281,20 @@ export interface Sync {
   updatedAt: string;
 }
 
+export interface SyncRoute {
+  cutoverId?: string;
+  hostname: string;
+  message?: string;
+  notBefore: string;
+  prepareId: string;
+  recordType?: string;
+  releaseId?: string;
+  routeId: string;
+  status: string;
+  ttl?: number;
+  value?: string;
+}
+
 export interface Target {
   cloudId: string;
   connectionId: string;
@@ -2105,6 +2341,12 @@ export interface UpdateVariableInputBody {
   value: string;
 }
 
+export interface Use {
+  enabled?: boolean;
+  external?: string;
+  resource?: string;
+}
+
 export interface Variable {
   createdAt: string;
   createdBy: string;
@@ -2123,6 +2365,12 @@ export interface Variable {
 
 export interface VariableList {
   variables: Variable[];
+}
+
+export interface Volume {
+  fsGroup?: number;
+  kubernetesSizeMb?: number;
+  mountPath: string;
 }
 
 export interface WebhookEndpoint {

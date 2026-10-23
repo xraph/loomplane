@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xraph/loomplane/internal/manageddb"
 )
@@ -74,11 +75,17 @@ func (m SQLMutation) check(ctx context.Context) error {
 }
 
 type sqlOperation struct {
-	Name          string `json:"name"`
-	Status        string `json:"status"`
-	TargetID      string `json:"targetId"`
-	TargetProject string `json:"targetProject"`
-	Type          string `json:"operationType"`
+	Kind          string    `json:"kind"`
+	User          string    `json:"user"`
+	InsertedAt    time.Time `json:"insertTime"`
+	StartedAt     time.Time `json:"startTime"`
+	EndedAt       time.Time `json:"endTime"`
+	Warning       *struct{} `json:"apiWarning"`
+	Name          string    `json:"name"`
+	Status        string    `json:"status"`
+	TargetID      string    `json:"targetId"`
+	TargetProject string    `json:"targetProject"`
+	Type          string    `json:"operationType"`
 	Error         *struct {
 		Errors []struct {
 			Message string `json:"message"`
@@ -87,7 +94,7 @@ type sqlOperation struct {
 }
 
 func (s *Session) validateSQLOperation(op sqlOperation, name, instance string, types []string) error {
-	if op.Name == "" || strings.ContainsAny(op.Name, "/\\?#") || (name != "" && name != op.Name) ||
+	if !validSQLPathID(op.Name) || (name != "" && name != op.Name) ||
 		!slices.Contains([]string{"PENDING", "RUNNING", "DONE"}, op.Status) ||
 		(op.TargetProject != "" && op.TargetProject != s.key.ProjectID) ||
 		(op.TargetID != "" && op.TargetID != instance) ||
@@ -105,7 +112,7 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 	}
 	var op sqlOperation
 	if track.Resume != "" {
-		if strings.ContainsAny(track.Resume, "/\\?#") {
+		if !validSQLPathID(track.Resume) {
 			return errors.New("invalid cloud sql operation identity")
 		}
 		if err := s.do(ctx, http.MethodGet, s.sqlPath("/operations/"+url.PathEscape(track.Resume)), nil, &op); err != nil {

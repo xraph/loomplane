@@ -1244,6 +1244,72 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.Route"
       },
+      "ComponentConfig": {
+        "type": "object",
+        "required": [
+          "kind",
+          "resource",
+          "revision",
+          "component",
+          "protection"
+        ],
+        "properties": {
+          "component": {
+            "$ref": "#/components/schemas/ResolvedComponent"
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "protection": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "CompositionConfig": {
+        "type": "object",
+        "required": [
+          "kind",
+          "version",
+          "revision"
+        ],
+        "properties": {
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Output"
+            }
+          },
+          "revision": {
+            "type": "string"
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GeneratedSecret"
+            }
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "DNSRecord": {
         "type": "object",
         "required": [
@@ -1392,6 +1458,9 @@
           "address": {
             "type": "string"
           },
+          "field": {
+            "type": "string"
+          },
           "from": {
             "type": "string"
           },
@@ -1401,7 +1470,37 @@
           "key": {
             "type": "string"
           },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "EnvVar": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/Ref"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "template": {
+            "type": "string"
+          },
+          "value": {
             "type": "string"
           }
         }
@@ -1438,7 +1537,16 @@
           "project_id": {
             "type": "string"
           },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncRoute"
+            }
+          },
           "routing_evidence": {
+            "type": "string"
+          },
+          "routing_status": {
             "type": "string"
           },
           "services": {
@@ -1501,6 +1609,20 @@
           }
         }
       },
+      "File": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "mode": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
       "Finding": {
         "type": "object",
         "required": [
@@ -1554,6 +1676,26 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/gateway.Route"
       },
+      "GeneratedSecret": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        }
+      },
       "GraphSummary": {
         "properties": {
           "deployable": {
@@ -1582,6 +1724,21 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/graph.Summary"
       },
+      "HTTPProbe": {
+        "type": "object",
+        "required": [
+          "port",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "port": {
+            "type": "string"
+          }
+        }
+      },
       "Held": {
         "type": "object",
         "properties": {
@@ -1594,6 +1751,34 @@
         "type": "object",
         "properties": {
           "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "KubernetesRule": {
+        "type": "object",
+        "required": [
+          "api_groups",
+          "resources",
+          "verbs"
+        ],
+        "properties": {
+          "api_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verbs": {
             "type": "array",
             "items": {
               "type": "string"
@@ -1737,6 +1922,36 @@
           }
         }
       },
+      "Output": {
+        "type": "object",
+        "required": [
+          "name",
+          "env_key"
+        ],
+        "properties": {
+          "env_key": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/components/schemas/Ref"
+          },
+          "name": {
+            "type": "string"
+          },
+          "per_consumer": {
+            "type": "boolean"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "template": {
+            "type": "string"
+          }
+        }
+      },
       "PlanSource": {
         "type": "object",
         "required": [
@@ -1834,6 +2049,31 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
       },
+      "Port": {
+        "type": "object",
+        "required": [
+          "name",
+          "container",
+          "protocol"
+        ],
+        "properties": {
+          "container": {
+            "type": "integer"
+          },
+          "control": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "routable": {
+            "type": "boolean"
+          }
+        }
+      },
       "Recipe": {
         "type": "object",
         "required": [
@@ -1851,6 +2091,18 @@
           },
           "backup_format": {
             "type": "string"
+          },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "family": {
+            "type": "string"
+          },
+          "fs_group": {
+            "type": "integer"
           },
           "id": {
             "type": "string"
@@ -1872,6 +2124,107 @@
           }
         }
       },
+      "Ref": {
+        "type": "object",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "dependency": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolvedComponent": {
+        "type": "object",
+        "required": [
+          "name",
+          "role",
+          "resources",
+          "image",
+          "step"
+        ],
+        "properties": {
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/File"
+            }
+          },
+          "image": {
+            "type": "string"
+          },
+          "kubernetes_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KubernetesRule"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Port"
+            }
+          },
+          "protection": {
+            "type": "string"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/HTTPProbe"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/Resources"
+          },
+          "role": {
+            "type": "string"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "timeout": {
+            "type": "integer"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Volume"
+          }
+        }
+      },
       "ResourceConfig": {
         "type": "object",
         "required": [
@@ -1881,6 +2234,15 @@
         "properties": {
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
+          },
+          "cloud_placement": {
+            "$ref": "#/components/schemas/CloudPlacement"
+          },
+          "component": {
+            "$ref": "#/components/schemas/ComponentConfig"
+          },
+          "composition": {
+            "$ref": "#/components/schemas/CompositionConfig"
           },
           "kind": {
             "type": "string"
@@ -1894,6 +2256,12 @@
           "region": {
             "type": "string"
           },
+          "routable_ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
           "target": {
             "type": "string"
           },
@@ -1903,6 +2271,21 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "Resources": {
+        "type": "object",
+        "required": [
+          "cpu_millis",
+          "memory_mb"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_mb": {
+            "type": "integer"
           }
         }
       },
@@ -2073,6 +2456,9 @@
           },
           "commit_sha": {
             "type": "string"
+          },
+          "component": {
+            "$ref": "#/components/schemas/ComponentConfig"
           },
           "context": {
             "type": "string"
@@ -2285,6 +2671,69 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "SyncRoute": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "prepare_id",
+          "status",
+          "hostname",
+          "not_before"
+        ],
+        "properties": {
+          "cutover_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "not_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "prepare_id": {
+            "type": "string"
+          },
+          "record_type": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "Volume": {
+        "type": "object",
+        "required": [
+          "mount_path"
+        ],
+        "properties": {
+          "fs_group": {
+            "type": "integer"
+          },
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
           }
         }
       },

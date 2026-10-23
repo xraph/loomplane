@@ -32,7 +32,9 @@ const GroupName = "loomplane"
 func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
 	g.MustRegister(
-		statements("20261030000100", "db_gateways", dbGatewaysUp, dbGatewaysDown),
+		statements("20261030000300", "db_gateways", dbGatewaysUp, dbGatewaysDown),
+		statements("20261030000200", "catalog_proxy_sessions", catalogProxySessionsUp, catalogProxySessionsDown),
+		statements("20261030000100", "catalog_endpoints", catalogEndpointsUp, catalogEndpointsDown),
 		statements("20261029000500", "cloud_default_switch", cloudDefaultSwitchUp, cloudDefaultSwitchDown),
 		statements("20261029000400", "cloud_tags", cloudTagsUp, cloudTagsDown),
 		statements("20261028000400", "workload_attempt_safety", workloadAttemptSafetyUp, nil),

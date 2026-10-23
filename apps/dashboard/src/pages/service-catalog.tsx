@@ -537,11 +537,93 @@ function DatabaseDeployment({
   )
 }
 
-export function ServiceRecovery({ project }: { project: string }) {
+/**
+ * ServiceRecovery is a project's database recovery. It opens on production
+ * and the first database there, unless environment (an environment ID) and
+ * resource choose where it starts; both can still be changed. A chosen
+ * environment or resource that isn't there says so rather than opening on
+ * another one.
+ */
+export function ServiceRecovery({
+  project,
+  environment,
+  resource,
+}: {
+  project: string
+  environment?: string
+  resource?: string
+}) {
+  if (!environment)
+    return (
+      <Recovery
+        project={project}
+        initialEnvironment="production"
+        initialResource={resource ?? ""}
+      />
+    )
+  return (
+    <PreselectedRecovery
+      project={project}
+      environment={environment}
+      resource={resource ?? ""}
+    />
+  )
+}
+
+// The recovery controls key environments by name, so a preselected ID waits
+// for the environments to say which name it is.
+function PreselectedRecovery({
+  project,
+  environment,
+  resource,
+}: {
+  project: string
+  environment: string
+  resource: string
+}) {
+  const environments = useQuery(useEnvironmentsList, { path: { id: project } })
+  if (environments.status === "error")
+    return (
+      <QueryError
+        error={environments.error}
+        fallback="Could not load recovery state"
+        retry={environments.refetch}
+      />
+    )
+  if (!environments.data) return <p role="status">Loading recovery state…</p>
+  const name = environments.data.environments.find(
+    (e) => e.id === environment
+  )?.name
+  if (!name)
+    return (
+      <CatalogEmpty
+        title="This environment isn't in the project"
+        description="It may have been deleted, so there is no recovery to show for it."
+      />
+    )
+  return (
+    <Recovery
+      key={`${environment}:${resource}`}
+      project={project}
+      initialEnvironment={name}
+      initialResource={resource}
+    />
+  )
+}
+
+function Recovery({
+  project,
+  initialEnvironment,
+  initialResource,
+}: {
+  project: string
+  initialEnvironment: string
+  initialResource: string
+}) {
   const [showNative, setShowNative] = useState(false)
   const { can } = useOrganization()
   const environments = useQuery(useEnvironmentsList, { path: { id: project } })
-  const [environment, setEnvironment] = useState("production")
+  const [environment, setEnvironment] = useState(initialEnvironment)
   const bindings = useQuery(useBindingsList, {
     path: { id: project },
     query: { environment },
@@ -557,7 +639,7 @@ export function ServiceRecovery({ project }: { project: string }) {
   const [deleting, setDeleting] = useState<Restore | null>(null)
   const { busy, onPendingChange } = useDeploymentWrites(project)
   const requests = useRef<Record<string, string>>({})
-  const [resource, setResource] = useState("")
+  const [resource, setResource] = useState(initialResource)
   const environmentID = environments.data?.environments.find(
     (e) => e.name === environment
   )?.id
@@ -645,25 +727,42 @@ export function ServiceRecovery({ project }: { project: string }) {
     )
   )
     return <p role="status">Loading recovery state…</p>
+  const environmentSelect = (
+    <Select
+      value={environment}
+      disabled={busy}
+      onValueChange={(value) => setEnvironment(value ?? "production")}
+    >
+      <SelectTrigger aria-label="Recovery environment" className="w-44">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {environments.data?.environments.map((e) => (
+          <SelectItem key={e.id} value={e.name}>
+            {e.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+  // A resource chosen by the caller that has no recovery here isn't
+  // swapped for another database.
+  if (initialResource && !resources.includes(resource))
+    return (
+      <div className="grid min-w-0 gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {environmentSelect}
+        </div>
+        <CatalogEmpty
+          title={`No recovery for ${resource} in ${environment}`}
+          description="Loomplane doesn't back it up in this environment, and it has no backups kept here. Choose the environment where it runs."
+        />
+      </div>
+    )
   return (
     <div className="grid min-w-0 gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Select
-          value={environment}
-          disabled={busy}
-          onValueChange={(value) => setEnvironment(value ?? "production")}
-        >
-          <SelectTrigger aria-label="Recovery environment" className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {environments.data?.environments.map((e) => (
-              <SelectItem key={e.id} value={e.name}>
-                {e.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {environmentSelect}
         <Button
           size="sm"
           variant="outline"
@@ -734,7 +833,7 @@ export function ServiceRecovery({ project }: { project: string }) {
       {managedRecovery ? (
         <CatalogEmpty
           title="Managed database recovery"
-          description="Open Cloud snapshots to inspect captured RDS history. Restore and PITR controls remain in your cloud account."
+          description="Open Cloud snapshots to inspect captured RDS and Cloud SQL history. Restore and PITR controls remain in your cloud account."
         >
           <Button
             variant="outline"

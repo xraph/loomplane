@@ -11,7 +11,7 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-function fixture({ fail = false, empty = false } = {}) {
+function fixture({ fail = false, empty = false, cloudSQL = false } = {}) {
   let refreshes = 0
   const source = {
     id: "source",
@@ -19,9 +19,9 @@ function fixture({ fail = false, empty = false } = {}) {
     project_id: "p",
     environment_id: "prod",
     name: "database",
-    provider: "rds",
+    provider: cloudSQL ? "cloud-sql" : "rds",
     connection_id: "account",
-    physical_id: "db-original",
+    physical_id: cloudSQL ? "cloud-sql:original" : "db-original",
     region: "us-east-1",
     captured_at: "2026-10-21T00:00:00Z",
     state: "ready",
@@ -134,4 +134,15 @@ it("requests the selected environment before source pagination", async () => {
   show()
   await screen.findByText("No captured cloud database history")
   expect(selectedEnvironment).toBe("prod")
+})
+
+it("explains missing source proof in partial Cloud SQL inventory", async () => {
+  fixture({ cloudSQL: true })
+  show()
+  await screen.findByText("daily")
+  expect(
+    screen.getByText(/matching source creation metadata/i)
+  ).toBeInTheDocument()
+  expect(screen.getByText(/point time/i)).toBeInTheDocument()
+  expect(screen.getByText(/partial scan/i)).toBeInTheDocument()
 })

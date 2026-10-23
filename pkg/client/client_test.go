@@ -1,10 +1,13 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 func TestClient_errorsAndLookup(t *testing.T) {
@@ -44,5 +47,38 @@ func TestClient_errorsAndLookup(t *testing.T) {
 	}
 	if _, err := c.FindProject(ctx, "api"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("an unknown name: %v", err)
+	}
+}
+
+func TestEditManifestSendsLinkUnlinkAndSetUse(t *testing.T) {
+	var got map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/projects/p1/manifest/edits" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"revision":2}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "lp_live_k")
+	cases := map[string]ManifestEdit{
+		"link":    {Link: &ServiceLink{Service: "api", Need: "fabriq", Options: map[string]string{"tenant": "acme"}}},
+		"unlink":  {Unlink: &ServiceLink{Service: "api", Need: "fabriq"}},
+		"set_use": {SetUse: &ResourceUse{Resource: "fabriq", Dependency: "redis", Use: manifest.Use{Resource: "cache"}}},
+	}
+	want := map[string]string{
+		"link":    `{"service":"api","need":"fabriq","options":{"tenant":"acme"}}`,
+		"unlink":  `{"service":"api","need":"fabriq"}`,
+		"set_use": `{"resource":"fabriq","dependency":"redis","use":{"resource":"cache"}}`,
+	}
+	for key, edit := range cases {
+		got = nil
+		if _, err := c.EditManifest(t.Context(), "p1", edit); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || string(got[key]) != want[key] {
+			t.Errorf("%s: sent %s, want {%q: %s}", key, got, key, want[key])
+		}
 	}
 }

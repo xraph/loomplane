@@ -53,8 +53,8 @@ This API supports the following authentication methods:
 
 ## API Overview
 
-- **Total Endpoints**: 190
-- **REST Endpoints**: 188
+- **Total Endpoints**: 196
+- **REST Endpoints**: 194
 - **WebSocket Endpoints**: 1
 - **SSE Endpoints**: 1
 

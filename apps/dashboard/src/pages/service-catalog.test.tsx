@@ -149,53 +149,59 @@ it("keeps a failed provider read distinct from having no eligible cloud accounts
   ).not.toBeInTheDocument()
 })
 
-it("identifies managed recovery as pending instead of offering container backups", async () => {
-  const fixture = managedDatabaseFixture("rds")
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-    const path = String(input)
-    if (path.endsWith("/providers"))
-      return response(managedWire({ providers: [fixture.provider] }))
-    if (path.endsWith("/projects"))
-      return response({ projects: [{ id: "p", name: "Managed orders" }] })
-    if (path.endsWith("/environments"))
-      return response({ environments: [{ id: "prod", name: "production" }] })
-    if (path.includes("/bindings"))
-      return response({
-        bindings: [
-          {
-            id: "binding",
-            name: "database",
-            subject: "resource",
-            provider: "rds",
-            environment_id: "prod",
-            config: {
-              kind: "postgres",
-              managed: { profile: { id: "postgresql-17-rds" } },
+it.each(["rds", "cloud-sql"] as const)(
+  "identifies %s managed recovery without offering container backups",
+  async (provider) => {
+    const fixture = managedDatabaseFixture(provider)
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith("/providers"))
+        return response(managedWire({ providers: [fixture.provider] }))
+      if (path.endsWith("/projects"))
+        return response({ projects: [{ id: "p", name: "Managed orders" }] })
+      if (path.endsWith("/environments"))
+        return response({ environments: [{ id: "prod", name: "production" }] })
+      if (path.includes("/bindings"))
+        return response({
+          bindings: [
+            {
+              id: "binding",
+              name: "database",
+              subject: "resource",
+              provider,
+              environment_id: "prod",
+              config: {
+                kind: "postgres",
+                managed: { profile: { id: `postgresql-17-${provider}` } },
+              },
             },
-          },
-        ],
+          ],
+        })
+      return response({
+        connections: [],
+        backups: [],
+        restores: [],
+        policies: [],
       })
-    return response({
-      connections: [],
-      backups: [],
-      restores: [],
-      policies: [],
     })
-  })
-  mountRecovery()
-  expect(
-    await screen.findByText("Managed database recovery")
-  ).toBeInTheDocument()
-  expect(
-    screen.queryByText("No catalog database in this environment")
-  ).not.toBeInTheDocument()
-  expect(
-    screen.queryByRole("button", { name: "Back up now" })
-  ).not.toBeInTheDocument()
-  expect(
-    screen.queryByRole("heading", { name: "Isolated recovery copies" })
-  ).not.toBeInTheDocument()
-})
+    mountRecovery()
+    expect(
+      await screen.findByText("Managed database recovery")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("No catalog database in this environment")
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/captured RDS and Cloud SQL history/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Back up now" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", { name: "Isolated recovery copies" })
+    ).not.toBeInTheDocument()
+  }
+)
 it("deploys one engine per page, with no project or recovery reads", async () => {
   const requests: string[] = []
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {

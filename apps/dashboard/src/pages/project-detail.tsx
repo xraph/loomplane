@@ -1,4 +1,6 @@
 import {
+  BoxIcon,
+  ChevronRightIcon,
   CopyIcon,
   FolderGit2Icon,
   GitBranchIcon,
@@ -6,11 +8,12 @@ import {
   RocketIcon,
   SparklesIcon,
 } from "lucide-react"
-import { type ReactNode, useEffect, useRef, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useBindingsList,
   useEnvironmentsList,
   useProjectsDelete,
   useProjectsGet,
@@ -18,12 +21,14 @@ import {
   useProjectsUpdate,
 } from "@/client/forge/loomplane/hooks"
 import type {
+  Binding,
   Environment,
   Graph,
   Project,
   ProjectView,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
+import { useQueries } from "@/client/queries"
 import {
   AnalysisBanner,
   AnalysisHistory,
@@ -39,6 +44,8 @@ import {
 } from "@/components/architecture"
 import { DatabaseGateways } from "@/components/database-gateway"
 import { DeployTab } from "@/components/deploy"
+import { ProductIcon } from "@/components/product-icon"
+import { QueryError } from "@/components/query-error"
 import { EnvironmentCards } from "@/components/environment-manager"
 import { Page, PageHeading } from "@/components/page"
 import { ProjectStylePopover } from "@/components/project-style-picker"
@@ -97,6 +104,11 @@ import {
   resourceLabel,
   shortSHA,
 } from "@/lib/architecture"
+import {
+  catalogKind,
+  catalogResources,
+  parseResourceConfig,
+} from "@/lib/catalog-kinds"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ServiceRecovery } from "@/pages/service-catalog"
@@ -450,6 +462,7 @@ function Body({
           </Discovered>
         </TabsContent>
         <TabsContent value="services" className="grid gap-4">
+          <Resources project={project} environments={environments} />
           <Discovered
             project={project}
             analyses={analyses}
@@ -530,6 +543,129 @@ function Body({
         </SheetContent>
       </Sheet>
     </>
+  )
+}
+
+/**
+ * Resources lists what runs as a resource in each environment, each row
+ * opening its service page. It shows nothing once every environment has
+ * answered with nothing deployed; an environment that couldn't be read or
+ * can't be seen says so, so it never reads as empty.
+ */
+export function Resources({
+  project,
+  environments,
+}: {
+  project: Project
+  environments?: Environment[]
+}) {
+  const list = useMemo(() => environments ?? [], [environments])
+  const args = useMemo(
+    () =>
+      list.map((e) => ({
+        path: { id: project.id },
+        query: { environment: e.name },
+      })),
+    [list, project.id]
+  )
+  const { states, refetch } = useQueries(useBindingsList, args)
+  const rows = list.flatMap((environment, i) =>
+    catalogResources(states[i]?.data?.bindings ?? []).map((binding) => ({
+      environment,
+      binding,
+    }))
+  )
+  const failures = list.flatMap((environment, i) => {
+    const state = states[i]
+    return state?.status === "error"
+      ? [{ environment, error: state.error }]
+      : []
+  })
+  const forbidden = (error: unknown) => [401, 403].includes(statusOf(error))
+  const denied = failures.filter((f) => forbidden(f.error))
+  const failed = failures.filter((f) => !forbidden(f.error))
+  const loading = !environments || states.some((s) => s?.status === "pending")
+  if (rows.length === 0 && failures.length === 0)
+    return loading ? (
+      <Skeleton
+        role="status"
+        aria-label="Loading resources"
+        className="h-12 w-full rounded-xl"
+      />
+    ) : null
+  const names = (items: { environment: Environment }[]) =>
+    items.map((f) => f.environment.name).join(", ")
+  return (
+    <section aria-label="Resources" className="grid gap-2">
+      <h2 className="text-[15px] font-semibold">
+        Resources{" "}
+        <span className="font-mono text-xs font-normal text-muted-foreground">
+          {rows.length}
+        </span>
+      </h2>
+      {failed.length > 0 && (
+        <QueryError
+          error={failed[0].error}
+          fallback={`What runs in ${names(failed)} couldn't be loaded.`}
+          retry={refetch}
+        />
+      )}
+      {denied.length > 0 && (
+        <p className="text-[13px] text-muted-foreground">
+          Your role can&apos;t see what runs in {names(denied)}.
+        </p>
+      )}
+      {rows.length > 0 && (
+        <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
+          {rows.map(({ environment, binding }) => (
+            <ResourceRow
+              key={`${environment.id}:${binding.id}`}
+              project={project}
+              environment={environment}
+              binding={binding}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ResourceRow({
+  project,
+  environment,
+  binding,
+}: {
+  project: Project
+  environment: Environment
+  binding: Binding
+}) {
+  const config = parseResourceConfig(binding)
+  const kind = config?.composition?.kind ?? config?.kind ?? binding.engine
+  const module = catalogKind(kind)
+  const title = module?.title ?? (kind ? resourceLabel(kind) : "Resource")
+  return (
+    <Link
+      to="/projects/$id/catalog/$resource"
+      params={{ id: project.id, resource: binding.name }}
+      search={{ environment: environment.id }}
+      className="group flex items-center gap-3 border-t px-4 py-2.5 text-foreground transition-colors first:border-t-0 hover:bg-subtle"
+    >
+      <ProductIcon
+        product={module?.logo}
+        fallback={BoxIcon}
+        label={title}
+        size="sm"
+      />
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className="truncate text-sm font-semibold">{binding.name}</span>
+        <span className="truncate text-xs text-muted-foreground">{title}</span>
+      </span>
+      <Badge variant="outline" className="h-5 shrink-0 font-normal capitalize">
+        {environment.name}
+      </Badge>
+      <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5" />
+    </Link>
   )
 }
 

@@ -641,7 +641,7 @@ func TestAppliedInputsUseGatewayAddress(t *testing.T) {
 	resources := map[string]*planning.Binding{"db": {Subject: planning.ResourceSubject, Name: "db"}}
 	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc",
 		Env: []planning.EnvLink{gatewayLink}}}
-	if err := r.captureAppliedVariables(ctx, gatewayDeployment, &a, services); err != nil {
+	if err := r.captureAppliedVariables(ctx, gatewayDeployment, &a, services, nil); err != nil {
 		t.Fatal(err)
 	}
 	want, extra, err := r.resourceAddress(ctx, gatewayDeployment, "web", services, gatewayLink)
@@ -669,7 +669,7 @@ func TestAppliedInputsUseGatewayAddress(t *testing.T) {
 	// A variable someone set for the gateway's address wins, as any does.
 	r.variables = fakeVariables{"svc": {"DATABASE_URL_GATEWAY": "https://mine"}}
 	b := planning.Action{ID: "service:other", Name: "other", Service: &planning.ServiceConfig{Service: "svc", Env: a.Service.Env}}
-	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services); err != nil {
+	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services, nil); err != nil {
 		t.Fatal(err)
 	}
 	if env, _, err = r.env(ctx, gatewayDeployment, b, services, resources); err != nil || env["DATABASE_URL_GATEWAY"] != "https://mine" || env["DATABASE_URL"] != want {
@@ -723,7 +723,7 @@ func TestGeneratedServicesAreNeverRepositoryServices(t *testing.T) {
 		if commitFor(d, a) != "" {
 			t.Errorf("%s has a commit", a.Name)
 		}
-		if err := r.captureAppliedVariables(t.Context(), d, &a, nil); err != nil || a.Service.AppliedInputs != nil {
+		if err := r.captureAppliedVariables(t.Context(), d, &a, nil, nil); err != nil || a.Service.AppliedInputs != nil {
 			t.Errorf("%s captured variables: %v", a.Name, err)
 		}
 		pinAppliedSource(d, plan, &a)
@@ -990,7 +990,7 @@ func TestGatewayLinkedAppsGetTheirDirectAddress(t *testing.T) {
 
 	// Through the applied-inputs snapshot, which captures what the app gets.
 	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc", Env: links}}
-	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &a, services); err != nil {
+	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &a, services, nil); err != nil {
 		t.Fatal(err)
 	}
 	if env, secret, err = r.env(ctx, gatewayDeployment, a, services, resources); err != nil {
@@ -1020,7 +1020,7 @@ func TestGatewayLinkedAppsGetTheirDirectAddress(t *testing.T) {
 		b := planning.Action{ID: "service:own", Name: "own", Service: &planning.ServiceConfig{Service: "svc", Env: links}}
 		if snapshot {
 			b.ID = "service:own-pinned"
-			if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services); err != nil {
+			if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services, nil); err != nil {
 				t.Fatal(err)
 			}
 		}

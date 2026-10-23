@@ -4,6 +4,14 @@ allowBuilds:
   esbuild: true
   msw: false
 
+# Forge's own client packages, published with the Go module they match
+# (forge v1.13.0). pnpm holds back releases younger than its minimum age, so
+# these two are let through by name. Drop the entries once 1.13.0 is old
+# enough to pass on its own.
+minimumReleaseAgeExclude:
+  - '@forge-go/client-core@1.13.0'
+  - '@forge-go/client-react@1.13.0'
+
 patchedDependencies:
   # The same patch tap carries (github.com/xraph/tap-frontend, itself ported
   # from twinos-app's for 1.7.0), plus Loomplane's cookie sessions. Three

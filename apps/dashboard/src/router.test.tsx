@@ -37,6 +37,21 @@ vi.mock("@/pages/deployment", () => ({
 vi.mock("@/pages/project-detail", () => ({
   ProjectDetail: ({ id }: { id: string }) => <h1>Project {id}</h1>,
 }))
+vi.mock("@/pages/catalog-service", () => ({
+  CatalogService: ({
+    projectId,
+    resource,
+    environmentId,
+  }: {
+    projectId: string
+    resource: string
+    environmentId: string
+  }) => (
+    <h1>
+      Service {resource} of {projectId} in {environmentId || "no environment"}
+    </h1>
+  ),
+}))
 
 beforeEach(() => {
   // jsdom has no scrolling; the router restores it in the browser.
@@ -74,6 +89,23 @@ describe("dashboard routes", () => {
     )
     expect(
       await screen.findByRole("heading", { name: "Project team/project?draft" })
+    ).toBeInTheDocument()
+  })
+
+  it("opens a catalog service page in its environment", async () => {
+    const { router } = await open("/projects/p1/catalog/app?environment=env_1")
+    expect(
+      await screen.findByRole("heading", { name: "Service app of p1 in env_1" })
+    ).toBeInTheDocument()
+    expect(router.state.location.search).toEqual({ environment: "env_1" })
+  })
+
+  it("drops an environment that isn't an ID from a catalog service link", async () => {
+    await open("/projects/p1/catalog/app?environment=%7B%7D")
+    expect(
+      await screen.findByRole("heading", {
+        name: "Service app of p1 in no environment",
+      })
     ).toBeInTheDocument()
   })
 

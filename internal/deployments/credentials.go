@@ -28,10 +28,16 @@ type ResourceSecrets interface {
 	Delete(ctx context.Context, key string) error
 }
 
-// resourceKey scopes a resource's credential to its organization,
-// environment and name, all from Loomplane's records.
-func resourceKey(orgID, environmentID, resource, field string) string {
+// ResourceKey scopes a resource's credential to its organization,
+// environment and name, all from Loomplane's records: where one field
+// kept for an action, such as a database's "url" or a composed
+// resource's "secret:<name>", lives in ResourceSecrets.
+func ResourceKey(orgID, environmentID, resource, field string) string {
 	return orgID + "/" + environmentID + "/" + resource + "/" + field
+}
+
+func resourceKey(orgID, environmentID, resource, field string) string {
+	return ResourceKey(orgID, environmentID, resource, field)
 }
 
 // ResourceURLKey is the key a resource's address is kept under, so code

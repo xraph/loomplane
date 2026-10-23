@@ -12,6 +12,7 @@ export const entities = {
   'BackupList': { fields: { 'backups': 'Backup' } },
   'Binding': { idField: 'id' },
   'BindingList': { fields: { 'bindings': 'Binding' } },
+  'CatalogconnectEndpoint': { idField: 'id' },
   'CloudSyncEvent': { idField: 'id' },
   'CloudinfraRoute': { idField: 'id' },
   'Collection': { idField: 'id' },

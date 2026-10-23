@@ -213,6 +213,115 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly catalogAdmin = {
+    /**
+     * Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure
+     */
+    open: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogproxySession> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/catalog/${encodeURIComponent(String(resource))}/admin-sessions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogproxySession"],
+      };
+
+      return this.request<types.CatalogproxySession>(config);
+    },
+
+  };
+
+  public readonly catalogEndpoints = {
+    /**
+     * Check a Postgres or Redis DSN from a target against what a kind's dependency needs, before storing it; the DSN isn't stored or returned
+     */
+    check: async (body: types.CheckInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CheckResult> => {
+      let __path = `/api/v1/catalog/endpoints/checks`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CheckInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CheckResult"],
+      };
+
+      return this.request<types.CheckResult>(config);
+    },
+
+    /**
+     * Register an external Postgres or Redis; its DSN is kept in Vault and never returned
+     */
+    create: async (body: types.CatalogconnectCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CatalogconnectCreateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The external databases and caches a catalog service can connect to, without their DSNs
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EndpointList> => {
+      let __path = `/api/v1/catalog/endpoints`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EndpointList"],
+      };
+
+      return this.request<types.EndpointList>(config);
+    },
+
+  };
+
+  public readonly catalogKinds = {
+    /**
+     * The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogKindList> => {
+      let __path = `/api/v1/catalog/kinds`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogKindList"],
+      };
+
+      return this.request<types.CatalogKindList>(config);
+    },
+
+  };
+
   public readonly cloudChanges = {
     /**
      * cloudChanges.apply
@@ -3261,17 +3370,17 @@ export class RESTClient extends Client {
     /**
      * The signed-in user, their active organization and their permissions in it
      */
-    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Session> => {
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.IdentitySession> => {
       let __path = `/api/v1/session`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Session"],
+        responseCodec: CODECS["IdentitySession"],
       };
 
-      return this.request<types.Session>(config);
+      return this.request<types.IdentitySession>(config);
     },
 
   };

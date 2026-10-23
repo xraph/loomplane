@@ -280,6 +280,7 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"scale", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["scale"]), Scale{}},
 		{"size", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["size"]), Size{}},
 		{"resource", props(defs["resource"]), Resource{}},
+		{"use", props(defs["use"]), Use{}},
 		{"resource settings", props(envOverride), ResourceSettings{}},
 		{"gateway", props(defs["gateway"]), Gateway{}},
 		{"database gateway", props(schema["properties"].(map[string]any)["database_gateway"]), DatabaseGateway{}},
@@ -374,6 +375,190 @@ func TestParse_held(t *testing.T) {
 	}
 	if out, _ := Marshal(&Manifest{Version: 1}); strings.Contains(string(out), "held") {
 		t.Fatalf("Marshal wrote an unset held:\n%s", out)
+	}
+}
+
+const usesEndpoint = "endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae"
+
+func TestUsesValidation(t *testing.T) {
+	tests := []struct {
+		name, yaml, want string
+	}{
+		{"both resource and external", "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, external: " + usesEndpoint + "}", "resources.gateway.uses.postgres: choose resource or external, not both"},
+		{"resource that isn't there", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: nope}", "resources.gateway.uses.postgres.resource: \"nope\" isn't a resource in this manifest"},
+		{"a service isn't a resource", "version: 1\nservices:\n  api: {source: x}\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: api}", "\"api\" isn't a resource in this manifest"},
+		{"resource names itself", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: gateway}", "resources.gateway.uses.postgres.resource: a resource can't use itself"},
+		{"external that isn't an endpoint", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: x}", "resources.gateway.uses.postgres.external: \"x\" isn't a catalog endpoint ID"},
+		{"external with the wrong prefix", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: target_01jbz7q5mx8vh3k2r9t4w6y0ae}", "isn't a catalog endpoint ID"},
+		{"disabled but connected to a resource", "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, enabled: false}", "resources.gateway.uses.postgres: enabled: false can't be set with resource or external"},
+		{"disabled but connected to an endpoint", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: " + usesEndpoint + ", enabled: false}", "enabled: false can't be set with resource or external"},
+		{"bad dependency name", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      Bad: {enabled: true}", "resources.gateway.uses.Bad: the name must be"},
+		{"unknown field", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {kind: postgres}", "field kind not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			if err == nil {
+				t.Fatal("parsed")
+			}
+			if !errors.Is(err, ErrInvalid) {
+				t.Errorf("%v doesn't wrap ErrInvalid", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsesAccepts(t *testing.T) {
+	for name, doc := range map[string]string{
+		"nothing set takes a new one": "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {}",
+		"switched off":                "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      falkordb: {enabled: false}",
+		"switched on":                 "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      falkordb: {enabled: true}",
+		"enabled with a resource":     "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, enabled: true}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(doc)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestUsesRoundTrips(t *testing.T) {
+	doc := `version: 1
+resources:
+  db:
+    kind: postgres
+  gateway:
+    kind: sample
+    target: conn_1
+    uses:
+      postgres:
+        resource: db
+      redis:
+        external: ` + usesEndpoint + `
+      falkordb:
+        enabled: true
+`
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uses := m.Resources["gateway"].Uses
+	on := true
+	want := map[string]Use{
+		"postgres": {Resource: "db"},
+		"redis":    {External: usesEndpoint},
+		"falkordb": {Enabled: &on},
+	}
+	if !reflect.DeepEqual(uses, want) {
+		t.Fatalf("uses = %+v, want %+v", uses, want)
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil {
+		t.Fatalf("reparse: %v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(m, again) {
+		t.Errorf("round trip changed the manifest:\n%s", out)
+	}
+	for _, s := range []string{"uses:", "resource: db", "external: " + usesEndpoint, "enabled: true"} {
+		if !strings.Contains(string(out), s) {
+			t.Errorf("lost %q:\n%s", s, out)
+		}
+	}
+}
+
+const needOptionsDoc = `version: 1
+services:
+  api:
+    source: services/api
+    needs: [db, fabriq]
+    need_options:
+      fabriq:
+        tenant: acme
+        plan_tier: "2"
+resources:
+  db:
+    kind: postgres
+  fabriq:
+    kind: sample
+`
+
+func TestNeedOptionsValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		opts string
+		want string
+	}{
+		{"for a resource it doesn't need", "      cache: {tenant: acme}\n", "need_options.cache isn't in needs"},
+		{"for something that isn't a need at all", "      fabriq: {tenant: acme}\n      other: {a: b}\n", "need_options.other isn't in needs"},
+		{"option name in capitals", "      fabriq: {Tenant: acme}\n", `"Tenant" isn't an option name`},
+		{"option name with a hyphen", "      fabriq: {plan-tier: gold}\n", `"plan-tier" isn't an option name`},
+		{"option name too long", "      fabriq: {" + strings.Repeat("a", 33) + ": x}\n", "isn't an option name"},
+		{"value of 201 characters", "      fabriq: {tenant: " + strings.Repeat("a", 201) + "}\n", "is 201 characters; the most is 200"},
+		{"value with a newline", "      fabriq: {tenant: \"acme\\nevil\"}\n", "can't hold a newline or other control character"},
+		{"value with a tab", "      fabriq: {tenant: \"a\\tb\"}\n", "can't hold a newline or other control character"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := "version: 1\nservices:\n  api:\n    source: services/api\n    needs: [db, fabriq]\n    need_options:\n" + tt.opts +
+				"resources:\n  db: {kind: postgres}\n  cache: {kind: redis}\n  fabriq: {kind: sample}\n"
+			_, err := Parse([]byte(doc))
+			var ps Problems
+			if !errors.As(err, &ps) {
+				t.Fatalf("got %v, want problems", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("got %v, want %q", err, tt.want)
+			}
+		})
+	}
+	if _, err := Parse([]byte(needOptionsDoc)); err != nil {
+		t.Fatalf("a valid manifest: %v", err)
+	}
+	ok := strings.Replace(needOptionsDoc, "tenant: acme", "tenant: "+strings.Repeat("a", 200), 1)
+	if _, err := Parse([]byte(ok)); err != nil {
+		t.Errorf("200 characters is allowed: %v", err)
+	}
+}
+
+func TestNeedOptionsRoundTrip(t *testing.T) {
+	m, err := Parse([]byte(needOptionsDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]string{"fabriq": {"tenant": "acme", "plan_tier": "2"}}
+	if got := m.Services["api"].NeedOptions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("need_options %v, want %v", got, want)
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := again.Services["api"].NeedOptions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after Marshal %v, want %v\n%s", got, want, out)
+	}
+	// A service without options writes none.
+	plain, err := Parse([]byte("version: 1\nservices:\n  api: {source: services/api}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := Marshal(plain); strings.Contains(string(out), "need_options") {
+		t.Errorf("wrote need_options for a service with none:\n%s", out)
+	}
+	data, err := json.Marshal(m.Services["api"])
+	if err != nil || !strings.Contains(string(data), `"need_options"`) {
+		t.Errorf("JSON %s, %v", data, err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"reflect"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
@@ -54,7 +55,9 @@ func (r *Runner) validateReleaseRoutes(ctx context.Context, job *Job, current *p
 			return decodeErr
 		}
 		candidate := job.Action.Service.CloudPlacement
-		if candidate.Allocation != job.Plan.ID || (source.CloudPlacement != nil && source.CloudPlacement.Allocation == candidate.Allocation) {
+		// Shared acceptance retains the preview's immutable allocation key. Its
+		// stored participant plan and reservation prove ownership during admission.
+		if (job.Plan.CloudSyncID == "" && candidate.Allocation != job.Plan.ID) || (source.CloudPlacement != nil && source.CloudPlacement.Allocation == candidate.Allocation) {
 			return errors.New("routed candidate allocation differs from its accepted plan")
 		}
 		if r.routes == nil {
@@ -110,7 +113,11 @@ func reviewedActionsComplete(d *Deployment, plan *planning.Plan) error {
 	return nil
 }
 
-func (r *Runner) cleanupRoutedAction(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action) (cleanupErr error) {
+func (r *Runner) cleanupRoutedAction(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action) error {
+	return r.finalizeReleaseAction(ctx, d, plan, a, true, nil, nil)
+}
+
+func (r *Runner) finalizeReleaseAction(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action, cleanup bool, progress func(cloudprofiles.SyncRoute) error, actor *security.Principal) (cleanupErr error) {
 	poolLock, err := r.beginPoolExecution(ctx, plan, a)
 	if err != nil {
 		return err
@@ -123,7 +130,7 @@ func (r *Runner) cleanupRoutedAction(ctx context.Context, d *Deployment, plan *p
 	if err != nil {
 		return err
 	}
-	defer func() { cleanupErr = errors.Join(cleanupErr, finishAttempt(cleanupErr == nil)) }()
+	defer func() { cleanupErr = errors.Join(cleanupErr, finishAttempt(cleanup && cleanupErr == nil)) }()
 	fresh, err := r.store.GetDeployment(ctx, d.OrgID, d.ID)
 	if err != nil {
 		return err
@@ -142,17 +149,46 @@ func (r *Runner) cleanupRoutedAction(ctx context.Context, d *Deployment, plan *p
 		if bound.PlanID != plan.ID {
 			return errors.New("a newer release owns the current binding")
 		}
-		if r.routes == nil {
-			return errors.New("release route coordinator is unavailable")
-		}
 		step := fresh.Step(a.ID)
-		job := &Job{Deployment: fresh, Plan: plan, Action: a, Binding: bound, Progress: func(string, string) {}}
-		in := cloudinfra.ReleaseRouteRequest{Key: plan.ID + "/" + a.ID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Service: a.Name, CloudID: a.Service.CloudPlacement.CloudID, InstanceID: bound.ExternalID, Routes: a.Routes, DrainSeconds: 60}
-		if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
-			return effectErr
+		execution := fresh
+		if actor != nil {
+			current := *fresh
+			current.StartedBy = actor.UserID
+			execution = &current
 		}
-		if routeErr := r.routes.ReconcileReleaseRoutes(ctx, principal(job), in); routeErr != nil {
-			return fmt.Errorf("route %s: %w", a.Name, routeErr)
+		job := &Job{BuildCredentials: r.credentials, Deployment: execution, Plan: plan, Action: a, Binding: bound, Progress: func(string, string) {}}
+		if len(a.Routes) > 0 {
+			if r.routes == nil {
+				return errors.New("release route coordinator is unavailable")
+			}
+			in := cloudinfra.ReleaseRouteRequest{Key: plan.ID + "/" + a.ID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Service: a.Name, CloudID: a.Service.CloudPlacement.CloudID, InstanceID: bound.ExternalID, Routes: a.Routes, DrainSeconds: 60, Checkpoint: progress}
+			in.CleanupOnly = cleanup && plan.CloudSyncID != ""
+			if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+				return effectErr
+			}
+			if _, fenced := server.EffectFenceFrom(ctx); fenced {
+				job.Connection, job.Credential, err = r.credentials.Credential(ctx, d.OrgID, a.ConnectionID)
+				if err != nil {
+					return err
+				}
+				if err := preparePoolEffects(ctx, r.executors[a.Provider], job); err != nil {
+					return err
+				}
+			}
+			if routeErr := r.routes.ReconcileReleaseRoutes(ctx, principal(job), in); routeErr != nil {
+				return fmt.Errorf("route %s: %w", a.Name, routeErr)
+			}
+		}
+		if !cleanup {
+			return nil
+		}
+		if authErr := r.authorizeCloudSourceCleanup(ctx, plan); authErr != nil {
+			return authErr
+		}
+		if plan.CloudSyncID != "" {
+			if checkErr := r.validateCloudPlacementAuthority(ctx, plan, a, nil, true); checkErr != nil {
+				return checkErr
+			}
 		}
 		rc := readReplaceCheckpoint(step.Checkpoint)
 		checkpoint := func(raw []byte) error {

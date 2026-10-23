@@ -119,6 +119,9 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	if recoverErr := state.recoverCreate(ctx, s, version); recoverErr != nil {
+		return nil, recoverErr
+	}
 	ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
 	job.Progress(StepDeploying, "Creating the database instance; this takes several minutes")
 	spec := gcp.SQLInstanceSpec{

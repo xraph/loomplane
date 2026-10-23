@@ -340,7 +340,7 @@ func dbGatewayControlURL(public string) (string, error) {
 }
 
 // resourceAddress is what app gets in link.Key for the resource it links:
-// the address kept for it, or, when the plan links it through the
+// the field the link reads, its address unless it names another, or, when the plan links it through the
 // database gateway, that address pointed at the gateway under the link's
 // suffix, with the gateway's own address in Key+GatewaySuffix and the
 // address kept for it, unchanged and secret, in Key+DirectSuffix. The plan
@@ -355,12 +355,19 @@ func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string,
 	if r.resources == nil {
 		return "", nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", app, resource)
 	}
-	raw, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, resource, ResourceURL))
+	field, err := linkField(link)
+	if err != nil {
+		return "", nil, err
+	}
+	raw, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, resource, field))
 	if err != nil {
 		return "", nil, fmt.Errorf("%s needs %s: %w", app, resource, err)
 	}
 	if link.Gateway == "" {
 		return string(raw), nil, nil
+	}
+	if field != ResourceURL {
+		return "", nil, fmt.Errorf("%s reads %s of %s through the database gateway, which only stands in for a resource's address", app, field, resource)
 	}
 	gw, suffix := servingGateway(services, resource)
 	switch {
