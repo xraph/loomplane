@@ -829,12 +829,16 @@ func (s *Service) filterCloudPreviewAssignments(ctx context.Context, p security.
 		}
 		assignment := **field
 		assignment.Targets = []cloudprofiles.Target{}
+		assignment.DefaultPlacement = nil
 		if grants, ok := s.cloudProfiles.(cloudprofiles.GrantStore); ok {
 			grant, err := grants.GetProjectGrant(ctx, p.OrgID, assignment.CloudID, preview.ProjectID)
 			if err != nil && !errors.Is(err, cloudprofiles.ErrNotFound) {
 				return err
 			}
 			if err == nil && !grant.Revoked {
+				if len(grant.TargetIDs) == 0 {
+					assignment.DefaultPlacement = (*field).DefaultPlacement
+				}
 				for _, target := range (*field).Targets {
 					if len(grant.TargetIDs) == 0 || slices.Contains(grant.TargetIDs, target.ID) {
 						assignment.Targets = append(assignment.Targets, target)

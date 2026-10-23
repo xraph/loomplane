@@ -33,6 +33,7 @@ import (
 )
 
 type combinedHost struct {
+	User      string `json:"user,omitempty"`
 	Container string `json:"container"`
 	Daemon    string `json:"daemon"`
 	Address   string `json:"address"`
@@ -54,7 +55,11 @@ func combinedSSH(t *testing.T, host combinedHost, private []byte) *ssh.Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := ssh.Dial("tcp", net.JoinHostPort(host.Address, "22"), &ssh.ClientConfig{User: "root", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(key), HostKeyAlgorithms: []string{key.Type()}, Timeout: 15 * time.Second})
+	user := host.User
+	if user == "" {
+		user = "root"
+	}
+	client, err := ssh.Dial("tcp", net.JoinHostPort(host.Address, "22"), &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(key), HostKeyAlgorithms: []string{key.Type()}, Timeout: 15 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,14 +367,12 @@ func TestAcceptanceSharedCloudCombined(t *testing.T) {
 		t.Fatal("web binding missing")
 		return planning.Binding{}
 	}
-	manifest := func(target, health string) string {
-		return fmt.Sprintf("version: 1\nservices:\n  web:\n    source: node:apps/web\n    cloud_target: %s\n    public: false\n    port: 80\n    health_path: %s\n    size: {cpu: 0.2, memory: 128}\n    build: {image: traefik/whoami:v1.11.0@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab}\nignore:\n  resources: [postgres, redis]\n", target, health)
-	}
+
 	var duringDeployment func(deploymentBody)
 	deploy := func(project, target, health string) deploymentBody {
 		t.Helper()
 		base := "/api/v1/projects/" + project
-		c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": manifest(target, health)}, nil)
+		c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": combinedManifest(target, health)}, nil)
 		var plan planBody
 		c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
 		waitPlanned(t, c, &plan)
@@ -829,4 +832,8 @@ func TestAcceptanceSharedCloudCombined(t *testing.T) {
 	verifyLimits("host2", routeContainers[first])
 	ledger["route_cleanup_after_revoke"] = removed
 	record()
+}
+
+func combinedManifest(target, health string) string {
+	return fmt.Sprintf("version: 1\nservices:\n  web:\n    source: node:apps/web\n    cloud_target: %s\n    public: false\n    port: 80\n    health_path: %s\n    size: {cpu: 0.2, memory: 128}\n    build: {image: traefik/whoami:v1.11.0@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab}\nignore:\n  resources: [postgres, redis]\n", target, health)
 }

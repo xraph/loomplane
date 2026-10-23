@@ -6,6 +6,9 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 func TestNormalizeDomainClaims(t *testing.T) {
@@ -42,7 +45,7 @@ func TestDomainProofExpirationAndContinuedControl(t *testing.T) {
 	now := time.Now().UTC()
 	svc := NewService(Deps{Resolver: proofResolver{[]string{"expected"}}})
 	svc.now = func() time.Time { return now }
-	zone := &Zone{Mode: "external", ProofValue: "expected", ProofExpiresAt: now.Add(-time.Second)}
+	zone := &Zone{Mode: "external", Name: "example.com", ProofName: "_loomplane.example.com", ProofValue: "expected", ProofExpiresAt: now.Add(-time.Second)}
 	if err := svc.verifyZoneControl(t.Context(), zone); !errors.Is(err, ErrConflict) {
 		t.Fatal("expired unverified proof accepted", err)
 	}
@@ -57,5 +60,64 @@ func TestDomainProofExpirationAndContinuedControl(t *testing.T) {
 	svc.Resolver = proofResolver{[]string{"another-organization-proof"}}
 	if err := svc.verifyZoneControl(t.Context(), zone); !errors.Is(err, ErrConflict) {
 		t.Fatal("foreign TXT established control", err)
+	}
+}
+
+type scopedZoneStore struct {
+	DomainStore
+	zone *Zone
+}
+
+func (*scopedZoneStore) DomainProject(context.Context, string, string) error { return nil }
+func (s *scopedZoneStore) CreateZone(_ context.Context, z *Zone) error       { s.zone = z; return nil }
+
+type scopedZoneAdapter struct{ routeDNSAdapter }
+
+func (*scopedZoneAdapter) ListZones(_ context.Context, c provider.InfrastructureCredential) ([]provider.DNSZone, error) {
+	return []provider.DNSZone{{ID: "parent", Name: "example.com", AccountID: c.AccountID, Verified: true}, {ID: "child", Name: "child.example.com", AccountID: c.AccountID, Verified: true}}, nil
+}
+func (*scopedZoneAdapter) GetZone(_ context.Context, c provider.InfrastructureCredential, name string) (provider.DNSZone, error) {
+	return provider.DNSZone{ID: "child", Name: name, AccountID: c.AccountID, Verified: true}, nil
+}
+func TestManagedProofNamespaceAndHostedZoneRemainDistinct(t *testing.T) {
+	registry := NewAdapters()
+	if err := registry.RegisterDNS("vercel", &scopedZoneAdapter{}); err != nil {
+		t.Fatal(err)
+	}
+	store := &scopedZoneStore{}
+	svc := NewService(Deps{Domains: store, Authz: cleanupTestAuth{}, Connections: routeDNSCredentials{"vercel"}, Adapters: registry})
+	zone, err := svc.CreateZone(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, ZoneInput{Name: "app.child.example.com", Mode: "managed", ConnectionID: "dns", ProjectIDs: []string{"project"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zone.ProviderZone.ID != "child" || zone.ProviderZone.Name != "child.example.com" || zone.Name != "app.child.example.com" || zone.ProofName != "_loomplane.app.child.example.com" || !zone.VerifiedAt.IsZero() {
+		t.Fatalf("scope widened: %+v", zone)
+	}
+	svc.Resolver = proofResolver{[]string{zone.ProofValue}}
+	if err = svc.verifyZoneControl(t.Context(), zone); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"child.example.com", "sibling.child.example.com", "example.com"} {
+		if _, err = routeDNSRecord(zone, host, "192.0.2.1", "route"); err == nil {
+			t.Fatalf("child proof authorized %s", host)
+		}
+	}
+	record, err := routeDNSRecord(zone, "sub.app.child.example.com", "192.0.2.1", "route")
+	if err != nil || record.Name != "sub.app" || record.ZoneID != "child" {
+		t.Fatalf("provider-relative name: %+v %v", record, err)
+	}
+	zone.Name = "child.example.com"
+	if err = svc.verifyZoneControl(t.Context(), zone); err == nil {
+		t.Fatal("child challenge verified parent namespace")
+	}
+	zone.Name = "app.child.example.com"
+	zone.ConnectionGeneration++
+	if err = svc.verifyZoneControl(t.Context(), zone); err == nil {
+		t.Fatal("changed account generation admitted proof")
+	}
+	// Cleanup checks the exact hosted zone/account even after proof loss or rotation.
+	zone.ProofValue = ""
+	if _, _, err = svc.zoneCredentialFor(t.Context(), zone, true); err != nil {
+		t.Fatal("retained hosted-zone cleanup denied", err)
 	}
 }
