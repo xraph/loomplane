@@ -166,6 +166,7 @@ class Live:
             os.killpg(child.pid, signal.SIGKILL)
             child.wait()
             raise RuntimeError(mode + " exceeded its command deadline") from None
+        self.record_exit(mode, code)
         if code:
             raise RuntimeError(
                 mode
@@ -397,6 +398,18 @@ class Live:
             "Compute and DNS cleanup verified; DNS baseline restored. Receipted DigitalOcean tags are preserved as account metadata."
         )
 
+    def record_exit(self, mode, code):
+        if (
+            mode not in {"prepare", "run", "inspect", "cleanup"}
+            or type(code) is not int
+        ):
+            raise RuntimeError("invalid process result")
+        # Fixed codes only: raw process output can contain credentials or bodies.
+        save(
+            self.directory / (mode + "-result.json"),
+            {"status": "passed" if code == 0 else "failed", "exit_code": code},
+        )
+
     def supervise(self, child, deadline):
         while child.poll() is None:
             if time.time() >= deadline:
@@ -410,8 +423,11 @@ class Live:
                 self.stop("tunnel")
                 self.stop("proxy")
             time.sleep(0.5)
+        self.record_exit("run", child.returncode)
         if child.returncode:
-            raise RuntimeError("live acceptance failed; evidence retained")
+            raise RuntimeError(
+                "live acceptance failed; inspect run-progress.json and run-result.json"
+            )
 
     def run(self, approval):
         scope = self.checked_scope(execution=True)
