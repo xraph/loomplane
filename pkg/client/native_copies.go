@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 )
 
@@ -78,11 +76,7 @@ type NativeRecoveryCopy struct {
 	DurationMS         int64                `json:"duration_ms"`
 }
 
-type NativeCopyPage struct {
-	EnvironmentID string
-	Before        string
-	Limit         int
-}
+type NativeCopyPage = NativeRecoveryPage
 
 type NativeRecoveryCopies struct {
 	Copies     []NativeRecoveryCopy `json:"copies"`
@@ -111,20 +105,9 @@ func (c *Client) NativeRecoveryCopy(ctx context.Context, id string) (*NativeReco
 }
 
 func (c *Client) NativeRecoveryCopies(ctx context.Context, project string, page NativeCopyPage) (*NativeRecoveryCopies, error) {
-	query, err := nativeRecoveryQuery(page.Before, page.Limit)
+	query, err := nativeRecoveryQuery(page)
 	if err != nil {
 		return nil, err
-	}
-	params, err := url.ParseQuery(strings.TrimPrefix(query, "?"))
-	if err != nil {
-		return nil, err
-	}
-	if page.EnvironmentID != "" {
-		params.Set("environment_id", page.EnvironmentID)
-	}
-	query = ""
-	if len(params) > 0 {
-		query = "?" + params.Encode()
 	}
 	var out NativeRecoveryCopies
 	err = c.do(ctx, http.MethodGet, "/api/v1/projects/"+esc(project)+"/native-recovery-copies"+query, nil, &out)

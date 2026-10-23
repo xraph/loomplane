@@ -12,6 +12,7 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
 import { NativeRecovery } from "@/components/native-recovery"
+import { ServiceRecovery } from "@/pages/service-catalog"
 
 const permission = vi.hoisted(() => ({ manage: true }))
 vi.mock("@/lib/organization", () => ({
@@ -31,7 +32,11 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-function fixture({ denyReview = false, noTargets = false } = {}) {
+function fixture({
+  denyReview = false,
+  noTargets = false,
+  removed = false,
+} = {}) {
   const reviews: Record<string, unknown>[] = []
   const creates: Record<string, unknown>[] = []
   const deletes: string[] = []
@@ -117,7 +122,45 @@ function fixture({ denyReview = false, noTargets = false } = {}) {
       const method = init?.method ?? "GET"
       reads.push(`${method} ${url.pathname}${url.search}`)
       if (url.pathname.endsWith("/native-recovery-sources"))
-        return reply({ sources: [source] })
+        return reply({
+          sources:
+            !url.searchParams.get("resource") ||
+            url.searchParams.get("resource") === source.name
+              ? [source]
+              : [],
+        })
+      if (url.pathname.endsWith("/environments"))
+        return reply({
+          environments: [
+            { id: "prod", name: "production" },
+            { id: "staging", name: "staging" },
+          ],
+        })
+      if (url.pathname.endsWith("/bindings"))
+        return reply({
+          bindings: removed
+            ? []
+            : [
+                {
+                  id: "managed-orders",
+                  subject: "resource",
+                  name: "orders",
+                  provider: "cloud-sql",
+                  environment_id: "prod",
+                  config: {
+                    kind: "postgres",
+                    provider: "cloud-sql",
+                    managed: { profile: { id: "postgresql-17-cloud-sql" } },
+                  },
+                },
+              ],
+        })
+      if (url.pathname.endsWith("/service-backups"))
+        return reply({ backups: [] })
+      if (url.pathname.endsWith("/service-restores"))
+        return reply({ restores: [] })
+      if (url.pathname.endsWith("/backup-policies"))
+        return reply({ policies: [] })
       if (url.pathname === "/api/v1/native-recovery-sources/source")
         return reply({ source, points: [point] })
       if (url.pathname === "/api/v1/projects/project/clouds")
@@ -208,6 +251,8 @@ function fixture({ denyReview = false, noTargets = false } = {}) {
           copies:
             !url.searchParams.get("before") &&
             url.searchParams.get("environment_id") === "prod" &&
+            (!url.searchParams.get("resource") ||
+              url.searchParams.get("resource") === "orders") &&
             copy
               ? [copy]
               : [],
@@ -446,42 +491,55 @@ it("keeps a denied copy history distinct from an empty result", async () => {
   ).not.toBeInTheDocument()
 })
 
-it("clears review and copy pagination when the project environment changes", async () => {
-  const f = fixture()
-  f.seedCopy()
-  f.control.nextBefore = "copy"
-  const view = show()
-  await screen.findByText("Copy queued")
-  await userEvent.click(screen.getByRole("button", { name: "More copies" }))
-  await waitFor(() =>
-    expect(
-      f.reads.some(
-        (url) =>
-          url.includes("before=copy") && url.includes("environment_id=prod")
-      )
-    ).toBe(true)
-  )
-  const dialog = await openReview()
-  await userEvent.click(
-    within(dialog).getByRole("button", { name: "Review capacity and charges" })
-  )
-  await within(dialog).findByText(/10 GiB/)
-  view.rerender(
-    <ClientProvider client={forgeClient}>
-      <NativeRecovery project="project" environment="staging" />
-    </ClientProvider>
-  )
-  await waitFor(() =>
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
-  )
-  await screen.findByText("No captured cloud database history")
-  expect(screen.queryByText("Copy queued")).not.toBeInTheDocument()
-  const lastPage = f.reads
-    .filter((url) => url.includes("/native-recovery-copies?"))
-    .at(-1)
-  expect(lastPage).toContain("environment_id=staging")
-  expect(lastPage).not.toContain("before=")
-})
+it.each([
+  { environment: "staging", resource: "" },
+  { environment: "prod", resource: "missing" },
+])(
+  "clears review and copy pagination when scope changes to %s",
+  async ({ environment, resource }) => {
+    const f = fixture()
+    f.seedCopy()
+    f.control.nextBefore = "copy"
+    const view = show()
+    await screen.findByText("Copy queued")
+    await userEvent.click(screen.getByRole("button", { name: "More copies" }))
+    await waitFor(() =>
+      expect(
+        f.reads.some(
+          (url) =>
+            url.includes("before=copy") && url.includes("environment_id=prod")
+        )
+      ).toBe(true)
+    )
+    const dialog = await openReview()
+    await userEvent.click(
+      within(dialog).getByRole("button", {
+        name: "Review capacity and charges",
+      })
+    )
+    await within(dialog).findByText(/10 GiB/)
+    view.rerender(
+      <ClientProvider client={forgeClient}>
+        <NativeRecovery
+          project="project"
+          environment={environment}
+          resource={resource}
+        />
+      </ClientProvider>
+    )
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    )
+    await screen.findByText("No captured cloud database history")
+    expect(screen.queryByText("Copy queued")).not.toBeInTheDocument()
+    const lastPage = f.reads
+      .filter((url) => url.includes("/native-recovery-copies?"))
+      .at(-1)
+    expect(lastPage).toContain(`environment_id=${environment}`)
+    if (resource) expect(lastPage).toContain(`resource=${resource}`)
+    expect(lastPage).not.toContain("before=")
+  }
+)
 
 it("polls retained status and requires SQL proof before describing a verified copy", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
@@ -509,4 +567,86 @@ it("polls retained status and requires SQL proof before describing a verified co
   expect(
     f.reads.filter((url) => url.includes("/native-recovery-copies?")).length
   ).toBeGreaterThanOrEqual(3)
+})
+
+it.each([false, true])(
+  "opens a chosen managed resource's retained native recovery (removed=%s)",
+  async (removed) => {
+    const f = fixture({ removed })
+    f.seedCopy({ status: "cleanup_failed" })
+    render(
+      <ClientProvider client={forgeClient}>
+        <ServiceRecovery
+          project="project"
+          environment="prod"
+          resource="orders"
+        />
+      </ClientProvider>
+    )
+    expect(
+      await screen.findByRole("button", {
+        name: "Review native copy from daily",
+      })
+    ).toBeInTheDocument()
+    expect(screen.getByText("Cleanup needs attention")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Back up now" })
+    ).not.toBeInTheDocument()
+    const sources = f.reads.find((url) =>
+      url.includes("/native-recovery-sources?")
+    )
+    const copies = f.reads.find((url) =>
+      url.includes("/native-recovery-copies?")
+    )
+    expect(sources).toContain("resource=orders")
+    expect(sources).toContain("environment_id=prod")
+    expect(copies).toContain("resource=orders")
+    expect(copies).toContain("environment_id=prod")
+  }
+)
+
+it("replaces a preselected resource's review and cursor when the default-environment entry changes", async () => {
+  const f = fixture()
+  f.seedCopy()
+  f.control.nextBefore = "copy"
+  const view = render(
+    <ClientProvider client={forgeClient}>
+      <ServiceRecovery project="project" resource="orders" />
+    </ClientProvider>
+  )
+  await screen.findByText("Copy queued")
+  await userEvent.click(screen.getByRole("button", { name: "More copies" }))
+  await waitFor(() =>
+    expect(
+      f.reads.some(
+        (url) => url.includes("before=copy") && url.includes("resource=orders")
+      )
+    ).toBe(true)
+  )
+  const dialog = await openReview()
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Review capacity and charges" })
+  )
+  await within(dialog).findByText(/10 GiB/)
+  await userEvent.click(
+    within(dialog).getByRole("checkbox", { name: /acknowledge charges/i })
+  )
+  view.rerender(
+    <ClientProvider client={forgeClient}>
+      <ServiceRecovery project="project" resource="analytics" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByText("Cloud snapshots for analytics")
+  ).toBeInTheDocument()
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("button", { name: "Review native copy from daily" })
+  ).not.toBeInTheDocument()
+  const lastPage = f.reads
+    .filter((url) => url.includes("/native-recovery-copies?"))
+    .at(-1)
+  expect(lastPage).toContain("resource=analytics")
+  expect(lastPage).not.toContain("before=")
+  expect(f.creates).toHaveLength(0)
 })

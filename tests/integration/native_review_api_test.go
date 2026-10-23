@@ -4,7 +4,9 @@ package integration
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,6 +139,58 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, lc loomctl, dsn string, s
 	if len(copies.Copies) != 1 || copies.Copies[0].ID != restored.ID || copies.Copies[0].Status != "deleted" {
 		t.Fatal("public history lost cleanup result")
 	}
+
+	var filteredSources recovery.NativeSourcesPage
+	sourceListPath := "/api/v1/projects/" + source.ProjectID + "/native-recovery-sources?environment_id=" + url.QueryEscape(source.EnvironmentID) + "&resource="
+	c.must(http.StatusOK, http.MethodGet, sourceListPath+"missing-resource", nil, &filteredSources)
+	if len(filteredSources.Sources) != 0 {
+		t.Fatal("HTTP source list ignored resource scope")
+	}
+	var filteredCopies recovery.NativeCopiesPage
+	copyListPath := "/api/v1/projects/" + source.ProjectID + "/native-recovery-copies?environment_id=" + url.QueryEscape(source.EnvironmentID) + "&resource="
+	c.must(http.StatusOK, http.MethodGet, copyListPath+"missing-resource", nil, &filteredCopies)
+	if len(filteredCopies.Copies) != 0 {
+		t.Fatal("HTTP copy list ignored resource scope")
+	}
+	c.must(http.StatusOK, http.MethodGet, sourceListPath+url.QueryEscape(source.Name), nil, &filteredSources)
+	foundSource := false
+	for _, retained := range filteredSources.Sources {
+		foundSource = foundSource || retained.ID == source.ID
+	}
+	if !foundSource {
+		t.Fatal("HTTP resource scope hid its retained source")
+	}
+	c.must(http.StatusOK, http.MethodGet, copyListPath+url.QueryEscape(source.Name), nil, &filteredCopies)
+	if len(filteredCopies.Copies) != 1 || filteredCopies.Copies[0].ID != restored.ID {
+		t.Fatal("HTTP resource scope hid its retained copy")
+	}
+	c.must(http.StatusNotFound, http.MethodGet, "/api/v1/native-recovery-sources/"+source.ID+"?resource=missing-resource", nil, nil)
+
+	scopedSources, scopeErr := sdk.NativeRecoverySourcesPage(t.Context(), source.ProjectID, lpclient.NativeRecoveryPage{EnvironmentID: source.EnvironmentID, Resource: source.Name, Limit: 1})
+	if scopeErr != nil || len(scopedSources.Sources) != 1 || scopedSources.Sources[0].Name != source.Name {
+		t.Fatalf("Go client lost resource source scope: %+v %v", scopedSources, scopeErr)
+	}
+	scopedCopies, scopeErr := sdk.NativeRecoveryCopies(t.Context(), source.ProjectID, lpclient.NativeCopyPage{EnvironmentID: source.EnvironmentID, Resource: source.Name, Limit: 1})
+	if scopeErr != nil || len(scopedCopies.Copies) != 1 || scopedCopies.Copies[0].ID != restored.ID {
+		t.Fatalf("Go client lost resource copy scope: %+v %v", scopedCopies, scopeErr)
+	}
+	if _, scopeErr = sdk.NativeRecoveryInventoryPage(t.Context(), source.ID, lpclient.NativeRecoveryPage{Resource: "missing-resource"}); !errors.Is(scopeErr, lpclient.ErrNotFound) {
+		t.Fatal("Go client ignored inventory resource assertion", scopeErr)
+	}
+	var cliSources recovery.NativeSourcesPage
+	if decodeErr := json.Unmarshal([]byte(lc.must("backups", "native-sources", source.ProjectID, "--resource", source.Name, "--environment-id", source.EnvironmentID, "--json")), &cliSources); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if len(cliSources.Sources) != 1 || cliSources.Sources[0].Name != source.Name {
+		t.Fatal("actual CLI lost scoped retained sources")
+	}
+	var cliCopies recovery.NativeCopiesPage
+	if decodeErr := json.Unmarshal([]byte(lc.must("backups", "native-copies", source.ProjectID, "--resource", "missing-resource", "--environment-id", source.EnvironmentID, "--json")), &cliCopies); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if len(cliCopies.Copies) != 0 {
+		t.Fatal("actual CLI ignored copy resource scope")
+	}
 	var contract json.RawMessage
 	c.must(http.StatusOK, http.MethodGet, "/openapi.json", nil, &contract)
 	var schema struct {
@@ -160,7 +214,7 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, lc loomctl, dsn string, s
 			query[parameter.Name] = true
 		}
 	}
-	for _, name := range []string{"environment_id", "before", "limit"} {
+	for _, name := range []string{"environment_id", "before", "limit", "resource"} {
 		if !query[name] {
 			t.Fatalf("native copy list contract omits query parameter %s", name)
 		}

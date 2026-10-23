@@ -37,7 +37,8 @@ it("keeps explicit native copy scope and cursor values on the wire", async () =>
     "project",
     "env&one",
     "copy/one",
-    1
+    1,
+    "orders&reports"
   )
 
   const [url] = fetch.mock.calls[0] as unknown as [string]
@@ -45,5 +46,6 @@ it("keeps explicit native copy scope and cursor values on the wire", async () =>
   expect(query.get("environment_id")).toBe("env&one")
   expect(query.get("before")).toBe("copy/one")
   expect(query.get("limit")).toBe("1")
+  expect(query.get("resource")).toBe("orders&reports")
   expect(page.nextBefore).toBe("next")
 })

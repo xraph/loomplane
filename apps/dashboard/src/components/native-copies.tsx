@@ -44,9 +44,11 @@ function copyStatus(copy: NativeRestore) {
 export function NativeCopyHistory({
   project,
   environment,
+  resource,
 }: {
   project: string
   environment?: string
+  resource?: string
 }) {
   const { can } = useOrganization()
   const [pages, setPages] = useState<string[]>([""])
@@ -56,6 +58,7 @@ export function NativeCopyHistory({
     path: { id: project },
     query: {
       environment_id: environment,
+      resource: resource || undefined,
       before: pages.at(-1) || undefined,
       limit: 25,
     },

@@ -15,8 +15,8 @@ import (
 
 func (a *App) nativeCopyCommand() cli.Command {
 	return cli.NewCommand("native-copies", "List temporary provider-native recovery copies", a.nativeCopies,
-		cli.WithUsage("backups native-copies <project> [--environment-id ID] [--before ID] [--limit 50] [--json]"),
-		cli.WithFlags(append(nativeRecoveryFlags(), cli.NewStringFlag("environment-id", "", "Limit to an environment ID", ""))...),
+		cli.WithUsage("backups native-copies <project> [--environment-id ID] [--resource NAME] [--before ID] [--limit 50] [--json]"),
+		cli.WithFlags(nativeRecoveryScopeFlags()...),
 		cli.WithSubcommand(cli.NewCommand("review", "Review capacity and lifetime before creating a Cloud SQL copy", a.reviewNativeCopy,
 			cli.WithFlags(jsonFlag, cli.NewStringFlag("cloud", "", "Granted destination Cloud ID", ""), cli.NewStringFlag("target", "", "Named destination target ID", ""), cli.NewStringFlag("ttl-hours", "", "Copy lifetime, from 1 to 24 hours", "1"), cli.NewStringFlag("request-id", "", "Stable request ID retained in the review", ""), cli.NewStringFlag("out", "", "Save a private review JSON file without overwriting", "")),
 			cli.WithUsage("backups native-copies review <source> <point> --cloud ID --target ID [--ttl-hours 1] [--request-id KEY] [--out review.json]"))),
@@ -158,7 +158,7 @@ func (a *App) nativeCopies(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	page, err := c.NativeRecoveryCopies(ctxOf(ctx), project.ID, client.NativeCopyPage{EnvironmentID: ctx.String("environment-id"), Before: ctx.String("before"), Limit: limit})
+	page, err := c.NativeRecoveryCopies(ctxOf(ctx), project.ID, client.NativeCopyPage{EnvironmentID: ctx.String("environment-id"), Resource: ctx.String("resource"), Before: ctx.String("before"), Limit: limit})
 	if err != nil {
 		return err
 	}

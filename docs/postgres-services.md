@@ -47,6 +47,8 @@ Open **Cloud snapshots** under **Service recovery** to inspect captured RDS and 
 
 The history stays after you remove a service binding. Each saved point keeps its native reference and creation time, so a reused snapshot name gets a separate record. A complete scan can mark earlier points **No longer observed**. A partial scan cannot prove that a point disappeared, and a failed refresh preserves the last successful observations. Check the observation time and completeness before relying on the list.
 
+When you open recovery for a named service, Cloud snapshots and copy history stay scoped to that resource, including after its live binding is removed. Changing the resource clears the previous page and any open copy review.
+
 Creation times retain the provider's full nanosecond precision for identity and pagination. The `native_point_creation_identity` migration derives an exact key from the retained point JSON and keeps existing point IDs. Stop older API and worker processes before upgrading: their inventory writes use the previous uniqueness constraint. Allow time for the table rewrite and exclusive lock. The migration cannot recover points overwritten before this upgrade, and downgrade refuses while any native point history remains.
 
 You need service backup read access. The saved managed account review must still match the connection; a changed account or unready credential blocks refresh. Old unpinned databases cannot refresh until an explicit execution captures their current identity. RDS discovery follows up to ten pages of 100 snapshots per refresh, reports an incomplete scan when more exist, and excludes shared and public snapshots.
@@ -62,12 +64,14 @@ Your Google account needs permission to list and read these backups. A failed pe
 You can read and refresh the same history with the CLI:
 
 ```sh
-loomctl backups native-sources PROJECT_ID --json
+loomctl backups native-sources PROJECT_ID --environment-id ENVIRONMENT_ID --resource DATABASE_NAME --json
 loomctl backups native-inventory SOURCE_ID --limit 50 --json
 loomctl backups native-refresh SOURCE_ID --json
 ```
 
 Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. RDS native restore, PITR and native-backup deletion and retention controls remain unavailable in Loomplane.
+
+The source and copy list commands accept `--environment-id` and `--resource` independently. Resource names match exactly. Each page and its cursor use the same scope, so a page cannot silently continue into another resource's history. Omit these filters to list the project's retained histories.
 
 For Cloud SQL PostgreSQL 17, open **Cloud snapshots** in the project's recovery screen, then **Review native copy** on a saved point. Choose a project-granted Cloud and a managed Cloud SQL target in a separate recovery project. Review its compute, disk, region and lifetime, then acknowledge charges before creating the copy. A review lasts ten minutes; the copy's requested lifetime can be one to 24 hours. These capacity details do not include a price estimate.
 
@@ -76,7 +80,7 @@ You can save and submit the same review with `loomctl`:
 ```sh
 loomctl backups native-copies review SOURCE_ID POINT_ID --cloud CLOUD_ID --target TARGET_ID --ttl-hours 2 --out recovery-review.json
 loomctl backups native-copies create --review-file recovery-review.json --acknowledge-charges --wait
-loomctl backups native-copies PROJECT_ID --environment-id ENVIRONMENT_ID --limit 25 --json
+loomctl backups native-copies PROJECT_ID --environment-id ENVIRONMENT_ID --resource DATABASE_NAME --limit 25 --json
 loomctl backups native-copies show COPY_ID --wait
 loomctl backups native-copies cleanup COPY_ID --yes --wait
 ```

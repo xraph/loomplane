@@ -2797,6 +2797,13 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5193,6 +5200,13 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5244,6 +5258,13 @@
             "in": "query",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           }
         ],

@@ -26,11 +26,12 @@ import { formatDate } from "@/lib/format"
 export function NativeRecovery(props: {
   project: string
   environment?: string
+  resource?: string
 }) {
   const { session } = useOrganization()
   return (
     <NativeRecoveryContent
-      key={`${session?.orgId ?? ""}:${props.project}:${props.environment ?? ""}`}
+      key={`${session?.orgId ?? ""}:${props.project}:${props.environment ?? ""}:${props.resource ?? ""}`}
       {...props}
     />
   )
@@ -39,9 +40,11 @@ export function NativeRecovery(props: {
 function NativeRecoveryContent({
   project,
   environment,
+  resource,
 }: {
   project: string
   environment?: string
+  resource?: string
 }) {
   const [pages, setPages] = useState<string[]>([""])
   const [chosen, setChosen] = useState("")
@@ -52,16 +55,21 @@ function NativeRecoveryContent({
       before: pages.at(-1) || undefined,
       limit: 50,
       environment_id: environment,
+      resource: resource || undefined,
     },
   })
   const visible = (sources.data?.sources ?? []).filter(
-    (source) => !environment || source.environmentId === environment
+    (source) =>
+      (!environment || source.environmentId === environment) &&
+      (!resource || source.name === resource)
   )
   const selected = visible.find((source) => source.id === chosen) ?? visible[0]
   return (
     <section aria-label="Cloud snapshots" className="grid min-w-0 gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">Cloud snapshots</h3>
+        <h3 className="text-sm font-medium">
+          Cloud snapshots{resource ? ` for ${resource}` : ""}
+        </h3>
         <Button
           size="sm"
           variant="ghost"
@@ -80,6 +88,7 @@ function NativeRecoveryContent({
         key={copyVersion}
         project={project}
         environment={environment}
+        resource={resource}
       />
       {sources.status === "error" && (
         <QueryError

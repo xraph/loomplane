@@ -62,17 +62,18 @@ func (s *PgStore) ListNativeSources(ctx context.Context, org, project string, pa
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT ` + nativeSourceColumns + ` FROM loomplane_native_sources WHERE org_id=$1 AND project_id=$2 AND ($3='' OR environment_id=$3)`
-	args := []any{org, project, page.EnvironmentID}
+	scope := ` FROM loomplane_native_sources WHERE org_id=$1 AND project_id=$2 AND ($3='' OR environment_id=$3) AND ($4='' OR name=$4)`
+	query := `SELECT ` + nativeSourceColumns + scope
+	args := []any{org, project, page.EnvironmentID, page.Resource}
 	if page.Before != "" {
 		var captured time.Time
-		if pageErr := s.db.QueryRow(ctx, `SELECT captured_at FROM loomplane_native_sources WHERE org_id=$1 AND project_id=$2 AND id=$4 AND ($3='' OR environment_id=$3)`, org, project, page.EnvironmentID, page.Before).Scan(&captured); pageErr != nil {
+		if pageErr := s.db.QueryRow(ctx, `SELECT captured_at`+scope+` AND id=$5`, append(args, page.Before)...).Scan(&captured); pageErr != nil {
 			if errors.Is(pageErr, pgx.ErrNoRows) {
 				return nil, ErrNotFound
 			}
 			return nil, pageErr
 		}
-		query += ` AND (captured_at,id)<($4,$5)`
+		query += ` AND (captured_at,id)<($5,$6)`
 		args = append(args, captured, page.Before)
 	}
 	// Limits have already been validated and remain parameters.
@@ -111,7 +112,7 @@ func (s *PgStore) ReadNativeInventory(ctx context.Context, org, id string, page 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // A no-op after commit.
-	source, err := scanNativeSource(tx.QueryRow(ctx, `SELECT `+nativeSourceColumns+` FROM loomplane_native_sources WHERE org_id=$1 AND id=$2 FOR SHARE`, org, id))
+	source, err := scanNativeSource(tx.QueryRow(ctx, `SELECT `+nativeSourceColumns+` FROM loomplane_native_sources WHERE org_id=$1 AND id=$2 AND ($3='' OR environment_id=$3) AND ($4='' OR name=$4) FOR SHARE`, org, id, page.EnvironmentID, page.Resource))
 	if err != nil {
 		return nil, err
 	}
