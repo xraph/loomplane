@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { QueryError } from "@/components/query-error"
 import { useOrganization } from "@/lib/organization"
 import { activeSync, syncLabel } from "@/lib/cloud-targets"
+import { EnvironmentProgress } from "./organization-activity"
 import { ChangeReview } from "./change-review"
 import { EmptyClouds } from "./workspace"
 
@@ -240,14 +241,10 @@ function SyncRow({
               </a>
             )}
           </div>
+          <EnvironmentProgress environment={env} />
           <p className="text-muted-foreground">
             {env.services?.join(", ") || "No service changes"}
           </p>
-          {env.error && (
-            <p role="alert" className="text-destructive">
-              {env.error}
-            </p>
-          )}
           {env.externalRouting &&
             sync.status === "routing_pending" &&
             !env.routingEvidence && (

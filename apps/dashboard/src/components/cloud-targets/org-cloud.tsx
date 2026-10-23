@@ -1,7 +1,7 @@
 // A Cloud the organization owns: its targets, and the projects allowed to
 // place services on them. A project gets the Cloud with a chosen set of its
 // targets, so one Cloud can serve many projects, each on only what it needs.
-import { PlusIcon } from "lucide-react"
+import { CloudIcon, PlusIcon } from "lucide-react"
 import { useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -29,6 +29,7 @@ import {
   EmptyContent,
   EmptyDescription,
   EmptyHeader,
+  EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
@@ -39,20 +40,117 @@ import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
+import { CloudTabs, CloudEmpty, type CloudTab } from "./infrastructure-ui"
+import { Servers, InfrastructureActivity } from "./servers"
+import { Domains } from "./domains"
+import { OrganizationActivity } from "./organization-activity"
+import { CloudWorkspace } from "./workspace"
+
+import { ChangeReview } from "./change-review"
 import { Choice, TargetEditor } from "./target-editor"
 import { TargetTable, cloudTags, selectClass } from "./workspace"
 
-export function OrganizationCloud({ cloud }: { cloud: Profile }) {
+export function OrganizationCloud({
+  cloud,
+  initialProject = "",
+}: {
+  cloud: Profile
+  initialProject?: string
+}) {
   const targets = useQuery(api.useOrganizationCloudTargetsList, {
     path: { cloudId: cloud.id },
   })
+  const grants = useQuery(api.useOrganizationCloudsListGrants, {
+    path: { cloudId: cloud.id },
+  })
+  const projects = useQuery(api.useProjectsList)
+  const [tab, setTab] = useState<CloudTab>("Targets")
+  const [chosen, setChosen] = useState(initialProject)
   const list = (targets.data?.targets ?? []).filter((t): t is Target => !!t)
+  const permitted = (projects.data?.projects ?? []).filter((p) =>
+    grants.data?.grants.some((g) => g?.projectId === p.id && !g.revoked)
+  )
+  const selected =
+    permitted.find((p) => p.id === chosen)?.id ?? permitted[0]?.id ?? ""
   return (
-    <>
-      <DefaultPlacementCard cloud={cloud} targets={list} />
-      <Targets cloud={cloud} />
-      <ProjectAccess cloud={cloud} targets={list} loaded={!!targets.data} />
-    </>
+    <CloudTabs value={tab} onChange={setTab}>
+      {["Domains", "Projects", "Activity"].includes(tab) &&
+        (grants.status === "error" || projects.status === "error") && (
+          <QueryError
+            error={grants.error ?? projects.error}
+            fallback="Granted project context couldn't be loaded."
+            retry={() =>
+              Promise.allSettled([grants.refetch(), projects.refetch()])
+            }
+          />
+        )}
+      {["Domains", "Projects", "Activity"].includes(tab) && (
+        <label className="grid max-w-sm gap-1 text-xs">
+          Project context
+          <select
+            aria-label="Cloud project context"
+            className={selectClass}
+            value={selected}
+            onChange={(e) => setChosen(e.target.value)}
+          >
+            <option value="">Choose a granted project</option>
+            {permitted.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="grid min-w-0 gap-4">
+        {tab === "Targets" && (
+          <>
+            <DefaultPlacementCard cloud={cloud} targets={list} />
+            <Targets cloud={cloud} />
+          </>
+        )}
+        {tab === "Servers" && <Servers cloud={cloud} />}
+        {tab === "Domains" && <Domains cloud={cloud} projectId={selected} />}
+        {tab === "Projects" && (
+          <>
+            <ProjectAccess
+              cloud={cloud}
+              targets={list}
+              loaded={!!targets.data}
+            />
+            {selected ? (
+              <CloudWorkspace
+                key={selected}
+                projectId={selected}
+                cloudId={cloud.id}
+              />
+            ) : (
+              <CloudEmpty
+                title="No project deployment context"
+                action={
+                  <Button
+                    nativeButton={false}
+                    variant="outline"
+                    render={<Link to="/projects" />}
+                  >
+                    Open projects
+                  </Button>
+                }
+              >
+                Give a project access, then choose it to assign environments and
+                review current releases.
+              </CloudEmpty>
+            )}
+          </>
+        )}
+        {tab === "Activity" && (
+          <>
+            <InfrastructureActivity cloudId={cloud.id} />
+            <OrganizationActivity cloudId={cloud.id} />
+          </>
+        )}
+      </div>
+    </CloudTabs>
   )
 }
 
@@ -72,8 +170,7 @@ function Targets({ cloud }: { cloud: Profile }) {
         <div className="grid gap-0.5">
           <h2 className="text-[15px] font-semibold">Targets</h2>
           <p className="text-[12.5px] text-muted-foreground">
-            Each target is one place services run: a provider, one of your
-            accounts there, and a region.
+            Choose a managed deployment or a server pool for each target.
           </p>
         </div>
         {manage && (
@@ -94,8 +191,11 @@ function Targets({ cloud }: { cloud: Profile }) {
       ) : !targets.data || !connections.data ? (
         <Skeleton className="h-28 rounded-xl" />
       ) : list.length === 0 ? (
-        <Empty>
+        <Empty variant="inline" preview={false}>
           <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <CloudIcon />
+            </EmptyMedia>
             <EmptyTitle>No targets yet</EmptyTitle>
             <EmptyDescription>
               Add a target such as frontend or backend and pick the account it
@@ -173,7 +273,7 @@ function ProjectAccess({
         {manage && (
           <Button
             variant="outline"
-            disabled={!loaded || targets.length === 0 || available.length === 0}
+            disabled={!loaded || available.length === 0}
             onClick={() => setEditing("new")}
           >
             <PlusIcon />
@@ -192,15 +292,29 @@ function ProjectAccess({
       ) : !grants.data || !projects.data ? (
         <Skeleton className="h-20 rounded-xl" />
       ) : active.length === 0 ? (
-        <Empty>
+        <Empty variant="inline" preview={false}>
           <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <CloudIcon />
+            </EmptyMedia>
             <EmptyTitle>No project uses this Cloud yet</EmptyTitle>
             <EmptyDescription>
-              {targets.length
-                ? "Give a project access to some or all of its targets, then assign the Cloud to one of that project's environments."
-                : "Add a target first. A project is given access to specific targets."}
+              {projects.data.projects.length === 0
+                ? "Create a project, then grant the whole Cloud or specific targets."
+                : "Grant the whole Cloud, including its default provider, or choose specific targets. Then assign a project environment."}
             </EmptyDescription>
           </EmptyHeader>
+          {projects.data.projects.length === 0 && (
+            <EmptyContent>
+              <Button
+                nativeButton={false}
+                variant="outline"
+                render={<Link to="/projects" />}
+              >
+                Create a project
+              </Button>
+            </EmptyContent>
+          )}
         </Empty>
       ) : (
         <ul className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
@@ -241,7 +355,7 @@ function ProjectAccess({
                     ))
                   ) : (
                     <span className="text-[12.5px] text-muted-foreground">
-                      No targets allowed
+                      Whole Cloud, including default placement
                     </span>
                   )}
                 </span>
@@ -305,6 +419,9 @@ function GrantDialog({
   const [chosen, setChosen] = useState<string[]>(
     grant?.targetIds ?? targets.map((t) => t.id)
   )
+  const [wholeCloud, setWholeCloud] = useState(
+    grant ? grant.targetIds.length === 0 : targets.length === 0
+  )
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState("")
   const busy = save.isPending || revoke.isPending
@@ -315,7 +432,7 @@ function GrantDialog({
     try {
       await save.mutateAsync({
         path: { cloudId: cloud.id, projectId },
-        body: { targetIds: chosen },
+        body: { targetIds: wholeCloud ? [] : chosen },
       })
       onSaved()
     } catch (err) {
@@ -364,7 +481,18 @@ function GrantDialog({
               </select>
             </label>
           )}
-          <fieldset className="grid gap-1.5">
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={wholeCloud}
+              onChange={(e) => setWholeCloud(e.target.checked)}
+            />
+            Whole Cloud, including its default provider and future targets
+          </label>
+          <fieldset
+            disabled={wholeCloud}
+            className="grid gap-1.5 disabled:opacity-50"
+          >
             <legend className="mb-1.5 text-xs">Targets it may use</legend>
             {targets.map((t) => {
               const on = chosen.includes(t.id)
@@ -414,7 +542,9 @@ function GrantDialog({
             Cancel
           </Button>
           <Button
-            disabled={busy || !projectId || chosen.length === 0}
+            disabled={
+              busy || !projectId || (!wholeCloud && chosen.length === 0)
+            }
             onClick={() => void submit()}
           >
             {grant ? "Save access" : "Give access"}
@@ -454,6 +584,9 @@ function DefaultPlacementCard({
   const current = profile.defaultPlacement
   const [editing, setEditing] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
+  const [pendingDefault, setPendingDefault] = useState<
+    Placement | null | undefined
+  >(undefined)
   const [error, setError] = useState("")
   const account = (connections.data?.connections ?? []).find(
     (c) => c.id === current?.connectionId
@@ -484,15 +617,15 @@ function DefaultPlacementCard({
   return (
     <section
       aria-label="Default provider"
-      className="grid gap-3 rounded-[14px] bg-card p-4 ring-1 ring-border"
+      className="grid gap-2 rounded-[14px] bg-card p-3 ring-1 ring-border"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid max-w-[64ch] gap-0.5">
           <h2 className="text-[15px] font-semibold">Default provider</h2>
           <p className="text-[12.5px] leading-relaxed text-muted-foreground">
             {targets.length === 0
-              ? "This Cloud has no targets, so every service on it runs here. A Cloud without targets uses exactly one provider and account."
-              : "Services that don't name or tag a target run here. Adding a target doesn't move them."}
+              ? "With no targets, every service on it runs here."
+              : "Services without a target use this provider."}
           </p>
         </div>
         {manage && (
@@ -503,7 +636,7 @@ function DefaultPlacementCard({
                 className="text-destructive"
                 disabled={set.isPending}
                 onClick={() =>
-                  confirmClear ? void save(null) : setConfirmClear(true)
+                  confirmClear ? setPendingDefault(null) : setConfirmClear(true)
                 }
               >
                 {confirmClear ? "Confirm clear default" : "Clear"}
@@ -545,10 +678,7 @@ function DefaultPlacementCard({
             : "Services that don't name or tag a target have nowhere to run."}
         </p>
       )}
-      <p className="text-xs text-muted-foreground">
-        Only projects given access to the whole Cloud use the default. A project
-        limited to some targets uses just those.
-      </p>
+
       {confirmClear && (
         <p className="text-xs text-muted-foreground">
           Clearing leaves services without a target of their own with nowhere to
@@ -567,6 +697,35 @@ function DefaultPlacementCard({
           {error}
         </p>
       )}
+      {pendingDefault !== undefined && (
+        <ChangeReview
+          projectId=""
+          title={
+            pendingDefault
+              ? "Review default provider switch"
+              : "Review clearing default provider"
+          }
+          change={{
+            cloudId: cloud.id,
+            default: true,
+            revision: profile.revision,
+            ...(pendingDefault ?? {
+              provider: "",
+              connectionId: "",
+              region: "",
+            }),
+          }}
+          onClose={() => setPendingDefault(undefined)}
+          onApplied={() => {
+            setPendingDefault(undefined)
+            setConfirmClear(false)
+            void api
+              .useOrganizationCloudsGet({ path: { cloudId: cloud.id } })
+              .refetch()
+              .then(setSaved)
+          }}
+        />
+      )}
       {editing && (
         <DefaultPlacementDialog
           cloud={cloud}
@@ -574,7 +733,12 @@ function DefaultPlacementCard({
           busy={set.isPending}
           error={error}
           onClose={() => setEditing(false)}
-          onSave={(next) => void save(next)}
+          onSave={(next) => {
+            if (current) {
+              setPendingDefault(next)
+              setEditing(false)
+            } else void save(next)
+          }}
         />
       )}
     </section>
@@ -800,7 +964,7 @@ function DefaultPlacementDialog({
             disabled={busy || unchanged || !complete}
             onClick={() => onSave({ ...value, region: value.region.trim() })}
           >
-            {current ? "Save default" : "Set default"}
+            {current ? "Review default switch" : "Set default"}
           </Button>
         </DialogFooter>
       </DialogContent>

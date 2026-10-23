@@ -45,15 +45,24 @@ export function AccountSummary({
   connections: Connection[]
   className?: string
 }) {
-  const list = groups(targets, connections)
-  if (list.length === 0) return null
-  const accounts = new Set(targets.map((t) => t.connectionId)).size
+  const managed = targets.filter((t) => t.runtime !== "server")
+  const pools = targets.filter((t) => t.runtime === "server")
+  const list = groups(managed, connections)
+  if (targets.length === 0) return null
+  const accounts = new Set(managed.map((t) => t.connectionId)).size
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
-      <span className="text-[12.5px] text-muted-foreground">
-        {plural(targets.length, "target")} across {plural(accounts, "account")}{" "}
-        on {plural(list.length, "provider")}
-      </span>
+      {managed.length > 0 && (
+        <span className="text-[12.5px] text-muted-foreground">
+          {plural(managed.length, "target")} across{" "}
+          {plural(accounts, "account")} on {plural(list.length, "provider")}
+        </span>
+      )}
+      {pools.length > 0 && (
+        <span className="text-[12.5px] text-muted-foreground">
+          {plural(pools.length, "server pool target")}
+        </span>
+      )}
       {list.map((g) => (
         <span
           key={g.cloud}
