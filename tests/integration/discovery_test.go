@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -27,7 +28,13 @@ func exampleTarball(t *testing.T) []byte {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
-	root := "../../examples/polyglot"
+	// Compiled acceptance binaries run from the repository root. Resolve the
+	// fixture from its source location so callers keep their configuration cwd.
+	_, source, _, ok := runtime.Caller(0)
+	if !ok || !filepath.IsAbs(source) {
+		t.Fatal("repository fixture source location unavailable")
+	}
+	root := filepath.Join(filepath.Dir(source), "..", "..", "examples", "polyglot")
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err

@@ -6,6 +6,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -336,6 +337,10 @@ func TestAcceptanceSharedCloudLive(t *testing.T) {
 	if mode != "prepare" && mode != "inspect" && mode != "cleanup" && mode != "run" {
 		t.Fatal("invalid live mode")
 	}
+	var progress *liveProgress
+	if mode == "run" {
+		progress = newLiveProgress(t, filepath.Dir(path))
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	providers, err := liveCredentials(ctx)
@@ -346,6 +351,9 @@ func TestAcceptanceSharedCloudLive(t *testing.T) {
 	if mode == "prepare" {
 		livePrepare(ctx, t, path, providers)
 		return
+	}
+	if progress != nil {
+		progress.step(t, "ledger")
 	}
 	ledger, err := liveRead(path)
 	if err != nil {
@@ -366,7 +374,7 @@ func TestAcceptanceSharedCloudLive(t *testing.T) {
 			t.Fatal(err)
 		}
 	case "run":
-		liveRun(t, path, ledger, providers)
+		liveRun(t, path, ledger, providers, progress)
 	}
 }
 func livePrepare(ctx context.Context, t *testing.T, path string, p *liveProviders) {
@@ -518,8 +526,9 @@ func liveInspectResources(ctx context.Context, path string, l *liveLedger, p *li
 	return errors.Join(failures...)
 }
 
-func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders) {
+func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progress *liveProgress) {
 	t.Helper()
+	progress.step(t, "preflight")
 	if os.Getenv("LOOMPLANE_SHARED_LIVE_APPROVAL") != l.RunID || !l.StartedAt.IsZero() || l.Cleaned {
 		t.Fatal("run needs exact approval and a fresh unused prepared ledger; inspect or cleanup interrupted runs")
 	}
@@ -559,33 +568,10 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders) {
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = observer
 	defer func() { http.DefaultTransport = originalTransport }()
-	cfg := config.Defaults()
-	secretKey := make([]byte, 32)
-	if _, err = crand.Read(secretKey); err != nil {
-		t.Fatal("isolated encryption key generation failed")
-	}
-	cfg.SecretKey = hex.EncodeToString(secretKey)
-	clear(secretKey)
-	cfg.Database.URL = liveDatabase(t, path, l)
-	cfg.Orchestration.PollInterval = 100 * time.Millisecond
-	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
-	cfg.Analysis.WorkDir = t.TempDir()
-	cfg.Storage.URL = "file://" + t.TempDir()
-	cfg.Clouds.EnrollmentURL = os.Getenv("LOOMPLANE_SHARED_LIVE_CALLBACK")
-	if !strings.HasPrefix(cfg.Clouds.EnrollmentURL, "https://") || !strings.HasSuffix(cfg.Clouds.EnrollmentURL, ".trycloudflare.com") {
-		t.Fatal("invalid approved callback origin")
-	}
-	running := start(t, cfg)
+	progress.step(t, "database")
+	cfg, running, c, orgID := liveSetup(t, liveDatabase(t, path, l), os.Getenv("LOOMPLANE_SHARED_LIVE_CALLBACK"), l.RunID, progress)
 	defer running.stop()
-	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "live@example.test", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
-	var org struct{ ID string }
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": l.RunID, "slug": l.RunID}, &org)
-	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	org := struct{ ID string }{orgID}
 	l.Evidence["org_id"] = org.ID
 	callbackPaths := []string{}
 	policyPath := filepath.Join(filepath.Dir(path), "enrollment.json")
@@ -597,6 +583,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders) {
 	}
 	policy()
 	defer func() { callbackPaths = nil; policy() }()
+	progress.step(t, "projects")
 	projects := make([]string, 0, 3)
 	for index := range 3 {
 		var project struct{ ID string }
@@ -611,6 +598,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders) {
 	for _, project := range projects[1:] {
 		c.must(http.StatusOK, http.MethodPut, cloudBase+"/projects/"+project, map[string]any{"target_ids": []string{}}, nil)
 	}
+	progress.step(t, "connections")
 	connectionIDs := map[string]string{}
 	for _, providerName := range []string{"digitalocean", "vercel"} {
 		raw := p.doRaw
@@ -626,6 +614,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders) {
 		}
 		connectionIDs[providerName] = connection.ID
 	}
+	progress.step(t, "hosts")
 	pools := make([]cloudinfra.Pool, 0, 2)
 	hosts := make([]combinedHost, 0, 2)
 	keys := make([][]byte, 0, 2)
@@ -709,6 +698,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders) {
 	l.Evidence["enrollment_complete"] = true
 	record()
 	namespaces := make([]cloudinfra.Zone, 0, len(projects))
+	progress.step(t, "dns_proofs")
 	writer, ok := p.dns.(provider.DNSAdapter)
 	if !ok {
 		t.Fatal("live DNS adapter cannot publish ownership challenges")
@@ -747,13 +737,14 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders) {
 		}
 		namespaces = append(namespaces, namespace)
 	}
-	liveLifecycle(t, c, cfg, l, p, cloud, pools, hosts, keys, runtimeIDs, projects, namespaces, observer, record, bound)
+	liveLifecycle(t, c, cfg, l, p, cloud, pools, hosts, keys, runtimeIDs, projects, namespaces, observer, record, bound, progress)
 }
 
-func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p *liveProviders, cloud cloudprofiles.Profile, pools []cloudinfra.Pool, hosts []combinedHost, keys [][]byte, runtimeIDs, projects []string, namespaces []cloudinfra.Zone, observer *livePatchObserver, record, bound func()) {
+func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p *liveProviders, cloud cloudprofiles.Profile, pools []cloudinfra.Pool, hosts []combinedHost, keys [][]byte, runtimeIDs, projects []string, namespaces []cloudinfra.Zone, observer *livePatchObserver, record, bound func(), progress *liveProgress) {
 	t.Helper()
 	targets := make([]cloudprofiles.Target, 0, len(projects))
 	bindings := make([]planning.Binding, 0, len(projects))
+	progress.step(t, "routes")
 	routes := make([]cloudinfra.Route, 0, len(projects))
 	variables := make([]string, 0, len(projects))
 	markers := make([]string, 0, len(projects))
@@ -871,6 +862,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		record()
 		verifyPublic(index, hostIndices[index], marker)
 	}
+	progress.step(t, "migration")
 	l.Evidence["three_project_public_https"] = "passed"
 	record()
 	first := projects[0]
@@ -983,6 +975,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 	}
 	routes[0] = currentRoutes.Routes[0]
 	verifyPublic(0, 1, markers[0])
+	progress.step(t, "future_release")
 	l.Evidence["current_release_migration"] = "passed"
 	l.Evidence["migrated_binding"] = migrated
 	record()
@@ -1004,6 +997,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 	l.Evidence["future_release"] = "passed"
 	l.Evidence["future_binding"] = future
 	record()
+	progress.step(t, "complete")
 }
 
 func liveDatabase(t *testing.T, path string, l *liveLedger) string {
@@ -1075,4 +1069,52 @@ func liveDropDatabase(ctx context.Context, l *liveLedger) error {
 		return fmt.Errorf("isolated database cleanup failed")
 	}
 	return nil
+}
+
+func liveSetup(t *testing.T, database, callback, runID string, progress *liveProgress) (config.Config, *running, *client, string) {
+	t.Helper()
+	progress.step(t, "configuration")
+	cfg := config.Defaults()
+	secretKey := make([]byte, 32)
+	if _, err := crand.Read(secretKey); err != nil {
+		t.Fatal("isolated encryption key generation failed")
+	}
+	cfg.SecretKey = base64.StdEncoding.EncodeToString(secretKey)
+	clear(secretKey)
+	cfg.Database.URL = database
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	progress.step(t, "repository_fixture")
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Storage.URL = "file://" + t.TempDir()
+	cfg.Clouds.EnrollmentURL = callback
+	if !strings.HasPrefix(cfg.Clouds.EnrollmentURL, "https://") || !strings.HasSuffix(cfg.Clouds.EnrollmentURL, ".trycloudflare.com") {
+		t.Fatal("invalid approved callback origin")
+	}
+	progress.step(t, "configuration")
+	if err := cfg.Validate(); err != nil {
+		t.Fatal("isolated configuration invalid")
+	}
+	progress.step(t, "application_start")
+	running := start(t, cfg)
+	setupComplete := false
+	defer func() {
+		if !setupComplete {
+			running.stop()
+		}
+	}()
+	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
+	var auth struct {
+		SessionToken string `json:"session_token"`
+	}
+	progress.step(t, "signup")
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "live@example.test", "password": "Correct-horse-battery-9"}, &auth)
+	c.token = auth.SessionToken
+	progress.step(t, "organization_create")
+	var org struct{ ID string }
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": runID, "slug": runID}, &org)
+	progress.step(t, "organization_switch")
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	setupComplete = true
+	return cfg, running, c, org.ID
 }

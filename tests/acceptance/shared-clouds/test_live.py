@@ -21,6 +21,34 @@ class LiveSafetyTests(unittest.TestCase):
         save(self.live.path, {"evidence": {}})
         save(self.live.directory / "callback.json", {"deadline": time.time() + 60})
 
+    def test_failed_runner_retains_only_exit_status(self):
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys; print('secret-response-body'); sys.exit(7)",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        child.wait(timeout=10)
+        with self.assertRaisesRegex(RuntimeError, "run-progress.json"):
+            self.live.supervise(child, time.time() + 10)
+        result = self.live.directory / "run-result.json"
+        self.assertEqual(
+            json.loads(result.read_text()), {"status": "failed", "exit_code": 7}
+        )
+        self.assertNotIn("secret-response-body", result.read_text())
+        self.live.record_exit("cleanup", 0)
+        self.assertEqual(json.loads(result.read_text())["exit_code"], 7)
+
+    def test_result_rejects_untrusted_diagnostic_text(self):
+        with self.assertRaisesRegex(RuntimeError, "invalid process result"):
+            self.live.record_exit("secret-response-body", 1)
+        with self.assertRaisesRegex(RuntimeError, "invalid process result"):
+            self.live.record_exit("run", "secret-response-body")
+        self.assertFalse((self.live.directory / "run-result.json").exists())
+
     def test_unapproved_run_never_launches(self):
         save(self.live.scope_path, {"run_id": "test"})
         with (
