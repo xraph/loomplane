@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import signal
 import socket
 import subprocess
@@ -82,7 +83,12 @@ def stop_exact(receipt):
     raise RuntimeError("owned process did not terminate")
 
 
-def launch_gate(descriptor, command):
+def launch_gate(descriptor, ready, command):
+    # The interpreter has entered the stable wrapper before identity is sampled.
+    try:
+        os.write(ready, b"R")
+    finally:
+        os.close(ready)
     # Only the supervisor owns the pipe writer. Its death before release is EOF.
     try:
         released = os.read(descriptor, 1) == b"1"
@@ -217,6 +223,21 @@ class Live:
             "hostnames": [
                 state["run_id"] + "-app" + str(i) + ".shipbraid.dev" for i in range(3)
             ],
+            "control_proof": "public TXT at each exact namespace; provider hosting alone grants no control",
+            "proof_records": [
+                {
+                    "name": "_loomplane."
+                    + state["run_id"]
+                    + "-app"
+                    + str(i)
+                    + ".shipbraid.dev",
+                    "type": "TXT",
+                    "ttl": 60,
+                    "value": "fresh Loomplane zone challenge",
+                    "owner": "loomplane:proof:" + state["run_id"] + ":" + str(i),
+                }
+                for i in range(3)
+            ],
             "callback_intermediary": "Cloudflare Quick Tunnel",
             "callback_payload": "one-time enrollment token and public SSH host key; no SSH private key",
             "callback_scope": "POST only, exact persisted org/operation paths, 16 KiB, 10 seconds per request, isolated loopback app",
@@ -261,6 +282,21 @@ class Live:
             "hostnames": [
                 state["run_id"] + "-app" + str(i) + ".shipbraid.dev" for i in range(3)
             ],
+            "control_proof": "public TXT at each exact namespace; provider hosting alone grants no control",
+            "proof_records": [
+                {
+                    "name": "_loomplane."
+                    + state["run_id"]
+                    + "-app"
+                    + str(i)
+                    + ".shipbraid.dev",
+                    "type": "TXT",
+                    "ttl": 60,
+                    "value": "fresh Loomplane zone challenge",
+                    "owner": "loomplane:proof:" + state["run_id"] + ":" + str(i),
+                }
+                for i in range(3)
+            ],
             "callback_max_minutes": 45,
             "retained_provider_metadata": RETAINED_METADATA,
         }
@@ -288,6 +324,7 @@ class Live:
         receipt[role] = {"phase": "intent", "launch_id": uuid.uuid4().hex}
         save(self.process_path, receipt)
         reader, writer = os.pipe()
+        ready_reader, ready_writer = os.pipe()
         try:
             child = subprocess.Popen(
                 [
@@ -295,20 +332,28 @@ class Live:
                     str(Path(__file__).resolve()),
                     "--launch-gate",
                     str(reader),
+                    str(ready_writer),
                     receipt[role]["launch_id"],
                     *command,
                 ],
-                pass_fds=(reader,),
+                pass_fds=(reader, ready_writer),
                 start_new_session=True,
                 **options,
             )
             self.children[role] = child
+            if (
+                not select.select([ready_reader], [], [], 10)[0]
+                or os.read(ready_reader, 1) != b"R"
+            ):
+                raise RuntimeError(role + " gate readiness was not established")
             self.remember(role, child)
             os.write(writer, b"1")
             return child
         finally:
             os.close(reader)
             os.close(writer)
+            os.close(ready_reader)
+            os.close(ready_writer)
 
     def remember(self, role, child):
         receipt = json.loads(self.process_path.read_text())
@@ -499,8 +544,15 @@ def main():
         print(
             json.dumps(
                 {
-                    key: state[key]
-                    for key in ["run_id", "deadline", "hosts", "records", "cleaned"]
+                    key: state.get(key, []) if key == "proofs" else state[key]
+                    for key in [
+                        "run_id",
+                        "deadline",
+                        "hosts",
+                        "records",
+                        "proofs",
+                        "cleaned",
+                    ]
                 },
                 indent=2,
             )
@@ -509,7 +561,7 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--launch-gate":
-        sys.exit(launch_gate(int(sys.argv[2]), sys.argv[4:]))
+        sys.exit(launch_gate(int(sys.argv[2]), int(sys.argv[3]), sys.argv[5:]))
     try:
         main()
     except (RuntimeError, KeyboardInterrupt) as error:

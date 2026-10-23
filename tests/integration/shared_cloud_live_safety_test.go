@@ -241,3 +241,44 @@ func TestSharedCloudLiveCleanupSafety(t *testing.T) {
 		})
 	}
 }
+
+func TestSharedCloudLiveProofCleanupScope(t *testing.T) {
+	for _, scenario := range []string{"owned", "lost-response", "absent-unknown", "apex", "sibling", "foreign-owner", "baseline", "value-drift"} {
+		t.Run(scenario, func(t *testing.T) {
+			l := &liveLedger{RunID: "lp-live-0123456789abcdef", Account: "account", Zone: provider.DNSZone{ID: "zone", Name: liveZone, AccountID: liveTeam, Verified: true}}
+			record := provider.DNSRecord{ID: "proof-record", ZoneID: "zone", Name: "_loomplane." + l.RunID + "-app0", Type: "TXT", Value: "loomplane=zone_unique-random", TTL: 60, Owner: "loomplane:proof:" + l.RunID + ":0"}
+			switch scenario {
+			case "apex":
+				record.Name = "_loomplane"
+			case "sibling":
+				record.Name = "_loomplane." + l.RunID + "-app3"
+			case "foreign-owner":
+				record.Owner = "loomplane:proof:another-run:0"
+			case "baseline":
+				l.Baseline = []provider.DNSRecord{record}
+			}
+			l.Proofs = []liveDNSIntent{{Desired: record, Receipt: &record, Attempted: true}}
+			dns := &liveFakeDNS{zone: l.Zone, records: []provider.DNSRecord{record}}
+			if scenario == "lost-response" || scenario == "absent-unknown" {
+				l.Proofs[0].Receipt = nil
+			}
+			if scenario == "absent-unknown" {
+				dns.records = nil
+			}
+			if scenario == "value-drift" {
+				dns.records[0].Value = "foreign-proof"
+			}
+			err := liveInspectResources(t.Context(), filepath.Join(t.TempDir(), "state.json"), l, &liveProviders{compute: &liveFakeCompute{}, dns: dns}, true)
+			safe := scenario == "owned" || scenario == "lost-response"
+			if (err == nil) != safe || l.Cleaned != safe {
+				t.Fatalf("cleanup result: %v cleaned=%v", err, l.Cleaned)
+			}
+			if safe && (len(dns.deleted) != 1 || dns.deleted[0] != "proof-record" || !l.Proofs[0].Deleted) {
+				t.Fatal("exact proof cleanup receipt missing")
+			}
+			if !safe && len(dns.deleted) != 0 {
+				t.Fatal("unsafe proof deletion")
+			}
+		})
+	}
+}

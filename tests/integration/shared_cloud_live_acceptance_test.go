@@ -83,6 +83,7 @@ type liveLedger struct {
 	Baseline        []provider.DNSRecord `json:"baseline"`
 	Hosts           []liveHostIntent     `json:"hosts"`
 	Records         []liveDNSIntent      `json:"records"`
+	Proofs          []liveDNSIntent      `json:"proofs"`
 	Evidence        map[string]any       `json:"evidence"`
 	Cleaned         bool                 `json:"cleaned"`
 }
@@ -283,6 +284,22 @@ func liveResolveHost(account string, intent liveHostIntent, all []provider.Infra
 	}
 	return found, nil
 }
+func liveAllowedDNSIntent(l *liveLedger, intent liveDNSIntent) bool {
+	if intent.Desired.ZoneID != l.Zone.ID {
+		return false
+	}
+	for index := range 3 {
+		child := fmt.Sprintf("%s-app%d", l.RunID, index)
+		if intent.Desired.Name == child && intent.Desired.Type == "A" && strings.HasPrefix(intent.Desired.Owner, "loomplane:route:") {
+			return true
+		}
+		if intent.Desired.Name == "_loomplane."+child && intent.Desired.Type == "TXT" && intent.Desired.Owner == fmt.Sprintf("loomplane:proof:%s:%d", l.RunID, index) && strings.HasPrefix(intent.Desired.Value, "loomplane=zone_") && len(intent.Transitions) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func liveResolveRecord(zone provider.DNSZone, intent liveDNSIntent, all []provider.DNSRecord) (*provider.DNSRecord, error) {
 	var found *provider.DNSRecord
 	for _, actual := range all {
@@ -398,35 +415,31 @@ func liveInspectResources(ctx context.Context, path string, l *liveLedger, p *li
 	if dnsErr != nil {
 		failures = append(failures, fmt.Errorf("DNS inventory or identity unavailable"))
 	} else {
-		for i := range l.Records {
-			intent := &l.Records[i]
-			allowedName := false
-			for index := range 3 {
-				if intent.Desired.Name == fmt.Sprintf("%s-app%d", l.RunID, index) {
-					allowedName = true
+		for _, intents := range [][]liveDNSIntent{l.Records, l.Proofs} {
+			for i := range intents {
+				intent := &intents[i]
+				baselineConflict := slices.ContainsFunc(l.Baseline, func(record provider.DNSRecord) bool { return record.Name == intent.Desired.Name })
+				if !liveAllowedDNSIntent(l, *intent) || baselineConflict {
+					failures = append(failures, fmt.Errorf("unsafe DNS cleanup intent"))
+					continue
 				}
-			}
-			baselineConflict := slices.ContainsFunc(l.Baseline, func(record provider.DNSRecord) bool { return record.Name == intent.Desired.Name })
-			if !allowedName || baselineConflict || !strings.HasPrefix(intent.Desired.Owner, "loomplane:route:") || intent.Desired.Type != "A" || intent.Desired.ZoneID != l.Zone.ID {
-				failures = append(failures, fmt.Errorf("unsafe DNS cleanup intent"))
-				continue
-			}
-			actual, resolveErr := liveResolveRecord(zone, *intent, records)
-			if resolveErr != nil {
-				failures = append(failures, resolveErr)
-				continue
-			}
-			if actual == nil {
-				intent.Deleted = true
-				continue
-			}
-			intent.Receipt = actual
-			if err := liveWrite(path, l); err != nil {
-				return err
-			}
-			if cleanup {
-				if err := p.dns.DeleteRecord(ctx, p.dnsCredential, provider.DNSDeleteRequest{Zone: zone, Expected: *actual}); err != nil {
-					failures = append(failures, fmt.Errorf("exact DNS deletion unresolved"))
+				actual, resolveErr := liveResolveRecord(zone, *intent, records)
+				if resolveErr != nil {
+					failures = append(failures, resolveErr)
+					continue
+				}
+				if actual == nil {
+					intent.Deleted = true
+					continue
+				}
+				intent.Receipt = actual
+				if err := liveWrite(path, l); err != nil {
+					return err
+				}
+				if cleanup {
+					if err := p.dns.DeleteRecord(ctx, p.dnsCredential, provider.DNSDeleteRequest{Zone: zone, Expected: *actual}); err != nil {
+						failures = append(failures, fmt.Errorf("exact DNS deletion unresolved"))
+					}
 				}
 			}
 		}
@@ -489,8 +502,10 @@ func liveInspectResources(ctx context.Context, path string, l *liveLedger, p *li
 		if readErr != nil || !reflect.DeepEqual(after, l.Zone) || !liveEqualInventory(l.Baseline, remaining) {
 			failures = append(failures, fmt.Errorf("surviving DNS inventory differs or is unverified"))
 		} else {
-			for i := range l.Records {
-				l.Records[i].Deleted = true
+			for _, intents := range [][]liveDNSIntent{l.Records, l.Proofs} {
+				for i := range intents {
+					intents[i].Deleted = true
+				}
 			}
 		}
 	}
@@ -693,13 +708,49 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders) {
 	}
 	l.Evidence["enrollment_complete"] = true
 	record()
-	var managedZone cloudinfra.Zone
-	c.must(http.StatusCreated, http.MethodPost, "/api/v1/dns-zones", cloudinfra.ZoneInput{Name: liveZone, Mode: "managed", ConnectionID: connectionIDs["vercel"], ProjectIDs: projects}, &managedZone)
-	c.must(http.StatusOK, http.MethodPost, "/api/v1/dns-zones/"+managedZone.ID+"/verify", nil, &managedZone)
-	liveLifecycle(t, c, cfg, l, p, cloud, pools, hosts, keys, runtimeIDs, projects, managedZone, observer, record, bound)
+	namespaces := make([]cloudinfra.Zone, 0, len(projects))
+	writer, ok := p.dns.(provider.DNSAdapter)
+	if !ok {
+		t.Fatal("live DNS adapter cannot publish ownership challenges")
+	}
+	for index, project := range projects {
+		bound()
+		var namespace cloudinfra.Zone
+		name := fmt.Sprintf("%s-app%d.%s", l.RunID, index, liveZone)
+		c.must(http.StatusCreated, http.MethodPost, "/api/v1/dns-zones", cloudinfra.ZoneInput{Name: name, Mode: "managed", ConnectionID: connectionIDs["vercel"], ProjectIDs: []string{project}}, &namespace)
+		if namespace.Name != name || namespace.ProviderZone.ID != l.Zone.ID || namespace.ProviderZone.Name != liveZone || namespace.ProofName != "_loomplane."+name || !namespace.VerifiedAt.IsZero() {
+			t.Fatal("managed namespace or public challenge widened")
+		}
+		intent := liveDNSIntent{Desired: provider.DNSRecord{ZoneID: l.Zone.ID, Name: strings.TrimSuffix(namespace.ProofName, "."+liveZone), Type: "TXT", Value: namespace.ProofValue, TTL: 60, Owner: fmt.Sprintf("loomplane:proof:%s:%d", l.RunID, index)}}
+		if !liveAllowedDNSIntent(l, intent) {
+			t.Fatal("proof record outside approved scope")
+		}
+		l.Proofs = append(l.Proofs, intent)
+		record()
+		bound()
+		l.Proofs[index].Attempted = true
+		record()
+		receipt, writeErr := writer.UpsertRecord(ctx, p.dnsCredential, provider.DNSUpsertRequest{Zone: l.Zone, Record: intent.Desired})
+		if writeErr != nil {
+			t.Fatal("public challenge write unresolved; retained cleanup intent")
+		}
+		l.Proofs[index].Receipt = &receipt
+		record()
+		for until := time.Now().Add(5 * time.Minute); ; time.Sleep(2 * time.Second) {
+			bound()
+			if c.do(http.MethodPost, "/api/v1/dns-zones/"+namespace.ID+"/verify", nil, &namespace) == http.StatusOK {
+				break
+			}
+			if time.Now().After(until) {
+				t.Fatal("public namespace control not established")
+			}
+		}
+		namespaces = append(namespaces, namespace)
+	}
+	liveLifecycle(t, c, cfg, l, p, cloud, pools, hosts, keys, runtimeIDs, projects, namespaces, observer, record, bound)
 }
 
-func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p *liveProviders, cloud cloudprofiles.Profile, pools []cloudinfra.Pool, hosts []combinedHost, keys [][]byte, runtimeIDs, projects []string, zone cloudinfra.Zone, observer *livePatchObserver, record, bound func()) {
+func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p *liveProviders, cloud cloudprofiles.Profile, pools []cloudinfra.Pool, hosts []combinedHost, keys [][]byte, runtimeIDs, projects []string, namespaces []cloudinfra.Zone, observer *livePatchObserver, record, bound func()) {
 	t.Helper()
 	targets := make([]cloudprofiles.Target, 0, len(projects))
 	bindings := make([]planning.Binding, 0, len(projects))
@@ -788,7 +839,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		deploy(project, target.Name, "/")
 		bindings = append(bindings, binding(project))
 		var operation cloudinfra.RouteOperation
-		c.must(http.StatusOK, http.MethodPost, base+"/domain-routes/preview", cloudinfra.RouteInput{ZoneID: zone.ID, CloudID: cloud.ID, EnvironmentID: environment, Service: "web", Hostname: fmt.Sprintf("%s-app%d.%s", l.RunID, index, liveZone), Port: 80}, &operation)
+		c.must(http.StatusOK, http.MethodPost, base+"/domain-routes/preview", cloudinfra.RouteInput{ZoneID: namespaces[index].ID, CloudID: cloud.ID, EnvironmentID: environment, Service: "web", Hostname: fmt.Sprintf("%s-app%d.%s", l.RunID, index, liveZone), Port: 80}, &operation)
 		l.Records = append(l.Records, liveDNSIntent{Desired: operation.DesiredRecord})
 		record()
 		bound()

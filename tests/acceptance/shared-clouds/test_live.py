@@ -204,6 +204,59 @@ class RealLaunchGateTests(unittest.TestCase):
                 self.assertIsNotNone(child.poll())
                 self.effect.unlink()
 
+    def test_receipt_waits_for_stable_wrapper_after_delayed_interpreter_start(self):
+        popen = subprocess.Popen
+        observed = []
+        remember = self.live.remember
+
+        def delayed(command, **options):
+            if "--launch-gate" in command:
+                command = [
+                    sys.executable,
+                    "-c",
+                    "import os,sys,time; time.sleep(0.3); os.execv(sys.argv[1], sys.argv[1:])",
+                    *command,
+                ]
+            return popen(command, **options)
+
+        def inspect(pid):
+            identity = process_identity(pid)
+            observed.append(identity)
+            self.assertIn(" --launch-gate ", identity)
+            self.assertNotIn("os.execv", identity)
+            return identity
+
+        def record(role, child):
+            self.assertFalse(self.effect.exists())
+            remember(role, child)
+            self.assertFalse(self.effect.exists())
+
+        with (
+            patch("live.subprocess.Popen", side_effect=delayed),
+            patch("live.process_identity", side_effect=inspect),
+            patch.object(self.live, "remember", side_effect=record),
+        ):
+            child = self.live.launch(self.command, role="runner")
+        self.addCleanup(self.reap_owned, child)
+        self.assertEqual(len(observed), 1)
+        self.wait_until(self.effect.exists)
+        self.assertEqual(observed[0], process_identity(child.pid))
+        self.live.stop("runner")
+
+    def test_readiness_timeout_never_releases_effects(self):
+        with (
+            patch("live.select.select", return_value=([], [], [])),
+            self.assertRaisesRegex(RuntimeError, "gate readiness"),
+        ):
+            self.live.launch(self.command, role="runner", stderr=subprocess.DEVNULL)
+        child = self.live.children["runner"]
+        self.addCleanup(self.reap_owned, child)
+        child.wait(timeout=5)
+        self.assertFalse(self.effect.exists())
+        receipt = json.loads(self.live.process_path.read_text())["runner"]
+        self.assertEqual(receipt["phase"], "intent")
+        self.assertNotIn("pid", receipt)
+
     def test_gate_preserves_target_exit_status(self):
         child = self.live.launch(
             [sys.executable, "-c", "raise SystemExit(23)"], role="runner"
