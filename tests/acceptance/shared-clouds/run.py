@@ -330,7 +330,7 @@ open('/fixture/issuance.pem','wb').write(root)
         self.state["gateway_preflight"] = "passed"
         self.persist()
 
-    def combined(self):
+    def combined(self, suite="combined", case=None):
         postgres = self.create(
             "postgres",
             "postgres:17-alpine",
@@ -383,7 +383,10 @@ open('/fixture/issuance.pem','wb').write(root)
             [
                 "/fixture/shared-cloud.test",
                 "-test.v",
-                "-test.run=^TestAcceptanceSharedCloudCombined$",
+                "-test.run=^TestAcceptanceSharedCloud"
+                + ("Recovery" if suite == "recovery" else "Combined")
+                + "$"
+                + (("/^" + case + "$") if case else ""),
                 "-test.timeout=15m",
             ],
         )
@@ -398,12 +401,12 @@ open('/fixture/issuance.pem','wb').write(root)
                 timeout=30,
             )
             log = captured.stdout + captured.stderr
-            (self.directory / "combined.log").write_text(log)
+            (self.directory / (suite + ".log")).write_text(log)
         if status != "0":
             raise RuntimeError(
-                "combined test failed; inspect " + str(self.directory / "combined.log")
+                suite + " test failed; inspect " + str(self.directory / (suite + ".log"))
             )
-        self.state["combined"] = "passed"
+        self.state[suite] = "passed"
         self.persist()
 
     def inspect(self, kind, identity):
@@ -577,7 +580,20 @@ def main():
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--suite", choices=("combined", "recovery"), default="combined")
+    parser.add_argument(
+        "--case",
+        choices=(
+            "historical_forward_migration",
+            "connection_drift_before_effect",
+            "direct_caller_loss",
+            "accept_route_race",
+            "cross_organization_denial",
+        ),
+    )
     args = parser.parse_args()
+    if args.case and args.suite != "recovery":
+        parser.error("--case requires --suite recovery")
     fixture = Fixture(args.state)
     if args.cleanup:
         fixture.cleanup()
@@ -615,7 +631,7 @@ def main():
         fixture.preflight()
         print("Private gateway and nested DNS preflight passed", flush=True)
         if not args.preflight_only:
-            fixture.combined()
+            fixture.combined(args.suite, args.case)
     except subprocess.CalledProcessError as error:
         print((error.stderr or b"").decode(errors="replace"), flush=True)
         raise
