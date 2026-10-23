@@ -572,6 +572,47 @@ it("offers wildcard certificates only on a domain that is its own Cloudflare zon
   expect(within(inside).queryByRole("button", setUp)).toBeNull()
 })
 
+it("renews a managed zone's proof once it expires", async () => {
+  // Not in the mock: proofs there never expire.
+  let renewed = false
+  const awaiting = () => {
+    const z = zoneWith("acme.dev", [], { verified: false, proof: true })
+    z.zone.proof_expires_at = renewed
+      ? new Date(Date.now() + 86400000).toISOString()
+      : "2026-01-01T00:00:00Z"
+    z.zone.proof_value = renewed ? "lp-proof-456" : "lp-proof-123"
+    return z
+  }
+  const writes = stubFetch({
+    "/api/v1/domains": () =>
+      Response.json({ zones: [awaiting()], registrations: [] }),
+    "POST /api/v1/dns-zones/zone-acme.dev/update": () => {
+      renewed = true
+      return Response.json(awaiting().zone)
+    },
+  })
+  render(
+    <Wrapped>
+      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
+    </Wrapped>
+  )
+  const card = await screen.findByRole("region", { name: "acme.dev" })
+  expect(await within(card).findByText(/This value expired/)).toBeTruthy()
+  expect(within(card).queryByRole("button", { name: "Check again" })).toBeNull()
+  await userEvent.click(
+    within(card).getByRole("button", { name: "Renew proof" })
+  )
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/dns-zones/zone-acme.dev/update",
+      body: { project_ids: ["shop"], renew_proof: true, revision: 2 },
+    },
+  ])
+  expect(await within(card).findByText("lp-proof-456")).toBeTruthy()
+  expect(within(card).getByRole("button", { name: "Check again" })).toBeTruthy()
+})
+
 it("saves grants with the zone's revision after a failed check", async () => {
   let revision = 2
   const external = () => {

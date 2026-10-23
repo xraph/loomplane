@@ -1,9 +1,10 @@
-// The TXT record that proves an external zone is the organization's, and
-// a way to check for it again.
+// The TXT record that proves a zone is the organization's, and a way to
+// check for it again or, once it expires, to renew it.
 import { useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useDnsZonesUpdate,
   useDnsZonesVerify,
   useDomainsOverview,
 } from "@/client/forge/loomplane/hooks"
@@ -12,11 +13,53 @@ import { useInvalidate, useMutation } from "@/client/hooks"
 import { Button } from "@/components/ui/button"
 import { isSet, relativeTime, useClock } from "@/lib/domains"
 
+// RenewProof issues a new TXT value with a fresh 24 hours to publish it.
+// Not in the mock: the mock's proofs never expire.
+export function RenewProof({ zone }: { zone: Zone }) {
+  const update = useMutation(useDnsZonesUpdate)
+  const invalidate = useInvalidate()
+  const [note, setNote] = useState("")
+  const renew = async () => {
+    setNote("")
+    try {
+      await update.mutateAsync({
+        path: { zoneId: zone.id },
+        body: {
+          revision: zone.revision,
+          projectIds: zone.projectIds,
+          renewProof: true,
+        },
+      })
+    } catch (err) {
+      setNote(messageOf(err, "The proof wasn't renewed."))
+    }
+    invalidate(useDomainsOverview)
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2.5">
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={update.isPending}
+        onClick={() => void renew()}
+      >
+        Renew proof
+      </Button>
+      <span className="text-[12.5px] text-muted-foreground" aria-live="polite">
+        {note}
+      </span>
+    </div>
+  )
+}
+
 export function TxtInstructions({ zone }: { zone: Zone }) {
   const verify = useMutation(useDnsZonesVerify)
   const invalidate = useInvalidate()
   const now = useClock()
   const [note, setNote] = useState("")
+  // An expired proof can't verify; a renewed one starts the 24 hours again.
+  const expired =
+    isSet(zone.proofExpiresAt) && new Date(zone.proofExpiresAt).getTime() <= now
 
   const check = async () => {
     setNote("")
@@ -64,25 +107,36 @@ export function TxtInstructions({ zone }: { zone: Zone }) {
           </span>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2.5">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={verify.isPending}
-          onClick={() => void check()}
-        >
-          Check again
-        </Button>
-        <span
-          className="text-[12.5px] text-muted-foreground"
-          aria-live="polite"
-        >
-          {note ||
-            (isSet(zone.proofCheckedAt)
-              ? `Last checked ${relativeTime(zone.proofCheckedAt, now)}.`
-              : "")}
-        </span>
-      </div>
+      {expired ? (
+        <>
+          <p className="text-[12.5px] text-muted-foreground">
+            This value expired {relativeTime(zone.proofExpiresAt, now)}, so it
+            can&apos;t verify the domain any more. Renew it, then publish the
+            new value.
+          </p>
+          <RenewProof zone={zone} />
+        </>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={verify.isPending}
+            onClick={() => void check()}
+          >
+            Check again
+          </Button>
+          <span
+            className="text-[12.5px] text-muted-foreground"
+            aria-live="polite"
+          >
+            {note ||
+              (isSet(zone.proofCheckedAt)
+                ? `Last checked ${relativeTime(zone.proofCheckedAt, now)}.`
+                : "")}
+          </span>
+        </div>
+      )}
     </div>
   )
 }
