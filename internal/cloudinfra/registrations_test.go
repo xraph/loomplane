@@ -134,6 +134,13 @@ func (d *registrationDNS) GetZone(context.Context, provider.InfrastructureCreden
 	return *d.zone, nil
 }
 
+func (d *registrationDNS) ListZones(context.Context, provider.InfrastructureCredential) ([]provider.DNSZone, error) {
+	if d.zone == nil {
+		return nil, nil
+	}
+	return []provider.DNSZone{*d.zone}, nil
+}
+
 func (d *registrationDNS) CreateZone(_ context.Context, _ provider.InfrastructureCredential, spec provider.DNSZoneSpec) (provider.DNSZone, error) {
 	d.creates++
 	d.zone = &provider.DNSZone{ID: "cf_zone", Name: spec.Name, AccountID: "account"}
@@ -639,7 +646,7 @@ func TestSucceededRegistrationBecomesManagedZone(t *testing.T) {
 		t.Fatalf("%+v creates=%d posts=%d", got, env.dns.creates, env.registrar.posts)
 	}
 	zone := env.domains.zones[0]
-	if zone.Mode != "managed" || zone.Name != "acme.dev" || zone.RegistrationID != op.ID || got.ZoneID != zone.ID || len(zone.ProjectIDs) != 1 || zone.ProjectIDs[0] != "shop" || zone.ProviderZone.ID != "cf_zone" || zone.VerifiedAt.IsZero() {
+	if zone.Mode != "managed" || zone.Name != "acme.dev" || zone.RegistrationID != op.ID || got.ZoneID != zone.ID || len(zone.ProjectIDs) != 1 || zone.ProjectIDs[0] != "shop" || zone.ProviderZone.ID != "cf_zone" || !zone.VerifiedAt.IsZero() || zone.ProofName != "_loomplane.acme.dev" {
 		t.Fatalf("zone: %+v", zone)
 	}
 	if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil || len(env.domains.zones) != 1 {

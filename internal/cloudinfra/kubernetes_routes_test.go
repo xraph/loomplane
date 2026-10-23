@@ -134,7 +134,9 @@ func (s *kubeRouteStore) Route(context.Context, string, string, string) (*Route,
 
 type addressResolver struct{ addresses []string }
 
-func (addressResolver) LookupTXT(context.Context, string) ([]string, error) { return nil, nil }
+func (addressResolver) LookupTXT(context.Context, string) ([]string, error) {
+	return []string{"proof"}, nil
+}
 func (r addressResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
 	out := make([]net.IPAddr, 0, len(r.addresses))
 	for _, address := range r.addresses {
@@ -162,7 +164,8 @@ func kubernetesRouteFixture(t *testing.T) (*Service, *kubeRouteStore, *fakeRoute
 		t.Fatal(err)
 	}
 	zone := &Zone{ID: "zone", OrgID: "org", Name: "example.com", Mode: "managed", ConnectionID: "dns", ConnectionGeneration: 1, Provider: "digitalocean", AccountID: "account",
-		RecordOwnership: true, ProviderZone: provider.DNSZone{ID: "zone", Name: "example.com"}, ProjectIDs: []string{"shop"}, VerifiedAt: now}
+		RecordOwnership: true, ProviderZone: provider.DNSZone{ID: "zone", Name: "example.com"}, ProjectIDs: []string{"shop"}, VerifiedAt: now,
+		ProofName: "_loomplane.example.com", ProofValue: "proof", ProofExpiresAt: now.Add(24 * time.Hour)}
 	binding := kubernetesBinding("203.0.113.10")
 	input := RouteInput{ZoneID: "zone", EnvironmentID: "prod", Service: "octo--gateway", Hostname: "api.example.com", Port: 8080, BlockedPathPrefixes: []string{"/admin"}}
 	record, err := routeDNSRecord(zone, input.Hostname, binding.Address, "route_k")

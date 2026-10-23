@@ -100,7 +100,7 @@ func challengeFixture(t *testing.T) (*Service, *overviewStore, *challengeDNS) {
 	if err := adapters.RegisterDNS("cloudflare", dns); err != nil {
 		t.Fatal(err)
 	}
-	svc.Connections, svc.Adapters = conns, adapters
+	svc.Connections, svc.Adapters, svc.Resolver = conns, adapters, proofResolver{[]string{"proof"}}
 	return svc, st, dns
 }
 

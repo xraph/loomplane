@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
 )
@@ -42,7 +43,7 @@ func (s *gatewayStore) PreviewRoute(_ context.Context, op *RouteOperation) error
 
 func gatewayFixture() (*Service, *gatewayStore) {
 	svc, base := overviewFixture()
-	base.zones = append(base.zones, &Zone{ID: "zone_gw", OrgID: "org", Name: "gateway.dev", Mode: "external", ProofName: "_loomplane.gateway.dev", ProofValue: "proof", ProjectIDs: []string{"shop"}, VerifiedAt: svc.now(), Revision: 1})
+	base.zones = append(base.zones, &Zone{ID: "zone_gw", OrgID: "org", Name: "gateway.dev", Mode: "external", ProofName: "_loomplane.gateway.dev", ProofValue: "proof", ProofExpiresAt: svc.now().Add(24 * time.Hour), ProjectIDs: []string{"shop"}, VerifiedAt: svc.now(), Revision: 1})
 	st := &gatewayStore{overviewStore: base, clouds: map[string]string{"octo--gateway": "cloud_1", "loose": ""}}
 	svc.Domains, svc.Resolver = st, proofResolver{[]string{"proof"}}
 	return svc, st

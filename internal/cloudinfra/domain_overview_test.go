@@ -146,9 +146,11 @@ func overviewFixture() (*Service, *overviewStore) {
 		projects: map[string]map[string]string{"org": {"shop": "Shop", "docs": "Docs"}, "other": {"rival": "Rival"}},
 		runtimes: map[string]map[string]string{"org": {"srv_1": "web-1", "conn_srv": "web-1 runtime", "conn_k8s": "prod-cluster"}},
 		zones: []*Zone{
-			{ID: "zone", OrgID: "org", Name: "acme.dev", Mode: "managed", Provider: "cloudflare", ProjectIDs: []string{"shop"}, VerifiedAt: now, Revision: 1},
+			{ID: "zone", OrgID: "org", Name: "acme.dev", Mode: "managed", Provider: "cloudflare", ProjectIDs: []string{"shop"}, VerifiedAt: now, Revision: 1,
+				ProofName: "_loomplane.acme.dev", ProofValue: "proof", ProofExpiresAt: now.Add(24 * time.Hour)},
 			{ID: "zone_docs", OrgID: "org", Name: "docs.dev", Mode: "external", ProjectIDs: []string{"docs"}, Revision: 1},
-			{ID: "zone_rival", OrgID: "other", Name: "rival.dev", Mode: "managed", ProjectIDs: []string{"rival"}, VerifiedAt: now, Revision: 1},
+			{ID: "zone_rival", OrgID: "other", Name: "rival.dev", Mode: "managed", ProjectIDs: []string{"rival"}, VerifiedAt: now, Revision: 1,
+				ProofName: "_loomplane.rival.dev", ProofValue: "proof", ProofExpiresAt: now.Add(24 * time.Hour)},
 		},
 		routes: []*Route{
 			{ID: "route_a", OrgID: "org", ProjectID: "shop", Status: "ready", Verification: ready, Input: RouteInput{ZoneID: "zone", EnvironmentID: "prod", Service: "web", Hostname: "api.acme.dev", Port: 8080}, Binding: RouteBinding{ServerID: "srv_1", ConnectionID: "conn_srv"}},
