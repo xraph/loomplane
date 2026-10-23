@@ -175,7 +175,17 @@ func (r *Runner) finalizeReleaseAction(ctx context.Context, d *Deployment, plan 
 					return err
 				}
 			}
-			if routeErr := r.routes.ReconcileReleaseRoutes(ctx, principal(job), in); routeErr != nil {
+			var routeErr error
+			if a.Compensation != nil && a.Compensation.Retained {
+				coordinator, ok := r.routes.(compensationRoutes)
+				if !ok {
+					return errors.New("compensation route coordinator is unavailable")
+				}
+				routeErr = coordinator.ReconcileCompensationRoutes(ctx, principal(job), compensationRouteRequest(d, a, progress, cleanup))
+			} else {
+				routeErr = r.routes.ReconcileReleaseRoutes(ctx, principal(job), in)
+			}
+			if routeErr != nil {
 				return fmt.Errorf("route %s: %w", a.Name, routeErr)
 			}
 		}
@@ -206,7 +216,7 @@ func (r *Runner) finalizeReleaseAction(ctx context.Context, d *Deployment, plan 
 
 func (r *Runner) beginWorkloadAttempt(ctx context.Context, d *Deployment, a planning.Action, finalizing bool) (context.Context, func(bool) error, error) {
 	st, ok := r.store.(*PgStore)
-	if !ok || a.Provider != "server" || a.Op == planning.Keep {
+	if !ok || (a.Provider != "server" && (a.Compensation == nil || !a.Compensation.ServerAttempt)) || (a.Op == planning.Keep && a.Compensation == nil) {
 		return ctx, func(bool) error { return nil }, nil
 	}
 	infra := cloudinfra.NewPgStore(st.db)
@@ -215,7 +225,7 @@ func (r *Runner) beginWorkloadAttempt(ctx context.Context, d *Deployment, a plan
 		return ctx, nil, err
 	}
 	ctx = attempt.Context(ctx)
-	if _, pooled := cloudinfra.ExecutionFrom(ctx); !pooled {
+	if _, pooled := cloudinfra.ExecutionFrom(ctx); !pooled && a.Provider == "server" {
 		ctx = server.WithEffectFence(ctx, server.EffectFence{Operation: d.OrgID + "/" + d.PlanID + "/" + a.Name, Generation: attempt.Generation})
 	}
 	return ctx, func(settled bool) error {

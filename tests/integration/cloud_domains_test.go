@@ -396,6 +396,9 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if released.Source.Binding.ServerID != "host2" || released.NotBefore.IsZero() {
 		t.Fatal("release lost inactive identity or TTL gate")
 	}
+	if _, err = store.BeginIngress(ctx, released); err != nil {
+		t.Fatal(err)
+	}
 	if err = store.CompleteHandoff(ctx, released); err != nil {
 		t.Fatal(err)
 	}
@@ -489,6 +492,9 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 			}
 			if resumed.DesiredConfig == nil || resumed.DesiredConfig.Version != abandoned.DesiredConfig.Version || resumed.PreviousConfig.ETag != "prepared" {
 				t.Fatal("cleanup CAS intent was lost")
+			}
+			if _, err = store.BeginIngress(ctx, resumed); err != nil {
+				t.Fatal(err)
 			}
 			if err = store.CompleteHandoff(ctx, resumed); err != nil {
 				t.Fatal(err)

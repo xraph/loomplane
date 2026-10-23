@@ -31,19 +31,21 @@ type ChangeInput struct {
 
 // EnvironmentChange describes the reviewed work in one environment.
 type EnvironmentChange struct {
-	ProjectID       string      `json:"project_id,omitempty"`
-	EnvironmentID   string      `json:"environment_id"`
-	Environment     string      `json:"environment"`
-	Services        []string    `json:"services"`
-	Summary         PlanSummary `json:"summary"`
-	PlanID          string      `json:"plan_id,omitempty"`
-	DeploymentID    string      `json:"deployment_id,omitempty"`
-	Status          string      `json:"status"`
-	Error           string      `json:"error,omitempty"`
-	ExternalRouting bool        `json:"external_routing"`
-	RoutingEvidence string      `json:"routing_evidence,omitempty"`
-	RoutingStatus   string      `json:"routing_status,omitempty"`
-	Routes          []SyncRoute `json:"routes,omitempty"`
+	CompensationMode    string      `json:"compensation_mode,omitempty"`
+	CompensationMessage string      `json:"compensation_message,omitempty"`
+	ProjectID           string      `json:"project_id,omitempty"`
+	EnvironmentID       string      `json:"environment_id"`
+	Environment         string      `json:"environment"`
+	Services            []string    `json:"services"`
+	Summary             PlanSummary `json:"summary"`
+	PlanID              string      `json:"plan_id,omitempty"`
+	DeploymentID        string      `json:"deployment_id,omitempty"`
+	Status              string      `json:"status"`
+	Error               string      `json:"error,omitempty"`
+	ExternalRouting     bool        `json:"external_routing"`
+	RoutingEvidence     string      `json:"routing_evidence,omitempty"`
+	RoutingStatus       string      `json:"routing_status,omitempty"`
+	Routes              []SyncRoute `json:"routes,omitempty"`
 }
 
 // SyncRoute identifies the durable handoff and the DNS record you need to serve.

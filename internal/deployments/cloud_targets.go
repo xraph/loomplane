@@ -80,7 +80,7 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 			return stale("changed since review or is outside this scope")
 		}
 	}
-	if pin.PoolID != "" {
+	if pin.PoolID != "" && (a.Compensation == nil || !a.Compensation.Retained) {
 		validator, ok := r.plans.(interface {
 			ValidatePlacement(context.Context, string, string, string, string, string, cloudinfra.Placement) error
 		})

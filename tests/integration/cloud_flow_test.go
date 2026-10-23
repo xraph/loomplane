@@ -130,6 +130,7 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	}
 	docs := connect("vercel", "docs-token-0123456789")
 	docsTarget := createTarget("docs", docs)
+	c.must(http.StatusOK, http.MethodGet, targets+"/"+docsTarget.ID, nil, &docsTarget)
 	managed = strings.Replace(managed, "ignore:", "  docs:\n    source: node:apps/web\n    cloud_target: docs\nignore:", 1)
 	deploy(managed)
 	afterAdoption = bindings()

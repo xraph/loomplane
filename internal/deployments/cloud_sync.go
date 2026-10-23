@@ -147,7 +147,7 @@ func (r *Runner) CleanupCloudPlan(ctx context.Context, org, planID string, heart
 		return err
 	}
 	for _, a := range plan.Actions {
-		if a.Op == planning.Keep || a.Op == planning.Delete {
+		if (a.Op == planning.Keep && (a.Compensation == nil || !a.Compensation.Retained)) || a.Op == planning.Delete {
 			continue
 		}
 		if err := r.finalizeReleaseAction(ctx, d, plan, a, true, nil, &actor); err != nil {

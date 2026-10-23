@@ -25,6 +25,11 @@ func (s *Service) BindCloudSyncRunner(runner CloudSyncDeployer, inputs AppliedIn
 	s.appliedInputs = inputs
 }
 
+// ValidateCloudSyncExecution returns the current actor for an exact accepted plan.
+func (s *Service) ValidateCloudSyncExecution(ctx context.Context, plan *Plan) (security.Principal, error) {
+	return s.validateCloudSync(ctx, plan, cloudprofiles.SyncRunning)
+}
+
 // ValidateCloudSync checks the current actor and exact stored plan before
 // candidate effects and metadata-only adoption.
 func (s *Service) ValidateCloudSync(ctx context.Context, plan *Plan) error {
@@ -324,7 +329,7 @@ func (s *Service) ValidateCloudSyncCleanup(ctx context.Context, plan *Plan, comp
 	if err != nil {
 		return err
 	}
-	if compensation.Status != cloudprofiles.SyncCleanup || compensation.Reverts != plan.CloudSyncID {
+	if (compensation.Status != cloudprofiles.SyncCleanup && compensation.Status != cloudprofiles.SyncRunning) || compensation.Reverts != plan.CloudSyncID {
 		return cloudprofiles.ErrConflict
 	}
 	if authErr := s.authorizeStoredCloudSync(ctx, snapshot.Actor, compensation, snapshot); authErr != nil {
