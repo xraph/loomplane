@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
 
 // CloudAdoptionStore updates only placement metadata if the serving row has not
@@ -25,6 +28,26 @@ func (s *PgStore) AdoptCloudPlacement(ctx context.Context, expected *Binding, pl
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
+
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, expected.OrgID); checkErr != nil {
+		return false, checkErr
+	}
+	if checkErr := cloudinfra.LockRouteWorkload(ctx, tx, expected.OrgID, expected.EnvironmentID, expected.Name); checkErr != nil {
+		return false, checkErr
+	}
+	var original string
+	if checkErr := tx.QueryRow(ctx, `SELECT loomplane_unstarted_compensation_origin($1,$2,$3,$4)`, expected.OrgID, id, expected.EnvironmentID, expected.Name).Scan(&original); checkErr != nil {
+		return false, checkErr
+	}
+	if original != "" {
+		var safe bool
+		if checkErr := tx.QueryRow(ctx, `SELECT loomplane_unstarted_cloud_compensation($1,$2,$3,$4)`, expected.OrgID, original, expected.EnvironmentID, expected.Name).Scan(&safe); checkErr != nil {
+			return false, checkErr
+		}
+		if !safe {
+			return false, fmt.Errorf("legacy compensation has an unresolved original attempt")
+		}
+	}
 	ok, err := adoptCloudPlacement(ctx, tx, expected, placement, at)
 	if err != nil || !ok {
 		return ok, err

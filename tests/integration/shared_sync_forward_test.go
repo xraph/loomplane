@@ -28,6 +28,7 @@ import (
 type forwardExecutor struct {
 	calls, removals map[string]int
 	failCleanup     bool
+	failApply       bool
 	expectedActor   string
 	prepared        map[string]int64
 	attempts        map[string]cloudinfra.WorkloadAttempt
@@ -67,7 +68,14 @@ func (e *forwardExecutor) Apply(ctx context.Context, job *deployments.Job) (*dep
 	if err := job.Checkpoint([]byte(`{"candidate":"accepted"}`)); err != nil {
 		return nil, err
 	}
-	return &deployments.Outcome{ExternalID: "candidate-" + key + "-" + job.Action.Name, Revision: "accepted-revision"}, nil
+	if e.failApply {
+		return nil, errors.New("lost candidate response")
+	}
+	prefix := "candidate-"
+	if job.Action.Compensation != nil {
+		prefix = "recreated-"
+	}
+	return &deployments.Outcome{ExternalID: prefix + key + "-" + job.Action.Name, Revision: "accepted-revision"}, nil
 }
 func (e *forwardExecutor) Remove(ctx context.Context, job *deployments.Job, b *planning.Binding) error {
 	if e.expectedActor != "" && job.Deployment.StartedBy != e.expectedActor {

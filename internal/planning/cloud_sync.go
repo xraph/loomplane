@@ -270,16 +270,68 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			return nil, e
 		}
 		plan := &Plan{ID: preview.ID + "/" + env.ID, OrgID: p.OrgID, ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, CreatedBy: p.UserID, CreatedAt: preview.CreatedAt, Status: StatusApproved, DecidedBy: p.UserID}
+		planningBindings := bindings
+		compensations := map[string]*CloudCompensation{}
+		if reverts != "" {
+			originalSync, originalSnapshot, readErr := st.GetSync(ctx, p.OrgID, preview.ProjectID, reverts)
+			if readErr != nil {
+				return nil, readErr
+			}
+			unstarted, checkErr := s.unstartedCloudCompensation(ctx, p.OrgID, reverts, env.ID, originalSnapshot)
+			if checkErr != nil {
+				return nil, checkErr
+			}
+			planningBindings, compensations, e = cloudCompensationBindings(bindings, originalSnapshot, reverts, env.ID, unstarted)
+			for _, compensation := range compensations {
+				compensation.OriginalCompleted = originalSync.Status == cloudprofiles.SyncSucceeded
+				if compensation.ServerAttempt != (compensation.Source.Provider == "server") && !compensation.OriginalCompleted {
+					preview.Blockers = append(preview.Blockers, "Finish or reconcile the original mixed-runtime change, then review its revert again; its unfinished effects cannot be safely transferred.")
+				}
+			}
+			if e != nil {
+				return nil, e
+			}
+		}
 		poolAssignment := after
 		if in.Default {
 			// A default is never a pool, and a default switch moves nothing pooled.
 			poolAssignment = nil
 		}
-		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, bindings, poolAssignment, preview.Before, options, planned)
+		capacityBindings := slices.DeleteFunc(slices.Clone(planningBindings), func(b *Binding) bool {
+			c := compensations[actionID(b.Subject, b.Name)]
+			return c != nil && c.Retained
+		})
+		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, capacityBindings, poolAssignment, preview.Before, options, planned)
+		if poolPlacements == nil {
+			poolPlacements = map[string]CloudPlacement{}
+		}
+		for _, c := range compensations {
+			if !c.Retained {
+				continue
+			}
+			var source ServiceConfig
+			if decodeErr := json.Unmarshal(c.Source.Config, &source); decodeErr != nil {
+				return nil, decodeErr
+			}
+			if source.CloudPlacement != nil && source.CloudPlacement.PoolID != "" && after != nil {
+				pin, valid := repinCloudPlacement(*source.CloudPlacement, after)
+				if !valid {
+					return nil, cloudprofiles.ErrConflict
+				}
+				poolPlacements[c.Source.Name] = pin
+			}
+		}
 		if poolErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+poolErr.Error())
 		}
 		routes, routeErr := s.releaseRoutes(ctx, plan)
+		if reverts != "" {
+			if reader, ok := s.store.(interface {
+				CompensationRoutes(context.Context, string, string, string) ([]cloudinfra.Route, error)
+			}); ok {
+				routes, routeErr = reader.CompensationRoutes(ctx, p.OrgID, project, env.ID)
+			}
+		}
 		if routeErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
 		}
@@ -287,12 +339,35 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if in.Default {
 			selector = defaultPlacementSelector
 		}
-		result := appliedCloudPlan(bindings, after, selector, options, s.providers, poolPlacements, routes)
+		result := appliedCloudPlan(planningBindings, after, selector, options, s.providers, poolPlacements, routes)
+		for i := range result.Actions {
+			a := &result.Actions[i]
+			c := compensations[a.ID]
+			if c == nil {
+				continue
+			}
+			a.Compensation = c
+			if c.Retained {
+				a.Op = Keep
+				a.AdoptCloudPlacement = true
+				a.CloudAdoption = nil
+				a.Routes = nil
+				a.Provider, a.ConnectionID, a.Region, a.Engine = c.Source.Provider, c.Source.ConnectionID, c.Source.Region, c.Source.Engine
+				a.Reason = "Restore the retained source instance and remove the replaced candidate after routing is verified."
+				for _, route := range routes {
+					if route.Input.Service == a.Name {
+						a.Routes = append(a.Routes, route)
+					}
+				}
+			} else {
+				a.Reason = "Recreate the saved source from its artifact and variables on the reviewed target. This creates a new runtime instance."
+			}
+		}
 		if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings, routePlacementReview{Prior: planned, Before: preview.Before}); routeErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
 		}
 		for _, action := range result.Actions {
-			if action.Service != nil && action.Service.CloudPlacement != nil && action.Service.CloudPlacement.PoolID != "" && action.Op != Delete && (action.Op != Keep || action.AdoptCloudPlacement) {
+			if (action.Compensation == nil || !action.Compensation.Retained) && action.Service != nil && action.Service.CloudPlacement != nil && action.Service.CloudPlacement.PoolID != "" && action.Op != Delete && (action.Op != Keep || action.AdoptCloudPlacement) {
 				planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: action.Name, Placement: action.Service.CloudPlacement.PoolPlacement()})
 			}
 		}
@@ -301,6 +376,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			preview.Blockers = append(preview.Blockers, env.Name+": "+finding.Name+": "+finding.Message)
 		}
 		change := cloudprofiles.EnvironmentChange{ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, Services: []string{}, Status: cloudprofiles.SyncPending}
+		change.CompensationMode, change.CompensationMessage = cloudCompensationDescription(plan.Actions)
 		change.Summary = cloudprofiles.PlanSummary{Create: plan.Summary.Create, Update: plan.Summary.Update, Replace: plan.Summary.Replace, Delete: plan.Summary.Delete, Keep: plan.Summary.Keep}
 		for _, a := range plan.Actions {
 			if a.AdoptCloudPlacement {

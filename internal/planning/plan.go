@@ -77,6 +77,8 @@ const (
 
 // Action is one step of a plan.
 type Action struct {
+	Compensation *CloudCompensation `json:"compensation,omitempty"`
+
 	Routes []cloudinfra.Route `json:"routes,omitempty"`
 
 	// AdoptCloudPlacement persists reviewed metadata without a provider call.
