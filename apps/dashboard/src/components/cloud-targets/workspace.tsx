@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react"
-import { PlusIcon } from "lucide-react"
+import { CloudIcon, PlusIcon } from "lucide-react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
   Connection,
@@ -26,6 +26,7 @@ import {
   ZeroStateContent,
   ZeroStateDescription,
   ZeroStateHeader,
+  ZeroStateMedia,
   ZeroStateTitle,
 } from "@/components/zero-state"
 import { cloudDeletionError } from "@/lib/cloud-targets"
@@ -51,8 +52,11 @@ export function EmptyClouds({
   children?: ReactNode
 }) {
   return (
-    <ZeroState>
+    <ZeroState variant="inline" preview={false}>
       <ZeroStateHeader>
+        <ZeroStateMedia variant="icon">
+          <CloudIcon />
+        </ZeroStateMedia>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{description}</ZeroStateDescription>
       </ZeroStateHeader>
@@ -722,7 +726,9 @@ export function TargetTable({
                     <CloudGlyph cloud={cloud} size="sm" />
                     <span className="grid min-w-0 gap-0.5">
                       <span className="truncate text-[13px]">
-                        {account?.name ?? "An account that was removed"}
+                        {t.runtime === "server"
+                          ? `Server pool ${t.poolId}`
+                          : (account?.name ?? "An account that was removed")}
                       </span>
                       <span className="truncate text-xs text-muted-foreground">
                         {cloudLabel(cloud)}

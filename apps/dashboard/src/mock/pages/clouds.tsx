@@ -31,6 +31,11 @@ import {
   ZeroStateTitle,
 } from "@/components/zero-state"
 import { cn } from "@/lib/utils"
+import {
+  CloudTabs,
+  type CloudTab,
+} from "@/components/cloud-targets/infrastructure-ui"
+import { MockCloudInfrastructure } from "./cloud-infrastructure"
 import { TopBar } from "@/mock/components/top-bar"
 
 type Target = {
@@ -90,6 +95,9 @@ const selectClass =
   "h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
 export function CloudsPage() {
+  const [tab, setTab] = useState<CloudTab>("Targets")
+  const [resetKey, setResetKey] = useState(0)
+  const [pools, setPools] = useState<string[]>([])
   const [targets, setTargets] = useState(initialTargets)
   const [selected, setSelected] = useState("frontend")
   const [query, setQuery] = useState("")
@@ -171,9 +179,18 @@ export function CloudsPage() {
       targets.some((item) => item.name === name)
     )
       return
-    const template = initialTargets.find(
-      (item) => item.provider === newProvider
-    )!
+    const template =
+      newProvider === "Server pool"
+        ? {
+            name: "",
+            provider: "Server pool",
+            cloud: "server",
+            account: pools[0]!,
+            accounts: pools,
+            services: [],
+            commit: "",
+          }
+        : initialTargets.find((item) => item.provider === newProvider)!
     setTargets([...targets, { ...template, name, services: [], commit: "" }])
     setSelected(name)
     setQuery("")
@@ -182,6 +199,9 @@ export function CloudsPage() {
   }
 
   function reset() {
+    setResetKey((k) => k + 1)
+    setPools([])
+    setTab("Targets")
     setSync(null)
     setTargets(initialTargets)
     setSelected("frontend")
@@ -268,286 +288,304 @@ export function CloudsPage() {
           </span>
         </div>
 
-        <div className="grid items-start gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <section aria-label="Cloud targets" className="grid min-w-0 gap-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Targets</h2>
-              <Button variant="ghost" size="sm" onClick={() => setAdding(true)}>
-                <PlusIcon /> Add target
-              </Button>
-            </div>
-            <select
-              aria-label="Selected target"
-              className={cn(selectClass, "lg:hidden")}
-              value={selected}
-              onChange={(event) => setSelected(event.target.value)}
-            >
-              {targets.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.name} · {item.provider}
-                </option>
-              ))}
-            </select>
-            <Input
-              className="hidden lg:block"
-              aria-label="Filter targets"
-              placeholder="Filter targets..."
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <div className="hidden gap-1 lg:grid">
-              {visible.map((item) => (
-                <button
-                  key={item.name}
-                  type="button"
-                  aria-pressed={selected === item.name}
-                  onClick={() => setSelected(item.name)}
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-lg border border-transparent p-3 text-left transition-colors outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring",
-                    selected === item.name && "border-border bg-muted/60"
-                  )}
-                >
-                  <CloudGlyph cloud={item.cloud} className="size-8" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium">
-                      {item.name}
-                    </span>
-                    <span className="block text-xs text-muted-foreground">
-                      {item.provider} · {item.services.length} services
-                    </span>
-                  </span>
-                  {sync?.target === item.name && sync.failed ? (
-                    <TriangleAlertIcon className="size-4 text-destructive" />
-                  ) : sync?.target === item.name && busy ? (
-                    <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
-                  ) : (
-                    <span className="size-1.5 rounded-full bg-overdye" />
-                  )}
-                </button>
-              ))}
-              {visible.length === 0 && (
-                <ZeroState variant="inline" className="px-2">
-                  <ZeroStateHeader>
-                    <ZeroStateTitle>No matching targets</ZeroStateTitle>
-                    <ZeroStateDescription>
-                      Try another name or provider.
-                    </ZeroStateDescription>
-                  </ZeroStateHeader>
-                  <ZeroStateContent>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setQuery("")}
-                    >
-                      Clear filter
-                    </Button>
-                  </ZeroStateContent>
-                </ZeroState>
-              )}
-            </div>
-            <p className="px-3 text-xs leading-relaxed text-muted-foreground">
-              Services use a target name. Change its account here to move them
-              together.
-            </p>
-          </section>
-
-          <section
-            aria-label={`${target.name} details`}
-            className="min-w-0 overflow-hidden rounded-xl border"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
-              <div className="flex items-center gap-2">
-                <h2 className="font-semibold">{target.name}</h2>
-                <Badge variant="outline">{target.provider}</Badge>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy || !!sync?.failed}
-                onClick={openSwitch}
+        <CloudTabs value={tab} onChange={setTab}>
+          <MockCloudInfrastructure
+            key={resetKey}
+            tab={tab}
+            failure={simulateFailure}
+            onPoolsChange={setPools}
+          />
+          {tab === "Targets" && (
+            <div className="grid items-start gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+              <section
+                aria-label="Cloud targets"
+                className="grid min-w-0 gap-3"
               >
-                Switch account
-              </Button>
-            </div>
-            <div className="grid gap-5 p-5">
-              <dl className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <dt className="mb-2 text-xs text-muted-foreground">
-                    {target.services.length
-                      ? "Serving account"
-                      : "Selected account"}
-                  </dt>
-                  <dd className="flex items-center gap-2 text-sm font-medium break-all">
-                    <CloudGlyph cloud={target.cloud} />
-                    {target.account}
-                  </dd>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold">Targets</h2>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setAdding(true)}
+                  >
+                    <PlusIcon /> Add target
+                  </Button>
                 </div>
-                <div>
-                  <dt className="mb-2 text-xs text-muted-foreground">
-                    Future releases
-                  </dt>
-                  <dd className="flex items-center gap-2 text-sm font-medium break-all">
-                    {targetSync?.to ?? target.account}
-                    {targetSync && !complete && (
-                      <Badge variant="secondary">
-                        {targetSync.failed ? "Paused" : "Queued"}
-                      </Badge>
-                    )}
-                  </dd>
-                </div>
-              </dl>
-
-              {targetSync && (
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className={cn(
-                    "rounded-lg bg-muted/50 p-4",
-                    targetSync.failed && "bg-destructive/5"
-                  )}
+                <select
+                  aria-label="Selected target"
+                  className={cn(selectClass, "lg:hidden")}
+                  value={selected}
+                  onChange={(event) => setSelected(event.target.value)}
                 >
-                  <div className="flex items-start gap-2">
-                    {targetSync.failed ? (
-                      <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
-                    ) : complete ? (
-                      <CheckIcon className="mt-0.5 size-4 shrink-0 text-overdye" />
-                    ) : (
-                      <LoaderCircleIcon className="mt-0.5 size-4 shrink-0 animate-spin motion-reduce:animate-none" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">
-                        {targetSync.failed
-                          ? "Readiness check failed"
-                          : complete
-                            ? "Account switched"
-                            : "Moving your current release"}
-                      </p>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                        {targetSync.failed
-                          ? `${targetSync.from} is still serving. Future releases are paused until you retry or revert.`
-                          : complete
-                            ? target.services.length
-                              ? `Current and future releases now use ${targetSync.to}.`
-                              : `Future releases will use ${targetSync.to}. No services needed redeployment.`
-                            : `${targetSync.from} → ${targetSync.to}. Your deployed source revision stays the same.`}
-                      </p>
-                    </div>
-                  </div>
-                  {!complete && (
-                    <ol className="mt-3 grid gap-2">
-                      {steps.map((label, index) => (
-                        <li
-                          key={label}
-                          className={cn(
-                            "flex items-center gap-2 text-xs",
-                            index > targetSync.step
-                              ? "text-muted-foreground"
-                              : "text-foreground"
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "flex size-4 shrink-0 items-center justify-center rounded-full",
-                              index < targetSync.step
-                                ? "bg-overdye/10 text-overdye"
-                                : "bg-muted"
-                            )}
-                          >
-                            {index < targetSync.step ? (
-                              <CheckIcon className="size-3" />
-                            ) : (
-                              <span className="size-1 rounded-full bg-current" />
-                            )}
-                          </span>
-                          {label}
-                          {index === targetSync.step && (
-                            <span className="ml-auto">
-                              {targetSync.failed ? "Failed" : "In progress"}
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                  {targetSync.failed && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          setSync({
-                            ...targetSync,
-                            failed: false,
-                            simulateFailure: false,
-                          })
-                        }
-                      >
-                        Retry sync
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setSync(null)}
-                      >
-                        Revert to {targetSync.from}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-medium">
-                    Services using this target
-                  </h3>
-                  {target.commit && (
-                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <GitCommitHorizontalIcon className="size-3.5" />
-                      {target.commit}
-                    </span>
-                  )}
-                </div>
-                {target.services.length > 0 ? (
-                  <div className="divide-y">
-                    {target.services.map((service) => (
-                      <div
-                        key={service}
-                        className="flex items-center justify-between gap-2 py-3 text-sm"
-                      >
-                        <span>{service}</span>
-                        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <span className="size-1.5 rounded-full bg-overdye" />
-                          Serving
+                  {targets.map((item) => (
+                    <option key={item.name} value={item.name}>
+                      {item.name} · {item.provider}
+                    </option>
+                  ))}
+                </select>
+                <Input
+                  className="hidden lg:block"
+                  aria-label="Filter targets"
+                  placeholder="Filter targets..."
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+                <div className="hidden gap-1 lg:grid">
+                  {visible.map((item) => (
+                    <button
+                      key={item.name}
+                      type="button"
+                      aria-pressed={selected === item.name}
+                      onClick={() => setSelected(item.name)}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-lg border border-transparent p-3 text-left transition-colors outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring",
+                        selected === item.name && "border-border bg-muted/60"
+                      )}
+                    >
+                      <CloudGlyph cloud={item.cloud} className="size-8" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">
+                          {item.name}
                         </span>
-                      </div>
-                    ))}
+                        <span className="block text-xs text-muted-foreground">
+                          {item.provider} · {item.services.length} services
+                        </span>
+                      </span>
+                      {sync?.target === item.name && sync.failed ? (
+                        <TriangleAlertIcon className="size-4 text-destructive" />
+                      ) : sync?.target === item.name && busy ? (
+                        <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
+                      ) : (
+                        <span className="size-1.5 rounded-full bg-overdye" />
+                      )}
+                    </button>
+                  ))}
+                  {visible.length === 0 && (
+                    <ZeroState variant="inline" className="px-2">
+                      <ZeroStateHeader>
+                        <ZeroStateTitle>No matching targets</ZeroStateTitle>
+                        <ZeroStateDescription>
+                          Try another name or provider.
+                        </ZeroStateDescription>
+                      </ZeroStateHeader>
+                      <ZeroStateContent>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setQuery("")}
+                        >
+                          Clear filter
+                        </Button>
+                      </ZeroStateContent>
+                    </ZeroState>
+                  )}
+                </div>
+                <p className="px-3 text-xs leading-relaxed text-muted-foreground">
+                  Services use a target name. Change its account here to move
+                  them together.
+                </p>
+              </section>
+
+              <section
+                aria-label={`${target.name} details`}
+                className="min-w-0 overflow-hidden rounded-xl border"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-semibold">{target.name}</h2>
+                    <Badge variant="outline">{target.provider}</Badge>
                   </div>
-                ) : (
-                  <ZeroState variant="inline" className="px-0">
-                    <ZeroStateHeader>
-                      <ZeroStateTitle>
-                        Ready for your first service
-                      </ZeroStateTitle>
-                      <ZeroStateDescription>
-                        Assign a service to this target in your release
-                        configuration.
-                      </ZeroStateDescription>
-                    </ZeroStateHeader>
-                    <ZeroStateContent>
-                      <code className="rounded bg-muted px-2 py-1 text-xs">
-                        cloud_target: {target.name}
-                      </code>
-                    </ZeroStateContent>
-                  </ZeroState>
-                )}
-              </div>
-              <p className="border-t pt-3 text-xs leading-relaxed text-muted-foreground">
-                Switching accounts redeploys these services first. The previous
-                deployment stays available until the new one is ready.
-              </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || !!sync?.failed}
+                    onClick={openSwitch}
+                  >
+                    Switch account
+                  </Button>
+                </div>
+                <div className="grid gap-5 p-5">
+                  <dl className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <dt className="mb-2 text-xs text-muted-foreground">
+                        {target.services.length
+                          ? "Serving account"
+                          : "Selected account"}
+                      </dt>
+                      <dd className="flex items-center gap-2 text-sm font-medium break-all">
+                        <CloudGlyph cloud={target.cloud} />
+                        {target.account}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="mb-2 text-xs text-muted-foreground">
+                        Future releases
+                      </dt>
+                      <dd className="flex items-center gap-2 text-sm font-medium break-all">
+                        {targetSync?.to ?? target.account}
+                        {targetSync && !complete && (
+                          <Badge variant="secondary">
+                            {targetSync.failed ? "Paused" : "Queued"}
+                          </Badge>
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  {targetSync && (
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      className={cn(
+                        "rounded-lg bg-muted/50 p-4",
+                        targetSync.failed && "bg-destructive/5"
+                      )}
+                    >
+                      <div className="flex items-start gap-2">
+                        {targetSync.failed ? (
+                          <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
+                        ) : complete ? (
+                          <CheckIcon className="mt-0.5 size-4 shrink-0 text-overdye" />
+                        ) : (
+                          <LoaderCircleIcon className="mt-0.5 size-4 shrink-0 animate-spin motion-reduce:animate-none" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium">
+                            {targetSync.failed
+                              ? "Readiness check failed"
+                              : complete
+                                ? "Account switched"
+                                : "Moving your current release"}
+                          </p>
+                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                            {targetSync.failed
+                              ? `${targetSync.from} is still serving. The desired destination is saved. Verify the failure before retrying or reviewing recovery.`
+                              : complete
+                                ? target.services.length
+                                  ? `Current and future releases now use ${targetSync.to}.`
+                                  : `Future releases will use ${targetSync.to}. No services needed redeployment.`
+                                : `${targetSync.from} → ${targetSync.to}. Your deployed source revision stays the same. Desired and applied placement remain separate until readiness and routing succeed.`}
+                          </p>
+                        </div>
+                      </div>
+                      {!complete && (
+                        <ol className="mt-3 grid gap-2">
+                          {steps.map((label, index) => (
+                            <li
+                              key={label}
+                              className={cn(
+                                "flex items-center gap-2 text-xs",
+                                index > targetSync.step
+                                  ? "text-muted-foreground"
+                                  : "text-foreground"
+                              )}
+                            >
+                              <span
+                                className={cn(
+                                  "flex size-4 shrink-0 items-center justify-center rounded-full",
+                                  index < targetSync.step
+                                    ? "bg-overdye/10 text-overdye"
+                                    : "bg-muted"
+                                )}
+                              >
+                                {index < targetSync.step ? (
+                                  <CheckIcon className="size-3" />
+                                ) : (
+                                  <span className="size-1 rounded-full bg-current" />
+                                )}
+                              </span>
+                              {label}
+                              {index === targetSync.step && (
+                                <span className="ml-auto">
+                                  {targetSync.failed ? "Failed" : "In progress"}
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                      {targetSync.failed && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              setSync({
+                                ...targetSync,
+                                failed: false,
+                                simulateFailure: false,
+                              })
+                            }
+                          >
+                            Retry sync
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSync(null)}
+                          >
+                            Revert to {targetSync.from}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-medium">
+                        Services using this target
+                      </h3>
+                      {target.commit && (
+                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <GitCommitHorizontalIcon className="size-3.5" />
+                          {target.commit}
+                        </span>
+                      )}
+                    </div>
+                    {target.services.length > 0 ? (
+                      <div className="divide-y">
+                        {target.services.map((service) => (
+                          <div
+                            key={service}
+                            className="flex items-center justify-between gap-2 py-3 text-sm"
+                          >
+                            <span>{service}</span>
+                            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <span className="size-1.5 rounded-full bg-overdye" />
+                              Serving
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <ZeroState variant="inline" className="px-0">
+                        <ZeroStateHeader>
+                          <ZeroStateTitle>
+                            Ready for your first service
+                          </ZeroStateTitle>
+                          <ZeroStateDescription>
+                            Assign a service to this target in your release
+                            configuration.
+                          </ZeroStateDescription>
+                        </ZeroStateHeader>
+                        <ZeroStateContent>
+                          <code className="rounded bg-muted px-2 py-1 text-xs">
+                            cloud_target: {target.name}
+                          </code>
+                        </ZeroStateContent>
+                      </ZeroState>
+                    )}
+                  </div>
+                  <p className="border-t pt-3 text-xs leading-relaxed text-muted-foreground">
+                    Switching accounts redeploys these services first. The
+                    previous deployment stays available until the new one is
+                    ready.
+                  </p>
+                </div>
+              </section>
             </div>
-          </section>
-        </div>
+          )}
+        </CloudTabs>
       </Page>
 
       <Dialog open={switching} onOpenChange={setSwitching}>
@@ -651,14 +689,15 @@ export function CloudsPage() {
               {initialTargets.map((item) => (
                 <option key={item.provider}>{item.provider}</option>
               ))}
+              {pools.length > 0 && <option>Server pool</option>}
             </select>
           </label>
           <p className="text-sm text-muted-foreground">
             Connected account:{" "}
-            {
-              initialTargets.find((item) => item.provider === newProvider)
-                ?.account
-            }
+            {newProvider === "Server pool"
+              ? pools[0]
+              : initialTargets.find((item) => item.provider === newProvider)
+                  ?.account}
           </p>
           {targets.some((item) => item.name === newName.trim()) && (
             <p role="alert" className="text-xs text-destructive">

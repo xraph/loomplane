@@ -71,6 +71,7 @@ function fixture({ granted = false, inUse = false, noTargets = false } = {}) {
         })
       }
       let body: unknown = {}
+      if (path.endsWith("/environments")) body = { environments: [] }
       if (path === "/api/v1/providers")
         body = {
           providers: [
@@ -167,7 +168,8 @@ it("shows an organization's Cloud with the projects allowed on each target", asy
   expect(
     await screen.findByText("3 targets across 3 accounts on 2 providers")
   ).toBeInTheDocument()
-  expect(await screen.findByText("Web app")).toBeInTheDocument()
+  await userEvent.click(screen.getByRole("tab", { name: "Projects" }))
+  expect((await screen.findAllByText("Web app")).length).toBeGreaterThan(0)
   // Web app may use frontend and api, not worker.
   const chips = screen.getAllByText(/^(Frontend|Api|Worker)$/)
   expect(chips.length).toBeGreaterThan(0)
@@ -180,6 +182,7 @@ it("gives a project access to only the targets you tick", async () => {
   const user = userEvent.setup()
   const { writes } = fixture()
   show()
+  await user.click(screen.getByRole("tab", { name: "Projects" }))
   expect(
     await screen.findByText("No project uses this Cloud yet")
   ).toBeInTheDocument()
@@ -256,4 +259,33 @@ it("explains why a default can't move while an environment uses the Cloud", asyn
   expect(await screen.findByRole("alert")).toHaveTextContent(
     /Unassign the Cloud from those environments first/
   )
+})
+
+it("reviews a default provider switch through the organization Cloud change contract", async () => {
+  fixture()
+  const user = userEvent.setup()
+  render(
+    <ClientProvider client={forgeClient}>
+      <OrganizationCloud
+        cloud={
+          {
+            ...cloud,
+            defaultPlacement: {
+              provider: "vercel",
+              connectionId: "v",
+              region: "",
+            },
+          } as never
+        }
+      />
+    </ClientProvider>
+  )
+  await user.click(await screen.findByRole("button", { name: "Change" }))
+  await user.click(
+    await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
+  )
+  await user.click(screen.getByRole("radio", { name: /DO US/ }))
+  expect(
+    screen.getByRole("button", { name: "Review default switch" })
+  ).toBeInTheDocument()
 })

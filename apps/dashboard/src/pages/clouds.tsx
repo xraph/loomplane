@@ -65,7 +65,7 @@ const connectionTone: Record<string, Tone> = {
 
 export function Clouds() {
   const { session, can } = useOrganization()
-  const allowed = can("cloud_account:read")
+  const allowed = can("organization_cloud:manage") || can("cloud_account:read")
   // Without access nothing about Clouds is read.
   if (!allowed) {
     return (
@@ -125,26 +125,7 @@ function CloudsList() {
           }
         />
         {shared ? (
-          <>
-            <OrganizationClouds onCreate={() => setCreating(true)} />
-            {list.length > 0 && (
-              <section
-                aria-label="Project Clouds"
-                className="hidden gap-2 has-[[data-cloud-row]]:grid"
-              >
-                <h2 className="text-[15px] font-semibold">
-                  Owned by a project
-                </h2>
-                <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-border">
-                  <div className="min-w-[680px]">
-                    {list.map((p) => (
-                      <ProjectClouds key={p.id} project={p} hideEmpty />
-                    ))}
-                  </div>
-                </div>
-              </section>
-            )}
-          </>
+          <OrganizationClouds onCreate={() => setCreating(true)} />
         ) : (
           <>
             {projects.status === "error" ? (
@@ -158,7 +139,7 @@ function CloudsList() {
             ) : list.length === 0 ? (
               <EmptyClouds
                 title="Create a project first"
-                description="Clouds and their targets belong to a project."
+                description="Your organization manager can create Clouds before projects exist. Create a project to use granted targets."
               >
                 <Button nativeButton={false} render={<Link to="/projects" />}>
                   <PlusIcon />
@@ -256,9 +237,7 @@ function ProjectClouds({
   const clouds = useQuery(api.useCloudsList, { path: { id: project.id } })
   // A project's list also holds the organization's Clouds it was granted.
   // Next to the organization's own list, show only the ones it owns.
-  const list = (clouds.data?.clouds ?? []).filter(
-    (c): c is Profile => !!c && (!hideEmpty || c.projectId === project.id)
-  )
+  const list = (clouds.data?.clouds ?? []).filter((c): c is Profile => !!c)
   if (clouds.status === "error") {
     return (
       <div className="border-t px-4 py-3">
@@ -761,7 +740,7 @@ function WorkspaceScope({
   ) : !project ? (
     <EmptyClouds
       title="Create a project first"
-      description="Clouds and their targets belong to a project."
+      description="Your organization manager can create Clouds before projects exist. Create a project to use granted targets."
     >
       <Link to="/projects">
         <Button>
