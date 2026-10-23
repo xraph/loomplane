@@ -38,6 +38,11 @@ def save(path, value):
         stream.flush()
         os.fsync(stream.fileno())
     temporary.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def process_identity(pid):
@@ -77,6 +82,41 @@ def stop_exact(receipt):
     raise RuntimeError("owned process did not terminate")
 
 
+def launch_gate(descriptor, command):
+    # Only the supervisor owns the pipe writer. Its death before release is EOF.
+    try:
+        released = os.read(descriptor, 1) == b"1"
+    finally:
+        os.close(descriptor)
+    if not released:
+        return 1
+    # Keep this group leader and its recorded command identity until work ends.
+    child = None
+    stopping = False
+
+    def terminate(_signal, _frame):
+        nonlocal stopping
+        stopping = True
+        if child is not None:
+            try:
+                child.terminate()
+            except ProcessLookupError:
+                pass
+
+    signal.signal(signal.SIGTERM, terminate)
+    if stopping:
+        return 1
+    child = subprocess.Popen(command)
+    if stopping:
+        terminate(None, None)
+    code = child.wait()
+    if code < 0:
+        if -code not in (signal.SIGKILL, signal.SIGSTOP):
+            signal.signal(-code, signal.SIG_DFL)
+        os.kill(os.getpid(), -code)
+    return code
+
+
 class Live:
     def __init__(self, path):
         self.path = Path(path).resolve()
@@ -99,7 +139,8 @@ class Live:
             }
         )
         environment.update(extra or {})
-        child = subprocess.Popen(
+        launch = self.launch if not wait else subprocess.Popen
+        child = launch(
             [
                 str(self.binary),
                 "-test.run=^TestAcceptanceSharedCloudLive$",
@@ -109,7 +150,7 @@ class Live:
             env=environment,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            **({"role": "runner"} if not wait else {"start_new_session": True}),
         )
         if not wait:
             return child
@@ -236,19 +277,46 @@ class Live:
             raise RuntimeError("prepared executable changed")
         return scope
 
-    def remember(self, role, child):
-        self.children[role] = child
+    def launch(self, command, *, role, **options):
         receipt = (
             json.loads(self.process_path.read_text())
             if self.process_path.exists()
             else {}
         )
+        if role in receipt:
+            raise RuntimeError(role + " launch already attempted")
+        receipt[role] = {"phase": "intent", "launch_id": uuid.uuid4().hex}
+        save(self.process_path, receipt)
+        reader, writer = os.pipe()
+        try:
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--launch-gate",
+                    str(reader),
+                    receipt[role]["launch_id"],
+                    *command,
+                ],
+                pass_fds=(reader,),
+                start_new_session=True,
+                **options,
+            )
+            self.children[role] = child
+            self.remember(role, child)
+            os.write(writer, b"1")
+            return child
+        finally:
+            os.close(reader)
+            os.close(writer)
+
+    def remember(self, role, child):
+        receipt = json.loads(self.process_path.read_text())
         identity = process_identity(child.pid)
         if identity is None:
             raise RuntimeError(role + " exited before identity receipt")
-        receipt[role] = {"pid": child.pid, "identity": identity}
+        receipt[role].update({"phase": "ready", "pid": child.pid, "identity": identity})
         save(self.process_path, receipt)
-        self.children[role] = child
 
     def stop(self, role):
         receipt = (
@@ -256,11 +324,13 @@ class Live:
             if self.process_path.exists()
             else {}
         )
+        owned = receipt.get(role)
+        if owned is not None and owned.get("phase") == "intent":
+            raise RuntimeError(role + " launch unresolved; quiescence not established")
         child = self.children.get(role)
         if child is not None:
             # Reap our children while stop_exact polls so zombies are not live work.
             threading.Thread(target=child.wait, daemon=True).start()
-        owned = receipt.get(role)
         if owned is None and child is not None and child.poll() is None:
             owned = {"pid": child.pid, "identity": process_identity(child.pid)}
         stop_exact(owned)
@@ -268,8 +338,14 @@ class Live:
     def cleanup(self):
         self.checked_scope()
         # Whole process shutdown drains all in-process workers before cloud deletion.
+        failures = []
         for role in ["runner", "tunnel", "proxy"]:
-            self.stop(role)
+            try:
+                self.stop(role)
+            except RuntimeError as error:
+                failures.append(str(error))
+        if failures:
+            raise RuntimeError("; ".join(failures))
         scope = json.loads(self.scope_path.read_text())
         self.invoke("cleanup", {"LOOMPLANE_SHARED_LIVE_QUIESCED": scope["run_id"]})
         print(
@@ -317,7 +393,7 @@ class Live:
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", 0))
                 port = probe.getsockname()[1]
-            proxy = subprocess.Popen(
+            self.launch(
                 [
                     sys.executable,
                     str(HERE / "enrollment_proxy.py"),
@@ -328,11 +404,10 @@ class Live:
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                role="proxy",
             )
-            self.remember("proxy", proxy)
             callback_deadline = time.time() + 45 * 60
-            tunnel = subprocess.Popen(
+            tunnel = self.launch(
                 [
                     str(BINARY),
                     "tunnel",
@@ -343,9 +418,8 @@ class Live:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                start_new_session=True,
+                role="tunnel",
             )
-            self.remember("tunnel", tunnel)
             callback = []
 
             def read_tunnel():
@@ -380,7 +454,6 @@ class Live:
                 },
                 wait=False,
             )
-            self.remember("runner", child)
             self.supervise(child, deadline - 5 * 60)
             evidence = json.loads(self.path.read_text()).get("evidence", {})
             if any(
@@ -435,6 +508,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--launch-gate":
+        sys.exit(launch_gate(int(sys.argv[2]), sys.argv[4:]))
     try:
         main()
     except (RuntimeError, KeyboardInterrupt) as error:

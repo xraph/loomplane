@@ -28,6 +28,8 @@ python3 tests/acceptance/shared-clouds/live.py inspect --state .superpowers/shar
 python3 tests/acceptance/shared-clouds/live.py cleanup --state .superpowers/shared-cloud-live/state.json
 ```
 
+Each worker, tunnel and proxy starts behind a private pipe gate. The supervisor persists launch intent and the exact gate process identity before releasing it. Parent loss before release closes the pipe and exits the gate without starting its target. Cleanup refuses provider work when a launch intent has no completed identity receipt.
+
 Cleanup first stops the exact recorded worker, tunnel and proxy processes. It reconciles known ownership intents, checks account and resource identity, consumes the latest owned DNS receipt after Vercel ID rotation, and verifies the surviving DNS inventory against the baseline. Unknown resources and changed ownership are preserved. Network or authentication errors leave cleanup unresolved. An attempted run cannot create hosts again; recover its receipts with `inspect` and finish with `cleanup`.
 
 DigitalOcean can retain the two operation/spec tags created for each host. The ledger records their exact names before apply, and cleanup preserves them. The [DigitalOcean tags API](https://docs.digitalocean.com/reference/api/reference/tags/) filters resource counts by the token's read permissions, so an empty count cannot establish that unknown resources do not use a tag. Compute and DNS absence are reported separately from these possible four retained metadata tags.

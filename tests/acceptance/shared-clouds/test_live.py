@@ -1,11 +1,16 @@
 import json
+import os
+import signal
+import subprocess
+import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from live import Live, save, stop_exact
+from live import HERE, Live, process_identity, save, stop_exact
 
 
 class LiveSafetyTests(unittest.TestCase):
@@ -93,6 +98,25 @@ class LiveSafetyTests(unittest.TestCase):
                 self.live.cleanup()
             invoke.assert_not_called()
 
+    def test_unresolved_runner_still_stops_public_processes(self):
+        save(self.live.process_path, {"runner": {"phase": "intent"}})
+        calls = []
+        original_stop = self.live.stop
+
+        def record_stop(role):
+            calls.append(role)
+            original_stop(role)
+
+        with (
+            patch.object(self.live, "checked_scope"),
+            patch.object(self.live, "stop", side_effect=record_stop),
+            patch.object(self.live, "invoke") as provider,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "launch unresolved"):
+                self.live.cleanup()
+            provider.assert_not_called()
+        self.assertEqual(calls, ["runner", "tunnel", "proxy"])
+
     def test_partial_tunnel_start_runs_cleanup(self):
         from live import digest
 
@@ -102,8 +126,7 @@ class LiveSafetyTests(unittest.TestCase):
         tunnel.poll.return_value = 1
         with (
             patch.object(self.live, "checked_scope", return_value={"run_id": "test"}),
-            patch("live.subprocess.Popen", side_effect=[proxy, tunnel]),
-            patch.object(self.live, "remember"),
+            patch.object(self.live, "launch", side_effect=[proxy, tunnel]),
             patch.object(self.live, "cleanup") as cleanup,
         ):
             with self.assertRaisesRegex(RuntimeError, "did not publish"):
@@ -129,3 +152,170 @@ class LiveSafetyTests(unittest.TestCase):
         self.assertEqual(self.live.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads(self.live.path.read_text()), {"intent": "one"})
         self.assertFalse(self.live.path.with_suffix(".tmp").exists())
+
+
+class RealLaunchGateTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.live = Live(Path(directory.name) / "state.json")
+        save(self.live.scope_path, {"run_id": "local-gate-test"})
+        self.effect = self.live.directory / "effect"
+        self.command = [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; import sys,time; "
+                "Path(sys.argv[1]).write_text('effect'); time.sleep(60)"
+            ),
+            str(self.effect),
+        ]
+
+    def reap_owned(self, child):
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGKILL)
+        child.wait(timeout=5)
+
+    def wait_until(self, predicate):
+        until = time.monotonic() + 10
+        while not predicate():
+            if time.monotonic() >= until:
+                self.fail("local subprocess did not reach the expected state")
+            time.sleep(0.02)
+
+    def test_released_roles_have_stable_receipts_and_fresh_cleanup_stops_them(self):
+        for role in ("runner", "tunnel", "proxy"):
+            with self.subTest(role=role):
+                child = self.live.launch(self.command, role=role)
+                self.addCleanup(self.reap_owned, child)
+                self.wait_until(self.effect.exists)
+                receipt = json.loads(self.live.process_path.read_text())[role]
+                self.assertEqual(receipt["phase"], "ready")
+                self.assertEqual(process_identity(child.pid), receipt["identity"])
+                # Reap the child as an OS parent would after a supervisor exits.
+                threading.Thread(target=child.wait, daemon=True).start()
+                fresh = Live(self.live.path)
+                with (
+                    patch.object(fresh, "checked_scope"),
+                    patch.object(fresh, "invoke") as provider,
+                ):
+                    fresh.cleanup()
+                    provider.assert_called_once()
+                self.assertIsNotNone(child.poll())
+                self.effect.unlink()
+
+    def test_gate_preserves_target_exit_status(self):
+        child = self.live.launch(
+            [sys.executable, "-c", "raise SystemExit(23)"], role="runner"
+        )
+        self.assertEqual(child.wait(timeout=5), 23)
+        for role, signum in (("proxy", signal.SIGTERM), ("tunnel", signal.SIGKILL)):
+            child = self.live.launch(
+                [sys.executable, "-c", f"import os; os.kill(os.getpid(), {signum})"],
+                role=role,
+            )
+            self.assertEqual(child.wait(timeout=5), -signum)
+
+    def test_shutdown_waits_for_signal_resistant_target(self):
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import signal,sys,time; from pathlib import Path; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "Path(sys.argv[1]).write_text('effect'); time.sleep(60)"
+            ),
+            str(self.effect),
+        ]
+        child = self.live.launch(command, role="runner")
+        self.addCleanup(self.reap_owned, child)
+        self.wait_until(self.effect.exists)
+        os.killpg(child.pid, signal.SIGTERM)
+        time.sleep(0.1)
+        self.assertIsNone(child.poll())
+        before = time.monotonic()
+        self.live.stop("runner")
+        self.assertIsNotNone(child.poll())
+        self.assertLess(time.monotonic() - before, 12)
+
+    def interrupted_launch(self, role, interruption):
+        marker = self.live.directory / "gate-created.json"
+        parent_code = """
+import json, signal, sys, time
+from pathlib import Path
+from live import Live, save
+live = Live(sys.argv[1])
+def pause_before_receipt(role, child):
+    save(Path(sys.argv[2]), {"pid": child.pid})
+    while True:
+        time.sleep(0.02)
+def interrupted(*_):
+    raise KeyboardInterrupt
+signal.signal(signal.SIGTERM, interrupted)
+live.remember = pause_before_receipt
+try:
+    live.launch(json.loads(sys.argv[4]), role=sys.argv[3])
+except KeyboardInterrupt:
+    pass
+finally:
+    for child in live.children.values():
+        child.wait(timeout=5)
+"""
+        parent = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                parent_code,
+                str(self.live.path),
+                str(marker),
+                role,
+                json.dumps(self.command),
+            ],
+            env={**os.environ, "PYTHONPATH": str(HERE)},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(lambda: parent.poll() is None and parent.kill())
+        self.wait_until(marker.exists)
+        pid = json.loads(marker.read_text())["pid"]
+        intent = json.loads(self.live.process_path.read_text())[role]
+        self.assertEqual(intent["phase"], "intent")
+        self.assertNotIn("pid", intent)
+        time.sleep(0.15)
+        self.assertFalse(self.effect.exists())
+        parent.send_signal(interruption)
+        parent.wait(timeout=10)
+
+        def exited():
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "stat="],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result.returncode == 1 or result.stdout.strip().startswith("Z")
+
+        self.wait_until(exited)
+        self.assertFalse(self.effect.exists())
+        fresh = Live(self.live.path)
+        with (
+            patch.object(fresh, "checked_scope"),
+            patch.object(fresh, "invoke") as provider,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "launch unresolved"):
+                fresh.cleanup()
+            provider.assert_not_called()
+
+    def test_ordinary_interruption_before_receipt_never_releases_child(self):
+        for role in ("runner", "tunnel", "proxy"):
+            with self.subTest(role=role):
+                self.interrupted_launch(role, signal.SIGTERM)
+                self.live.process_path.unlink()
+                (self.live.directory / "gate-created.json").unlink()
+
+    def test_abrupt_parent_loss_before_receipt_never_releases_child(self):
+        for role in ("runner", "tunnel", "proxy"):
+            with self.subTest(role=role):
+                self.interrupted_launch(role, signal.SIGKILL)
+                self.live.process_path.unlink()
+                (self.live.directory / "gate-created.json").unlink()
