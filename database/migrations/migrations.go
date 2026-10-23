@@ -127,6 +127,7 @@ func All() []*migrate.Group {
 		dispatchpg.Migrations,
 		cppg.Migrations,
 		vaultpg.Migrations,
+		NativeCredentialsGroup(),
 		kspg.Migrations,
 		trovepg.Migrations,
 		heraldpg.Migrations,

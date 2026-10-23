@@ -189,10 +189,8 @@ it("gives a project access to only the targets you tick", async () => {
   await user.click(
     await screen.findByRole("button", { name: "Give a project access" })
   )
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Project" }),
-    "jobs"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Project" }))
+  await user.click(await screen.findByRole("option", { name: /Jobs/ }))
   // Every target starts ticked; leave worker out.
   await user.click(screen.getByRole("checkbox", { name: /Worker/ }))
   await user.click(screen.getByRole("button", { name: "Give access" }))
@@ -219,10 +217,8 @@ it("sets a targetless Cloud's one provider and account", async () => {
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
   )
   await user.click(screen.getByRole("radio", { name: /DO EU/ }))
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Default region" }),
-    "ams"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Default region" }))
+  await user.click(await screen.findByRole("option", { name: /ams/ }))
   await user.click(screen.getByRole("button", { name: "Set default" }))
   await waitFor(() =>
     expect(writes).toEqual([

@@ -232,19 +232,15 @@ it("distinguishes filtered targets, clears the filter and discards old project/e
   expect(screen.getByText("No matching targets")).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "Clear filter" }))
   expect(screen.getByText("Frontend")).toBeInTheDocument()
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Environment" }),
-    "stage"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Environment" }))
+  await user.click(await screen.findByRole("option", { name: /staging/ }))
   await waitFor(() =>
     expect(reads.some((r) => r.includes("/environments/stage/cloud"))).toBe(
       true
     )
   )
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Project" }),
-    "other"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Project" }))
+  await user.click(await screen.findByRole("option", { name: /Other/ }))
   await waitFor(() =>
     expect(reads.some((r) => r.includes("/projects/other/clouds"))).toBe(true)
   )
@@ -264,7 +260,7 @@ it("creates a Cloud and refreshes the generated list", async () => {
   )
   await user.click(screen.getByRole("button", { name: "Save Cloud" }))
   await waitFor(() =>
-    expect(screen.getByRole("combobox", { name: "Cloud" })).toHaveDisplayValue(
+    expect(screen.getByRole("combobox", { name: "Cloud" })).toHaveTextContent(
       "Customer Cloud"
     )
   )
@@ -450,10 +446,10 @@ it("saves an adopted service through the optimistic generated manifest API", asy
       onSaved={async () => undefined}
     />
   )
-  await user.selectOptions(
-    await screen.findByRole("combobox", { name: "Cloud target for web" }),
-    "frontend"
+  await user.click(
+    await screen.findByRole("combobox", { name: "Cloud target for web" })
   )
+  await user.click(await screen.findByRole("option", { name: /Frontend/ }))
   await user.click(
     screen.getAllByRole("button", { name: "Review service edit" })[0]
   )
@@ -548,18 +544,16 @@ it.each(["empty", "environments", "list"])(
     else if (state === "environments")
       await screen.findByText("Environment read failed.")
     else await screen.findByText("Cloud read failed.")
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Project" }),
-      "other"
-    )
+    await user.click(screen.getByRole("combobox", { name: "Project" }))
+    await user.click(await screen.findByRole("option", { name: /Other/ }))
     await waitFor(() =>
       expect(
         reads.some((url) => url.includes("/projects/other/environments"))
       ).toBe(true)
     )
-    expect(
-      screen.getByRole("combobox", { name: "Project" })
-    ).toHaveDisplayValue("Other project")
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent(
+      "Other project"
+    )
     await screen.findByText("Frontend")
   }
 )

@@ -1,3 +1,7 @@
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 // Tags on a Cloud target. A service asks for tags with cloud_tags in its
 // manifest and lands on the one granted target that carries all of them.
 import { XIcon } from "lucide-react"
@@ -64,24 +68,26 @@ export function TagInput({
         )}
       >
         {tags.map((t) => (
-          <span
+          <Badge
+            variant="secondary"
             key={t}
             className="inline-flex h-6 items-center gap-1 rounded-md bg-brand-tint pr-1 pl-2 font-mono text-[11.5px] text-brand-ink"
           >
             {t}
             {!disabled && (
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 aria-label={`Remove tag ${t}`}
                 onClick={() => onChange(tags.filter((x) => x !== t))}
                 className="flex size-4 items-center justify-center rounded-sm hover:bg-brand-ink/10"
               >
                 <XIcon className="size-3" />
-              </button>
+              </Button>
             )}
-          </span>
+          </Badge>
         ))}
-        <input
+        <Input
           aria-label="Target tags"
           aria-invalid={!!problem && !!draft}
           value={draft}
@@ -119,21 +125,22 @@ export function TagInput({
         />
       </div>
       {draft && problem ? (
-        <p role="alert" className="text-xs text-destructive">
-          {problem}
-        </p>
+        <Alert variant="destructive" className="text-xs text-destructive">
+          <AlertDescription>{problem}</AlertDescription>
+        </Alert>
       ) : offered.length > 0 && !disabled ? (
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           Used in this Cloud:
           {offered.map((s) => (
-            <button
+            <Button
+              variant="ghost"
               key={s}
               type="button"
               onClick={() => add(s)}
               className="rounded-md border border-dashed px-1.5 py-px font-mono text-[11.5px] hover:border-foreground/30 hover:text-foreground"
             >
               + {s}
-            </button>
+            </Button>
           ))}
         </div>
       ) : (

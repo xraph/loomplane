@@ -1,11 +1,26 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useState } from "react"
+import {
+  validExternalTTL,
+  canUpdateExternalTTL,
+} from "@/lib/cloud-infrastructure"
+import { useNow } from "@/lib/use-runs"
 import type { CloudTab } from "@/components/cloud-targets/infrastructure-ui"
 import {
   CloudEmpty,
   CloudError,
   Field,
   Rows,
-  rowClass,
+  Row,
 } from "@/components/cloud-targets/infrastructure-ui"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,7 +32,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
-import { selectClass } from "@/components/cloud-targets/workspace"
 
 type Host = {
   id: string
@@ -26,7 +40,6 @@ type Host = {
   size: string
   status: string
   draining: boolean
-  workloads: number
 }
 type Domain = {
   hostname: string
@@ -37,6 +50,13 @@ type Domain = {
   backend: boolean
   ttl: number
   revision: number
+}
+type MovePin = {
+  sourceId: string
+  destinationId: string
+  workloadId: string
+  authority: string
+  expiresAt: number
 }
 type Review = {
   kind: string
@@ -53,7 +73,6 @@ const initialHosts: Host[] = [
     size: "2 CPU / 4 GiB",
     status: "ready",
     draining: false,
-    workloads: 2,
   },
   {
     id: "us-2",
@@ -62,8 +81,17 @@ const initialHosts: Host[] = [
     size: "4 CPU / 8 GiB",
     status: "ready",
     draining: false,
-    workloads: 0,
   },
+]
+type Workload = {
+  id: string
+  project: string
+  service: string
+  serverId: string
+}
+const initialWorkloads: Workload[] = [
+  { id: "web-api", project: "Web app", service: "api", serverId: "us-1" },
+  { id: "jobs-worker", project: "Jobs", service: "worker", serverId: "us-1" },
 ]
 export function MockCloudInfrastructure({
   tab,
@@ -75,6 +103,10 @@ export function MockCloudInfrastructure({
   onPoolsChange?: (names: string[]) => void
 }) {
   const [hosts, setHosts] = useState(initialHosts)
+  const [workloads, setWorkloads] = useState(initialWorkloads)
+  const workloadsOn = (serverId: string) =>
+    workloads.filter((workload) => workload.serverId === serverId)
+  const workloadCount = (serverId: string) => workloadsOn(serverId).length
   const [pool, setPool] = useState(false)
   const [poolDialog, setPoolDialog] = useState(false)
   const [poolMembers, setPoolMembers] = useState(
@@ -85,7 +117,9 @@ export function MockCloudInfrastructure({
       draining: h.draining,
     }))
   )
-  const [moveReviewed, setMoveReviewed] = useState(false)
+  const [moveReviewed, setMoveReviewed] = useState<MovePin | null>(null)
+  const [moveDestination, setMoveDestination] = useState("")
+  const [movePlanned, setMovePlanned] = useState(false)
   const [moveAccepted, setMoveAccepted] = useState(false)
   const [retained, setRetained] = useState(true)
   const [grant, setGrant] = useState(["Web app"])
@@ -108,6 +142,52 @@ export function MockCloudInfrastructure({
   const [zone, setZone] = useState(false)
   const [zoneVerified, setZoneVerified] = useState(false)
   const [routeReview, setRouteReview] = useState(false)
+  const now = useNow()
+  const moveSource = hosts.find(
+    (host) =>
+      host.draining &&
+      workloads.some(
+        (workload) => workload.id === "web-api" && workload.serverId === host.id
+      )
+  )
+  const moveEligible = hosts.filter(
+    (host) =>
+      host.status === "ready" &&
+      !host.draining &&
+      host.id !== moveSource?.id &&
+      poolMembers.some(
+        (member) => member.serverId === host.id && !member.draining
+      )
+  )
+  const moveTarget = moveDestination
+    ? moveEligible.find((host) => host.id === moveDestination)
+    : moveEligible[0]
+  const moveAuthority = JSON.stringify({
+    generation,
+    members: poolMembers,
+    workloads,
+    hosts: hosts.map((host) => [
+      host.id,
+      host.status,
+      host.draining,
+      host.ownership,
+      host.size,
+    ]),
+  })
+  const currentMove = (at: number) =>
+    !!moveReviewed &&
+    moveReviewed.authority === moveAuthority &&
+    moveReviewed.sourceId === moveSource?.id &&
+    moveReviewed.destinationId === moveTarget?.id &&
+    workloads.some(
+      (workload) =>
+        workload.id === moveReviewed.workloadId &&
+        workload.id === "web-api" &&
+        workload.serverId === moveReviewed.sourceId
+    ) &&
+    at < moveReviewed.expiresAt
+  const moveValid = currentMove(now)
+
   const record = (event: string) => setEvents((events) => [event, ...events])
   const open = (kind: string, server?: Host) => {
     setEditing({ kind, server })
@@ -142,7 +222,6 @@ export function MockCloudInfrastructure({
           size,
           status: "waiting",
           draining: false,
-          workloads: 0,
         },
       ])
     else if (kind === "delete" || kind === "disconnect")
@@ -196,24 +275,32 @@ export function MockCloudInfrastructure({
           </div>
           <Rows>
             {hosts.map((host) => (
-              <div className={rowClass} key={host.id}>
+              <Row key={host.id}>
                 <div className="grid gap-1">
                   <p className="font-medium">
                     {host.name} · {host.status}
                     {host.draining ? " · draining" : ""}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {host.ownership} · us-east · {host.size} · {host.workloads}{" "}
-                    workloads
+                    {host.ownership} · us-east · {host.size} ·{" "}
+                    {workloadCount(host.id)} workloads
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Reserved {host.workloads * 500} mCPU /{" "}
-                    {host.workloads * 256} MiB · available{" "}
+                    {workloadsOn(host.id)
+                      .map(
+                        (workload) =>
+                          `${workload.project} / ${workload.service}`
+                      )
+                      .join(" · ") || "No active services"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Reserved {workloadCount(host.id) * 500} mCPU /{" "}
+                    {workloadCount(host.id) * 256} MiB · available{" "}
                     {(host.size.startsWith("4") ? 4000 : 2000) -
-                      host.workloads * 500}{" "}
+                      workloadCount(host.id) * 500}{" "}
                     mCPU /{" "}
                     {(host.size.startsWith("4") ? 8192 : 4096) -
-                      host.workloads * 256}{" "}
+                      workloadCount(host.id) * 256}{" "}
                     MiB
                   </p>
                 </div>
@@ -256,7 +343,8 @@ export function MockCloudInfrastructure({
                     size="sm"
                     variant="ghost"
                     disabled={
-                      host.workloads > 0 || (host.id === "us-1" && retained)
+                      workloadCount(host.id) > 0 ||
+                      (host.id === "us-1" && retained)
                     }
                     onClick={() =>
                       open(
@@ -270,7 +358,7 @@ export function MockCloudInfrastructure({
                       : "Review disconnect"}
                   </Button>
                 </div>
-              </div>
+              </Row>
             ))}
           </Rows>
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted p-3 text-sm">
@@ -287,59 +375,140 @@ export function MockCloudInfrastructure({
               {pool ? "Edit pool budgets" : "Add pool"}
             </Button>
             {pool && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={
-                  !hosts.some((h) => h.draining && h.workloads > 0) ||
-                  moveAccepted
-                }
-                onClick={() => {
-                  if (!moveReviewed) {
-                    setMoveReviewed(true)
-                    return
+              <>
+                <Field label="Move destination server">
+                  <Select
+                    value={moveTarget?.id ?? ""}
+                    onValueChange={(event) => setMoveDestination(event ?? "")}
+                  >
+                    <SelectTrigger
+                      aria-label="Move destination server"
+                      className={"w-full min-w-0"}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">
+                        Choose eligible destination
+                      </SelectItem>
+                      {moveEligible.map((host) => (
+                        <SelectItem key={host.id} value={host.id}>
+                          {host.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                {!moveEligible.length && (
+                  <p className="basis-full text-xs">
+                    No eligible destination. Add a ready, non-draining server to
+                    this pool.
+                  </p>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    !moveSource || !moveTarget || (moveAccepted && moveValid)
                   }
-                  setMoveAccepted(true)
-                  record(
-                    "Reviewed api move accepted. Desired destination advanced; prior applied release and routes still serve."
-                  )
-                }}
-              >
-                {moveReviewed
-                  ? "Accept reviewed service move"
-                  : "Preview service move"}
-              </Button>
-            )}
-            {moveReviewed && !moveAccepted && (
-              <p className="basis-full text-xs">
-                Move Web app / api from shared-us-1 to shared-us-2. Persisted
-                release and route authority are pinned; storage migration stays
-                explicit.
-              </p>
-            )}
-            {moveAccepted && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setHosts(
-                    hosts.map((h) =>
-                      h.draining
-                        ? { ...h, workloads: 0 }
-                        : h.id === "us-2"
-                          ? { ...h, workloads: h.workloads + 2 }
-                          : h
+                  onClick={() => {
+                    if (!currentMove(Date.now())) {
+                      if (!moveSource || !moveTarget) return
+                      setMoveReviewed({
+                        sourceId: moveSource.id,
+                        destinationId: moveTarget.id,
+                        workloadId: "web-api",
+                        authority: moveAuthority,
+                        expiresAt: Date.now() + 15 * 60 * 1000,
+                      })
+                      setMoveAccepted(false)
+                      setMovePlanned(false)
+                      return
+                    }
+                    setMoveReviewed((pin) =>
+                      pin
+                        ? { ...pin, expiresAt: Date.now() + 15 * 60 * 1000 }
+                        : null
                     )
-                  )
-                  setMoveAccepted(false)
-                  setMoveReviewed(false)
-                  record(
-                    "Destination release and routes verified. Applied placement advanced; retained cleanup still needs recovery."
-                  )
-                }}
-              >
-                Verify moved release and routes
-              </Button>
+                    setMoveAccepted(true)
+                    record(
+                      `Reviewed api move staged for ${moveTarget?.name}. Source still serves until a deployment plan is reviewed.`
+                    )
+                  }}
+                >
+                  {moveValid
+                    ? "Accept reviewed service move"
+                    : "Preview service move"}
+                </Button>
+                {moveReviewed && !moveValid && (
+                  <Alert variant="destructive" className="basis-full text-xs">
+                    <AlertDescription>
+                      Pool membership, server authority or expiry changed.
+                      Review the move again.
+                    </AlertDescription>
+                  </Alert>
+                )}
+                {moveValid && (
+                  <p className="basis-full text-xs">
+                    Move Web app / api from {moveSource?.name} to{" "}
+                    {moveTarget?.name}. One service moves; other project
+                    services keep their current bindings. Persisted release and
+                    destination authority are pinned; storage migration stays
+                    explicit.
+                  </p>
+                )}
+                {moveAccepted && moveValid && (
+                  <>
+                    <p role="status" className="basis-full text-xs">
+                      Move intent staged. It expires 15 minutes after
+                      acceptance.{" "}
+                      {movePlanned
+                        ? "Deployment plan awaits review; the source still serves."
+                        : "No deployment has started; the source still serves."}
+                    </p>
+                    {!movePlanned ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          if (!currentMove(Date.now())) return
+                          setMovePlanned(true)
+                          record(
+                            "Deployment plan created for review. The source still serves."
+                          )
+                        }}
+                      >
+                        Create deployment plan
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          if (!currentMove(Date.now()) || !moveReviewed) return
+                          const pin = moveReviewed
+                          setWorkloads((current) =>
+                            current.map((workload) =>
+                              workload.id === pin.workloadId &&
+                              workload.serverId === pin.sourceId
+                                ? { ...workload, serverId: pin.destinationId }
+                                : workload
+                            )
+                          )
+                          setMoveAccepted(false)
+                          setMovePlanned(false)
+                          setMoveReviewed(null)
+                          record(
+                            "Reviewed deployment completed: destination release and routes verified. Retained cleanup still needs recovery."
+                          )
+                        }}
+                      >
+                        Simulate reviewed deployment completion
+                      </Button>
+                    )}
+                  </>
+                )}
+              </>
             )}
             {retained && (
               <>
@@ -351,7 +520,7 @@ export function MockCloudInfrastructure({
                   size="sm"
                   variant="outline"
                   disabled={hosts.some(
-                    (h) => h.id === "us-1" && h.workloads > 0
+                    (h) => h.id === "us-1" && workloadCount(h.id) > 0
                   )}
                   onClick={() =>
                     open(
@@ -430,7 +599,7 @@ export function MockCloudInfrastructure({
           ) : (
             <Rows>
               {domains.map((domain) => (
-                <div key={domain.hostname} className={rowClass}>
+                <Row key={domain.hostname}>
                   <div className="grid gap-1">
                     <p className="font-medium break-all">
                       {domain.hostname} · {domain.status}
@@ -467,18 +636,20 @@ export function MockCloudInfrastructure({
                         Retry route operation
                       </Button>
                     )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setHostname(domain.hostname)
-                        setTTL(String(domain.ttl))
-                        setEditing({ kind: "ttl" })
-                        setError("")
-                      }}
-                    >
-                      Update external TTL
-                    </Button>
+                    {canUpdateExternalTTL(domain.status, domain.mode) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setHostname(domain.hostname)
+                          setTTL(String(domain.ttl))
+                          setEditing({ kind: "ttl" })
+                          setError("")
+                        }}
+                      >
+                        Update external TTL
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -491,7 +662,7 @@ export function MockCloudInfrastructure({
                       Remove route
                     </Button>
                   </div>
-                </div>
+                </Row>
               ))}
             </Rows>
           )}
@@ -506,7 +677,7 @@ export function MockCloudInfrastructure({
           </p>
           <Rows>
             {["Web app", "Jobs"].map((project) => (
-              <div key={project} className={rowClass}>
+              <Row key={project}>
                 <div>
                   <p>{project}</p>
                   <p className="text-xs text-muted-foreground">
@@ -531,7 +702,7 @@ export function MockCloudInfrastructure({
                 >
                   {grant.includes(project) ? "Revoke access" : "Give access"}
                 </Button>
-              </div>
+              </Row>
             ))}
           </Rows>
         </section>
@@ -555,9 +726,9 @@ export function MockCloudInfrastructure({
           {events.length ? (
             <Rows>
               {events.map((event, i) => (
-                <p className="p-3 text-[13px]" key={i}>
+                <Row className="p-3 text-[13px]" key={i}>
                   {event}
-                </p>
+                </Row>
               ))}
             </Rows>
           ) : (
@@ -593,7 +764,8 @@ export function MockCloudInfrastructure({
                   <Input
                     aria-label="Maximum previously served TTL (seconds)"
                     type="number"
-                    min={1}
+                    min={60}
+                    max={86400}
                     value={ttl}
                     onChange={(e) => setTTL(e.target.value)}
                   />
@@ -603,8 +775,17 @@ export function MockCloudInfrastructure({
                   resolver response cannot establish this bound.
                 </p>
                 <Button
-                  disabled={Number(ttl) <= 0}
+                  disabled={!validExternalTTL(Number(ttl))}
                   onClick={() => {
+                    const route = domains.find(
+                      (domain) => domain.hostname === hostname
+                    )
+                    if (
+                      !route ||
+                      !canUpdateExternalTTL(route.status, route.mode) ||
+                      !validExternalTTL(Number(ttl))
+                    )
+                      return
                     setDomains(
                       domains.map((d) =>
                         d.hostname === hostname
@@ -655,38 +836,55 @@ export function MockCloudInfrastructure({
                 </Field>
                 {["resize", "create"].includes(editing.kind) && (
                   <Field label="Size">
-                    <select
-                      aria-label="Server size"
-                      className={selectClass}
+                    <Select
                       value={size}
-                      onChange={(e) => {
-                        setSize(e.target.value)
+                      onValueChange={(e) => {
+                        setSize(e ?? "")
                         setReview(null)
                       }}
                     >
-                      <option>2 CPU / 4 GiB</option>
-                      <option>4 CPU / 8 GiB</option>
-                    </select>
+                      <SelectTrigger
+                        aria-label="Server size"
+                        className={"w-full min-w-0"}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="2 CPU / 4 GiB">
+                          2 CPU / 4 GiB
+                        </SelectItem>
+                        <SelectItem value="4 CPU / 8 GiB">
+                          4 CPU / 8 GiB
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                   </Field>
                 )}
                 {editing.kind === "adopt" && (
-                  <label className="flex items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={confirmed}
-                      onChange={(e) => setConfirmed(e.target.checked)}
-                    />
-                    Confirm pinned SSH access and Docker installation
-                  </label>
+                  <FormField
+                    orientation="horizontal"
+                    className="flex items-center gap-2 text-xs"
+                  >
+                    <FieldLabel className="contents">
+                      <Checkbox
+                        checked={confirmed}
+                        onCheckedChange={(e) => setConfirmed(e)}
+                      />
+                      Confirm pinned SSH access and Docker installation
+                    </FieldLabel>
+                  </FormField>
                 )}
                 {editing.server && (
                   <p className="text-xs">
-                    {editing.server.workloads > 0
-                      ? "Web app / api and Jobs / worker"
-                      : "No active services"}
-                    : {editing.server.workloads} workloads. Drain prevents new
-                    placement; it does not migrate data. Retained cleanup must
-                    finish before removal.
+                    {workloadsOn(editing.server.id)
+                      .map(
+                        (workload) =>
+                          `${workload.project} / ${workload.service}`
+                      )
+                      .join(", ") || "No active services"}
+                    : {workloadCount(editing.server.id)} workloads. Drain
+                    prevents new placement; it does not migrate data. Retained
+                    cleanup must finish before removal.
                   </p>
                 )}
                 {review && (
@@ -751,30 +949,34 @@ export function MockCloudInfrastructure({
                     key={host.id}
                     className="grid gap-2 rounded-lg bg-muted p-3"
                   >
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={!!member}
-                        onChange={(e) =>
-                          setPoolMembers(
-                            e.target.checked
-                              ? [
-                                  ...poolMembers,
-                                  {
-                                    serverId: host.id,
-                                    cpuMillis: 1000,
-                                    memoryMib: 2048,
-                                    draining: host.draining,
-                                  },
-                                ]
-                              : poolMembers.filter(
-                                  (m) => m.serverId !== host.id
-                                )
-                          )
-                        }
-                      />
-                      {host.name}
-                    </label>
+                    <FormField
+                      orientation="horizontal"
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <FieldLabel className="contents">
+                        <Checkbox
+                          checked={!!member}
+                          onCheckedChange={(e) =>
+                            setPoolMembers(
+                              e
+                                ? [
+                                    ...poolMembers,
+                                    {
+                                      serverId: host.id,
+                                      cpuMillis: 1000,
+                                      memoryMib: 2048,
+                                      draining: host.draining,
+                                    },
+                                  ]
+                                : poolMembers.filter(
+                                    (m) => m.serverId !== host.id
+                                  )
+                            )
+                          }
+                        />
+                        {host.name}
+                      </FieldLabel>
+                    </FormField>
                     {member && (
                       <div className="grid gap-2 sm:grid-cols-2">
                         <Field label="CPU budget (millicores)">
@@ -862,25 +1064,34 @@ export function MockCloudInfrastructure({
               />
             </Field>
             <Field label="DNS mode">
-              <select
-                aria-label="DNS mode"
-                className={selectClass}
+              <Select
                 value={mode}
-                onChange={(e) => {
-                  setMode(e.target.value)
+                onValueChange={(e) => {
+                  setMode(e ?? "")
                   setRouteReview(false)
                 }}
               >
-                <option value="external">External DNS</option>
-                <option value="managed">Managed DNS, separate account</option>
-              </select>
+                <SelectTrigger
+                  aria-label="DNS mode"
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="external">External DNS</SelectItem>
+                  <SelectItem value="managed">
+                    Managed DNS, separate account
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             {mode === "external" && (
               <Field label="Maximum previously served TTL (seconds)">
                 <Input
                   aria-label="Maximum previously served TTL (seconds)"
                   type="number"
-                  min={1}
+                  min={60}
+                  max={86400}
                   value={ttl}
                   onChange={(e) => {
                     setTTL(e.target.value)
@@ -890,9 +1101,11 @@ export function MockCloudInfrastructure({
               </Field>
             )}
             {!zoneVerified && (
-              <p role="alert" className="text-xs">
-                Save and verify the DNS zone before reviewing a route.
-              </p>
+              <Alert variant="destructive" className="text-xs">
+                <AlertDescription>
+                  Save and verify the DNS zone before reviewing a route.
+                </AlertDescription>
+              </Alert>
             )}
             {routeReview && (
               <p className="rounded-lg bg-muted p-3 text-sm">
@@ -901,8 +1114,14 @@ export function MockCloudInfrastructure({
               </p>
             )}
             <Button
-              disabled={!zoneVerified || !hostname || Number(ttl) <= 0}
+              disabled={
+                !zoneVerified ||
+                !hostname ||
+                (mode === "external" && !validExternalTTL(Number(ttl)))
+              }
               onClick={() => {
+                if (mode === "external" && !validExternalTTL(Number(ttl)))
+                  return
                 if (!routeReview) {
                   setRouteReview(true)
                   return
@@ -912,7 +1131,7 @@ export function MockCloudInfrastructure({
                   {
                     hostname,
                     mode,
-                    ttl: Number(ttl),
+                    ttl: mode === "external" ? Number(ttl) : 300,
                     status: "pending",
                     dns: false,
                     tls: false,

@@ -1,3 +1,14 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
@@ -25,13 +36,12 @@ import {
 import { Link } from "@/lib/router"
 import { QueryError } from "@/components/query-error"
 import { useOrganization } from "@/lib/organization"
-import { selectClass } from "./workspace"
 import {
   CloudEmpty,
   CloudError,
   Field,
   Rows,
-  rowClass,
+  Row,
   useInfrastructureRefresh,
 } from "./infrastructure-ui"
 import { Pools, Recovery } from "./pools"
@@ -119,7 +129,7 @@ function ServerContent({ cloud }: { cloud: Profile }) {
           }
         />
       ) : !servers.data || !connections.data || !providers.data ? (
-        <p role="status">Loading servers...</p>
+        <CloudLoading>Loading servers...</CloudLoading>
       ) : !list.length ? (
         <CloudEmpty title="No servers connected">
           Connect a pinned SSH account, or create a server with an account that
@@ -215,7 +225,7 @@ function ServerRow({
     path: { cloudId, serverId: server.id },
   })
   return (
-    <div className={rowClass}>
+    <Row>
       <div className="grid min-w-0 gap-1">
         <span className="font-medium break-words">
           {server.name}{" "}
@@ -230,7 +240,9 @@ function ServerRow({
           {server.health.checkedAt || "never"}
         </span>
         {usage.status === "error" ? (
-          <span role="alert">Capacity couldn't be loaded.</span>
+          <Alert variant="destructive">
+            <AlertDescription>Capacity couldn't be loaded.</AlertDescription>
+          </Alert>
         ) : (
           <Capacity server={server} usage={usage.data} />
         )}
@@ -238,7 +250,7 @@ function ServerRow({
       <Button size="sm" variant="outline" onClick={onSelect}>
         Inspect {server.name}
       </Button>
-    </div>
+    </Row>
   )
 }
 function ServerEditor({
@@ -395,26 +407,32 @@ function ServerEditor({
                       : "No ready account supports this provider operation. Check account capabilities in Integrations."}
                   </CloudEmpty>
                 )}
-                <select
-                  aria-label="Server account"
-                  className={selectClass}
+                <Select
                   value={input.connectionId ?? ""}
-                  onChange={(e) =>
+                  onValueChange={(e) =>
                     update({
-                      connectionId: e.target.value,
+                      connectionId: e ?? "",
                       region: "",
                       size: "",
                       image: "",
                     })
                   }
                 >
-                  <option value="">Choose an account</option>
-                  {accounts.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger
+                    aria-label="Server account"
+                    className={"w-full min-w-0"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Choose an account</SelectItem>
+                    {accounts.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </Field>
             )}
             {["create", "resize"].includes(kind) && input.connectionId && (
@@ -426,17 +444,19 @@ function ServerEditor({
               />
             )}
             {kind === "adopt" && (
-              <label className="flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={input.confirmAdoption ?? false}
-                  onChange={(e) =>
-                    update({ confirmAdoption: e.target.checked })
-                  }
-                />
-                Confirm pinned SSH access and Docker installation on this
-                existing server
-              </label>
+              <FormField
+                orientation="horizontal"
+                className="flex items-center gap-2 text-xs"
+              >
+                <FieldLabel className="contents">
+                  <Checkbox
+                    checked={input.confirmAdoption ?? false}
+                    onCheckedChange={(e) => update({ confirmAdoption: e })}
+                  />
+                  Confirm pinned SSH access and Docker installation on this
+                  existing server
+                </FieldLabel>
+              </FormField>
             )}
             {operation && (
               <div className="grid gap-1 rounded-lg bg-muted p-3 text-sm">
@@ -523,60 +543,75 @@ function ServerOptions({
       retry={options.refetch}
     />
   ) : !options.data ? (
-    <p role="status">Loading provider options...</p>
+    <CloudLoading>Loading provider options...</CloudLoading>
   ) : (
     <div className="grid gap-3 sm:grid-cols-2">
       {input.kind === "create" && (
         <Field label="Server region">
-          <select
-            aria-label="Server region"
-            className={selectClass}
+          <Select
             value={input.region ?? ""}
-            onChange={(e) => update({ region: e.target.value })}
+            onValueChange={(e) => update({ region: e ?? "" })}
           >
-            <option value="">Choose region</option>
-            {options.data.regions.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label="Server region"
+              className={"w-full min-w-0"}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Choose region</SelectItem>
+              {options.data.regions.map((r) => (
+                <SelectItem key={r.id} value={r.id}>
+                  {r.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
       )}
       <Field label="Server size">
-        <select
-          aria-label="Server size"
-          className={selectClass}
+        <Select
           value={input.size ?? ""}
-          onChange={(e) => update({ size: e.target.value })}
+          onValueChange={(e) => update({ size: e ?? "" })}
         >
-          <option value="">Choose size</option>
-          {options.data.sizes
-            .filter((s) => !input.region || s.regions.includes(input.region))
-            .map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.id} · {s.cpus} CPU · {s.memoryMib} MiB · ${s.hourlyUsd}/h
-              </option>
-            ))}
-        </select>
+          <SelectTrigger aria-label="Server size" className={"w-full min-w-0"}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Choose size</SelectItem>
+            {options.data.sizes
+              .filter((s) => !input.region || s.regions.includes(input.region))
+              .map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {s.id} · {s.cpus} CPU · {s.memoryMib} MiB · ${s.hourlyUsd}/h
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
       </Field>
       {input.kind === "create" && (
         <Field label="Server image">
-          <select
-            aria-label="Server image"
-            className={selectClass}
+          <Select
             value={input.image ?? ""}
-            onChange={(e) => update({ image: e.target.value })}
+            onValueChange={(e) => update({ image: e ?? "" })}
           >
-            <option value="">Choose image</option>
-            {options.data.images
-              .filter((i) => i.bootstrap)
-              .map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-          </select>
+            <SelectTrigger
+              aria-label="Server image"
+              className={"w-full min-w-0"}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Choose image</SelectItem>
+              {options.data.images
+                .filter((i) => i.bootstrap)
+                .map((i) => (
+                  <SelectItem key={i.id} value={i.id}>
+                    {i.name}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
         </Field>
       )}
     </div>
@@ -648,7 +683,7 @@ function ServerDetails({
             retry={usage.refetch}
           />
         ) : !usage.data ? (
-          <p role="status">Loading workloads...</p>
+          <CloudLoading>Loading workloads...</CloudLoading>
         ) : (
           <>
             <Capacity server={server} usage={usage.data} />
@@ -792,7 +827,7 @@ export function InfrastructureActivity({ cloudId }: { cloudId: string }) {
           retry={operations.refetch}
         />
       ) : !operations.data ? (
-        <p role="status">Loading operations...</p>
+        <CloudLoading>Loading operations...</CloudLoading>
       ) : !list.length ? (
         <CloudEmpty title="No infrastructure operations">
           Reviewed server changes and retained cleanup appear here.
@@ -800,7 +835,7 @@ export function InfrastructureActivity({ cloudId }: { cloudId: string }) {
       ) : (
         <Rows>
           {list.map((o) => (
-            <div key={o.id} className={rowClass}>
+            <Row key={o.id}>
               <div className="grid min-w-0 gap-1">
                 <p>
                   {o.input.kind} {o.input.name || o.serverId}: {o.status} ·
@@ -839,7 +874,7 @@ export function InfrastructureActivity({ cloudId }: { cloudId: string }) {
                   </Button>
                 )}
               </div>
-            </div>
+            </Row>
           ))}
         </Rows>
       )}
@@ -864,7 +899,7 @@ function LifecycleUsage({
       retry={usage.refetch}
     />
   ) : !usage.data ? (
-    <p role="status">Loading affected workloads...</p>
+    <CloudLoading>Loading affected workloads...</CloudLoading>
   ) : (
     <div className="grid gap-2">
       <Usage usage={usage.data} />

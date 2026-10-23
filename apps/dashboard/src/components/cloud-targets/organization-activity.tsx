@@ -1,3 +1,4 @@
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
 import { useEffect, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Sync, EnvironmentChange } from "@/client/forge/loomplane/types"
@@ -9,6 +10,7 @@ import {
   CloudEmpty,
   CloudError,
   Rows,
+  Row,
   rowClass,
   useInfrastructureRefresh,
 } from "./infrastructure-ui"
@@ -116,7 +118,7 @@ export function OrganizationActivity({ cloudId }: { cloudId: string }) {
           retry={syncs.refetch}
         />
       ) : !syncs.data ? (
-        <p role="status">Loading Cloud activity...</p>
+        <CloudLoading>Loading Cloud activity...</CloudLoading>
       ) : !list.length ? (
         <CloudEmpty title="No Cloud syncs">
           Reviewed changes appear here with the actual deployment, route and
@@ -125,7 +127,7 @@ export function OrganizationActivity({ cloudId }: { cloudId: string }) {
       ) : (
         <Rows>
           {list.map((sync) => (
-            <article key={sync.id} className="grid gap-2 p-3">
+            <Row key={sync.id} className="grid gap-2 p-3">
               <div className={rowClass}>
                 <p className="text-sm font-medium">
                   {sync.status} · attempt {sync.attempt}
@@ -164,7 +166,7 @@ export function OrganizationActivity({ cloudId }: { cloudId: string }) {
                 />
               ))}
               {sync.error && <CloudError message={sync.error} />}
-            </article>
+            </Row>
           ))}
         </Rows>
       )}

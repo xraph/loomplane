@@ -1,3 +1,12 @@
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 // Clouds: every Cloud in the organization, with the accounts their targets
 // can point at. A Cloud's own page (CloudDetail) holds the workspace where
 // its targets, assignments and syncs are managed, one environment at a time.
@@ -24,7 +33,6 @@ import {
   CloudForm,
   CloudWorkspace,
   EmptyClouds,
-  selectClass,
 } from "@/components/cloud-targets/workspace"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
@@ -540,35 +548,43 @@ export function NewOrganizationCloud({
             if (name.trim()) void submit()
           }}
         >
-          <label className="grid gap-1.5 text-[12.5px] font-medium text-muted-foreground">
-            Name
-            <Input
-              autoFocus
-              aria-label="Cloud name"
-              value={name}
-              disabled={create.isPending}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Production"
-            />
-          </label>
-          <div className="grid gap-3 rounded-xl bg-subtle p-3">
-            <label className="flex items-start gap-2.5 text-[13px]">
-              <Checkbox
-                checked={withDefault}
+          <FormField className="grid gap-1.5 text-[12.5px] font-medium text-muted-foreground">
+            <FieldLabel className="contents">
+              Name
+              <Input
+                autoFocus
+                aria-label="Cloud name"
+                value={name}
                 disabled={create.isPending}
-                onCheckedChange={(v) => setWithDefault(!!v)}
-                className="mt-0.5"
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Production"
               />
-              <span className="grid gap-0.5">
-                <span className="font-medium">
-                  Start with a default provider
+            </FieldLabel>
+          </FormField>
+          <div className="grid gap-3 rounded-xl bg-subtle p-3">
+            <FormField
+              orientation="horizontal"
+              className="flex items-start gap-2.5 text-[13px]"
+            >
+              <FieldLabel className="contents">
+                <Checkbox
+                  checked={withDefault}
+                  disabled={create.isPending}
+                  onCheckedChange={(v) => setWithDefault(!!v)}
+                  className="mt-0.5"
+                />
+                <span className="grid gap-0.5">
+                  <span className="font-medium">
+                    Start with a default provider
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    With no targets, every service on the Cloud runs on this one
+                    provider and account. You can add targets or change it
+                    later.
+                  </span>
                 </span>
-                <span className="text-xs text-muted-foreground">
-                  With no targets, every service on the Cloud runs on this one
-                  provider and account. You can add targets or change it later.
-                </span>
-              </span>
-            </label>
+              </FieldLabel>
+            </FormField>
             {withDefault && (
               <PlacementPicker
                 value={placement}
@@ -581,9 +597,9 @@ export function NewOrganizationCloud({
             )}
           </div>
           {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
           <DialogFooter>
             <Button
@@ -653,21 +669,26 @@ function NewCloudDialog({
             services once it&apos;s assigned to an environment.
           </DialogDescription>
         </DialogHeader>
-        <label className="grid gap-1.5 text-[12.5px] font-medium text-muted-foreground">
-          Project
-          <select
-            className={selectClass}
-            aria-label="Project for the new Cloud"
-            value={chosen}
-            onChange={(e) => setProject(e.target.value)}
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FormField className="grid gap-1.5 text-[12.5px] font-medium text-muted-foreground">
+          <FieldLabel className="contents">
+            Project
+            <Select value={chosen} onValueChange={(e) => setProject(e ?? "")}>
+              <SelectTrigger
+                aria-label="Project for the new Cloud"
+                className={"w-full min-w-0"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldLabel>
+        </FormField>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
@@ -755,24 +776,29 @@ function WorkspaceScope({
       projectId={project.id}
       cloudId={project.id === projectId ? cloudId : undefined}
       projectControl={
-        <label className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
-          Project
-          <select
-            className={selectClass}
-            aria-label="Project"
-            value={project.id}
-            onChange={(e) => {
-              setSelected(e.target.value)
-              window.localStorage.setItem(preference, e.target.value)
-            }}
-          >
-            {projects.data.projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FormField className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
+          <FieldLabel className="contents">
+            Project
+            <Select
+              value={project.id}
+              onValueChange={(e) => {
+                setSelected(e ?? "")
+                window.localStorage.setItem(preference, e ?? "")
+              }}
+            >
+              <SelectTrigger aria-label="Project" className={"w-full min-w-0"}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.data.projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldLabel>
+        </FormField>
       }
     />
   )

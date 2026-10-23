@@ -68,7 +68,19 @@ function fixture(stale = false) {
       if (path.endsWith("/pools")) return Response.json({ pools: [] })
       if (path.endsWith("/infrastructure-operations"))
         return Response.json({ operations: [] })
-      if (path.endsWith("/dns-zones")) return Response.json({ zones: [] })
+      if (path.endsWith("/dns-zones"))
+        return Response.json({
+          zones: path.includes("/projects/")
+            ? [
+                {
+                  id: "external",
+                  name: "example.test",
+                  mode: "external",
+                  verified: true,
+                },
+              ]
+            : [],
+        })
       if (path.endsWith("/domain-routes"))
         return Response.json({
           routes: [
@@ -80,6 +92,7 @@ function fixture(stale = false) {
               input: {
                 cloud_id: "c",
                 hostname: "app.example.test",
+                zone_id: "external",
                 service: "api",
                 environment_id: "env",
                 external_ttl_seconds: 300,
@@ -107,10 +120,8 @@ it("reviews generic SSH adoption even with no provider provisioning capability, 
     screen.getByRole("textbox", { name: "Server name" }),
     "shared-host"
   )
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Server account" }),
-    "ssh"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Server account" }))
+  await user.click(await screen.findByRole("option", { name: /Pinned SSH/ }))
   await user.click(screen.getByRole("checkbox", { name: /Confirm pinned SSH/ }))
   await user.click(screen.getByRole("button", { name: "Review server" }))
   expect(
@@ -141,10 +152,8 @@ it("invalidates a stale server review and requires another preview", async () =>
     await screen.findByRole("button", { name: "Connect existing server" })
   )
   await user.type(screen.getByRole("textbox", { name: "Server name" }), "host")
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Server account" }),
-    "ssh"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Server account" }))
+  await user.click(await screen.findByRole("option", { name: /Pinned SSH/ }))
   await user.click(screen.getByRole("checkbox", { name: /Confirm pinned SSH/ }))
   await user.click(screen.getByRole("button", { name: "Review server" }))
   await user.click(
@@ -267,7 +276,19 @@ it("uses an independent DNS account and an explicit project grant when saving a 
         })
       if (path.endsWith("/projects"))
         return Response.json({ projects: [{ id: "p", name: "Web app" }] })
-      if (path.endsWith("/dns-zones")) return Response.json({ zones: [] })
+      if (path.endsWith("/dns-zones"))
+        return Response.json({
+          zones: path.includes("/projects/")
+            ? [
+                {
+                  id: "external",
+                  name: "example.test",
+                  mode: "external",
+                  verified: true,
+                },
+              ]
+            : [],
+        })
       return Response.json({ routes: [] })
     }
   )
@@ -278,18 +299,16 @@ it("uses an independent DNS account and an explicit project grant when saving a 
     screen.getByRole("textbox", { name: "Zone name" }),
     "example.test"
   )
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "DNS mode" }),
-    "managed"
-  )
+  await user.click(screen.getByRole("combobox", { name: "DNS mode" }))
+  await user.click(await screen.findByRole("option", { name: /Managed DNS/ }))
   expect(
     screen.queryByRole("option", { name: "Compute only" })
   ).not.toBeInTheDocument()
   expect(screen.getByRole("button", { name: "Save DNS zone" })).toBeDisabled()
   await user.click(await screen.findByRole("checkbox", { name: "Web app" }))
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "DNS account" }),
-    "dns"
+  await user.click(screen.getByRole("combobox", { name: "DNS account" }))
+  await user.click(
+    await screen.findByRole("option", { name: /Independent DNS/ })
   )
   await user.click(screen.getByRole("button", { name: "Save DNS zone" }))
   await waitFor(() =>
@@ -485,13 +504,13 @@ it("creates a pool target without a managed provider account and preserves targe
     screen.getByRole("textbox", { name: "Target slug" }),
     "backend"
   )
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Placement runtime" }),
-    "server"
+  await user.click(screen.getByRole("combobox", { name: "Placement runtime" }))
+  await user.click(await screen.findByRole("option", { name: /Server pool/ }))
+  await user.click(
+    await screen.findByRole("combobox", { name: "Target server pool" })
   )
-  await user.selectOptions(
-    await screen.findByRole("combobox", { name: "Target server pool" }),
-    "pool"
+  await user.click(
+    await screen.findByRole("option", { name: /Shared servers/ })
   )
   await user.click(screen.getByRole("button", { name: "Save target" }))
   await waitFor(() =>

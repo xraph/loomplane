@@ -1,3 +1,13 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
@@ -10,6 +20,7 @@ import type {
   ReservationRecovery,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
+import { Link } from "@/lib/router"
 import { messageOf } from "@/client/errors"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -22,13 +33,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { QueryError } from "@/components/query-error"
-import { selectClass } from "./workspace"
 import {
+  SetupReads,
   CloudEmpty,
   CloudError,
   Field,
   Rows,
-  rowClass,
+  Row,
 } from "./infrastructure-ui"
 
 export function Pools({
@@ -74,7 +85,7 @@ export function Pools({
           retry={pools.refetch}
         />
       ) : !pools.data ? (
-        <p role="status">Loading pools...</p>
+        <CloudLoading>Loading pools...</CloudLoading>
       ) : !list.length ? (
         <CloudEmpty title="No server pools">
           Add ready servers to a pool and choose their usable CPU and memory
@@ -83,7 +94,7 @@ export function Pools({
       ) : (
         <Rows>
           {list.map((p) => (
-            <div className={rowClass} key={p.id}>
+            <Row key={p.id}>
               <div>
                 <p className="font-medium">{p.name}</p>
                 <p className="text-xs text-muted-foreground">
@@ -108,7 +119,7 @@ export function Pools({
                   Review service move
                 </Button>
               </div>
-            </div>
+            </Row>
           ))}
         </Rows>
       )}
@@ -206,29 +217,33 @@ function PoolEditor({
             const member = input.members.find((m) => m.serverId === s.id)
             return (
               <div key={s.id} className="grid gap-2 rounded-lg bg-muted p-3">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={!!member}
-                    onChange={(e) =>
-                      setInput({
-                        ...input,
-                        members: e.target.checked
-                          ? [
-                              ...input.members,
-                              {
-                                serverId: s.id,
-                                cpuMillis: s.health.effectiveCpuMillis,
-                                memoryBytes: s.health.effectiveMemoryBytes,
-                                draining: s.draining,
-                              },
-                            ]
-                          : input.members.filter((m) => m.serverId !== s.id),
-                      })
-                    }
-                  />
-                  {s.name}
-                </label>
+                <FormField
+                  orientation="horizontal"
+                  className="flex items-center gap-2 text-sm"
+                >
+                  <FieldLabel className="contents">
+                    <Checkbox
+                      checked={!!member}
+                      onCheckedChange={(e) =>
+                        setInput({
+                          ...input,
+                          members: e
+                            ? [
+                                ...input.members,
+                                {
+                                  serverId: s.id,
+                                  cpuMillis: s.health.effectiveCpuMillis,
+                                  memoryBytes: s.health.effectiveMemoryBytes,
+                                  draining: s.draining,
+                                },
+                              ]
+                            : input.members.filter((m) => m.serverId !== s.id),
+                        })
+                      }
+                    />
+                    {s.name}
+                  </FieldLabel>
+                </FormField>
                 {member && (
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Field label="CPU budget (millicores)">
@@ -271,23 +286,25 @@ function PoolEditor({
                         }
                       />
                     </Field>
-                    <label className="flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={member.draining}
-                        onChange={(e) =>
-                          setInput({
-                            ...input,
-                            members: input.members.map((m) =>
-                              m.serverId === s.id
-                                ? { ...m, draining: e.target.checked }
-                                : m
-                            ),
-                          })
-                        }
-                      />
-                      Drain member
-                    </label>
+                    <FormField
+                      orientation="horizontal"
+                      className="flex items-center gap-2 text-xs"
+                    >
+                      <FieldLabel className="contents">
+                        <Checkbox
+                          checked={member.draining}
+                          onCheckedChange={(e) =>
+                            setInput({
+                              ...input,
+                              members: input.members.map((m) =>
+                                m.serverId === s.id ? { ...m, draining: e } : m
+                              ),
+                            })
+                          }
+                        />
+                        Drain member
+                      </FieldLabel>
+                    </FormField>
                   </div>
                 )}
               </div>
@@ -333,6 +350,7 @@ function MoveEditor({
   const [review, setReview] = useState<MoveReview | null>(null)
   const [error, setError] = useState("")
   const [accepted, setAccepted] = useState(false)
+  const [environmentName, setEnvironmentName] = useState("")
   const change = (p: Partial<MoveInputBody>) => {
     setInput({ ...input, ...p })
     setReview(null)
@@ -374,34 +392,84 @@ function MoveEditor({
           </DialogDescription>
         </DialogHeader>
         {accepted ? (
-          <p role="status">
-            Move accepted. Review applied deployment and routes in the project's
-            Activity before treating the destination as serving.
-          </p>
+          <div className="grid gap-3 text-sm">
+            <p role="status">
+              Move intent staged for {input.service}. It expires 15 minutes
+              after acceptance. No deployment has started; the source still
+              serves.
+            </p>
+            <p>
+              Create and review a deployment plan for this project and
+              environment before the intent expires. The plan consumes the
+              reviewed destination intent and checks current capacity.
+            </p>
+            <Button
+              nativeButton={false}
+              render={
+                <Link
+                  to="/deployments/new"
+                  search={{
+                    project: input.projectId,
+                    environment: environmentName,
+                  }}
+                />
+              }
+            >
+              Create deployment plan
+            </Button>
+          </div>
         ) : (
           <>
-            <Field label="Move project">
-              <select
-                aria-label="Move project"
-                className={selectClass}
-                value={input.projectId}
-                onChange={(e) =>
-                  change({ projectId: e.target.value, environmentId: "" })
-                }
-              >
-                <option value="">Choose project</option>
-                {projects.data?.projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            <SetupReads reads={[{ label: "Projects", query: projects }]}>
+              {projects.data?.projects.length === 0 ? (
+                <CloudEmpty
+                  title="No projects for this move"
+                  action={
+                    <Button
+                      nativeButton={false}
+                      render={<Link to="/projects" />}
+                    >
+                      Open projects
+                    </Button>
+                  }
+                >
+                  Create a project and deploy its service before reviewing a
+                  move.
+                </CloudEmpty>
+              ) : (
+                <Field label="Move project">
+                  <Select
+                    value={input.projectId}
+                    onValueChange={(e) =>
+                      change({ projectId: e ?? "", environmentId: "" })
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label="Move project"
+                      className={"w-full min-w-0"}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Choose project</SelectItem>
+                      {projects.data?.projects.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              )}
+            </SetupReads>
             {input.projectId && (
               <MoveEnvironment
                 projectId={input.projectId}
                 value={input.environmentId}
-                onChange={(environmentId) => change({ environmentId })}
+                onChange={(environmentId, name) => {
+                  setEnvironmentName(name ?? "")
+                  change({ environmentId })
+                }}
               />
             )}
             <Field label="Service">
@@ -412,24 +480,28 @@ function MoveEditor({
               />
             </Field>
             <Field label="Destination server">
-              <select
-                aria-label="Destination server"
-                className={selectClass}
+              <Select
                 value={input.destinationServerId}
-                onChange={(e) =>
-                  change({ destinationServerId: e.target.value })
-                }
+                onValueChange={(e) => change({ destinationServerId: e ?? "" })}
               >
-                <option value="">Choose server</option>
-                {pool.members
-                  .filter((m) => !m.draining)
-                  .map((m) => (
-                    <option key={m.serverId} value={m.serverId}>
-                      {servers.find((s) => s.id === m.serverId)?.name ??
-                        m.serverId}
-                    </option>
-                  ))}
-              </select>
+                <SelectTrigger
+                  aria-label="Destination server"
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Choose server</SelectItem>
+                  {pool.members
+                    .filter((m) => !m.draining)
+                    .map((m) => (
+                      <SelectItem key={m.serverId} value={m.serverId}>
+                        {servers.find((s) => s.id === m.serverId)?.name ??
+                          m.serverId}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
             </Field>
             {review && (
               <p className="text-sm">
@@ -442,6 +514,8 @@ function MoveEditor({
               disabled={
                 preview.isPending ||
                 apply.isPending ||
+                projects.status !== "success" ||
+                !environmentName ||
                 !input.environmentId ||
                 !input.service ||
                 !input.destinationServerId
@@ -464,34 +538,47 @@ export function MoveEnvironment({
 }: {
   projectId: string
   value: string
-  onChange: (v: string) => void
+  onChange: (v: string, name?: string) => void
 }) {
   const environments = useQuery(api.useEnvironmentsList, {
     path: { id: projectId },
   })
   return (
     <Field label="Environment">
-      {environments.status === "error" ? (
-        <QueryError
-          error={environments.error}
-          fallback="Environments couldn't be loaded."
-          retry={environments.refetch}
-        />
-      ) : (
-        <select
-          aria-label="Route environment"
-          className={selectClass}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">Choose environment</option>
-          {environments.data?.environments.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.name}
-            </option>
-          ))}
-        </select>
-      )}
+      <SetupReads reads={[{ label: "Environments", query: environments }]}>
+        {environments.data?.environments.length === 0 ? (
+          <CloudEmpty title="No environments">
+            Add an environment in this project before reviewing a route or move.
+          </CloudEmpty>
+        ) : (
+          <Select
+            value={value}
+            onValueChange={(event) =>
+              onChange(
+                event ?? "",
+                environments.data?.environments.find(
+                  (environment) => environment.id === (event ?? "")
+                )?.name
+              )
+            }
+          >
+            <SelectTrigger
+              aria-label="Route environment"
+              className={"w-full min-w-0"}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Choose environment</SelectItem>
+              {environments.data?.environments.map((environment) => (
+                <SelectItem key={environment.id} value={environment.id}>
+                  {environment.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </SetupReads>
     </Field>
   )
 }
@@ -522,13 +609,30 @@ export function Recovery({
         ...(review ? { review: review.review } : {}),
       }
       if (review) {
-        setReview(
-          (await recover.mutateAsync({
-            path: { cloudId },
-            body,
-          })) as ReservationRecovery
-        )
+        const recovered = (await recover.mutateAsync({
+          path: { cloudId },
+          body,
+        })) as ReservationRecovery
+        setReview(recovered)
         setDone(true)
+        try {
+          await Promise.all([
+            api
+              .useCloudServersUsage({
+                path: { cloudId, serverId: recovered.serverId },
+              })
+              .refetch(),
+            api.useCloudServersList({ path: { cloudId } }).refetch(),
+            api.useCloudPoolsList({ path: { cloudId } }).refetch(),
+          ])
+        } catch (refreshError) {
+          setError(
+            messageOf(
+              refreshError,
+              "Recovery was recorded, but current usage couldn't be refreshed. Reopen the server and retry its usage read."
+            )
+          )
+        }
       } else
         setReview(
           (await preview.mutateAsync({

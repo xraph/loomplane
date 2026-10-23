@@ -49,7 +49,11 @@ jobs:
       - run: make fuzz FUZZTIME=15s
 
   integration:
-    name: Integration tests
+    name: Integration tests (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     # Boots the whole app against a real Postgres. Each test makes a
     # database of its own on this server.
     runs-on: ubuntu-24.04
@@ -74,9 +78,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      # The suite runs past go test's 10 minute default under -race, so it
-      # gets an explicit budget.
-      - run: go test -race -count=1 -timeout=30m -tags=integration ./tests/integration/
+      - run: python3 -m unittest discover -s scripts -p test_integration_cohorts.py
+      - run: python3 scripts/integration-cohorts.py --shard ${{ matrix.shard }} --shards 8
 
   dashboard:
     name: Dashboard
