@@ -296,3 +296,35 @@ func TestCreatePlanRecordsTheCloudServerOfADirectTarget(t *testing.T) {
 		}
 	}
 }
+
+// A routed release onto a pool keeps the candidate on its old server only
+// when that server was a pool placement's. A direct server's ID is no pool
+// member to stick to.
+func TestRoutedReleaseOntoAPoolSticksOnlyToAPoolServer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		old    CloudPlacement
+		sticky string
+	}{
+		"from a direct server": {old: CloudPlacement{CloudID: "cloud_1", TargetID: "t1", ConnectionID: targetA, ServerID: "server_1"}},
+		"within the pool":      {old: CloudPlacement{CloudID: "cloud_1", TargetID: "t1", ConnectionID: targetA, PoolID: "pool", ServerID: "host-old"}, sticky: "host-old"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(ServiceConfig{CloudPlacement: &tc.old})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bindings := []*Binding{{ID: "binding", Subject: ServiceSubject, Name: "api", Provider: "server", ConnectionID: targetA, Config: raw}}
+			pin := &CloudPlacement{CloudID: "cloud_1", TargetID: "t1", TargetRevision: 5, ConnectionID: targetA, PoolID: "pool", ServerID: "host", CPUMillis: 1000, MemoryBytes: 512 << 20}
+			result := &Result{Actions: []Action{{ID: "service:api", Subject: ServiceSubject, Name: "api", Op: Replace, Provider: "server", Service: &ServiceConfig{CloudPlacement: pin}, Routes: []cloudinfra.Route{{ID: "route"}}}}}
+			resolver := &stickyResolver{}
+			s := NewService(Deps{Store: stickyStore{resolver: resolver}})
+			plan := &Plan{ID: "plan", OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
+			if err = s.reserveRoutedPlacements(t.Context(), plan, result, bindings); err != nil {
+				t.Fatal(err)
+			}
+			if len(resolver.requests) != 1 || resolver.requests[0].StickyServerID != tc.sticky {
+				t.Fatalf("routed overlap requests: %+v", resolver.requests)
+			}
+		})
+	}
+}

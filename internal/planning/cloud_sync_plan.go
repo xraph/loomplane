@@ -117,6 +117,7 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 			cfg.CloudPlacement = &placement
 		}
 		p.in.CloudPlacements[b.Name] = *cfg.CloudPlacement
+		p.checkCloudServer(ServiceSubject, b.Name, "services."+b.Name, *cfg.CloudPlacement)
 		set := manifest.Settings{Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size}
 		if OwnedCloud(prov.Cloud) {
 			set.Target = t.ConnectionID

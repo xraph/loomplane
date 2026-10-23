@@ -81,6 +81,12 @@ func (c ConnectionOption) cloudServers(cloud string) []string {
 // runtime of more than one Cloud server: none is recorded, so it can't
 // take domain routes. A connection that runs no Cloud server is a plain
 // direct target and isn't worth a finding.
+//
+// The schema can't produce this today. The loomplane_cloud_server_runtime
+// unique index (database/migrations/cloud_infrastructure.go) allows one
+// live server per organization and runtime connection, and ConnectionHosts
+// reads only live servers in the connection's organization. The check
+// stays so that loosening that index can't silently pick a server.
 func (p *planner) checkCloudServer(subject Subject, name, path string, placement CloudPlacement) {
 	if placement.PoolID != "" || placement.ServerID != "" {
 		return
