@@ -506,3 +506,22 @@ func (s *PgStore) RouteOperations(ctx context.Context, org, project, route strin
 	}
 	return out, rows.Err()
 }
+
+// RouteHandoffReceipts reads accepted receipt owners without the public history
+// cap. Release safety retains the maximum across every exact handoff attempt.
+func (s *PgStore) RouteHandoffReceipts(ctx context.Context, org, project, route, handoff string) ([]*RouteOperation, error) {
+	rows, err := s.db.Query(ctx, `SELECT body,principal,checkpoint FROM loomplane_route_operations WHERE org_id=$1 AND project_id=$2 AND route_id=$3 AND body->>'handoff_id'=$4 AND body->>'kind' IN ('cutover','rollback') AND status<>'preview'`, org, project, route, handoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*RouteOperation
+	for rows.Next() {
+		op, scanErr := scanRouteOperation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
+}

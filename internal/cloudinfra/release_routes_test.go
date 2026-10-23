@@ -213,3 +213,7 @@ func TestRouteWorkerRechecksLegacyAndRetryActor(t *testing.T) {
 		t.Fatal("revoked retry actor authorization skipped", st.authorized, st.current.Status)
 	}
 }
+
+func (s *ttlReleaseStore) RouteHandoffReceipts(ctx context.Context, org, project, route, _ string) ([]*RouteOperation, error) {
+	return s.RouteOperations(ctx, org, project, route)
+}

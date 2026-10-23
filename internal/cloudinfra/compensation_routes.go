@@ -201,7 +201,10 @@ func (s *Service) ReconcileCompensationRoutes(ctx context.Context, p security.Pr
 		if !reflect.DeepEqual(current.Binding, source.Binding) && !reflect.DeepEqual(current.Binding, prepared.Route.Binding) {
 			return ErrConflict
 		}
-		needsRollback := !reflect.DeepEqual(current.Binding, source.Binding) || cutover != nil && cutover.DNSAttempted && (cutover.Receipt == nil || cutover.Receipt.Value != source.Binding.Address)
+		// The ingress backend can change before the route row is published, even
+		// when both instances share an address. A recorded cutover effect needs
+		// its own rollback; DNS address equality cannot prove backend identity.
+		needsRollback := !reflect.DeepEqual(current.Binding, source.Binding) || cutover != nil && (cutover.DNSAttempted || cutover.DesiredConfig != nil || cutover.AppliedConfig != nil)
 		if rollback == nil && needsRollback {
 			if cutover == nil {
 				return ErrConflict
@@ -227,9 +230,6 @@ func (s *Service) ReconcileCompensationRoutes(ctx context.Context, p security.Pr
 				return ErrConflict
 			}
 			drain := max(60, in.DrainSeconds)
-			if cutover != nil && cutover.Receipt != nil {
-				drain = max(drain, cutover.Receipt.TTL)
-			}
 			release, e = s.ReleaseRouteHandoff(ctx, p, in.ProjectID, preparedID, drain)
 			if e != nil {
 				return e
