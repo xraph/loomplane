@@ -390,11 +390,15 @@ it("refreshes cached shared inventory after an operation retry completes enrollm
       <InfrastructureActivity cloudId="c" />
     </>
   )
-  expect(await screen.findByText("1 servers")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("heading", { name: "Servers 1" })
+  ).toBeInTheDocument()
   await user.click(
     await screen.findByRole("button", { name: "Retry operation" })
   )
-  expect(await screen.findByText("2 servers")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("heading", { name: "Servers 2" })
+  ).toBeInTheDocument()
 })
 
 it("releases a handoff through its exact preparation with a bounded reviewed drain interval", async () => {

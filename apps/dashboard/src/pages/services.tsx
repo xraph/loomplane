@@ -214,7 +214,7 @@ export function Services() {
           ) : !projects.data ? (
             <Skeleton className="h-16 rounded-xl" />
           ) : yours.length === 0 ? (
-            <Empty variant="inline" className="gap-3 px-0 py-3">
+            <Empty className="py-8">
               <EmptyHeader>
                 <EmptyTitle>No service projects yet</EmptyTitle>
                 <EmptyDescription>
@@ -313,7 +313,7 @@ export function Services() {
           </div>
 
           {shown.length === 0 && registeredShown.length === 0 ? (
-            <Empty variant="inline" className="gap-3 px-0 py-3">
+            <Empty className="py-8">
               <EmptyHeader>
                 <EmptyTitle>Nothing in the catalog matches</EmptyTitle>
                 <EmptyDescription>

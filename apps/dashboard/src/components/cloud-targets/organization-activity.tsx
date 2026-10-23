@@ -1,3 +1,4 @@
+import { ActivityIcon as ActivityPulseIcon } from "@/components/icons"
 import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
 import { useEffect, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
@@ -9,8 +10,9 @@ import { Button } from "@/components/ui/button"
 import {
   CloudEmpty,
   CloudError,
-  Rows,
+  CloudSectionHead,
   Row,
+  Rows,
   rowClass,
   useInfrastructureRefresh,
 } from "./infrastructure-ui"
@@ -103,13 +105,10 @@ export function OrganizationActivity({ cloudId }: { cloudId: string }) {
   }
   return (
     <section aria-label="Cloud sync activity" className="grid gap-3">
-      <h2 className="text-[15px] font-semibold">
-        Desired and applied placement
-      </h2>
-      <p className="text-xs text-muted-foreground">
-        Accepted target changes set the desired destination. Each environment
-        keeps serving its applied release until deployment and routing succeed.
-      </p>
+      <CloudSectionHead
+        title="Desired and applied placement"
+        description="Accepted target changes set the desired destination. Each environment keeps serving its applied release until deployment and routing succeed."
+      />
       <CloudError message={error} />
       {syncs.status === "error" ? (
         <QueryError
@@ -120,7 +119,7 @@ export function OrganizationActivity({ cloudId }: { cloudId: string }) {
       ) : !syncs.data ? (
         <CloudLoading>Loading Cloud activity...</CloudLoading>
       ) : !list.length ? (
-        <CloudEmpty title="No Cloud syncs">
+        <CloudEmpty kind="list" icon={ActivityPulseIcon} title="No Cloud syncs">
           Reviewed changes appear here with the actual deployment, route and
           cleanup progress.
         </CloudEmpty>

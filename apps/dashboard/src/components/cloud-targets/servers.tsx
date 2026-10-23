@@ -1,3 +1,8 @@
+import {
+  ActivityIcon as ActivityPulseIcon,
+  InfrastructureIcon,
+  RestrictedIcon,
+} from "@/components/icons"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -39,9 +44,10 @@ import { useOrganization } from "@/lib/organization"
 import {
   CloudEmpty,
   CloudError,
+  CloudSectionHead,
   Field,
-  Rows,
   Row,
+  Rows,
   useInfrastructureRefresh,
 } from "./infrastructure-ui"
 import { Pools, Recovery } from "./pools"
@@ -66,7 +72,11 @@ export function Servers({ cloud }: { cloud: Profile }) {
   return can("organization_cloud:manage") ? (
     <ServerContent cloud={cloud} />
   ) : (
-    <CloudEmpty title="Server inventory is restricted">
+    <CloudEmpty
+      kind="notice"
+      icon={RestrictedIcon}
+      title="Server inventory is restricted"
+    >
       Your organization manager can review shared workloads and capacity.
     </CloudEmpty>
   )
@@ -98,22 +108,20 @@ function ServerContent({ cloud }: { cloud: Profile }) {
   )
   return (
     <section className="grid gap-3" aria-label="Servers">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[15px] font-semibold">{list.length} servers</h2>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setEditing({ kind: "adopt" })}
-          >
-            Connect existing server
+      <CloudSectionHead
+        title="Servers"
+        count={list.length}
+        description="Machines this Cloud places services on, connected over SSH or created through an account that can provision them."
+      >
+        <Button variant="outline" onClick={() => setEditing({ kind: "adopt" })}>
+          Connect existing server
+        </Button>
+        {create && (
+          <Button onClick={() => setEditing({ kind: "create" })}>
+            Create server
           </Button>
-          {create && (
-            <Button onClick={() => setEditing({ kind: "create" })}>
-              Create server
-            </Button>
-          )}
-        </div>
-      </div>
+        )}
+      </CloudSectionHead>
       {servers.status === "error" ||
       connections.status === "error" ||
       providers.status === "error" ? (
@@ -131,7 +139,11 @@ function ServerContent({ cloud }: { cloud: Profile }) {
       ) : !servers.data || !connections.data || !providers.data ? (
         <CloudLoading>Loading servers...</CloudLoading>
       ) : !list.length ? (
-        <CloudEmpty title="No servers connected">
+        <CloudEmpty
+          kind="list"
+          icon={InfrastructureIcon}
+          title="No servers connected"
+        >
           Connect a pinned SSH account, or create a server with an account that
           supports provisioning.
         </CloudEmpty>
@@ -391,6 +403,8 @@ function ServerEditor({
               <Field label="Server account">
                 {!accounts.length && (
                   <CloudEmpty
+                    kind="inline"
+                    icon={InfrastructureIcon}
                     title="Connect a server account"
                     action={
                       <Button
@@ -818,7 +832,10 @@ export function InfrastructureActivity({ cloudId }: { cloudId: string }) {
   }
   return (
     <section className="grid gap-3" aria-label="Infrastructure activity">
-      <h2 className="text-[15px] font-semibold">Infrastructure operations</h2>
+      <CloudSectionHead
+        title="Infrastructure operations"
+        description="Changes Loomplane made to this Cloud's servers, and any you can retry."
+      />
       <CloudError message={error} />
       {operations.status === "error" ? (
         <QueryError
@@ -829,7 +846,11 @@ export function InfrastructureActivity({ cloudId }: { cloudId: string }) {
       ) : !operations.data ? (
         <CloudLoading>Loading operations...</CloudLoading>
       ) : !list.length ? (
-        <CloudEmpty title="No infrastructure operations">
+        <CloudEmpty
+          kind="list"
+          icon={ActivityPulseIcon}
+          title="No infrastructure operations"
+        >
           Reviewed server changes and retained cleanup appear here.
         </CloudEmpty>
       ) : (

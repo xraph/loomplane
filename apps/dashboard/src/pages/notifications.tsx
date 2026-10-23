@@ -1,11 +1,5 @@
-import {
-  BellIcon,
-  CheckIcon,
-  CopyIcon,
-  PlusIcon,
-  RefreshCwIcon,
-  WebhookIcon,
-} from "lucide-react"
+import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
+import { NotificationsIcon, WebhooksIcon } from "@/components/icons"
 import type { UseQueryResult } from "@forge-go/client-react"
 import { type FormEvent, type ReactNode, useEffect, useState } from "react"
 
@@ -317,10 +311,10 @@ function NotificationContent({ admin }: { admin: boolean }) {
           {inbox.data &&
             inbox.data.items.length === 0 &&
             inbox.status !== "error" && (
-              <ZeroState className="py-8">
+              <ZeroState surface={false} className="py-8">
                 <ZeroStateHeader>
                   <ZeroStateMedia variant="icon">
-                    <BellIcon />
+                    <NotificationsIcon />
                   </ZeroStateMedia>
                   <ZeroStateTitle>No notifications yet</ZeroStateTitle>
                   <ZeroStateDescription>
@@ -564,10 +558,10 @@ function WebhookContent({
         endpoints.data.items.length === 0 &&
         endpoints.status !== "error" && (
           <>
-            <ZeroState className="py-8">
+            <ZeroState surface={false} className="py-8">
               <ZeroStateHeader>
                 <ZeroStateMedia variant="icon">
-                  <WebhookIcon />
+                  <WebhooksIcon />
                 </ZeroStateMedia>
                 <ZeroStateTitle>No webhooks configured</ZeroStateTitle>
                 <ZeroStateDescription>
@@ -893,7 +887,7 @@ function DeliveryHistory({
             <ZeroState>
               <ZeroStateHeader>
                 <ZeroStateMedia variant="icon">
-                  <WebhookIcon />
+                  <WebhooksIcon />
                 </ZeroStateMedia>
                 <ZeroStateTitle>No deliveries yet</ZeroStateTitle>
                 <ZeroStateDescription>

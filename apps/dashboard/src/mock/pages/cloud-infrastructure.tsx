@@ -1,3 +1,7 @@
+import {
+  ActivityIcon as ActivityPulseIcon,
+  RoutesIcon,
+} from "@/components/icons"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -592,7 +596,7 @@ export function MockCloudInfrastructure({
             </div>
           </div>
           {!domains.length ? (
-            <CloudEmpty title="No routes yet">
+            <CloudEmpty kind="list" icon={RoutesIcon} title="No routes yet">
               Grant zone access, then review a deployed service's hostname and
               DNS authority.
             </CloudEmpty>
@@ -732,7 +736,11 @@ export function MockCloudInfrastructure({
               ))}
             </Rows>
           ) : (
-            <CloudEmpty title="No infrastructure activity">
+            <CloudEmpty
+              kind="list"
+              icon={ActivityPulseIcon}
+              title="No infrastructure activity"
+            >
               Review and apply a server, route or project change to see its
               checkpoints.
             </CloudEmpty>

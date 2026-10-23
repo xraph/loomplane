@@ -1,4 +1,5 @@
-import { CloudIcon, ChevronLeftIcon } from "lucide-react"
+import { ChevronLeftIcon, CloudIcon } from "lucide-react"
+import { CloudsIcon, ProjectsIcon } from "@/components/icons"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Profile } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
@@ -101,7 +102,11 @@ function Frame({
           All Clouds
         </Link>
         {restricted ? (
-          <CloudEmpty title="Choose a project with Cloud access">
+          <CloudEmpty
+            kind="notice"
+            icon={ProjectsIcon}
+            title="Choose a project with Cloud access"
+          >
             Open this Cloud through a project that has permission to use it.
           </CloudEmpty>
         ) : error !== undefined ? (
@@ -110,6 +115,8 @@ function Frame({
           />
         ) : missing ? (
           <CloudEmpty
+            kind="notice"
+            icon={CloudsIcon}
             title="No Cloud here by that ID"
             action={
               <Button nativeButton={false} render={<Link to="/clouds" />}>

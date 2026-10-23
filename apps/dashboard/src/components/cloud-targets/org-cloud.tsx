@@ -1,4 +1,5 @@
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { CloudsIcon } from "@/components/icons"
 import { Card } from "@/components/ui/card"
 import { Item, ItemGroup } from "@/components/ui/item"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -148,6 +149,8 @@ export function OrganizationCloud({
               />
             ) : (
               <CloudEmpty
+                kind="notice"
+                icon={CloudsIcon}
                 title="No project deployment context"
                 action={
                   <Button
@@ -213,7 +216,7 @@ function Targets({ cloud }: { cloud: Profile }) {
       ) : !targets.data || !connections.data ? (
         <Skeleton className="h-28 rounded-xl" />
       ) : list.length === 0 ? (
-        <Empty variant="inline" preview={false}>
+        <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <CloudIcon />
@@ -314,7 +317,7 @@ function ProjectAccess({
       ) : !grants.data || !projects.data ? (
         <Skeleton className="h-20 rounded-xl" />
       ) : active.length === 0 ? (
-        <Empty variant="inline" preview={false}>
+        <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <CloudIcon />

@@ -1,3 +1,4 @@
+import { DomainsIcon, ProjectsIcon, RoutesIcon } from "@/components/icons"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -40,12 +41,13 @@ import {
 import { useNow } from "@/lib/use-runs"
 import { useOrganization } from "@/lib/organization"
 import {
-  SetupReads,
   CloudEmpty,
   CloudError,
+  CloudSectionHead,
   Field,
-  Rows,
   Row,
+  Rows,
+  SetupReads,
   useInfrastructureRefresh,
 } from "./infrastructure-ui"
 import { MoveEnvironment } from "./pools"
@@ -69,6 +71,8 @@ export function Domains({
         <ProjectRoutes key={projectId} cloud={cloud} projectId={projectId} />
       ) : (
         <CloudEmpty
+          kind="notice"
+          icon={RoutesIcon}
           title="Choose a project to manage routes"
           action={
             <Button
@@ -130,12 +134,14 @@ function Zones({ onCreate }: { onCreate: () => void }) {
   }
   return (
     <section className="grid gap-3" aria-label="DNS zones">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[15px] font-semibold">DNS zones</h2>
+      <CloudSectionHead
+        title="DNS zones"
+        description="Zones Loomplane can write records in, and the projects allowed to use each one."
+      >
         <Button size="sm" variant="outline" onClick={onCreate}>
           Add DNS zone
         </Button>
-      </div>
+      </CloudSectionHead>
       <CloudError message={error} />
       {zones.status === "error" ? (
         <QueryError
@@ -146,7 +152,7 @@ function Zones({ onCreate }: { onCreate: () => void }) {
       ) : !zones.data ? (
         <CloudLoading>Loading DNS zones...</CloudLoading>
       ) : !list.length ? (
-        <CloudEmpty title="No DNS zones">
+        <CloudEmpty kind="list" icon={DomainsIcon} title="No DNS zones">
           Choose managed DNS with a separate provider account, or prove
           ownership of a zone hosted elsewhere.
         </CloudEmpty>
@@ -234,7 +240,11 @@ function Zones({ onCreate }: { onCreate: () => void }) {
             </DialogHeader>
             <SetupReads reads={[{ label: "Projects", query: projects }]}>
               {projects.data?.projects.length === 0 && (
-                <CloudEmpty title="No projects available">
+                <CloudEmpty
+                  kind="inline"
+                  icon={ProjectsIcon}
+                  title="No projects available"
+                >
                   Create a project before changing zone access.
                 </CloudEmpty>
               )}
@@ -368,6 +378,8 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
               >
                 {accounts.length === 0 ? (
                   <CloudEmpty
+                    kind="inline"
+                    icon={DomainsIcon}
                     title="No eligible DNS accounts"
                     action={
                       <Button
@@ -412,6 +424,8 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
               <SetupReads reads={[{ label: "Projects", query: projects }]}>
                 {projects.data?.projects.length === 0 && (
                   <CloudEmpty
+                    kind="inline"
+                    icon={ProjectsIcon}
                     title="Create a project for this zone"
                     action={
                       <Button
@@ -501,14 +515,15 @@ function ProjectRoutes({
   )
   return (
     <section className="grid gap-3" aria-label="Project routes">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[15px] font-semibold">
-          {list.length} routes in this Cloud
-        </h2>
+      <CloudSectionHead
+        title="Routes"
+        count={list.length}
+        description="Hostnames and paths in this Cloud that send traffic to the project's services."
+      >
         {can("infrastructure:modify") && (
           <Button onClick={() => setAdding(true)}>Add route</Button>
         )}
-      </div>
+      </CloudSectionHead>
       {routes.status === "error" ? (
         <QueryError
           error={routes.error}
@@ -518,7 +533,11 @@ function ProjectRoutes({
       ) : !routes.data ? (
         <CloudLoading>Loading project routes...</CloudLoading>
       ) : !list.length ? (
-        <CloudEmpty title="No routes for this project">
+        <CloudEmpty
+          kind="list"
+          icon={RoutesIcon}
+          title="No routes for this project"
+        >
           Review a hostname for a deployed service using a zone granted to this
           project.
         </CloudEmpty>

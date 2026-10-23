@@ -1,4 +1,5 @@
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { CloudsIcon } from "@/components/icons"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import {
   SelectTrigger,
@@ -85,6 +86,7 @@ export function Clouds() {
             description="Named targets keep your services connected to the accounts you choose."
           />
           <EmptyClouds
+            kind="notice"
             title="Cloud access is restricted"
             description="Ask your organization owner for permission to view Cloud accounts."
           />
@@ -146,6 +148,7 @@ function CloudsList() {
               <Skeleton className="h-40 rounded-xl" />
             ) : list.length === 0 ? (
               <EmptyClouds
+                kind="notice"
                 title="Create a project first"
                 description="Your organization manager can create Clouds before projects exist. Create a project to use granted targets."
               >
@@ -380,7 +383,7 @@ function OrganizationClouds({ onCreate }: { onCreate: () => void }) {
         <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
-              <CloudIcon />
+              <CloudsIcon />
             </EmptyMedia>
             <EmptyTitle>No Clouds yet</EmptyTitle>
             <EmptyDescription>
@@ -747,6 +750,7 @@ function WorkspaceScope({
     projects.data?.projects[0]
   return !allowed ? (
     <EmptyClouds
+      kind="notice"
       title="Cloud access is restricted"
       description="Ask your organization owner for permission to view Cloud accounts."
     />
@@ -760,6 +764,7 @@ function WorkspaceScope({
     <Skeleton className="h-24" />
   ) : !project ? (
     <EmptyClouds
+      kind="notice"
       title="Create a project first"
       description="Your organization manager can create Clouds before projects exist. Create a project to use granted targets."
     >

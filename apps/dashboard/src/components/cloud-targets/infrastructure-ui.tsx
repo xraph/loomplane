@@ -6,7 +6,8 @@ import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, type ReactNode, type ComponentProps } from "react"
 import { statusOf } from "@/client/errors"
 import { QueryError } from "@/components/query-error"
-import { CloudIcon } from "lucide-react"
+import type { ComponentType } from "react"
+import { CloudsIcon } from "@/components/icons"
 import {
   ZeroState,
   ZeroStateHeader,
@@ -58,26 +59,78 @@ export function CloudTabs({
     </Tabs>
   )
 }
+/**
+ * CloudEmpty is a Cloud page's empty state, in the shared design: a list
+ * that will fill shows a faded preview of its rows, a prerequisite or a
+ * missing page is a centered notice, and one inside a form or dialog stays
+ * compact.
+ */
 export function CloudEmpty({
   title,
   children,
   action,
+  kind = "list",
+  icon: Icon = CloudsIcon,
 }: {
   title: string
   children: ReactNode
   action?: ReactNode
+  kind?: "list" | "notice" | "inline"
+  icon?: ComponentType<{ className?: string }>
 }) {
   return (
-    <ZeroState variant="inline" preview={false}>
+    <ZeroState
+      variant={kind === "inline" ? "inline" : "panel"}
+      preview={kind === "list"}
+      className={kind === "inline" ? "gap-3 px-0 py-2" : undefined}
+    >
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
-          <CloudIcon />
+          <Icon />
         </ZeroStateMedia>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{children}</ZeroStateDescription>
       </ZeroStateHeader>
       {action && <ZeroStateContent>{action}</ZeroStateContent>}
     </ZeroState>
+  )
+}
+/**
+ * CloudSectionHead is the head of a section on a Cloud page: its title with
+ * an optional count, one line on what it holds, and its actions.
+ */
+export function CloudSectionHead({
+  title,
+  count,
+  description,
+  children,
+}: {
+  title: ReactNode
+  count?: number
+  description?: ReactNode
+  /** The section's actions, on the right. */
+  children?: ReactNode
+}) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="grid max-w-[64ch] min-w-0 gap-0.5">
+        <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+          {title}
+          {count !== undefined && " "}
+          {count !== undefined && (
+            <span className="rounded-full bg-muted px-1.5 font-mono text-[11px] font-normal text-muted-foreground tabular-nums">
+              {count}
+            </span>
+          )}
+        </h2>
+        {description && (
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+            {description}
+          </p>
+        )}
+      </div>
+      {children && <div className="flex flex-wrap gap-2">{children}</div>}
+    </div>
   )
 }
 export function CloudError({ message }: { message: string }) {

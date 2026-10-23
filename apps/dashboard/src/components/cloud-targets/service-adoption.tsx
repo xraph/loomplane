@@ -84,6 +84,7 @@ export function ServiceAdoption({
   if (manifest.status === "error")
     return statusOf(manifest.error) === 404 ? (
       <EmptyClouds
+        kind="notice"
         title="No manifest yet"
         description="Save a project manifest before assigning services to named targets."
       />

@@ -1,3 +1,4 @@
+import { EmptyIcon, PoolsIcon, ProjectsIcon } from "@/components/icons"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
 import {
@@ -34,12 +35,13 @@ import {
 } from "@/components/ui/dialog"
 import { QueryError } from "@/components/query-error"
 import {
-  SetupReads,
   CloudEmpty,
   CloudError,
+  CloudSectionHead,
   Field,
-  Rows,
   Row,
+  Rows,
+  SetupReads,
 } from "./infrastructure-ui"
 
 export function Pools({
@@ -56,9 +58,12 @@ export function Pools({
   const list = pools.data?.pools.filter((p): p is Pool => !!p) ?? []
   return (
     <section className="grid gap-3" aria-label="Server pools">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">Pools and reservations</h3>
-        <div className="flex flex-wrap gap-2">
+      <CloudSectionHead
+        title="Pools and reservations"
+        count={pools.data ? list.length : undefined}
+        description="Groups of ready servers, each with the CPU and memory it can give to services."
+      >
+        <>
           {servers.length > 0 && (
             <Button
               size="sm"
@@ -76,8 +81,8 @@ export function Pools({
           >
             Add pool
           </Button>
-        </div>
-      </div>
+        </>
+      </CloudSectionHead>
       {pools.status === "error" ? (
         <QueryError
           error={pools.error}
@@ -87,7 +92,7 @@ export function Pools({
       ) : !pools.data ? (
         <CloudLoading>Loading pools...</CloudLoading>
       ) : !list.length ? (
-        <CloudEmpty title="No server pools">
+        <CloudEmpty kind="list" icon={PoolsIcon} title="No server pools">
           Add ready servers to a pool and choose their usable CPU and memory
           budgets.
         </CloudEmpty>
@@ -423,6 +428,8 @@ function MoveEditor({
             <SetupReads reads={[{ label: "Projects", query: projects }]}>
               {projects.data?.projects.length === 0 ? (
                 <CloudEmpty
+                  kind="inline"
+                  icon={ProjectsIcon}
                   title="No projects for this move"
                   action={
                     <Button
@@ -547,7 +554,7 @@ export function MoveEnvironment({
     <Field label="Environment">
       <SetupReads reads={[{ label: "Environments", query: environments }]}>
         {environments.data?.environments.length === 0 ? (
-          <CloudEmpty title="No environments">
+          <CloudEmpty kind="inline" icon={EmptyIcon} title="No environments">
             Add an environment in this project before reviewing a route or move.
           </CloudEmpty>
         ) : (
