@@ -1,7 +1,7 @@
 // Package gcp talks to Google Cloud for Loomplane: it turns a service
 // account key into an authorized client and checks what that account may
-// do. It uses Google's REST APIs over net/http rather than the Go SDKs,
-// which would bring in gRPC and dozens of modules for a handful of calls.
+// do. Provisioning uses Google's REST APIs. PostgreSQL connections use the
+// official Cloud SQL Go Connector for IAM authorization and TLS.
 package gcp
 
 import (
