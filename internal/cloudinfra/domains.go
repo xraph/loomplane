@@ -220,8 +220,8 @@ func (s *Service) createManagedZone(ctx context.Context, p security.Principal, n
 	}
 	zone.ProviderZone = current
 	zone.Provider, zone.AccountID, zone.ConnectionGeneration = conn.Cloud, cred.AccountID, conn.Generation
-	if err = s.renewZoneProof(zone); err != nil {
-		return nil, err
+	if proofErr := s.renewZoneProof(zone); proofErr != nil {
+		return nil, proofErr
 	}
 	return zone, nil
 }
@@ -238,8 +238,8 @@ func (s *Service) externalZone(ctx context.Context, st DomainStore, p security.P
 		return nil, ErrInvalid
 	}
 	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: "external", ProjectIDs: append([]string{}, in.ProjectIDs...), Revision: 1}
-	if err = s.renewZoneProof(zone); err != nil {
-		return nil, err
+	if proofErr := s.renewZoneProof(zone); proofErr != nil {
+		return nil, proofErr
 	}
 	return zone, nil
 }

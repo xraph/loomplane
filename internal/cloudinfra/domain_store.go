@@ -589,8 +589,7 @@ func (s *PgStore) CompleteHandoff(ctx context.Context, op *RouteOperation) error
 	if checkErr := tx.QueryRow(ctx, `SELECT o.generation FROM loomplane_route_operations o JOIN loomplane_ingress_configs i ON i.org_id=o.org_id AND i.server_id=$5 WHERE o.org_id=$1 AND o.id=$2 AND o.revision=$3 AND o.generation=$4 AND i.generation=$4 AND o.status<>'cancelled' AND o.body->>'handoff_id'=$6 AND o.route_id=$7 AND o.body->>'kind'='release' AND o.body->'route'->'binding'->>'server_id'=$5 FOR UPDATE OF o,i`, op.Route.OrgID, op.ID, op.Revision, op.Generation, op.Route.Binding.ServerID, op.HandoffID, op.Route.ID).Scan(&generation); checkErr != nil {
 		return ErrConflict
 	}
-	var id string
-	if checkErr := tx.QueryRow(ctx, `UPDATE loomplane_route_handoffs SET released=true WHERE org_id=$1 AND id=$2 AND route_id=$3 RETURNING id`, op.Route.OrgID, op.HandoffID, op.Route.ID).Scan(&id); checkErr != nil {
+	if checkErr := tx.QueryRow(ctx, `UPDATE loomplane_route_handoffs SET released=true WHERE org_id=$1 AND id=$2 AND route_id=$3 RETURNING id`, op.Route.OrgID, op.HandoffID, op.Route.ID).Scan(new(string)); checkErr != nil {
 		return storeError(checkErr)
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM loomplane_connection_uses WHERE org_id=$1 AND kind='route_handoff' AND owner_id=$2`, op.Route.OrgID, op.HandoffID); err != nil {
