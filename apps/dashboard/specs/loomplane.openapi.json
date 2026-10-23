@@ -7116,6 +7116,9 @@
           "cloud_adoption": {
             "$ref": "#/components/schemas/CloudAdoption"
           },
+          "compensation": {
+            "$ref": "#/components/schemas/CloudCompensation"
+          },
           "connection_id": {
             "type": "string"
           },
@@ -8013,6 +8016,47 @@
           },
           "revision": {
             "type": "string"
+          }
+        }
+      },
+      "CloudCompensation": {
+        "type": "object",
+        "required": [
+          "plan_id",
+          "action_id",
+          "source",
+          "candidate",
+          "retained",
+          "server_attempt",
+          "original_completed"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/Binding"
+          },
+          "original_completed": {
+            "type": "boolean"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "retained": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudinfraRoute"
+            }
+          },
+          "server_attempt": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Binding"
           }
         }
       },
@@ -9599,6 +9643,12 @@
           "external_routing"
         ],
         "properties": {
+          "compensation_message": {
+            "type": "string"
+          },
+          "compensation_mode": {
+            "type": "string"
+          },
           "deployment_id": {
             "type": "string"
           },
@@ -9620,7 +9670,16 @@
           "project_id": {
             "type": "string"
           },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncRoute"
+            }
+          },
           "routing_evidence": {
+            "type": "string"
+          },
+          "routing_status": {
             "type": "string"
           },
           "services": {
@@ -14645,6 +14704,52 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SyncRoute": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "prepare_id",
+          "status",
+          "hostname",
+          "not_before"
+        ],
+        "properties": {
+          "cutover_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "not_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "prepare_id": {
+            "type": "string"
+          },
+          "record_type": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
           }
         }
       },

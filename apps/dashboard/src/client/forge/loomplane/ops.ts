@@ -1727,7 +1727,7 @@ export const ops = {
 export const entities = {
   'APIKey': { idField: 'id' },
   'APIKeyList': { fields: { 'keys': 'APIKey' } },
-  'Action': { fields: { 'routes': 'CloudinfraRoute' } },
+  'Action': { fields: { 'compensation': 'CloudCompensation', 'routes': 'CloudinfraRoute' } },
   'Analysis': { idField: 'id' },
   'AnalysisGraph': { idField: 'id' },
   'AnalysisList': { fields: { 'analyses': 'Analysis' } },
@@ -1737,6 +1737,7 @@ export const entities = {
   'Binding': { idField: 'id' },
   'BindingList': { fields: { 'bindings': 'Binding' } },
   'CatalogconnectEndpoint': { idField: 'id' },
+  'CloudCompensation': { fields: { 'candidate': 'Binding', 'routes': 'CloudinfraRoute', 'source': 'Binding' } },
   'CloudSyncEvent': { idField: 'id' },
   'CloudinfraRoute': { idField: 'id' },
   'Collection': { idField: 'id' },

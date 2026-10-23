@@ -30,6 +30,7 @@ export interface Action {
   adoptCloudPlacement?: boolean;
   changes?: Change[];
   cloudAdoption?: CloudAdoption;
+  compensation?: CloudCompensation;
   connectionId?: string;
   creates: string;
   dependsOn?: string[];
@@ -296,6 +297,17 @@ export interface CloudAdoption {
   externalId: string;
   planId: string;
   revision: string;
+}
+
+export interface CloudCompensation {
+  actionId: string;
+  candidate: Binding;
+  originalCompleted: boolean;
+  planId: string;
+  retained: boolean;
+  routes?: CloudinfraRoute[];
+  serverAttempt: boolean;
+  source: Binding;
 }
 
 export interface CloudForm {
@@ -764,6 +776,8 @@ export interface Environment {
 }
 
 export interface EnvironmentChange {
+  compensationMessage?: string;
+  compensationMode?: string;
   deploymentId?: string;
   environment: string;
   environmentId: string;
@@ -771,7 +785,9 @@ export interface EnvironmentChange {
   externalRouting: boolean;
   planId?: string;
   projectId?: string;
+  routes?: SyncRoute[];
   routingEvidence?: string;
+  routingStatus?: string;
   services: string[];
   status: string;
   summary: PlanSummary;
@@ -2206,6 +2222,20 @@ export interface Sync {
   status: string;
   targetId?: string;
   updatedAt: string;
+}
+
+export interface SyncRoute {
+  cutoverId?: string;
+  hostname: string;
+  message?: string;
+  notBefore: string;
+  prepareId: string;
+  recordType?: string;
+  releaseId?: string;
+  routeId: string;
+  status: string;
+  ttl?: number;
+  value?: string;
 }
 
 export interface Target {

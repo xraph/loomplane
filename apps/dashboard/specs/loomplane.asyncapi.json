@@ -977,6 +977,9 @@
           "cloud_adoption": {
             "$ref": "#/components/schemas/CloudAdoption"
           },
+          "compensation": {
+            "$ref": "#/components/schemas/CloudCompensation"
+          },
           "connection_id": {
             "type": "string"
           },
@@ -1040,6 +1043,102 @@
             "$ref": "#/components/schemas/PlanSource"
           },
           "variables": {
+            "type": "string"
+          }
+        }
+      },
+      "Binding": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "subject",
+          "name",
+          "provider",
+          "region",
+          "engine",
+          "external_id",
+          "config",
+          "url",
+          "connection_id",
+          "revision",
+          "commit_sha",
+          "drift",
+          "drift_message",
+          "plan_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
+          "config": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "drift": {
+            "type": "string"
+          },
+          "drift_message": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "physical_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "url": {
             "type": "string"
           }
         }
@@ -1109,6 +1208,47 @@
           },
           "revision": {
             "type": "string"
+          }
+        }
+      },
+      "CloudCompensation": {
+        "type": "object",
+        "required": [
+          "plan_id",
+          "action_id",
+          "source",
+          "candidate",
+          "retained",
+          "server_attempt",
+          "original_completed"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/Binding"
+          },
+          "original_completed": {
+            "type": "boolean"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "retained": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudinfraRoute"
+            }
+          },
+          "server_attempt": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Binding"
           }
         }
       },
@@ -1463,6 +1603,12 @@
           "external_routing"
         ],
         "properties": {
+          "compensation_message": {
+            "type": "string"
+          },
+          "compensation_mode": {
+            "type": "string"
+          },
           "deployment_id": {
             "type": "string"
           },
@@ -1484,7 +1630,16 @@
           "project_id": {
             "type": "string"
           },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncRoute"
+            }
+          },
           "routing_evidence": {
+            "type": "string"
+          },
+          "routing_status": {
             "type": "string"
           },
           "services": {
@@ -2606,6 +2761,52 @@
           }
         }
       },
+      "SyncRoute": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "prepare_id",
+          "status",
+          "hostname",
+          "not_before"
+        ],
+        "properties": {
+          "cutover_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "not_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "prepare_id": {
+            "type": "string"
+          },
+          "record_type": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "Volume": {
         "type": "object",
         "required": [
@@ -2687,102 +2888,6 @@
           },
           "summary": {
             "$ref": "#/components/schemas/GraphSummary"
-          }
-        }
-      },
-      "Binding": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "project_id",
-          "environment_id",
-          "subject",
-          "name",
-          "provider",
-          "region",
-          "engine",
-          "external_id",
-          "config",
-          "url",
-          "connection_id",
-          "revision",
-          "commit_sha",
-          "drift",
-          "drift_message",
-          "plan_id",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "commit_sha": {
-            "type": "string"
-          },
-          "config": {
-            "type": "string"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "drift": {
-            "type": "string"
-          },
-          "drift_message": {
-            "type": "string"
-          },
-          "engine": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "external_id": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "name": {
-            "type": "string"
-          },
-          "observed_at": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "physical_id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "region": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "string"
-          },
-          "subject": {
-            "type": "string"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "url": {
-            "type": "string"
           }
         }
       },
