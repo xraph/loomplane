@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -120,6 +121,28 @@ func (k TrustKey) ID() string {
 	return hex.EncodeToString(sum[:])
 }
 
+// trustDigestLen is how many hex characters of the hash TrustDigest keeps.
+const trustDigestLen = 16
+
+// TrustDigest names a set of trust keys: "tk" and the start of a SHA-256
+// over each key's ID and window, so a key added, dropped or renewed with a
+// new window gives a new name, and the order and repeats of keys don't.
+// Loomplane records it in the gateway's planned configuration, so a change
+// to the keys redeploys the gateway. No keys give "".
+func TrustDigest(keys []TrustKey) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(keys))
+	for _, k := range keys {
+		lines = append(lines, k.ID()+" "+k.NotBefore.UTC().Format(time.RFC3339Nano)+" "+k.NotAfter.UTC().Format(time.RFC3339Nano)+"\n")
+	}
+	slices.Sort(lines)
+	lines = slices.Compact(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "")))
+	return "tk" + hex.EncodeToString(sum[:])[:trustDigestLen]
+}
+
 // SnapshotPayload returns the bytes that are signed: the snapshot as JSON
 // with the routes sorted by ID. encoding/json writes struct fields in
 // declaration order and sorts map keys, which makes the output canonical.
@@ -157,20 +180,20 @@ func SignSnapshot(s Snapshot, private ed25519.PrivateKey, keyID string) (SignedS
 }
 
 // VerifySnapshot checks that env was signed by the key it names and that the
-// key is among keys and valid at now, and only then decodes the payload. The
-// snapshot must name the same key, be for gatewayID and have every route in a
-// known state. Fields in the payload that Snapshot doesn't have are ignored.
-// Every failure returns ErrSnapshot.
+// key is among keys and valid at now, and only then decodes the payload. A
+// key renewed with a new window is in keys once per window under the same
+// ID, and any of its windows that's open will do. The snapshot must name the
+// same key, be for gatewayID and have every route in a known state. Fields
+// in the payload that Snapshot doesn't have are ignored. Every failure
+// returns ErrSnapshot.
 func VerifySnapshot(env SignedSnapshot, keys []TrustKey, gatewayID string, now time.Time) (Snapshot, error) {
-	i := slices.IndexFunc(keys, func(k TrustKey) bool { return k.ID() == env.KeyID })
-	if i < 0 {
-		return Snapshot{}, ErrSnapshot
-	}
-	key := keys[i]
-	if len(key.PublicKey) != ed25519.PublicKeySize || now.Before(key.NotBefore) || !now.Before(key.NotAfter) {
-		return Snapshot{}, ErrSnapshot
-	}
-	if !ed25519.Verify(key.PublicKey, append([]byte(snapshotContext), env.Payload...), env.Signature) {
+	message := append([]byte(snapshotContext), env.Payload...)
+	trusted := slices.ContainsFunc(keys, func(k TrustKey) bool {
+		return k.ID() == env.KeyID && len(k.PublicKey) == ed25519.PublicKeySize &&
+			!now.Before(k.NotBefore) && now.Before(k.NotAfter) &&
+			ed25519.Verify(k.PublicKey, message, env.Signature)
+	})
+	if !trusted {
 		return Snapshot{}, ErrSnapshot
 	}
 	var s Snapshot

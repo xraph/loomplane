@@ -26,6 +26,9 @@ type Input struct {
 	// Zones are the verified DNS zones granted to the project. The
 	// database gateway names its hosts in one of them.
 	Zones []cloudinfra.ProjectZone
+	// DatabaseGatewayTrust is plane.TrustDigest of the keys a database
+	// gateway deployed now would trust, or "" when Loomplane has none.
+	DatabaseGatewayTrust string
 
 	// Catalog requests a standalone service without repository sources.
 	Catalog         bool

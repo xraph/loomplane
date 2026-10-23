@@ -142,7 +142,10 @@ func (p *planner) planDatabaseGateway() {
 		})
 		return
 	}
-	cfg.DatabaseGateway = &DatabaseGatewayConfig{Name: dbGatewayName, Suffix: strings.ToLower(cfg.Region + ".db." + domain), Resources: served, Program: program}
+	cfg.DatabaseGateway = &DatabaseGatewayConfig{
+		Name: dbGatewayName, Suffix: strings.ToLower(cfg.Region + ".db." + domain), Resources: served,
+		Program: program, Trust: p.in.DatabaseGatewayTrust,
+	}
 	sort.Strings(deps)
 	a := &Action{
 		ID: actionID(ServiceSubject, dbGatewayName), Subject: ServiceSubject, Name: dbGatewayName,

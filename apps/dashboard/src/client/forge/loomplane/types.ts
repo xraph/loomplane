@@ -505,6 +505,7 @@ export interface DatabaseGatewayConfig {
   program: string;
   resources: string[];
   suffix: string;
+  trust?: string;
 }
 
 export interface DecideInputBody {

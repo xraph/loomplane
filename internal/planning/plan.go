@@ -186,6 +186,11 @@ type DatabaseGatewayConfig struct {
 	// upgrade that changes the gateway's code changes its configuration
 	// and redeploys it.
 	Program string `json:"program"`
+	// Trust names the control-plane keys the gateway trusts, as
+	// plane.TrustDigest gives it, so a signing key added, renewed or
+	// expired redeploys the gateway with the keys it needs. The deploy
+	// hands it the keys themselves.
+	Trust string `json:"trust,omitempty"`
 }
 
 // Generated reports whether Loomplane generates the service from its own

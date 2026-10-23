@@ -8611,6 +8611,9 @@
           },
           "suffix": {
             "type": "string"
+          },
+          "trust": {
+            "type": "string"
           }
         }
       },

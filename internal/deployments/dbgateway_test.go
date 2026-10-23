@@ -318,6 +318,33 @@ func TestEnsureDatabaseGatewayNeedsASigningKey(t *testing.T) {
 	}
 }
 
+// A deploy hands the gateway every key the plan recorded, and refuses when
+// the keys changed after it was planned, before minting anything.
+func TestEnsureDatabaseGatewayChecksThePlannedTrustKeys(t *testing.T) {
+	old, next := testTrustKey(t), testTrustKey(t)
+	next.NotBefore = next.NotBefore.Add(12 * time.Hour)
+	store, secrets := &fakeDBGateways{}, snapshotSecrets{}
+	r := dbGatewayRunner(store, secrets, old, next)
+	a := dbGatewayAction()
+	a.Service.DatabaseGateway.Trust = plane.TrustDigest([]plane.TrustKey{old, next})
+	env, _, err := r.ensureDatabaseGateway(t.Context(), gatewayDeployment, &a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg := gatewayConfig(t, env); plane.TrustDigest(cfg.TrustKeys) != a.Service.DatabaseGateway.Trust {
+		t.Fatalf("the gateway trusts %+v", cfg.TrustKeys)
+	}
+
+	store, secrets = &fakeDBGateways{}, snapshotSecrets{}
+	r = dbGatewayRunner(store, secrets, next)
+	if _, _, err = r.ensureDatabaseGateway(t.Context(), gatewayDeployment, &a); !errors.Is(err, errDBGatewayTrustChanged) {
+		t.Fatalf("err %v", err)
+	}
+	if store.ensures != 0 || len(secrets) != 0 {
+		t.Fatal("minted with keys the plan didn't record")
+	}
+}
+
 // A Loomplane whose database gateway service isn't wired in is a wiring
 // error, not a missing signing key, and says so.
 func TestEnsureDatabaseGatewayTellsAMissingServiceFromAMissingKey(t *testing.T) {

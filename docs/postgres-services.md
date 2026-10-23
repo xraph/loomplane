@@ -308,15 +308,13 @@ Put the result in a JSON file that only its owner can read (mode `0600`), at an 
 }
 ```
 
-Then point Loomplane at the file with `dbgateway.signing_key_file` in its configuration, or set `LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE`. The file has to be a regular file, not a symlink, no bigger than 16 KiB, with exactly those four fields. The path has to be clean: no `..`, and no doubled or trailing slashes. `not_before` must come first. Give yourself a long window, because the key only signs between the two dates.
+Then point Loomplane at the file with `dbgateway.signing_key_file` in its configuration, or set `LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE`. The file has to be a regular file, not a symlink, no bigger than 16 KiB, with exactly those four fields. (A version 2 file holds a list of keys instead. You'll want that when you rotate, as [Rotate the signing key](#rotate-the-signing-key) shows.) The path has to be clean: no `..`, and no doubled or trailing slashes. `not_before` must come first. Give yourself a long window, because the key only signs between the two dates.
 
 Loomplane reads the file once, at startup. If the file itself is wrong, Loomplane won't start. You get `dbgateway.signing_key_file: invalid database gateway signing key configuration` and nothing more, so the message can't leak the file. Leave the setting empty and Loomplane starts, but the gateway endpoints answer 503 and a deployment that includes a gateway fails.
 
-A key outside its window is treated the same way as no key, and Loomplane still starts. Past `not_after`, it logs an error at startup, the gateway endpoints answer 503 with a message saying the key has expired, and a deployment that includes a gateway fails with that reason. That also happens the moment the key expires while Loomplane is running: it stops signing snapshots then, and never signs one with an expired key. Before `not_before` you get the same, saying the key isn't valid yet, until that date passes. Deployed gateways keep serving the routes they last applied, but they won't hear about a changed password or a paused route until a valid key signs again. From 30 days before `not_after`, Loomplane logs a warning at every start. Replace the key before then, and follow the steps below to hand the new one to your gateways.
+A key outside its window is treated the same way as no key, and Loomplane still starts. Past `not_after`, it logs an error at startup, the gateway endpoints answer 503 with a message saying the key has expired, and a deployment that includes a gateway fails with that reason. That also happens the moment the key expires while Loomplane is running: it stops signing snapshots then, and never signs one with an expired key. Before `not_before` you get the same, saying the key isn't valid yet, until that date passes. Deployed gateways keep serving the routes they last applied, but they won't hear about a changed password or a paused route until a valid key signs again. From 30 days before the last key's `not_after`, Loomplane logs a warning at every start. Add the next key before then, as [Rotate the signing key](#rotate-the-signing-key) describes.
 
-Gateways are handed the public half of the key when they're deployed, and nothing sends it again on its own. If you replace the key file and restart Loomplane, a plan still shows `db-gateway` as unchanged, because none of its configuration moved, and the gateway you deployed keeps trusting the old key. It refuses every snapshot signed with the new one. It carries on serving the routes it already has, but it never hears about a changed password or a paused route.
-
-A gateway gets the current key whenever a plan creates, updates or replaces it. An update happens when its planned configuration changes: the resources behind it, its region or provider, the DNS zone its names live in, or the gateway's own code, which changes when you upgrade to a Loomplane whose gateway differs. Opting another Postgres resource in, or one out, is the smallest change that does it, and it redeploys only the apps that need that resource. If there's no change you want to make, the only other way is to remove the gateway and add it back. Set `gateway: false` on every resource, approve that plan, then set them back to `true` and approve the next. Removing it deletes its record and keys, so adding it back mints new ones and a new gateway. It costs two deployments, each redeploying every app that needs one of those databases, and until the second finishes an app that can only reach its database through the gateway has no database.
+Gateways are handed the public halves of the keys when they're deployed. The plan records which keys those are, so when they change (you add one, renew one, or one expires) the next plan shows `db-gateway` as an update, and deploying it hands the gateway the keys Loomplane has now. The apps behind it stay as they are, since its address doesn't move. If the keys change between making a plan and deploying it, the deployment fails and asks you to plan again, so a gateway never runs with keys other than the ones you reviewed. The first plan after you upgrade to a Loomplane that records them updates each gateway once, for the same reason.
 
 A gateway also has to reach Loomplane to fetch its routes, and it does that at your `public_url`. That has to be https (plain http is accepted for `localhost` only), or the deployment is refused.
 
@@ -345,6 +343,29 @@ The gateway names each database from its resource and your DNS zone, as `<resour
 Create a plan and review it. Turning the gateway on adds one `db-gateway` service, deploys it before anything that needs a resource behind it, and redeploys those apps with their new variables. Taking a resource off the gateway redeploys them too, and they go back to the database's own address before the gateway stops serving it. A new region or DNS zone renames every host behind the gateway, so the same plan that updates the gateway redeploys every app that reaches a database through it. An app you've held back can't follow, and the plan stops with `db-gateway-held-user` until you release it.
 
 Opting a database in changes `DATABASE_URL` for every service that needs it, not just the Vercel app. Apps on Cloud Run and ECS get the gateway's host in `DATABASE_URL` too, so a service that connects over TCP stops working until it reads `DATABASE_URL_DIRECT` instead. The next section says where that comes from. The plan stops with `db-gateway-held-user` if it would take a resource off the gateway while a [held](manifest.md#held) app, one the plan leaves alone, still reaches it there.
+
+### Rotate the signing key
+
+You rotate by running the old key and the new one side by side for a while. A version 2 key file holds both:
+
+```json
+{
+  "version": 2,
+  "keys": [
+    {"private_key": "<the old key>", "not_before": "2026-10-01T00:00:00Z", "not_after": "2028-10-01T00:00:00Z"},
+    {"private_key": "<the new key>", "not_before": "2028-09-01T00:00:00Z", "not_after": "2030-10-01T00:00:00Z"}
+  ]
+}
+```
+
+Each entry takes the same three fields as a version 1 file, and a file holds up to eight. Loomplane signs with the newest key whose window is open, the one with the latest `not_before`, and hands gateways every key that hasn't expired, including one whose window hasn't opened yet. So a rotation goes like this:
+
+1. Make a new key with `openssl rand -base64 32` and add it beside the old one. Give it a `not_before` far enough out that you can deploy every environment with a gateway before it arrives, and let its window overlap the old key's, or Loomplane has nothing to sign with in the gap. Restart Loomplane.
+2. Plan and deploy each environment that has a gateway. The plan shows `db-gateway` as an update. The redeployed gateway trusts both keys, and Loomplane is still signing with the old one, so it gets its routes straight away.
+3. When the new key's `not_before` passes, Loomplane signs with it from then on, without a restart. Gateways from step 2 take what it signs. A gateway you missed refuses it and keeps serving the routes it has, the same as one whose key expired, until you deploy it.
+4. Take the old key out of the file and restart Loomplane, or just let it expire. Either way the next plan redeploys each gateway trusting the new key alone. There's no hurry: a gateway ignores a key that has expired.
+
+To extend a key rather than replace it, add the same `private_key` again with a later window, and follow the same steps. A gateway takes a snapshot while any window of that key is open.
 
 ### Connect from Vercel
 
