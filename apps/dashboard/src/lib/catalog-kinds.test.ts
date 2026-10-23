@@ -22,6 +22,15 @@ test("discovers kind modules from src/catalog-kinds", () => {
   expect(catalogKind("nope")).toBeUndefined()
 })
 
+test("Memcached advertises cache rebuilding without native recovery controls", () => {
+  const module = catalogKind("memcached")
+  expect(module?.group).toBe("cache")
+  expect(module?.features).toContain("Rebuild from your app")
+  expect(module?.blurb).toMatch(/No authentication/)
+  expect(module?.panels).toEqual([])
+  expect(inCatalog({ name: "memcached", placement: "app-project" })).toBe(true)
+})
+
 test("rejects two modules registering one kind", () => {
   expect(() =>
     defineCatalogKind({

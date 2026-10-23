@@ -114,16 +114,16 @@ type KubernetesRule struct {
 type Port struct {
 	Name      string `json:"name"` // DNS label: "http", "admin"
 	Container int    `json:"container"`
-	Protocol  string `json:"protocol"`           // "http", "tcp" or "redis" (RESP)
+	Protocol  string `json:"protocol"`           // "http", "tcp", "redis" (RESP) or "memcached" (ASCII)
 	Control   bool   `json:"control,omitempty"`  // reached only by Loomplane over the private channel; never routed publicly
 	Routable  bool   `json:"routable,omitempty"` // may receive a public HTTP route; requires Protocol "http"; never with Control
 }
 
-// HTTPProbe is the readiness check of a process: an HTTP GET, or a RESP
-// PING on a "redis" port, which has no path.
+// HTTPProbe checks a process with HTTP GET, Redis PING or Memcached
+// VERSION. Native protocol probes have no path.
 type HTTPProbe struct {
-	Port string `json:"port"` // a Port.Name with Protocol "http" or "redis"
-	Path string `json:"path"` // "/readyz"; "" on a redis port
+	Port string `json:"port"` // a Port.Name with Protocol "http", "redis" or "memcached"
+	Path string `json:"path"` // "/readyz"; "" on a native protocol port
 }
 
 // Volume is a component's data directory. Its data is rebuilt, never

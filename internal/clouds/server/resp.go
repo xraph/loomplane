@@ -1,10 +1,8 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -28,28 +26,7 @@ func probeRESP(ctx context.Context, c *Client, port int) error {
 // and wants a password the probe doesn't send. -LOADING, any other reply,
 // a closed connection and silence past the timeout are not ready.
 func pingRESP(ctx context.Context, timeout time.Duration, dial func(context.Context) (net.Conn, error)) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	conn, err := dial(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	// An SSH channel has no deadlines, so the context closes it instead.
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	if _, err = io.WriteString(conn, "PING\r\n"); err != nil {
-		return fmt.Errorf("send PING: %w", err)
-	}
-	reply, err := bufio.NewReader(io.LimitReader(conn, 512)).ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("read the PING reply: %w", err)
-	}
-	reply = strings.TrimRight(reply, "\r\n")
-	if reply == "+PONG" || strings.HasPrefix(reply, "-NOAUTH") {
-		return nil
-	}
-	return fmt.Errorf("the port answered PING with %.64q", reply)
+	return probeLine(ctx, timeout, dial, "PING", func(reply string) bool { return reply == "+PONG" || strings.HasPrefix(reply, "-NOAUTH") })
 }
 
 // probed reports whether a workload declares a readiness probe.
@@ -68,6 +45,12 @@ func (r *Runtime) healthProbe(labels map[string]string) (func(context.Context, *
 		}
 		return func(ctx context.Context, c *Client, port int) error {
 			return probe(ctx, c, port, labels[owned.LabelHealth])
+		}, nil
+	case "memcached":
+		return func(ctx context.Context, c *Client, port int) error {
+			return pingMemcached(ctx, respTimeout, func(ctx context.Context) (net.Conn, error) {
+				return c.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+			})
 		}, nil
 	case "redis":
 		if r.ProbeRESP != nil {
