@@ -36,6 +36,9 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		return err
 	}
 	for _, source := range in.Routes {
+		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
+			return ErrInvalid
+		}
 		// A Kubernetes route follows its Service by name, so a release has
 		// nothing to hand off.
 		if source.Binding.BackendName() == RouteBackendKubernetes {
@@ -49,9 +52,6 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		drain, drainErr := ReviewedRouteDrain(source, in.DrainSeconds)
 		if drainErr != nil {
 			return drainErr
-		}
-		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
-			return ErrInvalid
 		}
 		preparedID := releasePrepareID(in.Key, source.ID)
 		prepared, readErr := st.RouteOperation(ctx, p.OrgID, preparedID)

@@ -457,6 +457,14 @@ func TestReleaseRoutesSkipKubernetes(t *testing.T) {
 	if err := svc.ReconcileCompensationRoutes(t.Context(), kubeRouteManager, in); err != nil {
 		t.Fatal(err)
 	}
+	// Another project's route is refused before the skip.
+	in.Routes[0].ProjectID = "rival"
+	if err := svc.ReconcileReleaseRoutes(t.Context(), kubeRouteManager, in); !errors.Is(err, ErrInvalid) {
+		t.Fatal("release took a foreign Kubernetes route", err)
+	}
+	if err := svc.ReconcileCompensationRoutes(t.Context(), kubeRouteManager, in); !errors.Is(err, ErrInvalid) {
+		t.Fatal("compensation took a foreign Kubernetes route", err)
+	}
 }
 
 func TestKubernetesHandoffIsUnsupported(t *testing.T) {
