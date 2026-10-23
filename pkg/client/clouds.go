@@ -22,6 +22,8 @@ type Cloud struct {
 
 // CloudPlacement is a Cloud's single default provider, account and region.
 type CloudPlacement struct {
+	Runtime      string `json:"runtime,omitempty"`
+	PoolID       string `json:"pool_id,omitempty"`
 	Provider     string `json:"provider"`
 	ConnectionID string `json:"connection_id"`
 	Region       string `json:"region"`
@@ -29,6 +31,8 @@ type CloudPlacement struct {
 
 // CloudTarget is the public Cloud API record.
 type CloudTarget struct {
+	Runtime      string    `json:"runtime,omitempty"`
+	PoolID       string    `json:"pool_id,omitempty"`
 	ID           string    `json:"id" forge:"id"`
 	OrgID        string    `json:"org_id"`
 	ProjectID    string    `json:"project_id"`
@@ -60,6 +64,8 @@ type CloudAssignment struct {
 
 // CloudChangeInput is the public Cloud API record.
 type CloudChangeInput struct {
+	Runtime       string `json:"runtime,omitempty"`
+	PoolID        string `json:"pool_id,omitempty"`
 	Revision      int64  `json:"revision"`
 	CloudID       string `json:"cloud_id"`
 	TargetID      string `json:"target_id,omitempty"`
@@ -174,6 +180,8 @@ type CloudUpdateInput struct {
 }
 
 type CloudCreateTargetInput struct {
+	Runtime      string   `json:"runtime,omitempty"`
+	PoolID       string   `json:"pool_id,omitempty"`
 	Name         string   `json:"name"`
 	DisplayName  string   `json:"display_name"`
 	Provider     string   `json:"provider"`
@@ -363,6 +371,11 @@ func (c *Client) CloudPreview(ctx context.Context, project, id string) (*CloudPr
 	return &out, err
 }
 
+// CloudProjectGrantInput selects allowed targets; an empty list grants the whole Cloud.
+type CloudProjectGrantInput struct {
+	TargetIDs []string `json:"target_ids"`
+}
+
 // CloudProjectGrant controls fresh placement on a Cloud's allowed targets.
 type CloudProjectGrant struct {
 	OrgID     string   `json:"org_id"`
@@ -389,7 +402,7 @@ func (c *Client) CloudProjectGrants(ctx context.Context, cloud string) ([]CloudP
 }
 func (c *Client) GrantCloudProject(ctx context.Context, cloud, project string, targets []string) (*CloudProjectGrant, error) {
 	var out CloudProjectGrant
-	err := c.do(ctx, http.MethodPut, "/api/v1/clouds/"+esc(cloud)+"/projects/"+esc(project), map[string]any{"target_ids": targets}, &out)
+	err := c.do(ctx, http.MethodPut, "/api/v1/clouds/"+esc(cloud)+"/projects/"+esc(project), CloudProjectGrantInput{TargetIDs: targets}, &out)
 	return &out, err
 }
 func (c *Client) RevokeCloudProject(ctx context.Context, cloud, project string) (*CloudProjectGrant, error) {
