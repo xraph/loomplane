@@ -37,7 +37,7 @@ export async function addCatalogService(
   progress: (step: string) => void
 ): Promise<{ planId: string }> {
   progress(`Adding ${input.name} to the manifest…`)
-  await editManifest({
+  const revision = await editManifest({
     path: { id: input.projectId },
     body: {
       addResource: {
@@ -53,11 +53,20 @@ export async function addCatalogService(
     },
   })
   progress(`Planning ${input.environment}…`)
+  const manifest = revision.manifest
+  const resourceOnly =
+    manifest?.version === 1 &&
+    [manifest.services, manifest.gateways, manifest.links].every(
+      (value) => !value || Object.keys(value).length === 0
+    )
   let plan: Plan
   try {
     plan = await createPlan({
       path: { id: input.projectId },
-      body: { environment: input.environment },
+      body: {
+        environment: input.environment,
+        ...(resourceOnly ? { catalog: true } : {}),
+      },
     })
   } catch (cause) {
     // The manifest already has it, so trying again here would only be

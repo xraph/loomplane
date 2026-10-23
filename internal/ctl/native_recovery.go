@@ -77,9 +77,13 @@ func (a *App) nativeInventory(ctx cli.CommandContext) error {
 	a.printf("Observation: %s; complete: %t. Snapshot restore is not verified by inventory.\n", page.Source.State, page.Source.Complete)
 	rows := [][]string{}
 	for _, point := range page.Points {
-		rows = append(rows, []string{point.ID, point.Name, point.Kind, point.Status, point.CreatedAt.Format("2006-01-02 15:04Z"), strconv.FormatBool(point.Present)})
+		expiry := "not reported"
+		if point.ExpiresAt != nil {
+			expiry = point.ExpiresAt.UTC().Format("2006-01-02 15:04Z")
+		}
+		rows = append(rows, []string{point.ID, point.Name, point.Kind, point.Status, point.CreatedAt.Format("2006-01-02 15:04Z"), expiry, strconv.FormatBool(point.Present)})
 	}
-	a.table([]string{"ID", "SNAPSHOT", "KIND", "STATUS", "CREATED", "LAST SEEN PRESENT"}, rows)
+	a.table([]string{"ID", "SNAPSHOT", "KIND", "STATUS", "CREATED", "PROVIDER EXPIRY", "LAST SEEN PRESENT"}, rows)
 	if page.NextBefore != "" {
 		a.printf("Next page: --before %s\n", page.NextBefore)
 	}

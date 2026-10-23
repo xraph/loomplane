@@ -133,3 +133,83 @@ func TestReleaseCoordinatorHonorsLongManagedReceiptTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestReleaseCoordinatorCleanupCannotCreateRouteEffects(t *testing.T) {
+	source := Route{ID: "route", OrgID: "org", ProjectID: "project", Status: "ready", Input: RouteInput{EnvironmentID: "env", Service: "web", ExternalTTLSeconds: 60}, Binding: RouteBinding{InstanceID: "old"}}
+	destination := source
+	destination.Binding.InstanceID = "new"
+	destination.Revision = 2
+	st := &ttlReleaseStore{source: source, destination: destination}
+	svc := NewService(Deps{Store: st, Domains: st, Authz: cleanupTestAuth{}})
+	err := svc.ReconcileReleaseRoutes(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, ReleaseRouteRequest{Key: "plan/action", ProjectID: "project", EnvironmentID: "env", Service: "web", InstanceID: "new", Routes: []Route{source}, DrainSeconds: 60, CleanupOnly: true})
+	if !errors.Is(err, ErrConflict) || st.accepted != nil {
+		t.Fatal("cleanup created a new operation", err, st.accepted)
+	}
+}
+
+type retryActorStore struct {
+	releaseOperationStore
+	authorized []string
+	denied     string
+}
+
+func (s *retryActorStore) SaveRouteOperation(_ context.Context, op *RouteOperation) error {
+	s.current = *op
+	return nil
+}
+func (*retryActorStore) BeginIngress(context.Context, *RouteOperation) (*IngressState, error) {
+	return &IngressState{}, nil
+}
+func (*retryActorStore) ResolveRouteBinding(context.Context, string, string, RouteInput) (RouteBinding, error) {
+	return RouteBinding{}, ErrPending
+}
+func (s *retryActorStore) Require(_ context.Context, p security.Principal, _ security.Permission, _ string) error {
+	s.authorized = append(s.authorized, p.UserID)
+	if p.UserID == s.denied {
+		return security.ErrForbidden
+	}
+	return nil
+}
+func TestReleaseCoordinatorRetryUsesCurrentWorkerActor(t *testing.T) {
+	for _, kind := range []string{"prepare", "cutover"} {
+		t.Run(kind, func(t *testing.T) {
+			st := &retryActorStore{denied: "original", releaseOperationStore: releaseOperationStore{current: RouteOperation{ID: "accepted", Kind: kind, Status: "waiting", Principal: security.Principal{OrgID: "org", UserID: "original"}, Route: Route{OrgID: "org", ProjectID: "project", Binding: RouteBinding{ServerID: "server"}}}}}
+			svc := NewService(Deps{Store: st, Domains: st, Authz: st})
+			op := st.current
+			err := svc.reconcileReleaseOperation(t.Context(), security.Principal{OrgID: "org", UserID: "current"}, &op)
+			if !errors.Is(err, ErrPending) || st.current.Status != "waiting" {
+				t.Fatalf("retry did not reach current actor verification: status=%s auth=%v err=%v", st.current.Status, st.authorized, err)
+			}
+			for _, actor := range st.authorized {
+				if actor != "current" {
+					t.Fatalf("worker used old actor: %v", st.authorized)
+				}
+			}
+			if st.current.Principal.UserID != "original" || st.current.ID != "accepted" {
+				t.Fatal("accepted initiator or identity changed")
+			}
+		})
+	}
+}
+
+func TestRouteWorkerRechecksLegacyAndRetryActor(t *testing.T) {
+	st := &retryActorStore{denied: "original", releaseOperationStore: releaseOperationStore{current: RouteOperation{ID: "accepted", Kind: "prepare", Status: "waiting", Principal: security.Principal{OrgID: "org", UserID: "original"}, Route: Route{OrgID: "org", ProjectID: "project", Binding: RouteBinding{ServerID: "server"}}}}}
+	svc := NewService(Deps{Store: st, Domains: st, Authz: st})
+	if err := svc.ReconcileRoute(t.Context(), "org", "accepted", nil); err != nil {
+		t.Fatal(err)
+	}
+	if st.current.Status != "failed" || len(st.authorized) != 1 || st.authorized[0] != "original" {
+		t.Fatal("legacy actor authorization skipped", st.authorized, st.current.Status)
+	}
+	if _, err := svc.RetryRoute(t.Context(), security.Principal{OrgID: "org", UserID: "current"}, "project", "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	st.denied = "current"
+	st.authorized = nil
+	if err := svc.ReconcileRoute(t.Context(), "org", "accepted", nil); err != nil {
+		t.Fatal(err)
+	}
+	if st.current.Status != "failed" || len(st.authorized) != 1 || st.authorized[0] != "current" {
+		t.Fatal("revoked retry actor authorization skipped", st.authorized, st.current.Status)
+	}
+}

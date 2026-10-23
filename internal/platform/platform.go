@@ -97,11 +97,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// repository's code. Its handlers go to Dispatch now; the planning
 	// extension binds them to the planner when it registers.
 	deployments := orchestration.NewDeployments()
-	jobs := dispatchext.New(
+	jobs := newJobs(deployments.Options(owner(), cfg.Orchestration.Concurrency),
 		dispatchext.WithConcurrency(cfg.Orchestration.Concurrency),
 		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
 		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
-		dispatchext.WithDurableWorkflows(deployments.Options(owner(), cfg.Orchestration.Concurrency)),
 		// Followers check for a leader every half lease. A short lease
 		// means a leader that stops, a restarted replica or a stopped
 		// worker, is replaced in seconds, and the drift check keeps its

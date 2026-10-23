@@ -310,7 +310,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 				continue
 			}
 			change.Services = append(change.Services, a.Name)
-			if a.Op == Replace && a.Service.Public && len(a.Routes) == 0 {
+			if requiresExternalRouting(a) {
 				change.ExternalRouting = true
 			}
 			if plan.ManifestID == "" {
@@ -586,7 +586,7 @@ func (s *Service) RetryCloudSync(ctx context.Context, p security.Principal, proj
 	if authErr := s.authorizeStoredCloudSync(ctx, p, sync, snapshot); authErr != nil {
 		return nil, authErr
 	}
-	if sync.Status != cloudprofiles.SyncFailed && sync.Status != cloudprofiles.SyncCleanup {
+	if sync.Status != cloudprofiles.SyncFailed && sync.Status != cloudprofiles.SyncCleanup && sync.Status != cloudprofiles.SyncRouting {
 		return nil, cloudprofiles.ErrConflict
 	}
 	snapshot.Actor = p
@@ -606,7 +606,12 @@ func (s *Service) RetryCloudSync(ctx context.Context, p security.Principal, proj
 	return sync, nil
 }
 
-// CompleteCloudRouting records the operator's explicit external-route evidence.
+func requiresExternalRouting(a Action) bool {
+	return a.Op == Replace && a.Service != nil && a.Service.Public && len(a.Routes) == 0
+}
+
+// CompleteCloudRouting records evidence only for the accepted unmanaged replacements.
+// Recorded routes still reconcile and drain independently before source cleanup.
 func (s *Service) CompleteCloudRouting(ctx context.Context, p security.Principal, project, id, environment, evidence string) (*cloudprofiles.Sync, error) {
 	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
 		return nil, err
@@ -631,6 +636,20 @@ func (s *Service) CompleteCloudRouting(ctx context.Context, p security.Principal
 	i := slices.IndexFunc(sync.Environments, func(e cloudprofiles.EnvironmentChange) bool { return e.EnvironmentID == environment })
 	if i < 0 || !sync.Environments[i].ExternalRouting {
 		return nil, cloudprofiles.ErrNotFound
+	}
+	unmanaged := false
+	for _, env := range snapshot.Environments {
+		if env.EnvironmentID != environment {
+			continue
+		}
+		var plan Plan
+		if err := json.Unmarshal(env.Plan, &plan); err != nil {
+			return nil, err
+		}
+		unmanaged = slices.ContainsFunc(plan.Actions, requiresExternalRouting)
+	}
+	if !unmanaged {
+		return nil, cloudprofiles.ErrConflict
 	}
 	sync.Environments[i].RoutingEvidence = strings.TrimSpace(evidence)
 	snapshot.Actor = p

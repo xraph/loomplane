@@ -173,6 +173,26 @@ describe("thread", () => {
   })
 })
 
+it("does not queue kept services as deployment work", () => {
+  const kept = action("cache", 1, "keep")
+  const created = action("browser-cache", 2)
+  const run = toRun(
+    plan("approved", { actions: [kept, created] }),
+    deployment("succeeded", [
+      { actionId: "browser-cache", status: "succeeded" },
+    ])
+  )
+  expect(
+    run.thread.filter((s) => s.group === "Deploy").map((s) => [s.key, s.state])
+  ).toEqual([["browser-cache", "done"]])
+  const unchanged = toRun(
+    plan("approved", { actions: [kept] }),
+    deployment("succeeded", [])
+  )
+  expect(unchanged.thread.at(-1)?.name).toBe("Nothing to change")
+  expect(unchanged.thread.at(-1)?.state).toBe("done")
+})
+
 describe("runLog", () => {
   it("tells the story in time order, with the decision by name", () => {
     const r = toRun(
