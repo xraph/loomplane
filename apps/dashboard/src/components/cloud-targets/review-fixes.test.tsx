@@ -1,13 +1,20 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { Pools } from "./pools"
 import { Servers } from "./servers"
 import { Domains } from "./domains"
+const permissions = vi.hoisted(() => ({ allowed: true }))
 vi.mock("@/lib/organization", () => ({
-  useOrganization: () => ({ can: () => true }),
+  useOrganization: () => ({ can: () => permissions.allowed }),
 }))
 vi.mock("@/lib/router", () => ({
   Link: ({
@@ -25,6 +32,7 @@ vi.mock("@/lib/router", () => ({
   ),
 }))
 afterEach(() => {
+  permissions.allowed = true
   cleanup()
   vi.unstubAllGlobals()
   forgeClient.clear()
@@ -277,5 +285,75 @@ it("retries a denied projects read and restores zone grant choices without reloa
   ).toBeInTheDocument()
   expect(
     screen.queryByText("Projects access is restricted.")
+  ).not.toBeInTheDocument()
+})
+
+it.each([
+  [
+    "Servers",
+    "No servers connected",
+    "Connect existing server",
+    "Connect existing server",
+  ],
+  ["Domains", "No DNS zones", "Add DNS zone", "Add DNS zone"],
+  ["Routes", "No routes for this project", "Add route", "Add route"],
+])(
+  "opens the existing %s dialog from its shared empty state",
+  async (kind, title, action, dialog) => {
+    vi.stubGlobal("fetch", async () =>
+      Response.json({
+        servers: [],
+        pools: [],
+        zones: [],
+        routes: [],
+        projects: [],
+        connections: [],
+        providers: [],
+        environments: [],
+      })
+    )
+    mount(
+      kind === "Servers" ? (
+        <Servers cloud={cloud as never} />
+      ) : (
+        <Domains
+          cloud={cloud as never}
+          projectId={kind === "Routes" ? "p" : ""}
+        />
+      )
+    )
+    const state = (await screen.findByText(title)).closest(
+      '[data-slot="empty"]'
+    )!
+    await userEvent
+      .setup()
+      .click(within(state as HTMLElement).getByRole("button", { name: action }))
+    expect(
+      await screen.findByRole("dialog", { name: dialog })
+    ).toBeInTheDocument()
+  }
+)
+it("keeps denied server and route empty states explanatory without actions", async () => {
+  permissions.allowed = false
+  vi.stubGlobal("fetch", async () => Response.json({ routes: [], zones: [] }))
+  mount(
+    <>
+      <Servers cloud={cloud as never} />
+      <Domains cloud={cloud as never} projectId="p" />
+    </>
+  )
+  for (const title of [
+    "Server inventory is restricted",
+    "No routes for this project",
+  ]) {
+    const state = (await screen.findByText(title)).closest(
+      '[data-slot="empty"]'
+    )!
+    expect(
+      within(state as HTMLElement).queryByRole("button")
+    ).not.toBeInTheDocument()
+  }
+  expect(
+    screen.queryByRole("button", { name: "Add DNS zone" })
   ).not.toBeInTheDocument()
 })

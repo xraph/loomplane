@@ -128,7 +128,7 @@ function Zones({ onCreate }: { onCreate: () => void }) {
       await zones.refetch()
     } catch (err) {
       setError(
-        `${messageOf(err, "The DNS zone wasn't updated.")}${kind === "verify" && zone.mode === "external" ? " Check the published TXT name and proof value at your DNS host, then retry verification. Ownership remains pending." : ""}`
+        `${messageOf(err, "The DNS zone wasn't updated.")}${kind === "verify" ? " Check the published TXT name and proof value at your DNS host, then retry verification. Ownership remains pending." : ""}`
       )
     }
   }
@@ -152,7 +152,16 @@ function Zones({ onCreate }: { onCreate: () => void }) {
       ) : !zones.data ? (
         <CloudLoading>Loading DNS zones...</CloudLoading>
       ) : !list.length ? (
-        <CloudEmpty kind="list" icon={DomainsIcon} title="No DNS zones">
+        <CloudEmpty
+          kind="list"
+          icon={DomainsIcon}
+          title="No DNS zones"
+          action={
+            <Button size="sm" variant="outline" onClick={onCreate}>
+              Add DNS zone
+            </Button>
+          }
+        >
           Choose managed DNS with a separate provider account, or prove
           ownership of a zone hosted elsewhere.
         </CloudEmpty>
@@ -167,7 +176,10 @@ function Zones({ onCreate }: { onCreate: () => void }) {
                   </p>
                   <p className="text-xs text-muted-foreground">
                     DNS account: {zone.connectionId || "External"} ·{" "}
-                    {zone.verifiedAt && !zone.verifiedAt.startsWith("0001")
+                    {zone.proofName === `_loomplane.${zone.name}` &&
+                    zone.proofValue &&
+                    zone.verifiedAt &&
+                    !zone.verifiedAt.startsWith("0001")
                       ? "ownership verified"
                       : "ownership pending"}{" "}
                     · {zone.projectIds.length} projects
@@ -192,7 +204,9 @@ function Zones({ onCreate }: { onCreate: () => void }) {
                   >
                     Zone access
                   </Button>
-                  {zone.mode === "external" && (
+                  {(!zone.proofName ||
+                    !zone.verifiedAt ||
+                    zone.verifiedAt.startsWith("0001")) && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -217,6 +231,12 @@ function Zones({ onCreate }: { onCreate: () => void }) {
                 <p className="wrap-anywhere">
                   Publish TXT {zone.proofName} = {zone.proofValue}. Proof
                   expires {zone.proofExpiresAt}. Then verify ownership.
+                </p>
+              )}
+              {zone.mode === "managed" && zone.providerZone?.name && (
+                <p className="text-xs text-muted-foreground">
+                  Hosted zone: {zone.providerZone.name}. The TXT proof grants
+                  only {zone.name} and its children.
                 </p>
               )}
               {!!zone.providerZone?.nameservers?.length && (
@@ -537,6 +557,11 @@ function ProjectRoutes({
           kind="list"
           icon={RoutesIcon}
           title="No routes for this project"
+          action={
+            can("infrastructure:modify") && (
+              <Button onClick={() => setAdding(true)}>Add route</Button>
+            )
+          }
         >
           Review a hostname for a deployed service using a zone granted to this
           project.

@@ -143,6 +143,21 @@ function ServerContent({ cloud }: { cloud: Profile }) {
           kind="list"
           icon={InfrastructureIcon}
           title="No servers connected"
+          action={
+            <>
+              <Button
+                variant="outline"
+                onClick={() => setEditing({ kind: "adopt" })}
+              >
+                Connect existing server
+              </Button>
+              {create && (
+                <Button onClick={() => setEditing({ kind: "create" })}>
+                  Create server
+                </Button>
+              )}
+            </>
+          }
         >
           Connect a pinned SSH account, or create a server with an account that
           supports provisioning.
