@@ -136,7 +136,7 @@ func backendConfig(b Backend, s BackendSecret, params map[string]string) (*pgcon
 		cfg.TLSConfig = &tls.Config{
 			MinVersion:         tls.VersionTLS12,
 			ServerName:         serverName,
-			InsecureSkipVerify: true, //nolint:gosec // libpq "require" does not verify.
+			InsecureSkipVerify: true, // #nosec G402 -- sslmode=require encrypts without verifying, as libpq does.
 		}
 	default: // "verify-full" and anything unrecognised.
 		cfg.TLSConfig = &tls.Config{
