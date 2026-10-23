@@ -9,7 +9,7 @@ PACKAGE = "./tests/integration/"
 
 
 def discover(output):
-    names = [line for line in output.splitlines() if re.fullmatch(r"Test\w+", line)]
+    names = [line for line in output.splitlines() if re.fullmatch(r"Test\w*", line)]
     if not names or len(set(names)) != len(names):
         raise ValueError("test discovery is empty or contains duplicates")
     return sorted(names)
@@ -36,7 +36,7 @@ def main():
     parser.add_argument("--shards", type=int, default=1)
     args = parser.parse_args()
     output = subprocess.check_output(
-        ["go", "test", "-tags=integration", "-list", "^Test", PACKAGE],
+        ["go", "test", "-race", "-tags=integration", "-list", "^Test", PACKAGE],
         text=True,
         timeout=300,
     )

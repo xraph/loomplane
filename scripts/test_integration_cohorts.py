@@ -32,6 +32,18 @@ class CohortTests(unittest.TestCase):
             ["TestA", "TestNewTest", "TestZ"],
         )
 
+    def test_minimal_and_unicode_identifiers_survive_discovery(self):
+        self.assertEqual(cohorts.discover("Test\n"), ["Test"])
+        names = ["Test", "TestÉcriture", "Test日本語", "Test_A", "Test9"]
+        found = cohorts.discover("\n".join(names) + "\nok package 1.0s\n")
+        executed = [
+            name
+            for shard in range(8)
+            for _, group in cohorts.select(cohorts.partition(found), shard, 8)
+            for name in group
+        ]
+        self.assertEqual(sorted(executed), sorted(names))
+
     def test_invalid_discovery_and_partition_fail_closed(self):
         for output in ("ok package", "TestA\nTestA"):
             with self.assertRaises(ValueError):
