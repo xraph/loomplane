@@ -13,12 +13,12 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 )
 
-const nativeRestoreColumns = `id,org_id,project_id,environment_id,source_id,point_id,request_id,source,point,target,checkpoint,status,token,external_id,physical_id,error,created_by,created_at,expires_at,verified_at,duration_ms`
+const nativeRestoreColumns = `id,org_id,project_id,environment_id,source_id,point_id,request_id,source,point,target,checkpoint,status,token,external_id,physical_id,error,created_by,created_at,expires_at,verified_at,duration_ms,cleanup_by,cleanup_requested_at`
 
 func scanNativeRestore(row pgx.Row) (*NativeRestore, error) {
 	var r NativeRestore
 	var source, point, target []byte
-	if err := row.Scan(&r.ID, &r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.SourceID, &r.PointID, &r.RequestID, &source, &point, &target, &r.Checkpoint, &r.Status, &r.Token, &r.ExternalID, &r.PhysicalID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.ExpiresAt, &r.VerifiedAt, &r.DurationMS); err != nil {
+	if err := row.Scan(&r.ID, &r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.SourceID, &r.PointID, &r.RequestID, &source, &point, &target, &r.Checkpoint, &r.Status, &r.Token, &r.ExternalID, &r.PhysicalID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.ExpiresAt, &r.VerifiedAt, &r.DurationMS, &r.CleanupBy, &r.CleanupRequestedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -172,8 +172,8 @@ func (s *PgStore) ClaimNativeCleanup(ctx context.Context, org, id, token string)
 	if token == "" {
 		return nil, ErrInvalid
 	}
-	r, err := scanNativeRestore(s.db.QueryRow(ctx, `UPDATE loomplane_native_restores SET status='deleting',token=$3,lease_until=now()+interval '10 minutes'
- WHERE org_id=$1 AND id=$2 AND token<>$3 AND (status IN ('succeeded','failed','cleanup_failed') OR status='deleting' AND lease_until<now() OR status='running' AND expires_at<=now() AND lease_until<now() OR status='queued' AND expires_at<=now()) RETURNING `+nativeRestoreColumns, org, id, token))
+	r, err := scanNativeRestore(s.db.QueryRow(ctx, `UPDATE loomplane_native_restores SET status='deleting',token=$3,error='',lease_until=now()+interval '10 minutes'
+ WHERE org_id=$1 AND id=$2 AND token<>$3 AND (`+nativeCleanupDue+`) RETURNING `+nativeRestoreColumns, org, id, token))
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrConflict
 	}
