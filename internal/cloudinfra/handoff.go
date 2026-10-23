@@ -10,6 +10,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // IngressTransition retains the complete source config before HTTP-01
@@ -137,7 +138,7 @@ func (s *Service) RollbackRoute(ctx context.Context, p security.Principal, proje
 	if err != nil {
 		return nil, err
 	}
-	if cutover.Kind != "cutover" || cutover.Source == nil || (cutover.Status != "succeeded" && cutover.Status != "waiting" && cutover.Status != "failed" && (cutover.Status != "cancelled" || !cutover.DNSAttempted || cutover.Receipt == nil)) {
+	if cutover.Kind != "cutover" || cutover.Source == nil || (cutover.Status != "succeeded" && cutover.Status != "waiting" && cutover.Status != "failed" && (cutover.Status != "cancelled" || !cutover.DNSAttempted && cutover.DesiredConfig == nil && cutover.AppliedConfig == nil)) {
 		return nil, ErrConflict
 	}
 	if cutover.DNSAttempted && cutover.Receipt == nil {
@@ -291,6 +292,26 @@ func (s *Service) ReleaseRouteHandoff(ctx context.Context, p security.Principal,
 	}
 	if prepared.PreviousReceipt != nil {
 		drainSeconds = max(drainSeconds, prepared.PreviousReceipt.TTL)
+	}
+	// Accepted handoff receipts can outlive the route's current receipt. Keep
+	// their trusted maximum separate from the bounded caller drain interval.
+	operations, err := st.RouteHandoffReceipts(ctx, p.OrgID, project, current.ID, prepared.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, operation := range operations {
+		if operation.HandoffID != prepared.ID || operation.Source == nil || operation.Route.ID != current.ID || operation.Route.OrgID != p.OrgID || operation.Route.ProjectID != project {
+			continue
+		}
+		linked := operation.Kind == "cutover" && reflect.DeepEqual(operation.Source.Binding, prepared.Source.Binding) && reflect.DeepEqual(operation.Route.Binding, prepared.Route.Binding) || operation.Kind == "rollback" && reflect.DeepEqual(operation.Source.Binding, prepared.Route.Binding) && reflect.DeepEqual(operation.Route.Binding, prepared.Source.Binding)
+		if !linked {
+			continue
+		}
+		for _, receipt := range []*provider.DNSRecord{operation.PreviousReceipt, operation.Receipt} {
+			if receipt != nil {
+				drainSeconds = max(drainSeconds, receipt.TTL)
+			}
+		}
 	}
 	opID, err := randomID("routeop")
 	if err != nil {

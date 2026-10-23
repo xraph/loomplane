@@ -1,3 +1,5 @@
+import { CloudLoading } from "./infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useEffect, useRef, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { ChangeInputBody, Preview } from "@/client/forge/loomplane/types"
@@ -12,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { EnvironmentProgress } from "./organization-activity"
 import { useOrganization } from "@/lib/organization"
 
 type AssignmentIntent = {
@@ -138,6 +141,17 @@ function ReviewContent({
               })
         ).refetch()
         setLatestChange({ ...change, revision: current.revision })
+      } else if (change?.default) {
+        const current = await (
+          org
+            ? api.useOrganizationCloudsGet({
+                path: { cloudId: change.cloudId },
+              })
+            : api.useCloudsGet({
+                path: { id: projectId, cloudId: change.cloudId },
+              })
+        ).refetch()
+        setLatestChange({ ...change, revision: current.revision })
       } else if (assignment) {
         const current = await api
           .useEnvironmentCloudsGet({
@@ -192,23 +206,38 @@ function ReviewContent({
             placement and syncing its applied release.
           </DialogDescription>
         </DialogHeader>
-        {loading && (
-          <p role="status" className="text-sm">
-            Building preview...
-          </p>
-        )}
+        {loading && <CloudLoading>Building preview...</CloudLoading>}
         {preview && (
           <div className="grid gap-3 text-sm">
+            {(preview.beforeDefault ||
+              preview.afterDefault ||
+              change?.default) && (
+              <div className="grid gap-1 text-sm">
+                <p>
+                  Current default:{" "}
+                  {preview.beforeDefault
+                    ? `${preview.beforeDefault.provider} / ${accountName(preview.beforeDefault.connectionId)}`
+                    : "none"}
+                </p>
+                <p>
+                  Desired default:{" "}
+                  {preview.afterDefault
+                    ? `${preview.afterDefault.provider} / ${accountName(preview.afterDefault.connectionId)}`
+                    : "cleared"}
+                </p>
+              </div>
+            )}
             {preview.before && (
               <p className="break-words">
-                Current: {preview.before.provider} /{" "}
+                Current: {preview.before.runtime || preview.before.provider} /{" "}
+                {preview.before.poolId}{" "}
                 {accountName(preview.before.connectionId)}
               </p>
             )}
             {preview.after && (
               <p className="break-words">
-                Desired: {preview.after.provider} /{" "}
-                {accountName(preview.after.connectionId)}
+                Desired: {preview.after.runtime || preview.after.provider} /{" "}
+                {preview.after.poolId} {accountName(preview.after.connectionId)}
                 {preview.after.region ? ` / ${preview.after.region}` : ""}
               </p>
             )}
@@ -218,15 +247,13 @@ function ReviewContent({
               <AssignmentPreview preview={preview} accountName={accountName} />
             )}
             {(preview.blockers ?? []).map((blocker, i) => (
-              <p role="alert" key={i} className="text-destructive">
-                {blocker}
-              </p>
+              <Alert variant="destructive" key={i} className="text-destructive">
+                <AlertDescription>{blocker}</AlertDescription>
+              </Alert>
             ))}
             {(preview.environments ?? []).map((env) => (
               <div key={env.environmentId} className="rounded-lg border p-3">
-                <p className="font-medium">
-                  {env.environment}: {env.status}
-                </p>
+                <EnvironmentProgress environment={env} />
                 <p className="text-muted-foreground">
                   {env.services?.join(", ") ||
                     (preview.blockers?.length || env.error
@@ -245,11 +272,6 @@ function ReviewContent({
                     External routing must be confirmed before cleanup.
                   </p>
                 )}
-                {env.error && (
-                  <p role="alert" className="text-destructive">
-                    {env.error}
-                  </p>
-                )}
               </div>
             ))}
             {!preview.environments?.length && (
@@ -262,14 +284,16 @@ function ReviewContent({
           </div>
         )}
         {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
+          <Alert variant="destructive" className="text-sm text-destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
         {stale && (
-          <p role="alert" className="text-sm">
-            This review is out of date. Refresh it before applying.
-          </p>
+          <Alert variant="destructive" className="text-sm">
+            <AlertDescription>
+              This review is out of date. Refresh it before applying.
+            </AlertDescription>
+          </Alert>
         )}
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>
@@ -286,7 +310,9 @@ function ReviewContent({
                 busy ||
                 !preview ||
                 !!preview.blockers?.length ||
-                !can("cloud_account:manage") ||
+                !can(
+                  org ? "organization_cloud:manage" : "cloud_account:manage"
+                ) ||
                 !can("deployment:approve")
               }
               onClick={() => void submit()}

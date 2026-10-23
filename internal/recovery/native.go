@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -53,9 +54,10 @@ type NativePoint struct {
 }
 
 type NativePageInput struct {
-	EnvironmentID string `json:"environment_id,omitempty"`
-	Before        string `json:"before,omitempty"`
-	Limit         int    `json:"limit,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty" query:"environment_id,omitempty"`
+	Before        string `json:"before,omitempty" query:"before,omitempty"`
+	Limit         int    `json:"limit,omitempty" query:"limit,omitempty"`
+	Resource      string `json:"resource,omitempty" query:"resource,omitempty"`
 }
 
 func (p NativePageInput) pageSize() (int, error) {
@@ -91,11 +93,27 @@ type NativeBackend interface {
 	NativeSnapshots(context.Context, *planning.Binding) ([]NativePoint, bool, error)
 	CheckNativeSnapshot(context.Context, *planning.Binding, NativePoint) (*NativePoint, error)
 }
+
+type NativeAdmissionStore interface {
+	ReviewNativeTarget(context.Context, string, string, string, string) (NativeRestoreTarget, error)
+	CreateReviewedNativeRestore(context.Context, *NativeRestore, string) (*NativeRestore, error)
+	CheckNativeTarget(context.Context, *NativeRestore) error
+}
+
 type NativeService struct {
-	Store    NativeStore
-	Authz    Authorizer
-	Projects Projects
-	Backend  NativeBackend
+	Store          NativeStore
+	Authz          Authorizer
+	Projects       Projects
+	Backend        NativeBackend
+	Copies         NativeCopyWorkStore
+	CopyBackend    NativeCopyBackend
+	EnqueueCopy    func(context.Context, string, string) error
+	Cleanups       NativeCleanupWorkStore
+	CleanupBackend NativeCleanupBackend
+	EnqueueCleanup func(context.Context, string, string) error
+	Admission      NativeAdmissionStore
+	ReviewKey      []byte
+	Audit          projects.Auditor
 }
 
 func (s *NativeService) List(ctx context.Context, p security.Principal, project string, page NativePageInput) (*NativeSourcesPage, error) {

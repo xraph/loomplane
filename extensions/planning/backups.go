@@ -2,6 +2,7 @@ package planning
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -27,6 +28,14 @@ const restoreJob = "loomplane.service.restore"
 
 const backupJob = "loomplane.service.backup"
 const reconcileBackupsJob = "loomplane.service.backup.reconcile"
+const nativeRestoreJob = "loomplane.service.native.restore"
+const nativeCleanupJob = "loomplane.service.native.cleanup"
+
+type nativeRecoveryBackend interface {
+	recovery.NativeBackend
+	recovery.NativeCopyBackend
+	recovery.NativeCleanupBackend
+}
 
 type backupPayload struct {
 	OrgID string `json:"org_id"`
@@ -38,13 +47,22 @@ type BackupList struct {
 
 func (BackupList) ForgeEnvelope() forge.EnvelopeDef { return forge.EnvelopeDef{ItemsField: "backups"} }
 
-func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects.PgStore, plans *planning.PgStore, authz *security.Authorizer, target recovery.Targets, native recovery.NativeBackend, audit projects.Auditor) error {
+func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects.PgStore, plans *planning.PgStore, authz *security.Authorizer, target recovery.Targets, native nativeRecoveryBackend, audit projects.Auditor) error {
 	files, err := forge.InjectType[*backupfiles.Store](app.Container())
 	if err != nil {
 		return err
 	}
 	records := recovery.NewPgStore(pg)
-	e.nativeBackups = &recovery.NativeService{Store: records, Authz: authz, Projects: prj, Backend: native}
+	reviewKey, err := security.DeriveKey(e.cfg.SecretKey, recovery.NativeReviewKeyLabel)
+	if err != nil {
+		return err
+	}
+	e.nativeBackups = &recovery.NativeService{
+		Store: records, Authz: authz, Projects: prj, Backend: native, Admission: records,
+		ReviewKey: reviewKey, Audit: audit,
+		Copies: records, CopyBackend: native, EnqueueCopy: e.enqueueRecovery(nativeRestoreJob, 0),
+		Cleanups: records, CleanupBackend: native, EnqueueCleanup: e.enqueueRecovery(nativeCleanupJob, 0),
+	}
 	e.backups = &recovery.Service{
 		RetentionPolicies: records, Policies: records, Restores: records, Retirements: records, Store: records,
 		RestoreBackend: target, Backend: target, Projects: prj, Bindings: plans, Authz: authz, Audit: audit, Files: files,
@@ -56,8 +74,18 @@ func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects
 	}))
 	engine.Register(e.engineOf(), job.NewDefinition(restoreJob, func(ctx context.Context, in backupPayload) error { return e.backups.RunRestore(ctx, in.OrgID, in.ID) }))
 	engine.Register(e.engineOf(), job.NewDefinition(backupJob, func(ctx context.Context, in backupPayload) error { return e.backups.Run(ctx, in.OrgID, in.ID) }))
-	engine.Register(e.engineOf(), job.NewDefinition(reconcileBackupsJob, func(ctx context.Context, _ orchestration.DriftPayload) error { return e.backups.Reconcile(ctx) }))
+	engine.Register(e.engineOf(), job.NewDefinition(nativeRestoreJob, func(ctx context.Context, in backupPayload) error {
+		return e.nativeBackups.RunCopy(ctx, in.OrgID, in.ID)
+	}))
+	engine.Register(e.engineOf(), job.NewDefinition(nativeCleanupJob, func(ctx context.Context, in backupPayload) error {
+		return e.nativeBackups.RunCleanup(ctx, in.OrgID, in.ID)
+	}))
+	engine.Register(e.engineOf(), job.NewDefinition(reconcileBackupsJob, func(ctx context.Context, _ orchestration.DriftPayload) error { return e.reconcileRecovery(ctx) }))
 	return nil
+}
+
+func (e *Extension) reconcileRecovery(ctx context.Context) error {
+	return errors.Join(e.backups.Reconcile(ctx), e.nativeBackups.Reconcile(ctx))
 }
 
 func (e *Extension) enqueueRecovery(name string, retries int) func(context.Context, string, string) error {

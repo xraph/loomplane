@@ -17,7 +17,7 @@ type sqlRecoveryCreator interface {
 }
 
 func TestCloudSQLRecoveryCreatesOnlyNewConnectorIsolatedCopies(t *testing.T) {
-	for _, scenario := range []string{"new", "resume", "waiting-copy", "existing", "before-failure", "started-failure", "guard-failure", "inspect-failure", "foreign-operation", "missing-operation", "missing-operation-metadata", "wrong-operation-type", "failed-operation", "foreign-instance", "missing-creation", "wrong-intent", "wrong-engine", "authorized-network", "connector-disabled", "private-source-network"} {
+	for _, scenario := range []string{"new", "resume", "waiting-copy", "existing", "before-failure", "started-failure", "guard-failure", "inspect-failure", "foreign-operation", "missing-operation", "missing-operation-metadata", "wrong-operation-type", "failed-operation", "foreign-instance", "missing-creation", "wrong-intent", "wrong-engine", "authorized-network", "connector-disabled", "private-source-network", "disk-size", "disk-type", "autoresize"} {
 		t.Run(scenario, func(t *testing.T) {
 			writes, polls, inspected, reads := 0, 0, 0, 0
 			before, captured := false, scenario == "resume" || scenario == "missing-operation"
@@ -73,7 +73,16 @@ func TestCloudSQLRecoveryCreatesOnlyNewConnectorIsolatedCopies(t *testing.T) {
 					if scenario == "connector-disabled" {
 						enforcement = "NOT_REQUIRED"
 					}
-					_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#instance", "name": "recovery-copy", "project": project, "region": "europe-west1", "connectionName": project + ":europe-west1:recovery-copy", "createTime": created, "databaseVersion": version, "state": state, "settings": map[string]any{"tier": "db-custom-1-3840", "connectorEnforcement": enforcement, "ipConfiguration": network, "userLabels": map[string]string{SQLIntentLabel: intent, "managed-by": "loomplane"}}})
+					settings := map[string]any{"tier": "db-custom-1-3840", "connectorEnforcement": enforcement, "ipConfiguration": network, "userLabels": map[string]string{SQLIntentLabel: intent, "managed-by": "loomplane"}, "dataDiskSizeGb": "10", "dataDiskType": "PD_SSD", "storageAutoResize": false}
+					switch scenario {
+					case "disk-size":
+						settings["dataDiskSizeGb"] = "1000"
+					case "disk-type":
+						settings["dataDiskType"] = "PD_HDD"
+					case "autoresize":
+						settings["storageAutoResize"] = true
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#instance", "name": "recovery-copy", "project": project, "region": "europe-west1", "connectionName": project + ":europe-west1:recovery-copy", "createTime": created, "databaseVersion": version, "state": state, "settings": settings})
 					return
 				}
 				writes++
@@ -85,9 +94,12 @@ func TestCloudSQLRecoveryCreatesOnlyNewConnectorIsolatedCopies(t *testing.T) {
 					Settings struct {
 						Region   string `json:"region"`
 						Settings struct {
-							Tier      string `json:"tier"`
-							Connector string `json:"connectorEnforcement"`
-							Network   struct {
+							Tier       string `json:"tier"`
+							DiskGB     string `json:"dataDiskSizeGb"`
+							DiskType   string `json:"dataDiskType"`
+							AutoResize *bool  `json:"storageAutoResize"`
+							Connector  string `json:"connectorEnforcement"`
+							Network    struct {
 								IPv4       bool  `json:"ipv4Enabled"`
 								Authorized []any `json:"authorizedNetworks"`
 							} `json:"ipConfiguration"`
@@ -101,6 +113,9 @@ func TestCloudSQLRecoveryCreatesOnlyNewConnectorIsolatedCopies(t *testing.T) {
 				}
 				if body.Backup != "projects/source-project/backups/original-backup" || body.Settings.Region != "europe-west1" || body.Settings.Settings.Tier != "db-custom-1-3840" || body.Settings.Settings.Connector != "REQUIRED" || !body.Settings.Settings.Network.IPv4 || len(body.Settings.Settings.Network.Authorized) != 0 || body.Settings.Settings.Labels[SQLIntentLabel] != "original-intent" || !slices.Contains(body.Clear, "settings.ipConfiguration.privateNetwork") {
 					t.Error("native restore lost its original backup or isolated destination settings", body)
+				}
+				if body.Settings.Settings.DiskGB != "10" || body.Settings.Settings.DiskType != "PD_SSD" || body.Settings.Settings.AutoResize == nil || *body.Settings.Settings.AutoResize {
+					t.Error("native copy did not request its reviewed storage bounds")
 				}
 				exists = true
 				op := map[string]any{"kind": "sql#operation", "name": "restore-original", "status": "PENDING", "targetProject": "recovery-project", "targetId": "recovery-copy", "operationType": "RESTORE_VOLUME"}
@@ -153,6 +168,7 @@ func TestCloudSQLRecoveryCreatesOnlyNewConnectorIsolatedCopies(t *testing.T) {
 				}
 				return nil
 			}}
+			spec.Storage = &SQLStorageSettings{SizeGB: 10, Type: "PD_SSD"}
 			restored, err := creator.RestoreSQLBackup(t.Context(), "projects/source-project/backups/original-backup", spec, track)
 			if scenario == "new" || scenario == "resume" || scenario == "waiting-copy" {
 				if err != nil || restored == nil || restored.State != "RUNNABLE" || inspected == 0 || polls == 0 {

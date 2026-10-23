@@ -1986,11 +1986,127 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly nativeRecoveryCopies = {
+    /**
+     */
+    cleanup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    create: async (body: types.NativeCopyCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeCopyCreateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoveryCopies> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-copies`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRecoveryCopies"],
+      };
+
+      return this.request<types.NativeRecoveryCopies>(config);
+    },
+
+    /**
+     */
+    review: async (id: string, pointId: string, body: types.NativeCopyReviewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeCopyReview> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/points/${encodeURIComponent(String(pointId))}/copy-review`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeCopyReviewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeCopyReview"],
+      };
+
+      return this.request<types.NativeCopyReview>(config);
+    },
+
+  };
+
   public readonly nativeRecoverySources = {
     /**
      */
-    inventory: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
+    inventory: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
@@ -2004,8 +2120,25 @@ export class RESTClient extends Client {
 
     /**
      */
-    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-sources`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'GET',
         url: __path,

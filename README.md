@@ -224,6 +224,6 @@ Keep a change focused. Domain behavior belongs in `internal/`, Forge wiring in `
 
 ## License and distribution
 
-Loomplane is free software under the GNU Affero General Public License, version 3 ([LICENSE](LICENSE)). You can run it, change it and share it. If you run a changed Loomplane as a service other people use, you have to offer them the source of your changes too.
+Loomplane is source-available under the [Functional Source License 1.1, with Apache 2.0 as the future license](LICENSE) (FSL-1.1-ALv2). You can run it for your own team, change it and share your changes. You can't sell it to anyone else, either as software or as a hosted service that does the same job. Each release also becomes available under Apache 2.0 two years after it ships.
 
 Some of the libraries it's built on had their own license questions, recorded in [docs/forge-integration.md](docs/forge-integration.md#licenses).

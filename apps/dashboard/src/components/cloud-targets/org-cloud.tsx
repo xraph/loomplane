@@ -1,7 +1,25 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { CloudsIcon } from "@/components/icons"
+import { Card } from "@/components/ui/card"
+import { Item, ItemGroup } from "@/components/ui/item"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Field as FormField,
+  FieldLabel,
+  FieldSet,
+  FieldLegend,
+} from "@/components/ui/field"
 // A Cloud the organization owns: its targets, and the projects allowed to
 // place services on them. A project gets the Cloud with a chosen set of its
 // targets, so one Cloud can serve many projects, each on only what it needs.
-import { PlusIcon } from "lucide-react"
+import { CloudIcon, PlusIcon } from "lucide-react"
 import { useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -29,6 +47,7 @@ import {
   EmptyContent,
   EmptyDescription,
   EmptyHeader,
+  EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
@@ -39,20 +58,124 @@ import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
-import { Choice, TargetEditor } from "./target-editor"
-import { TargetTable, cloudTags, selectClass } from "./workspace"
+import { CloudTabs, CloudEmpty, type CloudTab } from "./infrastructure-ui"
+import { Servers, InfrastructureActivity } from "./servers"
+import { Domains } from "./domains"
+import { OrganizationActivity } from "./organization-activity"
+import { CloudWorkspace } from "./workspace"
 
-export function OrganizationCloud({ cloud }: { cloud: Profile }) {
+import { ChangeReview } from "./change-review"
+import { Choice, TargetEditor } from "./target-editor"
+import { TargetTable, cloudTags } from "./workspace"
+
+export function OrganizationCloud({
+  cloud,
+  initialProject = "",
+}: {
+  cloud: Profile
+  initialProject?: string
+}) {
   const targets = useQuery(api.useOrganizationCloudTargetsList, {
     path: { cloudId: cloud.id },
   })
+  const grants = useQuery(api.useOrganizationCloudsListGrants, {
+    path: { cloudId: cloud.id },
+  })
+  const projects = useQuery(api.useProjectsList)
+  const [tab, setTab] = useState<CloudTab>("Targets")
+  const [chosen, setChosen] = useState(initialProject)
   const list = (targets.data?.targets ?? []).filter((t): t is Target => !!t)
+  const permitted = (projects.data?.projects ?? []).filter((p) =>
+    grants.data?.grants.some((g) => g?.projectId === p.id && !g.revoked)
+  )
+  const selected =
+    permitted.find((p) => p.id === chosen)?.id ?? permitted[0]?.id ?? ""
   return (
-    <>
-      <DefaultPlacementCard cloud={cloud} targets={list} />
-      <Targets cloud={cloud} />
-      <ProjectAccess cloud={cloud} targets={list} loaded={!!targets.data} />
-    </>
+    <CloudTabs value={tab} onChange={setTab}>
+      {["Domains", "Projects", "Activity"].includes(tab) &&
+        (grants.status === "error" || projects.status === "error") && (
+          <QueryError
+            error={grants.error ?? projects.error}
+            fallback="Granted project context couldn't be loaded."
+            retry={() =>
+              Promise.allSettled([grants.refetch(), projects.refetch()])
+            }
+          />
+        )}
+      {["Domains", "Projects", "Activity"].includes(tab) && (
+        <FormField className="grid max-w-sm gap-1 text-xs">
+          <FieldLabel className="contents">
+            Project context
+            <Select value={selected} onValueChange={(e) => setChosen(e ?? "")}>
+              <SelectTrigger
+                aria-label="Cloud project context"
+                className={"w-full min-w-0"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Choose a granted project</SelectItem>
+                {permitted.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldLabel>
+        </FormField>
+      )}
+      <div className="grid min-w-0 gap-4">
+        {tab === "Targets" && (
+          <>
+            <DefaultPlacementCard cloud={cloud} targets={list} />
+            <Targets cloud={cloud} />
+          </>
+        )}
+        {tab === "Servers" && <Servers cloud={cloud} />}
+        {tab === "Domains" && <Domains cloud={cloud} projectId={selected} />}
+        {tab === "Projects" && (
+          <>
+            <ProjectAccess
+              cloud={cloud}
+              targets={list}
+              loaded={!!targets.data}
+            />
+            {selected ? (
+              <CloudWorkspace
+                key={selected}
+                projectId={selected}
+                cloudId={cloud.id}
+              />
+            ) : (
+              <CloudEmpty
+                kind="notice"
+                icon={CloudsIcon}
+                title="No project deployment context"
+                action={
+                  <Button
+                    nativeButton={false}
+                    variant="outline"
+                    render={<Link to="/projects" />}
+                  >
+                    Open projects
+                  </Button>
+                }
+              >
+                Give a project access, then choose it to assign environments and
+                review current releases.
+              </CloudEmpty>
+            )}
+          </>
+        )}
+        {tab === "Activity" && (
+          <>
+            <InfrastructureActivity cloudId={cloud.id} />
+            <OrganizationActivity cloudId={cloud.id} />
+          </>
+        )}
+      </div>
+    </CloudTabs>
   )
 }
 
@@ -72,8 +195,7 @@ function Targets({ cloud }: { cloud: Profile }) {
         <div className="grid gap-0.5">
           <h2 className="text-[15px] font-semibold">Targets</h2>
           <p className="text-[12.5px] text-muted-foreground">
-            Each target is one place services run: a provider, one of your
-            accounts there, and a region.
+            Choose a managed deployment or a server pool for each target.
           </p>
         </div>
         {manage && (
@@ -96,6 +218,9 @@ function Targets({ cloud }: { cloud: Profile }) {
       ) : list.length === 0 ? (
         <Empty>
           <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <CloudIcon />
+            </EmptyMedia>
             <EmptyTitle>No targets yet</EmptyTitle>
             <EmptyDescription>
               Add a target such as frontend or backend and pick the account it
@@ -173,7 +298,7 @@ function ProjectAccess({
         {manage && (
           <Button
             variant="outline"
-            disabled={!loaded || targets.length === 0 || available.length === 0}
+            disabled={!loaded || available.length === 0}
             onClick={() => setEditing("new")}
           >
             <PlusIcon />
@@ -194,22 +319,38 @@ function ProjectAccess({
       ) : active.length === 0 ? (
         <Empty>
           <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <CloudIcon />
+            </EmptyMedia>
             <EmptyTitle>No project uses this Cloud yet</EmptyTitle>
             <EmptyDescription>
-              {targets.length
-                ? "Give a project access to some or all of its targets, then assign the Cloud to one of that project's environments."
-                : "Add a target first. A project is given access to specific targets."}
+              {projects.data.projects.length === 0
+                ? "Create a project, then grant the whole Cloud or specific targets."
+                : "Grant the whole Cloud, including its default provider, or choose specific targets. Then assign a project environment."}
             </EmptyDescription>
           </EmptyHeader>
+          {projects.data.projects.length === 0 && (
+            <EmptyContent>
+              <Button
+                nativeButton={false}
+                variant="outline"
+                render={<Link to="/projects" />}
+              >
+                Create a project
+              </Button>
+            </EmptyContent>
+          )}
         </Empty>
       ) : (
-        <ul className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
+        <ItemGroup className="gap-0 divide-y rounded-xl bg-card ring-1 ring-border">
           {active.map((g) => {
             const p = projectOf(g.projectId)
             const s = p ? projectStyle(p) : null
             const allowed = targets.filter((t) => g.targetIds.includes(t.id))
             return (
-              <li
+              <Item
+                role="listitem"
+                size="sm"
                 key={g.projectId}
                 className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
               >
@@ -241,7 +382,7 @@ function ProjectAccess({
                     ))
                   ) : (
                     <span className="text-[12.5px] text-muted-foreground">
-                      No targets allowed
+                      Whole Cloud, including default placement
                     </span>
                   )}
                 </span>
@@ -254,10 +395,10 @@ function ProjectAccess({
                     Edit access
                   </Button>
                 )}
-              </li>
+              </Item>
             )
           })}
-        </ul>
+        </ItemGroup>
       )}
       {editing && (
         <GrantDialog
@@ -305,6 +446,9 @@ function GrantDialog({
   const [chosen, setChosen] = useState<string[]>(
     grant?.targetIds ?? targets.map((t) => t.id)
   )
+  const [wholeCloud, setWholeCloud] = useState(
+    grant ? grant.targetIds.length === 0 : targets.length === 0
+  )
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState("")
   const busy = save.isPending || revoke.isPending
@@ -315,7 +459,7 @@ function GrantDialog({
     try {
       await save.mutateAsync({
         path: { cloudId: cloud.id, projectId },
-        body: { targetIds: chosen },
+        body: { targetIds: wholeCloud ? [] : chosen },
       })
       onSaved()
     } catch (err) {
@@ -347,56 +491,83 @@ function GrantDialog({
         </DialogHeader>
         <div className="grid gap-4">
           {!grant && (
-            <label className="grid gap-1 text-xs">
-              Project
-              <select
-                className={selectClass}
-                aria-label="Project"
-                value={projectId}
-                disabled={busy}
-                onChange={(e) => setProjectId(e.target.value)}
-              >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <FormField className="grid gap-1 text-xs">
+              <FieldLabel className="contents">
+                Project
+                <Select
+                  value={projectId}
+                  disabled={busy}
+                  onValueChange={(e) => setProjectId(e ?? "")}
+                >
+                  <SelectTrigger
+                    aria-label="Project"
+                    className={"w-full min-w-0"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FieldLabel>
+            </FormField>
           )}
-          <fieldset className="grid gap-1.5">
-            <legend className="mb-1.5 text-xs">Targets it may use</legend>
+          <FormField
+            orientation="horizontal"
+            className="flex items-center gap-2 text-xs"
+          >
+            <FieldLabel className="contents">
+              <Checkbox
+                checked={wholeCloud}
+                disabled={busy}
+                onCheckedChange={(e) => setWholeCloud(e)}
+              />
+              Whole Cloud, including its default provider and future targets
+            </FieldLabel>
+          </FormField>
+          <FieldSet
+            disabled={wholeCloud}
+            className="grid gap-1.5 disabled:opacity-50"
+          >
+            <FieldLegend className="mb-1.5 text-xs">
+              Targets it may use
+            </FieldLegend>
             {targets.map((t) => {
               const on = chosen.includes(t.id)
               return (
-                <label
+                <FormField
+                  orientation="horizontal"
                   key={t.id}
                   className={cn(
                     "flex h-11 cursor-pointer items-center gap-3 rounded-xl bg-card px-3 ring-1 transition-shadow",
                     on ? "ring-2 ring-primary" : "ring-border"
                   )}
                 >
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    disabled={busy}
-                    onChange={() => toggle(t.id)}
-                    className="size-4 accent-[var(--primary)]"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-                    {t.displayName || t.name}
-                  </span>
-                  <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-                    {t.name}
-                  </span>
-                </label>
+                  <FieldLabel className="contents">
+                    <Checkbox
+                      checked={on}
+                      disabled={busy || wholeCloud}
+                      onCheckedChange={() => toggle(t.id)}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                      {t.displayName || t.name}
+                    </span>
+                    <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+                      {t.name}
+                    </span>
+                  </FieldLabel>
+                </FormField>
               )
             })}
-          </fieldset>
+          </FieldSet>
           {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
+            <Alert variant="destructive" className="text-sm text-destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
         </div>
         <DialogFooter className="flex-wrap">
@@ -414,7 +585,9 @@ function GrantDialog({
             Cancel
           </Button>
           <Button
-            disabled={busy || !projectId || chosen.length === 0}
+            disabled={
+              busy || !projectId || (!wholeCloud && chosen.length === 0)
+            }
             onClick={() => void submit()}
           >
             {grant ? "Save access" : "Give access"}
@@ -454,6 +627,9 @@ function DefaultPlacementCard({
   const current = profile.defaultPlacement
   const [editing, setEditing] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
+  const [pendingDefault, setPendingDefault] = useState<
+    Placement | null | undefined
+  >(undefined)
   const [error, setError] = useState("")
   const account = (connections.data?.connections ?? []).find(
     (c) => c.id === current?.connectionId
@@ -482,17 +658,19 @@ function DefaultPlacementCard({
     }
   }
   return (
-    <section
+    <Card
+      size="sm"
+      role="region"
       aria-label="Default provider"
-      className="grid gap-3 rounded-[14px] bg-card p-4 ring-1 ring-border"
+      className="grid gap-2 p-3"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid max-w-[64ch] gap-0.5">
           <h2 className="text-[15px] font-semibold">Default provider</h2>
           <p className="text-[12.5px] leading-relaxed text-muted-foreground">
             {targets.length === 0
-              ? "This Cloud has no targets, so every service on it runs here. A Cloud without targets uses exactly one provider and account."
-              : "Services that don't name or tag a target run here. Adding a target doesn't move them."}
+              ? "With no targets, every service on it runs here."
+              : "Services without a target use this provider."}
           </p>
         </div>
         {manage && (
@@ -503,7 +681,7 @@ function DefaultPlacementCard({
                 className="text-destructive"
                 disabled={set.isPending}
                 onClick={() =>
-                  confirmClear ? void save(null) : setConfirmClear(true)
+                  confirmClear ? setPendingDefault(null) : setConfirmClear(true)
                 }
               >
                 {confirmClear ? "Confirm clear default" : "Clear"}
@@ -545,27 +723,54 @@ function DefaultPlacementCard({
             : "Services that don't name or tag a target have nowhere to run."}
         </p>
       )}
-      <p className="text-xs text-muted-foreground">
-        Only projects given access to the whole Cloud use the default. A project
-        limited to some targets uses just those.
-      </p>
+
       {confirmClear && (
         <p className="text-xs text-muted-foreground">
           Clearing leaves services without a target of their own with nowhere to
           run.{" "}
-          <button
+          <Button
+            variant="ghost"
             type="button"
             className="underline underline-offset-4"
             onClick={() => setConfirmClear(false)}
           >
             Keep it
-          </button>
+          </Button>
         </p>
       )}
       {error && !editing && (
-        <p role="alert" className="text-[13px] text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive" className="text-[13px] text-destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {pendingDefault !== undefined && (
+        <ChangeReview
+          projectId=""
+          title={
+            pendingDefault
+              ? "Review default provider switch"
+              : "Review clearing default provider"
+          }
+          change={{
+            cloudId: cloud.id,
+            default: true,
+            revision: profile.revision,
+            ...(pendingDefault ?? {
+              provider: "",
+              connectionId: "",
+              region: "",
+            }),
+          }}
+          onClose={() => setPendingDefault(undefined)}
+          onApplied={() => {
+            setPendingDefault(undefined)
+            setConfirmClear(false)
+            void api
+              .useOrganizationCloudsGet({ path: { cloudId: cloud.id } })
+              .refetch()
+              .then(setSaved)
+          }}
+        />
       )}
       {editing && (
         <DefaultPlacementDialog
@@ -574,10 +779,15 @@ function DefaultPlacementCard({
           busy={set.isPending}
           error={error}
           onClose={() => setEditing(false)}
-          onSave={(next) => void save(next)}
+          onSave={(next) => {
+            if (current) {
+              setPendingDefault(next)
+              setEditing(false)
+            } else void save(next)
+          }}
         />
       )}
-    </section>
+    </Card>
   )
 }
 
@@ -715,33 +925,41 @@ export function PlacementPicker({
         </div>
       )}
       {selected && (
-        <label className="grid gap-1 text-xs">
-          Region
-          {selected.regions?.length ? (
-            <select
-              className={selectClass}
-              aria-label={`${label} region`}
-              disabled={disabled}
-              value={value.region}
-              onChange={(e) => emit({ ...value, region: e.target.value })}
-            >
-              <option value="">Provider default</option>
-              {selected.regions.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <Input
-              aria-label={`${label} region`}
-              disabled={disabled}
-              value={value.region}
-              onChange={(e) => emit({ ...value, region: e.target.value })}
-              placeholder="Provider default"
-            />
-          )}
-        </label>
+        <FormField className="grid gap-1 text-xs">
+          <FieldLabel className="contents">
+            Region
+            {selected.regions?.length ? (
+              <Select
+                disabled={disabled}
+                value={value.region}
+                onValueChange={(e) => emit({ ...value, region: e ?? "" })}
+              >
+                <SelectTrigger
+                  aria-label={`${label} region`}
+                  className={"w-full min-w-0"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Provider default</SelectItem>
+                  {selected.regions.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                aria-label={`${label} region`}
+                disabled={disabled}
+                value={value.region}
+                onChange={(e) => emit({ ...value, region: e.target.value })}
+                placeholder="Provider default"
+              />
+            )}
+          </FieldLabel>
+        </FormField>
       )}
     </div>
   )
@@ -788,9 +1006,9 @@ function DefaultPlacementDialog({
           }}
         />
         {error && (
-          <p role="alert" className="text-[13px] text-destructive">
-            {error}
-          </p>
+          <Alert variant="destructive" className="text-[13px] text-destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>
@@ -800,7 +1018,7 @@ function DefaultPlacementDialog({
             disabled={busy || unchanged || !complete}
             onClick={() => onSave({ ...value, region: value.region.trim() })}
           >
-            {current ? "Save default" : "Set default"}
+            {current ? "Review default switch" : "Set default"}
           </Button>
         </DialogFooter>
       </DialogContent>

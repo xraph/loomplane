@@ -1,3 +1,6 @@
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Sync } from "@/client/forge/loomplane/types"
@@ -8,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { QueryError } from "@/components/query-error"
 import { useOrganization } from "@/lib/organization"
 import { activeSync, syncLabel } from "@/lib/cloud-targets"
+import { EnvironmentProgress } from "./organization-activity"
 import { ChangeReview } from "./change-review"
 import { EmptyClouds } from "./workspace"
 
@@ -32,6 +36,7 @@ export function SyncHistory({
     />
   ) : (
     <EmptyClouds
+      kind="notice"
       title="Sync history is restricted"
       description="You need deployment read permission to view applied results."
     />
@@ -88,7 +93,7 @@ function SyncList({
           retry={reload}
         />
       ) : !syncs.data ? (
-        <p role="status">Loading sync history...</p>
+        <CloudLoading>Loading sync history...</CloudLoading>
       ) : !rows.length ? (
         <EmptyClouds
           title="No syncs in this environment"
@@ -213,9 +218,9 @@ function SyncRow({
         </p>
       )}
       {sync.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {sync.error}
-        </p>
+        <Alert variant="destructive" className="text-sm text-destructive">
+          <AlertDescription>{sync.error}</AlertDescription>
+        </Alert>
       )}
       {(sync.environments ?? []).map((env) => (
         <div
@@ -240,33 +245,31 @@ function SyncRow({
               </a>
             )}
           </div>
+          <EnvironmentProgress environment={env} />
           <p className="text-muted-foreground">
             {env.services?.join(", ") || "No service changes"}
           </p>
-          {env.error && (
-            <p role="alert" className="text-destructive">
-              {env.error}
-            </p>
-          )}
           {env.externalRouting &&
             sync.status === "routing_pending" &&
             !env.routingEvidence && (
               <div className="flex flex-wrap items-center gap-2">
-                <label className="grid min-w-40 flex-1 gap-1">
-                  Confirm external routing
-                  <Input
-                    aria-label={`Routing evidence for ${env.environment}`}
-                    placeholder="Route change or verification evidence"
-                    value={evidence[env.environmentId] ?? ""}
-                    disabled={!permitted || busy}
-                    onChange={(e) =>
-                      setEvidence((v) => ({
-                        ...v,
-                        [env.environmentId]: e.target.value,
-                      }))
-                    }
-                  />
-                </label>
+                <FormField className="grid min-w-40 flex-1 gap-1">
+                  <FieldLabel className="contents">
+                    Confirm external routing
+                    <Input
+                      aria-label={`Routing evidence for ${env.environment}`}
+                      placeholder="Route change or verification evidence"
+                      value={evidence[env.environmentId] ?? ""}
+                      disabled={!permitted || busy}
+                      onChange={(e) =>
+                        setEvidence((v) => ({
+                          ...v,
+                          [env.environmentId]: e.target.value,
+                        }))
+                      }
+                    />
+                  </FieldLabel>
+                </FormField>
                 <Button
                   size="sm"
                   variant="outline"
@@ -287,9 +290,9 @@ function SyncRow({
         </div>
       ))}
       {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive" className="text-sm text-destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
     </article>
   )

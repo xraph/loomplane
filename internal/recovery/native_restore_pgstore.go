@@ -10,15 +10,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 )
 
-const nativeRestoreColumns = `id,org_id,project_id,environment_id,source_id,point_id,request_id,source,point,target,checkpoint,status,token,external_id,physical_id,error,created_by,created_at,expires_at,verified_at,duration_ms`
+const nativeRestoreColumns = `id,org_id,project_id,environment_id,source_id,point_id,request_id,source,point,target,checkpoint,status,token,external_id,physical_id,error,created_by,created_at,expires_at,verified_at,duration_ms,cleanup_by,cleanup_requested_at`
 
 func scanNativeRestore(row pgx.Row) (*NativeRestore, error) {
 	var r NativeRestore
 	var source, point, target []byte
-	if err := row.Scan(&r.ID, &r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.SourceID, &r.PointID, &r.RequestID, &source, &point, &target, &r.Checkpoint, &r.Status, &r.Token, &r.ExternalID, &r.PhysicalID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.ExpiresAt, &r.VerifiedAt, &r.DurationMS); err != nil {
+	if err := row.Scan(&r.ID, &r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.SourceID, &r.PointID, &r.RequestID, &source, &point, &target, &r.Checkpoint, &r.Status, &r.Token, &r.ExternalID, &r.PhysicalID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.ExpiresAt, &r.VerifiedAt, &r.DurationMS, &r.CleanupBy, &r.CleanupRequestedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -36,10 +37,25 @@ func scanNativeRestore(row pgx.Row) (*NativeRestore, error) {
 }
 
 func sameNativeRestoreRequest(a, b *NativeRestore) bool {
-	return a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.SourceID == b.SourceID && a.PointID == b.PointID && a.Target == b.Target && sameNativePointIdentity(a.Point, b.Point)
+	return a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.SourceID == b.SourceID && a.PointID == b.PointID && a.RequestID == b.RequestID && a.CreatedBy == b.CreatedBy && a.Target == b.Target && a.ExpiresAt.Sub(a.CreatedAt) == b.ExpiresAt.Sub(b.CreatedAt) && sameNativePointIdentity(a.Point, b.Point)
 }
 
 func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*NativeRestore, error) {
+	if r != nil && nativeTargetHasReview(r.Target) {
+		return nil, ErrInvalid
+	}
+	return s.createNativeRestore(ctx, r, "")
+}
+
+func (s *PgStore) createNativeRestore(ctx context.Context, r *NativeRestore, sourceDigest string) (*NativeRestore, error) {
+	if r != nil {
+		// Compare the same precision PostgreSQL persists. Provider point times
+		// remain JSON identity metadata and must retain their full precision.
+		canonical := *r
+		canonical.CreatedAt = r.CreatedAt.UTC().Truncate(time.Microsecond)
+		canonical.ExpiresAt = r.ExpiresAt.UTC().Truncate(time.Microsecond)
+		r = &canonical
+	}
 	if r == nil || r.ID == "" || r.OrgID == "" || r.ProjectID == "" || r.EnvironmentID == "" || r.SourceID == "" || r.PointID == "" || r.RequestID == "" || r.CreatedBy == "" || r.CreatedAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt) || r.ExpiresAt.Sub(r.CreatedAt) > 24*time.Hour || r.Point.ID != r.PointID || r.Point.SourceID != r.SourceID {
 		return nil, ErrInvalid
 	}
@@ -48,10 +64,18 @@ func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*N
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // A no-op after commit.
+	if sourceDigest != "" {
+		if checkErr := cloudprofiles.LockOrganization(ctx, tx, r.OrgID); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	existing, err := scanNativeRestore(tx.QueryRow(ctx, `SELECT `+nativeRestoreColumns+` FROM loomplane_native_restores WHERE org_id=$1 AND project_id=$2 AND request_id=$3`, r.OrgID, r.ProjectID, r.RequestID))
 	if err == nil {
 		if !sameNativeRestoreRequest(existing, r) {
 			return nil, ErrConflict
+		}
+		if checkErr := checkReviewedNativeSource(existing, sourceDigest); checkErr != nil {
+			return nil, checkErr
 		}
 		return existing, tx.Commit()
 	}
@@ -68,6 +92,18 @@ func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*N
 	}
 	if !sameNativePointIdentity(*point, r.Point) || source.Provider != r.Target.Provider {
 		return nil, ErrConflict
+	}
+	if sourceDigest != "" {
+		if checkErr := checkReviewedNativeSource(&NativeRestore{Source: source.Binding}, sourceDigest); checkErr != nil {
+			return nil, checkErr
+		}
+		current, targetErr := readNativeTarget(ctx, tx, r.OrgID, r.ProjectID, r.Target.CloudID, r.Target.TargetID, true)
+		if targetErr != nil {
+			return nil, targetErr
+		}
+		if current != r.Target {
+			return nil, ErrConflict
+		}
 	}
 	var cloud, account, status string
 	var detailsRaw []byte
@@ -111,7 +147,24 @@ func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*N
 	if !sameNativeRestoreRequest(existing, r) {
 		return nil, ErrConflict
 	}
+	if checkErr := checkReviewedNativeSource(existing, sourceDigest); checkErr != nil {
+		return nil, checkErr
+	}
 	return existing, tx.Commit()
+}
+
+func checkReviewedNativeSource(r *NativeRestore, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	digest, err := nativeSourceDigest(r.Source)
+	if err != nil {
+		return err
+	}
+	if digest != expected {
+		return ErrConflict
+	}
+	return nil
 }
 
 func (s *PgStore) GetNativeRestore(ctx context.Context, org, id string) (*NativeRestore, error) {
@@ -149,7 +202,7 @@ func (s *PgStore) SaveNativeCheckpoint(ctx context.Context, r *NativeRestore, st
 	if len(trimmed) == 0 || len(trimmed) > 64<<10 || trimmed[0] != '{' || !json.Valid(trimmed) {
 		return ErrInvalid
 	}
-	return nativeRestoreWrite(s.db.Exec(ctx, `UPDATE loomplane_native_restores SET checkpoint=$4 WHERE org_id=$1 AND id=$2 AND token=$3 AND status IN ('running','deleting') AND lease_until>now()`, r.OrgID, r.ID, r.Token, state))
+	return nativeRestoreWrite(s.db.Exec(ctx, `UPDATE loomplane_native_restores SET checkpoint=$4 WHERE org_id=$1 AND id=$2 AND token=$3 AND status IN ('running','deleting') AND lease_until>now() AND (status='deleting' OR expires_at>now())`, r.OrgID, r.ID, r.Token, state))
 }
 
 func (s *PgStore) FinishNativeRestore(ctx context.Context, r *NativeRestore, result NativeRestoreResult, duration time.Duration, cause error) error {
@@ -165,15 +218,15 @@ func (s *PgStore) FinishNativeRestore(ctx context.Context, r *NativeRestore, res
 		status, message = "failed", "Native restore did not finish. Check the saved operation and remove or reconcile the temporary copy."
 	}
 	return nativeRestoreWrite(s.db.Exec(ctx, `UPDATE loomplane_native_restores SET status=$4,error=$5,external_id=$6,physical_id=$7,verified_at=$8,duration_ms=$9,lease_until=NULL
- WHERE org_id=$1 AND id=$2 AND token=$3 AND status='running' AND lease_until>now()`, r.OrgID, r.ID, r.Token, status, message, result.ExternalID, result.PhysicalID, verified, max(duration.Milliseconds(), 0)))
+ WHERE org_id=$1 AND id=$2 AND token=$3 AND status='running' AND lease_until>now() AND ($4='failed' OR expires_at>now())`, r.OrgID, r.ID, r.Token, status, message, result.ExternalID, result.PhysicalID, verified, max(duration.Milliseconds(), 0)))
 }
 
 func (s *PgStore) ClaimNativeCleanup(ctx context.Context, org, id, token string) (*NativeRestore, error) {
 	if token == "" {
 		return nil, ErrInvalid
 	}
-	r, err := scanNativeRestore(s.db.QueryRow(ctx, `UPDATE loomplane_native_restores SET status='deleting',token=$3,lease_until=now()+interval '10 minutes'
- WHERE org_id=$1 AND id=$2 AND token<>$3 AND (status IN ('succeeded','failed','cleanup_failed') OR status='deleting' AND lease_until<now() OR status='running' AND expires_at<=now() AND lease_until<now() OR status='queued' AND expires_at<=now()) RETURNING `+nativeRestoreColumns, org, id, token))
+	r, err := scanNativeRestore(s.db.QueryRow(ctx, `UPDATE loomplane_native_restores SET status='deleting',token=$3,error='',lease_until=now()+interval '10 minutes'
+ WHERE org_id=$1 AND id=$2 AND token<>$3 AND (`+nativeCleanupDue+`) RETURNING `+nativeRestoreColumns, org, id, token))
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrConflict
 	}

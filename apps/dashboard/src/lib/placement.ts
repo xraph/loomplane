@@ -10,6 +10,8 @@ import type {
 export type PlacementFields = {
   cloudTarget?: string
   cloud_target?: string
+  cloudTags?: string[]
+  cloud_tags?: string[]
   provider?: string
   region?: string
   enabled?: boolean
@@ -141,16 +143,21 @@ export function placementSettings(
   const build = o?.build ?? s.build
   const healthPath =
     o?.healthPath ?? o?.health_path ?? s.healthPath ?? s.health_path
+  // An environment names its target one way, replacing the service's choice.
+  // Default tags reach only a service with no placement of its own.
+  let cloudTarget = s.cloudTarget || s.cloud_target || ""
+  let cloudTags = tagsOf(s)
+  const overrideTarget = o?.cloudTarget || o?.cloud_target || ""
+  const overrideTags = o ? tagsOf(o) : []
+  if (overrideTarget) [cloudTarget, cloudTags] = [overrideTarget, []]
+  if (overrideTags.length) [cloudTarget, cloudTags] = ["", overrideTags]
+  const defaultTags =
+    d?.cloudTags ?? (d as { cloud_tags?: string[] })?.cloud_tags
+  if (!cloudTarget && !cloudTags.length && !provider && !target)
+    cloudTags = [...(defaultTags ?? [])]
   return {
-    ...(o?.cloudTarget || o?.cloud_target || s.cloudTarget || s.cloud_target
-      ? {
-          cloudTarget:
-            o?.cloudTarget ||
-            o?.cloud_target ||
-            s.cloudTarget ||
-            s.cloud_target,
-        }
-      : {}),
+    ...(cloudTarget ? { cloudTarget } : {}),
+    ...(cloudTags.length ? { cloudTags } : {}),
     provider,
     region,
     enabled: o?.enabled ?? s.enabled ?? true,
@@ -159,6 +166,10 @@ export function placementSettings(
     ...(build ? { build } : {}),
     ...(healthPath ? { healthPath } : {}),
   }
+}
+
+function tagsOf(fields: PlacementFields): string[] {
+  return [...(fields.cloudTags ?? fields.cloud_tags ?? [])]
 }
 
 export function targetConnections(

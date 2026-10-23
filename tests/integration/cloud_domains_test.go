@@ -44,6 +44,20 @@ func (w *domainWorkflow) StartRoute(context.Context, string, string, int) error 
 }
 
 func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
+	domainsDurableClaims(t, 60, 60)
+}
+
+func TestDomainsCompensationTrustedReceiptDeadline(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		previous, current int
+	}{{"previous-longer", 90000, 60}, {"current-longer", 60, 90000}} {
+		t.Run(tt.name, func(t *testing.T) { domainsDurableClaims(t, tt.previous, tt.current) })
+	}
+}
+
+func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int) {
+	t.Helper()
 	clouds, sql, db := cloudSyncDatabase(t)
 	ctx := t.Context()
 	store := cloudinfra.NewPgStore(db)
@@ -301,7 +315,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	cutover.Route.Status = "ready"
-	cutover.Receipt = &provider.DNSRecord{ID: "rotated-receipt", Name: "app", Type: "A", Value: "192.0.2.43", TTL: 60}
+	cutover.Receipt = &provider.DNSRecord{ID: "rotated-receipt", Name: "app", Type: "A", Value: "192.0.2.43", TTL: cutoverTTL}
 	if err = store.PublishRoute(ctx, cutover); err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +365,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if rolled.PreviousReceipt == nil || rolled.PreviousReceipt.ID != "rotated-receipt" {
 		t.Fatal("rollback lost latest DNS receipt")
 	}
-	rolled.Receipt = &provider.DNSRecord{ID: "rollback-receipt", Name: "app", Type: "A", Value: "192.0.2.42", TTL: 60}
+	rolled.Receipt = &provider.DNSRecord{ID: "rollback-receipt", Name: "app", Type: "A", Value: "192.0.2.42", TTL: rollbackTTL}
 	if err = store.PublishRoute(ctx, rolled); err != nil {
 		t.Fatal(err)
 	}
@@ -386,12 +400,42 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if _, err = svc.RollbackRoute(ctx, p, "proj", cutover.ID); err == nil {
 		t.Fatal("revoked grant authorized rollback")
 	}
+	if cutoverTTL > 86400 || rollbackTTL > 86400 {
+		// Later operations from other handoffs must not hide the accepted maximum.
+		if _, fixtureErr := sql.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal,checkpoint)
+ SELECT 'history-'||n,o.org_id,o.project_id,o.route_id,o.server_id,o.cloud_id,'succeeded',1,
+ o.body||jsonb_build_object('id','history-'||n,'handoff_id','unrelated','status','succeeded','created_at',now()+interval '1 second','receipt',jsonb_build_object('ttl',180000)),o.principal,o.checkpoint
+ FROM loomplane_route_operations o CROSS JOIN generate_series(1,105) n WHERE o.id=$1`, cutover.ID); fixtureErr != nil {
+			t.Fatal(fixtureErr)
+		}
+		if _, fixtureErr := sql.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal,checkpoint)
+ SELECT 'unaccepted-receipt',org_id,project_id,route_id,server_id,cloud_id,'preview',1,
+ body||jsonb_build_object('id','unaccepted-receipt','status','preview','receipt',jsonb_build_object('ttl',180000)),principal,checkpoint FROM loomplane_route_operations WHERE id=$1`, cutover.ID); fixtureErr != nil {
+			t.Fatal(fixtureErr)
+		}
+		history, historyErr := store.RouteOperations(ctx, "org", "proj", cutover.Route.ID)
+		if historyErr != nil || len(history) != 100 {
+			t.Fatal("public history cap changed", len(history), historyErr)
+		}
+		for _, op := range history {
+			if op.ID == cutover.ID {
+				t.Fatal("fixture did not hide old cutover")
+			}
+		}
+	}
+	if _, invalidErr := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 90000); !errors.Is(invalidErr, cloudinfra.ErrInvalid) {
+		t.Fatal("unbounded caller drain accepted", invalidErr)
+	}
 	released, err := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 60)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !released.NotBefore.Equal(rolled.Route.UpdatedAt.Add(300 * time.Second)) {
+	if !released.NotBefore.Equal(rolled.Route.UpdatedAt.Add(time.Duration(max(300, cutoverTTL, rollbackTTL)) * time.Second)) {
 		t.Fatal("prior source TTL was shortened", released.NotBefore)
+	}
+	persistedRelease, readErr := store.RouteOperation(ctx, "org", released.ID)
+	if readErr != nil || !persistedRelease.NotBefore.Equal(released.NotBefore) {
+		t.Fatal("trusted drain deadline was not persisted", readErr)
 	}
 	if released.Source.Binding.ServerID != "host2" || released.NotBefore.IsZero() {
 		t.Fatal("release lost inactive identity or TTL gate")

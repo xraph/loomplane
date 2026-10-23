@@ -5,14 +5,20 @@ import (
 	"strconv"
 
 	"github.com/xraph/forge/cli"
+
+	"github.com/xraph/loomplane/pkg/client"
 )
 
 func nativeRecoveryFlags() []cli.Flag {
 	return []cli.Flag{jsonFlag, cli.NewStringFlag("before", "", "Previous response's next_before", ""), cli.NewStringFlag("limit", "", "Page size, from 1 to 100", "50")}
 }
+func nativeRecoveryScopeFlags() []cli.Flag {
+	return append(nativeRecoveryFlags(), cli.NewStringFlag("environment-id", "", "Limit to an environment ID", ""), cli.NewStringFlag("resource", "", "Limit to a retained resource name", ""))
+}
+
 func (a *App) nativeRecoveryCommands() []cli.Command {
 	return []cli.Command{
-		cli.NewCommand("native-sources", "List captured cloud database histories", a.nativeSources, cli.WithUsage("backups native-sources <project> [--before ...] [--limit 50] [--json]"), cli.WithFlags(nativeRecoveryFlags()...)),
+		cli.NewCommand("native-sources", "List captured cloud database histories", a.nativeSources, cli.WithUsage("backups native-sources <project> [--environment-id ID] [--resource NAME] [--before ...] [--limit 50] [--json]"), cli.WithFlags(nativeRecoveryScopeFlags()...)),
 		cli.NewCommand("native-inventory", "Read saved native snapshot observations", a.nativeInventory, cli.WithUsage("backups native-inventory <source> [--before ...] [--limit 50] [--json]"), cli.WithFlags(nativeRecoveryFlags()...)),
 		cli.NewCommand("native-refresh", "Refresh snapshots from the original cloud account", a.nativeRefresh, cli.WithUsage("backups native-refresh <source> [--json]"), cli.WithFlag(jsonFlag)),
 	}
@@ -37,7 +43,7 @@ func (a *App) nativeSources(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	page, err := c.NativeRecoverySources(ctxOf(ctx), project.ID, ctx.String("before"), limit)
+	page, err := c.NativeRecoverySourcesPage(ctxOf(ctx), project.ID, client.NativeRecoveryPage{EnvironmentID: ctx.String("environment-id"), Resource: ctx.String("resource"), Before: ctx.String("before"), Limit: limit})
 	if err != nil {
 		return err
 	}

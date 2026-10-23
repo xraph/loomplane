@@ -1,0 +1,29 @@
+// The dashboard's navigation and empty-state icons, from Phosphor, named for
+// what they stand for. Swap a glyph here and the sidebar, the command menu
+// and the empty states follow.
+export {
+  SquaresFourIcon as OverviewIcon,
+  RocketLaunchIcon as DeploymentsIcon,
+  FolderSimpleIcon as ProjectsIcon,
+  DatabaseIcon as ServicesIcon,
+  CloudIcon as CloudsIcon,
+  HardDrivesIcon as InfrastructureIcon,
+  PulseIcon as ActivityIcon,
+  BellSimpleIcon as NotificationsIcon,
+  UsersIcon as MembersIcon,
+  BracketsCurlyIcon as VariablesIcon,
+  PlugsIcon as IntegrationsIcon,
+  KeyIcon as ApiKeysIcon,
+  StackIcon as EmptyIcon,
+  GlobeSimpleIcon as DomainsIcon,
+  SignpostIcon as RoutesIcon,
+  CubeIcon as PoolsIcon,
+  LockSimpleIcon as RestrictedIcon,
+  ShieldCheckIcon as ApproveIcon,
+  FolderPlusIcon as NewProjectIcon,
+  MoonIcon as ThemeIcon,
+  KeyboardIcon as ShortcutsIcon,
+  LightningIcon as QuickIcon,
+  MagnifyingGlassIcon as NoMatchIcon,
+  WebhooksLogoIcon as WebhooksIcon,
+} from "@phosphor-icons/react"

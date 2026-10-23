@@ -1059,6 +1059,40 @@ export interface MoveReview {
   sourceServerId: string;
 }
 
+export interface NativeCopyCapacity {
+  availability: string;
+  computeClass: string;
+  profileId: string;
+  profileRevision: string;
+  storageGb: number;
+  storageType: string;
+}
+
+export interface NativeCopyCreateInputBody {
+  acknowledgeCharges: boolean;
+  requestId: string;
+  reviewToken: string;
+}
+
+export interface NativeCopyReview {
+  capacity: NativeCopyCapacity;
+  notice: string;
+  pointId: string;
+  requestId: string;
+  reviewToken: string;
+  sourceId: string;
+  target: NativeRestoreTarget;
+  ttlHours: number;
+  validUntil: string;
+}
+
+export interface NativeCopyReviewInputBody {
+  cloudId: string;
+  requestId: string;
+  targetId: string;
+  ttlHours: number;
+}
+
 export interface NativeInventory {
   nextBefore?: string;
   points: NativePoint[];
@@ -1082,9 +1116,48 @@ export interface NativePoint {
   version: string;
 }
 
+export interface NativeRecoveryCopies {
+  copies: NativeRestore[];
+  nextBefore?: string;
+}
+
 export interface NativeRecoverySources {
   nextBefore?: string;
   sources: NativeSource[];
+}
+
+export interface NativeRestore {
+  cleanupBy?: string;
+  cleanupRequestedAt?: string;
+  createdAt: string;
+  createdBy: string;
+  durationMs: number;
+  environmentId: string;
+  error?: string;
+  expiresAt: string;
+  externalId?: string;
+  id: string;
+  orgId: string;
+  physicalId?: string;
+  pointId: string;
+  projectId: string;
+  sourceId: string;
+  status: string;
+  target: NativeRestoreTarget;
+  verifiedAt?: string;
+}
+
+export interface NativeRestoreTarget {
+  accountIdentity: string;
+  cloudId?: string;
+  cloudRevision?: number;
+  connectionId: string;
+  grantRevision?: number;
+  nativeProject?: string;
+  provider: string;
+  region: string;
+  targetId?: string;
+  targetRevision?: number;
 }
 
 export interface NativeSource {

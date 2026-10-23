@@ -4,16 +4,9 @@
 import { useAuth } from "@authsome/ui-react"
 import { useRouterState } from "@tanstack/react-router"
 import {
-  ActivityIcon,
-  CloudIcon,
-  DatabaseIcon,
   CopyIcon,
   FolderGit2Icon,
   KeyboardIcon,
-  LayoutDashboardIcon,
-  LayoutGridIcon,
-  RocketIcon,
-  ServerIcon,
   Settings2Icon,
 } from "lucide-react"
 import { type ComponentProps, useState } from "react"
@@ -22,6 +15,15 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
+import {
+  ActivityIcon,
+  CloudsIcon,
+  DeploymentsIcon,
+  InfrastructureIcon,
+  OverviewIcon,
+  ProjectsIcon,
+  ServicesIcon,
+} from "@/components/icons"
 import { OrganizationForm } from "@/components/organization-form"
 import { useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
@@ -87,13 +89,13 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const nav: NavItem[] = [
     {
       title: "Overview",
-      icon: <LayoutDashboardIcon />,
+      icon: <OverviewIcon />,
       link: <Link to="/" />,
       isActive: path === "/",
     },
     {
       title: "Deployments",
-      icon: <RocketIcon />,
+      icon: <DeploymentsIcon />,
       isActive: path.startsWith("/deployments"),
       items: [
         {
@@ -123,25 +125,25 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
     },
     {
       title: "Projects",
-      icon: <LayoutGridIcon />,
+      icon: <ProjectsIcon />,
       link: <Link to="/projects" />,
       isActive: path === "/projects",
     },
     {
       title: "Services",
-      icon: <DatabaseIcon />,
+      icon: <ServicesIcon />,
       link: <Link to="/services" />,
       isActive: path === "/services",
     },
     {
       title: "Clouds",
-      icon: <CloudIcon />,
+      icon: <CloudsIcon />,
       link: <Link to="/clouds" />,
       isActive: path.startsWith("/clouds"),
     },
     {
       title: "Infrastructure",
-      icon: <ServerIcon />,
+      icon: <InfrastructureIcon />,
       link: <Link to="/infrastructure" />,
       isActive: path.startsWith("/infrastructure"),
     },

@@ -106,7 +106,7 @@ homebrew_casks:
       email: bot@goreleaser.com
     homepage: https://github.com/xraph/loomplane
     description: "Plan, approve and follow Loomplane deployments from your terminal"
-    license: AGPL-3.0-only
+    license: FSL-1.1-ALv2
     caveats: "Run 'loomctl login --url https://your-loomplane --key lp_live_...' to get started"
     hooks:
       post:
@@ -128,4 +128,4 @@ scoops:
       email: bot@goreleaser.com
     homepage: https://github.com/xraph/loomplane
     description: "Plan, approve and follow Loomplane deployments from your terminal"
-    license: AGPL-3.0-only
+    license: FSL-1.1-ALv2

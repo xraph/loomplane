@@ -39,7 +39,7 @@ There are no `replace` directives. Loomplane resolves these versions through the
 
 ### Licenses
 
-This needs sorting out before Loomplane is published as open source. Authsome ships no license, and its README only sends you to the repository for terms, so its redistribution terms need upstream clarification. Dispatch, Chronicle, Confy, Herald and Relay ship no license file at these versions either. Forge's `LICENSE` is Apache-2.0, while its `LICENSE_FAQ.md` describes MIT for the core and a commercial license for the AI extension. Loomplane uses no Forge AI extension, so the commercial part doesn't touch it, but the two documents should agree.
+Loomplane itself is source-available under FSL-1.1-ALv2 (see [LICENSE](../LICENSE)), not open source, but it still redistributes these libraries, so their terms need to be clear. Authsome, Chronicle, Dispatch, Herald and Relay had no license file at the versions pinned above. All five added an MIT license on their `main` branches on October 23, 2026, and the gap closes once Loomplane moves to releases cut after that date. Confy still ships no license file, though its README says MIT. Forge's `LICENSE` is Apache-2.0, while its `LICENSE_FAQ.md` describes MIT for the core and a commercial license for the AI extension. Loomplane uses no Forge AI extension, so the commercial part doesn't touch it, but the two documents should agree.
 
 ## How the pieces fit
 

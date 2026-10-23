@@ -261,10 +261,10 @@ it("opens on the database and environment a service page chose", async () => {
   ).toHaveTextContent("another")
 })
 
-it("says a chosen database has no recovery instead of opening another", async () => {
+it("checks native history for a chosen database without opening another", async () => {
   recoveryFixture({ environment: "prod", resource: "missing" })
   expect(
-    await screen.findByText("No recovery for missing in production")
+    await screen.findByText("No captured cloud database history")
   ).toBeInTheDocument()
   expect(
     screen.queryByRole("button", { name: "Back up now" })

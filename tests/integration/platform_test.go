@@ -78,9 +78,10 @@ func freshDatabase(t *testing.T) string {
 
 // running is one started Loomplane app and an HTTP server in front of it.
 type running struct {
-	t   *testing.T
-	srv *httptest.Server
-	app interface{ Stop(context.Context) error }
+	t      *testing.T
+	srv    *httptest.Server
+	app    interface{ Stop(context.Context) error }
+	cancel context.CancelFunc
 }
 
 func start(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
@@ -92,7 +93,9 @@ func start(t *testing.T, cfg config.Config, configure ...func(*httptest.Server))
 	// Started the way forge.App.Run starts it, on a context that outlives
 	// Start: Dispatch's durable worker runs on the context Start gets, so a
 	// timeout here would stop it the moment Start returned.
-	if err := app.Start(context.Background()); err != nil {
+	lifetime, cancel := context.WithCancel(context.Background())
+	if err := app.Start(lifetime); err != nil {
+		cancel()
 		t.Fatalf("start app: %v", err)
 	}
 	srv := httptest.NewUnstartedServer(app.Router().Handler())
@@ -100,13 +103,16 @@ func start(t *testing.T, cfg config.Config, configure ...func(*httptest.Server))
 		option(srv)
 	}
 	srv.Start()
-	return &running{t: t, srv: srv, app: app}
+	return &running{t: t, srv: srv, app: app, cancel: cancel}
 }
 
 // stop shuts the app down the way a signal would, and fails the test if
 // shutdown fails.
 func (r *running) stop() {
 	r.t.Helper()
+	if r.cancel != nil {
+		defer r.cancel()
+	}
 	r.srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	defer cancel()

@@ -176,8 +176,9 @@ func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
 		{Kind: "redis", Creates: "Persistent Redis container", Versions: []string{"8.2"}},
 		{Kind: "valkey", Creates: "Persistent Valkey container", Versions: []string{"8.1"}},
 	}
+	wantDefault := append(slices.Clone(builtIn), provider.Provisions{Kind: "memcached", Creates: "Memcached catalog service", Versions: []string{"1.6"}})
 	got := provisionsOf(t, Catalog(), "server")
-	if !reflect.DeepEqual(got, builtIn) {
+	if !reflect.DeepEqual(got, wantDefault) {
 		t.Fatalf("default registry changed the server provisions: %+v", got)
 	}
 
