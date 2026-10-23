@@ -771,7 +771,9 @@ export interface EnvironmentChange {
   externalRouting: boolean;
   planId?: string;
   projectId?: string;
+  routes?: SyncRoute[];
   routingEvidence?: string;
+  routingStatus?: string;
   services: string[];
   status: string;
   summary: PlanSummary;
@@ -2206,6 +2208,20 @@ export interface Sync {
   status: string;
   targetId?: string;
   updatedAt: string;
+}
+
+export interface SyncRoute {
+  cutoverId?: string;
+  hostname: string;
+  message?: string;
+  notBefore: string;
+  prepareId: string;
+  recordType?: string;
+  releaseId?: string;
+  routeId: string;
+  status: string;
+  ttl?: number;
+  value?: string;
 }
 
 export interface Target {
