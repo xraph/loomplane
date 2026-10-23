@@ -93,7 +93,8 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 		t.Helper()
 		exec(`INSERT INTO cp_instances VALUES($1,'org',NULL,jsonb_build_object($2::text,$1::text||'-container'),jsonb_build_array(jsonb_build_object('name',$2::text,'ports',$3::jsonb)),jsonb_build_object('loomplane.revision',$1::text||'/release'),'running')`, id, service, ports)
 	}
-	instance("gw", "gateway", `[{"container":8080},{"container":9090}]`)
+	// A component's instance runs one service, main, with every recipe port.
+	instance("gw", "main", `[{"container":8080,"protocol":"tcp"},{"container":9090,"protocol":"tcp"}]`)
 	instance("pg", "postgres", `[{"container":5432}]`)
 	instance("web", "main", `[{"container":8080}]`)
 	instance("side", "sidecar", `[{"container":8080}]`)
@@ -102,9 +103,18 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 		t.Helper()
 		exec(`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES($1,'org','shop','prod',$2,$3,'server','http',$4,'runtime',$5,now(),now())`, id, subject, name, instanceID, config)
 	}
-	binding("b_gw", "resource", "octo--gateway", "gw", `{"routable_ports":[8080],`+placement+`}`)
+	// The gateway component, its composed resource and the web service are
+	// bound as Plan 0 writes them for a direct target whose connection runs
+	// one Cloud server: the whole ResourceConfig or ServiceConfig, with that
+	// server's ID and no revision in the placement.
+	planned := `"cloud_placement":{"server_id":"srv_1","grant_revision":1,"cloud_id":"cloud_1","cloud_revision":1,"assignment_revision":1,"target_id":"target_1","target_revision":1,"target_name":"servers","provider":"server","connection_id":"runtime","account_identity":"daemon","region_source":"default"}`
+	settings := `"target":"runtime","target_settings":{"docker_id":"daemon","host":"192.0.2.42"},"provider":"server"`
+	binding("b_gw", "resource", "octo--gateway", "gw", `{`+settings+`,"kind":"octopus","version":"1",`+
+		`"component":{"kind":"octopus","resource":"octo","revision":"1","component":{"name":"gateway","role":"process","ports":[{"name":"http","container":8080,"protocol":"http","routable":true},{"name":"admin","container":9090,"protocol":"http","control":true}],"protection":"none","image":"octopus/gateway:1","step":0},"protection":"none"},`+
+		`"routable_ports":[8080],`+planned+`}`)
+	binding("b_octo", "resource", "octo", "gw", `{`+settings+`,"kind":"octopus","version":"1","composition":{"kind":"octopus","version":"1","revision":"1"},`+planned+`}`)
 	binding("b_pg", "resource", "postgres", "pg", `{`+placement+`}`)
-	binding("b_web", "service", "web", "web", `{`+placement+`,"port":8080}`)
+	binding("b_web", "service", "web", "web", `{`+planned+`,`+settings+`,"health_path":"/_/health","workload":"http-service","execution":"container","service":"svc:go:cmd/web","source":"cmd/web","image":"Dockerfile","port":8080,"public":false}`)
 	// A service binding keeps routing only its main service, whatever its config says.
 	binding("b_side", "service", "side", "side", `{"routable_ports":[8080],`+placement+`}`)
 	binding("b_loose", "resource", "loose", "gw", `{"routable_ports":[8080]}`)
@@ -127,11 +137,21 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 		"another Cloud":                       {EnvironmentID: "prod", Service: "octo--gateway", CloudID: "cloud_other", Port: 8080},
 		"a service port outside main":         {EnvironmentID: "prod", Service: "side", CloudID: "cloud_1", Port: 8080},
 		"a binding without a Cloud placement": {EnvironmentID: "prod", Service: "loose", CloudID: "cloud_1", Port: 8080},
+		"the composed resource itself":        {EnvironmentID: "prod", Service: "octo", CloudID: "cloud_1", Port: 8080},
 	} {
 		if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", refused); !errors.Is(resolveErr, ErrNotFound) {
 			t.Fatalf("%s resolved: %+v %v", name, b, resolveErr)
 		}
 	}
+
+	// A revoked grant takes the Cloud's routes away from the project.
+	exec(`UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud_1' AND project_id='shop'`)
+	for _, revoked := range []RouteInput{in, {EnvironmentID: "prod", Service: "web", CloudID: "cloud_1", Port: 8080}} {
+		if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", revoked); !errors.Is(resolveErr, ErrNotFound) {
+			t.Fatalf("%s resolved under a revoked grant: %+v %v", revoked.Service, b, resolveErr)
+		}
+	}
+	exec(`UPDATE loomplane_cloud_project_grants SET revoked=false,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud_1' AND project_id='shop'`)
 
 	// Rollback, handoff and release check the accepted container of the same
 	// routed service. A service binding still checks only main.
