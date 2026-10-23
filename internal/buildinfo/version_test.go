@@ -26,9 +26,16 @@ func TestCLIDoesNotLoadServerExtensions(t *testing.T) {
 }
 
 func TestCLIVersionUsesSharedBuildValue(t *testing.T) {
-	// Building the CLI from cold shares the runner with every other test
-	// package, so give it room.
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	// Building the CLI compiles its whole dependency tree from cold, outside
+	// the test cache, while every other test package builds beside it. On a
+	// small CI runner that can take most of the package's time, so the build
+	// gets everything up to the test binary's own deadline, less a margin to
+	// report the failure.
+	budget := 10 * time.Minute
+	if deadline, ok := t.Deadline(); ok {
+		budget = time.Until(deadline) - 30*time.Second
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
 	defer cancel()
 	binary := filepath.Join(t.TempDir(), "loomctl")
 	version := "cli-build-boundary-test"
