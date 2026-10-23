@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 )
 
@@ -36,10 +37,25 @@ func scanNativeRestore(row pgx.Row) (*NativeRestore, error) {
 }
 
 func sameNativeRestoreRequest(a, b *NativeRestore) bool {
-	return a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.SourceID == b.SourceID && a.PointID == b.PointID && a.Target == b.Target && sameNativePointIdentity(a.Point, b.Point)
+	return a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.SourceID == b.SourceID && a.PointID == b.PointID && a.RequestID == b.RequestID && a.CreatedBy == b.CreatedBy && a.Target == b.Target && a.ExpiresAt.Sub(a.CreatedAt) == b.ExpiresAt.Sub(b.CreatedAt) && sameNativePointIdentity(a.Point, b.Point)
 }
 
 func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*NativeRestore, error) {
+	if r != nil && nativeTargetHasReview(r.Target) {
+		return nil, ErrInvalid
+	}
+	return s.createNativeRestore(ctx, r, "")
+}
+
+func (s *PgStore) createNativeRestore(ctx context.Context, r *NativeRestore, sourceDigest string) (*NativeRestore, error) {
+	if r != nil {
+		// Compare the same precision PostgreSQL persists. Provider point times
+		// remain JSON identity metadata and must retain their full precision.
+		canonical := *r
+		canonical.CreatedAt = r.CreatedAt.UTC().Truncate(time.Microsecond)
+		canonical.ExpiresAt = r.ExpiresAt.UTC().Truncate(time.Microsecond)
+		r = &canonical
+	}
 	if r == nil || r.ID == "" || r.OrgID == "" || r.ProjectID == "" || r.EnvironmentID == "" || r.SourceID == "" || r.PointID == "" || r.RequestID == "" || r.CreatedBy == "" || r.CreatedAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt) || r.ExpiresAt.Sub(r.CreatedAt) > 24*time.Hour || r.Point.ID != r.PointID || r.Point.SourceID != r.SourceID {
 		return nil, ErrInvalid
 	}
@@ -48,10 +64,18 @@ func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*N
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // A no-op after commit.
+	if sourceDigest != "" {
+		if checkErr := cloudprofiles.LockOrganization(ctx, tx, r.OrgID); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	existing, err := scanNativeRestore(tx.QueryRow(ctx, `SELECT `+nativeRestoreColumns+` FROM loomplane_native_restores WHERE org_id=$1 AND project_id=$2 AND request_id=$3`, r.OrgID, r.ProjectID, r.RequestID))
 	if err == nil {
 		if !sameNativeRestoreRequest(existing, r) {
 			return nil, ErrConflict
+		}
+		if checkErr := checkReviewedNativeSource(existing, sourceDigest); checkErr != nil {
+			return nil, checkErr
 		}
 		return existing, tx.Commit()
 	}
@@ -68,6 +92,18 @@ func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*N
 	}
 	if !sameNativePointIdentity(*point, r.Point) || source.Provider != r.Target.Provider {
 		return nil, ErrConflict
+	}
+	if sourceDigest != "" {
+		if checkErr := checkReviewedNativeSource(&NativeRestore{Source: source.Binding}, sourceDigest); checkErr != nil {
+			return nil, checkErr
+		}
+		current, targetErr := readNativeTarget(ctx, tx, r.OrgID, r.ProjectID, r.Target.CloudID, r.Target.TargetID, true)
+		if targetErr != nil {
+			return nil, targetErr
+		}
+		if current != r.Target {
+			return nil, ErrConflict
+		}
 	}
 	var cloud, account, status string
 	var detailsRaw []byte
@@ -111,7 +147,24 @@ func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*N
 	if !sameNativeRestoreRequest(existing, r) {
 		return nil, ErrConflict
 	}
+	if checkErr := checkReviewedNativeSource(existing, sourceDigest); checkErr != nil {
+		return nil, checkErr
+	}
 	return existing, tx.Commit()
+}
+
+func checkReviewedNativeSource(r *NativeRestore, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	digest, err := nativeSourceDigest(r.Source)
+	if err != nil {
+		return err
+	}
+	if digest != expected {
+		return ErrConflict
+	}
+	return nil
 }
 
 func (s *PgStore) GetNativeRestore(ctx context.Context, org, id string) (*NativeRestore, error) {

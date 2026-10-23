@@ -26,7 +26,10 @@ func (e *Extension) nativeBackupRoutes(group forge.Router) error {
 	if err := group.GET("/native-recovery-sources/:id", e.getNativeInventory, forge.WithName("nativeRecoverySources.inventory"), forge.WithQuerySchema(recovery.NativePageInput{}), forge.WithResponseSchema(http.StatusOK, "Provider snapshot observations", recovery.NativeInventory{})); err != nil {
 		return err
 	}
-	return group.POST("/native-recovery-sources/:id/refresh", e.refreshNativeInventory, forge.WithName("nativeRecoverySources.refresh"), forge.WithResponseSchema(http.StatusOK, "Refreshed provider snapshot observations", recovery.NativeInventory{}))
+	if err := group.POST("/native-recovery-sources/:id/refresh", e.refreshNativeInventory, forge.WithName("nativeRecoverySources.refresh"), forge.WithResponseSchema(http.StatusOK, "Refreshed provider snapshot observations", recovery.NativeInventory{})); err != nil {
+		return err
+	}
+	return e.nativeCopyRoutes(group)
 }
 func nativePage(c forge.Context) (recovery.NativePageInput, error) {
 	page := recovery.NativePageInput{Before: c.Query("before"), EnvironmentID: c.Query("environment_id")}
