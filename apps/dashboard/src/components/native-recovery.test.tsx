@@ -6,6 +6,10 @@ import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { NativeRecovery } from "@/components/native-recovery"
 
+vi.mock("@/lib/organization", () => ({
+  useOrganization: () => ({ can: () => true, session: { orgId: "org" } }),
+}))
+
 afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()

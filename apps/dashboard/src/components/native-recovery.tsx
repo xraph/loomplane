@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { CloudIcon } from "lucide-react"
 
 import { useMutation, useQuery } from "@/client/hooks"
 import {
@@ -18,36 +17,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  ZeroState,
-  ZeroStateDescription,
-  ZeroStateHeader,
-  ZeroStateMedia,
-  ZeroStateTitle,
-} from "@/components/zero-state"
+import { NativeEmpty } from "@/components/native-recovery-empty"
+import { NativeCopyButton } from "@/components/native-copy-review"
+import { NativeCopyHistory } from "@/components/native-copies"
+import { useOrganization } from "@/lib/organization"
 import { formatDate } from "@/lib/format"
 
-function NativeEmpty({
-  title,
-  children,
-}: {
-  title: string
-  children: React.ReactNode
+export function NativeRecovery(props: {
+  project: string
+  environment?: string
 }) {
+  const { session } = useOrganization()
   return (
-    <ZeroState variant="inline" className="p-3">
-      <ZeroStateHeader>
-        <ZeroStateMedia variant="icon">
-          <CloudIcon />
-        </ZeroStateMedia>
-        <ZeroStateTitle>{title}</ZeroStateTitle>
-        <ZeroStateDescription>{children}</ZeroStateDescription>
-      </ZeroStateHeader>
-    </ZeroState>
+    <NativeRecoveryContent
+      key={`${session?.orgId ?? ""}:${props.project}:${props.environment ?? ""}`}
+      {...props}
+    />
   )
 }
 
-export function NativeRecovery({
+function NativeRecoveryContent({
   project,
   environment,
 }: {
@@ -56,6 +45,7 @@ export function NativeRecovery({
 }) {
   const [pages, setPages] = useState<string[]>([""])
   const [chosen, setChosen] = useState("")
+  const [copyVersion, setCopyVersion] = useState(0)
   const sources = useQuery(useNativeRecoverySourcesList, {
     path: { id: project },
     query: {
@@ -65,7 +55,7 @@ export function NativeRecovery({
     },
   })
   const visible = (sources.data?.sources ?? []).filter(
-    (source) => source.environmentId === environment
+    (source) => !environment || source.environmentId === environment
   )
   const selected = visible.find((source) => source.id === chosen) ?? visible[0]
   return (
@@ -82,9 +72,15 @@ export function NativeRecovery({
       </div>
       <p className="text-xs text-muted-foreground">
         Saved provider observations, separate from Trove exports. A snapshot
-        listed here has not been restore-tested. Isolated native restore and
-        PITR controls remain unavailable.
+        listed here has not been restore-tested. You can review temporary Cloud
+        SQL PostgreSQL 17 copies below. PITR and RDS restore controls remain in
+        your cloud account.
       </p>
+      <NativeCopyHistory
+        key={copyVersion}
+        project={project}
+        environment={environment}
+      />
       {sources.status === "error" && (
         <QueryError
           error={sources.error}
@@ -118,6 +114,7 @@ export function NativeRecovery({
             key={selected.id}
             source={selected}
             reloadSources={sources.refetch}
+            onCopyAccepted={() => setCopyVersion((version) => version + 1)}
           />
         </>
       ) : sources.status !== "error" ? (
@@ -156,9 +153,11 @@ export function NativeRecovery({
 function NativePoints({
   source,
   reloadSources,
+  onCopyAccepted,
 }: {
   source: NativeSource
   reloadSources: () => Promise<unknown>
+  onCopyAccepted: () => void
 }) {
   const [pages, setPages] = useState<string[]>([""])
   const [failure, setFailure] = useState(false)
@@ -252,6 +251,12 @@ function NativePoints({
                     : "Expiry not reported"}
                 </span>
               </p>
+              <NativeCopyButton
+                source={source}
+                point={point}
+                onAccepted={onCopyAccepted}
+                disabled={busy || inventory.status !== "success"}
+              />
               <details className="text-xs">
                 <summary className="cursor-pointer text-muted-foreground">
                   Snapshot identity

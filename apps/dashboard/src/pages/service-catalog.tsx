@@ -833,7 +833,7 @@ function Recovery({
       {managedRecovery ? (
         <CatalogEmpty
           title="Managed database recovery"
-          description="Open Cloud snapshots to inspect captured RDS and Cloud SQL history. Restore and PITR controls remain in your cloud account."
+          description="Open Cloud snapshots for captured RDS and Cloud SQL history and temporary Cloud SQL PostgreSQL 17 copies. PITR and RDS restore controls remain in your cloud account."
         >
           <Button
             variant="outline"
