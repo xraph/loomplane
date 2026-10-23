@@ -125,11 +125,9 @@ export function providerLabel(z: ZoneOverview): string {
 
 export function zoneDNSLabel(z: ZoneOverview): string {
   if (z.state !== "ready") {
-    // Not in the mock: "Awaiting verification" for a managed zone that
-    // isn't verified, which the API shouldn't produce.
-    return z.zone?.mode === "external"
-      ? "Awaiting TXT record"
-      : "Awaiting verification"
+    // Not in the mock: "Awaiting verification" for a zone with no TXT proof
+    // yet, such as one verified before proofs were required.
+    return z.zone?.proofName ? "Awaiting TXT record" : "Awaiting verification"
   }
   // Not in the mock: an external zone after its TXT record was found.
   if (z.zone?.mode === "external") return "Verified by TXT record"

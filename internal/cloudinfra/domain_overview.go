@@ -90,7 +90,7 @@ func (s *Service) hostnameUses(ctx context.Context, st DomainStore, org string, 
 }
 
 func zoneState(zone *Zone) DomainState {
-	if zone.VerifiedAt.IsZero() {
+	if !zone.verified() {
 		return DomainAwaitingVerification
 	}
 	return DomainReady
@@ -164,7 +164,7 @@ func (s *Service) ProjectDomains(ctx context.Context, p security.Principal, proj
 	}
 	out := make([]ProjectDomain, 0, len(zones))
 	for _, zone := range zones {
-		out = append(out, ProjectDomain{ZoneID: zone.ID, Name: zone.Name, Mode: zone.Mode, Provider: zone.Provider, Verified: !zone.VerifiedAt.IsZero(), Wildcards: zone.Wildcards(), Hostnames: append([]HostnameUse{}, uses[zone.ID]...)})
+		out = append(out, ProjectDomain{ZoneID: zone.ID, Name: zone.Name, Mode: zone.Mode, Provider: zone.Provider, Verified: zone.verified(), Wildcards: zone.Wildcards(), Hostnames: append([]HostnameUse{}, uses[zone.ID]...)})
 	}
 	return out, nil
 }

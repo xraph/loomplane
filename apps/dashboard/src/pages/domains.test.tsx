@@ -87,8 +87,10 @@ function zoneWith(
     external?: boolean
     verified?: boolean
     registration?: string
+    proof?: boolean
   } = {}
 ) {
+  const proof = options.proof ?? options.external
   const verified = options.verified ?? !options.external
   const id = `zone-${name}`
   return {
@@ -100,8 +102,8 @@ function zoneWith(
       provider: options.external ? "" : "cloudflare",
       connection_id: options.external ? "" : "cf",
       project_ids: ["shop"],
-      proof_name: options.external ? `_loomplane.${name}` : "",
-      proof_value: options.external ? "lp-proof-123" : "",
+      proof_name: proof ? `_loomplane.${name}` : "",
+      proof_value: proof ? "lp-proof-123" : "",
       proof_checked_at: zero,
       proof_expires_at: zero,
       provider_zone: {},
@@ -517,6 +519,23 @@ it("shows TXT instructions and checks again", async () => {
       body: undefined,
     },
   ])
+})
+
+it("shows TXT instructions for a managed zone awaiting its proof", async () => {
+  stubFetch({
+    "/api/v1/domains": overviewWith(
+      zoneWith("acme.dev", [], { verified: false, proof: true })
+    ),
+  })
+  render(
+    <Wrapped>
+      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
+    </Wrapped>
+  )
+  const card = await screen.findByRole("region", { name: "acme.dev" })
+  expect(within(card).getByText("Awaiting TXT record")).toBeTruthy()
+  expect(within(card).getByText("_loomplane.acme.dev")).toBeTruthy()
+  expect(within(card).getByRole("button", { name: "Check again" })).toBeTruthy()
 })
 
 it("saves grants with the zone's revision after a failed check", async () => {

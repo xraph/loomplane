@@ -52,7 +52,7 @@ func ValidateRouteHostname(zone *Zone, value string) (RouteHostname, error) {
 	if _, err = zoneRelative(base, zone.Name); err != nil {
 		return RouteHostname{}, err
 	}
-	if zone.VerifiedAt.IsZero() || !zone.Wildcards() {
+	if !zone.verified() || !zone.Wildcards() {
 		return RouteHostname{}, ErrWildcardUnsupported
 	}
 	return RouteHostname{Hostname: "*." + base, Wildcard: true, Base: base}, nil

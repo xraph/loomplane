@@ -8,7 +8,7 @@ import (
 )
 
 func TestValidateRouteHostnameKeepsClaimsExact(t *testing.T) {
-	cf := &Zone{Name: "acme.dev", Mode: "managed", Provider: "cloudflare", ChallengeConnectionID: "cf-dns", VerifiedAt: time.Now()}
+	cf := provenZone(&Zone{Name: "acme.dev", Mode: "managed", Provider: "cloudflare", ChallengeConnectionID: "cf-dns", VerifiedAt: time.Now()})
 	if _, err := NormalizeHostname("*.acme.dev"); !errors.Is(err, ErrInvalid) {
 		t.Fatal("claim path accepts wildcards")
 	}

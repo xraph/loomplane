@@ -72,7 +72,7 @@ func DeriveRouteStatus(route Route, zone *Zone, latest *RouteOperation, now time
 	switch {
 	case latest != nil && latest.Kind == "remove" && latest.Status != "succeeded":
 		return all(DomainCleanupPending)
-	case zone == nil || zone.VerifiedAt.IsZero():
+	case zone == nil || !zone.verified():
 		return all(DomainAwaitingVerification)
 	case latest != nil && (latest.Status == "pending" || latest.Status == "running") && latest.Receipt == nil && zone.Mode == "managed":
 		return all(DomainProvisioning)

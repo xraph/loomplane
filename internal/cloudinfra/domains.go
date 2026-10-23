@@ -311,6 +311,12 @@ func (z *Zone) hasControlProof() bool {
 	return z.ProofName == "_loomplane."+z.Name && z.ProofValue != "" && !z.ProofExpiresAt.IsZero()
 }
 
+// verified is a zone a project can route through: checked, and checked
+// against its own TXT proof.
+func (z *Zone) verified() bool {
+	return !z.VerifiedAt.IsZero() && z.hasControlProof()
+}
+
 func (s *Service) renewZoneProof(zone *Zone) error {
 	token, err := reviewToken()
 	if err != nil {
@@ -419,7 +425,7 @@ func (s *Service) ProjectZones(ctx context.Context, p security.Principal, projec
 	out := []ProjectZone{}
 	for _, zone := range zones {
 		if slices.Contains(zone.ProjectIDs, project) {
-			out = append(out, ProjectZone{zone.ID, zone.Name, zone.Mode, zone.hasControlProof() && !zone.VerifiedAt.IsZero()})
+			out = append(out, ProjectZone{zone.ID, zone.Name, zone.Mode, zone.verified()})
 		}
 	}
 	return out, nil

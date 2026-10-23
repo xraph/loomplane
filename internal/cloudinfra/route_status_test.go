@@ -7,10 +7,16 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
+// provenZone gives a test zone the TXT proof a verified zone needs.
+func provenZone(z *Zone) *Zone {
+	z.ProofName, z.ProofValue, z.ProofExpiresAt = "_loomplane."+z.Name, "proof", time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)
+	return z
+}
+
 func TestDeriveRouteStatus(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
-	verified := &Zone{Mode: "managed", VerifiedAt: now}
-	external := &Zone{Mode: "external", VerifiedAt: now}
+	verified := provenZone(&Zone{Mode: "managed", VerifiedAt: now})
+	external := provenZone(&Zone{Mode: "external", VerifiedAt: now})
 	cases := []struct {
 		name  string
 		route Route
@@ -19,6 +25,8 @@ func TestDeriveRouteStatus(t *testing.T) {
 		want  [3]DomainState
 	}{
 		{"unverified", Route{Status: "pending"}, &Zone{Mode: "external"}, nil, [3]DomainState{DomainAwaitingVerification, DomainAwaitingVerification, DomainAwaitingVerification}},
+		// A zone checked before TXT proofs were required isn't verified.
+		{"hosting only", Route{Status: "ready"}, &Zone{Mode: "managed", VerifiedAt: now}, nil, [3]DomainState{DomainAwaitingVerification, DomainAwaitingVerification, DomainAwaitingVerification}},
 		{"zone gone", Route{Status: "ready"}, nil, nil, [3]DomainState{DomainAwaitingVerification, DomainAwaitingVerification, DomainAwaitingVerification}},
 		{"writing", Route{Status: "pending"}, verified, &RouteOperation{Kind: "apply", Status: "running"}, [3]DomainState{DomainProvisioning, DomainProvisioning, DomainProvisioning}},
 		{"external record missing", Route{Status: "waiting"}, external, &RouteOperation{Kind: "apply", Status: "waiting"}, [3]DomainState{DomainAwaitingVerification, DomainProvisioning, DomainProvisioning}},
@@ -44,7 +52,7 @@ func TestDeriveRouteStatus(t *testing.T) {
 
 func TestDeriveRouteStatusDetails(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
-	zone := &Zone{Mode: "managed", VerifiedAt: now}
+	zone := provenZone(&Zone{Mode: "managed", VerifiedAt: now})
 	expires := now.AddDate(0, 2, 0)
 	route := Route{ID: "route", OperationID: "op_old", Status: "waiting", Input: RouteInput{Hostname: "*.acme.dev"}, Binding: RouteBinding{Backend: RouteBackendKubernetes},
 		Verification: RouteVerification{DNS: true, TLS: true, CertExpires: expires, CheckedAt: now, BackendError: "no backend"}}
