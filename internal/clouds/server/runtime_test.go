@@ -58,6 +58,11 @@ func TestRuntime_refusesForeignContainerBeforeAnyMutation(t *testing.T) {
 	if err = runtime.Remove(t.Context(), iid, labels); err == nil || mutations != 0 {
 		t.Fatalf("foreign cleanup: %d %v", mutations, err)
 	}
+	for _, running := range []bool{false, true} {
+		if err = runtime.SetRunning(t.Context(), iid, labels, running); !errors.Is(err, ErrOwned) || mutations != 0 {
+			t.Fatalf("foreign state control: %d %v", mutations, err)
+		}
+	}
 }
 
 func TestRuntime_injectsSecretsThroughDockerAndKeepsPrivateAddress(t *testing.T) {
@@ -129,7 +134,7 @@ func TestRuntime_injectsSecretsThroughDockerAndKeepsPrivateAddress(t *testing.T)
 
 // The fixture applies a mutation before returning an error, like a lost daemon response.
 func TestRuntime_recoversInterruptedReplacement(t *testing.T) {
-	for _, failure := range []string{"network", "stop", "create", "backup", "collision"} {
+	for _, failure := range []string{"network", "stop", "stop-unchanged", "create", "backup", "running-backup", "collision"} {
 		t.Run(failure, func(t *testing.T) {
 			iid := id.New(id.PrefixInstance)
 			labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelConnection: "conn_fixture", owned.LabelPublic: "true", owned.LabelHostPort: "18080", owned.LabelRevision: "new"}
@@ -142,10 +147,10 @@ func TestRuntime_recoversInterruptedReplacement(t *testing.T) {
 			if failure != "network" && failure != "create" {
 				containers[name] = &item{"old", "sha256:old", "old", true}
 			}
-			if failure == "backup" {
+			if failure == "backup" || failure == "running-backup" {
 				containers[name+"-previous"] = containers[name]
 				delete(containers, name)
-				containers[name+"-previous"].running = false
+				containers[name+"-previous"].running = failure == "running-backup"
 			}
 			leases := &runtimeLeases{}
 			stops := 0
@@ -197,9 +202,9 @@ func TestRuntime_recoversInterruptedReplacement(t *testing.T) {
 				case "json":
 					_ = json.NewEncoder(w).Encode(map[string]any{"Id": current.id, "Config": map[string]any{"Image": current.image, "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelInstance: iid.String(), owned.LabelRevision: current.revision}}, "State": map[string]any{"Running": current.running, "Status": "exited", "ExitCode": 1}})
 				case "stop":
-					current.running = false
+					current.running = failure == "stop-unchanged"
 					stops++
-					if failure == "stop" {
+					if failure == "stop" || failure == "stop-unchanged" {
 						w.WriteHeader(500)
 					} else {
 						w.WriteHeader(204)
@@ -209,11 +214,16 @@ func TestRuntime_recoversInterruptedReplacement(t *testing.T) {
 					containers[r.URL.Query().Get("name")] = current
 					w.WriteHeader(204)
 				case "start":
+					alreadyRunning := current.running
 					current.running = true
 					if current.id == "candidate" {
 						current.running = false
 					}
-					w.WriteHeader(204)
+					if alreadyRunning {
+						w.WriteHeader(http.StatusNotModified)
+					} else {
+						w.WriteHeader(http.StatusNoContent)
+					}
 				default:
 					t.Errorf("unexpected %s", r.URL)
 				}
@@ -229,6 +239,9 @@ func TestRuntime_recoversInterruptedReplacement(t *testing.T) {
 			_, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:new", Ports: []cpprovider.PortSpec{{Container: 8080}}}, labels)
 			if err == nil {
 				t.Fatal("failed rollout was accepted")
+			}
+			if strings.Contains(err.Error(), "HTTP 304") {
+				t.Fatalf("already-running recovery failed: %v", err)
 			}
 			if failure == "network" || failure == "create" {
 				if len(containers) != 0 || leases.held {
