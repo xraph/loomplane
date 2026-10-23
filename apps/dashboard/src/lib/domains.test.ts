@@ -75,7 +75,9 @@ function zone(
       orgId: "org",
       projectIds: [],
       proofCheckedAt: "0001-01-01T00:00:00Z",
-      proofExpiresAt: "0001-01-01T00:00:00Z",
+      proofExpiresAt: "2026-10-02T00:00:00Z",
+      proofName: "_loomplane.acme.dev",
+      proofValue: "loomplane=zone-token",
       provider: mode === "managed" ? "cloudflare" : undefined,
       providerZone: {} as never,
       recordOwnership: true,
@@ -224,6 +226,11 @@ describe("zones", () => {
     expect(zoneDNSLabel(zone({}, false, "external"))).toBe(
       "Awaiting TXT record"
     )
+    // A managed zone waits on the same TXT proof.
+    expect(zoneDNSLabel(zone({}, false))).toBe("Awaiting TXT record")
+    const legacy = zone({}, false)
+    legacy.zone = { ...legacy.zone!, proofName: undefined }
+    expect(zoneDNSLabel(legacy)).toBe("Awaiting verification")
   })
 
   it("says where the domain was registered", () => {
