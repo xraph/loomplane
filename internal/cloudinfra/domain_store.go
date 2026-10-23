@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 var _ DomainStore = (*PgStore)(nil)
@@ -114,11 +115,12 @@ func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, 
 }
 
 type routeCheckpoint struct {
-	Cancelled *IngressTransition      `json:"cancelled,omitempty"`
-	Source    *IngressTransition      `json:"source,omitempty"`
-	Desired   *server.IngressConfig   `json:"desired,omitempty"`
-	Previous  *server.IngressSnapshot `json:"previous,omitempty"`
-	Applied   *server.IngressSnapshot `json:"applied,omitempty"`
+	ExecutionPrincipal *security.Principal     `json:"execution_principal,omitempty"`
+	Cancelled          *IngressTransition      `json:"cancelled,omitempty"`
+	Source             *IngressTransition      `json:"source,omitempty"`
+	Desired            *server.IngressConfig   `json:"desired,omitempty"`
+	Previous           *server.IngressSnapshot `json:"previous,omitempty"`
+	Applied            *server.IngressSnapshot `json:"applied,omitempty"`
 }
 
 func routeBytes(op *RouteOperation) (body, principal, checkpoint []byte, err error) {
@@ -127,7 +129,7 @@ func routeBytes(op *RouteOperation) (body, principal, checkpoint []byte, err err
 		principal, err = json.Marshal(op.Principal)
 	}
 	if err == nil {
-		checkpoint, err = json.Marshal(routeCheckpoint{Cancelled: op.CancelledIngress, Source: op.SourceTransition, Desired: op.DesiredConfig, Previous: op.PreviousConfig, Applied: op.AppliedConfig})
+		checkpoint, err = json.Marshal(routeCheckpoint{ExecutionPrincipal: op.ExecutionPrincipal, Cancelled: op.CancelledIngress, Source: op.SourceTransition, Desired: op.DesiredConfig, Previous: op.PreviousConfig, Applied: op.AppliedConfig})
 	}
 	return
 }
@@ -148,6 +150,7 @@ func scanRouteOperation(row pgx.Row) (*RouteOperation, error) {
 	if err := json.Unmarshal(checkpoint, &cp); err != nil {
 		return nil, err
 	}
+	op.ExecutionPrincipal = cp.ExecutionPrincipal
 	op.DesiredConfig, op.PreviousConfig, op.AppliedConfig, op.SourceTransition, op.CancelledIngress = cp.Desired, cp.Previous, cp.Applied, cp.Source, cp.Cancelled
 	return &op, nil
 }

@@ -120,7 +120,7 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 	route := &op.Route
 	// Accepted removal retains exact cleanup authority after a grant is revoked.
 	if op.Kind != "remove" {
-		if err := s.domainScope(ctx, op.Principal, route.ProjectID, true); err != nil {
+		if err := s.domainScope(ctx, op.executionPrincipal(), route.ProjectID, true); err != nil {
 			return err
 		}
 		switch op.Kind {
