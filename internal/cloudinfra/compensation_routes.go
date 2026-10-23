@@ -145,6 +145,10 @@ func (s *Service) ReconcileCompensationRoutes(ctx context.Context, p security.Pr
 		return err
 	}
 	for _, source := range in.Routes {
+		// A Kubernetes route was never handed off, as in ReconcileReleaseRoutes.
+		if source.Binding.BackendName() == RouteBackendKubernetes {
+			continue
+		}
 		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
 			return ErrInvalid
 		}

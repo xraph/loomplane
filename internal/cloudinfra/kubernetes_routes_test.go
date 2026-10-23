@@ -449,7 +449,12 @@ func TestReleaseRoutesSkipKubernetes(t *testing.T) {
 	st := untouchedRouteStore{t: t}
 	svc := NewService(Deps{Domains: st, Authz: cleanupTestAuth{}})
 	route := Route{ID: "route_k", OrgID: "org", ProjectID: "shop", Status: "ready", Input: RouteInput{EnvironmentID: "prod", Service: "web"}, Binding: kubernetesBinding("203.0.113.10")}
-	if err := svc.ReconcileReleaseRoutes(t.Context(), kubeRouteManager, ReleaseRouteRequest{Key: "plan/action", ProjectID: "shop", EnvironmentID: "prod", Service: "web", InstanceID: "inst_gw", Routes: []Route{route}, DrainSeconds: 60}); err != nil {
+	in := ReleaseRouteRequest{Key: "plan/action", ProjectID: "shop", EnvironmentID: "prod", Service: "web", InstanceID: "inst_gw", Routes: []Route{route}, DrainSeconds: 60}
+	if err := svc.ReconcileReleaseRoutes(t.Context(), kubeRouteManager, in); err != nil {
+		t.Fatal(err)
+	}
+	// A Cloud compensation restoring the service leaves it alone too.
+	if err := svc.ReconcileCompensationRoutes(t.Context(), kubeRouteManager, in); err != nil {
 		t.Fatal(err)
 	}
 }
