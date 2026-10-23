@@ -81,6 +81,9 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 				continue
 			}
 			if _, consumer := consumerOutput(link); consumer {
+				if e := consumerThroughGateway(a.Name, link); e != nil {
+					return fmt.Errorf("capture applied resource variable: %w", e)
+				}
 				// Issued again on every release, and kept only here.
 				value, e := r.bindConsumer(ctx, d, a.Name, link, resources)
 				if e != nil {

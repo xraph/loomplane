@@ -1290,6 +1290,9 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 				return nil, nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", a.Name, link.From)
 			}
 			if _, consumer := consumerOutput(link); consumer {
+				if err := consumerThroughGateway(a.Name, link); err != nil {
+					return nil, nil, err
+				}
 				return nil, nil, fmt.Errorf("%s's %s for %s is issued when its variables are captured, and none was", link.From, link.Field, a.Name)
 			}
 			addr, extra, err := r.resourceAddress(ctx, d, a.Name, services, link)

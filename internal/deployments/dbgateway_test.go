@@ -633,6 +633,54 @@ func TestResourceAddressGatewayFailuresHoldNoSecrets(t *testing.T) {
 	}
 }
 
+// readsCounted counts every secret read, so a test can tell a refusal
+// that never opened a secret from one that read it first.
+type readsCounted struct {
+	snapshotSecrets
+	reads int
+}
+
+func (s *readsCounted) Get(ctx context.Context, k string) ([]byte, error) {
+	s.reads++
+	return s.snapshotSecrets.Get(ctx, k)
+}
+
+// A gateway link to anything but the address is refused before the secret
+// it names is decrypted.
+func TestResourceAddressGatewayRefusesAnOutputUnread(t *testing.T) {
+	secrets := &readsCounted{snapshotSecrets: snapshotSecrets{resourceKey("org_1", "env_1", "db", "output:x"): []byte("pw-in-output")}}
+	r := NewRunner(RunnerDeps{Resources: secrets})
+	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
+	link := gatewayLink
+	link.Field = "output:x"
+	_, _, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, link)
+	if err == nil || !strings.Contains(err.Error(), "only stands in for a resource's address") {
+		t.Fatalf("err %v", err)
+	}
+	if secrets.reads != 0 {
+		t.Fatalf("read %d secrets before refusing", secrets.reads)
+	}
+}
+
+// A per-consumer link carrying a gateway suffix is refused on both paths
+// that resolve one, rather than issued past the gateway's check.
+func TestConsumerLinksThroughTheGatewayAreRefused(t *testing.T) {
+	ctx := t.Context()
+	link := planning.EnvLink{Key: "CACHE_URL", From: "db", Subject: planning.ResourceSubject, Field: consumerPrefix + "url", Gateway: "nyc3.db.example.com"}
+	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
+	resources := map[string]*planning.Binding{"db": {Subject: planning.ResourceSubject, Name: "db"}}
+	const want = "web reads consumer:url of db through the database gateway"
+
+	r := NewRunner(RunnerDeps{Variables: fakeVariables{"svc": {}}, Resources: snapshotSecrets{}})
+	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc", Env: []planning.EnvLink{link}}}
+	if err := r.captureAppliedVariables(ctx, gatewayDeployment, &a, services, resources); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("capture: %v", err)
+	}
+	if _, _, err := r.env(ctx, gatewayDeployment, a, services, resources); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("env: %v", err)
+	}
+}
+
 func TestAppliedInputsUseGatewayAddress(t *testing.T) {
 	ctx := t.Context()
 	secrets := snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(doDSN)}

@@ -359,15 +359,17 @@ func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string,
 	if err != nil {
 		return "", nil, err
 	}
+	// Refuse a gateway link that reads anything but the address before the
+	// secret is decrypted, so a link it won't serve never opens one.
+	if link.Gateway != "" && field != ResourceURL {
+		return "", nil, fmt.Errorf("%s reads %s of %s through the database gateway, which only stands in for a resource's address", app, field, resource)
+	}
 	raw, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, resource, field))
 	if err != nil {
 		return "", nil, fmt.Errorf("%s needs %s: %w", app, resource, err)
 	}
 	if link.Gateway == "" {
 		return string(raw), nil, nil
-	}
-	if field != ResourceURL {
-		return "", nil, fmt.Errorf("%s reads %s of %s through the database gateway, which only stands in for a resource's address", app, field, resource)
 	}
 	gw, suffix := servingGateway(services, resource)
 	switch {
