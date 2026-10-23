@@ -19,6 +19,10 @@ type NativeDatabases struct {
 	AWS         *aws.Client
 	Google      *gcp.Client
 	Credentials Credentials
+	Secrets     NativeCopySecrets
+	// SQLConnector overrides only transport in controlled integration tests.
+	// The actual PostgreSQL verifier always runs; production uses Google's dialer.
+	SQLConnector func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error)
 }
 
 func (n *NativeDatabases) NativeSnapshots(ctx context.Context, b *planning.Binding) ([]recovery.NativePoint, bool, error) {

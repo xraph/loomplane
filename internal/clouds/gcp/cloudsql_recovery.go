@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // RestoreSQLBackup creates a new PostgreSQL copy in a separate recovery project.
@@ -17,6 +19,9 @@ func (s *Session) RestoreSQLBackup(ctx context.Context, backup string, spec SQLI
 	}
 	if s.key.ProjectID == "" || !sqlNativeName(spec.Name) || len(spec.Name) > 63 || spec.DatabaseVersion != "POSTGRES_17" || spec.Region == "" || spec.Tier == "" || spec.Intent == "" || len(spec.Intent) > 63 || spec.Existing || spec.Inspect == nil || track.Check == nil {
 		return nil, errors.New("cloud sql recovery requires a new reviewed PostgreSQL target and durable ownership guards")
+	}
+	if spec.Storage != nil && (spec.Storage.SizeGB < 10 || spec.Storage.Type != "PD_SSD") {
+		return nil, errors.New("cloud sql recovery requires reviewed SSD storage of at least 10 GiB")
 	}
 	if err := track.check(ctx); err != nil {
 		return nil, err
@@ -37,6 +42,9 @@ func (s *Session) RestoreSQLBackup(ctx context.Context, backup string, spec SQLI
 			"ipConfiguration":     map[string]any{"ipv4Enabled": true, "authorizedNetworks": []any{}, "privateNetwork": "", "pscConfig": map[string]bool{"pscEnabled": false}},
 			"userLabels":          map[string]string{"managed-by": "loomplane", SQLIntentLabel: spec.Intent},
 			"backupConfiguration": map[string]bool{"enabled": false, "pointInTimeRecoveryEnabled": false},
+		}
+		if disk := spec.Storage; disk != nil {
+			settings["dataDiskSizeGb"], settings["dataDiskType"], settings["storageAutoResize"] = strconv.FormatInt(int64(disk.SizeGB), 10), disk.Type, false
 		}
 		body := map[string]any{
 			"backup":                  backup,
@@ -66,9 +74,8 @@ func (s *Session) RestoreSQLBackup(ctx context.Context, backup string, spec SQLI
 		if err := spec.Inspect(in); err != nil {
 			return nil, err
 		}
-		network := in.Settings.IPConfiguration
-		if in.Settings.Tier != spec.Tier || in.Settings.ConnectorEnforcement != "REQUIRED" || network == nil || network.IPv4Enabled == nil || !*network.IPv4Enabled || len(network.AuthorizedNetworks) != 0 || network.PrivateNetwork != "" || network.PSC != nil && network.PSC.Enabled {
-			return nil, errors.New("cloud sql recovery target does not have its reviewed connector-only network settings")
+		if settingsErr := in.CheckRecoverySettings(spec); settingsErr != nil {
+			return nil, settingsErr
 		}
 		switch in.State {
 		case "RUNNABLE":
@@ -81,6 +88,73 @@ func (s *Session) RestoreSQLBackup(ctx context.Context, backup string, spec SQLI
 			return nil, errors.New("cloud sql recovery copy is not in a recoverable readiness state")
 		}
 	}
+}
+
+// CheckRecoverySettings is shared by creation and later guarded copy actions.
+// A preserved creation pin does not imply that the network stayed isolated.
+func (in *SQLInstance) CheckRecoverySettings(spec SQLInstanceSpec) error {
+	if in == nil {
+		return errors.New("cloud sql recovery target metadata is missing")
+	}
+	network := in.Settings.IPConfiguration
+	if in.Settings.Tier != spec.Tier || in.Settings.ConnectorEnforcement != "REQUIRED" || network == nil || network.IPv4Enabled == nil || !*network.IPv4Enabled || len(network.AuthorizedNetworks) != 0 || network.PrivateNetwork != "" || network.PSC != nil && network.PSC.Enabled {
+		return errors.New("cloud sql recovery target does not have its reviewed connector-only network settings")
+	}
+	if disk := spec.Storage; disk != nil && (in.Settings.DataDiskSizeGB != int64(disk.SizeGB) || in.Settings.DataDiskType != disk.Type || in.Settings.StorageAutoResize == nil || *in.Settings.StorageAutoResize) {
+		return errors.New("cloud sql recovery target does not match its reviewed storage bounds")
+	}
+	return nil
+}
+
+// InspectSQLRecoveryForCleanup observes a captured restore without initiating
+// another one. A failed terminal operation can leave no instance or a partial
+// owned copy. A surviving copy needs creation timing before it can be pinned.
+func (s *Session) InspectSQLRecoveryForCleanup(ctx context.Context, spec SQLInstanceSpec, operation string, check func(context.Context) error) (*SQLInstance, error) {
+	if !validSQLPathID(operation) || !sqlNativeName(spec.Name) || spec.Region == "" || spec.DatabaseVersion != "POSTGRES_17" || spec.Intent == "" || spec.Inspect == nil || check == nil {
+		return nil, errors.New("cloud sql cleanup requires the captured restore and its original intent")
+	}
+	var op sqlOperation
+	for {
+		if err := check(ctx); err != nil {
+			return nil, err
+		}
+		if err := s.do(ctx, http.MethodGet, s.sqlPath("/operations/"+url.PathEscape(operation)), nil, &op); err != nil {
+			return nil, err
+		}
+		if err := s.validateSQLOperation(op, operation, spec.Name, []string{"RESTORE_VOLUME"}, true); err != nil {
+			return nil, err
+		}
+		if op.Warning != nil {
+			return nil, errors.New("cloud sql restore operation has incomplete metadata")
+		}
+		if op.Status == "DONE" {
+			break
+		}
+		if err := s.wait(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if err := check(ctx); err != nil {
+		return nil, err
+	}
+	in, err := s.GetSQLInstance(ctx, spec.Name)
+	if IsNotFound(err) {
+		return nil, check(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, pinErr := in.Incarnation(s.key.ProjectID, spec.Region, spec.Name); pinErr != nil {
+		return nil, pinErr
+	}
+	created, err := time.Parse(time.RFC3339Nano, in.CreateTime)
+	if err != nil || op.InsertedAt.IsZero() || op.EndedAt.IsZero() || op.EndedAt.Before(op.InsertedAt) || created.Before(op.InsertedAt) || created.After(op.EndedAt) || in.Kind != "sql#instance" || in.DatabaseVersion != spec.DatabaseVersion || in.Settings.UserLabels[SQLIntentLabel] != spec.Intent || in.Settings.UserLabels["managed-by"] != "loomplane" {
+		return nil, errors.New("cloud sql partial recovery copy does not match its terminal restore operation")
+	}
+	if inspectErr := spec.Inspect(in); inspectErr != nil {
+		return nil, inspectErr
+	}
+	return in, check(ctx)
 }
 
 // DeleteSQLRecovery disposes only the pinned temporary copy. It does not request

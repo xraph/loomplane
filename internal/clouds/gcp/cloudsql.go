@@ -28,6 +28,9 @@ type SQLInstance struct {
 	Settings        struct {
 		UserLabels           map[string]string   `json:"userLabels"`
 		Tier                 string              `json:"tier"`
+		DataDiskSizeGB       int64               `json:"dataDiskSizeGb,string"`
+		DataDiskType         string              `json:"dataDiskType"`
+		StorageAutoResize    *bool               `json:"storageAutoResize"`
 		ConnectorEnforcement string              `json:"connectorEnforcement"`
 		IPConfiguration      *SQLIPConfiguration `json:"ipConfiguration"`
 	} `json:"settings"`
