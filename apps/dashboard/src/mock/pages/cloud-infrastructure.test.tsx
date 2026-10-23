@@ -1,8 +1,36 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it } from "vitest"
 import { MockCloudInfrastructure } from "./cloud-infrastructure"
 afterEach(cleanup)
+it("keeps pool and DNS zone actions inside the shared empty states", async () => {
+  const user = userEvent.setup()
+  const { rerender } = render(
+    <MockCloudInfrastructure tab="Servers" failure={false} />
+  )
+  const pool = screen
+    .getByText("No server pool yet")
+    .closest("[data-slot=empty]")
+  expect(pool).toBeInTheDocument()
+  await user.click(
+    within(pool as HTMLElement).getByRole("button", { name: "Add pool" })
+  )
+  await user.click(screen.getByRole("button", { name: "Save pool budgets" }))
+  expect(screen.queryByText("No server pool yet")).not.toBeInTheDocument()
+  expect(
+    screen.getByRole("button", { name: "Edit pool budgets" })
+  ).toBeInTheDocument()
+  rerender(<MockCloudInfrastructure tab="Domains" failure={false} />)
+  const zone = screen.getByText("No DNS zone yet").closest("[data-slot=empty]")
+  expect(zone).toBeInTheDocument()
+  await user.click(
+    within(zone as HTMLElement).getByRole("button", { name: "Save DNS zone" })
+  )
+  expect(screen.queryByText("No DNS zone yet")).not.toBeInTheDocument()
+  expect(
+    screen.getByRole("button", { name: "Verify zone" })
+  ).toBeInTheDocument()
+})
 it("keeps a stale server review from applying and records accepted enrollment separately", async () => {
   const user = userEvent.setup()
   const { rerender } = render(

@@ -205,6 +205,51 @@ it("gives a project access to only the targets you tick", async () => {
   )
 })
 
+it("disables target choices for whole Cloud access and all grant choices while saving", async () => {
+  const user = userEvent.setup()
+  fixture()
+  const fetch = globalThis.fetch
+  let finishSave!: (response: Response) => void
+  const pendingSave = new Promise<Response>((resolve) => {
+    finishSave = resolve
+  })
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/projects/"))
+      return pendingSave
+    return fetch(input, init)
+  })
+  show()
+  await user.click(screen.getByRole("tab", { name: "Projects" }))
+  await user.click(
+    await screen.findByRole("button", { name: "Give a project access" })
+  )
+  const wholeCloud = screen.getByRole("checkbox", { name: /Whole Cloud/ })
+  const frontend = screen.getByRole("checkbox", { name: /Frontend/ })
+  await user.click(wholeCloud)
+  expect(frontend).toHaveAttribute("aria-disabled", "true")
+  await user.click(frontend)
+  expect(frontend).toBeChecked()
+  await user.click(wholeCloud)
+  expect(frontend).not.toHaveAttribute("aria-disabled", "true")
+  await user.click(screen.getByRole("button", { name: "Give access" }))
+  await waitFor(() =>
+    expect(wholeCloud).toHaveAttribute("aria-disabled", "true")
+  )
+  expect(frontend).toHaveAttribute("aria-disabled", "true")
+  expect(screen.getByRole("combobox", { name: "Project" })).toBeDisabled()
+  finishSave(
+    Response.json({
+      cloud_id: "c",
+      project_id: "web",
+      target_ids: ["frontend", "api", "worker"],
+      revision: 2,
+    })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  )
+})
+
 it("sets a targetless Cloud's one provider and account", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ noTargets: true })

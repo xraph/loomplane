@@ -301,12 +301,15 @@ it("uses an independent DNS account and an explicit project grant when saving a 
   )
   await user.click(screen.getByRole("combobox", { name: "DNS mode" }))
   await user.click(await screen.findByRole("option", { name: /Managed DNS/ }))
-  expect(
-    screen.queryByRole("option", { name: "Compute only" })
-  ).not.toBeInTheDocument()
   expect(screen.getByRole("button", { name: "Save DNS zone" })).toBeDisabled()
   await user.click(await screen.findByRole("checkbox", { name: "Web app" }))
   await user.click(screen.getByRole("combobox", { name: "DNS account" }))
+  expect(
+    await screen.findByRole("option", { name: /Independent DNS/ })
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("option", { name: "Compute only" })
+  ).not.toBeInTheDocument()
   await user.click(
     await screen.findByRole("option", { name: /Independent DNS/ })
   )

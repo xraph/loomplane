@@ -523,6 +523,7 @@ function GrantDialog({
             <FieldLabel className="contents">
               <Checkbox
                 checked={wholeCloud}
+                disabled={busy}
                 onCheckedChange={(e) => setWholeCloud(e)}
               />
               Whole Cloud, including its default provider and future targets
@@ -549,7 +550,7 @@ function GrantDialog({
                   <FieldLabel className="contents">
                     <Checkbox
                       checked={on}
-                      disabled={busy}
+                      disabled={busy || wholeCloud}
                       onCheckedChange={() => toggle(t.id)}
                     />
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
