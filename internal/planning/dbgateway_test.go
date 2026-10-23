@@ -789,3 +789,37 @@ func TestDatabaseGatewayMarkingClearsAdoption(t *testing.T) {
 		t.Fatalf("control: api is %s, adopt %v", api.Op, api.AdoptCloudPlacement)
 	}
 }
+
+// Marking a service's gateway links compares it with what's deployed again,
+// and that comparison still names a consumer option that changed rather
+// than reporting one change to all its variables.
+func TestDatabaseGatewayMarkingKeepsNamedOptionChanges(t *testing.T) {
+	doc := func(tenant string) string {
+		return `version: 1
+services:
+  api: {source: services/api, provider: server, target: ` + targetA + `, public: false, needs: [db, app], need_options: {app: {tenant: ` + tenant + `}}}
+resources:
+  db: {kind: postgres, provider: digitalocean, gateway: true}
+  app: {kind: sample, provider: server, target: ` + targetA + `}
+database_gateway: {provider: cloud-run, region: us-east1}
+`
+	}
+	input := func(tenant string, bindings ...*Binding) Input {
+		in := dbgwInput(t, doc(tenant), exampleZone, bindings...)
+		in.Kinds = tenanted(t)
+		in.Connections = append(slices.Clone(in.Connections), composedConnections(t)...)
+		return in
+	}
+	first := Compute(input("acme"))
+	if !first.Executable {
+		t.Fatalf("plan blocked: %+v", first.Problems)
+	}
+	live := deployed(t, first)
+	if api := action(t, Compute(input("acme", live...)), "service:api"); api.Op != Keep {
+		t.Fatalf("unchanged api is %s: %+v", api.Op, api.Changes)
+	}
+	api := action(t, Compute(input("beta", live...)), "service:api")
+	if api.Op != Update || !slices.Equal(api.Changes, []Change{{Field: "app tenant", From: "acme", To: "beta"}}) {
+		t.Fatalf("api is %s with %+v", api.Op, api.Changes)
+	}
+}

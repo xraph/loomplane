@@ -308,6 +308,9 @@ func (p *planner) dependOnDatabaseGateway(gw *Action, resources []string) {
 			// comparison set mustn't outlive an Update.
 			a.AdoptCloudPlacement, a.CloudAdoption = false, nil
 			p.diff(a, a.Service, a.Provider, a.Region)
+			// diff resets the changes, so the consumer options link named
+			// have to be named again.
+			p.optionChanges(a)
 		}
 	}
 	for _, a := range p.actions {
