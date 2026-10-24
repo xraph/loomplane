@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 
 	sdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
@@ -18,6 +19,8 @@ import (
 // DBRecoverySpec is private placement reviewed before a native restore. It
 // cannot adopt or replace a source instance or select a public SQL endpoint.
 type DBRecoverySpec struct {
+	PITR                                                 *DBPITRWindow
+	RestoreTime                                          time.Time
 	ID, ResourceID, Intent, SourcePhysicalID             string
 	Snapshot                                             DBSnapshot
 	Class, StorageType                                   string
@@ -34,6 +37,8 @@ type DBRecoveryControl struct {
 // DBRecoverySettings retains provider observations needed before SQL access.
 // Missing flags are unknown, never evidence of a private or encrypted copy.
 type DBRecoverySettings struct {
+	PITRKnown, IAMAuth                                              bool
+	IOPS, Throughput, MaxStorageGB                                  int32
 	Known                                                           bool
 	ARN, Class, StorageType, KMSKey, MasterUser, SubnetGroup, VPCID string
 	StorageGB, BackupDays                                           int32
@@ -45,7 +50,7 @@ type DBRecoverySettings struct {
 }
 
 func readDBRecoverySettings(in rdstypes.DBInstance) *DBRecoverySettings {
-	out := &DBRecoverySettings{Known: in.StorageEncrypted != nil && in.PubliclyAccessible != nil && in.MultiAZ != nil && in.AutoMinorVersionUpgrade != nil && in.BackupRetentionPeriod != nil && in.DeletionProtection != nil && in.AllocatedStorage != nil,
+	out := &DBRecoverySettings{PITRKnown: in.Iops != nil && in.StorageThroughput != nil && in.MaxAllocatedStorage != nil && in.IAMDatabaseAuthenticationEnabled != nil, IAMAuth: sdk.ToBool(in.IAMDatabaseAuthenticationEnabled), IOPS: sdk.ToInt32(in.Iops), Throughput: sdk.ToInt32(in.StorageThroughput), MaxStorageGB: sdk.ToInt32(in.MaxAllocatedStorage), Known: in.StorageEncrypted != nil && in.PubliclyAccessible != nil && in.MultiAZ != nil && in.AutoMinorVersionUpgrade != nil && in.BackupRetentionPeriod != nil && in.DeletionProtection != nil && in.AllocatedStorage != nil,
 		ARN: sdk.ToString(in.DBInstanceArn), Class: sdk.ToString(in.DBInstanceClass), StorageType: sdk.ToString(in.StorageType), KMSKey: sdk.ToString(in.KmsKeyId), MasterUser: sdk.ToString(in.MasterUsername), StorageGB: sdk.ToInt32(in.AllocatedStorage), BackupDays: sdk.ToInt32(in.BackupRetentionPeriod), Encrypted: sdk.ToBool(in.StorageEncrypted), Public: sdk.ToBool(in.PubliclyAccessible), MultiAZ: sdk.ToBool(in.MultiAZ), AutoMinor: sdk.ToBool(in.AutoMinorVersionUpgrade), DeleteProtected: sdk.ToBool(in.DeletionProtection), GroupsReady: true, ParametersReady: true}
 	if in.DBSubnetGroup != nil {
 		out.SubnetGroup = sdk.ToString(in.DBSubnetGroup.DBSubnetGroupName)
@@ -69,6 +74,18 @@ func (s *Session) validDBRecovery(spec DBRecoverySpec, c DBRecoveryControl) erro
 	if !recoveryIntentRE.MatchString(spec.Intent) || spec.ID != "lp-recovery-"+spec.Intent[:32] || spec.ID == spec.Snapshot.InstanceID || spec.SourcePhysicalID == "" || spec.ResourceID == spec.SourcePhysicalID || spec.Class == "" || spec.StorageGB < 20 || spec.StorageType != "gp3" || spec.VPCID == "" || spec.SubnetGroup == "" || spec.SecurityGroupID == "" || spec.VerifierGroupID == "" || spec.SecurityGroupID == spec.VerifierGroupID || spec.ParameterGroup != "default.postgres17" || spec.AdminUser == "" || spec.Snapshot.Engine != "postgres" || (spec.Snapshot.EngineVersion != "17" && !strings.HasPrefix(spec.Snapshot.EngineVersion, "17.")) || !spec.Snapshot.Encrypted || c.Check == nil || spec.ResourceID == "" && c.Mutation.Captured == nil {
 		return errors.New("RDS recovery requires a reviewed private PostgreSQL 17 copy and durable controls")
 	}
+	if spec.PITR != nil {
+		if spec.PITR.InstanceID != spec.Snapshot.InstanceID || spec.PITR.Engine != spec.Snapshot.Engine || spec.PITR.EngineVersion != spec.Snapshot.EngineVersion || spec.PITR.Encrypted != spec.Snapshot.Encrypted || spec.PITR.KMSKey != spec.Snapshot.KMSKey || spec.PITR.Earliest.Before(spec.PITR.CreatedAt) {
+			return errors.New("RDS PITR source differs from its reviewed copy metadata")
+		}
+		if err := s.checkDBPITRIdentity(spec.PITR, spec.SourcePhysicalID); err != nil {
+			return err
+		}
+		return spec.PITR.CheckRestoreTime(spec.RestoreTime)
+	}
+	if !spec.RestoreTime.IsZero() {
+		return errors.New("RDS snapshot recovery cannot accept a PITR time")
+	}
 	return s.checkSnapshotIdentity(&spec.Snapshot, spec.SourcePhysicalID)
 }
 
@@ -88,7 +105,7 @@ func (s *Session) checkDBRecoveryIdentity(db *DBInstance, spec DBRecoverySpec) e
 		return err
 	}
 	if db.Engine != "postgres" || db.EngineVersion != spec.Snapshot.EngineVersion {
-		return errors.New("RDS recovery engine differs from the selected snapshot")
+		return errors.New("RDS recovery engine differs from the selected recovery point")
 	}
 	return nil
 }
@@ -98,12 +115,22 @@ func checkDBRecoverySettings(db *DBInstance, spec DBRecoverySpec) error {
 	if r == nil || !r.Known || r.Class != spec.Class || r.StorageGB != spec.StorageGB || r.StorageType != spec.StorageType || !r.Encrypted || r.KMSKey != spec.Snapshot.KMSKey || r.Public || r.MultiAZ || r.AutoMinor || r.DeleteProtected || r.BackupDays != 0 || r.Pending || r.MasterUser != spec.AdminUser || r.SubnetGroup != spec.SubnetGroup || r.VPCID != spec.VPCID || !r.GroupsReady || len(r.Groups) != 1 || r.Groups[0] != spec.SecurityGroupID || !r.ParametersReady || len(r.Parameters) != 1 || r.Parameters[0] != spec.ParameterGroup {
 		return errors.New("RDS recovery copy settings differ from its private capacity review")
 	}
+	if spec.PITR != nil && (!r.PITRKnown || r.IOPS != 3000 || r.Throughput != 125 || r.MaxStorageGB != 0 && r.MaxStorageGB != spec.StorageGB || r.IAMAuth) {
+		return errors.New("RDS PITR performance, storage ceiling or authentication differs from its review")
+	}
 	return nil
 }
 
 // RestoreDBSnapshot creates once, pins DbiResourceId before further polling,
 // and observes only that copy on continuation. Available is not SQL proof.
 func (s *Session) RestoreDBSnapshot(ctx context.Context, spec DBRecoverySpec, c DBRecoveryControl) (*DBInstance, error) {
+	if spec.PITR != nil || !spec.RestoreTime.IsZero() {
+		return nil, errors.New("use the explicit point-in-time recovery operation for PITR")
+	}
+	return s.restoreDBRecovery(ctx, spec, c)
+}
+
+func (s *Session) restoreDBRecovery(ctx context.Context, spec DBRecoverySpec, c DBRecoveryControl) (*DBInstance, error) {
 	if inputErr := s.validDBRecovery(spec, c); inputErr != nil {
 		return nil, inputErr
 	}
@@ -121,12 +148,8 @@ func (s *Session) RestoreDBSnapshot(ctx context.Context, spec DBRecoverySpec, c 
 		if checkErr := c.Check(ctx); checkErr != nil {
 			return nil, checkErr
 		}
-		selected, selectErr := s.ReadDBSnapshot(ctx, spec.SourcePhysicalID, spec.Snapshot)
-		if selectErr != nil {
-			return nil, selectErr
-		}
-		if selected.StorageGB <= 0 || selected.StorageGB > spec.StorageGB || selected.MasterUser != spec.AdminUser {
-			return nil, errors.New("RDS snapshot exceeds reviewed storage or has another administrator")
+		if sourceErr := s.checkDBRecoverySource(ctx, spec); sourceErr != nil {
+			return nil, sourceErr
 		}
 		if networkErr := s.checkDBRecoveryNetwork(ctx, spec, c.Check); networkErr != nil {
 			return nil, dbRecoveryObservationError(networkErr)
@@ -137,14 +160,7 @@ func (s *Session) RestoreDBSnapshot(ctx context.Context, spec DBRecoverySpec, c 
 		if checkErr := c.Check(ctx); checkErr != nil {
 			return nil, checkErr
 		}
-		out, restoreErr := s.rdsWrites().RestoreDBInstanceFromDBSnapshot(ctx, &rds.RestoreDBInstanceFromDBSnapshotInput{DBInstanceIdentifier: sdk.String(spec.ID), DBSnapshotIdentifier: sdk.String(spec.Snapshot.ARN), DBInstanceClass: sdk.String(spec.Class), AllocatedStorage: sdk.Int32(spec.StorageGB), StorageType: sdk.String(spec.StorageType), PubliclyAccessible: sdk.Bool(false), MultiAZ: sdk.Bool(false), AutoMinorVersionUpgrade: sdk.Bool(false), BackupRetentionPeriod: sdk.Int32(0), DeletionProtection: sdk.Bool(false), DBSubnetGroupName: sdk.String(spec.SubnetGroup), VpcSecurityGroupIds: []string{spec.SecurityGroupID}, DBParameterGroupName: sdk.String(spec.ParameterGroup), Port: sdk.Int32(5432), Tags: []rdstypes.Tag{{Key: sdk.String("loomplane-native-recovery"), Value: sdk.String(spec.Intent)}}})
-		if restoreErr != nil {
-			return nil, dbRecoveryWriteError(restoreErr)
-		}
-		if out.DBInstance == nil {
-			return nil, dbRecoveryWriteError(errors.New("RDS recovery returned no physical copy"))
-		}
-		db, err = readDBInstance(*out.DBInstance), nil
+		db, err = s.submitDBRecovery(ctx, spec)
 	} else if err == nil && !c.Mutation.Attempted && spec.ResourceID == "" {
 		return nil, errors.New("RDS recovery name exists without its original restore intent")
 	}
@@ -223,6 +239,9 @@ func (s *Session) checkDBRecoveryNetwork(ctx context.Context, spec DBRecoverySpe
 		seen[id] = true
 		if id != spec.SecurityGroupID {
 			continue
+		}
+		if spec.PITR != nil && len(group.IpPermissionsEgress) != 0 {
+			return errors.New("RDS PITR copy must have no outbound security-group rules")
 		}
 		if len(group.IpPermissions) != 1 {
 			return errors.New("RDS recovery must allow only its private SQL verifier")
