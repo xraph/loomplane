@@ -1071,6 +1071,54 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly dbGateways = {
+    /**
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GatewayList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/db-gateways`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GatewayList"],
+      };
+
+      return this.request<types.GatewayList>(config);
+    },
+
+    /**
+     */
+    pauseRoute: async (id: string, gatewayId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteSummary> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/db-gateways/${encodeURIComponent(String(gatewayId))}/routes/${encodeURIComponent(String(routeId))}/pause`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteSummary"],
+      };
+
+      return this.request<types.RouteSummary>(config);
+    },
+
+    /**
+     */
+    resumeRoute: async (id: string, gatewayId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteSummary> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/db-gateways/${encodeURIComponent(String(gatewayId))}/routes/${encodeURIComponent(String(routeId))}/resume`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteSummary"],
+      };
+
+      return this.request<types.RouteSummary>(config);
+    },
+
+  };
+
   public readonly deployed = {
     /**
      * The commit of each of the project's repositories deployed in the environment; one with nothing deployed there isn't listed, and a plan can't hold it

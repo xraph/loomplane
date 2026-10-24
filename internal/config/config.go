@@ -71,6 +71,15 @@ type Config struct {
 	Worker        WorkerConfig
 	Federation    FederationConfig
 	Providers     ProvidersConfig
+	DBGateway     DBGatewayConfig
+}
+
+// DBGatewayConfig is the control plane's side of the database gateway.
+type DBGatewayConfig struct {
+	// SigningKeyFile is the private JSON file holding the Ed25519 key that
+	// signs gateway snapshots, as a canonical absolute path. Empty leaves
+	// the gateway endpoints answering 503.
+	SigningKeyFile string
 }
 
 // FederationConfig keeps management and the agent listener independently configured.
@@ -412,6 +421,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Federation.Identity.OrganizationID, "federation.identity.organization_id")
 	r.str(&c.Federation.Identity.TrustDomain, "federation.identity.trust_domain")
 	r.str(&c.Federation.Identity.AdminSocket, "federation.identity.admin_socket")
+	r.str(&c.DBGateway.SigningKeyFile, "dbgateway.signing_key_file")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -484,6 +494,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Analysis.Concurrency < 1 {
 		errs = append(errs, errors.New("analysis.concurrency must be at least 1"))
+	}
+	if f := c.DBGateway.SigningKeyFile; f != "" && (!filepath.IsAbs(f) || filepath.Clean(f) != f) {
+		errs = append(errs, errors.New("dbgateway.signing_key_file must be a canonical absolute path"))
 	}
 	if c.Environment == EnvProduction {
 		errs = append(errs, c.productionChecks()...)
