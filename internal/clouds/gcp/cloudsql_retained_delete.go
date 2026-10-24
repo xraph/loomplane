@@ -33,8 +33,8 @@ func (s *Session) DeleteRetainedSQLBackup(ctx context.Context, region, instance,
 		if before == nil {
 			return errors.New("native backup deletion requires durable intent")
 		}
-		if _, err := s.ReadSQLBackup(ctx, region, instance, physical, selected); err != nil {
-			return err
+		if _, readErr := s.ReadSQLBackup(ctx, region, instance, physical, selected); readErr != nil && !IsNotFound(readErr) {
+			return readErr
 		}
 		if err := before(); err != nil {
 			return err
@@ -42,8 +42,10 @@ func (s *Session) DeleteRetainedSQLBackup(ctx context.Context, region, instance,
 		if err := check(ctx); err != nil {
 			return err
 		}
-		if _, err := s.ReadSQLBackup(ctx, region, instance, physical, selected); err != nil {
-			return err
+		if _, readErr := s.ReadSQLBackup(ctx, region, instance, physical, selected); IsNotFound(readErr) {
+			return check(ctx)
+		} else if readErr != nil {
+			return readErr
 		}
 		if err := check(ctx); err != nil {
 			return err

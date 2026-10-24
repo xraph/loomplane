@@ -56,7 +56,11 @@ func (a *App) reviewNativeCopy(ctx cli.CommandContext) error {
 			return saveErr
 		}
 		if !ctx.Bool("json") {
-			a.printf("Target %s/%s: %s in %s. %s, %d GiB %s, lifetime %dh. Review expires %s.\n", review.Target.CloudID, review.Target.TargetID, review.Target.NativeProject, review.Target.Region, review.Capacity.ComputeClass, review.Capacity.StorageGB, review.Capacity.StorageType, review.TTLHours, review.ValidUntil.UTC().Format("2006-01-02 15:04Z"))
+			nativeAccount := review.Target.NativeProject
+			if nativeAccount == "" {
+				nativeAccount = review.Target.NativeAccount
+			}
+			a.printf("Target %s/%s: %s in %s. %s, %d GiB %s, lifetime %dh. Review expires %s.\n", review.Target.CloudID, review.Target.TargetID, nativeAccount, review.Target.Region, review.Capacity.ComputeClass, review.Capacity.StorageGB, review.Capacity.StorageType, review.TTLHours, review.ValidUntil.UTC().Format("2006-01-02 15:04Z"))
 			a.printf("Saved request %s to %s. %s\n", review.RequestID, path, review.Notice)
 			return nil
 		}

@@ -7,17 +7,26 @@ import (
 	"time"
 )
 
+type RDSRecoveryNetwork struct {
+	VPCID           string `json:"vpc_id"`
+	SubnetGroup     string `json:"subnet_group"`
+	SecurityGroupID string `json:"security_group_id"`
+	VerifierGroupID string `json:"verifier_group_id"`
+}
+
 type NativeRecoveryTarget struct {
-	Provider        string `json:"provider"`
-	ConnectionID    string `json:"connection_id"`
-	AccountIdentity string `json:"account_identity"`
-	NativeProject   string `json:"native_project,omitempty"`
-	Region          string `json:"region"`
-	CloudID         string `json:"cloud_id,omitempty"`
-	TargetID        string `json:"target_id,omitempty"`
-	CloudRevision   int64  `json:"cloud_revision,omitempty"`
-	TargetRevision  int64  `json:"target_revision,omitempty"`
-	GrantRevision   int64  `json:"grant_revision,omitempty"`
+	NativeAccount   string             `json:"native_account,omitempty"`
+	RDSNetwork      RDSRecoveryNetwork `json:"rds_network,omitempty,omitzero"`
+	Provider        string             `json:"provider"`
+	ConnectionID    string             `json:"connection_id"`
+	AccountIdentity string             `json:"account_identity"`
+	NativeProject   string             `json:"native_project,omitempty"`
+	Region          string             `json:"region"`
+	CloudID         string             `json:"cloud_id,omitempty"`
+	TargetID        string             `json:"target_id,omitempty"`
+	CloudRevision   int64              `json:"cloud_revision,omitempty"`
+	TargetRevision  int64              `json:"target_revision,omitempty"`
+	GrantRevision   int64              `json:"grant_revision,omitempty"`
 }
 
 type NativeRecoveryCapacity struct {

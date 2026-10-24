@@ -95,12 +95,15 @@ func TestRetainedSQLBackupDeletionKeepsOriginalIncarnation(t *testing.T) {
 				}
 				err = deleter.DeleteRetainedSQLBackup(t.Context(), "europe-west1", "database", pin, selected, true, check, before)
 			}
-			success := scenario == "complete" || scenario == "lost-response"
+			success := scenario == "complete" || scenario == "lost-response" || scenario == "missing-before-intent"
 			if (err == nil) != success {
 				t.Fatal("wrong native deletion result", err)
 			}
+			if success && !intent {
+				t.Fatal("absence was accepted without durable intent")
+			}
 			want := 0
-			if success || scenario == "denied" {
+			if scenario == "complete" || scenario == "lost-response" || scenario == "denied" {
 				want = 1
 			}
 			if writes != want {

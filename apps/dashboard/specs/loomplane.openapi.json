@@ -2845,6 +2845,113 @@
         }
       }
     },
+    "/api/v1/native-recovery-retirements/{id}": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryRetirements.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native deletion and reconciliation status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRetirement"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-retirements/{id}/history": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryRetirements.history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed native deletion transitions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetirementHistory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-retirements/{id}/retry": {
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryRetirements.retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Retried original native deletion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRetirement"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/native-recovery-sources/{id}": {
       "get": {
         "tags": [
@@ -2955,6 +3062,57 @@
         }
       }
     },
+    "/api/v1/native-recovery-sources/{id}/points/{pointId}/retirements": {
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryRetirements.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pointId",
+            "in": "path",
+            "description": "Path parameter: pointId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeRetirementInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Admitted native recovery-point deletion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRetirement"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/native-recovery-sources/{id}/refresh": {
       "post": {
         "tags": [
@@ -2979,6 +3137,112 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NativeInventory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-sources/{id}/retention-preview": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoverySources.previewRetention",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "older_than_days",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "keep_last",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native full-backup retention preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPreview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-sources/{id}/retirements": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryRetirements.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native deletion history for a captured source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRetirementPage"
                 }
               }
             }
@@ -11394,6 +11658,115 @@
           },
           "target_revision": {
             "type": "integer"
+          }
+        }
+      },
+      "NativeRetirement": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "source_id",
+          "point_id",
+          "witness_id",
+          "status",
+          "policy",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "point_id": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RetentionInput"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "witness_id": {
+            "type": "string"
+          }
+        }
+      },
+      "NativeRetirementInputBody": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "policy",
+          "acknowledge_deletion"
+        ],
+        "properties": {
+          "acknowledge_deletion": {
+            "type": "boolean"
+          },
+          "policy": {
+            "type": "object",
+            "required": [
+              "older_than_days",
+              "keep_last"
+            ],
+            "properties": {
+              "keep_last": {
+                "type": "integer"
+              },
+              "older_than_days": {
+                "type": "integer"
+              }
+            }
+          },
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "NativeRetirementPage": {
+        "type": "object",
+        "required": [
+          "retirements"
+        ],
+        "properties": {
+          "next_before": {
+            "type": "string"
+          },
+          "retirements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativeRetirement"
+            }
           }
         }
       },

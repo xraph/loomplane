@@ -24,6 +24,15 @@ func (s *NativeService) CheckPoint(ctx context.Context, p security.Principal, so
 	if selected == nil || selected.ID != pointID || selected.SourceID != sourceID {
 		return nil, ErrNotFound
 	}
+	if s.Retirements != nil {
+		retired, retirementErr := s.Retirements.NativePointRetired(ctx, p.OrgID, sourceID, pointID)
+		if retirementErr != nil {
+			return nil, retirementErr
+		}
+		if retired {
+			return nil, ErrConflict
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	current, err := s.Backend.CheckNativeSnapshot(ctx, &source.Binding, *selected)

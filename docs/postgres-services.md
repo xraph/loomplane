@@ -69,7 +69,7 @@ loomctl backups native-inventory SOURCE_ID --limit 50 --json
 loomctl backups native-refresh SOURCE_ID --json
 ```
 
-Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. PITR and native-backup deletion and retention controls remain unavailable in Loomplane.
+Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. Native full-backup deletion is available through the API and CLI below. PITR remains unavailable.
 
 The source and copy list commands accept `--environment-id` and `--resource` independently. Resource names match exactly. Each page and its cursor use the same scope, so a page cannot silently continue into another resource's history. Omit these filters to list the project's retained histories.
 
@@ -233,6 +233,29 @@ loomctl restores delete RESTORE_ID --yes
 Reuse a request ID after a lost response to recover the original operation. Use a new ID for a new backup or restore. Failed backups can be retried with `loomctl backups retry BACKUP_ID`. Add `--disable` to the policy command to stop its schedule.
 
 With `--wait`, the CLI follows the persisted operation for up to 45 minutes. Set `--timeout 10m` to change that limit. Timeouts must be positive; invalid values are rejected before any API call. A timeout stops waiting and leaves the server job running. With `--json`, the CLI preserves the operation ID and its earlier response, then exits nonzero. Follow that ID with `show --wait` to read current status. Failed operations also return a nonzero exit status and retain their JSON result for inspection. `--json` outputs a single JSON value without a request-ID prefix; request errors include the reusable key.
+
+## Delete eligible native backups
+
+You can preview retention for a captured RDS or Cloud SQL source, then request permanent deletion of one eligible independent backup:
+
+```sh
+loomctl backups native-retention preview SOURCE_ID --older-than-days 30 --keep-last 7 --json
+loomctl backups native-retention delete SOURCE_ID POINT_ID --older-than-days 30 --keep-last 7 --request-id native-delete-001 --yes --wait
+loomctl backups native-retention show DELETION_ID --json
+loomctl backups native-retention history DELETION_ID --limit 50 --json
+```
+
+The source needs a complete, fresh inventory and a strictly newer point with recorded SQL verification. Keep counts protect the newest usable independent backups. Active recovery copies and the witness for an accepted deletion stay protected. A point exactly at the age cutoff stays. This selector supports RDS manual snapshots and Cloud SQL ON_DEMAND/FINAL backups. It does not prune provider-managed automated chains or PITR logs.
+
+Only an organization owner can request deletion. Admission permanently blocks that point from new recovery copies, even if the provider response is lost. The worker records intent before sending a native delete, rechecks the captured source and point identities, then confirms absence. An uncertain response is reconciled against the original point without posting another delete. A confirmed native rejection requires an explicit retry by the original requesting owner:
+
+```sh
+loomctl backups native-retention retry DELETION_ID --yes --wait
+```
+
+Deletion history remains scoped to the captured source. Read-only access permits previews and status, not deletion or retry. In **Service recovery**, choose the captured cloud history and open **Review native retention** to inspect decisions and deletion history. Automatic native retention policies remain pending. These operations use the provider's native backup storage; Trove export retention remains separate.
+
+Provider deletion tests use controlled AWS and Google endpoints. The RDS API/CLI/Dispatch drill uses a real control-plane database and a private PostgreSQL SQL verifier; it covers a denied native delete, explicit retry and the retained restore barrier. Dashboard workflows have JSDOM checks. Live cloud deletion and desktop/narrow browser rendering remain unverified.
 
 ## Preview backup retention
 

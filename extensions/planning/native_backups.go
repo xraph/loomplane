@@ -29,6 +29,9 @@ func (e *Extension) nativeBackupRoutes(group forge.Router) error {
 	if err := group.POST("/native-recovery-sources/:id/refresh", e.refreshNativeInventory, forge.WithName("nativeRecoverySources.refresh"), forge.WithResponseSchema(http.StatusOK, "Refreshed provider snapshot observations", recovery.NativeInventory{})); err != nil {
 		return err
 	}
+	if err := e.nativeRetirementRoutes(group); err != nil {
+		return err
+	}
 	return e.nativeCopyRoutes(group)
 }
 func nativePage(c forge.Context) (recovery.NativePageInput, error) {

@@ -13,7 +13,11 @@ import (
 // Reconcile repairs copy and cleanup enqueue gaps independently. A copy scan
 // failure must not keep an expired temporary database from reaching cleanup.
 func (s *NativeService) Reconcile(ctx context.Context) error {
-	return errors.Join(s.ReconcileCopies(ctx), s.ReconcileCleanups(ctx))
+	var retirementErr error
+	if s.Retirements != nil && s.EnqueueDeletion != nil {
+		retirementErr = s.ReconcileRetirements(ctx)
+	}
+	return errors.Join(s.ReconcileCopies(ctx), s.ReconcileCleanups(ctx), retirementErr)
 }
 
 func copyNativeRestore(r NativeRestore) NativeRestore {

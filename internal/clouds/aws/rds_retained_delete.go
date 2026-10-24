@@ -29,8 +29,8 @@ func (s *Session) DeleteRetainedDBSnapshot(ctx context.Context, physical string,
 		if c.Mutation.Before == nil {
 			return errors.New("native deletion requires a durable intent")
 		}
-		if _, err := s.ReadDBSnapshot(ctx, physical, selected); err != nil {
-			return err
+		if _, readErr := s.ReadDBSnapshot(ctx, physical, selected); readErr != nil && !IsNotFound(readErr) {
+			return readErr
 		}
 		if err := c.Mutation.Before(); err != nil {
 			return err
@@ -38,8 +38,10 @@ func (s *Session) DeleteRetainedDBSnapshot(ctx context.Context, physical string,
 		if err := c.Check(ctx); err != nil {
 			return err
 		}
-		if _, err := s.ReadDBSnapshot(ctx, physical, selected); err != nil {
-			return err
+		if _, readErr := s.ReadDBSnapshot(ctx, physical, selected); IsNotFound(readErr) {
+			return c.Check(ctx)
+		} else if readErr != nil {
+			return readErr
 		}
 		if err := c.Check(ctx); err != nil {
 			return err

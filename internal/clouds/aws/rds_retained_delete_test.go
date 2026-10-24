@@ -92,12 +92,15 @@ func TestRetainedRDSSnapshotDeletionPinsOriginalAndNeverReposts(t *testing.T) {
 				control.Mutation.Attempted = true
 				err = deleter.DeleteRetainedDBSnapshot(t.Context(), "db-original", selected, control)
 			}
-			success := scenario == "complete" || scenario == "lost-response"
+			success := scenario == "complete" || scenario == "lost-response" || scenario == "missing-before-intent"
 			if (err == nil) != success {
 				t.Fatal("incorrect native deletion result", err)
 			}
+			if success && !intent {
+				t.Fatal("absence was accepted without durable intent")
+			}
 			want := 0
-			if success || scenario == "denied" {
+			if scenario == "complete" || scenario == "lost-response" || scenario == "denied" {
 				want = 1
 			}
 			if writes != want {

@@ -1173,6 +1173,37 @@ export interface NativeRestoreTarget {
   targetRevision?: number;
 }
 
+export interface NativeRetirement {
+  completedAt?: string;
+  createdAt: string;
+  createdBy: string;
+  error?: string;
+  id: string;
+  orgId: string;
+  pointId: string;
+  policy: RetentionInput;
+  policyId?: string;
+  policyRevision?: number;
+  projectId: string;
+  sourceId: string;
+  status: string;
+  witnessId: string;
+}
+
+export interface NativeRetirementInputBody {
+  acknowledgeDeletion: boolean;
+  policy: {
+  keepLast: number;
+  olderThanDays: number;
+};
+  requestId: string;
+}
+
+export interface NativeRetirementPage {
+  nextBefore?: string;
+  retirements: NativeRetirement[];
+}
+
 export interface NativeSource {
   capturedAt: string;
   checkedAt?: string;

@@ -2100,6 +2100,114 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly nativeRecoveryRetirements = {
+    /**
+     */
+    create: async (id: string, pointId: string, body: types.NativeRetirementInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/points/${encodeURIComponent(String(pointId))}/retirements`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeRetirementInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+    /**
+     */
+    history: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementHistory> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}/history`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetirementHistory"],
+      };
+
+      return this.request<types.RetirementHistory>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirementPage> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retirements`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirementPage"],
+      };
+
+      return this.request<types.NativeRetirementPage>(config);
+    },
+
+    /**
+     */
+    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+  };
+
   public readonly nativeRecoverySources = {
     /**
      */
@@ -2163,6 +2271,28 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.NativeRecoverySources>(config);
+    },
+
+    /**
+     */
+    previewRetention: async (id: string, olderThanDays?: number, keepLast?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPreview> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-preview`;
+      const queryParams: Record<string, any> = {};
+      queryParams['older_than_days'] = olderThanDays;
+      queryParams['keep_last'] = keepLast;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPreview"],
+      };
+
+      return this.request<types.RetentionPreview>(config);
     },
 
     /**

@@ -20,6 +20,7 @@ import {
 import { NativeEmpty } from "@/components/native-recovery-empty"
 import { NativeCopyButton } from "@/components/native-copy-review"
 import { NativeCopyHistory } from "@/components/native-copies"
+import { NativeRetention } from "@/components/native-retention"
 import { useOrganization } from "@/lib/organization"
 import { formatDate } from "@/lib/format"
 
@@ -81,8 +82,8 @@ function NativeRecoveryContent({
       <p className="text-xs text-muted-foreground">
         Saved provider observations, separate from Trove exports. A snapshot
         listed here has not been restore-tested. You can review temporary Cloud
-        SQL PostgreSQL 17 copies below. PITR and RDS restore controls remain in
-        your cloud account.
+        SQL and RDS PostgreSQL 17 copies below. Native retention has a separate
+        review. PITR controls remain in your cloud account.
       </p>
       <NativeCopyHistory
         key={copyVersion}
@@ -197,14 +198,23 @@ function NativePoints({
         <p className="min-w-0 text-xs break-all text-muted-foreground">
           {source.provider} · {source.region} · {source.physicalId}
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => void refreshCloud()}
-        >
-          {busy ? "Reading cloud snapshots…" : "Refresh cloud snapshots"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <NativeRetention
+            source={source.id}
+            project={source.projectId}
+            onChanged={async () => {
+              await Promise.allSettled([inventory.refetch(), reloadSources()])
+            }}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void refreshCloud()}
+          >
+            {busy ? "Reading cloud snapshots…" : "Refresh cloud snapshots"}
+          </Button>
+        </div>
       </div>
       <p className="text-xs text-muted-foreground">
         {observed.observedAt

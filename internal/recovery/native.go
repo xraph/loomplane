@@ -101,20 +101,23 @@ type NativeAdmissionStore interface {
 }
 
 type NativeService struct {
-	Store          NativeStore
-	Authz          Authorizer
-	Projects       Projects
-	Backend        NativeBackend
-	Copies         NativeCopyWorkStore
-	CopyBackend    NativeCopyBackend
-	AccessBackend  NativeAccessBackend
-	EnqueueCopy    func(context.Context, string, string) error
-	Cleanups       NativeCleanupWorkStore
-	CleanupBackend NativeCleanupBackend
-	EnqueueCleanup func(context.Context, string, string) error
-	Admission      NativeAdmissionStore
-	ReviewKey      []byte
-	Audit          projects.Auditor
+	Retirements     NativeRetirementStore
+	DeletionBackend NativeDeletionBackend
+	EnqueueDeletion func(context.Context, string, string) error
+	Store           NativeStore
+	Authz           Authorizer
+	Projects        Projects
+	Backend         NativeBackend
+	Copies          NativeCopyWorkStore
+	CopyBackend     NativeCopyBackend
+	AccessBackend   NativeAccessBackend
+	EnqueueCopy     func(context.Context, string, string) error
+	Cleanups        NativeCleanupWorkStore
+	CleanupBackend  NativeCleanupBackend
+	EnqueueCleanup  func(context.Context, string, string) error
+	Admission       NativeAdmissionStore
+	ReviewKey       []byte
+	Audit           projects.Auditor
 }
 
 func (s *NativeService) List(ctx context.Context, p security.Principal, project string, page NativePageInput) (*NativeSourcesPage, error) {

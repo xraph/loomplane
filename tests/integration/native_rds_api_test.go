@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,13 @@ import (
 )
 
 func TestNativeRDSRecoveryHTTPCLIAndDispatchSurviveRestart(t *testing.T) {
+	runNativeRDSRecoveryHTTP(t, "copy")
+}
+func TestNativeRDSRetentionHTTPCLIAndDispatchUsesVerifiedWitness(t *testing.T) {
+	runNativeRDSRecoveryHTTP(t, "retention")
+}
+func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
+	nativeRetention := workflow == "retention"
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Storage.URL = "file://" + t.TempDir()
@@ -54,6 +62,8 @@ func TestNativeRDSRecoveryHTTPCLIAndDispatchSurviveRestart(t *testing.T) {
 	exists := false
 	cleanupDenied := false
 	mutations := map[string]int{}
+	oldBackupExists, pointDeleteDenied := true, false
+	oldPointTime := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
 	notFound := func() (int, string) {
 		return 404, `<ErrorResponse><Error><Code>DBInstanceNotFound</Code></Error></ErrorResponse>`
 	}
@@ -80,7 +90,42 @@ func TestNativeRDSRecoveryHTTPCLIAndDispatchSurviveRestart(t *testing.T) {
 		if form.Get("DbiResourceId") != "" && form.Get("DbiResourceId") != "db-source" {
 			t.Error("snapshot read lost source pin")
 		}
-		return 200, fmt.Sprintf(`<DescribeDBSnapshotsResponse><DescribeDBSnapshotsResult><DBSnapshots><DBSnapshot><DBSnapshotIdentifier>original</DBSnapshotIdentifier><DBSnapshotArn>arn:aws:rds:us-east-1:%s:snapshot:original</DBSnapshotArn><DBInstanceIdentifier>%s</DBInstanceIdentifier><DbiResourceId>db-source</DbiResourceId><SnapshotType>manual</SnapshotType><SnapshotCreateTime>2026-10-22T00:00:00Z</SnapshotCreateTime><Status>available</Status><Engine>postgres</Engine><EngineVersion>17.2</EngineVersion><Encrypted>true</Encrypted><KmsKeyId>%s</KmsKeyId><AllocatedStorage>20</AllocatedStorage><MasterUsername>app</MasterUsername></DBSnapshot></DBSnapshots></DescribeDBSnapshotsResult></DescribeDBSnapshotsResponse>`, awsAccount, sourceName, kms)
+		selected := form.Get("DBSnapshotIdentifier")
+		body := ""
+		if selected == "" || selected == "original" {
+			body += nativeRDSSnapshotXML("original", sourceName, kms, time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC))
+		}
+		if nativeRetention && oldBackupExists && (selected == "" || selected == "old-retained") {
+			body += nativeRDSSnapshotXML("old-retained", sourceName, kms, oldPointTime)
+		}
+		if body == "" {
+			return http.StatusNotFound, `<ErrorResponse><Error><Code>DBSnapshotNotFound</Code></Error></ErrorResponse>`
+		}
+		return http.StatusOK, `<DescribeDBSnapshotsResponse><DescribeDBSnapshotsResult><DBSnapshots>` + body + `</DBSnapshots></DescribeDBSnapshotsResult></DescribeDBSnapshotsResponse>`
+	}
+	fake.query["DeleteDBSnapshot"] = func(form url.Values) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !nativeRetention || form.Get("DBSnapshotIdentifier") != "old-retained" {
+			t.Error("retention touched another native recovery point", form)
+		}
+		db, err := pgx.Connect(t.Context(), cfg.Database.URL)
+		if err != nil {
+			t.Error(err)
+			return http.StatusInternalServerError, ""
+		}
+		defer db.Close(context.Background())
+		var durable bool
+		if err = db.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM loomplane_native_retirements WHERE point->>'name'='old-retained' AND status='running' AND attempted)`).Scan(&durable); err != nil || !durable {
+			t.Error("native point deletion preceded durable intent", err)
+		}
+		if !pointDeleteDenied {
+			pointDeleteDenied = true
+			return http.StatusForbidden, `<ErrorResponse><Error><Code>AccessDenied</Code></Error></ErrorResponse>`
+		}
+		mutations["point_delete"]++
+		oldBackupExists = false
+		return http.StatusOK, `<DeleteDBSnapshotResponse><DeleteDBSnapshotResult/></DeleteDBSnapshotResponse>`
 	}
 	fake.query["DescribeDBSubnetGroups"] = func(url.Values) (int, string) {
 		return 200, `<DescribeDBSubnetGroupsResponse><DescribeDBSubnetGroupsResult><DBSubnetGroups><DBSubnetGroup><DBSubnetGroupName>recovery-private</DBSubnetGroupName><VpcId>vpc-recovery</VpcId><SubnetGroupStatus>Complete</SubnetGroupStatus></DBSubnetGroup></DBSubnetGroups></DescribeDBSubnetGroupsResult></DescribeDBSubnetGroupsResponse>`
@@ -189,8 +234,12 @@ func TestNativeRDSRecoveryHTTPCLIAndDispatchSurviveRestart(t *testing.T) {
 	_ = data.Close(t.Context())
 	var inventory recovery.NativeInventory
 	c.must(200, http.MethodPost, "/api/v1/native-recovery-sources/"+source.ID+"/refresh", nil, &inventory)
-	if len(inventory.Points) != 1 {
-		t.Fatal("native RDS point missing")
+	expectedPoints := 1
+	if nativeRetention {
+		expectedPoints = 2
+	}
+	if len(inventory.Points) != expectedPoints {
+		t.Fatal("native RDS point missing", len(inventory.Points))
 	}
 	var cloud cloudprofiles.Profile
 	cloudBase := "/api/v1/projects/" + plan.ProjectID + "/clouds"
@@ -300,6 +349,61 @@ func TestNativeRDSRecoveryHTTPCLIAndDispatchSurviveRestart(t *testing.T) {
 	wait("deleted")
 	if secretExists() {
 		t.Fatal("confirmed RDS cleanup retained copy credentials")
+	}
+	if nativeRetention {
+		base := "/api/v1/native-recovery-sources/" + source.ID
+		var preview recovery.RetentionPreview
+		c.must(http.StatusOK, http.MethodGet, base+"/retention-preview?older_than_days=7&keep_last=1", nil, &preview)
+		if !preview.Complete || preview.EligibleCount != 1 || preview.VerifiedBackupID != inventory.Points[0].ID {
+			t.Fatal("native retention lost the SQL-verified witness", preview)
+		}
+		oldPointID := ""
+		for _, point := range inventory.Points {
+			if point.Name == "old-retained" {
+				oldPointID = point.ID
+			}
+		}
+		endpoint := base + "/points/" + oldPointID + "/retirements"
+		input := recovery.NativeRetirementInput{RequestID: "rds-native-retire-request", Policy: recovery.RetentionInput{OlderThanDays: 7, KeepLast: 1}}
+		c.must(http.StatusUnprocessableEntity, http.MethodPost, endpoint, input, nil)
+		input.AcknowledgeDeletion = true
+		readOnly.must(http.StatusForbidden, http.MethodPost, endpoint, input, nil)
+		var retirement recovery.NativeRetirement
+		c.must(http.StatusAccepted, http.MethodPost, endpoint, input, &retirement)
+		waitRetirement := func(want string) {
+			t.Helper()
+			until := time.Now().Add(90 * time.Second)
+			for {
+				c.must(http.StatusOK, http.MethodGet, "/api/v1/native-recovery-retirements/"+retirement.ID, nil, &retirement)
+				if retirement.Status == want {
+					return
+				}
+				if time.Now().After(until) {
+					t.Fatal("native retirement did not finish", want, retirement.Status, retirement.Error)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		waitRetirement("failed")
+		lc.must("backups", "native-retention", "retry", retirement.ID, "--yes", "--wait")
+		waitRetirement("succeeded")
+		var replay recovery.NativeRetirement
+		c.must(http.StatusAccepted, http.MethodPost, endpoint, input, &replay)
+		if replay.ID != retirement.ID || replay.WitnessID != inventory.Points[0].ID {
+			t.Fatal("native deletion replay changed its witness or operation")
+		}
+		var history recovery.RetirementHistory
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/native-recovery-retirements/"+retirement.ID+"/history?limit=100", nil, &history)
+		if len(history.Events) < 5 {
+			t.Fatal("native deletion lost committed history", history)
+		}
+		c.must(http.StatusOK, http.MethodPut, "/api/v1/clouds/"+cloud.ID+"/projects/"+source.ProjectID, map[string]any{"target_ids": []string{target.ID}}, nil)
+		c.must(http.StatusConflict, http.MethodPost, base+"/points/"+oldPointID+"/copy-review", recovery.NativeCopyReviewInput{RequestID: "retired-copy-request", CloudID: cloud.ID, TargetID: target.ID, TTLHours: 1}, nil)
+		mu.Lock()
+		if oldBackupExists || mutations["point_delete"] != 1 {
+			t.Error("native deletion was not exact", oldBackupExists, mutations["point_delete"])
+		}
+		mu.Unlock()
 	}
 	var contract json.RawMessage
 	c.must(200, http.MethodGet, "/openapi.json", nil, &contract)
