@@ -149,8 +149,10 @@ export function NativeCopyHistory({
                   )}
               </div>
               <p className="break-all text-muted-foreground">
-                {copy.target.nativeProject || copy.target.provider} ·{" "}
-                {copy.target.region} · Source {copy.sourceId}
+                {copy.target.nativeProject ||
+                  copy.target.nativeAccount ||
+                  copy.target.provider}{" "}
+                · {copy.target.region} · Source {copy.sourceId}
               </p>
               <p className="text-muted-foreground">
                 {copy.verifiedAt
@@ -222,8 +224,10 @@ export function NativeCopyHistory({
             <AlertDialogTitle>Clean up temporary copy?</AlertDialogTitle>
             <AlertDialogDescription className="break-words">
               Remove {confirming?.id} from{" "}
-              {confirming?.target.nativeProject || confirming?.target.provider}.
-              This removes the temporary copy and its credentials. The source
+              {confirming?.target.nativeProject ||
+                confirming?.target.nativeAccount ||
+                confirming?.target.provider}
+              . This removes the temporary copy and its credentials. The source
               database stays unchanged. Charges continue if cleanup fails.
             </AlertDialogDescription>
           </AlertDialogHeader>

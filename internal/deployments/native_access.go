@@ -11,6 +11,9 @@ import (
 // NativeCredentials authenticates the original reader through Google's
 // connector. The caller must supply its own Cloud SQL IAM identity to connect.
 func (n *NativeDatabases) NativeCredentials(ctx context.Context, p security.Principal, r recovery.NativeRestore, check func(context.Context) error) (*recovery.NativeCopyCredentials, error) {
+	if r.Target.Provider == "rds" {
+		return n.rdsCopyCredentials(ctx, p, r, check)
+	}
 	if check == nil || p.OrgID != r.OrgID || p.UserID == "" {
 		return nil, recovery.ErrInvalid
 	}

@@ -15,7 +15,7 @@ type rdsRecoveryRemover interface {
 }
 
 func TestRDSRecoveryCleanupNeverDeletesSourceOrReplacement(t *testing.T) {
-	for _, scenario := range []string{"delete", "resume", "absent-without-intent", "replacement", "source", "foreign-intent", "before-fails", "lost-response", "revoked", "replaced-during-poll"} {
+	for _, scenario := range []string{"delete", "resume", "absent-without-intent", "replacement", "source", "foreign-intent", "before-fails", "lost-response", "revoked", "replaced-during-poll", "capture-restore", "capture-fails", "capture-foreign"} {
 		t.Run(scenario, func(t *testing.T) {
 			intent := strings.Repeat("a", 64)
 			name := "lp-recovery-" + intent[:32]
@@ -24,6 +24,7 @@ func TestRDSRecoveryCleanupNeverDeletesSourceOrReplacement(t *testing.T) {
 				spec.ResourceID = "db-source"
 			}
 			writes, reads, before := 0, 0, 0
+			captures := 0
 			missing := scenario == "resume" || scenario == "absent-without-intent"
 			failure := errors.New("cleanup lease lost")
 			revoked := scenario == "revoked"
@@ -44,7 +45,7 @@ func TestRDSRecoveryCleanupNeverDeletesSourceOrReplacement(t *testing.T) {
 					if scenario == "replacement" || scenario == "replaced-during-poll" && writes > 0 {
 						physical = "db-replacement"
 					}
-					if scenario == "foreign-intent" {
+					if scenario == "foreign-intent" || scenario == "capture-foreign" {
 						tag = "other"
 					}
 					fmt.Fprintf(w, `<DescribeDBInstancesResponse><DescribeDBInstancesResult><DBInstances><DBInstance><DBInstanceIdentifier>%s</DBInstanceIdentifier><DbiResourceId>%s</DbiResourceId><DBInstanceArn>arn:aws:rds:us-east-1:123456789012:db:%s</DBInstanceArn><Engine>postgres</Engine><EngineVersion>17.2</EngineVersion><DBInstanceStatus>available</DBInstanceStatus><TagList><Tag><Key>loomplane-native-recovery</Key><Value>%s</Value></Tag></TagList></DBInstance></DBInstances></DescribeDBInstancesResult></DescribeDBInstancesResponse>`, name, physical, name, tag)
@@ -83,6 +84,36 @@ func TestRDSRecoveryCleanupNeverDeletesSourceOrReplacement(t *testing.T) {
 				}
 				return ctx.Err()
 			}}
+			if strings.HasPrefix(scenario, "capture-") {
+				spec.ResourceID = ""
+				control.Mutation.Attempted = true
+				control.Mutation.Captured = func(id string) error {
+					captures++
+					if id != "db-copy" {
+						t.Error("wrong restore pin", id)
+					}
+					if scenario == "capture-fails" {
+						return failure
+					}
+					return nil
+				}
+				inspector, ok := any(client).(interface {
+					InspectDBRecoveryForCleanup(context.Context, DBRecoverySpec, DBRecoveryControl) (*DBInstance, error)
+				})
+				if !ok {
+					t.Fatal("RDS lost restore response cannot capture its original cleanup identity")
+				}
+				observed, observeErr := inspector.InspectDBRecoveryForCleanup(t.Context(), spec, control)
+				if scenario == "capture-restore" {
+					if observeErr != nil || observed == nil || captures != 1 || writes != 0 {
+						t.Fatal("original restore not captured for cleanup", captures, writes, observeErr)
+					}
+				} else if observeErr == nil || writes != 0 {
+					t.Fatal("unverified cleanup capture accepted", observeErr)
+				}
+				return
+			}
+
 			err := remover.DeleteDBRecovery(t.Context(), spec, control)
 			switch scenario {
 			case "delete":

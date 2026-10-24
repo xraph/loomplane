@@ -13,13 +13,22 @@ import (
 	"github.com/xraph/loomplane/internal/recovery"
 )
 
+// NativeSQLTransports lets trusted Go integrations supply provider transport.
+// It cannot bypass source/target authority, native identity or SQL verification.
+// HTTP requests and connection settings cannot select these factories.
+type NativeSQLTransports struct {
+	RDS      func(context.Context, *aws.Session, string, string, int32) (aws.DBConnector, error)
+	CloudSQL func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error)
+}
+
 // NativeDatabases reads provider metadata for the original reviewed source.
 // It never substitutes Trove exports for provider-native recovery points.
 type NativeDatabases struct {
-	AWS         *aws.Client
-	Google      *gcp.Client
-	Credentials Credentials
-	Secrets     NativeCopySecrets
+	AWS          *aws.Client
+	Google       *gcp.Client
+	Credentials  Credentials
+	Secrets      NativeCopySecrets
+	RDSConnector func(context.Context, *aws.Session, string, string, int32) (aws.DBConnector, error)
 	// SQLConnector overrides only transport in controlled integration tests.
 	// The actual PostgreSQL verifier always runs; production uses Google's dialer.
 	SQLConnector func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error)

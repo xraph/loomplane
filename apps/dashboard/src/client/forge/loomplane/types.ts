@@ -1164,8 +1164,10 @@ export interface NativeRestoreTarget {
   cloudRevision?: number;
   connectionId: string;
   grantRevision?: number;
+  nativeAccount?: string;
   nativeProject?: string;
   provider: string;
+  rdsNetwork?: RDSRecoveryNetwork;
   region: string;
   targetId?: string;
   targetRevision?: number;
@@ -1583,6 +1585,13 @@ export interface PublicConfig {
   appId: string;
   authBasePath: string;
   publishableKey: string;
+}
+
+export interface RDSRecoveryNetwork {
+  securityGroupId: string;
+  subnetGroup: string;
+  verifierGroupId: string;
+  vpcId: string;
 }
 
 export interface RealtimeForgeGap {

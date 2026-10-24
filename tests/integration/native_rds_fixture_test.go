@@ -1,0 +1,9 @@
+//go:build integration
+
+package integration
+
+import "fmt"
+
+func nativeRDSInstanceXML(name, physical, intent, kms string) string {
+	return fmt.Sprintf(`<DBInstance><DBInstanceIdentifier>%s</DBInstanceIdentifier><DbiResourceId>%s</DbiResourceId><DBInstanceArn>arn:aws:rds:us-east-1:123456789012:db:%s</DBInstanceArn><Engine>postgres</Engine><EngineVersion>17.2</EngineVersion><DBInstanceStatus>available</DBInstanceStatus><DBInstanceClass>db.t4g.micro</DBInstanceClass><AllocatedStorage>20</AllocatedStorage><StorageType>gp3</StorageType><StorageEncrypted>true</StorageEncrypted><KmsKeyId>%s</KmsKeyId><MasterUsername>app</MasterUsername><PubliclyAccessible>false</PubliclyAccessible><MultiAZ>false</MultiAZ><AutoMinorVersionUpgrade>false</AutoMinorVersionUpgrade><BackupRetentionPeriod>0</BackupRetentionPeriod><DeletionProtection>false</DeletionProtection><DBSubnetGroup><DBSubnetGroupName>recovery-private</DBSubnetGroupName><VpcId>vpc-recovery</VpcId></DBSubnetGroup><VpcSecurityGroups><VpcSecurityGroupMembership><VpcSecurityGroupId>sg-copy</VpcSecurityGroupId><Status>active</Status></VpcSecurityGroupMembership></VpcSecurityGroups><DBParameterGroups><DBParameterGroup><DBParameterGroupName>default.postgres17</DBParameterGroupName><ParameterApplyStatus>in-sync</ParameterApplyStatus></DBParameterGroup></DBParameterGroups><Endpoint><Address>%s.abcdef.us-east-1.rds.amazonaws.com</Address><Port>5432</Port></Endpoint><TagList><Tag><Key>loomplane-native-recovery</Key><Value>%s</Value></Tag></TagList></DBInstance>`, name, physical, name, kms, name, intent)
+}

@@ -26,7 +26,7 @@ func (s *Session) SetDBRecoveryPassword(ctx context.Context, spec DBRecoverySpec
 	}
 	db, err := s.GetDBInstance(ctx, spec.ID)
 	if err != nil {
-		return err
+		return dbRecoveryObservationError(err)
 	}
 	if identityErr := s.checkDBRecoveryIdentity(db, spec); identityErr != nil {
 		return identityErr
@@ -49,7 +49,7 @@ func (s *Session) SetDBRecoveryPassword(ctx context.Context, spec DBRecoverySpec
 		}
 		current, readErr := s.GetDBInstance(ctx, spec.ID)
 		if readErr != nil {
-			return readErr
+			return dbRecoveryObservationError(readErr)
 		}
 		if identityErr := s.checkDBRecoveryIdentity(current, spec); identityErr != nil {
 			return identityErr
@@ -62,10 +62,10 @@ func (s *Session) SetDBRecoveryPassword(ctx context.Context, spec DBRecoverySpec
 		}
 		out, modifyErr := s.rdsWrites().ModifyDBInstance(ctx, &rds.ModifyDBInstanceInput{DBInstanceIdentifier: sdk.String(spec.ID), MasterUserPassword: sdk.String(password), ApplyImmediately: sdk.Bool(true)})
 		if modifyErr != nil {
-			return errors.New("update the temporary RDS recovery administrator")
+			return dbRecoveryWriteError(modifyErr)
 		}
 		if out.DBInstance == nil {
-			return errors.New("RDS recovery password update returned no copy")
+			return dbRecoveryWriteError(errors.New("RDS recovery password update returned no copy"))
 		}
 		db = readDBInstance(*out.DBInstance)
 	}
@@ -91,7 +91,7 @@ func (s *Session) SetDBRecoveryPassword(ctx context.Context, spec DBRecoverySpec
 		}
 		db, err = s.GetDBInstance(ctx, spec.ID)
 		if err != nil {
-			return err
+			return dbRecoveryObservationError(err)
 		}
 	}
 }

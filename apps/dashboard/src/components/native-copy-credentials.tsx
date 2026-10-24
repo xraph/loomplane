@@ -60,9 +60,11 @@ function CredentialsDialog({
           <DialogTitle>Recovery copy credentials</DialogTitle>
           <DialogDescription>
             Read the temporary copy with an expiring reader login. Access is
-            checked again when you reveal it. You need your own authorized Cloud
-            SQL connector identity. An open SQL session can outlive the login
-            expiry.
+            checked again when you reveal it.{" "}
+            {copy.target.provider === "rds"
+              ? "Connect over the reviewed private route with RDS CA verification."
+              : "You need your own authorized Cloud SQL connector identity."}{" "}
+            An open SQL session can outlive the login expiry.
           </DialogDescription>
         </DialogHeader>
         <p className="text-xs break-all text-muted-foreground">

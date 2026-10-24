@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/grove/driver"
 
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -60,11 +61,27 @@ func readNativeTarget(ctx context.Context, db nativeTargetReader, org, project, 
 	if err := json.Unmarshal(raw, &details); err != nil {
 		return NativeRestoreTarget{}, err
 	}
-	out.NativeProject = details["project_id"]
+
 	out.AccountIdentity = connections.AccountIdentity(cloudKind, account, details)
-	if out.Provider != "cloud-sql" || runtime != "managed" || pool != "" || cloudKind != connections.GCP || status != connections.StatusReady || strings.TrimSpace(out.NativeProject) == "" || out.AccountIdentity == "" || strings.TrimSpace(out.Region) == "" || !nativeTargetPinned(out) {
+	if runtime != "managed" || pool != "" || status != connections.StatusReady || out.AccountIdentity == "" || strings.TrimSpace(out.Region) == "" || !nativeTargetPinned(out) {
 		return NativeRestoreTarget{}, ErrInvalid
 	}
+	switch out.Provider {
+	case "cloud-sql":
+		out.NativeProject = details["project_id"]
+		if cloudKind != connections.GCP || strings.TrimSpace(out.NativeProject) == "" {
+			return NativeRestoreTarget{}, ErrInvalid
+		}
+	case "rds":
+		route, routeErr := manageddb.RDSRecoverySettings(details)
+		if cloudKind != connections.AWS || details["region"] != out.Region || routeErr != nil || !route.Valid() {
+			return NativeRestoreTarget{}, ErrInvalid
+		}
+		out.NativeAccount, out.RDSNetwork = account, route
+	default:
+		return NativeRestoreTarget{}, ErrInvalid
+	}
+
 	return out, nil
 }
 

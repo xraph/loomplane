@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/nativepg"
@@ -52,7 +54,7 @@ type nativeCopyPasswords struct {
 }
 
 func nativeSQLCopyScope(r recovery.NativeRestore) (string, *planning.ResourceConfig, error) {
-	if r.ID == "" || r.OrgID == "" || r.ProjectID == "" || r.EnvironmentID == "" || r.SourceID == "" || r.PointID == "" || r.Source.OrgID != r.OrgID || r.Source.ProjectID != r.ProjectID || r.Source.EnvironmentID != r.EnvironmentID || r.Source.Subject != planning.ResourceSubject || r.Source.Provider != "cloud-sql" || r.Target.Provider != "cloud-sql" || r.Source.PhysicalID == "" || r.Source.ConnectionID == "" || r.Point.ID != r.PointID || r.Point.SourceID != r.SourceID || r.Point.Engine != "postgres" || r.Point.Version != "17" || r.Point.CreatedAt.IsZero() || r.ExpiresAt.IsZero() {
+	if r.ID == "" || r.OrgID == "" || r.ProjectID == "" || r.EnvironmentID == "" || r.SourceID == "" || r.PointID == "" || r.Source.OrgID != r.OrgID || r.Source.ProjectID != r.ProjectID || r.Source.EnvironmentID != r.EnvironmentID || r.Source.Subject != planning.ResourceSubject || (r.Source.Provider != "cloud-sql" && r.Source.Provider != "rds") || r.Target.Provider != r.Source.Provider || r.Source.PhysicalID == "" || r.Source.ConnectionID == "" || r.Point.ID != r.PointID || r.Point.SourceID != r.SourceID || r.Point.Engine != "postgres" || r.Point.CreatedAt.IsZero() || r.ExpiresAt.IsZero() {
 		return "", nil, recovery.ErrInvalid
 	}
 	for _, segment := range []string{r.OrgID, r.EnvironmentID, r.ID} {
@@ -64,10 +66,13 @@ func nativeSQLCopyScope(r recovery.NativeRestore) (string, *planning.ResourceCon
 	if err != nil {
 		return "", nil, err
 	}
-	parts := strings.Split(r.Point.ProviderID, "/")
-	if _, _, err = boundSQLInstance(r.Source.ExternalID, parts[1], r.Source.Region); err != nil {
-		return "", nil, err
+	if r.Source.Provider == "cloud-sql" {
+		parts := strings.Split(r.Point.ProviderID, "/")
+		if _, _, err = boundSQLInstance(r.Source.ExternalID, parts[1], r.Source.Region); err != nil {
+			return "", nil, err
+		}
 	}
+
 	// Scope contains the immutable retained inputs, not worker tokens/status or
 	// mutable inventory observations. The same request always names one copy.
 	raw, err := json.Marshal(struct {
@@ -263,6 +268,13 @@ func (s *nativeSQLCopyState) restore(ctx context.Context, client *gcp.Session, r
 // RestoreNative creates only an isolated copy, then proves an actual SQL login.
 // The original binding and the source database credentials are never changed.
 func (n *NativeDatabases) RestoreNative(ctx context.Context, p security.Principal, r recovery.NativeRestore, c recovery.NativeCopyControl) (recovery.NativeRestoreResult, error) {
+	if r.Target.Provider == "rds" {
+		result, err := n.restoreRDSCopy(ctx, p, r, c)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || aws.DBRecoveryReconciliationPending(err) {
+			return recovery.NativeRestoreResult{}, errors.Join(recovery.ErrNativePending, err)
+		}
+		return result, err
+	}
 	if c.Check == nil || c.Save == nil || c.Selected == nil || p.OrgID != r.OrgID || p.UserID == "" {
 		return recovery.NativeRestoreResult{}, recovery.ErrInvalid
 	}
@@ -339,12 +351,22 @@ func (n *NativeDatabases) checkNativeSQL(ctx context.Context, client *gcp.Sessio
 	if err != nil {
 		return err
 	}
+	return verifyNativeReader(ctx, r, s, passwords, guard, connector, "postgres", existingOnly)
+}
+
+type nativeSQLConnector interface {
+	DialContext(context.Context, string, string) (net.Conn, error)
+	Close() error
+}
+
+func verifyNativeReader(ctx context.Context, r recovery.NativeRestore, s *nativeSQLCopyState, passwords nativeCopyPasswords, guard func(context.Context) error, connector nativeSQLConnector, adminUser string, existingOnly bool) error {
+	var err error
 	if connector == nil {
 		return recovery.ErrInvalid
 	}
 	defer func() { _ = connector.Close() }()
 	verifier := &nativepg.Verifier{Dial: connector.DialContext}
-	spec := nativepg.Spec{Database: databaseName(r.Source.Name), AdminUser: "postgres", AdminPassword: passwords.AdminPassword, Reader: "lp_recovery_" + s.Scope[:32], ReaderPassword: passwords.ReaderPassword, Intent: s.Scope, ExpiresAt: r.ExpiresAt, MajorVersion: 17}
+	spec := nativepg.Spec{Database: databaseName(r.Source.Name), AdminUser: adminUser, AdminPassword: passwords.AdminPassword, Reader: "lp_recovery_" + s.Scope[:32], ReaderPassword: passwords.ReaderPassword, Intent: s.Scope, ExpiresAt: r.ExpiresAt, MajorVersion: 17}
 	if existingOnly {
 		_, err = verifier.Inspect(ctx, spec, guard)
 	} else {
@@ -356,6 +378,9 @@ func (n *NativeDatabases) checkNativeSQL(ctx context.Context, client *gcp.Sessio
 // DeleteNative retains the pin and operation through retries. Secrets are
 // removed only after the destination confirms the temporary copy is absent.
 func (n *NativeDatabases) DeleteNative(ctx context.Context, p security.Principal, r recovery.NativeRestore, c recovery.NativeWorkerControl) (recovery.NativeCleanupResult, error) {
+	if r.Target.Provider == "rds" {
+		return n.deleteRDSCopy(ctx, p, r, c)
+	}
 	if c.Check == nil || c.Save == nil || p.OrgID != r.OrgID || p.UserID == "" {
 		return recovery.NativeCleanupResult{}, recovery.ErrInvalid
 	}

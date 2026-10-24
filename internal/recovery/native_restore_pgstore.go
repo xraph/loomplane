@@ -208,13 +208,16 @@ func (s *PgStore) SaveNativeCheckpoint(ctx context.Context, r *NativeRestore, st
 func (s *PgStore) FinishNativeRestore(ctx context.Context, r *NativeRestore, result NativeRestoreResult, duration time.Duration, cause error) error {
 	status, message := "succeeded", ""
 	var verified *time.Time
-	if cause == nil {
+	switch {
+	case cause == nil:
 		if !result.SQLVerified || result.ExternalID == "" || result.PhysicalID == "" || duration < 0 {
 			return ErrInvalid
 		}
 		now := time.Now().UTC()
 		verified = &now
-	} else {
+	case errors.Is(cause, ErrNativePending):
+		status, message = "queued", "Waiting to reconcile the original native request. Its identity, credentials and expiry are retained."
+	default:
 		status, message = "failed", "Native restore did not finish. Check the saved operation and remove or reconcile the temporary copy."
 	}
 	return nativeRestoreWrite(s.db.Exec(ctx, `UPDATE loomplane_native_restores SET status=$4,error=$5,external_id=$6,physical_id=$7,verified_at=$8,duration_ms=$9,lease_until=NULL

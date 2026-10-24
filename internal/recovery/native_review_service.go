@@ -49,7 +49,7 @@ func (s *NativeService) ReviewCopy(ctx context.Context, p security.Principal, so
 	if checkErr := s.requireNative(ctx, p, source.ProjectID); checkErr != nil {
 		return nil, checkErr
 	}
-	if source.Provider != "cloud-sql" {
+	if source.Provider != "cloud-sql" && source.Provider != "rds" {
 		return nil, ErrInvalid
 	}
 	target, err := s.Admission.ReviewNativeTarget(ctx, p.OrgID, source.ProjectID, in.CloudID, in.TargetID)
@@ -91,6 +91,9 @@ func nativeReviewCapacity(source planning.Binding, point NativePoint, target Nat
 // NativeSQLCopyConfig is shared by admission and execution so their supported
 // source profile, native backup and isolated destination cannot diverge.
 func NativeSQLCopyConfig(source planning.Binding, point NativePoint, target NativeRestoreTarget) (*planning.ResourceConfig, error) {
+	if source.Provider == "rds" {
+		return nativeRDSCopyConfig(source, point, target)
+	}
 	var cfg planning.ResourceConfig
 	profile, err := manageddb.Postgres("cloud-sql", "17")
 	parts := strings.Split(point.ProviderID, "/")

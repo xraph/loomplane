@@ -11,6 +11,11 @@ import {
 import { type FormEvent, useRef, useState } from "react"
 import { toast } from "sonner"
 
+import {
+  RDSRecoveryFields,
+  rdsRecoverySettings,
+} from "@/components/rds-recovery-fields"
+
 import { messageOf } from "@/client/errors"
 import {
   useConnectionsCheck,
@@ -473,6 +478,7 @@ function ConnectForm({
         : cloud === "aws"
           ? {
               region: region.trim(),
+              ...rdsRecoverySettings(extraSettings),
               ...(certificate.trim()
                 ? { certificate_arn: certificate.trim() }
                 : {}),
@@ -675,6 +681,10 @@ function ConnectForm({
                     balancer serves plain HTTP and plans warn you.
                   </FieldDescription>
                 </Field>
+                <RDSRecoveryFields
+                  value={extraSettings}
+                  onChange={setExtraSettings}
+                />
               </>
             ) : extra ? (
               <>

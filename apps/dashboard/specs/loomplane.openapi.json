@@ -11374,11 +11374,17 @@
           "grant_revision": {
             "type": "integer"
           },
+          "native_account": {
+            "type": "string"
+          },
           "native_project": {
             "type": "string"
           },
           "provider": {
             "type": "string"
+          },
+          "rds_network": {
+            "$ref": "#/components/schemas/RDSRecoveryNetwork"
           },
           "region": {
             "type": "string"
@@ -12952,6 +12958,29 @@
             "type": "string"
           },
           "publishable_key": {
+            "type": "string"
+          }
+        }
+      },
+      "RDSRecoveryNetwork": {
+        "type": "object",
+        "required": [
+          "vpc_id",
+          "subnet_group",
+          "security_group_id",
+          "verifier_group_id"
+        ],
+        "properties": {
+          "security_group_id": {
+            "type": "string"
+          },
+          "subnet_group": {
+            "type": "string"
+          },
+          "verifier_group_id": {
+            "type": "string"
+          },
+          "vpc_id": {
             "type": "string"
           }
         }

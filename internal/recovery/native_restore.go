@@ -3,24 +3,32 @@ package recovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
+	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
 )
 
+// ErrNativePending retains a saved uncertain provider request for reconciliation.
+// It never establishes SQL proof or permits another native creation request.
+var ErrNativePending = errors.New("native recovery is waiting for its original provider request")
+
 // NativeRestoreTarget is the checked destination retained before a native copy.
 type NativeRestoreTarget struct {
-	Provider        string `json:"provider"`
-	ConnectionID    string `json:"connection_id"`
-	AccountIdentity string `json:"account_identity"`
-	NativeProject   string `json:"native_project,omitempty"`
-	Region          string `json:"region"`
-	CloudID         string `json:"cloud_id,omitempty"`
-	TargetID        string `json:"target_id,omitempty"`
-	CloudRevision   int64  `json:"cloud_revision,omitempty"`
-	TargetRevision  int64  `json:"target_revision,omitempty"`
-	GrantRevision   int64  `json:"grant_revision,omitempty"`
+	NativeAccount   string                       `json:"native_account,omitempty"`
+	RDSNetwork      manageddb.RDSRecoveryNetwork `json:"rds_network,omitempty,omitzero"`
+	Provider        string                       `json:"provider"`
+	ConnectionID    string                       `json:"connection_id"`
+	AccountIdentity string                       `json:"account_identity"`
+	NativeProject   string                       `json:"native_project,omitempty"`
+	Region          string                       `json:"region"`
+	CloudID         string                       `json:"cloud_id,omitempty"`
+	TargetID        string                       `json:"target_id,omitempty"`
+	CloudRevision   int64                        `json:"cloud_revision,omitempty"`
+	TargetRevision  int64                        `json:"target_revision,omitempty"`
+	GrantRevision   int64                        `json:"grant_revision,omitempty"`
 }
 
 // NativeRestore retains the selected provider backup independently of Trove.

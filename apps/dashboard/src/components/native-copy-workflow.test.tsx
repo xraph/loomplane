@@ -46,6 +46,7 @@ function fixture({
   denyReview = false,
   noTargets = false,
   removed = false,
+  provider = "cloud-sql",
 } = {}) {
   const reviews: Record<string, unknown>[] = []
   const creates: Record<string, unknown>[] = []
@@ -66,10 +67,10 @@ function fixture({
     project_id: "project",
     environment_id: "prod",
     name: "orders",
-    provider: "cloud-sql",
+    provider,
     connection_id: "source-account",
     physical_id: "source-original",
-    region: "us-central1",
+    region: provider === "rds" ? "us-east-1" : "us-central1",
     state: "ready",
     complete: true,
     captured_at: "2026-10-20T00:00:00Z",
@@ -77,12 +78,15 @@ function fixture({
   const point = {
     id: "point",
     source_id: "source",
-    provider_id: "projects/source-project/backups/daily",
+    provider_id:
+      provider === "rds"
+        ? "arn:aws:rds:us-east-1:123456789012:snapshot:daily"
+        : "projects/source-project/backups/daily",
     name: "daily",
-    kind: "ENHANCED",
-    status: "SUCCESSFUL",
+    kind: provider === "rds" ? "manual" : "ENHANCED",
+    status: provider === "rds" ? "available" : "SUCCESSFUL",
     engine: "postgres",
-    version: "17",
+    version: provider === "rds" ? "17.2" : "17",
     created_at: "2026-10-20T00:00:00Z",
     expires_at: "2099-01-01T00:00:00Z",
     last_seen_at: "2026-10-20T00:00:00Z",
@@ -97,9 +101,9 @@ function fixture({
     org_id: "org",
     project_id: "project",
     runtime: "managed",
-    provider: "cloud-sql",
-    region: "europe-west1",
-    connection_id: "recovery-account",
+    provider,
+    region: provider === "rds" ? "us-east-1" : "europe-west1",
+    connection_id: provider === "rds" ? "source-account" : "recovery-account",
     revision: 2,
   }
   const baseCopy = {
@@ -114,9 +118,10 @@ function fixture({
     created_at: "2026-10-23T00:00:00Z",
     expires_at: "2099-01-01T00:00:00Z",
     target: {
-      provider: "cloud-sql",
-      region: "europe-west1",
-      native_project: "recovery-project",
+      provider,
+      region: provider === "rds" ? "us-east-1" : "europe-west1",
+      native_project: provider === "rds" ? undefined : "recovery-project",
+      native_account: provider === "rds" ? "123456789012" : undefined,
     },
   }
   let copy: Record<string, unknown> | null = null
@@ -146,8 +151,11 @@ function fixture({
           ? reply({ message: "Reader access could not be checked" }, 503)
           : reply({
               copy_id: "copy",
-              provider: "cloud-sql",
-              connection_name: "recovery:europe-west1:copy",
+              provider,
+              connection_name:
+                provider === "rds"
+                  ? "copy.abcdef.us-east-1.rds.amazonaws.com:5432"
+                  : "recovery:europe-west1:copy",
               database: "orders",
               username: "lp_recovery_reader",
               password: "private-native-reader",
@@ -179,11 +187,11 @@ function fixture({
                   id: "managed-orders",
                   subject: "resource",
                   name: "orders",
-                  provider: "cloud-sql",
+                  provider,
                   environment_id: "prod",
                   config: {
                     kind: "postgres",
-                    provider: "cloud-sql",
+                    provider,
                     managed: { profile: { id: "postgresql-17-cloud-sql" } },
                   },
                 },
@@ -229,12 +237,14 @@ function fixture({
           notice:
             "Charges continue until deletion is confirmed. Cleanup can fail; check copy status.",
           target: {
-            provider: "cloud-sql",
+            provider,
             cloud_id: "cloud",
             target_id: "recovery",
-            region: "europe-west1",
-            native_project: "recovery-project",
-            connection_id: "recovery-account",
+            region: provider === "rds" ? "us-east-1" : "europe-west1",
+            native_project: provider === "rds" ? undefined : "recovery-project",
+            native_account: provider === "rds" ? "123456789012" : undefined,
+            connection_id:
+              provider === "rds" ? "source-account" : "recovery-account",
             account_identity: "gcp:recovery-project",
             cloud_revision: 1,
             target_revision: 2,
@@ -243,8 +253,9 @@ function fixture({
           capacity: {
             profile_id: "cloud-sql-postgres-17",
             profile_revision: "1",
-            compute_class: "db-custom-1-3840",
-            storage_gb: 10,
+            compute_class:
+              provider === "rds" ? "db.t4g.micro" : "db-custom-1-3840",
+            storage_gb: provider === "rds" ? 20 : 10,
             storage_type: "PD_SSD",
             availability: "ZONAL",
           },
@@ -896,4 +907,43 @@ it("replaces a preselected resource's review and cursor when the default-environ
   expect(lastPage).toContain("resource=analytics")
   expect(lastPage).not.toContain("before=")
   expect(f.creates).toHaveLength(0)
+})
+
+it("reviews an RDS snapshot into a granted private target on the source account", async () => {
+  const f = fixture({ provider: "rds" })
+  show()
+  const dialog = await openReview()
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Review capacity and charges" })
+  )
+  await within(dialog).findByText(/db.t4g.micro/)
+  expect(f.reviews).toHaveLength(1)
+  await userEvent.click(
+    within(dialog).getByRole("checkbox", { name: /acknowledge charges/i })
+  )
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Create temporary copy" })
+  )
+  await waitFor(() => expect(f.creates).toHaveLength(1))
+})
+
+it("explains the private RDS TLS route before revealing reader credentials", async () => {
+  const f = fixture({ provider: "rds" })
+  f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  expect(
+    within(dialog).getByText(/reviewed private route.*RDS CA/i)
+  ).toBeInTheDocument()
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+    "private-native-reader"
+  )
 })

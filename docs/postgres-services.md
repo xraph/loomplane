@@ -69,11 +69,19 @@ loomctl backups native-inventory SOURCE_ID --limit 50 --json
 loomctl backups native-refresh SOURCE_ID --json
 ```
 
-Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. RDS native restore, PITR and native-backup deletion and retention controls remain unavailable in Loomplane.
+Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. PITR and native-backup deletion and retention controls remain unavailable in Loomplane.
 
 The source and copy list commands accept `--environment-id` and `--resource` independently. Resource names match exactly. Each page and its cursor use the same scope, so a page cannot silently continue into another resource's history. Omit these filters to list the project's retained histories.
 
 For Cloud SQL PostgreSQL 17, open **Cloud snapshots** in the project's recovery screen, then **Review native copy** on a saved point. Choose a project-granted Cloud and a managed Cloud SQL target in a separate recovery project. Review its compute, disk, region and lifetime, then acknowledge charges before creating the copy. A review lasts ten minutes; the copy's requested lifetime can be one to 24 hours. These capacity details do not include a price estimate.
+
+For RDS PostgreSQL 17, choose a managed RDS target in the source account and region. The source must have the saved catalog profile and an encrypted snapshot that fits its reviewed 20 GiB capacity. Recovery creates a new private instance. It does not restore over the source or copy snapshots across accounts or regions.
+
+Configure **Private RDS recovery (optional)** when connecting or replacing the AWS account credential. Supply the recovery VPC, DB subnet group, copy security group and separate verifier security group. The copy group must allow TCP 5432 only from that verifier group, without CIDR or other ingress rules. Your recovery worker needs a private route from that group to the DB subnets. The server checks the groups, owner, VPC, subnet and instance settings before SQL access. Changing these connection settings invalidates an existing target review.
+
+The connection settings are `rds_recovery_vpc`, `rds_recovery_subnet_group`, `rds_recovery_security_group` and `rds_recovery_verifier_group`. Configure all four together. The AWS connection's **Ready** status does not establish the worker route or recovery permissions. Its key also needs the RDS snapshot restore, instance modification, metadata and deletion permissions, EC2 group reads and access to the snapshot's KMS key.
+
+RDS copies use the retained snapshot's encryption key, single-zone capacity and a fixed PostgreSQL 17 parameter group. They disable automated backups. Cleanup skips a final snapshot and deletes only the pinned temporary instance and its automated backups; your original recovery point stays in the account. An explicit AWS authorization rejection remains retryable after you correct access. A lost response stays uncertain and is reconciled without reposting the native request.
 
 You can save and submit the same review with `loomctl`:
 
@@ -97,9 +105,9 @@ loomctl backups native-copies credentials COPY_ID --out copy-credentials.json
 
 The CLI creates a new owner-only JSON file and refuses to overwrite one. It does not print the password. The API exposes the same check through `POST /api/v1/native-recovery-copies/COPY_ID/credentials`, with a `no-store` response. The dashboard keeps the password in the open dialog and clears it on close, scope change or permission loss. Cleanup cannot begin while the server checks access.
 
-Use the returned database, reader name, password and instance connection name with your own authorized Cloud SQL connector identity. Loomplane does not export the cloud account key or administrator password. Revealing credentials does not extend the copy's expiry. Hiding a disclosed password does not revoke it, and an open SQL session can outlive login expiry. Confirm copy removal when you finish.
+For Cloud SQL, use the returned database, reader name, password and instance connection name with your own authorized connector identity. For RDS, connect to the returned host and port over the reviewed private route, using `sslmode=verify-full` and the [RDS root certificate bundle](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html). Loomplane does not export the cloud account key or administrator password. Revealing credentials does not extend the copy's expiry. Hiding a disclosed password does not revoke it, and an open SQL session can outlive login expiry. Confirm copy removal when you finish.
 
-Native copy API, CLI, Dispatch and Vault checks use a real local control-plane database with controlled Google endpoints. The SQL verifier, credential-access service and backend also run against a private PostgreSQL fixture. Live Cloud SQL restore, IAM/TLS, privilege authority and cost qualification remain unverified; unsafe inherited SQL privileges cause verification to fail. Browser rendering of the native-copy and credential dialogs remains unverified. Live AWS snapshot and recovery qualification also remain pending.
+Native copy API, CLI, Dispatch and Vault checks use a real local control-plane database with controlled Google and AWS endpoints. The RDS success drill includes a control-plane restart, a real reader query, removed-role denial, retained credentials after cleanup denial and a CLI cleanup retry. SQL checks run against a private PostgreSQL fixture; the RDS TLS connector has separate certificate, hostname and private-address tests. Live Cloud SQL restore, IAM/TLS, privilege authority and cost qualification remain unverified; unsafe inherited SQL privileges cause verification to fail. Browser rendering of the native-copy and credential dialogs remains unverified. Live AWS snapshot and recovery qualification also remain pending.
 
 ## Persistence and backup storage
 
@@ -310,9 +318,9 @@ Worker loss keeps an accepted point unavailable for restore. On the Docker/local
 | Create a recovery copy        | `POST /api/v1/service-backups/:id/restore`                                                                     | `service_restore:manage`                        |
 | List/read copies              | `GET /api/v1/projects/:id/service-restores`, `GET /api/v1/service-restores/:id`                                | `service_backup:read`                           |
 | Remove a copy                 | `DELETE /api/v1/service-restores/:id`                                                                          | `service_restore:manage`                        |
-| Review a native copy          | `POST /api/v1/native-recovery-sources/:id/points/:pointId/copy-review`                                          | `service_restore:manage`                        |
-| Admit a native copy           | `POST /api/v1/native-recovery-copies`                                                                         | `service_restore:manage`                        |
-| List/read native copies       | `GET /api/v1/projects/:id/native-recovery-copies`, `GET /api/v1/native-recovery-copies/:id`                       | `service_backup:read`                           |
+| Review a native copy          | `POST /api/v1/native-recovery-sources/:id/points/:pointId/copy-review`                                         | `service_restore:manage`                        |
+| Admit a native copy           | `POST /api/v1/native-recovery-copies`                                                                          | `service_restore:manage`                        |
+| List/read native copies       | `GET /api/v1/projects/:id/native-recovery-copies`, `GET /api/v1/native-recovery-copies/:id`                    | `service_backup:read`                           |
 | Clean up a native copy        | `DELETE /api/v1/native-recovery-copies/:id`                                                                    | `service_restore:manage`                        |
 
 Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Project retirement lists also accept `backup_id` to resolve one recovery point without scanning other histories. Backup schedule updates accept `environment`, `resource`, `every_hours` and `enabled`. Retention policy updates accept the observed `revision`, `policy` (`older_than_days`, `keep_last`) and `enabled`. Retention history accepts `before` and `limit` (1 to 100). Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.

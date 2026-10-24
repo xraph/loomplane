@@ -113,7 +113,7 @@ func (s *Session) RestoreDBSnapshot(ctx context.Context, spec DBRecoverySpec, c 
 	db, err := s.GetDBInstance(ctx, spec.ID)
 	if IsNotFound(err) {
 		if c.Mutation.Attempted || spec.ResourceID != "" {
-			return nil, errors.New("original RDS recovery request is not visible; reconcile it without reposting")
+			return nil, dbRecoveryObservationError(err)
 		}
 		if c.Mutation.Before == nil {
 			return nil, errors.New("RDS recovery requires a durable restore intent")
@@ -129,7 +129,7 @@ func (s *Session) RestoreDBSnapshot(ctx context.Context, spec DBRecoverySpec, c 
 			return nil, errors.New("RDS snapshot exceeds reviewed storage or has another administrator")
 		}
 		if networkErr := s.checkDBRecoveryNetwork(ctx, spec, c.Check); networkErr != nil {
-			return nil, networkErr
+			return nil, dbRecoveryObservationError(networkErr)
 		}
 		if beforeErr := c.Mutation.Before(); beforeErr != nil {
 			return nil, beforeErr
@@ -139,17 +139,17 @@ func (s *Session) RestoreDBSnapshot(ctx context.Context, spec DBRecoverySpec, c 
 		}
 		out, restoreErr := s.rdsWrites().RestoreDBInstanceFromDBSnapshot(ctx, &rds.RestoreDBInstanceFromDBSnapshotInput{DBInstanceIdentifier: sdk.String(spec.ID), DBSnapshotIdentifier: sdk.String(spec.Snapshot.ARN), DBInstanceClass: sdk.String(spec.Class), AllocatedStorage: sdk.Int32(spec.StorageGB), StorageType: sdk.String(spec.StorageType), PubliclyAccessible: sdk.Bool(false), MultiAZ: sdk.Bool(false), AutoMinorVersionUpgrade: sdk.Bool(false), BackupRetentionPeriod: sdk.Int32(0), DeletionProtection: sdk.Bool(false), DBSubnetGroupName: sdk.String(spec.SubnetGroup), VpcSecurityGroupIds: []string{spec.SecurityGroupID}, DBParameterGroupName: sdk.String(spec.ParameterGroup), Port: sdk.Int32(5432), Tags: []rdstypes.Tag{{Key: sdk.String("loomplane-native-recovery"), Value: sdk.String(spec.Intent)}}})
 		if restoreErr != nil {
-			return nil, fmt.Errorf("restore RDS snapshot: %w", restoreErr)
+			return nil, dbRecoveryWriteError(restoreErr)
 		}
 		if out.DBInstance == nil {
-			return nil, errors.New("RDS recovery returned no physical copy")
+			return nil, dbRecoveryWriteError(errors.New("RDS recovery returned no physical copy"))
 		}
 		db, err = readDBInstance(*out.DBInstance), nil
 	} else if err == nil && !c.Mutation.Attempted && spec.ResourceID == "" {
 		return nil, errors.New("RDS recovery name exists without its original restore intent")
 	}
 	if err != nil {
-		return nil, err
+		return nil, dbRecoveryObservationError(err)
 	}
 	if identityErr := s.checkDBRecoveryIdentity(db, spec); identityErr != nil {
 		return nil, identityErr
@@ -172,7 +172,7 @@ func (s *Session) RestoreDBSnapshot(ctx context.Context, spec DBRecoverySpec, c 
 				return nil, settingsErr
 			}
 			if networkErr := s.checkDBRecoveryNetwork(ctx, spec, c.Check); networkErr != nil {
-				return nil, networkErr
+				return nil, dbRecoveryObservationError(networkErr)
 			}
 			return db, c.Check(ctx)
 		}
@@ -188,7 +188,7 @@ func (s *Session) RestoreDBSnapshot(ctx context.Context, spec DBRecoverySpec, c 
 		}
 		db, err = s.GetDBInstance(ctx, spec.ID)
 		if err != nil {
-			return nil, err
+			return nil, dbRecoveryObservationError(err)
 		}
 	}
 }

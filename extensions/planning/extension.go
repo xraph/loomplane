@@ -326,9 +326,22 @@ func (e *Extension) Register(fapp forge.App) error {
 		Endpoints: checker,
 		Dialer:    dialer,
 	})
-	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), Credentials: clouds, Secrets: resourceSecrets}, auditor); err != nil {
+
+	nativeDatabases := &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), Credentials: clouds, Secrets: resourceSecrets}
+	if forge.HasType[*deployments.NativeSQLTransports](c) {
+		transports, transportErr := forge.InjectType[*deployments.NativeSQLTransports](c)
+		if transportErr != nil {
+			return transportErr
+		}
+		if transports == nil {
+			return fmt.Errorf("native SQL transport dependency is nil")
+		}
+		nativeDatabases.RDSConnector, nativeDatabases.SQLConnector = transports.RDS, transports.CloudSQL
+	}
+	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, nativeDatabases, auditor); err != nil {
 		return err
 	}
+
 	e.restoreTargets = func(ctx context.Context) error {
 		// Restore provider keys after central migrations have run.
 		rows, err := pg.Query(ctx, "SELECT org_id,id,cloud FROM loomplane_cloud_connections WHERE cloud IN ('server','kubernetes')")

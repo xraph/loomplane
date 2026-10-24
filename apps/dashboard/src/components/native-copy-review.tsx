@@ -55,12 +55,13 @@ export function NativeCopyButton({
   const [open, setOpen] = useState(false)
   if (
     !can("service_restore:manage") ||
-    source.provider !== "cloud-sql" ||
+    !["cloud-sql", "rds"].includes(source.provider) ||
     point.engine !== "postgres" ||
-    point.version !== "17" ||
+    (point.version !== "17" &&
+      !(source.provider === "rds" && point.version.startsWith("17."))) ||
     !point.present ||
     !point.encrypted ||
-    point.status !== "SUCCESSFUL"
+    point.status !== (source.provider === "rds" ? "available" : "SUCCESSFUL")
   )
     return null
   return (
@@ -184,8 +185,11 @@ function CopyReview({
         <DialogHeader>
           <DialogTitle>Review native copy</DialogTitle>
           <DialogDescription className="break-words">
-            Copy {point.name} from {source.name} into a separate recovery
-            project. The source database stays unchanged.
+            Copy {point.name} from {source.name} into{" "}
+            {source.provider === "rds"
+              ? "a new private RDS instance"
+              : "a separate recovery project"}
+            . The source database stays unchanged.
           </DialogDescription>
         </DialogHeader>
         {!owner && (
@@ -206,7 +210,9 @@ function CopyReview({
         ) : !list.length ? (
           <NativeEmpty title="No granted Cloud targets">
             Ask your organization manager to grant this project a Cloud with a
-            managed Cloud SQL target in a separate recovery project.
+            {source.provider === "rds"
+              ? "managed RDS target with a private recovery route in the source account and region."
+              : "managed Cloud SQL target in a separate recovery project."}
           </NativeEmpty>
         ) : (
           <>
@@ -287,7 +293,10 @@ function CopyReview({
         {review && (
           <div className="grid min-w-0 gap-2 rounded-md bg-muted/50 p-3">
             <p className="text-sm font-medium break-all">
-              {review.target.nativeProject} · {review.target.region}
+              {review.target.nativeProject ||
+                review.target.nativeAccount ||
+                review.target.provider}{" "}
+              · {review.target.region}
             </p>
             <p className="text-xs text-muted-foreground">
               {review.capacity.computeClass} · {review.capacity.storageGb} GiB{" "}
@@ -359,10 +368,12 @@ function TargetChoice({
   const choices = (targets.data?.targets ?? []).filter(
     (target): target is Target =>
       !!target &&
-      target.provider === "cloud-sql" &&
+      target.provider === source.provider &&
       target.runtime === "managed" &&
       !target.poolId &&
-      target.connectionId !== source.connectionId
+      (source.provider === "rds"
+        ? target.region === source.region
+        : target.connectionId !== source.connectionId)
   )
   if (targets.status === "error")
     return (
@@ -376,9 +387,8 @@ function TargetChoice({
   if (!choices.length)
     return (
       <NativeEmpty title="No compatible recovery target">
-        Choose a Cloud with a managed Cloud SQL target on a separate recovery
-        account. The server checks the account, region and current grant before
-        admission.
+        Choose a Cloud with a compatible managed recovery target. The server
+        checks the account, region and current grant before admission.
       </NativeEmpty>
     )
   return (
