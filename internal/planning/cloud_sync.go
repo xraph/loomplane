@@ -301,7 +301,23 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			c := compensations[actionID(b.Subject, b.Name)]
 			return c != nil && c.Retained
 		})
-		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, capacityBindings, poolAssignment, preview.Before, options, planned)
+		intents := map[string]*CapacityIntent{}
+		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, capacityBindings, poolAssignment, preview.Before, options, planned, intents)
+		if len(intents) > 0 {
+			syncID, idErr := capacitySyncID(preview.ID)
+			if idErr != nil {
+				return nil, idErr
+			}
+			for _, intent := range intents {
+				intent.Demand.PlanID = migrationPlanID(syncID, env.ID)
+				intent.Demand.IntentHash = ""
+				hash, hashErr := Digest(intent)
+				if hashErr != nil {
+					return nil, hashErr
+				}
+				intent.Demand.IntentHash = hash
+			}
+		}
 		if poolPlacements == nil {
 			poolPlacements = map[string]CloudPlacement{}
 		}
@@ -339,7 +355,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if in.Default {
 			selector = defaultPlacementSelector
 		}
-		result := appliedCloudPlan(planningBindings, after, selector, options, s.providers, poolPlacements, routes)
+		result := appliedCloudPlanWithIntents(planningBindings, after, selector, options, s.providers, poolPlacements, intents, routes)
 		for i := range result.Actions {
 			a := &result.Actions[i]
 			c := compensations[a.ID]
@@ -549,6 +565,20 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 		}
 	}
 	id, err := typeid.Generate("csync")
+	for _, env := range snapshot.Environments {
+		var plan Plan
+		if decodeErr := json.Unmarshal(env.Plan, &plan); decodeErr != nil {
+			return nil, decodeErr
+		}
+		if slices.ContainsFunc(plan.Actions, func(a Action) bool { return a.Service != nil && a.Service.CapacityIntent != nil }) {
+			reserved, idErr := capacitySyncID(preview.ID)
+			if idErr != nil {
+				return nil, idErr
+			}
+			id, err = typeid.Parse(reserved)
+			break
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -908,4 +938,17 @@ func (s *Service) filterCloudSync(ctx context.Context, p security.Principal, syn
 		}
 	}
 	return nil
+}
+
+// capacitySyncID reserves the operation identity while its intents are reviewed.
+func capacitySyncID(preview string) (string, error) {
+	id, err := typeid.Parse(preview)
+	if err != nil || id.Prefix() != "cpv" || id.IsZero() {
+		return "", cloudprofiles.ErrInvalid
+	}
+	sync, err := typeid.FromUUID("csync", id.UUID())
+	if err != nil {
+		return "", err
+	}
+	return sync.String(), nil
 }

@@ -73,7 +73,7 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		return
 	}
 	cfg.Target, cfg.Endpoint = set.Target, set.Endpoint
-	if cfg.Target == "" {
+	if cfg.Target == "" && cfg.CapacityIntent == nil {
 		cfg.Target = p.in.Chosen[prov.Cloud]
 		if cfg.Target == "" {
 			if fallback, ok := p.connection(prov.Cloud); ok {
@@ -81,7 +81,12 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 			}
 		}
 	}
-	c := p.targetConnection(name, base+".target", "target", prov.Cloud, cfg.Target)
+	var c *ConnectionOption
+	if cfg.CapacityIntent == nil {
+		c = p.targetConnection(name, base+".target", "target", prov.Cloud, cfg.Target)
+	} else {
+		cfg.TargetSettings = map[string]string{"architecture": cfg.CapacityIntent.Demand.Architecture}
+	}
 	if c != nil && c.Pooled {
 		if pin, ok := p.in.CloudPlacements[name]; !ok || pin.PoolID == "" {
 			p.problem(Finding{Code: "pool-target-required", Subject: ServiceSubject, Name: name, Path: base + ".target", Message: "This host belongs to shared capacity. Choose its Cloud pool target so approval reserves the workload."})
@@ -101,6 +106,9 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		}
 		if builder := p.targetConnection(name, base+".build.builder", "builder", "server", build.Builder); builder != nil {
 			build.BuilderSettings = ReviewedConnectionSettings(builder.Cloud, builder.Details)
+			if cfg.CapacityIntent != nil && builder.Details["architecture"] != cfg.CapacityIntent.Demand.Architecture {
+				p.problem(Finding{Code: "capacity-architecture", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "The builder must match the approved pool architecture."})
+			}
 		}
 		if prov.Cloud == "kubernetes" || build.Builder != cfg.Target {
 			p.targetConnection(name, base+".build.registry", "registry", "registry", build.Registry)

@@ -13,6 +13,7 @@ import (
 	"github.com/xraph/dispatch/engine"
 
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // The deployment workflow runs on Dispatch's durable runtime: history
@@ -85,7 +86,8 @@ type DeploymentInput struct {
 
 // Decision is an approval or a rejection, as the signal carries it.
 type Decision struct {
-	Approve bool `json:"approve"`
+	Actor   *security.Principal `json:"actor,omitempty"`
+	Approve bool                `json:"approve"`
 	// Revision is the plan revision the decider reviewed.
 	Revision string `json:"revision"`
 	By       string `json:"by"`
