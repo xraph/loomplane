@@ -309,7 +309,12 @@ export function IntegrationCatalog({
                         {c.connected ? "Connected" : "Not connected"}
                       </StatusPill>
                     </div>
-                    <p className="flex-1 text-[12.5px] leading-relaxed text-muted-foreground">
+                    {/* Two lines, always, so every card in the catalog is the
+                        same height; the full text is on hover. */}
+                    <p
+                      title={c.purpose}
+                      className="line-clamp-2 min-h-[2lh] flex-1 text-[12.5px] leading-relaxed text-muted-foreground"
+                    >
                       {c.purpose}
                     </p>
                     <div className="flex items-center justify-between gap-2">
