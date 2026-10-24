@@ -1,40 +1,66 @@
+/* Sign-in, sign-up, recovery and the first organization, in the landing
+   site's look: hairlines, a double-bezel card and the hero light. Colors come
+   from the app's theme tokens, so the page follows light and dark. */
 .auth-layout {
-  /* The app's own tokens, so sign-in follows the accent and dark mode. */
-  --auth-thread-paper: color-mix(in oklch, var(--foreground) 22%, transparent);
-  --auth-thread-gold: var(--brand);
+  --auth-bg: color-mix(in oklch, var(--foreground) 2.5%, var(--background));
+  --auth-line: color-mix(in oklch, var(--foreground) 9%, transparent);
+  --auth-line-2: color-mix(in oklch, var(--foreground) 15%, transparent);
+  --auth-ink: var(--foreground);
+  --auth-muted: var(--muted-foreground);
+  --auth-link: var(--brand-ink, var(--brand));
 
   position: relative;
   isolation: isolate;
-  display: flex;
-  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr);
   min-height: 100svh;
-  background:
-    radial-gradient(
-      ellipse 70% 55% at 0% 0%,
-      var(--brand-tint),
-      transparent 70%
-    ),
-    radial-gradient(
-      ellipse 60% 50% at 100% 100%,
-      var(--flight-tint),
-      transparent 70%
-    ),
-    var(--subtle);
-  color: var(--foreground);
+  overflow: hidden;
+  background: var(--auth-bg);
+  color: var(--auth-ink);
 }
 
 .auth-access {
+  position: relative;
   z-index: 1;
   display: flex;
-  width: 100%;
   min-width: 0;
   flex-direction: column;
-  padding: 24px;
+  padding: 28px 32px 24px;
 }
+
 
 .auth-toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.auth-cross {
+  position: relative;
+  width: 21px;
+  height: 21px;
+  pointer-events: none;
+}
+
+.auth-cross::before,
+.auth-cross::after {
+  content: "";
+  position: absolute;
+  background: color-mix(in oklch, var(--foreground) 30%, transparent);
+}
+
+.auth-cross::before {
+  top: 0;
+  left: 10px;
+  width: 1px;
+  height: 21px;
+}
+
+.auth-cross::after {
+  top: 10px;
+  left: 0;
+  width: 21px;
+  height: 1px;
 }
 
 .auth-content {
@@ -44,7 +70,17 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  padding-block: 32px;
+  padding-block: 40px;
+}
+
+.auth-bezel {
+  width: 100%;
+  max-width: 412px;
+  padding: 6px;
+  border: 1px solid var(--auth-line);
+  border-radius: 18px;
+  background: color-mix(in oklch, var(--foreground) 2.5%, transparent);
+  box-shadow: 0 50px 90px -50px color-mix(in oklch, var(--foreground) 35%, transparent);
 }
 
 .auth-panel {
@@ -53,20 +89,269 @@
   align-items: stretch;
   gap: 20px;
   width: 100%;
-  max-width: 400px;
   padding: 32px 28px 28px;
-  border-radius: var(--radius-xl);
+  border: 1px solid var(--auth-line-2);
+  border-radius: 13px;
   background: var(--card);
   color: var(--card-foreground);
-  box-shadow:
-    0 0 0 1px var(--border),
-    0 12px 32px -12px color-mix(in oklch, var(--foreground) 14%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklch, var(--foreground) 4%, transparent);
 }
 
 .auth-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   padding-top: 16px;
-  text-align: center;
-  color: var(--muted-foreground);
+  color: var(--auth-muted);
+  font-size: 12px;
+}
+
+.auth-by {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.auth-by span {
+  color: var(--auth-ink);
+  font-weight: 500;
+}
+
+.auth-by:hover {
+  color: var(--auth-ink);
+}
+
+.auth-by:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+
+.auth-xraph {
+  width: 15px;
+  height: 15px;
+  color: var(--auth-ink);
+}
+
+/* The hero light, in an inset panel with a hairline bezel */
+.auth-visual {
+  position: relative;
+  margin: 12px 12px 12px 0;
+  overflow: hidden;
+  border: 1px solid var(--auth-line);
+  border-radius: 18px;
+  background:
+    linear-gradient(130deg, transparent 30%, oklch(0.35 0.09 245 / 0.45) 42%, transparent 52%, oklch(0.45 0.1 240 / 0.4) 60%, transparent 72%),
+    hsl(0 0% 3%);
+}
+
+.auth-silk {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.auth-visual::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to top, hsl(0 0% 2% / 0.85) 0%, transparent 45%);
+}
+
+.auth-visual-copy {
+  position: absolute;
+  z-index: 1;
+  right: 40px;
+  bottom: 40px;
+  left: 40px;
+}
+
+/* What Loomplane connects, grouped by type in glass tiles around its mark:
+   six columns, with the mark across the middle two */
+.auth-logos {
+  --tile: 54px;
+  --gap: 16px;
+
+  position: absolute;
+  z-index: 1;
+  top: 52px;
+  left: 50%;
+  display: grid;
+  grid-template-columns: repeat(6, var(--tile));
+  grid-template-areas:
+    "clouds clouds clouds clouds clouds clouds"
+    "langs langs core core conn conn"
+    "services services services services services services";
+  gap: 26px var(--gap);
+  transform: translateX(-50%);
+}
+
+.auth-group {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-group.clouds { grid-area: clouds; }
+.auth-group.langs { grid-area: langs; }
+.auth-group.conn { grid-area: conn; }
+.auth-group.services { grid-area: services; }
+
+/* the rows below the mark carry their label underneath */
+.auth-group.langs,
+.auth-group.conn,
+.auth-group.services {
+  flex-direction: column-reverse;
+}
+
+.auth-group ul {
+  display: flex;
+  gap: var(--gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-group-label {
+  color: hsl(0 0% 70% / 0.8);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.auth-group.conn .auth-group-label,
+.auth-group.conn ul {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.auth-core {
+  grid-area: core;
+  display: grid;
+  place-items: center;
+  align-self: start;
+  height: var(--tile);
+  border: 1px solid hsl(210 60% 90% / 0.2);
+  border-radius: 16px;
+  background: hsl(220 30% 8% / 0.4);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.1),
+    0 0 56px -12px oklch(0.72 0.115 240 / 0.5);
+  animation: auth-core 6s ease-in-out infinite;
+}
+
+.auth-core svg {
+  width: 30px;
+  height: 30px;
+}
+
+@keyframes auth-core {
+  50% {
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.14),
+      0 0 76px -10px oklch(0.72 0.115 240 / 0.7);
+  }
+}
+
+.auth-logo {
+  animation: auth-float 7s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -0.55s);
+}
+
+@keyframes auth-float {
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.auth-logo-glass {
+  display: grid;
+  width: var(--tile, 54px);
+  height: var(--tile, 54px);
+  place-items: center;
+  border: 1px solid hsl(210 60% 90% / 0.12);
+  border-radius: 15px;
+  background: hsl(220 30% 8% / 0.32);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.08),
+    0 22px 40px -26px hsl(0 0% 0% / 0.9);
+  color: hsl(0 0% 80% / 0.85);
+  animation: auth-glint var(--cycle) ease-in-out infinite;
+  animation-delay: var(--delay);
+}
+
+.auth-logo-glass svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+
+/* each tile lights in its brand color in turn, then settles back */
+@keyframes auth-glint {
+  0%,
+  12%,
+  100% {
+    color: hsl(0 0% 80% / 0.85);
+    border-color: hsl(210 60% 90% / 0.12);
+  }
+  5% {
+    color: var(--c);
+    border-color: color-mix(in oklch, var(--c) 45%, transparent);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.12),
+      0 0 28px -6px color-mix(in oklch, var(--c) 55%, transparent),
+      0 22px 40px -26px hsl(0 0% 0% / 0.9);
+  }
+}
+
+.auth-headline {
+  max-width: 20ch;
+  color: hsl(0 0% 96%);
+  margin: 0;
+  font-size: clamp(36px, 3.6vw, 54px);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.auth-headline span {
+  color: hsl(212 45% 88%);
+}
+
+.auth-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-points li {
+  padding: 6px 12px;
+  border: 1px solid hsl(210 60% 90% / 0.14);
+  border-radius: 999px;
+  background: hsl(220 30% 6% / 0.5);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: hsl(0 0% 78%);
+  font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 12px;
 }
 
@@ -86,14 +371,14 @@
 }
 
 .auth-card > div:first-child {
-  gap: 8px;
+  gap: 6px;
   padding-top: 0;
   padding-bottom: 24px;
-  text-align: center;
+  text-align: left;
 }
 
 .auth-card > div:first-child > div:first-child {
-  margin: 0 auto 20px;
+  margin: 0 0 28px;
 }
 
 .auth-card > div:first-child > .font-semibold {
@@ -105,16 +390,19 @@
 
 .auth-card > div:first-child > div:last-child:not(.font-semibold) {
   max-width: 38ch;
-  margin: 0 auto;
+  margin: 0;
   font-size: 14px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
 .auth-card > div:last-child {
-  justify-content: center;
+  justify-content: flex-start;
+  margin-top: 4px;
+  padding-top: 20px;
   padding-bottom: 0;
-  text-align: center;
+  border-top: 1px solid var(--auth-line);
+  text-align: left;
 }
 
 .auth-card :where(input:not([type="checkbox"]):not([type="hidden"])) {
@@ -143,25 +431,44 @@
   outline-offset: 4px;
 }
 
-.auth-watermark {
-  position: absolute;
-  z-index: 0;
-  right: -160px;
-  bottom: -120px;
-  width: clamp(480px, 60vw, 880px);
-  opacity: 0.1;
-  pointer-events: none;
-}
-
-.auth-weave {
-  display: block;
-  width: 100%;
-  height: auto;
+.auth-card :where(a) {
+  color: var(--auth-link);
 }
 
 @media (min-width: 768px) {
   .auth-card :where(input:not([type="checkbox"]):not([type="hidden"])) {
     font-size: 14px;
+  }
+}
+
+@media (max-width: 1279px) {
+  .auth-logos {
+    --tile: 46px;
+    --gap: 12px;
+  }
+}
+
+/* Below a laptop width the light becomes a band behind the top of the page */
+@media (max-width: 1023px) {
+  .auth-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .auth-visual {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: 0;
+    height: 300px;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+    mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  }
+
+  .auth-visual-copy,
+  .auth-logos {
+    display: none;
   }
 }
 
@@ -174,8 +481,20 @@
     padding: 24px 20px 20px;
   }
 
-  .auth-watermark {
-    right: -240px;
-    bottom: -100px;
+  .auth-cross {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-logo,
+  .auth-logo-glass,
+  .auth-core {
+    animation: none;
+  }
+
+  .auth-points li {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
