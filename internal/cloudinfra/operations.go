@@ -360,7 +360,7 @@ func (s *Service) RecoverInfrastructure(ctx context.Context) error {
 			return checkErr
 		}
 	}
-	return nil
+	return s.recoverCapacity(ctx)
 }
 
 func (s *Service) execute(ctx context.Context, o *Operation) error {

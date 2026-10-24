@@ -46,6 +46,8 @@ type Server struct {
 
 // RuntimeHealth comes from the pinned Docker daemon, never a provider size slug.
 type RuntimeHealth struct {
+	StorageBytes         *int64    `json:"storage_bytes"`
+	FreeStorageBytes     *int64    `json:"free_storage_bytes"`
 	EffectiveCPUMillis   int64     `json:"effective_cpu_millis"`
 	EffectiveMemoryBytes int64     `json:"effective_memory_bytes"`
 	DockerID             string    `json:"docker_id"`
@@ -187,14 +189,17 @@ func (s *Service) CheckServer(ctx context.Context, p security.Principal, cloud, 
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
 	}
-	v, err := s.Store.GetServer(ctx, p.OrgID, cloud, id)
+	return s.checkServer(ctx, p.OrgID, cloud, id)
+}
+func (s *Service) checkServer(ctx context.Context, org, cloud, id string) (*Server, error) {
+	v, err := s.Store.GetServer(ctx, org, cloud, id)
 	if err != nil {
 		return nil, err
 	}
 	if v.Status != "ready" && v.Status != "unhealthy" {
 		return nil, ErrConflict
 	}
-	conn, raw, err := s.Connections.Credential(ctx, p.OrgID, v.RuntimeConnectionID)
+	conn, raw, err := s.Connections.Credential(ctx, org, v.RuntimeConnectionID)
 	if err != nil {
 		return nil, err
 	}

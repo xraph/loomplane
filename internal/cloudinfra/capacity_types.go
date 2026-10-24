@@ -1,6 +1,10 @@
 package cloudinfra
 
-import "time"
+import (
+	"time"
+
+	"github.com/xraph/loomplane/pkg/provider"
+)
 
 // ResourceVector uses CPU milliseconds and bytes. Zero is a measured value.
 type ResourceVector struct {
@@ -107,15 +111,43 @@ type Expansion struct {
 	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
+// CapacityResources preserves unknown facts as null, independently per dimension.
+type CapacityResources struct {
+	Servers      *int64 `json:"servers"`
+	CPUMillis    *int64 `json:"cpu_millis"`
+	MemoryBytes  *int64 `json:"memory_bytes"`
+	StorageBytes *int64 `json:"storage_bytes"`
+}
+
+type CapacityObservation struct {
+	CPUMillis        *int64    `json:"cpu_millis"`
+	MemoryBytes      *int64    `json:"memory_bytes"`
+	StorageBytes     *int64    `json:"storage_bytes"`
+	FreeStorageBytes *int64    `json:"free_storage_bytes"`
+	CheckedAt        time.Time `json:"checked_at"`
+}
+
+// CapacityAccountSnapshot contains account totals, without unrelated resource
+// identities or credentials. The quota and each resource fact may be unknown.
+type CapacityAccountSnapshot struct {
+	Provider    string                 `json:"provider"`
+	AccountID   string                 `json:"account_id"`
+	Provisioned CapacityResources      `json:"provisioned"`
+	Quota       provider.CapacityQuota `json:"quota"`
+	CheckedAt   time.Time              `json:"checked_at"`
+}
+
 type CapacityUsage struct {
-	Provisioned          ResourceVector `json:"provisioned"`
-	Pending              ResourceVector `json:"pending"`
-	Reserved             ResourceVector `json:"reserved"`
-	Observed             ResourceVector `json:"observed"`
-	SystemReserve        ResourceVector `json:"system_reserve"`
-	Allocatable          ResourceVector `json:"allocatable"`
-	Headroom             ResourceVector `json:"headroom"`
-	ObservedStorageBytes *int64         `json:"observed_storage_bytes"`
-	CheckedAt            time.Time      `json:"checked_at"`
-	Fresh                bool           `json:"fresh"`
+	Accounts             []CapacityAccountSnapshot `json:"accounts"`
+	Records              []CapacityRecord          `json:"records"`
+	Provisioned          CapacityResources         `json:"provisioned"`
+	Pending              CapacityResources         `json:"pending"`
+	Reserved             CapacityResources         `json:"reserved"`
+	Observed             CapacityResources         `json:"observed"`
+	SystemReserve        CapacityResources         `json:"system_reserve"`
+	Allocatable          CapacityResources         `json:"allocatable"`
+	Headroom             CapacityResources         `json:"headroom"`
+	ObservedStorageBytes *int64                    `json:"observed_storage_bytes"`
+	CheckedAt            time.Time                 `json:"checked_at"`
+	Fresh                bool                      `json:"fresh"`
 }
