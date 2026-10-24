@@ -507,5 +507,41 @@ Every journal transition commits with its project event.
 
 This is an internal lifecycle API. The live Kubernetes fixture uses it with a
 fixture-created controller and explicit CSI installation. Production installation,
-artifact proof retrieval, policy withdrawal and gateway assignment remain separate
+coordinator wiring, policy withdrawal and gateway assignment remain separate
 work. No public route or agent-launch flag enables application issuance.
+
+## Registry image proofs
+
+`LoadFederationImageProofs` loads proofs through the registry saved in the service
+build target. The current instance must match the committed binding, plan and
+runtime attempt. Its registry ID and reviewed settings must match the binding,
+and the current connection must still have those trust settings and pull access.
+Credential bytes are cleared after use.
+
+The reader uses digest-addressed manifest requests with pull-only token scope.
+It keeps the raw bytes, verifies their SHA-256 hash and refuses redirects,
+responses over 256 KiB, unexpected content types and mismatched digest headers.
+The proof collector makes at most four reads in the deployed image's repository.
+Runtime repository aliases and descriptor URLs cannot select another host.
+The request format follows the
+[OCI Distribution specification](https://github.com/opencontainers/distribution-spec/blob/v1.1.1/spec.md#pulling-manifests).
+
+The collector shares the image verifier used by Kubernetes attestation and the
+registration journal. Identical content digests need no registry read. A platform
+manifest needs its complete index chain; an import wrapper needs an exclusive
+chain back to the deployed digest. If the wrapper exists only in the runtime's
+local content store, registry retrieval fails closed. No proof is fabricated.
+
+You must still authorize and load the records, verify the saved controller and
+live owner chain, and pass the checked proofs to the attestation profile and
+issuance journal. The loader does not install CSI, register an identity or enable
+a service route. Production application coordination remains pending.
+
+The local registry qualification test publishes a small OCI image and index into
+a disposable registry, retrieves the proof through this client, and checks raw
+byte preservation, platform selection and tag rejection. Set
+`LOOMPLANE_TEST_REGISTRY_URL` only to that fixture's literal loopback HTTP address;
+the test refuses external endpoints. Remove the fixture container afterward.
+Authenticated challenge scope and credential redirects are covered by the HTTP
+fixtures. Production registry accounts and runtime-local wrappers still need
+provider qualification.
