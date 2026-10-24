@@ -595,6 +595,15 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 	var cloud cloudprofiles.Profile
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+projects[0]+"/clouds", cloudprofiles.CreateInput{Name: l.RunID}, &cloud)
 	cloudBase := "/api/v1/clouds/" + cloud.ID
+	infrastructure, injectErr := forge.InjectType[*cloudinfra.Service](running.app.(forge.App).Container())
+	if injectErr != nil {
+		t.Fatal("isolated infrastructure store unavailable")
+	}
+	defer func() {
+		if captureErr := liveCaptureTerminal(path, progress, infrastructure.Store, org.ID, cloud.ID, l.Hosts); captureErr != nil {
+			t.Error("terminal snapshot unavailable; preserve run progress")
+		}
+	}()
 	for _, project := range projects[1:] {
 		c.must(http.StatusOK, http.MethodPut, cloudBase+"/projects/"+project, map[string]any{"target_ids": []string{}}, nil)
 	}
@@ -625,6 +634,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 	}
 	for index := range 2 {
 		bound()
+		progress.step(t, "host_preview")
 		var operation cloudinfra.Operation
 		name := fmt.Sprintf("%s-host%d", l.RunID, index+1)
 		c.must(http.StatusOK, http.MethodPost, cloudBase+"/servers/preview", cloudinfra.ServerInput{Kind: "create", Name: name, ConnectionID: connectionIDs["digitalocean"], Region: liveRegion, Size: liveSize, Image: liveImage, CloudRevision: cloud.Revision}, &operation)
@@ -640,7 +650,9 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 		l.Hosts[index].Attempted = true
 		record()
 		bound()
+		progress.step(t, "host_apply")
 		c.must(http.StatusAccepted, http.MethodPost, cloudBase+"/infrastructure-operations/"+operation.ID+"/apply", cloudinfra.ApplyInput{Review: operation.Review}, &operation)
+		progress.step(t, "host_wait")
 		for readyBy := time.Now().Add(20 * time.Minute); ; time.Sleep(2 * time.Second) {
 			bound()
 			c.must(http.StatusOK, http.MethodGet, cloudBase+"/infrastructure-operations/"+operation.ID, nil, &operation)
@@ -672,6 +684,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 		}
 		callbackPaths = slices.DeleteFunc(callbackPaths, func(value string) bool { return strings.HasSuffix(value, "/"+operation.ID) })
 		policy()
+		progress.step(t, "host_runtime")
 		var listing struct{ Servers []cloudinfra.Server }
 		c.must(http.StatusOK, http.MethodGet, cloudBase+"/servers", nil, &listing)
 		var managed cloudinfra.Server
@@ -691,6 +704,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 		hosts = append(hosts, combinedHost{User: "loomplane", Address: conn.Details["host"], HostKey: conn.Details["host_key"], Daemon: managed.Health.DockerID})
 		keys = append(keys, key)
 		runtimeIDs = append(runtimeIDs, managed.RuntimeConnectionID)
+		progress.step(t, "host_pool")
 		var pool cloudinfra.Pool
 		c.must(http.StatusOK, http.MethodPost, cloudBase+"/pools", cloudinfra.PoolInput{Name: name, Members: []cloudinfra.PoolMember{{ServerID: managed.ID, CPUMillis: 1000, MemoryBytes: 1 << 30}}}, &pool)
 		pools = append(pools, pool)
@@ -1103,7 +1117,7 @@ func liveSetup(t *testing.T, database, callback, runID string, progress *livePro
 			running.stop()
 		}
 	}()
-	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
+	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey, observeStatus: func(status int) { progress.observeHTTP(t, status) }}
 	var auth struct {
 		SessionToken string `json:"session_token"`
 	}
