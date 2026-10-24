@@ -26,25 +26,23 @@ func TestCLIDoesNotLoadServerExtensions(t *testing.T) {
 }
 
 func TestCLIVersionUsesSharedBuildValue(t *testing.T) {
-	// Building the CLI compiles its whole dependency tree from cold, outside
-	// the test cache, while every other test package builds beside it. On a
-	// small CI runner that can take most of the package's time, so the build
-	// gets everything up to the test binary's own deadline, less a margin to
-	// report the failure.
-	budget := 10 * time.Minute
-	if deadline, ok := t.Deadline(); ok {
-		budget = time.Until(deadline) - 30*time.Second
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), budget)
-	defer cancel()
+	// CI may compile this binary from an empty cache alongside the race suite.
+	buildCtx, cancelBuild := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancelBuild()
 	binary := filepath.Join(t.TempDir(), "loomctl")
 	version := "cli-build-boundary-test"
-	command := exec.CommandContext(ctx, "go", "build", "-ldflags", "-X github.com/xraph/loomplane/internal/buildinfo.Version="+version, "-o", binary, "./cmd/loomctl")
+	command := exec.CommandContext(buildCtx, "go", "build", "-ldflags", "-X github.com/xraph/loomplane/internal/buildinfo.Version="+version, "-o", binary, "./cmd/loomctl")
 	command.Dir = filepath.Join("..", "..")
 	if out, err := command.CombinedOutput(); err != nil {
+		if buildCtx.Err() != nil {
+			t.Fatalf("build CLI: %v (%v)\n%s", err, buildCtx.Err(), out)
+		}
 		t.Fatalf("build CLI: %v\n%s", err, out)
 	}
-	if out, err := exec.CommandContext(ctx, binary, "--version").CombinedOutput(); err != nil || !strings.Contains(string(out), version) {
+	cancelBuild()
+	versionCtx, cancelVersion := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancelVersion()
+	if out, err := exec.CommandContext(versionCtx, binary, "--version").CombinedOutput(); err != nil || !strings.Contains(string(out), version) {
 		t.Fatalf("CLI version: %v\n%s", err, out)
 	}
 }
