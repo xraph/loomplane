@@ -10,7 +10,7 @@ import {
 import type {
   NativeSource,
   NativePoint,
-  NativeCopyReview,
+  NativeCopyReview as NativeCopyReviewResult,
   Profile,
   Target,
 } from "@/client/forge/loomplane/types"
@@ -76,7 +76,7 @@ export function NativeCopyButton({
         Review native copy
       </Button>
       {open && (
-        <CopyReview
+        <NativeCopyReview
           source={source}
           point={point}
           onAccepted={onAccepted}
@@ -87,23 +87,25 @@ export function NativeCopyButton({
   )
 }
 
-function CopyReview({
+export function NativeCopyReview({
   source,
   point,
   onAccepted,
   onClose,
+  restoreTime,
 }: {
   source: NativeSource
-  point: NativePoint
+  point: Pick<NativePoint, "id" | "name">
   onAccepted: () => void
   onClose: () => void
+  restoreTime?: string
 }) {
   const { can } = useOrganization()
   const clouds = useQuery(useCloudsList, { path: { id: source.projectId } })
   const [chosenCloud, setChosenCloud] = useState("")
   const [target, setTarget] = useState("")
   const [hours, setHours] = useState("1")
-  const [review, setReview] = useState<NativeCopyReview | null>(null)
+  const [review, setReview] = useState<NativeCopyReviewResult | null>(null)
   const [acknowledged, setAcknowledged] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [failure, setFailure] = useState("")
@@ -141,8 +143,9 @@ function CopyReview({
           targetId: target,
           ttlHours: ttl,
           requestId,
+          restoreTime,
         },
-      })) as NativeCopyReview
+      })) as NativeCopyReviewResult
       if (request.current === requestId) setReview(result)
     } catch (cause) {
       setFailure(
@@ -191,6 +194,9 @@ function CopyReview({
               : "a separate recovery project"}
             . The source database stays unchanged.
           </DialogDescription>
+          {restoreTime && (
+            <p className="text-sm break-all">PITR time: {restoreTime}</p>
+          )}
         </DialogHeader>
         {!owner && (
           <Alert variant="destructive">
@@ -303,7 +309,18 @@ function CopyReview({
               {review.capacity.storageType} · {review.capacity.availability} ·{" "}
               {review.ttlHours} hour lifetime
             </p>
+            {review.capacity.iops && (
+              <p className="text-xs text-muted-foreground">
+                {review.capacity.iops} IOPS · {review.capacity.throughputMbps}{" "}
+                MiB/s · storage ceiling {review.capacity.maxStorageGb} GiB
+              </p>
+            )}
             <p className="text-xs">{review.notice}</p>
+            {review.restoreTime && (
+              <p className="text-xs break-all">
+                Reviewed PITR time: {review.restoreTime}
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">
               Review valid until {formatDate(review.validUntil)}. Provider
               charges are not a price estimate.

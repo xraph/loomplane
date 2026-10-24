@@ -69,7 +69,7 @@ loomctl backups native-inventory SOURCE_ID --limit 50 --json
 loomctl backups native-refresh SOURCE_ID --json
 ```
 
-Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. Native full-backup deletion is available through the API and CLI below. PITR remains unavailable.
+Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. Native full-backup deletion is available through the API and CLI below. RDS PITR copies use the separate window controls described below.
 
 The source and copy list commands accept `--environment-id` and `--resource` independently. Resource names match exactly. Each page and its cursor use the same scope, so a page cannot silently continue into another resource's history. Omit these filters to list the project's retained histories.
 
@@ -108,6 +108,26 @@ The CLI creates a new owner-only JSON file and refuses to overwrite one. It does
 For Cloud SQL, use the returned database, reader name, password and instance connection name with your own authorized connector identity. For RDS, connect to the returned host and port over the reviewed private route, using `sslmode=verify-full` and the [RDS root certificate bundle](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html). Loomplane does not export the cloud account key or administrator password. Revealing credentials does not extend the copy's expiry. Hiding a disclosed password does not revoke it, and an open SQL session can outlive login expiry. Confirm copy removal when you finish.
 
 Native copy API, CLI, Dispatch and Vault checks use a real local control-plane database with controlled Google and AWS endpoints. The RDS success drill includes a control-plane restart, a real reader query, removed-role denial, retained credentials after cleanup denial and a CLI cleanup retry. SQL checks run against a private PostgreSQL fixture; the RDS TLS connector has separate certificate, hostname and private-address tests. Live Cloud SQL restore, IAM/TLS, privilege authority and cost qualification remain unverified; unsafe inherited SQL privileges cause verification to fail. Browser rendering of the native-copy and credential dialogs remains unverified. Live AWS snapshot and recovery qualification also remain pending.
+
+## Restore RDS to an explicit time
+
+In **Cloud snapshots**, choose the retained source history and **Read PITR window**. Loomplane reads the actual earliest and latest provider times using the original physical database ID. Choose a whole UTC second from the earliest time up to, but not including, the latest time. There is no automatic latest-time selection. Review the destination, capacity, lifetime and charges before creating the copy.
+
+```sh
+loomctl backups native-pitr SOURCE_ID --json
+loomctl backups native-copies review SOURCE_ID WINDOW_POINT_ID --restore-time 2026-10-22T12:00:03Z --cloud CLOUD_ID --target TARGET_ID --ttl-hours 2 --out pitr-review.json
+loomctl backups native-copies create --review-file pitr-review.json --acknowledge-charges --wait
+```
+
+Use the returned `point_id` as `WINDOW_POINT_ID`. The API reads the same window at `GET /api/v1/native-recovery-sources/SOURCE_ID/pitr-window`. Send `restore_time` with the explicit UTC timestamp to the existing point `copy-review` endpoint. The signed review and retained copy include that time. Retrying a request cannot change it or extend its expiry. Bounds are checked again before the first native creation request; an expired window cannot authorize a new copy. Existing copies keep their reader-access and cleanup paths after the source window expires.
+
+This path supports the saved encrypted RDS PostgreSQL 17 profile in the source account and region. The temporary instance uses 20 GiB gp3, 3,000 IOPS, 125 MiB/s throughput and a storage ceiling equal to its allocation. The copy security group must have no outbound rules as well as verifier-only ingress. This fences inherited database jobs before SQL verification. Configure and verify that private worker route before use. The AWS identity needs automated-backup metadata and point-in-time restore permissions, plus the existing copy modification, metadata, deletion and KMS access.
+
+The exact 20 GiB gp3 request still needs live AWS qualification. The [restore API reference](https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_RestoreDBInstanceToPointInTime.html) requires an IOPS value when requesting gp3, while the [storage table](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage) marks provisioned performance below 400 GiB as inapplicable. Acceptance of the explicit baseline fields remains unresolved. A controlled endpoint accepting them does not establish that AWS will.
+
+PITR windows are separate from snapshot history and full-backup retention. Loomplane does not prune provider-managed recovery logs. Cloud SQL PITR remains unavailable with the current recovery profile: its standard clone operation inherits settings and cannot atomically apply the required isolation. A Cloud SQL source with PITR enabled is not evidence that Loomplane can safely create a PITR copy.
+
+The connected acceptance drill uses controlled AWS endpoints and a private PostgreSQL fixture. It checks the exact submitted timestamp, retained intent, worker reconciliation, SQL proof and cleanup. It does not establish that AWS returned timestamp-correct data. Live AWS PITR, IAM/KMS, routing, inherited privileges, costs and desktop/narrow browser rendering remain unverified.
 
 ## Persistence and backup storage
 
@@ -183,7 +203,7 @@ Each new standalone RDS or Cloud SQL PostgreSQL 17 plan saves a versioned manage
 | Recovery logs     | 7 days through RDS backup retention           | 7 days, point-in-time recovery enabled                        |
 | Removal           | Final snapshot and retained automated backups | Final backup requested for 30 days                            |
 
-These are creation requests. They do not establish the actual retained recovery window or a successful restore, and they do not include a Loomplane point-in-time restore control. A Cloud SQL backup count is not a duration. RDS final snapshots have no Loomplane expiry; your account controls their lifetime. Provider availability and quotas can reject a requested class or region.
+These are creation requests. They do not establish the actual retained recovery window or a successful restore, so you must read the current provider window before reviewing an RDS PITR copy. A Cloud SQL backup count is not a duration. RDS final snapshots have no Loomplane expiry; your account controls their lifetime. Provider availability and quotas can reject a requested class or region.
 
 Existing databases without a managed profile keep their original settings when you replan. Loomplane does not label them with a new profile or silently reconfigure their storage and backups.
 

@@ -30,10 +30,8 @@ func copyNativeRestore(r NativeRestore) NativeRestore {
 	// Replacement history is not a worker input. Native copies use the saved
 	// original incarnation, never another binding's replacement chain.
 	r.Source.Replaced = nil
-	if r.Point.ExpiresAt != nil {
-		expires := *r.Point.ExpiresAt
-		r.Point.ExpiresAt = &expires
-	}
+	r.Point = cloneNativePoint(r.Point)
+	r.RestoreTime = r.Point.RestoreTime
 	if r.CleanupRequestedAt != nil {
 		requested := *r.CleanupRequestedAt
 		r.CleanupRequestedAt = &requested

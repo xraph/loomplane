@@ -33,11 +33,12 @@ func scanNativeRestore(row pgx.Row) (*NativeRestore, error) {
 			return nil, err
 		}
 	}
+	r.RestoreTime = r.Point.RestoreTime
 	return &r, nil
 }
 
 func sameNativeRestoreRequest(a, b *NativeRestore) bool {
-	return a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.SourceID == b.SourceID && a.PointID == b.PointID && a.RequestID == b.RequestID && a.CreatedBy == b.CreatedBy && a.Target == b.Target && a.ExpiresAt.Sub(a.CreatedAt) == b.ExpiresAt.Sub(b.CreatedAt) && sameNativePointIdentity(a.Point, b.Point)
+	return a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.SourceID == b.SourceID && a.PointID == b.PointID && a.RequestID == b.RequestID && a.CreatedBy == b.CreatedBy && a.Target == b.Target && a.ExpiresAt.Sub(a.CreatedAt) == b.ExpiresAt.Sub(b.CreatedAt) && sameNativePointSelection(a.Point, b.Point)
 }
 
 func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*NativeRestore, error) {
@@ -99,6 +100,9 @@ func (s *PgStore) createNativeRestore(ctx context.Context, r *NativeRestore, sou
 	}
 	if !sameNativePointIdentity(*point, r.Point) || source.Provider != r.Target.Provider {
 		return nil, ErrConflict
+	}
+	if _, selectionErr := point.SelectTime(source.Provider, r.Point.RestoreTime); selectionErr != nil {
+		return nil, selectionErr
 	}
 	if sourceDigest != "" {
 		if checkErr := checkReviewedNativeSource(&NativeRestore{Source: source.Binding}, sourceDigest); checkErr != nil {

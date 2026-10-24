@@ -10,6 +10,11 @@ import (
 // CheckPoint revalidates a retained native point before restore admission. A
 // successful metadata check does not create a copy or establish SQL recovery.
 func (s *NativeService) CheckPoint(ctx context.Context, p security.Principal, sourceID, pointID string) (*NativePoint, error) {
+	return s.CheckPointAt(ctx, p, sourceID, pointID, nil)
+}
+
+// CheckPointAt requires an explicit UTC time for PITR and rechecks rolling bounds.
+func (s *NativeService) CheckPointAt(ctx context.Context, p security.Principal, sourceID, pointID string, at *time.Time) (*NativePoint, error) {
 	source, err := s.authorizedSource(ctx, p, sourceID, security.RestoreManage)
 	if err != nil {
 		return nil, err
@@ -24,6 +29,11 @@ func (s *NativeService) CheckPoint(ctx context.Context, p security.Principal, so
 	if selected == nil || selected.ID != pointID || selected.SourceID != sourceID {
 		return nil, ErrNotFound
 	}
+	selection, err := selected.SelectTime(source.Provider, at)
+	if err != nil {
+		return nil, err
+	}
+	selected = &selection
 	if s.Retirements != nil {
 		retired, retirementErr := s.Retirements.NativePointRetired(ctx, p.OrgID, sourceID, pointID)
 		if retirementErr != nil {
@@ -43,6 +53,9 @@ func (s *NativeService) CheckPoint(ctx context.Context, p security.Principal, so
 	if err := checkNativePoint(source.Provider, *selected, current, now); err != nil {
 		return nil, err
 	}
+	fresh := cloneNativePoint(*current)
+	current = &fresh
+	current.RestoreTime = selected.RestoreTime
 	current.ID, current.SourceID, current.Present, current.LastSeenAt = pointID, sourceID, true, now
 	return current, nil
 }
@@ -50,6 +63,18 @@ func (s *NativeService) CheckPoint(ctx context.Context, p security.Principal, so
 func checkNativePoint(provider string, selected NativePoint, current *NativePoint, now time.Time) error {
 	if current == nil || !sameNativePointIdentity(selected, *current) {
 		return ErrNativeUnavailable
+	}
+	if selected.Kind == "pitr" {
+		if current.Status != "available" || current.ExpiresAt != nil {
+			return ErrNativeUnavailable
+		}
+		if _, err := current.SelectTime(provider, selected.RestoreTime); err != nil {
+			return ErrNativePITRUnavailable
+		}
+		return nil
+	}
+	if selected.PITR != nil || current.PITR != nil || selected.RestoreTime != nil || current.RestoreTime != nil {
+		return ErrInvalid
 	}
 	status := "available"
 	if provider == "cloud-sql" {
@@ -64,5 +89,5 @@ func checkNativePoint(provider string, selected NativePoint, current *NativePoin
 }
 
 func sameNativePointIdentity(a, b NativePoint) bool {
-	return a.ProviderID != "" && !a.CreatedAt.IsZero() && a.ProviderID == b.ProviderID && a.Name == b.Name && a.CreatedAt.Equal(b.CreatedAt) && a.Kind == b.Kind && a.Engine == b.Engine && a.Version == b.Version && a.Encrypted == b.Encrypted && a.KMSKey == b.KMSKey
+	return (a.Kind != "pitr" || a.PITR != nil && b.PITR != nil && a.PITR.Protocol == 1 && b.PITR.Protocol == 1) && a.ProviderID != "" && !a.CreatedAt.IsZero() && a.ProviderID == b.ProviderID && a.Name == b.Name && a.CreatedAt.Equal(b.CreatedAt) && a.Kind == b.Kind && a.Engine == b.Engine && a.Version == b.Version && a.Encrypted == b.Encrypted && a.KMSKey == b.KMSKey
 }

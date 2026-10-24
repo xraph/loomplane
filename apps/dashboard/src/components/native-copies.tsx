@@ -154,6 +154,11 @@ export function NativeCopyHistory({
                   copy.target.provider}{" "}
                 · {copy.target.region} · Source {copy.sourceId}
               </p>
+              {copy.restoreTime && (
+                <p className="break-all text-muted-foreground">
+                  PITR time {copy.restoreTime}
+                </p>
+              )}
               <p className="text-muted-foreground">
                 {copy.verifiedAt
                   ? `SQL verified ${formatDate(copy.verifiedAt)}`

@@ -20,6 +20,7 @@ import {
 import { NativeEmpty } from "@/components/native-recovery-empty"
 import { NativeCopyButton } from "@/components/native-copy-review"
 import { NativeCopyHistory } from "@/components/native-copies"
+import { NativePITR } from "@/components/native-pitr"
 import { NativeRetention } from "@/components/native-retention"
 import { useOrganization } from "@/lib/organization"
 import { formatDate } from "@/lib/format"
@@ -83,7 +84,8 @@ function NativeRecoveryContent({
         Saved provider observations, separate from Trove exports. A snapshot
         listed here has not been restore-tested. You can review temporary Cloud
         SQL and RDS PostgreSQL 17 copies below. Native retention has a separate
-        review. PITR controls remain in your cloud account.
+        review. RDS PITR copies use an explicit UTC time from the current
+        provider window.
       </p>
       <NativeCopyHistory
         key={copyVersion}
@@ -216,6 +218,7 @@ function NativePoints({
           </Button>
         </div>
       </div>
+      <NativePITR source={source} onAccepted={onCopyAccepted} />
       <p className="text-xs text-muted-foreground">
         {observed.observedAt
           ? `Saved ${formatDate(observed.observedAt)}`

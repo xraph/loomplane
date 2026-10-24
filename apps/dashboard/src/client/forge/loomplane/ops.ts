@@ -807,6 +807,13 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['NativeInventory'],
   },
+  'nativeRecoverySources.pitrWindow': {
+    method: 'GET',
+    path: '/api/v1/native-recovery-sources/{id}/pitr-window',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['NativePITRWindow'],
+  },
   'nativeRecoveryCopies.review': {
     method: 'POST',
     path: '/api/v1/native-recovery-sources/{id}/points/{pointId}/copy-review',

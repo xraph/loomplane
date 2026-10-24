@@ -35,6 +35,12 @@ import (
 func TestNativeRDSRecoveryHTTPCLIAndDispatchSurviveRestart(t *testing.T) {
 	runNativeRDSRecoveryHTTP(t, "copy")
 }
+func TestNativeRDSPITRHTTPCLIAndDispatchRetainsExactTime(t *testing.T) {
+	runNativeRDSRecoveryHTTP(t, "pitr")
+}
+func TestNativeRDSPITRRefusalHTTPCLIAndDispatchAllowsAbsentCleanup(t *testing.T) {
+	runNativeRDSRecoveryHTTP(t, "pitr-refusal")
+}
 func TestNativeRDSRetentionHTTPCLIAndDispatchUsesVerifiedWitness(t *testing.T) {
 	runNativeRDSRecoveryHTTP(t, "retention")
 }
@@ -42,7 +48,9 @@ func TestNativeRDSRetentionPolicyHTTPCLIAndDispatch(t *testing.T) {
 	runNativeRDSRecoveryHTTP(t, "policy")
 }
 func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
-	nativeRetention := workflow != "copy"
+	nativePITR := strings.HasPrefix(workflow, "pitr")
+	nativeRefusal := workflow == "pitr-refusal"
+	nativeRetention := workflow == "retention" || workflow == "policy"
 	nativePolicy := workflow == "policy"
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
@@ -64,6 +72,9 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 	var mu sync.Mutex
 	var sourceName, copyName, intent, adminPassword string
 	exists := false
+	windowExpired := false
+	restoreAt := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
+	sourceCreated := restoreAt.Add(-30 * 24 * time.Hour)
 	cleanupDenied := false
 	mutations := map[string]int{}
 	oldBackupExists, pointDeleteDenied := true, false
@@ -87,6 +98,18 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 			return notFound()
 		}
 		return 200, `<DescribeDBInstancesResponse><DescribeDBInstancesResult><DBInstances>` + nativeRDSInstanceXML(name, physical, intent, kms) + `</DBInstances></DescribeDBInstancesResult></DescribeDBInstancesResponse>`
+	}
+	fake.query["DescribeDBInstanceAutomatedBackups"] = func(form url.Values) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if form.Get("DbiResourceId") != "db-source" {
+			t.Error("PITR window lost immutable source", form)
+		}
+		body := ""
+		if !windowExpired {
+			body = fmt.Sprintf(`<DBInstanceAutomatedBackup><DBInstanceArn>arn:aws:rds:us-east-1:123456789012:db:%s</DBInstanceArn><DBInstanceIdentifier>%s</DBInstanceIdentifier><DbiResourceId>db-source</DbiResourceId><InstanceCreateTime>%s</InstanceCreateTime><Engine>postgres</Engine><EngineVersion>17.2</EngineVersion><Encrypted>true</Encrypted><KmsKeyId>%s</KmsKeyId><MasterUsername>app</MasterUsername><AllocatedStorage>20</AllocatedStorage><Status>active</Status><RestoreWindow><EarliestTime>%s</EarliestTime><LatestTime>%s</LatestTime></RestoreWindow></DBInstanceAutomatedBackup>`, sourceName, sourceName, sourceCreated.Format(time.RFC3339Nano), kms, restoreAt.Add(-24*time.Hour).Format(time.RFC3339Nano), restoreAt.Add(time.Hour).Format(time.RFC3339Nano))
+		}
+		return http.StatusOK, `<DescribeDBInstanceAutomatedBackupsResponse><DescribeDBInstanceAutomatedBackupsResult><DBInstanceAutomatedBackups>` + body + `</DBInstanceAutomatedBackups></DescribeDBInstanceAutomatedBackupsResult></DescribeDBInstanceAutomatedBackupsResponse>`
 	}
 	fake.query["DescribeDBSnapshots"] = func(form url.Values) (int, string) {
 		mu.Lock()
@@ -145,6 +168,22 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 		exists = true
 		return 200, `<RestoreDBInstanceFromDBSnapshotResponse><RestoreDBInstanceFromDBSnapshotResult>` + nativeRDSInstanceXML(copyName, "db-copy", intent, kms) + `</RestoreDBInstanceFromDBSnapshotResult></RestoreDBInstanceFromDBSnapshotResponse>`
 	}
+	fake.query["RestoreDBInstanceToPointInTime"] = func(form url.Values) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		mutations["restore"]++
+		if !nativePITR || form.Get("SourceDbiResourceId") != "db-source" || form.Get("RestoreTime") != restoreAt.Format(time.RFC3339) || form.Get("UseLatestRestorableTime") != "false" || form.Get("SourceDBInstanceIdentifier") != "" || form.Get("PubliclyAccessible") != "false" || form.Get("Iops") != "3000" || form.Get("StorageThroughput") != "125" || form.Get("MaxAllocatedStorage") != "20" {
+			t.Error("PITR native request changed reviewed time or isolated capacity", form)
+		}
+		copyName, intent = form.Get("TargetDBInstanceIdentifier"), form.Get("Tags.Tag.1.Value")
+		if nativeRefusal {
+			return http.StatusBadRequest, `<ErrorResponse><Error><Code>InstanceQuotaExceeded</Code></Error></ErrorResponse>`
+		}
+		exists = true
+		// A provider may accept the request before its response is lost. The
+		// next worker must observe the original intent rather than repost it.
+		return http.StatusInternalServerError, `<ErrorResponse><Error><Code>InternalFailure</Code></Error></ErrorResponse>`
+	}
 	fake.query["ModifyDBInstance"] = func(form url.Values) (int, string) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -202,6 +241,13 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 	defer func() { running.stop() }()
 	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
+	var contract json.RawMessage
+	c.must(200, http.MethodGet, "/openapi.json", nil, &contract)
+	if path := os.Getenv("LOOMPLANE_TEST_OPENAPI_OUTPUT"); path != "" {
+		if writeErr := os.WriteFile(path, contract, 0600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
 	settings := manageddb.RDSRecoveryNetwork{VPCID: "vpc-recovery", SubnetGroup: "recovery-private", SecurityGroupID: "sg-copy", VerifierGroupID: "sg-worker"}.Settings()
 	settings["region"] = "us-east-1"
 	var account connections.Connection
@@ -226,6 +272,13 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 	if _, err := sql.admin.Exec(t.Context(), "CREATE DATABASE "+pgx.Identifier{database}.Sanitize()); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
+		defer stop()
+		if _, dropErr := sql.admin.Exec(cleanup, "DROP DATABASE "+pgx.Identifier{database}.Sanitize()+" WITH (FORCE)"); dropErr != nil {
+			t.Error(dropErr)
+		}
+	})
 	dbConfig := sql.config.Copy()
 	dbConfig.Database = database
 	data, err := pgx.ConnectConfig(t.Context(), dbConfig)
@@ -251,7 +304,19 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 	var target cloudprofiles.Target
 	c.must(201, http.MethodPost, cloudBase+"/"+cloud.ID+"/targets", cloudprofiles.CreateTargetInput{Name: "recovery", Runtime: "managed", Provider: "rds", ConnectionID: account.ID, Region: "us-east-1"}, &target)
 	reviewFile := filepath.Join(t.TempDir(), "review.json")
-	lc.must("backups", "native-copies", "review", source.ID, inventory.Points[0].ID, "--cloud", cloud.ID, "--target", target.ID, "--request-id", "rds-http-request", "--out", reviewFile)
+	pointID := inventory.Points[0].ID
+	reviewArgs := []string{"backups", "native-copies", "review", source.ID, pointID, "--cloud", cloud.ID, "--target", target.ID, "--request-id", "rds-http-request", "--out", reviewFile}
+	if nativePITR {
+		var window recovery.NativePITRWindow
+		if decodeErr := json.Unmarshal([]byte(lc.must("backups", "native-pitr", source.ID, "--json")), &window); decodeErr != nil || !window.Available || window.PointID == "" {
+			t.Fatal("public PITR window missing", window, decodeErr)
+		}
+		reviewArgs[4] = window.PointID
+		reviewArgs = append(reviewArgs, "--restore-time", restoreAt.Format(time.RFC3339))
+		base := "/api/v1/native-recovery-sources/" + source.ID + "/points/" + window.PointID + "/copy-review"
+		c.must(http.StatusUnprocessableEntity, http.MethodPost, base, recovery.NativeCopyReviewInput{RequestID: "no-time-request", CloudID: cloud.ID, TargetID: target.ID, TTLHours: 1}, nil)
+	}
+	lc.must(reviewArgs...)
 	var copyRecord recovery.NativeRestore
 	if err = json.Unmarshal([]byte(lc.must("backups", "native-copies", "create", "--review-file", reviewFile, "--acknowledge-charges", "--json")), &copyRecord); err != nil {
 		t.Fatal(err)
@@ -259,6 +324,9 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 	wait := func(want string) {
 		t.Helper()
 		until := time.Now().Add(90 * time.Second)
+		if nativeRefusal {
+			until = time.Now().Add(20 * time.Second)
+		}
 		for {
 			c.must(200, http.MethodGet, "/api/v1/native-recovery-copies/"+copyRecord.ID, nil, &copyRecord)
 			if copyRecord.Status == want {
@@ -270,9 +338,75 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	if nativeRefusal {
+		wait("failed")
+		control, connectErr := pgx.Connect(t.Context(), cfg.Database.URL)
+		if connectErr != nil {
+			t.Fatal(connectErr)
+		}
+		defer control.Close(context.Background())
+		assertRefused := func() {
+			t.Helper()
+			var checkpoint struct {
+				Uncertain  bool   `json:"uncertain"`
+				PhysicalID string `json:"physical_id"`
+			}
+			var raw []byte
+			if queryErr := control.QueryRow(t.Context(), `SELECT checkpoint FROM loomplane_native_restores WHERE id=$1`, copyRecord.ID).Scan(&raw); queryErr != nil || json.Unmarshal(raw, &checkpoint) != nil || checkpoint.Uncertain || checkpoint.PhysicalID != "" {
+				t.Fatal("known refusal retained creation uncertainty", string(raw), queryErr)
+			}
+			var replay recovery.NativeRestore
+			if decodeErr := json.Unmarshal([]byte(lc.must("backups", "native-copies", "create", "--review-file", reviewFile, "--acknowledge-charges", "--json")), &replay); decodeErr != nil || replay.ID != copyRecord.ID || replay.Status != "failed" || !replay.ExpiresAt.Equal(copyRecord.ExpiresAt) {
+				t.Fatal("refusal replay created new intent or extended expiry", replay, decodeErr)
+			}
+			lc.must("backups", "native-copies", "cleanup", copyRecord.ID, "--yes", "--wait")
+			wait("deleted")
+			var kept bool
+			key := deployments.ResourceKey(source.OrgID, source.EnvironmentID, "native-copy:"+copyRecord.ID, "credentials")
+			if queryErr := control.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM vault_secrets WHERE app_id='loomplane-resource-credentials' AND key=$1)`, key).Scan(&kept); queryErr != nil || kept {
+				t.Fatal("absent refused copy retained credentials", queryErr)
+			}
+		}
+		assertRefused()
+		firstID := copyRecord.ID
+		reviewFile = filepath.Join(t.TempDir(), "new-review.json")
+		for index, value := range reviewArgs {
+			if value == "--request-id" {
+				reviewArgs[index+1] = "rds-new-explicit-request"
+			}
+			if value == "--out" {
+				reviewArgs[index+1] = reviewFile
+			}
+		}
+		lc.must(reviewArgs...)
+		if decodeErr := json.Unmarshal([]byte(lc.must("backups", "native-copies", "create", "--review-file", reviewFile, "--acknowledge-charges", "--json")), &copyRecord); decodeErr != nil || copyRecord.ID == firstID {
+			t.Fatal("new explicit request did not create separate intent", decodeErr)
+		}
+		wait("failed")
+		assertRefused()
+		mu.Lock()
+		defer mu.Unlock()
+		if mutations["restore"] != 2 || mutations["password"] != 0 || mutations["delete"] != 0 || exists {
+			t.Fatal("known refusal reposted or touched an instance", mutations, exists)
+		}
+		return
+	}
 	wait("succeeded")
 	if copyRecord.VerifiedAt == nil || copyRecord.PhysicalID != "db-copy" {
 		t.Fatal("Dispatch returned no SQL proof")
+	}
+	if nativePITR {
+		if copyRecord.RestoreTime == nil || !copyRecord.RestoreTime.Equal(restoreAt) {
+			t.Fatal("public PITR copy lost exact time", copyRecord.RestoreTime)
+		}
+		mu.Lock()
+		windowExpired = true
+		mu.Unlock()
+		var unavailable recovery.NativePITRWindow
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/native-recovery-sources/"+source.ID+"/pitr-window", nil, &unavailable)
+		if unavailable.Available || unavailable.PointID != "" {
+			t.Fatal("expired window reused cached availability", unavailable)
+		}
 	}
 	running.stop()
 	running = startApp()
@@ -441,13 +575,6 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 			t.Error("native deletion was not exact", oldBackupExists, mutations["point_delete"])
 		}
 		mu.Unlock()
-	}
-	var contract json.RawMessage
-	c.must(200, http.MethodGet, "/openapi.json", nil, &contract)
-	if path := os.Getenv("LOOMPLANE_TEST_OPENAPI_OUTPUT"); path != "" {
-		if err = os.WriteFile(path, contract, 0600); err != nil {
-			t.Fatal(err)
-		}
 	}
 	mu.Lock()
 	defer mu.Unlock()

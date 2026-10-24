@@ -33,7 +33,19 @@ func (n *NativeDatabases) nativeRDSSession(ctx context.Context, r recovery.Nativ
 
 func (s *nativeSQLCopyState) rdsSpec(r recovery.NativeRestore, cfg *planning.ResourceConfig) aws.DBRecoverySpec {
 	network := r.Target.RDSNetwork
-	return aws.DBRecoverySpec{ID: "lp-recovery-" + s.Scope[:32], ResourceID: s.PhysicalID, Intent: s.Scope, SourcePhysicalID: r.Source.PhysicalID, Snapshot: aws.DBSnapshot{ID: r.Point.Name, ARN: r.Point.ProviderID, InstanceID: r.Source.ExternalID, ResourceID: r.Source.PhysicalID, Type: r.Point.Kind, Engine: r.Point.Engine, EngineVersion: r.Point.Version, Encrypted: r.Point.Encrypted, KMSKey: r.Point.KMSKey, CreatedAt: r.Point.CreatedAt}, Class: cfg.Managed.Profile.ComputeClass, StorageGB: cfg.Managed.Profile.StorageGB, StorageType: cfg.Managed.Profile.StorageType, VPCID: network.VPCID, SubnetGroup: network.SubnetGroup, SecurityGroupID: network.SecurityGroupID, VerifierGroupID: network.VerifierGroupID, ParameterGroup: "default.postgres17", AdminUser: sqlUser}
+	spec := aws.DBRecoverySpec{ID: "lp-recovery-" + s.Scope[:32], ResourceID: s.PhysicalID, Intent: s.Scope, SourcePhysicalID: r.Source.PhysicalID, Snapshot: aws.DBSnapshot{ID: r.Point.Name, ARN: r.Point.ProviderID, InstanceID: r.Source.ExternalID, ResourceID: r.Source.PhysicalID, Type: r.Point.Kind, Engine: r.Point.Engine, EngineVersion: r.Point.Version, Encrypted: r.Point.Encrypted, KMSKey: r.Point.KMSKey, CreatedAt: r.Point.CreatedAt}, Class: cfg.Managed.Profile.ComputeClass, StorageGB: cfg.Managed.Profile.StorageGB, StorageType: cfg.Managed.Profile.StorageType, VPCID: network.VPCID, SubnetGroup: network.SubnetGroup, SecurityGroupID: network.SecurityGroupID, VerifierGroupID: network.VerifierGroupID, ParameterGroup: "default.postgres17", AdminUser: sqlUser}
+	if r.Point.Kind == "pitr" && r.Point.PITR != nil && r.Point.RestoreTime != nil {
+		spec.PITR = &aws.DBPITRWindow{ARN: r.Point.ProviderID, InstanceID: r.Source.ExternalID, ResourceID: r.Source.PhysicalID, Engine: r.Point.Engine, EngineVersion: r.Point.Version, KMSKey: r.Point.KMSKey, MasterUser: sqlUser, CreatedAt: r.Point.CreatedAt, Earliest: r.Point.PITR.Earliest, Latest: r.Point.PITR.Latest, Encrypted: r.Point.Encrypted, EncryptionKnown: true}
+		spec.RestoreTime = *r.Point.RestoreTime
+	}
+	return spec
+}
+
+func restoreRDSRecovery(ctx context.Context, client *aws.Session, spec aws.DBRecoverySpec, c aws.DBRecoveryControl) (*aws.DBInstance, error) {
+	if spec.PITR != nil {
+		return client.RestoreDBPointInTime(ctx, spec, c)
+	}
+	return client.RestoreDBSnapshot(ctx, spec, c)
 }
 
 func (s *nativeSQLCopyState) rdsMutation(ctx context.Context, c recovery.NativeWorkerControl, remove bool) aws.DBRecoveryControl {
@@ -56,7 +68,7 @@ func (s *nativeSQLCopyState) rdsGuard(client *aws.Session, r recovery.NativeRest
 		if s.PhysicalID == "" {
 			return recovery.ErrConflict
 		}
-		_, err := client.RestoreDBSnapshot(ctx, s.rdsSpec(r, cfg), aws.DBRecoveryControl{Check: c.Check, Mutation: aws.DBMutation{Attempted: true}})
+		_, err := restoreRDSRecovery(ctx, client, s.rdsSpec(r, cfg), aws.DBRecoveryControl{Check: c.Check, Mutation: aws.DBMutation{Attempted: true}})
 		return err
 	}
 }
@@ -108,7 +120,7 @@ func (n *NativeDatabases) restoreRDSCopy(ctx context.Context, p security.Princip
 				return recovery.NativeRestoreResult{}, recovery.ErrConflict
 			}
 		}
-		if _, restoreErr := client.RestoreDBSnapshot(ctx, s.rdsSpec(r, cfg), s.rdsMutation(ctx, c.NativeWorkerControl, false)); restoreErr != nil {
+		if _, restoreErr := restoreRDSRecovery(ctx, client, s.rdsSpec(r, cfg), s.rdsMutation(ctx, c.NativeWorkerControl, false)); restoreErr != nil {
 			return recovery.NativeRestoreResult{}, s.rdsWriteFailure(ctx, c.NativeWorkerControl, restoreErr, false)
 		}
 		s.Stage, s.Uncertain = "admin", false
@@ -138,7 +150,7 @@ func (n *NativeDatabases) restoreRDSCopy(ctx context.Context, p security.Princip
 	if saveErr := s.save(ctx, c.NativeWorkerControl); saveErr != nil {
 		return recovery.NativeRestoreResult{}, saveErr
 	}
-	db, err := client.RestoreDBSnapshot(ctx, s.rdsSpec(r, cfg), aws.DBRecoveryControl{Check: c.Check, Mutation: aws.DBMutation{Attempted: true}})
+	db, err := restoreRDSRecovery(ctx, client, s.rdsSpec(r, cfg), aws.DBRecoveryControl{Check: c.Check, Mutation: aws.DBMutation{Attempted: true}})
 	if err != nil {
 		return recovery.NativeRestoreResult{}, err
 	}
@@ -146,7 +158,7 @@ func (n *NativeDatabases) restoreRDSCopy(ctx context.Context, p security.Princip
 }
 
 func (n *NativeDatabases) checkRDSReader(ctx context.Context, client *aws.Session, r recovery.NativeRestore, s *nativeSQLCopyState, cfg *planning.ResourceConfig, passwords nativeCopyPasswords, guard func(context.Context) error, existingOnly bool) error {
-	db, err := client.RestoreDBSnapshot(ctx, s.rdsSpec(r, cfg), aws.DBRecoveryControl{Check: guard, Mutation: aws.DBMutation{Attempted: true}})
+	db, err := restoreRDSRecovery(ctx, client, s.rdsSpec(r, cfg), aws.DBRecoveryControl{Check: guard, Mutation: aws.DBMutation{Attempted: true}})
 	if err != nil {
 		return err
 	}
@@ -258,7 +270,7 @@ func (n *NativeDatabases) rdsCopyCredentials(ctx context.Context, p security.Pri
 	if verifyErr := n.checkRDSReader(ctx, client, r, s, cfg, passwords, guard, true); verifyErr != nil {
 		return nil, verifyErr
 	}
-	db, err := client.RestoreDBSnapshot(ctx, s.rdsSpec(r, cfg), aws.DBRecoveryControl{Check: check, Mutation: aws.DBMutation{Attempted: true}})
+	db, err := restoreRDSRecovery(ctx, client, s.rdsSpec(r, cfg), aws.DBRecoveryControl{Check: check, Mutation: aws.DBMutation{Attempted: true}})
 	if err != nil {
 		return nil, err
 	}

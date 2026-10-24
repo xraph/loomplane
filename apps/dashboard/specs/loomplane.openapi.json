@@ -7784,6 +7784,37 @@
           }
         }
       }
+    },
+    "/api/v1/native-recovery-sources/{id}/pitr-window": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoverySources.pitrWindow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current provider PITR window for the captured source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativePITRWindow"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -11390,6 +11421,12 @@
           "compute_class": {
             "type": "string"
           },
+          "iops": {
+            "type": "integer"
+          },
+          "max_storage_gb": {
+            "type": "integer"
+          },
           "profile_id": {
             "type": "string"
           },
@@ -11401,6 +11438,9 @@
           },
           "storage_type": {
             "type": "string"
+          },
+          "throughput_mbps": {
+            "type": "integer"
           }
         }
       },
@@ -11490,6 +11530,9 @@
           "request_id": {
             "type": "string"
           },
+          "restore_time": {
+            "type": "string"
+          },
           "review_token": {
             "type": "string"
           },
@@ -11521,6 +11564,9 @@
             "type": "string"
           },
           "request_id": {
+            "type": "string"
+          },
+          "restore_time": {
             "type": "string"
           },
           "target_id": {
@@ -11601,10 +11647,16 @@
           "name": {
             "type": "string"
           },
+          "pitr": {
+            "$ref": "#/components/schemas/NativePITRBounds"
+          },
           "present": {
             "type": "boolean"
           },
           "provider_id": {
+            "type": "string"
+          },
+          "restore_time": {
             "type": "string"
           },
           "source_id": {
@@ -11714,6 +11766,9 @@
             "type": "string"
           },
           "project_id": {
+            "type": "string"
+          },
+          "restore_time": {
             "type": "string"
           },
           "source_id": {
@@ -16525,6 +16580,61 @@
           },
           "revision": {
             "type": "integer"
+          }
+        }
+      },
+      "NativePITRBounds": {
+        "type": "object",
+        "required": [
+          "protocol",
+          "earliest",
+          "latest"
+        ],
+        "properties": {
+          "earliest": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latest": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "protocol": {
+            "type": "integer"
+          }
+        }
+      },
+      "NativePITRWindow": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "provider",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "earliest": {
+            "type": "string"
+          },
+          "latest": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "point_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "type": "string"
           }
         }
       }

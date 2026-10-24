@@ -2275,6 +2275,21 @@ export class RESTClient extends Client {
 
     /**
      */
+    pitrWindow: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativePITRWindow> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/pitr-window`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativePITRWindow"],
+      };
+
+      return this.request<types.NativePITRWindow>(config);
+    },
+
+    /**
+     */
     previewRetention: async (id: string, olderThanDays?: number, keepLast?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPreview> => {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-preview`;
       const queryParams: Record<string, any> = {};

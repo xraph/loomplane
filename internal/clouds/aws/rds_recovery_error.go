@@ -21,14 +21,18 @@ func dbRecoveryWriteError(err error) error {
 	var native smithy.APIError
 	if errors.As(err, &native) {
 		switch native.ErrorCode() {
-		case "InvalidDBInstanceState", "InvalidDBInstanceStateFault", "InvalidDBSnapshotState", "InvalidDBSnapshotStateFault", "InvalidRestoreFault", "PointInTimeRestoreNotEnabled", "DBInstanceAutomatedBackupNotFound", "DBInstanceAutomatedBackupNotFoundFault", "InvalidParameterValue", "InvalidParameterCombination":
+		case "InvalidDBInstanceState", "InvalidDBInstanceStateFault", "InvalidDBSnapshotState", "InvalidDBSnapshotStateFault", "InvalidRestoreFault", "PointInTimeRestoreNotEnabled", "DBInstanceAutomatedBackupNotFound", "DBInstanceAutomatedBackupNotFoundFault", "InvalidParameterValue", "InvalidParameterCombination",
+			"InstanceQuotaExceeded", "StorageQuotaExceeded", "InsufficientDBInstanceCapacity", "DBInstanceAlreadyExists", "DBInstanceNotFound",
+			"DBParameterGroupNotFound", "DBSecurityGroupNotFound", "DBSubnetGroupDoesNotCoverEnoughAZs", "DBSubnetGroupNotFoundFault",
+			"InvalidSubnet", "InvalidVPCNetworkStateFault", "KMSKeyNotAccessibleFault", "NetworkTypeNotSupported", "OptionGroupNotFoundFault",
+			"ProvisionedIopsNotAvailableInAZFault", "StorageTypeNotSupported", "TenantDatabaseQuotaExceeded", "VpcEncryptionControlViolation", "CertificateNotFound", "AuthorizationNotFound":
 			rejected = true
 		}
 	}
 	return dbRecoveryMutationError{cause: err, rejected: rejected}
 }
 
-// DBRecoveryRequestRejected identifies an authorization or invalid-state rejection, which
+// DBRecoveryRequestRejected identifies a documented definitive refusal, which
 // cannot have applied the write. Transport failures and lost responses remain
 // uncertain and must never clear the retained attempt marker.
 func DBRecoveryRequestRejected(err error) bool {

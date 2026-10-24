@@ -163,6 +163,26 @@ function fixture({
               checked_at: new Date().toISOString(),
             })
       }
+      if (url.pathname.endsWith("/pitr-window"))
+        return reply(
+          provider === "rds"
+            ? {
+                source_id: "source",
+                provider,
+                available: true,
+                point_id: "window",
+                earliest: "2026-10-21T00:00:00Z",
+                latest: "2026-10-22T00:00:00Z",
+                observed_at: "2026-10-23T00:00:00Z",
+              }
+            : {
+                source_id: "source",
+                provider,
+                available: false,
+                unavailable_reason:
+                  "PITR is unavailable for this recovery profile.",
+              }
+        )
       if (url.pathname.endsWith("/native-recovery-sources"))
         return reply({
           sources:
@@ -231,7 +251,8 @@ function fixture({
           request_id: body.request_id,
           review_token: `signed-${body.request_id}`,
           source_id: "source",
-          point_id: "point",
+          point_id: body.restore_time ? "window" : "point",
+          restore_time: body.restore_time,
           ttl_hours: body.ttl_hours,
           valid_until: new Date(Date.now() + 600000).toISOString(),
           notice:
@@ -267,7 +288,7 @@ function fixture({
       ) {
         const body = JSON.parse(String(init?.body))
         creates.push(body)
-        copy ??= { ...baseCopy }
+        copy ??= { ...baseCopy, restore_time: reviews.at(-1)?.restore_time }
         if (control.loseCreate)
           return reply({ message: "Admission response unavailable" }, 503)
         return reply(copy, 202)
@@ -946,4 +967,57 @@ it("explains the private RDS TLS route before revealing reader credentials", asy
   expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
     "private-native-reader"
   )
+})
+
+it("keeps the exact reviewed PITR time through uncertain admission and copy history", async () => {
+  const f = fixture({ provider: "rds" })
+  f.control.loseCreate = true
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Read PITR window" })
+  )
+  await userEvent.type(
+    await screen.findByLabelText("Restore time in UTC"),
+    "2026-10-21T12:00:03Z"
+  )
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review PITR copy" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Review native copy",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("combobox", { name: "Destination Cloud" })
+  )
+  await userEvent.click(await screen.findByRole("option", { name: "Recovery" }))
+  await userEvent.click(
+    within(dialog).getByRole("combobox", { name: "Destination target" })
+  )
+  await userEvent.click(
+    await screen.findByRole("option", { name: /Recovery SQL/ })
+  )
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Review capacity and charges" })
+  )
+  expect(
+    await within(dialog).findByText("Reviewed PITR time: 2026-10-21T12:00:03Z")
+  ).toBeVisible()
+  expect(f.reviews[0].restore_time).toBe("2026-10-21T12:00:03Z")
+  await userEvent.click(within(dialog).getByRole("checkbox"))
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Create temporary copy" })
+  )
+  const retry = await within(dialog).findByRole("button", {
+    name: "Retry same request",
+  })
+  f.control.loseCreate = false
+  await userEvent.click(retry)
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  )
+  expect(f.creates).toHaveLength(2)
+  expect(f.creates[1]).toEqual(f.creates[0])
+  expect(
+    await screen.findByText("PITR time 2026-10-21T12:00:03Z")
+  ).toBeVisible()
 })

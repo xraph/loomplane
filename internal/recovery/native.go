@@ -37,20 +37,22 @@ type NativeSource struct {
 // NativePoint is provider metadata, not a logical backup object in Trove.
 // Its identity includes the source, native reference and creation time.
 type NativePoint struct {
-	ID         string     `json:"id" forge:"id"`
-	SourceID   string     `json:"source_id"`
-	ProviderID string     `json:"provider_id"`
-	Name       string     `json:"name"`
-	Kind       string     `json:"kind"`
-	Status     string     `json:"status"`
-	Engine     string     `json:"engine"`
-	Version    string     `json:"version"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ExpiresAt  *time.Time `json:"expires_at" nullable:"true" required:"true"`
-	Encrypted  bool       `json:"encrypted"`
-	KMSKey     string     `json:"kms_key,omitempty"`
-	Present    bool       `json:"present"`
-	LastSeenAt time.Time  `json:"last_seen_at"`
+	ID          string            `json:"id" forge:"id"`
+	SourceID    string            `json:"source_id"`
+	ProviderID  string            `json:"provider_id"`
+	Name        string            `json:"name"`
+	Kind        string            `json:"kind"`
+	Status      string            `json:"status"`
+	Engine      string            `json:"engine"`
+	Version     string            `json:"version"`
+	CreatedAt   time.Time         `json:"created_at"`
+	ExpiresAt   *time.Time        `json:"expires_at" nullable:"true" required:"true"`
+	Encrypted   bool              `json:"encrypted"`
+	KMSKey      string            `json:"kms_key,omitempty"`
+	Present     bool              `json:"present"`
+	LastSeenAt  time.Time         `json:"last_seen_at"`
+	PITR        *NativePITRBounds `json:"pitr,omitempty"`
+	RestoreTime *time.Time        `json:"restore_time,omitempty"`
 }
 
 type NativePageInput struct {

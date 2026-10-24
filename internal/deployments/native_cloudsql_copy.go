@@ -80,7 +80,9 @@ func nativeSQLCopyScope(r recovery.NativeRestore) (string, *planning.ResourceCon
 		Config                                                                                                         json.RawMessage
 		Target                                                                                                         recovery.NativeRestoreTarget
 		PointReference, PointKind, PointVersion, PointCreated, KMS, Expires                                            string
-	}{r.OrgID, r.ProjectID, r.EnvironmentID, r.ID, r.SourceID, r.PointID, r.Source.Name, r.Source.ExternalID, r.Source.PhysicalID, r.Source.ConnectionID, r.Source.Config, r.Target, r.Point.ProviderID, r.Point.Kind, r.Point.Version, r.Point.CreatedAt.UTC().Format(time.RFC3339Nano), r.Point.KMSKey, r.ExpiresAt.UTC().Format(time.RFC3339Nano)})
+		PITR                                                                                                           *recovery.NativePITRBounds `json:"pitr,omitempty"`
+		RestoreTime                                                                                                    *time.Time                 `json:"restore_time,omitempty"`
+	}{r.OrgID, r.ProjectID, r.EnvironmentID, r.ID, r.SourceID, r.PointID, r.Source.Name, r.Source.ExternalID, r.Source.PhysicalID, r.Source.ConnectionID, r.Source.Config, r.Target, r.Point.ProviderID, r.Point.Kind, r.Point.Version, r.Point.CreatedAt.UTC().Format(time.RFC3339Nano), r.Point.KMSKey, r.ExpiresAt.UTC().Format(time.RFC3339Nano), r.Point.PITR, r.Point.RestoreTime})
 	if err != nil {
 		return "", nil, err
 	}

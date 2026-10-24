@@ -34,6 +34,7 @@ type NativeRestoreTarget struct {
 // NativeRestore retains the selected provider backup independently of Trove.
 // Source, selected metadata and checkpoints are internal worker inputs.
 type NativeRestore struct {
+	RestoreTime        *time.Time          `json:"restore_time,omitempty"`
 	ID                 string              `json:"id" forge:"id"`
 	OrgID              string              `json:"org_id"`
 	ProjectID          string              `json:"project_id"`

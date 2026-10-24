@@ -1062,10 +1062,13 @@ export interface MoveReview {
 export interface NativeCopyCapacity {
   availability: string;
   computeClass: string;
+  iops?: number;
+  maxStorageGb?: number;
   profileId: string;
   profileRevision: string;
   storageGb: number;
   storageType: string;
+  throughputMbps?: number;
 }
 
 export interface NativeCopyCreateInputBody {
@@ -1090,6 +1093,7 @@ export interface NativeCopyReview {
   notice: string;
   pointId: string;
   requestId: string;
+  restoreTime?: string;
   reviewToken: string;
   sourceId: string;
   target: NativeRestoreTarget;
@@ -1100,6 +1104,7 @@ export interface NativeCopyReview {
 export interface NativeCopyReviewInputBody {
   cloudId: string;
   requestId: string;
+  restoreTime?: string;
   targetId: string;
   ttlHours: number;
 }
@@ -1108,6 +1113,23 @@ export interface NativeInventory {
   nextBefore?: string;
   points: NativePoint[];
   source: NativeSource;
+}
+
+export interface NativePITRBounds {
+  earliest: string;
+  latest: string;
+  protocol: number;
+}
+
+export interface NativePITRWindow {
+  available: boolean;
+  earliest?: string;
+  latest?: string;
+  observedAt?: string;
+  pointId?: string;
+  provider: string;
+  sourceId: string;
+  unavailableReason?: string;
 }
 
 export interface NativePoint {
@@ -1120,8 +1142,10 @@ export interface NativePoint {
   kmsKey?: string;
   lastSeenAt: string;
   name: string;
+  pitr?: NativePITRBounds;
   present: boolean;
   providerId: string;
+  restoreTime?: string;
   sourceId: string;
   status: string;
   version: string;
@@ -1152,6 +1176,7 @@ export interface NativeRestore {
   physicalId?: string;
   pointId: string;
   projectId: string;
+  restoreTime?: string;
   sourceId: string;
   status: string;
   target: NativeRestoreTarget;

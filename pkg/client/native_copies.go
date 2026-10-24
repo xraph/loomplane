@@ -30,6 +30,9 @@ type NativeRecoveryTarget struct {
 }
 
 type NativeRecoveryCapacity struct {
+	IOPS            int32  `json:"iops,omitempty"`
+	ThroughputMBPS  int32  `json:"throughput_mbps,omitempty"`
+	MaxStorageGB    int32  `json:"max_storage_gb,omitempty"`
 	ProfileID       string `json:"profile_id"`
 	ProfileRevision string `json:"profile_revision"`
 	ComputeClass    string `json:"compute_class"`
@@ -39,13 +42,15 @@ type NativeRecoveryCapacity struct {
 }
 
 type NativeCopyReviewRequest struct {
-	RequestID string `json:"request_id"`
-	CloudID   string `json:"cloud_id"`
-	TargetID  string `json:"target_id"`
-	TTLHours  int    `json:"ttl_hours"`
+	RestoreTime *time.Time `json:"restore_time,omitempty"`
+	RequestID   string     `json:"request_id"`
+	CloudID     string     `json:"cloud_id"`
+	TargetID    string     `json:"target_id"`
+	TTLHours    int        `json:"ttl_hours"`
 }
 
 type NativeRecoveryReview struct {
+	RestoreTime *time.Time             `json:"restore_time,omitempty"`
 	RequestID   string                 `json:"request_id"`
 	ReviewToken string                 `json:"review_token"`
 	SourceID    string                 `json:"source_id"`
@@ -65,6 +70,7 @@ type NativeCopyRequest struct {
 
 // NativeRecoveryCopy exposes retained status without worker secrets or checkpoints.
 type NativeRecoveryCopy struct {
+	RestoreTime        *time.Time           `json:"restore_time,omitempty"`
 	ID                 string               `json:"id"`
 	OrgID              string               `json:"org_id"`
 	ProjectID          string               `json:"project_id"`
