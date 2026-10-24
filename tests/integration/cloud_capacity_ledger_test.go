@@ -20,7 +20,7 @@ import (
 type ledgerProvider struct{ *infraProvider }
 
 func (p *ledgerProvider) ServerOptions(context.Context, provider.InfrastructureCredential) (provider.ServerOptions, error) {
-	return provider.ServerOptions{Regions: []provider.ServerRegion{{ID: "region"}}, Images: []provider.ServerImage{{ID: "ubuntu", Bootstrap: true, Regions: []string{"region"}}}, Sizes: []provider.ServerSize{{ID: "small", CPUs: 2, MemoryMiB: 2048, DiskGB: 20, Regions: []string{"region"}}}}, nil
+	return provider.ServerOptions{Regions: []provider.ServerRegion{{ID: "region"}}, Images: []provider.ServerImage{{ID: "ubuntu", Bootstrap: true, Regions: []string{"region"}}}, Sizes: []provider.ServerSize{{ID: "small", CPUs: 2, MemoryMiB: 2048, DiskGB: 20, Regions: []string{"region"}}, {ID: "large", CPUs: 3, MemoryMiB: 2048, DiskGB: 20, Regions: []string{"region"}}}}, nil
 }
 func ledgerFixture(t *testing.T) *infraFixture {
 	t.Helper()
@@ -262,6 +262,10 @@ func TestCapacityLedgerTransferAndRetainedVolume(t *testing.T) {
 	if err != nil || len(records) != 1 || records[0].Kind != "volume" {
 		t.Fatalf("cleanup lost retained volume: %+v %v", records, err)
 	}
+	usage, err := f.store.GetCapacityUsage(t.Context(), "org", "cloud")
+	if err != nil || !usage.Fresh || usage.Provisioned.CPUMillis == nil || *usage.Provisioned.CPUMillis != 0 || usage.Headroom.CPUMillis == nil || *usage.Headroom.CPUMillis != 2000 {
+		t.Fatalf("authoritative absence left unknown server footprint: %+v %v", usage, err)
+	}
 	tx, err := ledgerDB(t, f).BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -477,5 +481,176 @@ func TestCapacityLedgerMissingInventoryIsUnknownUsage(t *testing.T) {
 	}
 	if usage.Fresh || usage.Provisioned.CPUMillis != nil || usage.Headroom.CPUMillis != nil {
 		t.Fatalf("unobserved host became zero usage: %+v", usage)
+	}
+}
+
+func TestCapacityLedgerPoolEditCountsPendingResize(t *testing.T) {
+	for _, resizeMember := range []string{"current", "new", "pool-and-member"} {
+		t.Run(resizeMember, func(t *testing.T) {
+			f := ledgerFixture(t)
+			ctx := t.Context()
+			records := make([]cloudinfra.CapacityRecord, 0, 2)
+			hosts := make([]*cloudinfra.Server, 0, 2)
+			for _, id := range []string{"current", "new"} {
+				v, r := ledgerHost(t, f, id, 1000)
+				v.RuntimeConnectionID = "runtime-" + id
+				conn := &connections.Connection{ID: v.RuntimeConnectionID, OrgID: "org", Cloud: "server", Name: v.RuntimeConnectionID, Account: v.RuntimeConnectionID, Status: "ready", Details: map[string]string{"docker_id": v.RuntimeConnectionID}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+				if err := f.connections.CreateConnection(ctx, conn); err != nil {
+					t.Fatal(err)
+				}
+				v.Health = cloudinfra.RuntimeHealth{DockerID: v.RuntimeConnectionID, EffectiveCPUMillis: 1000, EffectiveMemoryBytes: 1 << 30, CheckedAt: time.Now()}
+				if err := f.store.SaveServer(ctx, v); err != nil {
+					t.Fatal(err)
+				}
+				r.ServerStateRevision = v.StateRevision
+				records = append(records, r)
+				hosts = append(hosts, v)
+			}
+			pool := &cloudinfra.Pool{ID: "resize-pool", OrgID: "org", CloudID: "cloud", Revision: 1, Members: []cloudinfra.PoolMember{{ServerID: "current", CPUMillis: 1000, MemoryBytes: 1 << 30}}}
+			if err := f.store.SavePool(ctx, pool, 0); err != nil {
+				t.Fatal(err)
+			}
+			policy, err := f.store.GetCapacityPolicy(ctx, "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy.Revision++
+			policy.Limits.CPUMillis = 4000
+			poolLimit := policy.Limits
+			poolLimit.CPUMillis = 3000
+			policy.Pools = []cloudinfra.PoolExpansionPolicy{{PoolID: pool.ID, MaxServers: 2, Limits: &poolLimit}}
+			if err = f.store.SaveCapacityPolicy(ctx, policy, 1); err != nil {
+				t.Fatal(err)
+			}
+			ledgerSave(t, f, records, nil)
+			v := hosts[0]
+			if resizeMember == "new" {
+				v = hosts[1]
+			}
+			f.provider.remote = provider.InfrastructureServer{ID: v.ResourceID, AccountID: "account", Size: "old"}
+			o, err := f.svc.PreviewServer(ctx, f.p, "cloud", cloudinfra.ServerInput{Kind: "resize", ServerID: v.ID, ServerRevision: v.Revision, CloudRevision: 1, Size: "large"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resizeMember == "pool-and-member" {
+				tx, beginErr := ledgerDB(t, f).BeginTx(ctx, nil)
+				if beginErr != nil {
+					t.Fatal(beginErr)
+				}
+				defer func() { _ = tx.Rollback() }()
+				block, reserveErr := f.store.ReserveInfrastructureCapacity(ctx, tx, o.ID, cloudinfra.CapacityDemand{OrgID: "org", CloudID: "cloud", PoolID: pool.ID}, cloudinfra.ResourceVector{CPUMillis: 2000, MemoryBytes: 1 << 30, StorageBytes: 10_000_000_000})
+				if reserveErr != nil || block != nil {
+					t.Fatalf("pool reservation: %+v %v", block, reserveErr)
+				}
+				if commitErr := tx.Commit(); commitErr != nil {
+					t.Fatal(commitErr)
+				}
+			}
+			o.Status = "pending"
+			if err = f.store.Accept(ctx, o); err != nil {
+				t.Fatal(err)
+			}
+			pool.Revision++
+			pool.Members = append(pool.Members, cloudinfra.PoolMember{ServerID: "new", CPUMillis: 1000, MemoryBytes: 1 << 30})
+			var blocked *cloudinfra.CapacityAdmissionError
+			if err = f.store.SavePool(ctx, pool, 1); !errors.As(err, &blocked) || blocked.Block.Reason != "hard_limit" || blocked.Block.Resource != "cpu_millis" {
+				t.Fatalf("pool edit ignored pending resize on %s member: %v", resizeMember, err)
+			}
+			policy.Revision++
+			policy.Pools[0].Limits.CPUMillis = 4000
+			if err = f.store.SaveCapacityPolicy(ctx, policy, 2); err != nil {
+				t.Fatal(err)
+			}
+			if err = f.store.SavePool(ctx, pool, 1); err != nil {
+				t.Fatalf("exact 4-CPU limit double-counted pending resize: %v", err)
+			}
+		})
+	}
+}
+
+func TestCapacityLedgerLegacyDisconnectKeepsUnknownFootprint(t *testing.T) {
+	f := newInfraFixture(t)
+	ctx := t.Context()
+	f.svc.Runtime = ledgerRuntime{}
+	adapters := cloudinfra.NewAdapters()
+	if err := adapters.RegisterServer("digitalocean", &ledgerProvider{f.provider}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Adapters = adapters
+	conn := &connections.Connection{ID: "legacy-adopt", OrgID: "org", Cloud: "server", Name: "Legacy", Account: "ledger-adopt", Status: "ready", Details: map[string]string{"host_key": "fixture"}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := f.connections.CreateConnection(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.secrets.Put(ctx, "org", conn.ID, []byte("fixture")); err != nil {
+		t.Fatal(err)
+	}
+	o, err := f.svc.PreviewServer(ctx, f.p, "cloud", cloudinfra.ServerInput{Kind: "adopt", Name: "Legacy", ConnectionID: conn.ID, CloudRevision: 1, ConfirmAdoption: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err = f.svc.ApplyServerOperation(ctx, f.p, "cloud", o.ID, cloudinfra.ApplyInput{Review: o.Review})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reconcile(t, o); got.Status != "succeeded" {
+		t.Fatalf("legacy adoption: %s", got.Status)
+	}
+	policy := &cloudinfra.CapacityPolicy{OrgID: "org", CloudID: "cloud", Revision: 1, Limits: cloudinfra.ResourceVector{Servers: 10, CPUMillis: 2000, MemoryBytes: 20 << 30, StorageBytes: 200_000_000_000}}
+	if err = f.store.SaveCapacityPolicy(ctx, policy, 0); err != nil {
+		t.Fatal(err)
+	}
+	zero := cloudinfra.CapacityResources{Servers: inventoryNumber(0), CPUMillis: inventoryNumber(0), MemoryBytes: inventoryNumber(0), StorageBytes: inventoryNumber(0)}
+	ledgerSave(t, f, nil, []cloudinfra.CapacityAccountSnapshot{{Provider: "digitalocean", AccountID: "account", Provisioned: zero, CheckedAt: time.Now()}})
+	assertUnknown := func(t *testing.T) {
+		t.Helper()
+		usage, usageErr := f.store.GetCapacityUsage(ctx, "org", "cloud")
+		if usageErr != nil {
+			t.Fatal(usageErr)
+		}
+		if usage.Fresh || usage.Provisioned.CPUMillis != nil || usage.Headroom.CPUMillis != nil {
+			t.Errorf("never-sampled host became zero usage: %+v", usage)
+		}
+		var blocked *cloudinfra.CapacityAdmissionError
+		if acceptErr := f.store.Accept(ctx, ledgerPreview(t, f)); !errors.As(acceptErr, &blocked) || blocked.Block.Reason != "stale_inventory" {
+			t.Errorf("never-sampled host allowed infrastructure admission: %v", acceptErr)
+		}
+	}
+	assertUnknown(t)
+	v, err := f.store.GetServer(ctx, "org", "cloud", o.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disconnect, err := f.svc.PreviewServer(ctx, f.p, "cloud", cloudinfra.ServerInput{Kind: "disconnect", ServerID: v.ID, ServerRevision: v.Revision, CloudRevision: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disconnect, err = f.svc.ApplyServerOperation(ctx, f.p, "cloud", disconnect.ID, cloudinfra.ApplyInput{Review: disconnect.Review})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reconcile(t, disconnect); got.Status != "succeeded" {
+		t.Fatalf("disconnect: %s", got.Status)
+	}
+	if _, err = f.svc.RefreshCapacity(ctx, f.p, "cloud"); err != nil {
+		t.Fatal(err)
+	}
+	assertUnknown(t)
+}
+
+func TestCapacityLedgerRetiredStatusDoesNotProveAbsence(t *testing.T) {
+	for _, status := range []string{"disconnected", "deleted"} {
+		t.Run(status, func(t *testing.T) {
+			f := ledgerFixture(t)
+			v, _ := ledgerHost(t, f, "unknown-retired", 2000)
+			v.Status = status
+			if err := f.store.SaveServer(t.Context(), v); err != nil {
+				t.Fatal(err)
+			}
+			ledgerSave(t, f, nil, nil)
+			usage, err := f.store.GetCapacityUsage(t.Context(), "org", "cloud")
+			if err != nil || usage.Fresh || usage.Provisioned.CPUMillis != nil || usage.Headroom.CPUMillis != nil {
+				t.Fatalf("status %s concealed unknown footprint: %+v %v", status, usage, err)
+			}
+		})
 	}
 }

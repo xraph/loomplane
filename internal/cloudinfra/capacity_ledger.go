@@ -452,7 +452,9 @@ func checkPoolCapacityEdit(ctx context.Context, tx driver.Tx, pool *Pool) error 
 		return checkErr
 	}
 	delta := ResourceVector{}
+	newIDs := map[string]bool{}
 	for _, member := range pool.Members {
+		newIDs[member.ServerID] = true
 		if oldIDs[member.ServerID] {
 			continue
 		}
@@ -484,13 +486,26 @@ func checkPoolCapacityEdit(ctx context.Context, tx driver.Tx, pool *Pool) error 
 	if err != nil {
 		return err
 	}
-	for _, r := range reservations {
-		if r.cloud == pool.CloudID && r.reservation.PoolID == pool.ID {
-			old, err = sumResources(old, capacityResources(r.reservation.Delta))
-			if err != nil {
-				return err
-			}
+	counted := map[string]bool{}
+	for _, scoped := range reservations {
+		r := scoped.reservation
+		if scoped.cloud != pool.CloudID || counted[r.OperationID] {
+			continue
 		}
+		// Manual resize reservations carry the host identity without a pool ID.
+		// Count their delta once, including when the edit adds that host.
+		switch {
+		case r.PoolID == pool.ID || oldIDs[r.ServerID]:
+			old, err = sumResources(old, capacityResources(r.Delta))
+		case newIDs[r.ServerID]:
+			delta, err = addCapacity(delta, r.Delta)
+		default:
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		counted[r.OperationID] = true
 	}
 	ceilings := CapacityResources{Servers: number(limits.MaxServers)}
 	if limits.Limits != nil {
@@ -552,6 +567,19 @@ func operationCapacityDelta(ctx context.Context, tx driver.Tx, o *Operation, p *
 
 func capacityInventoryIncomplete(ctx context.Context, tx driver.Tx, org, cloud string) (bool, error) {
 	var missing bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_servers s WHERE s.org_id=$1 AND s.cloud_id=$2 AND s.status NOT IN ('deleted','disconnected') AND NOT EXISTS(SELECT 1 FROM loomplane_cloud_capacity_inventory i WHERE i.org_id=s.org_id AND i.cloud_id=s.cloud_id AND i.server_id=s.id) AND NOT EXISTS(SELECT 1 FROM loomplane_cloud_capacity_reservations r WHERE r.org_id=s.org_id AND r.cloud_id=s.cloud_id AND r.body->>'server_id'=s.id AND r.servers=1 AND r.status='reserved'))`, org, cloud).Scan(&missing)
+	// Retirement status does not establish provider absence, even when this host
+	// never had an inventory sample. Only an exact durable delete receipt does.
+	err := tx.QueryRow(ctx, `SELECT EXISTS(
+ SELECT 1 FROM loomplane_cloud_servers s WHERE s.org_id=$1 AND s.cloud_id=$2
+ AND NOT EXISTS(SELECT 1 FROM loomplane_cloud_capacity_inventory i
+ WHERE i.org_id=s.org_id AND i.cloud_id=s.cloud_id AND i.server_id=s.id)
+ AND NOT EXISTS(SELECT 1 FROM loomplane_cloud_capacity_reservations r
+ WHERE r.org_id=s.org_id AND r.cloud_id=s.cloud_id AND r.body->>'server_id'=s.id AND r.servers=1 AND r.status='reserved')
+ AND NOT EXISTS(SELECT 1 FROM loomplane_infrastructure_operations o
+ WHERE o.org_id=s.org_id AND o.cloud_id=s.cloud_id AND o.server_id=s.id
+ AND o.body->'input'->>'kind'='delete' AND s.resource_id<>''
+ AND o.body->>'provider'=s.provider AND o.body->>'account_id'=s.account_id AND o.body->>'resource_id'=s.resource_id
+ AND coalesce(o.body->>'absence_confirmed_at','') NOT IN ('','0001-01-01T00:00:00Z'))
+ )`, org, cloud).Scan(&missing)
 	return missing, err
 }
