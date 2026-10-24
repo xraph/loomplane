@@ -1,0 +1,138 @@
+---
+title: Deploy a monorepo end to end
+description: Take a monorepo with a web app, an API and a database from a GitHub URL to running services on Vercel and Google Cloud.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+This walk-through deploys a typical monorepo: a Next.js app, a Go API behind it, and a Postgres database the API uses. The web app goes to Vercel, and the API and database go to Google Cloud. Swap in any targets from the [Clouds overview](/docs/clouds). The repository can be your own, or `examples/polyglot` in the Loomplane source, which has the same shape.
+
+You'll need a Loomplane you can sign in to ([Quick start](/docs/quick-start)), a Vercel token, and a Google Cloud service account key with the permissions listed in [Google Cloud](/docs/clouds/google-cloud).
+
+<Steps>
+<Step>
+
+### Create the project and analyze it
+
+Choose **New project** and paste the GitHub URL. Or from the terminal:
+
+```bash
+loomctl projects create "Acme shop" --repo acme/shop
+loomctl analyze acme-shop
+```
+
+When it finishes you get a line like "found 4 services (3 deployable), 2 packages and 1 resources at 3f2c1a9" (your numbers will differ). In the dashboard, open the graph and check each service and database against the files it points at. A resource found only from a driver in a dependency list is marked to confirm.
+
+If Loomplane found something you don't deploy (a demo app, say), leave it out of the manifest. If it found a resource you don't use, list its kind under `ignore.resources` so plans stop asking.
+
+</Step>
+<Step>
+
+### Draft and edit the manifest
+
+```bash
+loomctl manifest acme-shop --draft > loomplane.yaml
+```
+
+Edit it so the web app runs on Vercel and the API and database run on Google Cloud:
+
+```yaml title="loomplane.yaml"
+version: 1
+
+defaults:
+  provider: cloud-run
+  region: us-central1
+
+services:
+  api:
+    source: go:services/api
+    needs: [db]
+    scale: { min: 1, max: 5 }
+    size: { cpu: 1, memory: 512 }
+  web:
+    source: apps/web
+    provider: vercel
+    needs: [api]
+    environments:
+      preview:
+        enabled: false
+
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+    version: "17"
+```
+
+`web` needs `api`, so it gets `API_URL`. The API is public here, which a Vercel app on another cloud needs, because a private Cloud Run service only takes calls from the project's own services. `api` needs `db`, so it gets `DATABASE_URL` through Secret Manager. If the Dockerfile copies files from across the repository, add `build: { context: . }` to the service.
+
+Save it:
+
+```bash
+loomctl manifest save acme-shop -f loomplane.yaml
+```
+
+</Step>
+<Step>
+
+### Connect the clouds
+
+Under **Integrations**, add the Vercel token and the Google Cloud key. If a check says permissions are missing, grant them and check again. Then confirm each environment uses the account you meant. With one ready account per cloud, Loomplane picks it for you.
+
+</Step>
+<Step>
+
+### Add variables
+
+Set anything your services read that Loomplane doesn't generate:
+
+```bash
+loomctl vars set acme-shop LOG_LEVEL=info --env production
+loomctl vars set acme-shop STRIPE_KEY=- --secret --env production --service svc:api:go:services/api
+```
+
+The service ID comes from the graph. See [Variables and secrets](/docs/concepts/variables-and-secrets).
+
+</Step>
+<Step>
+
+### Plan the environment
+
+```bash
+loomctl plan acme-shop --env production
+```
+
+Read it from the top. Check the actions are only the ones you expect (a database, an API, a web app), that each sits on the provider you chose, and that no problems are listed. Read the warnings too. A service without a `port` falls back to 8080 with a warning, and you can fix that in the manifest.
+
+</Step>
+<Step>
+
+### Approve and watch
+
+An admin approves:
+
+```bash
+loomctl approve <plan-id>
+```
+
+`approve` follows the deployment step by step and exits nonzero if it fails. Cloud SQL can take several minutes. If a step fails, fix the cause (often a missing permission) and run `loomctl retry <deployment-id>`. It resumes from the failed step.
+
+```bash
+loomctl status acme-shop
+```
+
+shows what runs where, with addresses, and flags any drift.
+
+</Step>
+<Step>
+
+### Change and redeploy
+
+Push to the repository. If you've set up the [GitHub App's webhook](/docs/guides/private-repositories#re-analyze-on-push), Loomplane re-analyzes on its own. Otherwise run `loomctl analyze`. Then plan and approve again. To move only one repository in a multi-repository project, plan with `--scope web`.
+
+</Step>
+</Steps>
+
+## If you don't want a database to move
+
+Resources never move between connections, because their data would stay behind. If you change an environment's connection, choose the old one again for the resource, or plan a fresh one deliberately. See [Adopting and moving services](/docs/clouds/adopting-and-moving).

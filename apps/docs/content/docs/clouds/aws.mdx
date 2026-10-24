@@ -1,0 +1,70 @@
+---
+title: AWS
+description: Connect an AWS account and run services on ECS on Fargate with RDS, ElastiCache and S3.
+---
+
+Loomplane builds a service with CodeBuild, stores the image in ECR and runs it on ECS on Fargate, behind a load balancer when it serves HTTP. It provisions RDS (Postgres and MySQL), ElastiCache (Redis OSS) and S3 buckets alongside it.
+
+## Connect an account
+
+Under **Integrations**, choose AWS and enter an access key ID and secret, then a region. The region is required, because everything Loomplane makes with this connection lives in it. Key IDs start with `AKIA` or `ASIA`.
+
+Loomplane asks STS who the key is, then runs IAM's policy simulator against the actions a deployment needs and lists any the principal can't take. If the key isn't allowed to run the simulator, the connection is ready with its permissions marked unchecked, so a failed step is where you'll find out.
+
+You can add an ACM certificate ARN for the same region as an optional setting. Public ECS services then serve HTTPS. Without one they serve HTTP.
+
+| Used for | Actions Loomplane checks |
+|---|---|
+| Builds | `codebuild:BatchGetBuilds`, `CreateProject`, `StartBuild`, `UpdateProject`; `ecr:CreateRepository`, `DescribeRepositories` |
+| ECS | `ecs:CreateCluster`, `CreateService`, `DeleteService`, `DescribeClusters`, `DescribeServices`, `RegisterTaskDefinition`, `UpdateService` |
+| Load balancing | `elasticloadbalancing:CreateListener`, `CreateLoadBalancer`, `CreateRule`, `CreateTargetGroup`, `DescribeListeners`, `DescribeLoadBalancers`, `DescribeRules`, `DescribeTargetGroups` |
+| Networking | `ec2:AuthorizeSecurityGroupIngress`, `CreateSecurityGroup`, `DescribeSecurityGroups`, `DescribeSubnets`, `DescribeVpcs`; `servicediscovery:CreateHttpNamespace`, `CreateService`, `GetNamespace`, `GetOperation`, `ListNamespaces` |
+| IAM and logs | `iam:AttachRolePolicy`, `CreateRole`, `GetRole`, `PassRole`, `PutRolePolicy`; `logs:CreateLogGroup` |
+| Secrets | `secretsmanager:CreateSecret`, `PutSecretValue` |
+| RDS | `rds:CreateDBInstance`, `CreateDBSubnetGroup`, `DeleteDBInstance`, `DescribeDBInstances`, `DescribeDBSnapshots`, `AddTagsToResource` |
+| ElastiCache | `elasticache:CreateCacheSubnetGroup`, `CreateReplicationGroup`, `DeleteReplicationGroup`, `DescribeReplicationGroups` |
+| S3 | `s3:CreateBucket`, `DeleteBucket`, `DeleteObject`, `ListBucket`, `PutBucketPublicAccessBlock`, `PutObject` |
+
+Reading build logs also needs CloudWatch `GetLogEvents`. A cross-cloud link needs the VPN actions listed in the [manifest reference](/docs/reference/loomplane-yaml#links).
+
+## Use it in a manifest
+
+```yaml
+version: 1
+services:
+  api:
+    source: go:services/api
+    provider: ecs-fargate
+    needs: [db, cache, uploads]
+  worker:
+    source: services/worker
+    provider: ecs-fargate
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    provider: rds
+    version: "17"
+  cache:
+    kind: redis
+    provider: elasticache
+  uploads:
+    kind: object-storage
+    provider: s3
+```
+
+## How things behave
+
+The region is the connection's. Leave `region` out and you get it. Name a different one and the plan stops, because the deployment would land in the connection's region anyway. To move an environment to another AWS region, choose a connection in that region for it.
+
+Two ECS services in the same environment reach each other inside the VPC at `http://name:port`, whether or not the one they need is public. A worker is an ECS service with no load balancer. RDS and ElastiCache are reachable from the environment's ECS tasks only.
+
+Buckets are private, and services reach them with their task's environment role, so `STORAGE_URL` carries no credentials (`s3://bucket?region=...`). Redis gets an auth token in `REDIS_URL` (`rediss://...`), and ElastiCache encrypts it in transit and at rest.
+
+Secret variables go to Secrets Manager and never into a task definition.
+
+Supported regions Loomplane lists: `us-east-1`, `us-east-2`, `us-west-2`, `ca-central-1`, `sa-east-1`, `eu-west-1`, `eu-west-2`, `eu-central-1`, `eu-north-1`, `ap-south-1`, `ap-southeast-1`, `ap-southeast-2` and `ap-northeast-1`.
+
+<Callout type="warn">
+  RDS creation, removal and snapshot handling are checked against controlled AWS endpoints. Live AWS creation, SQL persistence and snapshot restore aren't qualified yet. RDS removal keeps a final snapshot and the automated backups, which can incur storage charges. See [Database services](/docs/services/database-services).
+</Callout>

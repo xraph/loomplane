@@ -1,0 +1,40 @@
+---
+title: How it works
+description: The path from a repository to a running service, and what Loomplane checks along the way.
+---
+
+Every deployment follows the same seven steps. Once you know them the rest of these docs are easier to read, since each page takes one step and goes deep.
+
+## 1. Analyze
+
+You add one or more GitHub repositories to a project. A worker downloads a tarball of each at one commit and reads it. Nothing from the repository runs: no build scripts, no package managers. The worker finds services, the packages they share, and the databases and caches they need, and it records the file and line behind every finding. See [Repository discovery](/docs/concepts/repository-discovery).
+
+## 2. Draft the manifest
+
+From that analysis Loomplane drafts a `loomplane.yaml`. You edit it in the dashboard or with `loomctl manifest save`, and every save is a new revision. This file says what deploys, where, and what each service needs. See [The manifest](/docs/concepts/the-manifest).
+
+## 3. Connect clouds
+
+Under Integrations you add credentials for the clouds your manifest names. Loomplane checks each with its cloud first and tells you which permissions are missing. Credentials live in Vault, encrypted with a key derived from your secret key. See [Clouds](/docs/clouds).
+
+## 4. Plan
+
+A plan is for one environment. It lists every action a deployment would take, in order, with the problems that would block it and the warnings worth reading. Planning never touches a cloud. A plan names the manifest revision and the exact commit of every repository it moves.
+
+## 5. Approve
+
+A developer can plan anything. Only an admin's approval changes a cloud, and the approval names the plan's revision. If the world changed since you looked, the plan comes back stale and nothing happens. See [Plans and approvals](/docs/concepts/plans-and-approvals).
+
+## 6. Deploy
+
+Approval starts a durable workflow. It stores one source tarball per repository, provisions resources, builds each service on its cloud's own builder (Cloud Build, CodeBuild, Vercel, Render, App Platform or ACR Tasks), deploys it, and checks that public services answer. If a step fails, you retry from that step. See [Deployments and recovery](/docs/concepts/deployments-and-recovery).
+
+## 7. Watch for drift
+
+On a schedule (every 30 minutes by default), Loomplane compares everything it deployed with what each cloud has live. It records differences and changes nothing. The next plan, approved like any other, puts things back. See [Drift](/docs/concepts/drift).
+
+## Where each piece runs
+
+Loomplane is two processes over one PostgreSQL database. `loomplane` serves the API and dashboard, runs the deployment workflows and records everything. `loomplane-worker` analyzes repositories, in a separate process that holds no sessions and serves nothing but health checks.
+
+Your builds run on your clouds' builders, in your accounts. Gateways and provider plugins run on your infrastructure. Application traffic goes straight to your services.

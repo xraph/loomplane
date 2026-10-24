@@ -1,0 +1,62 @@
+---
+title: Retention
+description: Preview which backups an age and count rule would retire, delete them deliberately, or let an owner enable automatic deletion.
+---
+
+Recovery points stay until an owner asks for deletion or enables a retention policy. Retention is a separate switch from the backup schedule: pausing one doesn't pause the other.
+
+## Preview a rule
+
+```bash
+loomctl backups retention BACKUP_ID --older-than-days 30 --keep-last 7 --json
+```
+
+Use any recovery point from the database history you want to inspect. The preview keeps at least the newest requested count and the newest restore-tested point. It also protects backups linked to copies that haven't been removed. Without a tested point, nothing qualifies for retirement. Age counts from completion, and a backup exactly on the boundary stays.
+
+This command only reads metadata. It doesn't delete files, save a policy or change your schedule. An incomplete inventory selects nothing, and the preview covers up to 1,000 points from one physical database source. The result gives each decision and the bytes that meet the rule.
+
+In **Service recovery**, **Review retention** shows the same table, with the reason each point stays or qualifies. Storage that can't safely delete the captured file has no deletion action, and an incomplete history blocks deletion.
+
+## Retire a backup
+
+An organization owner can select **Delete backup** on an eligible point and confirm. **Deletion details** shows the current attempt, the protected recovery point and the committed history. If deletion fails, check the retained point and storage permissions, then select **Retry deletion**. Readers can inspect but can't request deletion or retry. A failed deletion keeps new restores blocked until it finishes.
+
+```bash
+loomctl backups retire BACKUP_ID --older-than-days 30 --keep-last 7 --request-id retirement-1 --yes --wait --json
+loomctl retirements PROJECT_ID --limit 50 --json
+loomctl retirements show RETIREMENT_ID --wait --json
+loomctl retirements history RETIREMENT_ID --limit 50 --json
+```
+
+Requesting retirement or authorizing a retry takes a write-capable owner key. Admins and read-only keys can inspect. Pass `next_before` as `--before` to continue a list.
+
+Retirement deletes the selected backup file. The service and its retained data volume stay in place. The server rechecks the rule, protects existing copies and the newest tested point, and verifies that retained point's current bytes through Trove before it deletes anything. Concurrent restore admission and retirement are serialized, and an accepted candidate becomes unavailable for new restores.
+
+A failed retirement keeps that protection, because the deletion may have finished after its response was lost. Check the retained point and storage permissions, then authorize another bounded set of attempts:
+
+```bash
+loomctl retirements retry RETIREMENT_ID --request-id retirement-retry-1 --yes --wait --json
+```
+
+Reuse the key after a lost response. A new retry key authorizes up to three attempts from the lifetime count, and history records each transition and the earlier failure.
+
+## Automatic deletion
+
+An owner can enable a policy from **Review retention**: choose the history, update the preview and select **Enable automatic deletion**. You need a complete history, supported captured storage and a restore-tested point. **Update automatic policy** saves reviewed changes after confirmation, **Pause automatic deletion** stops future selections and keeps the rule (even when storage is unavailable), and **Policy changes** lists every saved revision with its owner and date.
+
+```bash
+loomctl backups retention-policy BACKUP_ID --json
+loomctl backups retention-set BACKUP_ID --revision 0 --older-than-days 30 --keep-last 7 --yes --json
+loomctl backups retention-history BACKUP_ID --limit 50 --json
+loomctl backups retention-pause BACKUP_ID --yes --json
+```
+
+Revision zero creates a policy. To change one, pass the revision you just read, and a conflicting update fails without overwriting another owner's settings. An unset policy returns `configured: false`. If a save fails or its response is uncertain, inspect the current policy before changing anything.
+
+This authorizes recurring deletion. A reconciliation job runs every minute and selects at most one oldest eligible full backup per due evaluation, using the same byte checks as explicit retirement and rechecking the rule, the owner's authority and the captured source each time. A failed deletion holds that source until its bounded attempts finish or an owner checks the failure and authorizes a retry. Ordinary policy failures wait an hour before another evaluation. Pausing retention stops new selections, though accepted deletions may still finish. Readers and admins can inspect the history, and only owners can change it.
+
+If a worker is lost, the accepted point stays unavailable for restore. On the Docker and local Trove profile, a restarted worker can finish the same deletion once its lease expires, even if the file was already removed.
+
+<Callout type="warn">
+  Retirement is qualified on Docker PostgreSQL with local Trove storage. Remote stores need captured-version deletion support in their Trove driver, and the pinned S3 driver doesn't have it yet. Kubernetes retirement and other engine and storage combinations need their own live qualification. Legacy backups without a destination pin stay recoverable but can't be retired.
+</Callout>

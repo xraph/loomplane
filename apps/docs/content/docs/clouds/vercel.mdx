@@ -1,0 +1,33 @@
+---
+title: Vercel
+description: Connect a Vercel account or team and deploy web apps and static sites.
+---
+
+Loomplane uploads the approved commit to Vercel, which builds it into an immutable deployment served from its network, with server rendering in functions. Vercel runs web apps and static sites. It doesn't run workers, and it doesn't provision databases, so a worker needs a target such as ECS on Fargate or Render.
+
+## Connect Vercel
+
+Under **Integrations**, choose Vercel and paste an access token. If you deploy to a team, add its team ID (it looks like `team_` followed by letters and digits). Without one, the token deploys to your own account.
+
+Loomplane asks Vercel whose token it is before keeping it. A token that has expired, been revoked or has no access to the team is refused.
+
+## Use it in a manifest
+
+```yaml
+version: 1
+services:
+  web:
+    source: apps/web
+    provider: vercel
+    needs: [api]
+```
+
+A managed resource is only reachable from services on its own cloud, so a Vercel app that needs a Cloud SQL database is a problem on the plan.
+
+## Build logs
+
+Vercel streams its build events, and Loomplane shows them live in the deployment.
+
+## Verified
+
+We ran the full dashboard flow on 18 October 2026 against a real Vercel account with a pinned public Astro static site: saved placements, plan review, approval, build logs, navigating the HTTPS site, a client-side counter and cleanup. After cleanup the account showed no bindings and the old URL returned `DEPLOYMENT_NOT_FOUND`. That qualifies the static-site path. Custom domains still need their own verification.

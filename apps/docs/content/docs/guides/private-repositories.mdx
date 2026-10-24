@@ -1,0 +1,109 @@
+---
+title: Private repositories
+description: Create a GitHub App once, connect it to your organization, and re-analyze projects when their default branch moves.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Loomplane reads public GitHub repositories with no setup. To read private ones it needs a GitHub App, which your organization's admins install on their GitHub accounts. You create the App once for the whole Loomplane instance.
+
+## Create the App
+
+From a checkout of Loomplane, GitHub's App Manifest flow does most of it:
+
+```bash
+go run ./scripts/github-app -org your-org
+```
+
+Open the local address it prints and review the permissions on GitHub. After you create the App, the command writes its settings to the ignored `config.local.yaml` and its private key to `.loomplane/github-app.pem`, both readable only by you. It refuses to overwrite an existing key or add a second GitHub configuration. Restart Loomplane, then connect the account under Integrations.
+
+For an instance that's publicly reachable, add `-url https://your-loomplane.example -webhook` to turn on push events. The local flow leaves webhooks off because GitHub can't reach localhost.
+
+### Or create it by hand
+
+On GitHub go to **Settings, Developer settings, GitHub Apps, New GitHub App**. Use the organization's settings if the App should belong to it.
+
+| Setting | Value |
+|---|---|
+| GitHub App name | Anything. Its slug goes in `LOOMPLANE_GITHUB_APP_SLUG` |
+| Homepage URL | Your Loomplane's public URL |
+| Callback URL | `<public_url>/integrations/github/setup` |
+| Request user authorization (OAuth) during installation | On |
+| Expire user authorization tokens | On |
+| Webhook | Active, URL `<public_url>/api/v1/github/webhook`, with a secret you generate (`openssl rand -hex 32`). Or off, if you'd rather press Analyze yourself |
+| Subscribe to events | Push |
+| Repository permissions: Contents | Read-only |
+| Repository permissions: Metadata | Read-only (GitHub requires it) |
+| Everything else | No access |
+| Where can this GitHub App be installed? | Any account, unless only your own organization uses this Loomplane |
+
+Create it, then on its page note the App ID and the Client ID, generate a client secret, and generate a private key (GitHub downloads a `.pem`).
+
+## Configure Loomplane
+
+Set these for both `loomplane` and `loomplane-worker`, and keep the secret and key out of any file you commit:
+
+```bash
+LOOMPLANE_GITHUB_APP_ID=123456
+LOOMPLANE_GITHUB_APP_SLUG=your-app-slug
+LOOMPLANE_GITHUB_CLIENT_ID=Iv23li...
+LOOMPLANE_GITHUB_CLIENT_SECRET=...
+LOOMPLANE_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-app.pem
+```
+
+`LOOMPLANE_GITHUB_PRIVATE_KEY` takes the PEM itself instead of a path, which suits a secret store that only does variables, and newlines written as `\n` work. Loomplane refuses to start with only some of these set, or with a key it can't parse.
+
+For GitHub Enterprise Server, also set `LOOMPLANE_GITHUB_API_URL` to `https://<host>/api/v3` and `LOOMPLANE_GITHUB_WEB_URL` to `https://<host>`.
+
+## Connect an account
+
+An owner or admin opens **Integrations** and chooses **Install on GitHub**. GitHub asks which account to install on and which repositories to allow, then sends them back. From then on, any project in the organization whose repository that installation can see is analyzed with access to it. Choose repositories later in the App's settings on GitHub.
+
+What happens underneath:
+
+- Connecting. GitHub's redirect carries the installation's number and a one-time code. Loomplane exchanges the code for the installer's own token and checks that their account can see that installation, because the number alone proves nothing. The state in the link is signed, lasts 15 minutes and names the organization and person who started it. The installer's token is used for that one check, then dropped.
+- Analyzing. For each analysis the worker mints an installation token limited to that one repository and to reading its contents, and GitHub expires it within the hour. Loomplane stores no token, and uses an organization's own installations only, so one organization can't read another's code.
+- Disconnecting removes the installation from the organization in Loomplane. The App stays installed on GitHub until someone uninstalls it there.
+
+## Re-analyze on push
+
+With the webhook on, set its secret in `LOOMPLANE_GITHUB_WEBHOOK_SECRET` for `loomplane`. When a repository's default branch moves, every source tracking it (one that names no branch, or names the default) is analyzed again, in whichever projects have it. Only organizations that connected the installation the push came through hear about it. Pushes to other branches and deliveries without a matching signature do nothing.
+
+A public repository doesn't need an App for this. Add a webhook to the repository itself with the same URL and secret and the push event.
+
+## Verify the connection
+
+<Steps>
+<Step>
+
+Connect the account from Integrations and confirm it appears after GitHub sends you back. Reload to check it persists.
+
+</Step>
+<Step>
+
+Open New project, choose a private repository from the account's group and analyze it. The graph should name the repository and its exact commit.
+
+</Step>
+<Step>
+
+On the App's **Permissions & events** page, check that Push is selected. A working webhook URL alone doesn't subscribe the App to pushes.
+
+</Step>
+<Step>
+
+Push a change to the default branch, or redeliver an existing push from GitHub's Recent Deliveries. Confirm GitHub receives HTTP 202 with `analyses_started` above zero, and that the project's Analyses tab shows another analysis finishing at the new commit.
+
+</Step>
+</Steps>
+
+The analysis worker has to be running too. If Loomplane accepts a push but the analysis stays queued, check the worker's health at `http://localhost:8781/_/health` (or wherever you serve it) and its database connection.
+
+For local development you can point the App's webhook at a Smee channel and run its client in another terminal:
+
+```bash
+npx smee-client --url https://smee.io/YOUR_CHANNEL --target http://localhost:8780/api/v1/github/webhook
+```
+
+Set the same webhook secret in GitHub and Loomplane. Smee's HTTP 200 only means it accepted the delivery, so check the client's terminal for Loomplane's 202. If the API was restarting when Smee forwarded the event, wait for it to become healthy and redeliver from GitHub. Smee channels receive push metadata for the repositories your App can access, including commit messages and authors.
+
+A redelivered older push analyzes the source's current tracked branch. To check a fresh push, compare the finished analysis's `commit_sha` with the push's commit and confirm `created_by` is `github-push`. Keep private keys and webhook secrets out of shell arguments and diagnostic output.

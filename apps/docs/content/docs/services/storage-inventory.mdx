@@ -1,0 +1,35 @@
+---
+title: Storage inventory
+description: A read-only view of the volumes on your Docker servers and Kubernetes clusters, and which workloads still use them.
+---
+
+Open **Infrastructure**, then **Persistent storage**. Choose a Docker server or Kubernetes connection and select **Refresh storage** to read its current volumes and workload references. The CLI gives you the same inventory:
+
+```bash
+loomctl storage CONNECTION_ID
+loomctl storage CONNECTION_ID --json
+```
+
+The table shows each volume's name, owning project and environment, role, storage class and status. Docker local volumes show **Shared host capacity**. Kubernetes shows the claim's reported capacity, which isn't a measurement of used disk space.
+
+| Status | Meaning |
+|---|---|
+| In use | A container or pod still references the volume. Stopped containers and completed pods count |
+| Retained | The volume has no current workload reference. A Kubernetes claim must also be bound |
+| Pending | Kubernetes hasn't bound the claim. A pending pod reference doesn't override this |
+| Lost | Kubernetes reports the claim as lost |
+| Deleting | Kubernetes has accepted deletion of the claim |
+
+This is a snapshot, and it only reads. Detached storage isn't a backup, and it isn't proof that removing it is safe. The inventory doesn't delete data, reattach volumes, measure disk use or qualify recovery.
+
+## Scope and permissions
+
+`GET /api/v1/connections/:id/storage` uses the checked connection's credential internally. It needs `infrastructure:read` and `cloud_account:read`, then filters every record through `project:read`. A read-only API key can inspect storage it's allowed to see. Another organization's connection returns not found, and an authorization outage or unreadable state returns an error, never an empty inventory.
+
+Each record must have matching organization, connection, project, environment, instance and volume-role metadata, and its name must match the instance's stable volume identity. Docker daemon and Kubernetes namespace identities are checked again when reading. Host paths, credentials and other tenants' workload metadata are never returned.
+
+Docker inventory checks all containers, including stopped and unlabelled ones. Kubernetes checks every pod in the selected namespace. These references are conservative: an old workload object can keep a volume marked in use until you remove it.
+
+<Callout type="warn">
+  Verified on Docker and on a disposable arm64 kind cluster with `rancher.io/local-path` storage. Production CSI and zone-loss behavior are unverified. Managed-provider snapshot inventory, deliberate data destruction, storage expansion and capacity alerts are separate work.
+</Callout>
