@@ -124,8 +124,9 @@ func TestCapacityUnknownAndOverflow(t *testing.T) {
 
 type capacityRuntimeStore struct {
 	Store
-	host    Server
-	records []CapacityRecord
+	host       Server
+	records    []CapacityRecord
+	generation int64
 }
 
 func (s *capacityRuntimeStore) ListServers(context.Context, string, string) ([]*Server, error) {
@@ -156,7 +157,14 @@ func (s *capacityRuntimeStore) ListPools(context.Context, string, string) ([]*Po
 func (s *capacityRuntimeStore) ListCapacityInventory(context.Context, string, string) ([]CapacityRecord, error) {
 	return s.records, nil
 }
-func (s *capacityRuntimeStore) SaveCapacityInventory(_ context.Context, _, _ string, records []CapacityRecord, _ []CapacityAccountSnapshot) error {
+func (s *capacityRuntimeStore) BeginCapacityRefresh(context.Context, string, string) (int64, error) {
+	s.generation++
+	return s.generation, nil
+}
+func (s *capacityRuntimeStore) SaveCapacityInventory(_ context.Context, _, _ string, generation int64, records []CapacityRecord, _ []CapacityAccountSnapshot) error {
+	if generation != s.generation {
+		return ErrConflict
+	}
 	s.records = records
 	return nil
 }

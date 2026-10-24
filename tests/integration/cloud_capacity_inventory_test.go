@@ -140,7 +140,11 @@ func TestCapacityInventoryPersistenceAndAttribution(t *testing.T) {
 		t.Fatal(e)
 	}
 	account.CheckedAt = account.CheckedAt.Add(time.Hour)
-	if e = f.store.SaveCapacityInventory(ctx, "org", "cloud", stored, []cloudinfra.CapacityAccountSnapshot{*account}); e != nil {
+	generation, e := f.store.BeginCapacityRefresh(ctx, "org", "cloud")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = f.store.SaveCapacityInventory(ctx, "org", "cloud", generation, stored, []cloudinfra.CapacityAccountSnapshot{*account}); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = f.svc.RefreshCapacity(ctx, f.p, "cloud"); !errors.Is(e, cloudinfra.ErrConflict) {
@@ -149,5 +153,155 @@ func TestCapacityInventoryPersistenceAndAttribution(t *testing.T) {
 	persisted, e := f.store.GetCapacityAccount(ctx, "org", "digitalocean", "account")
 	if e != nil || !persisted.CheckedAt.Equal(account.CheckedAt) {
 		t.Fatalf("newer snapshot replaced: %+v %v", persisted, e)
+	}
+}
+
+func TestCapacityInventoryRejectsRegressiveDockerSnapshots(t *testing.T) {
+	for _, state := range []string{"reduced capacity", "unhealthy", "absent"} {
+		t.Run(state, func(t *testing.T) {
+			f := newInfraFixture(t)
+			ctx := t.Context()
+			oldTime := time.Now().UTC().Add(-time.Minute)
+			newTime := oldTime.Add(time.Second)
+			older := cloudinfra.CapacityRecord{Kind: "server", Provider: "server", AccountID: "daemon", ResourceID: "server:daemon", Resources: cloudinfra.CapacityResources{Servers: inventoryNumber(1), CPUMillis: inventoryNumber(2000), MemoryBytes: inventoryNumber(1 << 30)}, Observation: &cloudinfra.CapacityObservation{CPUMillis: inventoryNumber(2000), MemoryBytes: inventoryNumber(1 << 30), CheckedAt: oldTime}, CheckedAt: oldTime}
+			newer := older
+			newer.Resources.CPUMillis = inventoryNumber(1000)
+			newer.Observation = &cloudinfra.CapacityObservation{CPUMillis: inventoryNumber(1000), MemoryBytes: inventoryNumber(1 << 30), CheckedAt: newTime}
+			newer.CheckedAt = newTime
+			next := []cloudinfra.CapacityRecord{newer}
+			if state == "unhealthy" {
+				newer.Observation = nil
+				next = []cloudinfra.CapacityRecord{newer}
+			}
+			if state == "absent" {
+				next = nil
+			}
+			olderGeneration, err := f.store.BeginCapacityRefresh(ctx, "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			newerGeneration, err := f.store.BeginCapacityRefresh(ctx, "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", newerGeneration, next, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", olderGeneration, []cloudinfra.CapacityRecord{older}, nil); !errors.Is(err, cloudinfra.ErrConflict) {
+				t.Fatalf("older Docker-only snapshot replaced newer observation: %v", err)
+			}
+			stored, err := f.store.ListCapacityInventory(ctx, "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state == "absent" {
+				if len(stored) != 0 {
+					t.Fatalf("deleted observation resurrected: %+v", stored)
+				}
+				return
+			}
+			if len(stored) != 1 || !stored[0].CheckedAt.Equal(newTime) {
+				t.Fatalf("newer resource snapshot lost: %+v", stored)
+			}
+			if state == "unhealthy" {
+				if stored[0].Observation != nil {
+					t.Fatal("old healthy observation replaced unhealthy snapshot")
+				}
+				return
+			}
+			if stored[0].Observation == nil || *stored[0].Observation.CPUMillis != 1000 || !stored[0].Observation.CheckedAt.Equal(newTime) {
+				t.Fatalf("newer independent observation lost: %+v", stored)
+			}
+		})
+	}
+}
+
+func TestCapacityInventoryFailedGenerationPreservesCommittedFacts(t *testing.T) {
+	f := newInfraFixture(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	record := cloudinfra.CapacityRecord{Kind: "server", Provider: "server", AccountID: "daemon", ResourceID: "server:daemon", Resources: cloudinfra.CapacityResources{Servers: inventoryNumber(1), CPUMillis: inventoryNumber(1000)}, Observation: &cloudinfra.CapacityObservation{CPUMillis: inventoryNumber(1000), CheckedAt: now}, CheckedAt: now}
+	saved, err := f.store.BeginCapacityRefresh(ctx, "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", saved, []cloudinfra.CapacityRecord{record}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Starting work never removes the previously committed inventory.
+	older, err := f.store.BeginCapacityRefresh(ctx, "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := f.store.BeginCapacityRefresh(ctx, "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := f.store.ListCapacityInventory(ctx, "org", "cloud")
+	if err != nil || len(stored) != 1 {
+		t.Fatalf("issuance erased committed facts: %+v %v", stored, err)
+	}
+	invalid := record
+	invalid.Kind = "invalid"
+	if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", failed, []cloudinfra.CapacityRecord{invalid}, nil); !errors.Is(err, cloudinfra.ErrInvalid) {
+		t.Fatalf("invalid snapshot: %v", err)
+	}
+	if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", older, nil, nil); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatalf("superseded refresh accepted after failure: %v", err)
+	}
+	stored, err = f.store.ListCapacityInventory(ctx, "org", "cloud")
+	if err != nil || len(stored) != 1 || stored[0].Observation == nil || *stored[0].Observation.CPUMillis != 1000 || !stored[0].Observation.CheckedAt.Equal(now) {
+		t.Fatalf("failed refresh lost committed facts: %+v %v", stored, err)
+	}
+	// Failed saves roll back generation consumption, so the current refresh can retry.
+	if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", failed, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", failed, []cloudinfra.CapacityRecord{record}, nil); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatalf("consumed generation reused: %v", err)
+	}
+	stored, err = f.store.ListCapacityInventory(ctx, "org", "cloud")
+	if err != nil || len(stored) != 0 {
+		t.Fatalf("empty snapshot resurrected: %+v %v", stored, err)
+	}
+}
+
+func TestCapacityInventoryRejectsSupersededHostState(t *testing.T) {
+	f := newInfraFixture(t)
+	ctx := t.Context()
+	oldTime := time.Now().UTC().Add(-time.Minute)
+	host := &cloudinfra.Server{ID: "docker-host", Revision: 1, OrgID: "org", CloudID: "cloud", Provider: "server", ConnectionID: "infra-account", AccountID: "daemon", ResourceID: "daemon", Ownership: "adopted", Status: "ready", Health: cloudinfra.RuntimeHealth{DockerID: "daemon", EffectiveCPUMillis: 2000, EffectiveMemoryBytes: 1 << 30, CheckedAt: oldTime}}
+	if err := f.store.SaveServer(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := f.store.BeginCapacityRefresh(ctx, "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := cloudinfra.CapacityRecord{Kind: "server", Provider: "server", AccountID: "daemon", ResourceID: "server:daemon", ServerID: host.ID, ServerStateRevision: host.StateRevision, Resources: cloudinfra.CapacityResources{Servers: inventoryNumber(1), CPUMillis: inventoryNumber(2000)}, Observation: &cloudinfra.CapacityObservation{CPUMillis: inventoryNumber(2000), CheckedAt: oldTime}, CheckedAt: oldTime}
+	// A separate pinned runtime check supersedes the sample without issuing a
+	// Cloud refresh generation. This observation must not restore its old state.
+	host.Health.EffectiveCPUMillis = 1000
+	host.Health.CheckedAt = oldTime.Add(time.Second)
+	if err = f.store.SaveServer(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", generation, []cloudinfra.CapacityRecord{record}, nil); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatalf("superseded host revision accepted: %v", err)
+	}
+	stored, err := f.store.ListCapacityInventory(ctx, "org", "cloud")
+	if err != nil || len(stored) != 0 {
+		t.Fatalf("stale host created inventory: %+v %v", stored, err)
+	}
+	record.ServerStateRevision = host.StateRevision
+	record.Observation = &cloudinfra.CapacityObservation{CPUMillis: inventoryNumber(1000), CheckedAt: host.Health.CheckedAt}
+	record.CheckedAt = host.Health.CheckedAt
+	record.Resources.CPUMillis = inventoryNumber(1000)
+	if err = f.store.SaveCapacityInventory(ctx, "org", "cloud", generation, []cloudinfra.CapacityRecord{record}, nil); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = f.store.ListCapacityInventory(ctx, "org", "cloud")
+	if err != nil || len(stored) != 1 || stored[0].ServerStateRevision != host.StateRevision || !stored[0].Observation.CheckedAt.Equal(host.Health.CheckedAt) {
+		t.Fatalf("independent current host state lost: %+v %v", stored, err)
 	}
 }

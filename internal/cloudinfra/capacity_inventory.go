@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -20,18 +21,20 @@ const CapacityFreshness = 5 * time.Minute
 // CapacityRecord identifies one attributed physical resource. Pool membership
 // does not create a second record. ResourceID includes the provider kind.
 type CapacityRecord struct {
-	Kind        string               `json:"kind"`
-	Provider    string               `json:"provider"`
-	AccountID   string               `json:"account_id"`
-	ResourceID  string               `json:"resource_id"`
-	ServerID    string               `json:"server_id,omitempty"`
-	Resources   CapacityResources    `json:"resources"`
-	Observation *CapacityObservation `json:"observation,omitempty"`
-	CheckedAt   time.Time            `json:"checked_at"`
+	Kind                string               `json:"kind"`
+	Provider            string               `json:"provider"`
+	AccountID           string               `json:"account_id"`
+	ResourceID          string               `json:"resource_id"`
+	ServerID            string               `json:"server_id,omitempty"`
+	ServerStateRevision int64                `json:"server_state_revision"`
+	Resources           CapacityResources    `json:"resources"`
+	Observation         *CapacityObservation `json:"observation,omitempty"`
+	CheckedAt           time.Time            `json:"checked_at"`
 }
 type CapacityInventoryStore interface {
+	BeginCapacityRefresh(context.Context, string, string) (int64, error)
 	ListCapacityInventory(context.Context, string, string) ([]CapacityRecord, error)
-	SaveCapacityInventory(context.Context, string, string, []CapacityRecord, []CapacityAccountSnapshot) error
+	SaveCapacityInventory(context.Context, string, string, int64, []CapacityRecord, []CapacityAccountSnapshot) error
 	GetCapacityAccount(context.Context, string, string, string) (*CapacityAccountSnapshot, error)
 }
 type CapacityScope struct{ OrgID, CloudID string }
@@ -60,6 +63,10 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 	pools, ok := s.Store.(PoolStore)
 	if !ok {
 		return nil, ErrInvalid
+	}
+	generation, err := st.BeginCapacityRefresh(ctx, org, cloud)
+	if err != nil {
+		return nil, err
 	}
 	policy, err := ps.GetCapacityPolicy(ctx, org, cloud)
 	if err != nil {
@@ -141,7 +148,7 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			}
 			v = checked
 		}
-		record := CapacityRecord{Kind: "server", Provider: v.Provider, AccountID: v.AccountID, ResourceID: "server:" + v.ResourceID, ServerID: v.ID, CheckedAt: v.Health.CheckedAt, Resources: CapacityResources{Servers: number(1)}, Observation: capacityObservation(v.Health)}
+		record := CapacityRecord{Kind: "server", Provider: v.Provider, AccountID: v.AccountID, ResourceID: "server:" + v.ResourceID, ServerID: v.ID, ServerStateRevision: v.StateRevision, CheckedAt: v.Health.CheckedAt, Resources: CapacityResources{Servers: number(1)}, Observation: capacityObservation(v.Health)}
 		if v.Status != "ready" {
 			record.Observation = nil
 		}
@@ -217,7 +224,7 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 		}
 		return cmp.Compare(a.AccountID, b.AccountID)
 	})
-	if err := st.SaveCapacityInventory(ctx, org, cloud, records, usage.Accounts); err != nil {
+	if err := st.SaveCapacityInventory(ctx, org, cloud, generation, records, usage.Accounts); err != nil {
 		return nil, err
 	}
 	return usage, nil
@@ -421,7 +428,40 @@ func (s *PgStore) ListCapacityInventory(ctx context.Context, org, cloud string) 
 	}
 	return out, rows.Err()
 }
-func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, records []CapacityRecord, accounts []CapacityAccountSnapshot) error {
+
+// BeginCapacityRefresh issues an ordering token before any provider or runtime
+// collection. Issuing a token never replaces the last committed inventory.
+func (s *PgStore) BeginCapacityRefresh(ctx context.Context, org, cloud string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+	var id string
+	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, cloud).Scan(&id); err != nil {
+		return 0, storeError(err)
+	}
+	var generation int64
+	err = tx.QueryRow(ctx, `INSERT INTO loomplane_cloud_capacity_refreshes(org_id,cloud_id,issued_generation) VALUES($1,$2,1) ON CONFLICT(org_id,cloud_id) DO UPDATE SET issued_generation=loomplane_cloud_capacity_refreshes.issued_generation+1 WHERE loomplane_cloud_capacity_refreshes.issued_generation<$3 RETURNING issued_generation`, org, cloud, int64(math.MaxInt64)).Scan(&generation)
+	if err != nil {
+		if errors.Is(storeError(err), ErrNotFound) {
+			return 0, ErrConflict
+		}
+		return 0, storeError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return generation, nil
+}
+
+// SaveCapacityInventory consumes only the current uncommitted generation. The
+// Cloud lock orders every replacement, including snapshots with no resources
+// or account summaries. Independent runtime timestamps are preserved.
+func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, generation int64, records []CapacityRecord, accounts []CapacityAccountSnapshot) error {
+	if generation <= 0 {
+		return ErrInvalid
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -430,6 +470,44 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 	var id string
 	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, cloud).Scan(&id); err != nil {
 		return storeError(err)
+	}
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_capacity_refreshes SET saved_generation=$3 WHERE org_id=$1 AND cloud_id=$2 AND issued_generation=$3 AND saved_generation<$3`, org, cloud, generation)
+	if err != nil {
+		return err
+	}
+	changed, err := tag.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return ErrConflict
+	}
+
+	// Runtime checks have independent timestamps and may finish in a different
+	// order from provider collection. Refuse a sample superseded by a host save.
+	revisions := map[string]int64{}
+	for _, record := range records {
+		if record.Kind != "server" || record.ServerID == "" {
+			continue
+		}
+		if prior, exists := revisions[record.ServerID]; exists && prior != record.ServerStateRevision {
+			return ErrConflict
+		}
+		revisions[record.ServerID] = record.ServerStateRevision
+	}
+	hostIDs := make([]string, 0, len(revisions))
+	for id := range revisions {
+		hostIDs = append(hostIDs, id)
+	}
+	slices.Sort(hostIDs)
+	for _, id := range hostIDs {
+		var revision int64
+		if err = tx.QueryRow(ctx, `SELECT coalesce((body->>'state_revision')::bigint,0) FROM loomplane_cloud_servers WHERE org_id=$1 AND cloud_id=$2 AND id=$3 FOR SHARE`, org, cloud, id).Scan(&revision); err != nil {
+			return storeError(err)
+		}
+		if revision != revisions[id] {
+			return ErrConflict
+		}
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM loomplane_cloud_capacity_inventory WHERE org_id=$1 AND cloud_id=$2`, org, cloud); err != nil {
 		return err
