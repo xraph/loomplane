@@ -1057,7 +1057,7 @@ func validateEngine(e Engine) []error {
 	}
 	format, ok := families[e.Family]
 	if !ok {
-		f.add("family %q is not one of postgres, mysql, mariadb, redis and valkey", e.Family)
+		f.add("family %q has no native recovery adapter", e.Family)
 	}
 	if e.Title == "" {
 		f.add("engine has no title")

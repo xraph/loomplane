@@ -608,7 +608,7 @@ test("a kind the API doesn't know says so", async () => {
   ).toBeInTheDocument()
 })
 
-test("registered kinds follow the five built-ins", async () => {
+test("registered application kinds follow the native service recipes", async () => {
   serve({
     kinds: () =>
       json({
@@ -642,9 +642,19 @@ test("registered kinds follow the five built-ins", async () => {
     "Deploy MariaDB",
     "Deploy Redis",
     "Deploy Valkey",
+    "Deploy NATS JetStream",
     "Add Sample",
   ])
   expect(within(catalog).queryByText(/Helper/)).not.toBeInTheDocument()
+  await userEvent.click(
+    within(catalog).getByRole("radio", { name: /^Data\s*1$/ })
+  )
+  expect(
+    within(catalog).getByRole("button", { name: "Deploy NATS JetStream" })
+  ).toBeInTheDocument()
+  expect(
+    within(catalog).queryByRole("button", { name: "Deploy PostgreSQL" })
+  ).not.toBeInTheDocument()
 })
 
 test("hidden modules and dependency-only kinds stay out of the catalog", async () => {

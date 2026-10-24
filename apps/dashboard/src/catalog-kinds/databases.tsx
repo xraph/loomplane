@@ -28,6 +28,18 @@ const cacheFeatures = ["AOF every second", "RDB snapshots", "Up to 128 MiB"]
 
 const engines: Omit<CatalogKindModule, "panels">[] = [
   {
+    kind: "nats",
+    title: "NATS JetStream",
+    group: "data",
+    blurb:
+      "Persistent messaging on one private server. Back up file streams and durable consumers, then verify them in an isolated copy.",
+    features: [
+      "Retained file store",
+      "Messages and consumers",
+      "Test restores",
+    ],
+  },
+  {
     kind: "postgres",
     title: "PostgreSQL",
     logo: "postgresql",

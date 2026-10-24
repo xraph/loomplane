@@ -4,6 +4,12 @@ const cacheStorage =
   "Private endpoint, AOF persistence every second and native RDB snapshots. The dataset is limited to 128 MiB without eviction. Keep backups outside this host. Recovery copies are read-only. This profile has no failover."
 
 export const databaseRecipes = {
+  nats: {
+    title: "NATS JetStream",
+    version: "2.11",
+    description:
+      "Private single server with a retained file store up to 1 GiB. Native snapshots include messages and consumers. Snapshots are sequential across streams; pause writers for a coordinated checkpoint. Recovery copies allow inspection only.",
+  },
   postgres: {
     title: "PostgreSQL",
     version: "17",
