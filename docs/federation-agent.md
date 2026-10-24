@@ -506,9 +506,10 @@ the local cleanup deadline, make application records eligible for revocation.
 Every journal transition commits with its project event.
 
 This is an internal lifecycle API. The live Kubernetes fixture uses it with a
-fixture-created controller and explicit CSI installation. Production installation,
-coordinator wiring, policy withdrawal and gateway assignment remain separate
-work. No public route or agent-launch flag enables application issuance.
+fixture-created controller and explicit CSI installation. The internal application
+coordinator below supplies the production wiring; installation qualification,
+policy withdrawal and gateway assignment remain separate work. No public route or
+agent-launch flag enables application issuance.
 
 ## Registry image proofs
 
@@ -535,7 +536,8 @@ local content store, registry retrieval fails closed. No proof is fabricated.
 You must still authorize and load the records, verify the saved controller and
 live owner chain, and pass the checked proofs to the attestation profile and
 issuance journal. The loader does not install CSI, register an identity or enable
-a service route. Production application coordination remains pending.
+a service route. The internal application coordinator described below wires this
+loader into the attestation and issuance checks.
 
 The local registry qualification test publishes a small OCI image and index into
 a disposable registry, retrieves the proof through this client, and checks raw
@@ -562,6 +564,26 @@ The result includes the checked workload binding, runtime platform and copied
 raw image proofs needed by the issuance journal. Each call owns its proof
 buffers. Failed reads and rejected proofs return no usable evidence.
 
-You still need the authorized application coordinator and CSI installation
-before enabling production issuance. The local Kubernetes fixture exercises this
-verifier and the existing journal with its fixture-owned CSI installation.
+The internal application coordinator uses this verifier and the existing
+journal. You still need a qualified CSI installation and production image proofs
+before enabling application issuance for a destination.
+
+### Application issuance coordination
+
+With federation identity enabled, the platform provides an internal
+`ApplicationService` backed by the durable workload journal and SPIRE cleanup
+runtime. You select an existing binding and pod. The service reloads the current
+binding, instance, installation trust and controller receipt before fetching live
+image evidence with the reviewed registry credentials.
+
+Reservation keeps a durable handle before issuance starts. Each journal guard
+rechecks deployment approval and destination trust permissions, capability
+freshness, pod ownership and image evidence. A failed check after issuance starts
+requests revocation and keeps the journal available for cleanup. Registrations
+use a one-minute certificate TTL and a four-minute cleanup deadline; that deadline
+still requires explicit revocation and does not act as a SPIRE issuance cutoff.
+
+There is no public issuance route or automatic deployment trigger yet. The local
+Kubernetes test exercises the coordinator with the real journal and SPIRE, using
+fixture-supplied image proofs. Production registry proof retrieval is wired but
+has not been qualified against a deployed application registry.

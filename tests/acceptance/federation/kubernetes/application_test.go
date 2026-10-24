@@ -23,12 +23,13 @@ import (
 	"github.com/xraph/loomplane/internal/deployments"
 	fed "github.com/xraph/loomplane/internal/federation"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/workloadidentity"
 	domain "github.com/xraph/loomplane/pkg/federation"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-func proveApplicationIdentity(ctx context.Context, t *testing.T, db *pgdriver.PgDB, client kubernetes.Interface, credentials *fixtureCredentials, admin *workloadidentity.Admin, d domain.Destination) {
+func proveApplicationIdentity(ctx context.Context, t *testing.T, db *pgdriver.PgDB, client kubernetes.Interface, credentials *fixtureCredentials, admin *workloadidentity.Admin, d domain.Destination, destinations *fed.Service, principal security.Principal) {
 	t.Helper()
 	instance := id.New(id.PrefixInstance)
 	image := os.Getenv("AGENT_IMAGE")
@@ -94,22 +95,23 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, db *pgdriver.Pg
 	must(t, planning.NewPgStore(db).PutBinding(ctx, &saved))
 	application.Binding.EntryID = ""
 	journal := workloadidentity.NewWorkloadStore(db, "loomplane.test")
-	guard := func(check context.Context) error {
-		verified, verifyErr := verify(check, d, binding, profile)
+	resolver := func(check context.Context, current domain.Destination, target fed.ApplicationTarget) (workloadidentity.WorkloadIntent, error) {
+		if target.BindingID != saved.ID || target.PodName != profile.PodName || target.PodUID != profile.PodUID {
+			return workloadidentity.WorkloadIntent{}, fed.ErrUnverified
+		}
+		verified, verifyErr := verify(check, current, binding, profile)
 		if verifyErr != nil {
-			return verifyErr
+			return workloadidentity.WorkloadIntent{}, verifyErr
 		}
-		if verified.Workload.Binding.ParentURI != application.Binding.ParentURI || verified.Workload.ContainerImage != application.ContainerImage {
-			return workloadidentity.ErrIdentity
-		}
-		return nil
+		return workloadidentity.WorkloadIntent{BindingID: saved.ID, PodName: profile.PodName, Controller: receipt, Workload: verified.Workload, ImageIndexes: verified.ImageIndexes, OperatingSystem: verified.OperatingSystem, Architecture: verified.Architecture}, nil
 	}
-	record, reserveErr := journal.Reserve(ctx, workloadidentity.WorkloadIntent{BindingID: saved.ID, Controller: receipt, Workload: application, ImageIndexes: evidence.ImageIndexes, OperatingSystem: evidence.OperatingSystem, Architecture: evidence.Architecture}, guard)
+	coordinator := fed.NewApplicationService(destinations, journal, resolver, admin)
+	record, reserveErr := coordinator.Reserve(ctx, principal, d.ID, fed.ApplicationTarget{BindingID: saved.ID, PodName: profile.PodName, PodUID: profile.PodUID})
 	if reserveErr != nil {
-		t.Fatalf("reserve application journal: %v", reserveErr)
+		t.Fatalf("reserve application: %v", reserveErr)
 	}
-	if issueErr := journal.Issue(ctx, d.OrgID, record.ID, admin, guard); issueErr != nil {
-		t.Fatalf("issue application journal: %v", issueErr)
+	if _, issueErr := coordinator.Issue(ctx, principal, record.ID); issueErr != nil {
+		t.Fatalf("issue application: %v", issueErr)
 	}
 	application.Binding.EntryID = record.Intent.Workload.Binding.EntryID
 	t.Cleanup(func() {
@@ -130,7 +132,7 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, db *pgdriver.Pg
 	}
 	wait(ctx, t, "application SPIRE identity and image selector", func() error { return probeLog("APPLICATION_IDENTITY_VERIFIED") })
 	reopened := workloadidentity.NewWorkloadStore(db, "loomplane.test")
-	must(t, reopened.Revoke(ctx, d.OrgID, record.ID, admin))
+	must(t, fed.NewApplicationService(destinations, reopened, resolver, admin).Revoke(ctx, principal, record.ID))
 	retained, readErr := reopened.Get(ctx, d.OrgID, record.ID)
 	must(t, readErr)
 	if retained.Phase != "draining" || !retained.Settled {
@@ -156,7 +158,7 @@ func TestApplicationWorkloadProbe(t *testing.T) {
 	defer func() { must(t, source.Close()) }()
 	svid, err := source.GetX509SVID()
 	must(t, err)
-	if svid.ID.String() != uri || svid.Certificates[0].NotAfter.After(time.Now().Add(31*time.Second)) {
+	if svid.ID.String() != uri || svid.Certificates[0].NotAfter.After(time.Now().Add(61*time.Second)) {
 		t.Fatal("application identity or lifetime differs")
 	}
 	wrong, err := workloadidentity.OpenSource(ctx, workloadAddress, os.Getenv("WRONG_IMAGE_URI"))

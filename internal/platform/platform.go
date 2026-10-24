@@ -140,7 +140,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		environmentsext.New(cfg),
 		connectionsext.New(cfg, plugs),
 		cloudinfraext.New(cfg, deployments),
-		federationext.New(cfg),
+		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
