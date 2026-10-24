@@ -53,7 +53,13 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, db *pgdriver.Pg
 		defer cancel()
 		must(t, client.AppsV1().Deployments("apps").Delete(cleanup, created.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &created.UID}, PropagationPolicy: ptr.To(metav1.DeletePropagationForeground)}))
 	})
-	verify := fed.VerifyKubernetesWorkload(credentials, admin, "loomplane.test", d.OrgID)
+	verify := fed.VerifyKubernetesWorkloadEvidence(credentials, admin, "loomplane.test", d.OrgID, func(_ context.Context, current fed.WorkloadDeployment, _, _, _ string) ([][]byte, error) {
+		if current != binding {
+			return nil, fed.ErrUnverified
+		}
+		return imageIndexes, nil
+	})
+	var evidence fed.KubernetesWorkloadEvidence
 	var application workloadidentity.WorkloadBinding
 	var podName string
 	var profile fed.KubernetesWorkloadProfile
@@ -69,7 +75,8 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, db *pgdriver.Pg
 		podName = pod.Name
 		profile = fed.KubernetesWorkloadProfile{KubernetesAttestationProfile: fed.KubernetesAttestationProfile{Scope: d.Scope, DestinationID: d.ID, ConnectionID: d.ConnectionID, IdentityRevision: d.Identity.Revision(), PodName: pod.Name, PodUID: string(pod.UID), ServiceAccount: pod.Spec.ServiceAccountName, Container: binding.Container, SPIRECluster: "qualification", SPIRENamespace: "spire", SPIREServiceAccount: "spire-agent"}, BindingID: binding.BindingID, DeploymentUID: string(created.UID), DeploymentGeneration: created.Generation, RuntimeRevision: revision, ImageIndexes: imageIndexes}
 		var verifyErr error
-		application, verifyErr = verify(ctx, d, binding, profile)
+		evidence, verifyErr = verify(ctx, d, binding, profile)
+		application = evidence.Workload
 		return verifyErr
 	})
 	application.Binding.EntryID = uuid.NewString()
@@ -92,16 +99,12 @@ func proveApplicationIdentity(ctx context.Context, t *testing.T, db *pgdriver.Pg
 		if verifyErr != nil {
 			return verifyErr
 		}
-		if verified.Binding.ParentURI != application.Binding.ParentURI || verified.ContainerImage != application.ContainerImage {
+		if verified.Workload.Binding.ParentURI != application.Binding.ParentURI || verified.Workload.ContainerImage != application.ContainerImage {
 			return workloadidentity.ErrIdentity
 		}
 		return nil
 	}
-	pod, podErr := client.CoreV1().Pods("apps").Get(ctx, podName, metav1.GetOptions{})
-	must(t, podErr)
-	node, nodeErr := client.CoreV1().Nodes().Get(ctx, pod.Spec.NodeName, metav1.GetOptions{})
-	must(t, nodeErr)
-	record, reserveErr := journal.Reserve(ctx, workloadidentity.WorkloadIntent{BindingID: saved.ID, Controller: receipt, Workload: application, ImageIndexes: imageIndexes, OperatingSystem: node.Status.NodeInfo.OperatingSystem, Architecture: node.Status.NodeInfo.Architecture}, guard)
+	record, reserveErr := journal.Reserve(ctx, workloadidentity.WorkloadIntent{BindingID: saved.ID, Controller: receipt, Workload: application, ImageIndexes: evidence.ImageIndexes, OperatingSystem: evidence.OperatingSystem, Architecture: evidence.Architecture}, guard)
 	if reserveErr != nil {
 		t.Fatalf("reserve application journal: %v", reserveErr)
 	}

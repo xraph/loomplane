@@ -545,3 +545,23 @@ the test refuses external endpoints. Remove the fixture container afterward.
 Authenticated challenge scope and credential redirects are covered by the HTTP
 fixtures. Production registry accounts and runtime-local wrappers still need
 provider qualification.
+
+## Live application image evidence
+
+`VerifyKubernetesWorkloadEvidence` checks the Pod, ReplicaSet and saved Deployment
+identity before it calls the image-proof loader. The loader receives the image
+and platform read from the cluster. It must select registry credentials from the
+committed build target; the runtime image name cannot choose a connection.
+
+After retrieval, the verifier rereads all three workload objects and the node.
+A changed controller, pod version, node identity or platform fails verification.
+The SPIRE parent's certificate must still be valid when verification finishes.
+The complete operation has a 30-second deadline.
+
+The result includes the checked workload binding, runtime platform and copied
+raw image proofs needed by the issuance journal. Each call owns its proof
+buffers. Failed reads and rejected proofs return no usable evidence.
+
+You still need the authorized application coordinator and CSI installation
+before enabling production issuance. The local Kubernetes fixture exercises this
+verifier and the existing journal with its fixture-owned CSI installation.
