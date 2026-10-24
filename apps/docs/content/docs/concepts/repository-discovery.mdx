@@ -1,0 +1,59 @@
+---
+title: Repository discovery
+description: How Loomplane reads a repository to find services and backends without running anything from it.
+---
+
+Analyze a repository and you get its application graph: services, the packages they share, and the databases and caches they need. Loomplane reads manifests and source code without running a build, downloading dependencies or executing anything from the checkout. Every service and backend it reports comes with the file and line it was read from.
+
+Analysis runs in `loomplane-worker`, a separate process. A checkout is one repository's tarball at one commit, extracted under hard limits on size and file count. Only regular files are written, nothing lands outside the checkout, and dependency and build output directories are skipped. The worker deletes the directory afterward.
+
+## What it detects
+
+| Ecosystem | What Loomplane reads |
+|---|---|
+| Go | `go.work`, every `go.mod`, each main package, and the frameworks and drivers it reaches by following imports through the workspace |
+| Rust | Cargo workspaces and member globs, binaries the way Cargo finds them, path and workspace dependencies, and features (which database `sqlx` speaks) |
+| Node | npm, Yarn, pnpm and Bun workspaces, Turborepo, Nx and Lerna. A framework counts only when the package is an app built on it, so a library that imports Next.js stays a library. Prisma's provider comes from its schema |
+| Python | `pyproject.toml`, `requirements.txt`, Pipfile and uv workspaces. Each Procfile process is a service, and so is a Celery app beside a web app |
+| JVM | Maven, and Gradle (with version catalogs, subprojects, `allprojects` blocks and convention plugins in `buildSrc` or `build-logic`) |
+| Containers | Dockerfiles (ports, base image, which binary a build step builds) and Compose files (backing services, build contexts) |
+
+A Gradle script that works out its dependencies in a loop or a condition can't be read without running it, and analysis never does that. Declare those dependencies plainly, or confirm them in the manifest.
+
+Resources found only from a driver in a dependency list are marked to confirm before anything provisions them. A Go command that shares a server's packages can read as a tool, flagged for you to confirm.
+
+## Examples and development helpers
+
+The default graph excludes executables under `example`, `examples`, `sample`, `samples`, `fixture`, `fixtures`, `testdata`, `tests` and `__tests__` directories. It also excludes `scripts`, `tools`, `tooling`, `generators`, `codegen` and `generated`. The check applies to each path segment, across languages and container images.
+
+You can still deploy an example. Set the source's root to that directory, or declare the executable as a Forge app or build target. Selecting `examples/polyglot` includes that application, though nested test-data directories stay excluded until you select them too.
+
+Loomplane keeps the full analysis and applies selection when it composes the project graph. A selected app keeps the shared libraries outside its root, along with their backend requirements, and excluded services contribute nothing. The graph's analysis notes explain what was left out.
+
+A Dockerfile whose missing source inputs exist only as `.txt`, `.tmpl`, `.tpl` or `.template` files is a generator template. It produces a note instead of an application image.
+
+## Forge applications
+
+Loomplane reads `.forge.yaml` and `.forge.yml` project layouts, workspace globs, custom application paths and `build.apps` targets. An app manifest supplies the name and role:
+
+```yaml
+app:
+  name: analysis-worker
+  type: worker
+```
+
+Use `web`, `server` or `api` for an HTTP service, `worker` for background work and `cli` for a command-line tool. A declared worker stays a worker even when it exposes health HTTP. CLI entries show up for inspection but aren't deployable.
+
+Go discovery follows referenced local functions, callbacks, constructors and types, so separate app constructors in one package can have different framework and backend findings. Imports alone are weaker evidence than an explicit driver option or configuration.
+
+## Backend evidence
+
+Registered extension constructors and literal driver options, such as `grove.WithDSN("postgres", ...)`, contribute backend evidence to the app that reaches them. Scoped configuration covers Grove databases and KV stores, cache, queue, Trove stores, events and search backends.
+
+Configuration is read in this order: `config/<app>.yaml` (or `.yml`), then the app's own `config.yaml`, then shared project defaults for registered extensions. An app-specific embedded backend or disabled extension overrides the shared default. In-memory and local-file backends don't ask for managed infrastructure.
+
+Driver evidence records the backend and the source line, never the credentials or connection string. Malformed configuration and unsupported drivers produce notes. Dynamic factories, interface dispatch, environment-dependent selection and runtime plugins may need an explicit declaration, because analysis never evaluates them to guess.
+
+## Re-analysis on push
+
+With the GitHub App's webhook on, a push to a repository's default branch re-analyzes every source tracking it, so your next plan has the new commit without anyone pressing Analyze. [Private repositories](/docs/guides/private-repositories) covers the setup.

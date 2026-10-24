@@ -49,14 +49,14 @@ func (s *NativeService) ReviewCopy(ctx context.Context, p security.Principal, so
 	if checkErr := s.requireNative(ctx, p, source.ProjectID); checkErr != nil {
 		return nil, checkErr
 	}
-	if source.Provider != "cloud-sql" {
+	if source.Provider != "cloud-sql" && source.Provider != "rds" {
 		return nil, ErrInvalid
 	}
 	target, err := s.Admission.ReviewNativeTarget(ctx, p.OrgID, source.ProjectID, in.CloudID, in.TargetID)
 	if err != nil {
 		return nil, err
 	}
-	point, err := s.CheckPoint(ctx, p, sourceID, pointID)
+	point, err := s.CheckPointAt(ctx, p, sourceID, pointID, in.RestoreTime)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (s *NativeService) ReviewCopy(ctx context.Context, p security.Principal, so
 	}
 	payload := base64.RawURLEncoding.EncodeToString(raw)
 	token := payload + "." + base64.RawURLEncoding.EncodeToString(s.signNativeReview(payload))
-	return &NativeCopyReview{RequestID: in.RequestID, ReviewToken: token, SourceID: sourceID, PointID: pointID, Target: target, Capacity: capacity, TTLHours: in.TTLHours, ValidUntil: until, Notice: "Charges continue until deletion is confirmed. Cleanup can fail; check copy status. The copy must pass database verification before use."}, nil
+	return &NativeCopyReview{RestoreTime: point.RestoreTime, RequestID: in.RequestID, ReviewToken: token, SourceID: sourceID, PointID: pointID, Target: target, Capacity: capacity, TTLHours: in.TTLHours, ValidUntil: until, Notice: "Charges continue until deletion is confirmed. Cleanup can fail; check copy status. The copy must pass database verification before use."}, nil
 }
 
 func nativeReviewCapacity(source planning.Binding, point NativePoint, target NativeRestoreTarget) (NativeCopyCapacity, error) {
@@ -85,12 +85,19 @@ func nativeReviewCapacity(source planning.Binding, point NativePoint, target Nat
 		return NativeCopyCapacity{}, ErrInvalid
 	}
 	profile := cfg.Managed.Profile
-	return NativeCopyCapacity{ProfileID: profile.ID, ProfileRevision: profile.Revision, ComputeClass: profile.ComputeClass, StorageGB: profile.StorageGB, StorageType: profile.StorageType, Availability: profile.Availability}, nil
+	capacity := NativeCopyCapacity{ProfileID: profile.ID, ProfileRevision: profile.Revision, ComputeClass: profile.ComputeClass, StorageGB: profile.StorageGB, StorageType: profile.StorageType, Availability: profile.Availability}
+	if point.Kind == "pitr" && source.Provider == "rds" {
+		capacity.IOPS, capacity.ThroughputMBPS, capacity.MaxStorageGB = 3000, 125, profile.StorageGB
+	}
+	return capacity, nil
 }
 
 // NativeSQLCopyConfig is shared by admission and execution so their supported
 // source profile, native backup and isolated destination cannot diverge.
 func NativeSQLCopyConfig(source planning.Binding, point NativePoint, target NativeRestoreTarget) (*planning.ResourceConfig, error) {
+	if source.Provider == "rds" {
+		return nativeRDSCopyConfig(source, point, target)
+	}
 	var cfg planning.ResourceConfig
 	profile, err := manageddb.Postgres("cloud-sql", "17")
 	parts := strings.Split(point.ProviderID, "/")
@@ -169,11 +176,11 @@ func (s *NativeService) CreateCopy(ctx context.Context, p security.Principal, in
 	if source.ProjectID != claims.ProjectID || source.EnvironmentID != claims.EnvironmentID {
 		return nil, ErrConflict
 	}
-	point, err := s.CheckPoint(ctx, p, claims.SourceID, claims.Point.ID)
+	point, err := s.CheckPointAt(ctx, p, claims.SourceID, claims.Point.ID, claims.Point.RestoreTime)
 	if err != nil {
 		return nil, err
 	}
-	if !sameNativePointIdentity(*point, claims.Point) {
+	if !sameNativePointSelection(*point, claims.Point) {
 		return nil, ErrConflict
 	}
 	if _, err = nativeReviewCapacity(source.Binding, *point, claims.Target); err != nil {

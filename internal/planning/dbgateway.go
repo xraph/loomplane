@@ -491,7 +491,8 @@ func resolveDatabaseGatewayPlacement(out *manifest.Manifest, env string, assignm
 	if fallback {
 		path = "database_gateway.provider"
 	}
-	placement, resolved, err := resolveCloudPlacement(dbGatewayName, path, set, fallback, assignment, options, pools)
+	// The gateway isn't a manifest service, so it never has a capacity intent.
+	placement, resolved, err := resolveCloudPlacement(dbGatewayName, path, set, fallback, assignment, options, pools, false)
 	if err != nil {
 		return err
 	}

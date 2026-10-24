@@ -54,6 +54,9 @@ const liveSize = "s-1vcpu-2gb"
 const liveRegion = "nyc3"
 const liveImage = "ubuntu-24-04-x64"
 
+// Allow propagation beyond a ten-minute negative DNS cache.
+const liveDNSPropagationWait = 15 * time.Minute
+
 type liveHostIntent struct {
 	RetainedTags []string                       `json:"retained_provider_tags,omitempty"`
 	Operation    string                         `json:"operation"`
@@ -719,6 +722,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 	}
 	for index, project := range projects {
 		bound()
+		progress.step(t, "dns_namespace_create")
 		var namespace cloudinfra.Zone
 		name := fmt.Sprintf("%s-app%d.%s", l.RunID, index, liveZone)
 		c.must(http.StatusCreated, http.MethodPost, "/api/v1/dns-zones", cloudinfra.ZoneInput{Name: name, Mode: "managed", ConnectionID: connectionIDs["vercel"], ProjectIDs: []string{project}}, &namespace)
@@ -732,6 +736,7 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 		l.Proofs = append(l.Proofs, intent)
 		record()
 		bound()
+		progress.step(t, "dns_proof_publish")
 		l.Proofs[index].Attempted = true
 		record()
 		receipt, writeErr := writer.UpsertRecord(ctx, p.dnsCredential, provider.DNSUpsertRequest{Zone: l.Zone, Record: intent.Desired})
@@ -740,7 +745,8 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 		}
 		l.Proofs[index].Receipt = &receipt
 		record()
-		for until := time.Now().Add(5 * time.Minute); ; time.Sleep(2 * time.Second) {
+		progress.step(t, "dns_proof_verify")
+		for until := time.Now().Add(liveDNSPropagationWait); ; time.Sleep(2 * time.Second) {
 			bound()
 			if c.do(http.MethodPost, "/api/v1/dns-zones/"+namespace.ID+"/verify", nil, &namespace) == http.StatusOK {
 				break
@@ -851,7 +857,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		l.Records[index].Attempted = true
 		record()
 		c.must(http.StatusAccepted, http.MethodPost, base+"/route-operations/"+operation.ID+"/apply", cloudinfra.ApplyInput{Review: operation.Review}, &operation)
-		for until := time.Now().Add(10 * time.Minute); ; time.Sleep(2 * time.Second) {
+		for until := time.Now().Add(liveDNSPropagationWait); ; time.Sleep(2 * time.Second) {
 			bound()
 			c.must(http.StatusOK, http.MethodGet, base+"/route-operations/"+operation.ID, nil, &operation)
 			if operation.Receipt != nil {

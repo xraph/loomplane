@@ -1,0 +1,46 @@
+---
+title: Backing up Loomplane
+description: Back up and restore Loomplane's own database with one command, and know what a backup does and doesn't contain.
+---
+
+This page is about Loomplane's own data. For the databases it deploys for you, see [Backups and test restores](/docs/services/backups-and-test-restores). The commands here are `loomplane` commands, run with the same configuration the server runs with.
+
+## Back up
+
+```bash
+loomplane backup --out loomplane-backup.tar.gz
+```
+
+A backup is one file. It holds every table in Loomplane's database, Loomplane's own and every library's (authsome, Warden, Chronicle, Dispatch, Ctrl Plane, Vault, Keysmith), copied in one snapshot so the tables agree with each other however long the copy takes. You can run it while Loomplane is serving. The file is written beside its final name and renamed once it's complete, and only you can read it.
+
+```bash
+loomplane backup inspect loomplane-backup.tar.gz
+```
+
+shows which Loomplane made a backup, when, and how many rows each table has, without restoring anything.
+
+A backup holds secrets the way the database does: cloud credentials and variables as Vault ciphertext, API keys as hashes. Reading them needs the `secret_key` Loomplane ran with. Keep that key somewhere other than beside the backups, or a restored Loomplane will start without being able to deploy.
+
+Not in a backup: the source tarballs in `storage.url`, which Loomplane fetches again from GitHub when it needs them, and anything in your clouds. A restore brings back Loomplane's record of what runs where, and the next drift check compares it with what's live. If you use local recovery objects, back up the `artifact-data` volume too. They can't be recreated by fetching source code.
+
+Schedule it however you schedule things. With cron, one a night kept for two weeks:
+
+```bash
+0 3 * * * cd /srv/loomplane && loomplane backup --out backups/loomplane-$(date +\%F).tar.gz && find backups -name 'loomplane-*.tar.gz' -mtime +14 -delete
+```
+
+In the Docker stack, run it through Compose as shown in [Upgrades and releases](/docs/operations/upgrades-and-releases#with-the-docker-stack). Store backups off the host.
+
+## Restore
+
+Stop Loomplane, then run this against an empty database:
+
+```bash
+loomplane restore loomplane-backup.tar.gz
+```
+
+Restore migrates the database to this Loomplane's schema, then loads every table in one transaction, so a failed restore leaves nothing half done. It refuses a database a Loomplane has already run on. Pass `--force` to replace what's there. Start Loomplane again with the `secret_key` it ran with before.
+
+A backup made by a newer Loomplane can't be restored by an older one, because its rows fit a schema the older one lacks. Restore with the same version or a later one. A backup from before a released schema change still restores: restore loads a backup at the schema it was taken at and migrates it up from there.
+
+After a restore, test sign-in, open a project, and run a plan to see that connections still decrypt.

@@ -37,7 +37,7 @@ func TestRDSRecoveryRestoresOnlyReviewedPrivateCopyAndCapturesIdentity(t *testin
 				if scenario == "public-copy" || scenario == "unsafe-created-copy" {
 					public = "true"
 				}
-				return fmt.Sprintf(`<DBInstance><DBInstanceIdentifier>%s</DBInstanceIdentifier><DBInstanceArn>arn:aws:rds:us-east-1:123456789012:db:%s</DBInstanceArn><DbiResourceId>%s</DbiResourceId><Engine>postgres</Engine><EngineVersion>17.2</EngineVersion><DBInstanceStatus>available</DBInstanceStatus><DBInstanceClass>db.t4g.micro</DBInstanceClass><AllocatedStorage>20</AllocatedStorage><StorageType>gp3</StorageType><StorageEncrypted>true</StorageEncrypted><KmsKeyId>%s</KmsKeyId><MasterUsername>loomplane</MasterUsername><PubliclyAccessible>%s</PubliclyAccessible><MultiAZ>false</MultiAZ><AutoMinorVersionUpgrade>false</AutoMinorVersionUpgrade><BackupRetentionPeriod>0</BackupRetentionPeriod><DeletionProtection>false</DeletionProtection><DBSubnetGroup><DBSubnetGroupName>recovery-private</DBSubnetGroupName><VpcId>vpc-recovery</VpcId></DBSubnetGroup><VpcSecurityGroups><VpcSecurityGroupMembership><VpcSecurityGroupId>sg-copy</VpcSecurityGroupId><Status>active</Status></VpcSecurityGroupMembership></VpcSecurityGroups><DBParameterGroups><DBParameterGroup><DBParameterGroupName>default.postgres17</DBParameterGroupName><ParameterApplyStatus>in-sync</ParameterApplyStatus></DBParameterGroup></DBParameterGroups><Endpoint><Address>%s.abcdef.us-east-1.rds.amazonaws.com</Address><Port>5432</Port></Endpoint><TagList><Tag><Key>loomplane-native-recovery</Key><Value>%s</Value></Tag></TagList></DBInstance>`, name, name, physical, point.KMSKey, public, name, tag)
+				return rdsRecoveryInstanceXML(name, physical, tag, public, point.KMSKey)
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if err := r.ParseForm(); err != nil {
@@ -167,4 +167,8 @@ func TestRDSRecoveryRestoresOnlyReviewedPrivateCopyAndCapturesIdentity(t *testin
 			}
 		})
 	}
+}
+
+func rdsRecoveryInstanceXML(name, physical, intent, public, kms string) string {
+	return fmt.Sprintf(`<DBInstance><DBInstanceIdentifier>%s</DBInstanceIdentifier><DBInstanceArn>arn:aws:rds:us-east-1:123456789012:db:%s</DBInstanceArn><DbiResourceId>%s</DbiResourceId><Engine>postgres</Engine><EngineVersion>17.2</EngineVersion><DBInstanceStatus>available</DBInstanceStatus><DBInstanceClass>db.t4g.micro</DBInstanceClass><AllocatedStorage>20</AllocatedStorage><StorageType>gp3</StorageType><StorageEncrypted>true</StorageEncrypted><KmsKeyId>%s</KmsKeyId><MasterUsername>loomplane</MasterUsername><PubliclyAccessible>%s</PubliclyAccessible><MultiAZ>false</MultiAZ><AutoMinorVersionUpgrade>false</AutoMinorVersionUpgrade><BackupRetentionPeriod>0</BackupRetentionPeriod><DeletionProtection>false</DeletionProtection><DBSubnetGroup><DBSubnetGroupName>recovery-private</DBSubnetGroupName><VpcId>vpc-recovery</VpcId></DBSubnetGroup><VpcSecurityGroups><VpcSecurityGroupMembership><VpcSecurityGroupId>sg-copy</VpcSecurityGroupId><Status>active</Status></VpcSecurityGroupMembership></VpcSecurityGroups><DBParameterGroups><DBParameterGroup><DBParameterGroupName>default.postgres17</DBParameterGroupName><ParameterApplyStatus>in-sync</ParameterApplyStatus></DBParameterGroup></DBParameterGroups><Endpoint><Address>%s.abcdef.us-east-1.rds.amazonaws.com</Address><Port>5432</Port></Endpoint><TagList><Tag><Key>loomplane-native-recovery</Key><Value>%s</Value></Tag></TagList></DBInstance>`, name, name, physical, kms, public, name, intent)
 }

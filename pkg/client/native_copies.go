@@ -7,20 +7,32 @@ import (
 	"time"
 )
 
+type RDSRecoveryNetwork struct {
+	VPCID           string `json:"vpc_id"`
+	SubnetGroup     string `json:"subnet_group"`
+	SecurityGroupID string `json:"security_group_id"`
+	VerifierGroupID string `json:"verifier_group_id"`
+}
+
 type NativeRecoveryTarget struct {
-	Provider        string `json:"provider"`
-	ConnectionID    string `json:"connection_id"`
-	AccountIdentity string `json:"account_identity"`
-	NativeProject   string `json:"native_project,omitempty"`
-	Region          string `json:"region"`
-	CloudID         string `json:"cloud_id,omitempty"`
-	TargetID        string `json:"target_id,omitempty"`
-	CloudRevision   int64  `json:"cloud_revision,omitempty"`
-	TargetRevision  int64  `json:"target_revision,omitempty"`
-	GrantRevision   int64  `json:"grant_revision,omitempty"`
+	NativeAccount   string             `json:"native_account,omitempty"`
+	RDSNetwork      RDSRecoveryNetwork `json:"rds_network,omitempty,omitzero"`
+	Provider        string             `json:"provider"`
+	ConnectionID    string             `json:"connection_id"`
+	AccountIdentity string             `json:"account_identity"`
+	NativeProject   string             `json:"native_project,omitempty"`
+	Region          string             `json:"region"`
+	CloudID         string             `json:"cloud_id,omitempty"`
+	TargetID        string             `json:"target_id,omitempty"`
+	CloudRevision   int64              `json:"cloud_revision,omitempty"`
+	TargetRevision  int64              `json:"target_revision,omitempty"`
+	GrantRevision   int64              `json:"grant_revision,omitempty"`
 }
 
 type NativeRecoveryCapacity struct {
+	IOPS            int32  `json:"iops,omitempty"`
+	ThroughputMBPS  int32  `json:"throughput_mbps,omitempty"`
+	MaxStorageGB    int32  `json:"max_storage_gb,omitempty"`
 	ProfileID       string `json:"profile_id"`
 	ProfileRevision string `json:"profile_revision"`
 	ComputeClass    string `json:"compute_class"`
@@ -30,13 +42,15 @@ type NativeRecoveryCapacity struct {
 }
 
 type NativeCopyReviewRequest struct {
-	RequestID string `json:"request_id"`
-	CloudID   string `json:"cloud_id"`
-	TargetID  string `json:"target_id"`
-	TTLHours  int    `json:"ttl_hours"`
+	RestoreTime *time.Time `json:"restore_time,omitempty"`
+	RequestID   string     `json:"request_id"`
+	CloudID     string     `json:"cloud_id"`
+	TargetID    string     `json:"target_id"`
+	TTLHours    int        `json:"ttl_hours"`
 }
 
 type NativeRecoveryReview struct {
+	RestoreTime *time.Time             `json:"restore_time,omitempty"`
 	RequestID   string                 `json:"request_id"`
 	ReviewToken string                 `json:"review_token"`
 	SourceID    string                 `json:"source_id"`
@@ -56,6 +70,7 @@ type NativeCopyRequest struct {
 
 // NativeRecoveryCopy exposes retained status without worker secrets or checkpoints.
 type NativeRecoveryCopy struct {
+	RestoreTime        *time.Time           `json:"restore_time,omitempty"`
 	ID                 string               `json:"id"`
 	OrgID              string               `json:"org_id"`
 	ProjectID          string               `json:"project_id"`

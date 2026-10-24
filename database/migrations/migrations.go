@@ -32,6 +32,16 @@ const GroupName = "loomplane"
 func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
 	g.MustRegister(
+		statements("20261101001100", "deployment_workflow_runs", deploymentWorkflowRunsUp, deploymentWorkflowRunsDown),
+		statements("20261102000300", "native_retention_policy_connections", nativeRetentionPolicyConnectionsUp, nativeRetentionPolicyConnectionsDown),
+		statements("20261101001000", "deployment_capacity_wait", deploymentCapacityWaitUp, deploymentCapacityWaitDown),
+		statements("20261101000900", "cloud_capacity_intents", cloudCapacityIntentsUp, cloudCapacityIntentsDown),
+		statements("20261102000100", "native_retirements", nativeRetirementsUp, nativeRetirementsDown),
+		statements("20261102000200", "native_retention_policies", nativeRetentionPoliciesUp, nativeRetentionPoliciesDown),
+		statements("20261101000600", "cloud_capacity_refresh", cloudCapacityRefreshUp, cloudCapacityRefreshDown),
+		statements("20261101000800", "cloud_expansion_authority", cloudExpansionAuthorityUp, cloudExpansionAuthorityDown),
+		statements("20261101000700", "cloud_capacity_ledger", cloudCapacityLedgerUp, cloudCapacityLedgerDown),
+		statements("20261101000500", "cloud_capacity_accounts", cloudCapacityAccountsUp, cloudCapacityAccountsDown),
 		statements("20261101000400", "cloud_capacity", cloudCapacityUp, cloudCapacityDown),
 		statements("20261101000300", "cloud_compensation_progress", cloudCompensationProgressUp, nil),
 		statements("20261101000200", "native_cleanup", nativeCleanupUp, nativeCleanupDown),

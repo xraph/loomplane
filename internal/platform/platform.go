@@ -113,6 +113,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithDisableRoutes(),
 		dispatchext.WithDisableMigrate(),
 	)
+	jobs.WithCapacity(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency), deployments.BindCapacityWorker)
 
 	// Provider plugins, described when the first extension that needs
 	// them registers.
@@ -141,7 +142,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		environmentsext.New(cfg),
 		connectionsext.New(cfg, plugs),
 		cloudinfraext.New(cfg, deployments),
-		federationext.New(cfg),
+		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
 		dbgatewayext.New(cfg),

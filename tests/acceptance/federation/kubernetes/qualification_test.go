@@ -138,7 +138,7 @@ func TestPreparedKubernetesIdentity(t *testing.T) {
 	current, err := store.Get(ctx, destination.OrgID, destination.ID)
 	must(t, err)
 	proveControllerReceipts(ctx, t, db, client, *current)
-	proveApplicationIdentity(ctx, t, db, client, credentials, admin, *current)
+	proveApplicationIdentity(ctx, t, db, client, credentials, admin, *current, destinations, principal)
 }
 
 type fixtureAuthorizer struct{}

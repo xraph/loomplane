@@ -55,6 +55,9 @@ func (e *Extension) nativeCopyCredentials(c forge.Context) error {
 }
 
 func nativeCopyError(err error) error {
+	if errors.Is(err, recovery.ErrNativePITRUnavailable) {
+		return forge.NewHTTPError(http.StatusConflict, recovery.ErrNativePITRUnavailable.Error())
+	}
 	if errors.Is(err, recovery.ErrNativeUnavailable) {
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())
 	}

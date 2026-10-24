@@ -49,9 +49,8 @@ func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy
 		return err
 	}
 	defer rollback(tx)
-	var id string
-	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, policy.OrgID, policy.CloudID).Scan(&id); err != nil {
-		return storeError(err)
+	if checkErr := lockCapacityCloud(ctx, tx, policy.OrgID, policy.CloudID); checkErr != nil {
+		return checkErr
 	}
 	var revision int64
 	err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_capacity_policies WHERE org_id=$1 AND cloud_id=$2`, policy.OrgID, policy.CloudID).Scan(&revision)
@@ -68,7 +67,11 @@ func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_policies(org_id,cloud_id,revision,enabled,require_expansion_approval,servers,cpu_millis,memory_bytes,storage_bytes,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(org_id,cloud_id) DO UPDATE SET revision=excluded.revision,enabled=excluded.enabled,require_expansion_approval=excluded.require_expansion_approval,servers=excluded.servers,cpu_millis=excluded.cpu_millis,memory_bytes=excluded.memory_bytes,storage_bytes=excluded.storage_bytes,body=excluded.body,updated_at=now()`, policy.OrgID, policy.CloudID, policy.Revision, policy.Enabled, policy.RequireExpansionApproval, policy.Limits.Servers, policy.Limits.CPUMillis, policy.Limits.MemoryBytes, policy.Limits.StorageBytes, raw)
+	authority, err := json.Marshal(policy.authority)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_policies(org_id,cloud_id,revision,enabled,require_expansion_approval,servers,cpu_millis,memory_bytes,storage_bytes,body,authority) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(org_id,cloud_id) DO UPDATE SET revision=excluded.revision,enabled=excluded.enabled,require_expansion_approval=excluded.require_expansion_approval,servers=excluded.servers,cpu_millis=excluded.cpu_millis,memory_bytes=excluded.memory_bytes,storage_bytes=excluded.storage_bytes,body=excluded.body,authority=excluded.authority,updated_at=now()`, policy.OrgID, policy.CloudID, policy.Revision, policy.Enabled, policy.RequireExpansionApproval, policy.Limits.Servers, policy.Limits.CPUMillis, policy.Limits.MemoryBytes, policy.Limits.StorageBytes, raw, authority)
 	if err != nil {
 		return storeError(err)
 	}

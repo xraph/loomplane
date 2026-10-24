@@ -1,6 +1,11 @@
 package cloudinfra
 
-import "time"
+import (
+	"time"
+
+	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
+)
 
 // ResourceVector uses CPU milliseconds and bytes. Zero is a measured value.
 type ResourceVector struct {
@@ -11,6 +16,7 @@ type ResourceVector struct {
 }
 
 type CapacityPolicy struct {
+	authority                *security.Principal
 	OrgID                    string                `json:"org_id"`
 	CloudID                  string                `json:"cloud_id"`
 	Revision                 int64                 `json:"revision"`
@@ -84,38 +90,70 @@ type CapacityDecision struct {
 }
 
 type Expansion struct {
-	ID                   string         `json:"id"`
-	OrgID                string         `json:"org_id"`
-	CloudID              string         `json:"cloud_id"`
-	PoolID               string         `json:"pool_id"`
-	OperationID          string         `json:"operation_id"`
-	Status               string         `json:"status"`
-	IntentHash           string         `json:"intent_hash"`
-	PolicyRevision       int64          `json:"policy_revision"`
-	Resources            ResourceVector `json:"resources"`
-	Provider             string         `json:"provider"`
-	AccountID            string         `json:"account_id"`
-	ConnectionID         string         `json:"connection_id"`
-	ConnectionGeneration int64          `json:"connection_generation"`
-	Region               string         `json:"region"`
-	Size                 string         `json:"size"`
-	Architecture         string         `json:"architecture"`
-	Image                string         `json:"image"`
-	ApprovedBy           string         `json:"approved_by"`
-	ApprovedAt           *time.Time     `json:"approved_at,omitempty"`
-	CreatedAt            time.Time      `json:"created_at"`
-	UpdatedAt            time.Time      `json:"updated_at"`
+	Revision             int64               `json:"revision"`
+	Minimum              bool                `json:"minimum"`
+	Template             PoolExpansionPolicy `json:"template"`
+	Block                *CapacityBlock      `json:"block,omitempty"`
+	ID                   string              `json:"id"`
+	OrgID                string              `json:"org_id"`
+	CloudID              string              `json:"cloud_id"`
+	PoolID               string              `json:"pool_id"`
+	OperationID          string              `json:"operation_id"`
+	Status               string              `json:"status"`
+	IntentHash           string              `json:"intent_hash"`
+	PolicyRevision       int64               `json:"policy_revision"`
+	Resources            ResourceVector      `json:"resources"`
+	Provider             string              `json:"provider"`
+	AccountID            string              `json:"account_id"`
+	ConnectionID         string              `json:"connection_id"`
+	ConnectionGeneration int64               `json:"connection_generation"`
+	Region               string              `json:"region"`
+	Size                 string              `json:"size"`
+	Architecture         string              `json:"architecture"`
+	Image                string              `json:"image"`
+	ApprovedBy           string              `json:"approved_by"`
+	ApprovedAt           *time.Time          `json:"approved_at,omitempty"`
+	CreatedAt            time.Time           `json:"created_at"`
+	UpdatedAt            time.Time           `json:"updated_at"`
+}
+
+// CapacityResources preserves unknown facts as null, independently per dimension.
+type CapacityResources struct {
+	Servers      *int64 `json:"servers"`
+	CPUMillis    *int64 `json:"cpu_millis"`
+	MemoryBytes  *int64 `json:"memory_bytes"`
+	StorageBytes *int64 `json:"storage_bytes"`
+}
+
+type CapacityObservation struct {
+	CPUMillis        *int64    `json:"cpu_millis"`
+	MemoryBytes      *int64    `json:"memory_bytes"`
+	StorageBytes     *int64    `json:"storage_bytes"`
+	FreeStorageBytes *int64    `json:"free_storage_bytes"`
+	CheckedAt        time.Time `json:"checked_at"`
+}
+
+// CapacityAccountSnapshot contains account totals, without unrelated resource
+// identities or credentials. The quota and each resource fact may be unknown.
+type CapacityAccountSnapshot struct {
+	Provider    string                 `json:"provider"`
+	AccountID   string                 `json:"account_id"`
+	Provisioned CapacityResources      `json:"provisioned"`
+	Quota       provider.CapacityQuota `json:"quota"`
+	CheckedAt   time.Time              `json:"checked_at"`
 }
 
 type CapacityUsage struct {
-	Provisioned          ResourceVector `json:"provisioned"`
-	Pending              ResourceVector `json:"pending"`
-	Reserved             ResourceVector `json:"reserved"`
-	Observed             ResourceVector `json:"observed"`
-	SystemReserve        ResourceVector `json:"system_reserve"`
-	Allocatable          ResourceVector `json:"allocatable"`
-	Headroom             ResourceVector `json:"headroom"`
-	ObservedStorageBytes *int64         `json:"observed_storage_bytes"`
-	CheckedAt            time.Time      `json:"checked_at"`
-	Fresh                bool           `json:"fresh"`
+	Accounts             []CapacityAccountSnapshot `json:"accounts"`
+	Records              []CapacityRecord          `json:"records"`
+	Provisioned          CapacityResources         `json:"provisioned"`
+	Pending              CapacityResources         `json:"pending"`
+	Reserved             CapacityResources         `json:"reserved"`
+	Observed             CapacityResources         `json:"observed"`
+	SystemReserve        CapacityResources         `json:"system_reserve"`
+	Allocatable          CapacityResources         `json:"allocatable"`
+	Headroom             CapacityResources         `json:"headroom"`
+	ObservedStorageBytes *int64                    `json:"observed_storage_bytes"`
+	CheckedAt            time.Time                 `json:"checked_at"`
+	Fresh                bool                      `json:"fresh"`
 }

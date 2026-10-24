@@ -178,3 +178,11 @@ test("NATS exposes native recovery and describes file persistence", () => {
   expect(module?.features).toContain("Messages and consumers")
   expect(module?.panels[0].id).toBe("recovery")
 })
+
+test("RabbitMQ exposes message recovery and warns about backup downtime", () => {
+  const module = catalogKind("rabbitmq")
+  expect(module?.title).toBe("RabbitMQ")
+  expect(module?.blurb).toMatch(/disconnect.*stop/i)
+  expect(module?.features).toContain("Message backups")
+  expect(module?.panels[0].id).toBe("recovery")
+})

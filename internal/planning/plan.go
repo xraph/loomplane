@@ -122,6 +122,7 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
+	CapacityIntent *CapacityIntent    `json:"capacity_intent,omitempty"`
 	AppliedInputs  *AppliedInputs     `json:"applied_inputs,omitempty"`
 	CloudPlacement *CloudPlacement    `json:"cloud_placement,omitempty"`
 	Catalog        *recipes.Recipe    `json:"catalog,omitempty"`

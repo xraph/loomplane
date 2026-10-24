@@ -73,6 +73,18 @@ func TestNativeRestoreMigrationReplaysEveryAppliedStatement(t *testing.T) {
 
 func TestNativeRestoreMigrationRemovesPartialEmptyInstall(t *testing.T) {
 	f := nativePointHistoryFixture(t)
+	// Dependent native deletion references must be removed first, as the
+	// migration runner does when rolling back from the newest schema.
+	for _, version := range []string{"20261102000300", "20261102000200", "20261102000100"} {
+		for _, child := range migrations.Group().Migrations() {
+			if child.Version == version {
+				if childErr := child.Down(t.Context(), pgmigrate.New(f.db)); childErr != nil {
+					t.Fatal(childErr)
+				}
+			}
+		}
+	}
+
 	step := nativeRestoreMigration(t)
 	executor := pgmigrate.New(f.db)
 	if err := step.Down(t.Context(), executor); err != nil {

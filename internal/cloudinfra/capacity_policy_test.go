@@ -3,8 +3,10 @@ package cloudinfra
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/pkg/provider"
@@ -134,4 +136,52 @@ func TestCapacityPolicyMinimumVectors(t *testing.T) {
 	if err := validateCapacityPolicy(p, options); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("accepted aggregate minimum overage: %v", err)
 	}
+}
+
+func TestCapacityPolicyMixedOnlyAndSearchBound(t *testing.T) {
+	catalog := provider.ServerOptions{Regions: []provider.ServerRegion{{ID: "region"}}, Images: []provider.ServerImage{{ID: "ubuntu", Bootstrap: true, Regions: []string{"region"}}}, Sizes: []provider.ServerSize{
+		{ID: "a-cpu", CPUs: 4, MemoryMiB: 1024, DiskGB: 10, Regions: []string{"region"}},
+		{ID: "b-memory", CPUs: 1, MemoryMiB: 4096, DiskGB: 10, Regions: []string{"region"}},
+	}}
+	t.Run("mixed-only allocation stays unproven", func(t *testing.T) {
+		p := capacityPolicyFixture()
+		p.Limits = ResourceVector{Servers: 2, CPUMillis: 5000, MemoryBytes: 5 << 30, StorageBytes: 20_000_000_000}
+		p.Pools[0].MinServers = 2
+		p.Pools[0].MaxServers = 2
+		p.Pools[0].AllowedSizes = []string{"a-cpu", "b-memory"}
+		if err := validateCapacityPolicy(p, map[string]provider.ServerOptions{"pool": catalog}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "homogeneous") {
+			t.Fatalf("mixed-only validation: %v", err)
+		}
+	})
+	t.Run("bounded search rejects unproven feasible allocation", func(t *testing.T) {
+		// Thirteen earlier pools offer equal CPU-heavy choices before a memory-heavy
+		// alternative. Only all memory-heavy choices leave room for the final pool.
+		// That valid assignment lies beyond 10,000 deterministic candidate visits.
+		p := capacityPolicyFixture()
+		p.Pools = nil
+		p.Limits = ResourceVector{Servers: 14, CPUMillis: 65000, MemoryBytes: 100 << 30, StorageBytes: 1_000_000_000_000}
+		options := map[string]provider.ServerOptions{}
+		for i := range 14 {
+			id := fmt.Sprintf("pool-%02d", i)
+			pool := PoolExpansionPolicy{PoolID: id, ConnectionID: "account", Region: "region", Image: "ubuntu", Architecture: "amd64", MinServers: 1, MaxServers: 1, AllowedSizes: []string{"a-cpu", "b-memory"}}
+			if i == 13 {
+				pool.AllowedSizes = []string{"z-final"}
+			}
+			p.Pools = append(p.Pools, pool)
+			options[id] = catalog
+			if i == 13 {
+				options[id] = provider.ServerOptions{Regions: catalog.Regions, Images: catalog.Images, Sizes: []provider.ServerSize{{ID: "z-final", CPUs: 52, MemoryMiB: 1024, DiskGB: 10, Regions: []string{"region"}}}}
+			}
+		}
+		if err := validateCapacityPolicy(p, options); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "homogeneous") {
+			t.Fatalf("search-bound validation: %v", err)
+		}
+		// The reverse catalog order is irrelevant; stable size IDs drive the bound.
+		for i := range 13 {
+			p.Pools[i].AllowedSizes = []string{"b-memory"}
+		}
+		if err := validateCapacityPolicy(p, options); err != nil {
+			t.Fatalf("known homogeneous allocation: %v", err)
+		}
+	})
 }

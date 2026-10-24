@@ -89,7 +89,17 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 		return err
 	}
 	defer rollback(tx)
+	if err := s.acceptOperationTx(ctx, tx, o); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *PgStore) acceptOperationTx(ctx context.Context, tx driver.Tx, o *Operation) error {
 	if checkErr := lockInfrastructureScope(ctx, tx, o); checkErr != nil {
+		return checkErr
+	}
+	if checkErr := s.reserveOperationCapacity(ctx, tx, o); checkErr != nil {
 		return checkErr
 	}
 	if o.Input.Kind != "create" && o.Input.Kind != "adopt" {
@@ -122,17 +132,32 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 	if n != 1 {
 		return ErrConflict
 	}
-	return tx.Commit()
+	return nil
 }
+
 func (s *PgStore) SaveOperation(ctx context.Context, o *Operation) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
+		return checkErr
+	}
 	previous := o.StateRevision
+	committed := false
+	defer func() {
+		if !committed {
+			o.StateRevision = previous
+		}
+	}()
 	o.StateRevision++
 	raw, err := json.Marshal(o)
 	if err != nil {
 		o.StateRevision = previous
 		return err
 	}
-	tag, err := s.db.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND (status<>'preview' OR $4='cancelled') AND coalesce((body->>'state_revision')::bigint,0)=$6`, o.OrgID, o.CloudID, o.ID, o.Status, raw, previous)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND (status<>'preview' OR $4='cancelled') AND coalesce((body->>'state_revision')::bigint,0)=$6`, o.OrgID, o.CloudID, o.ID, o.Status, raw, previous)
 	if err != nil {
 		o.StateRevision = previous
 		return storeError(err)
@@ -145,6 +170,13 @@ func (s *PgStore) SaveOperation(ctx context.Context, o *Operation) error {
 		o.StateRevision = previous
 		return ErrConflict
 	}
+	if err := recordCapacityCleanup(ctx, tx, o); err != nil {
+		return err
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return commitErr
+	}
+	committed = true
 	return nil
 }
 
@@ -232,6 +264,9 @@ func (s *PgStore) RetireServer(ctx context.Context, v *Server) error {
 		return err
 	}
 	defer rollback(tx)
+	if checkErr := lockCapacityCloud(ctx, tx, v.OrgID, v.CloudID); checkErr != nil {
+		return checkErr
+	}
 	if v.RuntimeConnectionID != "" {
 		var id string
 		if checkErr := tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 FOR UPDATE`, v.OrgID, v.RuntimeConnectionID).Scan(&id); checkErr != nil {
@@ -347,6 +382,9 @@ func (s *PgStore) ClaimAdoption(ctx context.Context, org, cloud, id string) (*Se
 	}
 	if scopeErr := lockInfrastructureScope(ctx, tx, o); scopeErr != nil {
 		return nil, scopeErr
+	}
+	if checkErr := s.reserveOperationCapacity(ctx, tx, o); checkErr != nil {
+		return nil, checkErr
 	}
 	var status string
 	if err = tx.QueryRow(ctx, `SELECT status FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3 FOR UPDATE`, org, cloud, id).Scan(&status); err != nil {

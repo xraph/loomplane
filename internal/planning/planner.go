@@ -34,6 +34,7 @@ type Input struct {
 	// Catalog requests a standalone service without repository sources.
 	Catalog         bool
 	CloudPlacements map[string]CloudPlacement
+	CapacityIntents map[string]*CapacityIntent
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput
 	// Environment is the environment's name, which picks the manifest's
@@ -639,6 +640,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
 	p.buildContext(name, base, set.Build, gs, cfg)
+	cfg.CapacityIntent = p.in.CapacityIntents[name]
 	p.configureTarget(name, base, prov, set, cfg)
 	if placement, ok := p.in.CloudPlacements[name]; ok {
 		placement.Region = cfg.Region

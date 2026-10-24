@@ -99,6 +99,14 @@ export const catalog: Entry[] = [
     features: cacheFeatures,
   },
   {
+    kind: "rabbitmq",
+    group: "data",
+    runsOn: "Docker",
+    blurb:
+      "Durable queues with message backups that disconnect clients and briefly stop the broker. Test recovery in an isolated copy.",
+    features: ["Retained volume", "Message backups", "Test restores"],
+  },
+  {
     kind: "nats",
     group: "data",
     runsOn: "Docker",

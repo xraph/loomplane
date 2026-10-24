@@ -1,0 +1,50 @@
+---
+title: Plans and approvals
+description: A plan lists exactly what a deployment would do, and only an admin's approval of that exact revision changes a cloud.
+---
+
+A plan is Loomplane's answer to "what would happen if I deployed this?" Making one never touches a cloud. Approving one starts the deployment.
+
+## Make a plan
+
+```bash
+loomctl plan my-project --env production
+loomctl plan my-project --env production --scope web
+loomctl show <plan-id>
+```
+
+`--scope` names the repositories the plan moves, by alias. The rest stay at the commits that are already deployed, and their services are kept as they run. Without it, every source moves.
+
+A plan pins a lockset: one analysis and commit for each source. It composes its graph from those, so it always sees the graph it was made from, even if you push or re-analyze afterward.
+
+## What a plan shows
+
+Every action, step by step, with its operation, name, provider and the reason it's there. Beside the actions you get two lists.
+
+Problems block the plan. A Vercel app that needs a Cloud SQL database is a problem, because a managed resource is only reachable from services on its own cloud. So is a private service needed from another cloud. A plan with problems can't be approved.
+
+Warnings don't block, but you should read them. Expect them for a service that falls back to port 8080 because it didn't declare one, for a service still using a legacy variable name, and for old resources a move left behind that you'll need to delete yourself.
+
+Some plans are for review only: something in them has no adapter yet, or they use a [paused target](/docs/operations/monitoring#pausing-a-target). You can approve those, but approving deploys nothing.
+
+## Approve, reject or let it expire
+
+```bash
+loomctl approve <plan-id>            # asks first; --yes skips the question
+loomctl approve <plan-id> --note "Release 14" --no-wait
+loomctl reject <plan-id> --note "Wrong environment"
+```
+
+An approval names the revision of the plan you reviewed. If what's deployed changed since the plan was made, it comes back stale and nothing happens: you plan again. A plan that nobody decides expires after the approval window, 168 hours by default. You can set it between one minute and 90 days with `LOOMPLANE_PLANNING_APPROVAL_WINDOW`.
+
+Developers plan and admins approve. See [Organizations and roles](/docs/concepts/organizations-and-roles).
+
+## Moves and replacements
+
+A service or resource that moves to another provider, region or connection is replaced. The new one starts first, and the old one goes once the new one is up and answering. A resource never moves between connections, because its data would stay behind. A plan that would provision one through another connection than the one that provisioned it has a problem until you choose the old connection again.
+
+Turning an existing service off can produce a deletion in the next plan, so read that one carefully.
+
+## Standalone resources
+
+A project can hold only resources, with no repository. `loomctl plan PROJECT --catalog --env production` plans those. [Database services](/docs/services/database-services) shows how it fits together.

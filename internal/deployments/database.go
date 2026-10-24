@@ -7,6 +7,7 @@ import (
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	nativenats "github.com/xraph/loomplane/internal/clouds/nats"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativerabbit "github.com/xraph/loomplane/internal/clouds/rabbitmq"
 	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/planning"
@@ -34,6 +35,9 @@ func databaseService(cfg *planning.ResourceConfig) (*planning.ServiceConfig, err
 }
 
 func databaseEnvironment(kind, name, application, admin string) (env map[string]string, secrets map[string]bool) {
+	if kind == "rabbitmq" {
+		return map[string]string{"RABBITMQ_DEFAULT_USER": "admin", "RABBITMQ_DEFAULT_PASS": admin, "LOOMPLANE_APP_PASSWORD": application, "RABBITMQ_NODENAME": "rabbit@localhost", "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS": "+S 2:2 -kernel inet_dist_use_interface {127,0,0,1}", "RABBITMQ_CTL_ERL_ARGS": "+S 1:1", "ERL_EPMD_ADDRESS": "127.0.0.1"}, map[string]bool{"RABBITMQ_DEFAULT_PASS": true, "LOOMPLANE_APP_PASSWORD": true}
+	}
 	if kind == "nats" {
 		return map[string]string{"LOOMPLANE_NATS_ADMIN_PASSWORD": admin, "LOOMPLANE_APP_PASSWORD": application}, map[string]bool{"LOOMPLANE_NATS_ADMIN_PASSWORD": true, "LOOMPLANE_APP_PASSWORD": true}
 	}
@@ -53,6 +57,10 @@ func databaseEnvironment(kind, name, application, admin string) (env map[string]
 func databaseLabels(labels map[string]string, recipe *recipes.Recipe, name string) {
 	labels[owned.LabelStateful] = "true"
 	labels[labelImage] = recipe.Image
+	if recipe.Engine() == "rabbitmq" {
+		labels[nativerabbit.LabelEngine] = "rabbitmq"
+		return
+	}
 	if recipe.Engine() == "nats" {
 		labels[nativenats.LabelEngine] = "nats"
 		return

@@ -36,12 +36,16 @@ func validateOptions(options provider.ServerOptions, in ServerInput) error {
 		region = region || v.ID == in.Region
 	}
 	size := false
+	disk := 0
 	for _, v := range options.Sizes {
 		size = size || (v.ID == in.Size && slices.Contains(v.Regions, in.Region))
+		if v.ID == in.Size {
+			disk = v.DiskGB
+		}
 	}
 	image := false
 	for _, v := range options.Images {
-		image = image || (v.ID == in.Image && v.Bootstrap && slices.Contains(v.Regions, in.Region))
+		image = image || (v.ID == in.Image && v.Bootstrap && v.MinDiskGB >= 0 && v.MinDiskGB <= disk && slices.Contains(v.Regions, in.Region))
 	}
 	if !region || !size || !image {
 		return ErrInvalid

@@ -13,7 +13,9 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/page"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 const pgUniqueViolation = "23505"
@@ -267,13 +269,35 @@ func (s *PgStore) FailPlanning(ctx context.Context, orgID, id, reason string, no
 }
 
 // Decide implements Store.
-func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string, now time.Time) (bool, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE loomplane_plans SET status = $3, decided_by = $4, decision_note = $5, decided_at = $6
-		WHERE org_id = $1 AND id = $2 AND status = 'ready'`, orgID, id, status, by, note, now)
+func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string, now time.Time) (changed bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { err = rollback(tx, err) }()
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, orgID); checkErr != nil {
+		return false, checkErr
+	}
+	if actor, ok := security.PrincipalFrom(ctx); ok {
+		raw, marshalErr := json.Marshal(actor)
+		if marshalErr != nil {
+			return false, marshalErr
+		}
+		if _, err = tx.Exec(ctx, `SELECT set_config('loomplane.capacity_actor',$1,true)`, string(raw)); err != nil {
+			return false, err
+		}
+	}
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_plans SET status = $3, decided_by = $4, decision_note = $5, decided_at = $6
+ WHERE org_id = $1 AND id = $2 AND status = 'ready'`, orgID, id, status, by, note, now)
 	if err != nil {
 		return false, fmt.Errorf("decide plan: %w", err)
 	}
-	return affected(tag)
+	changed, err = affected(tag)
+	if err != nil {
+		return false, err
+	}
+	err = tx.Commit()
+	return changed, err
 }
 
 func affected(r driver.Result) (bool, error) {

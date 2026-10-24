@@ -14,6 +14,9 @@ import (
 // CheckNativeSnapshot shares inventory's original account review, then rereads
 // the selected backup itself. No current source instance is needed.
 func (n *NativeDatabases) CheckNativeSnapshot(ctx context.Context, b *planning.Binding, selected recovery.NativePoint) (*recovery.NativePoint, error) {
+	if selected.Kind == "pitr" {
+		return n.NativePITRWindow(ctx, b)
+	}
 	cfg, conn, credential, err := n.nativeSourceAccess(ctx, b)
 	if err != nil {
 		return nil, err

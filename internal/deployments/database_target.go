@@ -33,6 +33,9 @@ func databaseAddress(cfg *planning.ResourceConfig, iid id.ID, name, password str
 		return "", errors.New("database address has no qualified target")
 	}
 	scheme, suffix := "mysql", ""
+	if cfg.Catalog.Engine() == "rabbitmq" {
+		return fmt.Sprintf("amqp://%s@%s:5672/%%2F", url.UserPassword(sqlUser, password).String(), host), nil
+	}
 	if cfg.Catalog.Engine() == "nats" {
 		return fmt.Sprintf("nats://%s@%s:4222", url.UserPassword(sqlUser, password).String(), host), nil
 	}

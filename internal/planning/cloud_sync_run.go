@@ -396,6 +396,15 @@ func validateSyncGrants(ctx context.Context, st cloudprofiles.SyncStore, org str
 }
 
 func (s *Service) authorizeStoredCloudSync(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, snapshot *cloudprofiles.Snapshot) error {
+	if p.KeyID != "" {
+		if s.capacityPrincipal == nil {
+			return security.ErrForbidden
+		}
+		if err := s.capacityPrincipal.ValidatePrincipal(ctx, p); err != nil {
+			return err
+		}
+	}
+
 	if sync.TargetID != "" || snapshot.Shared {
 		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}
@@ -425,9 +434,9 @@ func (s *Service) acceptedCloudPlan(ctx context.Context, sync *cloudprofiles.Syn
 	saved, err := s.store.GetPlan(ctx, sync.OrgID, expected.ID)
 	if errors.Is(err, ErrNotFound) && env.AcceptedPlan == nil {
 		if slices.ContainsFunc(expected.Actions, func(a Action) bool {
-			return a.Service != nil && a.Service.CloudPlacement != nil && a.Service.CloudPlacement.PoolID != ""
+			return a.Service != nil && (a.Service.CapacityIntent != nil || a.Service.CloudPlacement != nil && a.Service.CloudPlacement.PoolID != "")
 		}) {
-			return nil, errors.New("this legacy Cloud sync has no accepted pool plan; review and accept a revert before reviewing the target change again")
+			return nil, fmt.Errorf("%w: this legacy Cloud sync has no accepted pool plan; review and accept a revert before reviewing the target change again", cloudprofiles.ErrConflict)
 		}
 		plans, ok := s.store.(CloudSyncPlanStore)
 		if !ok {

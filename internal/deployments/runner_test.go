@@ -24,8 +24,10 @@ import (
 )
 
 type memStore struct {
-	mu sync.Mutex
-	d  map[string]*Deployment
+	mu             sync.Mutex
+	d              map[string]*Deployment
+	capacityEvents []CapacityTransition
+	capacityAcks   map[string]bool
 }
 
 func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployment, error) {
@@ -84,6 +86,9 @@ func (m *memStore) SetSources(_ context.Context, _, id string, sources []SourceA
 func (m *memStore) UpdateStep(_ context.Context, _, id string, s Step) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if s.Status == StepSkipped && (m.d[id].Status == StatusPaused || m.d[id].Status == StatusCancelled) {
+		return nil
+	}
 	for i := range m.d[id].Steps {
 		if m.d[id].Steps[i].ActionID == s.ActionID {
 			m.d[id].Steps[i] = s

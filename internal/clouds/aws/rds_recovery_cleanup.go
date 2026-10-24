@@ -3,7 +3,6 @@ package aws
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	sdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -54,7 +53,7 @@ func (s *Session) DeleteDBRecovery(ctx context.Context, spec DBRecoverySpec, con
 		}
 		out, deleteErr := s.rdsWrites().DeleteDBInstance(ctx, &rds.DeleteDBInstanceInput{DBInstanceIdentifier: sdk.String(spec.ID), SkipFinalSnapshot: sdk.Bool(true), DeleteAutomatedBackups: sdk.Bool(true)})
 		if deleteErr != nil {
-			return fmt.Errorf("remove temporary RDS recovery copy: %w", deleteErr)
+			return dbRecoveryWriteError(deleteErr)
 		}
 		if out.DBInstance == nil || sdk.ToString(out.DBInstance.DBInstanceIdentifier) != spec.ID || sdk.ToString(out.DBInstance.DbiResourceId) != spec.ResourceID {
 			return errors.New("RDS cleanup response did not confirm the original copy")
@@ -80,4 +79,27 @@ func (s *Session) DeleteDBRecovery(ctx context.Context, spec DBRecoverySpec, con
 			return waitErr
 		}
 	}
+}
+
+// InspectDBRecoveryForCleanup recovers only the original attempted restore's
+// physical pin. Failed or unsafe copies remain removable without completing
+// SQL setup or making the snapshot available again. Missing is still uncertain.
+func (s *Session) InspectDBRecoveryForCleanup(ctx context.Context, spec DBRecoverySpec, c DBRecoveryControl) (*DBInstance, error) {
+	if !recoveryIntentRE.MatchString(spec.Intent) || spec.ID != "lp-recovery-"+spec.Intent[:32] || spec.ID == spec.Snapshot.InstanceID || spec.SourcePhysicalID == "" || !c.Mutation.Attempted || c.Check == nil || c.Mutation.Captured == nil {
+		return nil, errors.New("RDS restore cleanup requires its captured original creation intent")
+	}
+	if checkErr := c.Check(ctx); checkErr != nil {
+		return nil, checkErr
+	}
+	db, err := s.GetDBInstance(ctx, spec.ID)
+	if err != nil {
+		return nil, err
+	}
+	if identityErr := s.checkDBRecoveryOwner(db, spec); identityErr != nil {
+		return nil, identityErr
+	}
+	if captureErr := c.Mutation.Captured(db.ResourceID); captureErr != nil {
+		return nil, captureErr
+	}
+	return db, c.Check(ctx)
 }

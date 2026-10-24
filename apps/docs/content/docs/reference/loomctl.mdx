@@ -1,0 +1,105 @@
+---
+title: loomctl
+description: Every loomctl command, grouped by what it does, with its main flags.
+---
+
+`loomctl` is Loomplane's command-line client and MCP server. It calls the API with an API key through `pkg/client`, so anything it does, a script can do the same way. Run `loomctl --help`, or `loomctl <command> --help`, for the flags on your version.
+
+## Install
+
+```bash
+brew install xraph/tap/loomctl
+```
+
+You can also install it from the `xraph` Scoop bucket, or unpack a release archive. To build from source, `make build-cli` writes `bin/loomctl`.
+
+## Connect to Loomplane
+
+`loomctl` finds the server and key in `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`, which suit CI, or in the file `loomctl login` writes (`loomctl.json` under `loomplane` in your user config directory, readable only by you). The environment wins over the saved login.
+
+| Command | What it does |
+|---|---|
+| `login --url URL --key KEY` | Checks the key and saves where Loomplane is. `--key -` reads the key from standard input |
+| `logout` | Forgets the saved key. It still works until you revoke it |
+| `whoami [--json]` | Who the key acts as and what it may do |
+
+## Projects and analysis
+
+| Command | What it does |
+|---|---|
+| `projects [--json]` | Lists the organization's projects |
+| `projects create NAME --repo REPO` | Creates a project. Repeat `--repo` for each repository, and write `alias=repository` to name one |
+| `analyze PROJECT [--source ALIAS] [--ref REF] [--no-wait]` | Reads a project's repositories. `--source` is repeatable. `--ref` is a branch, tag or commit for one repository |
+| `manifest PROJECT [--draft]` | Prints the saved `loomplane.yaml`, or a draft from the latest analysis |
+| `manifest save PROJECT [-f FILE]` | Saves a new revision. The file defaults to `loomplane.yaml`, and `-` reads standard input |
+| `vars PROJECT [--json]` | Lists variables. Secrets show no value |
+| `vars set PROJECT KEY=VALUE [--env E] [--service S] [--secret]` | Sets a variable. `KEY=-` reads the value from standard input |
+
+## Plans and deployments
+
+| Command | What it does |
+|---|---|
+| `plan PROJECT [--env production] [--scope ALIAS] [--catalog] [--no-wait] [--json]` | Plans a manifest for an environment. `--scope` is repeatable. `--catalog` plans standalone resources |
+| `plans PROJECT [--json]` | Lists a project's plans |
+| `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way |
+| `approve PLAN_ID [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment |
+| `reject PLAN_ID [--note TEXT]` | Rejects a plan |
+| `deployments PROJECT [--json]` | Lists a project's deployments |
+| `deployment ID [--watch] [--json]` | Shows a deployment step by step. `--watch` follows it |
+| `retry DEPLOYMENT_ID [--no-wait]` | Retries a failed deployment from the step that failed |
+| `status PROJECT [--json]` | What runs each service and resource, with addresses and drift |
+
+## Database services and recovery
+
+| Command | What it does |
+|---|---|
+| `services create NAME --target CONN [--kind K] [--provider P] [--region R] [--env E] [--json]` | Plans a standalone database service. `--kind` is `postgres` (default), `mysql`, `mariadb`, `redis` or `valkey`. `--provider` is `server` (default), `kubernetes`, `rds` or `cloud-sql` |
+| `services add PROJECT_ID --kind K --name RESOURCE --target CONN [--provider P] [--version V] [--env E]` | Plans a catalog service added to an existing project (`server` or `kubernetes`) |
+| `backups PROJECT`, `backups show ID`, `backups create PROJECT --resource NAME`, `backups retry ID` | List, read, create and retry backups. `create` takes `--env` and `--request-id` |
+| `backups policy PROJECT --resource NAME --every-hours N [--disable]`, `backups policies PROJECT` | Set and list backup schedules |
+| `backups retention ID`, `backups retire ID`, `retirements ...` | Preview and run [retention](/docs/services/retention). `retirements`, `retirements show`, `retirements history`, `retirements retry` follow them |
+| `backups retention-policy`, `retention-set`, `retention-history`, `retention-pause` | Automatic deletion policy |
+| `backups native-sources`, `native-inventory`, `native-refresh` | Native cloud snapshot history |
+| `backups native-copies review`, `create`, `show`, `cleanup` | Native recovery copies |
+| `restores PROJECT`, `restores create BACKUP_ID`, `restores show ID`, `restores delete ID --yes` | Isolated test restores |
+| `storage CONNECTION_ID [--json]` | Read-only [storage inventory](/docs/services/storage-inventory) |
+
+Recovery commands that wait take `--wait` and `--timeout` (45 minutes by default, and it must be positive), plus `--json`.
+
+## Clouds, targets and infrastructure
+
+| Command | What it does |
+|---|---|
+| `clouds [PROJECT] [--organization]`, `clouds create`, `show`, `update`, `delete` | Manage Clouds. With `--organization` no project argument is needed |
+| `clouds assignment`, `assign`, `switch-default` | Assign a Cloud to an environment and change its default placement |
+| `cloud-targets`, `show`, `create`, `update`, `delete`, `switch` | Manage targets within a Cloud |
+| `cloud-grants CLOUD`, `grant CLOUD PROJECT [--targets IDS]`, `revoke CLOUD PROJECT` | Project access to a Cloud |
+| `cloud-syncs`, `show`, `wait`, `retry`, `revert`, `routing`, `apply` | Follow and recover a placement change |
+| `cloud-servers CLOUD`, `options`, `check`, `usage`, `preview`, `apply`, `drain`, `operations`, `show`, `retry`, `cancel` | Servers inside an organization Cloud |
+| `cloud-pools CLOUD`, `save`, `move`, `recover` | Server pools |
+| `dns-zones`, `create`, `update`, `verify`, `remove`, `project` | Organization DNS zones |
+| `domain-routes PROJECT`, `preview`, `apply`, `show`, `retry`, `verify`, `remove`, `ttl`, `history` | Domain routes |
+
+Most of these review before they act and apply only with `--yes`. Many take `--wait`, `--timeout` and `--request-id`. [Cloud targets](/docs/clouds/cloud-targets), [Adopting and moving services](/docs/clouds/adopting-and-moving) and [Your own servers](/docs/clouds/your-own-servers) show them in context.
+
+## AI agents
+
+| Command | What it does |
+|---|---|
+| `mcp [--allow-deploy]` | Serves Loomplane's tools over MCP on standard input and output. `--allow-deploy` also offers `approve_plan` and `retry_deployment`. See [MCP server](/docs/agents/mcp-server) |
+
+## Server commands
+
+The `loomplane` binary has its own commands, run with the same configuration the server runs with:
+
+| Command | What it does |
+|---|---|
+| `loomplane` (also `serve`, `start`, `run`) | Serves the API and dashboard |
+| `loomplane info` | Prints name, version and environment |
+| `loomplane extensions` | Lists registered extensions |
+| `loomplane backup --out FILE` | Backs up the database to a file. `backup inspect FILE` reads it |
+| `loomplane restore FILE [--force]` | Restores a backup into an empty database |
+| `loomplane migrations` | Shows applied and pending migrations |
+| `loomplane migrate` | Applies pending migrations |
+
+`loomplane-worker` runs repository analysis. `loomplane-agent` is the federation destination agent, which isn't ready for production.

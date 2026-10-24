@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -94,9 +94,19 @@ export const useNativeRecoveryCopiesCreate = mutation<NativeRestore, NativeResto
 export const useNativeRecoveryCopiesGet = query<NativeRestore>(ops['nativeRecoveryCopies.get']);
 export const useNativeRecoveryCopiesCleanup = mutation<NativeRestore, NativeRestore>(ops['nativeRecoveryCopies.cleanup']);
 export const useNativeRecoveryCopiesCredentials = mutation(ops['nativeRecoveryCopies.credentials']);
+export const useNativeRecoveryRetirementsGet = query<NativeRetirement>(ops['nativeRecoveryRetirements.get']);
+export const useNativeRecoveryRetirementsHistory = query<RetirementHistory>(ops['nativeRecoveryRetirements.history']);
+export const useNativeRecoveryRetirementsRetry = mutation<NativeRetirement, NativeRetirement>(ops['nativeRecoveryRetirements.retry']);
 export const useNativeRecoverySourcesInventory = query<NativeInventory>(ops['nativeRecoverySources.inventory']);
+export const useNativeRecoverySourcesPitrWindow = query<NativePITRWindow>(ops['nativeRecoverySources.pitrWindow']);
 export const useNativeRecoveryCopiesReview = mutation(ops['nativeRecoveryCopies.review']);
+export const useNativeRecoveryRetirementsCreate = mutation<NativeRetirement, NativeRetirement>(ops['nativeRecoveryRetirements.create']);
 export const useNativeRecoverySourcesRefresh = mutation(ops['nativeRecoverySources.refresh']);
+export const useNativeRetentionPoliciesGet = query<NativeRetentionPolicyState>(ops['nativeRetentionPolicies.get']);
+export const useNativeRetentionPoliciesSet = mutation<NativeRetentionPolicy, NativeRetentionPolicy>(ops['nativeRetentionPolicies.set']);
+export const useNativeRetentionPoliciesHistory = query<RetentionPolicyHistory>(ops['nativeRetentionPolicies.history']);
+export const useNativeRecoverySourcesPreviewRetention = query<RetentionPreview>(ops['nativeRecoverySources.previewRetention']);
+export const useNativeRecoveryRetirementsList = query<NativeRetirementPage>(ops['nativeRecoveryRetirements.list']);
 export const useNotificationsList = query<NotificationList>(ops['notifications.list']);
 export const useNotificationsPreferencesGet = query<Preferences>(ops['notifications.preferences.get']);
 export const useNotificationsPreferencesUpdate = mutation(ops['notifications.preferences.update']);

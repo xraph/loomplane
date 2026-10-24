@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
+	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
@@ -260,8 +261,8 @@ func rejected(err error) bool {
 		errors.As(err, &ge) || errors.As(err, &ve)
 }
 
-// AWSChecker checks AWS access keys. The one setting is region, which is
-// required: everything Loomplane makes lives in it.
+// AWSChecker checks AWS access keys in a required region. Optional private
+// recovery route settings do not establish connectivity or SQL verification.
 type AWSChecker struct{ Client *aws.Client }
 
 // Parse implements Checker.
@@ -283,6 +284,14 @@ func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check,
 		}
 		details["certificate_arn"] = cert
 	}
+	route, routeErr := manageddb.RDSRecoverySettings(settings)
+	if routeErr != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, routeErr)
+	}
+	for key, value := range route.Settings() {
+		details[key] = value
+	}
+
 	return Check{Details: details}, nil
 }
 

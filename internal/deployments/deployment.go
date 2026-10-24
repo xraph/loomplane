@@ -18,6 +18,8 @@ import (
 // Deployment statuses.
 const (
 	StatusRunning   = "running"
+	StatusPaused    = "paused"
+	StatusCancelled = "cancelled"
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
 )
@@ -53,8 +55,10 @@ type Deployment struct {
 	// CommitSHA is what the list shows: the commit of the one repository
 	// the deployment moves, or "web@3f2c1a9 api@9a1b02e" when it moves
 	// several.
-	CommitSHA string `json:"commit_sha"`
-	Status    string `json:"status"`
+	CommitSHA        string        `json:"commit_sha"`
+	Status           string        `json:"status"`
+	CapacityWait     *CapacityWait `json:"capacity_wait,omitempty"`
+	CapacityRevision int64         `json:"-"`
 	// Sources are the repositories the deployment moves, in alias order,
 	// each with its tarball once stored.
 	Sources []SourceArtifact `json:"sources"`

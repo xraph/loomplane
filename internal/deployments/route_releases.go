@@ -118,6 +118,16 @@ func (r *Runner) cleanupRoutedAction(ctx context.Context, d *Deployment, plan *p
 }
 
 func (r *Runner) finalizeReleaseAction(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action, cleanup bool, progress func(cloudprofiles.SyncRoute) error, actor *security.Principal) (cleanupErr error) {
+	execution, err := r.executionPlan(ctx, plan)
+	if err != nil {
+		return err
+	}
+	for _, candidate := range execution.Actions {
+		if candidate.ID == a.ID {
+			a = candidate
+			break
+		}
+	}
 	poolLock, err := r.beginPoolExecution(ctx, plan, a)
 	if err != nil {
 		return err

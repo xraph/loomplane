@@ -206,7 +206,8 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
-	routes ReleaseRoutes
+	capacity CapacityResolver
+	routes   ReleaseRoutes
 
 	cloudSyncAuth CloudSyncAuthorizer
 	cloudProfiles cloudprofiles.Resolver
@@ -233,7 +234,8 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
-	Routes ReleaseRoutes
+	Capacity CapacityResolver
+	Routes   ReleaseRoutes
 
 	CloudSyncAuth CloudSyncAuthorizer
 	CloudProfiles cloudprofiles.Resolver
@@ -292,7 +294,7 @@ type ReleaseObserver interface {
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
-		cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
+		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
 		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		dbGateways: d.DatabaseGateways, dbTrust: d.DatabaseGatewayTrust, publicURL: d.PublicURL,
@@ -309,6 +311,9 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	if err != nil {
 		return "", nil, err
 	}
+	if guardErr := legacyCapacityGuard(ctx, plan); guardErr != nil {
+		return "", nil, guardErr
+	}
 	if plan.Status != planning.StatusApproved || !plan.Executable {
 		return "", nil, nil
 	}
@@ -321,6 +326,9 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 		return "", nil, authErr
 	}
 	for _, action := range plan.Actions {
+		if action.Service != nil && action.Service.CapacityIntent != nil {
+			continue
+		}
 		if validationErr := r.validateCloudPlacement(ctx, plan, action, nil); validationErr != nil {
 			return "", nil, validationErr
 		}
@@ -400,6 +408,20 @@ func (r *Runner) FetchSource(ctx context.Context, orgID, deploymentID string) er
 	if err != nil {
 		return err
 	}
+	if d.Status == StatusPaused {
+		return ErrCapacityPaused
+	}
+	if d.Status == StatusCancelled {
+		return ErrCapacityCancelled
+	}
+	plan, err := r.plans.GetPlan(ctx, orgID, d.PlanID)
+	if err != nil {
+		return err
+	}
+	if guardErr := legacyCapacityGuard(ctx, plan); guardErr != nil {
+		return guardErr
+	}
+
 	sources := d.Sources
 	if len(sources) == 0 {
 		// A deployment started before deployments fetched each repository,
@@ -486,11 +508,39 @@ func (r *Runner) retainsCheckpoint(providerName string) bool {
 // checkpoint an earlier attempt saved, or nil; heartbeat saves one and
 // tells Dispatch the activity is alive.
 func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) (runErr error) {
+	// A guard can reject work after the initial deployment read. Report the
+	// durable wait state to workflow callers without converting it to Retry.
+	defer func() {
+		if runErr == nil {
+			return
+		}
+		if signal := capacityEffectSignal(runErr); signal != nil {
+			runErr = signal
+			return
+		}
+		current, readErr := r.store.GetDeployment(context.WithoutCancel(ctx), orgID, deploymentID)
+		if readErr != nil {
+			runErr = errors.Join(runErr, readErr)
+			return
+		}
+		if current.Status == StatusPaused {
+			runErr = errors.Join(ErrCapacityPaused, runErr)
+		}
+		if current.Status == StatusCancelled {
+			runErr = errors.Join(ErrCapacityCancelled, runErr)
+		}
+	}()
 	ctx, heartbeat, stopHeartbeat := keepHeartbeat(ctx, resume, heartbeat, 30*time.Second)
 	defer stopHeartbeat()
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
+	}
+	if d.Status == StatusCancelled {
+		return ErrCapacityCancelled
+	}
+	if d.Status == StatusPaused {
+		return ErrCapacityPaused
 	}
 	step := d.Step(actionID)
 	if step == nil {
@@ -503,8 +553,12 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err != nil {
 		return err
 	}
+	execution, err := r.executionPlan(ctx, plan)
+	if err != nil {
+		return err
+	}
 	var action planning.Action
-	for _, a := range plan.Actions {
+	for _, a := range execution.Actions {
 		if a.ID == actionID {
 			action = a
 		}
@@ -577,6 +631,32 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		_ = r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step) //nolint:errcheck // progress is best effort; the step's end is recorded
 	}
 	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress, poolLock); err != nil {
+		if signal := capacityEffectSignal(err); signal != nil {
+			return signal
+		}
+		current, readErr := r.store.GetDeployment(context.WithoutCancel(ctx), orgID, d.ID)
+		if readErr != nil {
+			return errors.Join(err, readErr)
+		}
+		if current.Status == StatusCancelled {
+			return errors.Join(ErrCapacityCancelled, err)
+		}
+		if blocks, blockErr := capacityBlocks(err); blockErr == nil && len(blocks) > 0 {
+			st, ok := r.store.(CapacityStore)
+			if !ok {
+				return errors.New("capacity wait store is unavailable")
+			}
+			if current.CapacityWait != nil {
+				blocks = append(blocks, current.CapacityWait.Blocks...)
+			}
+			if _, waitErr := st.SetCapacityWait(ctx, orgID, d.ID, current.CapacityRevision, blocks, r.now().UTC()); waitErr != nil {
+				return waitErr
+			}
+			return ErrCapacityPaused
+		}
+		if current.Status == StatusPaused {
+			return errors.Join(ErrCapacityPaused, err)
+		}
 		finished := r.now().UTC()
 		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))
 		step.Status, step.Message, step.FinishedAt = StepFailed, err.Error(), &finished
@@ -590,6 +670,19 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	step.Status, step.FinishedAt = StepSucceeded, &finished
 	step.Message = doneMessage(step)
 	return r.store.UpdateStep(ctx, orgID, d.ID, *step)
+}
+
+// Preserve the boundary's rejection before consulting mutable deployment
+// state. A newer resume remains running; the workflow can reassess and retry
+// this activity without turning the rejected effect into a failed step.
+func capacityEffectSignal(err error) error {
+	if errors.Is(err, cloudinfra.ErrWorkloadCancelled) {
+		return errors.Join(ErrCapacityCancelled, err)
+	}
+	if errors.Is(err, cloudinfra.ErrWorkloadPaused) {
+		return errors.Join(ErrCapacityPaused, err)
+	}
+	return nil
 }
 
 func doneMessage(s *Step) string {
@@ -1462,6 +1555,9 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if err != nil {
 		return err
 	}
+	if d.Status == StatusPaused || d.Status == StatusCancelled {
+		return nil
+	}
 	if reason == "" && d.Status != StatusFailed {
 		if cleanupErr := r.finishRoutedRelease(ctx, d); cleanupErr != nil {
 			return cleanupErr
@@ -1487,6 +1583,13 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	// A deployment that already failed stays failed, so a late success
 	// for it records nothing.
 	if reason != "" || d.Status == StatusFailed {
+		return nil
+	}
+	settled, readErr := r.store.GetDeployment(ctx, orgID, d.ID)
+	if readErr != nil {
+		return readErr
+	}
+	if settled.Status != StatusSucceeded {
 		return nil
 	}
 	return r.recordDeployed(ctx, d, now)

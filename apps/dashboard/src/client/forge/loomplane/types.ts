@@ -1114,10 +1114,13 @@ export interface MoveReview {
 export interface NativeCopyCapacity {
   availability: string;
   computeClass: string;
+  iops?: number;
+  maxStorageGb?: number;
   profileId: string;
   profileRevision: string;
   storageGb: number;
   storageType: string;
+  throughputMbps?: number;
 }
 
 export interface NativeCopyCreateInputBody {
@@ -1142,6 +1145,7 @@ export interface NativeCopyReview {
   notice: string;
   pointId: string;
   requestId: string;
+  restoreTime?: string;
   reviewToken: string;
   sourceId: string;
   target: NativeRestoreTarget;
@@ -1152,6 +1156,7 @@ export interface NativeCopyReview {
 export interface NativeCopyReviewInputBody {
   cloudId: string;
   requestId: string;
+  restoreTime?: string;
   targetId: string;
   ttlHours: number;
 }
@@ -1160,6 +1165,23 @@ export interface NativeInventory {
   nextBefore?: string;
   points: NativePoint[];
   source: NativeSource;
+}
+
+export interface NativePITRBounds {
+  earliest: string;
+  latest: string;
+  protocol: number;
+}
+
+export interface NativePITRWindow {
+  available: boolean;
+  earliest?: string;
+  latest?: string;
+  observedAt?: string;
+  pointId?: string;
+  provider: string;
+  sourceId: string;
+  unavailableReason?: string;
 }
 
 export interface NativePoint {
@@ -1172,8 +1194,10 @@ export interface NativePoint {
   kmsKey?: string;
   lastSeenAt: string;
   name: string;
+  pitr?: NativePITRBounds;
   present: boolean;
   providerId: string;
+  restoreTime?: string;
   sourceId: string;
   status: string;
   version: string;
@@ -1204,6 +1228,7 @@ export interface NativeRestore {
   physicalId?: string;
   pointId: string;
   projectId: string;
+  restoreTime?: string;
   sourceId: string;
   status: string;
   target: NativeRestoreTarget;
@@ -1216,11 +1241,66 @@ export interface NativeRestoreTarget {
   cloudRevision?: number;
   connectionId: string;
   grantRevision?: number;
+  nativeAccount?: string;
   nativeProject?: string;
   provider: string;
+  rdsNetwork?: RDSRecoveryNetwork;
   region: string;
   targetId?: string;
   targetRevision?: number;
+}
+
+export interface NativeRetentionPolicy {
+  authorizedBy: string;
+  createdAt: string;
+  createdBy: string;
+  enabled: boolean;
+  id: string;
+  lastError?: string;
+  lastRetirementId?: string;
+  nextAt: string;
+  orgId: string;
+  policy: RetentionInput;
+  projectId: string;
+  revision: number;
+  sourceId: string;
+  updatedAt: string;
+}
+
+export interface NativeRetentionPolicyState {
+  configured: boolean;
+  policy?: NativeRetentionPolicy;
+}
+
+export interface NativeRetirement {
+  completedAt?: string;
+  createdAt: string;
+  createdBy: string;
+  error?: string;
+  id: string;
+  orgId: string;
+  pointId: string;
+  policy: RetentionInput;
+  policyId?: string;
+  policyRevision?: number;
+  projectId: string;
+  sourceId: string;
+  status: string;
+  witnessId: string;
+}
+
+export interface NativeRetirementInputBody {
+  acknowledgeDeletion: boolean;
+  policy: {
+  keepLast: number;
+  olderThanDays: number;
+};
+  requestId: string;
+}
+
+export interface NativeRetirementPage {
+  nextBefore?: string;
+  retirements: NativeRetirement[];
 }
 
 export interface NativeSource {
@@ -1635,6 +1715,13 @@ export interface PublicConfig {
   appId: string;
   authBasePath: string;
   publishableKey: string;
+}
+
+export interface RDSRecoveryNetwork {
+  securityGroupId: string;
+  subnetGroup: string;
+  verifierGroupId: string;
+  vpcId: string;
 }
 
 export interface RealtimeForgeGap {
