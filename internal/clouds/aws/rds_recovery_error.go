@@ -19,7 +19,7 @@ func (e dbRecoveryMutationError) Unwrap() error { return e.cause }
 func dbRecoveryWriteError(err error) error {
 	rejected := refused(err)
 	var native smithy.APIError
-	if errors.As(err, &native) && (native.ErrorCode() == "InvalidDBInstanceState" || native.ErrorCode() == "InvalidDBInstanceStateFault") {
+	if errors.As(err, &native) && (native.ErrorCode() == "InvalidDBInstanceState" || native.ErrorCode() == "InvalidDBInstanceStateFault" || native.ErrorCode() == "InvalidDBSnapshotState" || native.ErrorCode() == "InvalidDBSnapshotStateFault") {
 		rejected = true
 	}
 	return dbRecoveryMutationError{cause: err, rejected: rejected}

@@ -52,7 +52,7 @@ func (s *Session) ReadDBSnapshot(ctx context.Context, physical string, selected 
 	if err := s.checkSnapshotIdentity(point, physical); err != nil {
 		return nil, err
 	}
-	if !point.EncryptionKnown || point.ARN != selected.ARN || point.InstanceID != selected.InstanceID || !point.CreatedAt.Equal(selected.CreatedAt) || point.Type != selected.Type || point.Engine != selected.Engine || point.EngineVersion != selected.EngineVersion || point.Encrypted != selected.Encrypted || point.KMSKey != selected.KMSKey {
+	if !sameDBSnapshotIdentity(&selected, point) {
 		return nil, errors.New("RDS selected snapshot no longer matches its retained identity")
 	}
 	if point.Status != "available" {
