@@ -124,6 +124,9 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 		return err
 	}
 	defer rollback(tx)
+	if checkErr := lockCapacityCloud(ctx, tx, p.OrgID, p.CloudID); checkErr != nil {
+		return checkErr
+	}
 	// All membership edits and reservations share the same ordered host locks.
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('pool-config/'||$1,0))`, p.OrgID); err != nil {
 		return err
@@ -192,6 +195,9 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 	}
 	if busy {
 		return fmt.Errorf("%w: drain and clean workloads before removing a member", ErrConflict)
+	}
+	if checkErr := checkPoolCapacityEdit(ctx, tx, p); checkErr != nil {
+		return checkErr
 	}
 	raw, err := json.Marshal(p)
 	if err != nil {

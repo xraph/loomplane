@@ -49,9 +49,8 @@ func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy
 		return err
 	}
 	defer rollback(tx)
-	var id string
-	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, policy.OrgID, policy.CloudID).Scan(&id); err != nil {
-		return storeError(err)
+	if checkErr := lockCapacityCloud(ctx, tx, policy.OrgID, policy.CloudID); checkErr != nil {
+		return checkErr
 	}
 	var revision int64
 	err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_capacity_policies WHERE org_id=$1 AND cloud_id=$2`, policy.OrgID, policy.CloudID).Scan(&revision)

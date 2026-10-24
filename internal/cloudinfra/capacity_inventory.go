@@ -227,6 +227,19 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 	if err := st.SaveCapacityInventory(ctx, org, cloud, generation, records, usage.Accounts); err != nil {
 		return nil, err
 	}
+	if ledger, ok := s.Store.(interface {
+		GetCapacityUsage(context.Context, string, string) (*CapacityUsage, error)
+	}); ok {
+		current, e := ledger.GetCapacityUsage(ctx, org, cloud)
+		if e != nil {
+			return nil, e
+		}
+		// The refresh also reports accounts reached through configured empty pools.
+		if len(current.Accounts) == 0 {
+			current.Accounts = usage.Accounts
+		}
+		return current, nil
+	}
 	return usage, nil
 }
 func (s *Service) recoverCapacity(ctx context.Context) error {
@@ -437,9 +450,8 @@ func (s *PgStore) BeginCapacityRefresh(ctx context.Context, org, cloud string) (
 		return 0, err
 	}
 	defer rollback(tx)
-	var id string
-	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, cloud).Scan(&id); err != nil {
-		return 0, storeError(err)
+	if checkErr := lockCapacityCloud(ctx, tx, org, cloud); checkErr != nil {
+		return 0, checkErr
 	}
 	var generation int64
 	err = tx.QueryRow(ctx, `INSERT INTO loomplane_cloud_capacity_refreshes(org_id,cloud_id,issued_generation) VALUES($1,$2,1) ON CONFLICT(org_id,cloud_id) DO UPDATE SET issued_generation=loomplane_cloud_capacity_refreshes.issued_generation+1 WHERE loomplane_cloud_capacity_refreshes.issued_generation<$3 RETURNING issued_generation`, org, cloud, int64(math.MaxInt64)).Scan(&generation)
@@ -467,9 +479,8 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 		return err
 	}
 	defer rollback(tx)
-	var id string
-	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, cloud).Scan(&id); err != nil {
-		return storeError(err)
+	if checkErr := lockCapacityCloud(ctx, tx, org, cloud); checkErr != nil {
+		return checkErr
 	}
 	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_capacity_refreshes SET saved_generation=$3 WHERE org_id=$1 AND cloud_id=$2 AND issued_generation=$3 AND saved_generation<$3`, org, cloud, generation)
 	if err != nil {
@@ -481,6 +492,11 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 	}
 	if changed != 1 {
 		return ErrConflict
+	}
+
+	records, err = retainDisconnectedCapacity(ctx, tx, org, cloud, records)
+	if err != nil {
+		return err
 	}
 
 	// Runtime checks have independent timestamps and may finish in a different
@@ -535,6 +551,12 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 			return storeError(err)
 		}
 	}
+	slices.SortFunc(accounts, func(a, b CapacityAccountSnapshot) int {
+		if n := cmp.Compare(a.Provider, b.Provider); n != 0 {
+			return n
+		}
+		return cmp.Compare(a.AccountID, b.AccountID)
+	})
 	for _, account := range accounts {
 		raw, e := json.Marshal(account)
 		if e != nil {
@@ -553,6 +575,13 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 		}
 	}
 
+	persisted, readErr := capacityRecordsTx(ctx, tx, org, cloud)
+	if readErr != nil {
+		return readErr
+	}
+	if checkErr := reconcileCapacityReservations(ctx, tx, org, cloud, persisted); checkErr != nil {
+		return checkErr
+	}
 	return tx.Commit()
 }
 func observedStorage(r CapacityRecord) *int64 {
