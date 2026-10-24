@@ -23,7 +23,7 @@ type liveProgress struct {
 
 func liveStageAllowed(stage string) bool {
 	switch stage {
-	case "credentials", "ledger", "preflight", "configuration", "repository_fixture", "database", "application_start", "signup", "organization_create", "organization_switch", "projects", "connections", "hosts", "host_preview", "host_apply", "host_wait", "host_runtime", "host_pool", "dns_proofs", "routes", "migration", "future_release", "complete":
+	case "credentials", "ledger", "preflight", "configuration", "repository_fixture", "database", "application_start", "signup", "organization_create", "organization_switch", "projects", "connections", "hosts", "host_preview", "host_apply", "host_wait", "host_runtime", "host_pool", "dns_proofs", "dns_namespace_create", "dns_proof_publish", "dns_proof_verify", "routes", "migration", "future_release", "complete":
 		return true
 	default:
 		return false
