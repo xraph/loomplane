@@ -179,6 +179,7 @@ func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
 	wantDefault := append(slices.Clone(builtIn),
 		provider.Provisions{Kind: "memcached", Creates: "Memcached catalog service", Versions: []string{"1.6"}},
 		provider.Provisions{Kind: "nats", Creates: "NATS JetStream catalog service", Versions: []string{"2.11"}},
+		provider.Provisions{Kind: "rabbitmq", Creates: "RabbitMQ catalog service", Versions: []string{"4.3"}},
 	)
 	got := provisionsOf(t, Catalog(), "server")
 	if !reflect.DeepEqual(got, wantDefault) {

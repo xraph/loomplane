@@ -28,6 +28,14 @@ const cacheFeatures = ["AOF every second", "RDB snapshots", "Up to 128 MiB"]
 
 const engines: Omit<CatalogKindModule, "panels">[] = [
   {
+    kind: "rabbitmq",
+    title: "RabbitMQ",
+    group: "data",
+    blurb:
+      "Durable queues on one private server. Message backups disconnect clients and briefly stop the broker. Recover into an isolated copy.",
+    features: ["Retained volume", "Message backups", "Test restores"],
+  },
+  {
     kind: "nats",
     title: "NATS JetStream",
     group: "data",

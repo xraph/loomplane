@@ -4,6 +4,12 @@ const cacheStorage =
   "Private endpoint, AOF persistence every second and native RDB snapshots. The dataset is limited to 128 MiB without eviction. Keep backups outside this host. Recovery copies are read-only. This profile has no failover."
 
 export const databaseRecipes = {
+  rabbitmq: {
+    title: "RabbitMQ",
+    version: "4.3",
+    description:
+      "Private single node with retained storage. Message backups disconnect clients and briefly stop the broker. Use durable classic or quorum queues. Recovery copies have fresh credentials and no application access.",
+  },
   nats: {
     title: "NATS JetStream",
     version: "2.11",

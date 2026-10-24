@@ -24,6 +24,7 @@ import (
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	nativenats "github.com/xraph/loomplane/internal/clouds/nats"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativerabbit "github.com/xraph/loomplane/internal/clouds/rabbitmq"
 	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 )
 
@@ -294,7 +295,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		variables = append(variables, key+"="+env[key])
 	}
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
-	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine} {
+	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}
@@ -382,6 +383,9 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 			value = labelPort(labels[owned.LabelHostPort])
 		}
 		protocol := "http"
+		if labels[nativerabbit.LabelEngine] != "" {
+			protocol = "amqp"
+		}
 		if labels[nativenats.LabelEngine] != "" {
 			protocol = "nats"
 		}

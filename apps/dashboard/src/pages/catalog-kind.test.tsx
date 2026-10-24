@@ -642,15 +642,19 @@ test("registered application kinds follow the native service recipes", async () 
     "Deploy MariaDB",
     "Deploy Redis",
     "Deploy Valkey",
+    "Deploy RabbitMQ",
     "Deploy NATS JetStream",
     "Add Sample",
   ])
   expect(within(catalog).queryByText(/Helper/)).not.toBeInTheDocument()
   await userEvent.click(
-    within(catalog).getByRole("radio", { name: /^Data\s*1$/ })
+    within(catalog).getByRole("radio", { name: /^Data\s*2$/ })
   )
   expect(
     within(catalog).getByRole("button", { name: "Deploy NATS JetStream" })
+  ).toBeInTheDocument()
+  expect(
+    within(catalog).getByRole("button", { name: "Deploy RabbitMQ" })
   ).toBeInTheDocument()
   expect(
     within(catalog).queryByRole("button", { name: "Deploy PostgreSQL" })
