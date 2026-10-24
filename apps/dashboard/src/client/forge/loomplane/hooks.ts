@@ -93,6 +93,7 @@ export const useMembersList = query<OrgMemberList>(ops['members.list']);
 export const useNativeRecoveryCopiesCreate = mutation<NativeRestore, NativeRestore>(ops['nativeRecoveryCopies.create']);
 export const useNativeRecoveryCopiesGet = query<NativeRestore>(ops['nativeRecoveryCopies.get']);
 export const useNativeRecoveryCopiesCleanup = mutation<NativeRestore, NativeRestore>(ops['nativeRecoveryCopies.cleanup']);
+export const useNativeRecoveryCopiesCredentials = mutation(ops['nativeRecoveryCopies.credentials']);
 export const useNativeRecoverySourcesInventory = query<NativeInventory>(ops['nativeRecoverySources.inventory']);
 export const useNativeRecoveryCopiesReview = mutation(ops['nativeRecoveryCopies.review']);
 export const useNativeRecoverySourcesRefresh = mutation(ops['nativeRecoverySources.refresh']);

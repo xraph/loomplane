@@ -89,7 +89,17 @@ The review file is created with owner-only permissions and will not overwrite an
 
 **Native recovery copies** records status independently of snapshot inventory. A queued or available cloud instance is not SQL proof; the copy needs a recorded verification time. **Clean up copy** requires confirmation. **Cleanup needs attention** keeps the error and offers a retry. Charges can continue after expiry until deletion is confirmed. A revoked placement grant blocks new copy work, but an administrator with current recovery permission can still finish cleanup.
 
-Native copy API, CLI, Dispatch and Vault checks use a real local control-plane database with controlled Google endpoints. The SQL verifier and backend also run against a private PostgreSQL fixture. Live Cloud SQL restore, IAM/TLS, privilege authority and cost qualification remain unverified; unsafe inherited SQL privileges cause verification to fail. Browser rendering of the native-copy UI and credential access for a verified copy remain unfinished. Live AWS snapshot and recovery qualification also remain pending.
+For a succeeded, unexpired copy with recorded SQL proof, **Reader credentials** lets you request a fresh access check. You need backup read, restore management and secret management permissions, plus the unchanged project grant for the recovery target. The check reads the original Vault credential version, confirms the cloud instance identity and authenticates the existing reader login. A missing login or changed privileges blocks access; revealing credentials cannot recreate or repair that login.
+
+```sh
+loomctl backups native-copies credentials COPY_ID --out copy-credentials.json
+```
+
+The CLI creates a new owner-only JSON file and refuses to overwrite one. It does not print the password. The API exposes the same check through `POST /api/v1/native-recovery-copies/COPY_ID/credentials`, with a `no-store` response. The dashboard keeps the password in the open dialog and clears it on close, scope change or permission loss. Cleanup cannot begin while the server checks access.
+
+Use the returned database, reader name, password and instance connection name with your own authorized Cloud SQL connector identity. Loomplane does not export the cloud account key or administrator password. Revealing credentials does not extend the copy's expiry. Hiding a disclosed password does not revoke it, and an open SQL session can outlive login expiry. Confirm copy removal when you finish.
+
+Native copy API, CLI, Dispatch and Vault checks use a real local control-plane database with controlled Google endpoints. The SQL verifier, credential-access service and backend also run against a private PostgreSQL fixture. Live Cloud SQL restore, IAM/TLS, privilege authority and cost qualification remain unverified; unsafe inherited SQL privileges cause verification to fail. Browser rendering of the native-copy and credential dialogs remains unverified. Live AWS snapshot and recovery qualification also remain pending.
 
 ## Persistence and backup storage
 

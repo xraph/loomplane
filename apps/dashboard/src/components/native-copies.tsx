@@ -11,6 +11,7 @@ import { useOrganization } from "@/lib/organization"
 import { useNow } from "@/lib/use-runs"
 import { formatDate } from "@/lib/format"
 import { NativeEmpty } from "@/components/native-recovery-empty"
+import { NativeCopyCredentialsControl } from "@/components/native-copy-credentials"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -119,6 +120,16 @@ export function NativeCopyHistory({
                   <span className="font-medium">{copyStatus(copy)}</span> ·{" "}
                   {copy.id}
                 </p>
+                {can("service_backup:read") &&
+                  can("service_restore:manage") &&
+                  can("secret:manage") &&
+                  copies.status === "success" &&
+                  copy.status === "succeeded" &&
+                  copy.verifiedAt &&
+                  !copy.cleanupRequestedAt &&
+                  new Date(copy.expiresAt).getTime() > now && (
+                    <NativeCopyCredentialsControl copy={copy} />
+                  )}
                 {can("service_restore:manage") &&
                   copies.status === "success" &&
                   !["deleted", "deleting"].includes(copy.status) && (

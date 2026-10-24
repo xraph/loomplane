@@ -35,6 +35,7 @@ type nativeRecoveryBackend interface {
 	recovery.NativeBackend
 	recovery.NativeCopyBackend
 	recovery.NativeCleanupBackend
+	recovery.NativeAccessBackend
 }
 
 type backupPayload struct {
@@ -60,7 +61,7 @@ func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects
 	e.nativeBackups = &recovery.NativeService{
 		Store: records, Authz: authz, Projects: prj, Backend: native, Admission: records,
 		ReviewKey: reviewKey, Audit: audit,
-		Copies: records, CopyBackend: native, EnqueueCopy: e.enqueueRecovery(nativeRestoreJob, 0),
+		Copies: records, CopyBackend: native, AccessBackend: native, EnqueueCopy: e.enqueueRecovery(nativeRestoreJob, 0),
 		Cleanups: records, CleanupBackend: native, EnqueueCleanup: e.enqueueRecovery(nativeCleanupJob, 0),
 	}
 	e.backups = &recovery.Service{

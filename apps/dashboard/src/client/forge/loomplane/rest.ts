@@ -2021,6 +2021,21 @@ export class RESTClient extends Client {
 
     /**
      */
+    credentials: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeCopyCredentials> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}/credentials`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeCopyCredentials"],
+      };
+
+      return this.request<types.NativeCopyCredentials>(config);
+    },
+
+    /**
+     */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
       let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}`;
       const config: RequestConfig = {

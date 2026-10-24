@@ -53,6 +53,16 @@ func validSpec(s Spec) bool {
 // Verify creates only an owned, expiring recovery login. Replays inspect the
 // saved role and authenticate with the kept password without resetting it.
 func (v *Verifier) Verify(ctx context.Context, s Spec, check func(context.Context) error) (Proof, error) {
+	return v.verify(ctx, s, check, true)
+}
+
+// Inspect authenticates and checks the kept login without creating or repairing
+// it. Credential disclosure must not restore access removed by an administrator.
+func (v *Verifier) Inspect(ctx context.Context, s Spec, check func(context.Context) error) (Proof, error) {
+	return v.verify(ctx, s, check, false)
+}
+
+func (v *Verifier) verify(ctx context.Context, s Spec, check func(context.Context) error, create bool) (Proof, error) {
 	// PostgreSQL stores timestamps in microseconds. Never extend a requested TTL.
 	s.ExpiresAt = s.ExpiresAt.UTC().Truncate(time.Microsecond)
 	if v == nil || v.Dial == nil || check == nil || !validSpec(s) {
@@ -102,6 +112,9 @@ func (v *Verifier) Verify(ctx context.Context, s Spec, check func(context.Contex
 		return Proof{}, sqlError("read the recovery login", err)
 	}
 	if !exists {
+		if !create {
+			return Proof{}, ErrVerification
+		}
 		if createErr := createReader(ctx, tx, s, guard); createErr != nil {
 			return Proof{}, createErr
 		}
