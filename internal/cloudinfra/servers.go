@@ -150,14 +150,15 @@ type Deps struct {
 
 type Service struct {
 	Deps
-	now func() time.Time
+	now               func() time.Time
+	expansionSchedule *expansionSchedule
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
 		d.Runtime = SSHRuntime{}
 	}
-	return &Service{Deps: d, now: time.Now}
+	return &Service{Deps: d, now: time.Now, expansionSchedule: &expansionSchedule{}}
 }
 
 func (s *Service) authorize(ctx context.Context, p security.Principal, cloud string) (*cloudprofiles.Profile, error) {

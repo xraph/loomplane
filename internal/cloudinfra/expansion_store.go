@@ -294,6 +294,9 @@ func (s *PgStore) acceptExpansion(ctx context.Context, e *Expansion, o *Operatio
 	if err != nil {
 		return err
 	}
+	if minimumErr := expansionMinimumAdmissionTx(ctx, tx, e, policy); minimumErr != nil {
+		return minimumErr
+	}
 	if policy.RequireExpansionApproval && (e.ApprovedBy != p.UserID || e.ApprovedAt == nil) {
 		return security.ErrForbidden
 	}
@@ -454,6 +457,9 @@ func (s *PgStore) revalidateExpansionTx(ctx context.Context, tx driver.Tx, e *Ex
 	if revision != e.Revision {
 		return ErrConflict
 	}
+	if minimumErr := expansionMinimumAdmissionTx(ctx, tx, e, policy); minimumErr != nil {
+		return minimumErr
+	}
 	if policy.RequireExpansionApproval && (e.ApprovedBy != p.UserID || e.ApprovedAt == nil) {
 		return &CapacityAdmissionError{Block: *capacityBlock(policy, CapacityDemand{CloudID: e.CloudID, PoolID: e.PoolID}, "expansion_approval", "policy")}
 	}
@@ -491,7 +497,7 @@ func (s *PgStore) checkpointExpansionAttempt(ctx context.Context, e *Expansion, 
 		return err
 	}
 	defer rollback(tx)
-	if scopeErr := lockCapacityCloud(ctx, tx, e.OrgID, e.CloudID); scopeErr != nil {
+	if scopeErr := lockInfrastructureScope(ctx, tx, o); scopeErr != nil {
 		return scopeErr
 	}
 	if admissionErr := s.revalidateExpansionTx(ctx, tx, e, o, p); admissionErr != nil {
@@ -524,4 +530,113 @@ func (s *PgStore) checkpointExpansionAttempt(ctx context.Context, e *Expansion, 
 	}
 	*o = next
 	return nil
+}
+
+// Minimum slots go to concrete members, attempted or workload-backed capacity,
+// then older minimum proposals. Excluding this proposal avoids double counting;
+// stable priority lets retained unattempted proposals resume after a reduction.
+func expansionMinimumNeededTx(ctx context.Context, tx driver.Tx, e *Expansion, policy *CapacityPolicy) (bool, error) {
+	if !e.Minimum {
+		return true, nil
+	}
+	var attached bool
+	if scanErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_expansion_demands WHERE org_id=$1 AND cloud_id=$2 AND expansion_id=$3)`, e.OrgID, e.CloudID, e.ID).Scan(&attached); scanErr != nil {
+		return false, scanErr
+	}
+	if attached {
+		return true, nil
+	}
+	template, found := expansionPool(policy, e.PoolID)
+	if !policy.Enabled || !found || template.MinServers == 0 {
+		return false, nil
+	}
+	var count int64
+	if scanErr := tx.QueryRow(ctx, `SELECT
+ (SELECT count(*) FROM loomplane_server_pool_members WHERE org_id=$1 AND pool_id=$3) +
+ (SELECT count(*) FROM loomplane_cloud_expansions x LEFT JOIN loomplane_infrastructure_operations o ON o.org_id=x.org_id AND o.cloud_id=x.cloud_id AND o.id=x.operation_id
+ WHERE x.org_id=$1 AND x.cloud_id=$2 AND x.pool_id=$3 AND x.id<>$4 AND x.status NOT IN ('cancelled','ready')
+ AND NOT EXISTS(SELECT 1 FROM loomplane_server_pool_members m WHERE m.org_id=$1 AND m.pool_id=$3 AND m.server_id=o.server_id)
+ AND (coalesce((o.body->>'attempted')::boolean,false)
+ OR EXISTS(SELECT 1 FROM loomplane_cloud_expansion_demands d WHERE d.org_id=x.org_id AND d.cloud_id=x.cloud_id AND d.expansion_id=x.id)
+ OR (coalesce((x.body->>'minimum')::boolean,false) AND (x.created_at,x.id)<(SELECT created_at,id FROM loomplane_cloud_expansions WHERE org_id=$1 AND cloud_id=$2 AND id=$4))))`, e.OrgID, e.CloudID, e.PoolID, e.ID).Scan(&count); scanErr != nil {
+		return false, scanErr
+	}
+	return count < template.MinServers, nil
+}
+func expansionMinimumAdmissionTx(ctx context.Context, tx driver.Tx, e *Expansion, policy *CapacityPolicy) error {
+	needed, err := expansionMinimumNeededTx(ctx, tx, e, policy)
+	if err != nil {
+		return err
+	}
+	if !needed {
+		return &CapacityAdmissionError{Block: *capacityBlock(policy, CapacityDemand{CloudID: e.CloudID, PoolID: e.PoolID}, "review_required", "minimum_servers")}
+	}
+	return nil
+}
+
+func (s *PgStore) retireObsoleteMinimum(ctx context.Context, e *Expansion, token string) (bool, error) {
+	if !e.Minimum || e.Status == "ready" || e.Status == "cancelled" {
+		return false, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer rollback(tx)
+	if scopeErr := lockCapacityCloud(ctx, tx, e.OrgID, e.CloudID); scopeErr != nil {
+		return false, scopeErr
+	}
+	if leaseErr := expansionLeaseTx(ctx, tx, e, token); leaseErr != nil {
+		return false, leaseErr
+	}
+	policy, err := capacityPolicyTx(ctx, tx, e.OrgID, e.CloudID)
+	if err != nil {
+		return false, err
+	}
+	needed, err := expansionMinimumNeededTx(ctx, tx, e, policy)
+	if err != nil || needed {
+		return false, err
+	}
+	accepted := false
+	if e.OperationID != "" {
+		o, readErr := scanOperation(tx.QueryRow(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, e.OrgID, e.CloudID, e.OperationID))
+		if readErr != nil {
+			return false, readErr
+		}
+		if o.Attempted || o.Status == "succeeded" {
+			return false, nil
+		}
+		accepted = o.Status != "preview"
+		if !accepted {
+			previous := o.StateRevision
+			o.StateRevision++
+			o.Status = "cancelled"
+			o.UpdatedAt = time.Now().UTC()
+			raw, marshalErr := json.Marshal(o)
+			if marshalErr != nil {
+				return false, marshalErr
+			}
+			tag, updateErr := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status='cancelled',body=$4,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND status='preview' AND coalesce((body->>'state_revision')::bigint,0)=$5`, o.OrgID, o.CloudID, o.ID, raw, previous)
+			if updateErr != nil {
+				return false, updateErr
+			}
+			n, rowsErr := tag.RowsAffected()
+			if rowsErr != nil {
+				return false, rowsErr
+			}
+			if n != 1 {
+				return false, ErrConflict
+			}
+		}
+	}
+	e.Status = "cancelled"
+	e.Block = nil
+	if accepted {
+		e.Status = "blocked"
+		e.Block = capacityBlock(policy, CapacityDemand{CloudID: e.CloudID, PoolID: e.PoolID}, "review_required", "minimum_servers")
+	}
+	if saveErr := saveExpansionTx(ctx, tx, e, e.Revision); saveErr != nil {
+		return false, saveErr
+	}
+	return true, tx.Commit()
 }

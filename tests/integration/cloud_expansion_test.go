@@ -13,6 +13,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -492,5 +493,271 @@ func TestExpansionFirstAttemptPolicyBoundary(t *testing.T) {
 				t.Fatalf("first-attempt reservation lost: %d %v", count, err)
 			}
 		})
+	}
+}
+
+func TestExpansionFirstAttemptConnectionBoundary(t *testing.T) {
+	f, _, d := expansionFixture(t, false, 0)
+	e := ensureExpansion(t, f, d)
+	f.svc.Secrets = &expansionBootstrapBarrier{infraSecrets: f.secrets, beforePut: func() error {
+		conn, err := f.connections.GetConnection(t.Context(), "org", "infra-account")
+		if err != nil {
+			return err
+		}
+		return f.connections.WithCredentialReplacement(t.Context(), conn, func() error {
+			if putErr := f.secrets.Put(t.Context(), "org", conn.ID, []byte("dop_rotated_same_account")); putErr != nil {
+				return putErr
+			}
+			conn.Status = "ready"
+			conn.Message = ""
+			conn.UpdatedAt = time.Now().UTC()
+			return f.connections.UpdateConnection(t.Context(), conn)
+		})
+	}}
+	reconcileExpansion(t, f)
+	o, err := f.store.GetOperation(t.Context(), "org", "cloud", e.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Attempted || f.provider.creates != 0 {
+		t.Fatalf("rotated connection used: attempted=%v creates=%d", o.Attempted, f.provider.creates)
+	}
+	assertExpansionReservation(t, f, e.OperationID, 1)
+}
+func assertExpansionReservation(t *testing.T, f *infraFixture, operation string, want int) {
+	t.Helper()
+	var count int
+	if err := f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cloud_capacity_reservations WHERE id=$1 AND status='reserved'`, operation).Scan(&count); err != nil || count != want {
+		t.Fatalf("retained reservation: got=%d want=%d err=%v", count, want, err)
+	}
+}
+func minimumExpansion(t *testing.T, f *infraFixture) *cloudinfra.Expansion {
+	t.Helper()
+	var id string
+	if err := f.sql.QueryRow(t.Context(), `SELECT id FROM loomplane_cloud_expansions WHERE body->>'minimum'='true' ORDER BY created_at,id LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	e, err := f.store.GetExpansion(t.Context(), "org", "cloud", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+func lowerExpansionMinimum(t *testing.T, f *infraFixture) {
+	t.Helper()
+	policy, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.Pools[0].MinServers = 0
+	if _, err = f.svc.SaveCapacityPolicy(t.Context(), f.p, "cloud", cloudinfra.CapacityPolicyInput{Policy: *policy, ExpectedRevision: policy.Revision}); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestExpansionObsoleteMinimum(t *testing.T) {
+	for _, approval := range []bool{false, true} {
+		t.Run(map[bool]string{false: "automatic", true: "approval"}[approval], func(t *testing.T) {
+			f, _, _ := expansionFixture(t, approval, 1)
+			reconcileExpansion(t, f)
+			original := minimumExpansion(t, f)
+			lowerExpansionMinimum(t, f)
+			reconcileExpansion(t, f)
+			got := minimumExpansion(t, f)
+			if f.provider.creates != 0 {
+				t.Fatalf("obsolete minimum created %d hosts", f.provider.creates)
+			}
+			if approval {
+				if got.Status != "cancelled" {
+					t.Fatalf("obsolete proposal status=%s", got.Status)
+				}
+				assertExpansionReservation(t, f, original.OperationID, 0)
+			} else {
+				if got.Status != "blocked" || got.OperationID != original.OperationID {
+					t.Fatalf("accepted minimum identity/status: %+v", got)
+				}
+				assertExpansionReservation(t, f, original.OperationID, 1)
+			}
+		})
+	}
+}
+func addExpansionPoolHost(t *testing.T, f *infraFixture) {
+	t.Helper()
+	now := time.Now().UTC()
+	if err := f.connections.CreateConnection(t.Context(), &connections.Connection{ID: "other-runtime", OrgID: "org", Cloud: "server", Name: "Other host", Account: "other", Details: map[string]string{"docker_id": "other", "architecture": "amd64"}, Status: "ready", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	v, record := ledgerHost(t, f, "other-server", 2000)
+	v.RuntimeConnectionID = "other-runtime"
+	v.Health = cloudinfra.RuntimeHealth{DockerID: "other", Architecture: "amd64", EffectiveCPUMillis: 2000, EffectiveMemoryBytes: 2 << 30, CheckedAt: now}
+	if err := f.store.SaveServer(t.Context(), v); err != nil {
+		t.Fatal(err)
+	}
+	record.ServerStateRevision = v.StateRevision
+	ledgerSave(t, f, []cloudinfra.CapacityRecord{record}, nil)
+	pool, err := f.store.GetPool(t.Context(), "org", "cloud", "pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := pool.Revision
+	pool.Revision++
+	pool.Members = append(pool.Members, cloudinfra.PoolMember{ServerID: v.ID, CPUMillis: 2000, MemoryBytes: 2 << 30})
+	if err = f.store.SavePool(t.Context(), pool, previous); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestExpansionMinimumSatisfiedBeforeApproval(t *testing.T) {
+	f, _, _ := expansionFixture(t, true, 1)
+	reconcileExpansion(t, f)
+	e := minimumExpansion(t, f)
+	addExpansionPoolHost(t, f)
+	if _, err := f.svc.ApproveExpansion(t.Context(), f.p, "cloud", e.ID, e.Revision); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatalf("obsolete approval error=%v", err)
+	}
+	reconcileExpansion(t, f)
+	got := minimumExpansion(t, f)
+	if got.Status != "cancelled" || f.provider.creates != 0 {
+		t.Fatalf("satisfied minimum: status=%s creates=%d", got.Status, f.provider.creates)
+	}
+}
+func TestExpansionMinimumWithWorkload(t *testing.T) {
+	for _, revoked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "valid", true: "revoked"}[revoked], func(t *testing.T) {
+			f, authority, d := expansionFixture(t, true, 1)
+			reconcileExpansion(t, f)
+			e := minimumExpansion(t, f)
+			shared := ensureExpansion(t, f, d)
+			if shared.ID != e.ID {
+				t.Fatal("minimum host was not shared")
+			}
+			lowerExpansionMinimum(t, f)
+			reconcileExpansion(t, f)
+			e = minimumExpansion(t, f)
+			authority.revoked = revoked
+			_, err := f.svc.ApproveExpansion(t.Context(), f.p, "cloud", e.ID, e.Revision)
+			if revoked {
+				if !errors.Is(err, security.ErrForbidden) {
+					t.Fatalf("revoked attached demand approved: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			reconcileExpansion(t, f)
+			want := 1
+			if revoked {
+				want = 0
+			}
+			if f.provider.creates != want {
+				t.Fatalf("attached workload creates=%d want=%d", f.provider.creates, want)
+			}
+			var count int
+			if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cloud_expansion_demands WHERE expansion_id=$1`, e.ID).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("demand lost: %d %v", count, err)
+			}
+		})
+	}
+}
+func TestExpansionMinimumChangesDuringBootstrap(t *testing.T) {
+	for _, host := range []bool{false, true} {
+		t.Run(map[bool]string{false: "policy", true: "host"}[host], func(t *testing.T) {
+			f, _, _ := expansionFixture(t, false, 1)
+			reconcileExpansion(t, f)
+			e := minimumExpansion(t, f)
+			f.svc.Secrets = &expansionBootstrapBarrier{infraSecrets: f.secrets, beforePut: func() error {
+				if host {
+					addExpansionPoolHost(t, f)
+				} else {
+					lowerExpansionMinimum(t, f)
+				}
+				return nil
+			}}
+			reconcileExpansion(t, f)
+			o, err := f.store.GetOperation(t.Context(), "org", "cloud", e.OperationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if o.Attempted || f.provider.creates != 0 {
+				t.Fatalf("obsolete minimum attempted=%v creates=%d", o.Attempted, f.provider.creates)
+			}
+			assertExpansionReservation(t, f, e.OperationID, 1)
+		})
+	}
+}
+
+type expansionContextBlocker struct {
+	expansionProvider
+	cancel  context.CancelFunc
+	failure error
+}
+
+func (p *expansionContextBlocker) ServerOptions(ctx context.Context, c provider.InfrastructureCredential) (provider.ServerOptions, error) {
+	if c.Token == "dop_v1_fixture" {
+		if p.failure != nil {
+			return provider.ServerOptions{}, p.failure
+		}
+		p.cancel()
+		<-ctx.Done()
+		return provider.ServerOptions{}, ctx.Err()
+	}
+	return p.expansionProvider.ServerOptions(ctx, c)
+}
+func TestExpansionRecoveryFairness(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "canceled", true: "failed"}[failure], func(t *testing.T) { testExpansionRecoveryFairness(t, failure) })
+	}
+}
+func testExpansionRecoveryFairness(t *testing.T, failure bool) {
+	t.Helper()
+	f, _, _ := expansionFixture(t, false, 1)
+	pool := &cloudinfra.Pool{ID: "pool-z", OrgID: "org", CloudID: "cloud", Name: "Second", Revision: 1}
+	if err := f.store.SavePool(t.Context(), pool, 0); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := f.connections.GetConnection(t.Context(), "org", "infra-account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.ID = "infra-second"
+	conn.Name = "Second infrastructure account"
+	if err = f.connections.CreateConnection(t.Context(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.secrets.Put(t.Context(), "org", conn.ID, []byte("dop_second")); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := policy.Pools[0]
+	second.PoolID = pool.ID
+	second.ConnectionID = conn.ID
+	policy.Pools = append(policy.Pools, second)
+	if _, err = f.svc.SaveCapacityPolicy(t.Context(), f.p, "cloud", cloudinfra.CapacityPolicyInput{Policy: *policy, ExpectedRevision: policy.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &expansionContextBlocker{expansionProvider: expansionProvider{f.provider}}
+	if failure {
+		adapter.failure = errors.New("fixture options unavailable")
+	}
+	adapters := cloudinfra.NewAdapters()
+	if err = adapters.RegisterServer("digitalocean", adapter); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Adapters = adapters
+	for range 3 {
+		ctx, cancel := context.WithCancel(t.Context())
+		adapter.cancel = cancel
+		err = f.svc.ReconcileExpansions(ctx)
+		cancel()
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, adapter.failure) {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cloud_expansions WHERE pool_id='pool-z' AND operation_id IS NOT NULL`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || f.provider.creates != 1 {
+		t.Fatalf("later pool starved: expansions=%d creates=%d", count, f.provider.creates)
 	}
 }

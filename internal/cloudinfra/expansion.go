@@ -5,10 +5,17 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/xraph/loomplane/internal/security"
 )
+
+type expansionSchedule struct {
+	mu    sync.Mutex
+	after string
+}
 
 // CapacityDemandAuthority resolves immutable approved intent and rechecks its
 // actor's current deployment permission. Implementations reject revoked grants,
@@ -239,7 +246,7 @@ func (s *Service) validateExpansionDemand(ctx context.Context, st *PgStore, e *E
 	if err != nil {
 		return err
 	}
-	if e.Minimum {
+	if e.Minimum && len(demands) == 0 {
 		return nil
 	}
 	if len(demands) == 0 {
@@ -340,6 +347,9 @@ func (s *Service) acceptPolicyExpansion(ctx context.Context, st *PgStore, e *Exp
 	return nil
 }
 func (s *Service) blockExpansion(ctx context.Context, st *PgStore, e *Expansion, cause error, token string) error {
+	if stopped, retireErr := st.retireObsoleteMinimum(ctx, e, token); retireErr != nil || stopped {
+		return retireErr
+	}
 	var admission *CapacityAdmissionError
 	e.Block = &CapacityBlock{Reason: "review_required", CloudID: e.CloudID, PoolID: e.PoolID, PolicyRevision: e.PolicyRevision, Retryable: true}
 	if errors.As(cause, &admission) {
@@ -425,26 +435,50 @@ func (s *Service) ReconcileExpansions(ctx context.Context) error {
 		return err
 	}
 	var failures []error
+	type poolWork struct {
+		key  string
+		pool *Pool
+	}
+	var work []poolWork
 	for _, scope := range scopes {
-		if ctx.Err() != nil {
-			return errors.Join(append(failures, ctx.Err())...)
-		}
-		policy, readErr := st.GetCapacityPolicy(ctx, scope.OrgID, scope.CloudID)
-		if readErr != nil {
-			failures = append(failures, readErr)
-			continue
-		}
 		pools, readErr := st.ListPools(ctx, scope.OrgID, scope.CloudID)
 		if readErr != nil {
 			failures = append(failures, readErr)
 			continue
 		}
 		for _, pool := range pools {
-			if checkErr := st.withExpansionLease(ctx, scope.OrgID, scope.CloudID, pool.ID, func(ctx context.Context, token string) error {
-				return s.reconcileExpansionPool(ctx, st, policy, pool, token)
-			}); checkErr != nil && !errors.Is(checkErr, ErrBusy) {
-				failures = append(failures, checkErr)
-			}
+			work = append(work, poolWork{key: pool.OrgID + "\x00" + pool.CloudID + "\x00" + pool.ID, pool: pool})
+		}
+	}
+	sort.Slice(work, func(i, j int) bool { return work[i].key < work[j].key })
+	s.expansionSchedule.mu.Lock()
+	after := s.expansionSchedule.after
+	s.expansionSchedule.mu.Unlock()
+	start := sort.Search(len(work), func(i int) bool { return work[i].key > after })
+	if start == len(work) {
+		start = 0
+	}
+	for i := range work {
+		if ctx.Err() != nil {
+			return errors.Join(append(failures, ctx.Err())...)
+		}
+		job := work[(start+i)%len(work)]
+		// Advance before any fallible or slow work. Cancellation and provider
+		// failures cannot force the next pass back to this pool. Restart resets
+		// only this scheduling position; persisted leases still fence execution.
+		s.expansionSchedule.mu.Lock()
+		s.expansionSchedule.after = job.key
+		s.expansionSchedule.mu.Unlock()
+		pool := job.pool
+		policy, readErr := st.GetCapacityPolicy(ctx, pool.OrgID, pool.CloudID)
+		if readErr != nil {
+			failures = append(failures, readErr)
+			continue
+		}
+		if checkErr := st.withExpansionLease(ctx, pool.OrgID, pool.CloudID, pool.ID, func(ctx context.Context, token string) error {
+			return s.reconcileExpansionPool(ctx, st, policy, pool, token)
+		}); checkErr != nil && !errors.Is(checkErr, ErrBusy) {
+			failures = append(failures, checkErr)
 		}
 	}
 	return errors.Join(failures...)
@@ -456,6 +490,11 @@ func (s *Service) reconcileExpansionPool(ctx context.Context, st *PgStore, polic
 	}
 	outstanding := int64(len(pool.Members))
 	for _, e := range expansions {
+		if stopped, retireErr := st.retireObsoleteMinimum(ctx, e, token); retireErr != nil {
+			return retireErr
+		} else if stopped {
+			continue
+		}
 		if !e.Minimum && e.Status != "ready" {
 			demands, readErr := st.expansionDemands(ctx, e)
 			if readErr != nil {
