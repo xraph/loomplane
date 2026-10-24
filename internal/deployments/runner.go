@@ -472,6 +472,24 @@ func (r *Runner) retainsCheckpoint(providerName string) bool {
 // checkpoint an earlier attempt saved, or nil; heartbeat saves one and
 // tells Dispatch the activity is alive.
 func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) (runErr error) {
+	// A guard can reject work after the initial deployment read. Report the
+	// durable wait state to workflow callers without converting it to Retry.
+	defer func() {
+		if runErr == nil {
+			return
+		}
+		current, readErr := r.store.GetDeployment(context.WithoutCancel(ctx), orgID, deploymentID)
+		if readErr != nil {
+			runErr = errors.Join(runErr, readErr)
+			return
+		}
+		if current.Status == StatusPaused {
+			runErr = errors.Join(ErrCapacityPaused, runErr)
+		}
+		if current.Status == StatusCancelled {
+			runErr = errors.Join(ErrCapacityCancelled, runErr)
+		}
+	}()
 	ctx, heartbeat, stopHeartbeat := keepHeartbeat(ctx, resume, heartbeat, 30*time.Second)
 	defer stopHeartbeat()
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
@@ -569,14 +587,17 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		_ = r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step) //nolint:errcheck // progress is best effort; the step's end is recorded
 	}
 	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress, poolLock); err != nil {
+		current, readErr := r.store.GetDeployment(context.WithoutCancel(ctx), orgID, d.ID)
+		if readErr != nil {
+			return errors.Join(err, readErr)
+		}
+		if current.Status == StatusCancelled {
+			return errors.Join(ErrCapacityCancelled, err)
+		}
 		if blocks, blockErr := capacityBlocks(err); blockErr == nil && len(blocks) > 0 {
 			st, ok := r.store.(CapacityStore)
 			if !ok {
 				return errors.New("capacity wait store is unavailable")
-			}
-			current, readErr := r.store.GetDeployment(ctx, orgID, d.ID)
-			if readErr != nil {
-				return readErr
 			}
 			if current.CapacityWait != nil {
 				blocks = append(blocks, current.CapacityWait.Blocks...)
@@ -585,6 +606,9 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 				return waitErr
 			}
 			return ErrCapacityPaused
+		}
+		if current.Status == StatusPaused {
+			return errors.Join(ErrCapacityPaused, err)
 		}
 		finished := r.now().UTC()
 		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))

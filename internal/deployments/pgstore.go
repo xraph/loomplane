@@ -166,7 +166,7 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 		return fmt.Errorf("read steps: %w", err)
 	}
 	// A concurrent pause or cancellation keeps pending steps resumable.
-	if step.Status == StepSkipped && (status == StatusPaused || status == StatusCancelled) {
+	if (step.Status == StepSkipped || step.Status == StepFailed) && (status == StatusPaused || status == StatusCancelled) {
 		return tx.Commit()
 	}
 	steps, err := decodeSteps(raw)

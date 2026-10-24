@@ -104,6 +104,21 @@ func (s *PgStore) capacityTransition(ctx context.Context, org, id string, expect
 	if lockErr := cloudprofiles.LockOrganization(ctx, tx, org); lockErr != nil {
 		return nil, lockErr
 	}
+	// Step writes lock pool/workload receipts before the deployment row.
+	// Fence in that order; stale CAS or event failures roll the whole change back.
+	if status == StatusCancelled {
+		var plan, environment string
+		readErr := tx.QueryRow(ctx, `SELECT plan_id,environment_id FROM loomplane_deployments WHERE org_id=$1 AND id=$2`, org, id).Scan(&plan, &environment)
+		if errors.Is(readErr, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+		if fenceErr := cloudinfra.CancelUnstartedCapacity(ctx, tx, org, plan, id, environment); fenceErr != nil {
+			return nil, fenceErr
+		}
+	}
 	d, err := scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM loomplane_deployments WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

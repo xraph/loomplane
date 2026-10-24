@@ -43,6 +43,9 @@ func (s *PgStore) BeginWorkloadAttempt(ctx context.Context, a WorkloadAttempt, r
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, a.Org); checkErr != nil {
 		return nil, checkErr
 	}
+	if checkErr := guardDeploymentEffects(ctx, tx, a.Org, a.Plan, false); checkErr != nil {
+		return nil, checkErr
+	}
 	if checkErr := LockRouteWorkload(ctx, tx, a.Org, a.Environment, a.Service); checkErr != nil {
 		return nil, checkErr
 	}
@@ -129,10 +132,26 @@ func guardRouteAttachment(ctx context.Context, tx driver.Tx, route *Route, kind 
 
 // MarkWorkloadEffects persists uncertainty before entering a remote mutation.
 func (s *PgStore) MarkWorkloadEffects(ctx context.Context, a WorkloadAttempt) error {
-	var generation int64
-	err := s.db.QueryRow(ctx, `UPDATE loomplane_workload_attempts SET effects_started=true WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND service=$4 AND plan_id=$5 AND deployment_id=$6 AND generation=$7 AND active AND NOT settled AND NOT legacy_unfenced RETURNING generation`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, a.Generation).Scan(&generation)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, a.Org); checkErr != nil {
+		return checkErr
+	}
+	var accepted bool
+	err = tx.QueryRow(ctx, `SELECT effects_started FROM loomplane_workload_attempts WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND service=$4 AND plan_id=$5 AND deployment_id=$6 AND generation=$7 AND active AND NOT settled AND NOT legacy_unfenced`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, a.Generation).Scan(&accepted)
 	if err != nil {
 		return errors.Join(ErrConflict, err)
 	}
-	return nil
+	if checkErr := guardDeploymentEffects(ctx, tx, a.Org, a.Plan, accepted); checkErr != nil {
+		return checkErr
+	}
+	var generation int64
+	err = tx.QueryRow(ctx, `UPDATE loomplane_workload_attempts SET effects_started=true WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND service=$4 AND plan_id=$5 AND deployment_id=$6 AND generation=$7 AND active AND NOT settled AND NOT legacy_unfenced RETURNING generation`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, a.Generation).Scan(&generation)
+	if err != nil {
+		return errors.Join(ErrConflict, err)
+	}
+	return tx.Commit()
 }
