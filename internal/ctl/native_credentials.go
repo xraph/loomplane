@@ -34,8 +34,8 @@ func (a *App) nativeCopyCredentials(ctx cli.CommandContext) (result error) {
 	}
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	if err = encoder.Encode(credentials); err != nil { // #nosec G117 -- Explicit disclosure to the new owner-only file requested by the caller.
-		return err
+	if writeErr := encoder.Encode(credentials); writeErr != nil { // #nosec G117 -- Explicit disclosure to the new owner-only file requested by the caller.
+		return writeErr
 	}
 	a.printf("Saved reader credentials for %s to %s. Login expires %s. Cloud SQL still requires your own authorized connector identity.\n", id, path, credentials.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
 	return nil
