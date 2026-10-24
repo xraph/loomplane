@@ -1,5 +1,6 @@
-'use client';
+"use client";
 
+import { Tabs as Primitive } from "@base-ui/react/tabs";
 import {
   type ComponentProps,
   createContext,
@@ -9,9 +10,8 @@ import {
   useMemo,
   useRef,
   useState,
-} from 'react';
-import { Tabs as Primitive } from '@base-ui/react/tabs';
-import { mergeRefs } from '../../lib/merge-refs';
+} from "react";
+import { mergeRefs } from "../../lib/merge-refs";
 
 type ChangeListener = (v: string) => void;
 const listeners = new Map<string, Set<ChangeListener>>();
@@ -52,13 +52,17 @@ const TabsContext = createContext<{
 
 function useTabContext() {
   const ctx = use(TabsContext);
-  if (!ctx) throw new Error('You must wrap your component in <Tabs>');
+  if (!ctx) throw new Error("You must wrap your component in <Tabs>");
   return ctx;
 }
 
 export const TabsList = Primitive.List;
 
-export function TabsTrigger({ value, ref, ...props }: ComponentProps<typeof Primitive.Tab>) {
+export function TabsTrigger({
+  value,
+  ref,
+  ...props
+}: ComponentProps<typeof Primitive.Tab>) {
   const { triggers } = useTabContext();
 
   return (
@@ -87,12 +91,14 @@ export function Tabs({
   const valueToIdMap = useMemo(() => new Map<string, string>(), []);
   const panels = useMemo(() => new Map<string, HTMLElement>(), []);
   const triggers = useMemo(() => new Set<string>(), []);
-  const [value, setValue] =
-    _value === undefined
-      ? // eslint-disable-next-line react-hooks/rules-of-hooks -- not supposed to change controlled/uncontrolled
-        useState(defaultValue)
-      : // eslint-disable-next-line react-hooks/rules-of-hooks -- not supposed to change controlled/uncontrolled
-        [_value, (v: string) => _onValueChange?.(v)];
+  // The state hook always runs, so switching between controlled and
+  // uncontrolled can't change the hook order. Controlled tabs ignore it.
+  const [uncontrolledValue, setUncontrolledValue] = useState(defaultValue);
+  const value = _value === undefined ? uncontrolledValue : _value;
+  const setValue = (v: string) => {
+    if (_value === undefined) setUncontrolledValue(v);
+    else _onValueChange?.(v);
+  };
 
   const onChange = useEffectEvent((v: string) => {
     if (triggers.has(v)) setValue(v);
@@ -141,8 +147,8 @@ export function Tabs({
 
   useLayoutEffect(() => {
     openFromHash();
-    window.addEventListener('hashchange', openFromHash);
-    return () => window.removeEventListener('hashchange', openFromHash);
+    window.addEventListener("hashchange", openFromHash);
+    return () => window.removeEventListener("hashchange", openFromHash);
   }, []);
 
   return (
@@ -154,7 +160,7 @@ export function Tabs({
           const id = valueToIdMap.get(v);
 
           if (id) {
-            window.history.replaceState(null, '', `#${id}`);
+            window.history.replaceState(null, "", `#${id}`);
           }
         }
 
@@ -184,7 +190,11 @@ export function Tabs({
   );
 }
 
-export function TabsContent({ value, ref, ...props }: ComponentProps<typeof Primitive.Panel>) {
+export function TabsContent({
+  value,
+  ref,
+  ...props
+}: ComponentProps<typeof Primitive.Panel>) {
   const { valueToIdMap, panels } = useTabContext();
 
   if (props.id) {

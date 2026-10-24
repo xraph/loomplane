@@ -1,6 +1,9 @@
-'use client';
-import { DocsLayout as Layout, type DocsLayoutProps } from 'fumadocs-ui/layouts/docs';
-import { AIChat, AIChatPanel, AIChatTrigger, useAIChat } from './search';
+"use client";
+import {
+  type DocsLayoutProps,
+  DocsLayout as Layout,
+} from "fumadocs-ui/layouts/docs";
+import { AIChat, AIChatPanel, AIChatTrigger, useAIChat } from "./search";
 
 export function DocsLayout(props: DocsLayoutProps) {
   return (
@@ -14,5 +17,10 @@ export function DocsLayout(props: DocsLayoutProps) {
 function ChatLayout(props: DocsLayoutProps) {
   const { open, setOpen } = useAIChat();
 
-  return <Layout {...props} aiChat={{ open, onOpenChange: setOpen, panel: <AIChatPanel /> }} />;
+  return (
+    <Layout
+      {...props}
+      aiChat={{ open, onOpenChange: setOpen, panel: <AIChatPanel /> }}
+    />
+  );
 }

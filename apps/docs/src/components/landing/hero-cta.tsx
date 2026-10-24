@@ -1,12 +1,12 @@
-import type { CSSProperties } from 'react';
-import Link from 'next/link';
-import { CopyButton } from './copy-button';
-import { installCommands, installGuideHref } from './install-commands';
+import Link from "next/link";
+import type { CSSProperties } from "react";
+import { CopyButton } from "./copy-button";
+import { installCommands, installGuideHref } from "./install-commands";
 
 /** Two install commands beside one square button into the install guide. */
 export function HeroCta() {
   return (
-    <div className="cta-grid rise" style={{ '--d': '.28s' } as CSSProperties}>
+    <div className="cta-grid rise" style={{ "--d": ".28s" } as CSSProperties}>
       {installCommands.map((c) => (
         <div className="cta-row" key={c.id}>
           <span className="p">$</span>
@@ -15,7 +15,11 @@ export function HeroCta() {
           <CopyButton text={c.text} label={c.label} targetId={`hero-${c.id}`} />
         </div>
       ))}
-      <Link className="cta-guide" href={installGuideHref} aria-label="Read the install guide">
+      <Link
+        className="cta-guide"
+        href={installGuideHref}
+        aria-label="Read the install guide"
+      >
         <span className="top">
           <svg
             width="22"

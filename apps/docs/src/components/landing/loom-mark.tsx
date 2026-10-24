@@ -1,9 +1,11 @@
-'use client';
+"use client";
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
 
-const IVORY = 'M0 10.5L0 21A11 11 0 0 0 11 32L28 32A4 4 0 0 0 28 24L11 24A3 3 0 0 1 8 21L8 10.5Z';
-const BLUE = 'M32 21.5L32 11A11 11 0 0 0 21 0L4 0A4 4 0 0 0 4 8L21 8A3 3 0 0 1 24 11L24 21.5Z';
+const IVORY =
+  "M0 10.5L0 21A11 11 0 0 0 11 32L28 32A4 4 0 0 0 28 24L11 24A3 3 0 0 1 8 21L8 10.5Z";
+const BLUE =
+  "M32 21.5L32 11A11 11 0 0 0 21 0L4 0A4 4 0 0 0 4 8L21 8A3 3 0 0 1 24 11L24 21.5Z";
 const SLICES = 9;
 
 function Thread({
@@ -33,12 +35,23 @@ function Thread({
           style={{ transform: `translateZ(${(-q * 1.6).toFixed(1)}px)` }}
           aria-hidden="true"
         >
-          <path style={{ fill: `color-mix(in oklch, ${from} ${Math.round((q / SLICES) * 100)}%, ${to})` }} d={d} />
+          <path
+            style={{
+              fill: `color-mix(in oklch, ${from} ${Math.round((q / SLICES) * 100)}%, ${to})`,
+            }}
+            d={d}
+          />
         </svg>
       ))}
       <svg className="lm-layer lm-face" viewBox="0 0 32 32" aria-hidden="true">
         <defs>
-          <radialGradient id={sheenId} gradientUnits="userSpaceOnUse" cx="10" cy="8" r="14">
+          <radialGradient
+            id={sheenId}
+            gradientUnits="userSpaceOnUse"
+            cx="10"
+            cy="8"
+            r="14"
+          >
             <stop offset="0" stopColor={sheen} stopOpacity=".85" />
             <stop offset=".5" stopColor={sheen} stopOpacity=".18" />
             <stop offset="1" stopColor={sheen} stopOpacity="0" />
@@ -66,14 +79,37 @@ export function LoomMark() {
     const rig = rigRef.current;
     const cursor = cursorRef.current;
     const label = cursorText.current;
-    const final = mark?.closest('.final') as HTMLElement | null;
-    const ivory = mark?.querySelector<HTMLElement>('#lm-ivory');
-    const blue = mark?.querySelector<HTMLElement>('#lm-blue');
+    const final = mark?.closest(".final") as HTMLElement | null;
+    const ivory = mark?.querySelector<HTMLElement>("#lm-ivory");
+    const blue = mark?.querySelector<HTMLElement>("#lm-blue");
     if (!mark || !rig || !cursor || !label || !final || !ivory || !blue) return;
-    const sheens = mark.querySelectorAll('radialGradient');
+    const sheens = mark.querySelectorAll("radialGradient");
 
-    const S = { rx: 0, ry: 0, trx: 0, try: 0, spin: 0, spinV: 0, bx: 0, by: 0, bvx: 0, bvy: 0, ix: 0, iy: 0, ivx: 0, ivy: 0, sx: 10, sy: 8 };
-    let drag: { x: number; y: number; dx: number; dy: number; moved: boolean } | null = null;
+    const S = {
+      rx: 0,
+      ry: 0,
+      trx: 0,
+      try: 0,
+      spin: 0,
+      spinV: 0,
+      bx: 0,
+      by: 0,
+      bvx: 0,
+      bvy: 0,
+      ix: 0,
+      iy: 0,
+      ivx: 0,
+      ivy: 0,
+      sx: 10,
+      sy: 8,
+    };
+    let drag: {
+      x: number;
+      y: number;
+      dx: number;
+      dy: number;
+      moved: boolean;
+    } | null = null;
     let hover = false;
     let lastMove = 0;
     let visible = false;
@@ -85,14 +121,14 @@ export function LoomMark() {
       const sep = Math.hypot(S.bx - S.ix, S.by - S.iy);
       ivory.style.transform = `translate3d(${S.ix.toFixed(1)}px,${S.iy.toFixed(1)}px,${(-10 - sep * 0.15).toFixed(1)}px)`;
       blue.style.transform = `translate3d(${S.bx.toFixed(1)}px,${S.by.toFixed(1)}px,${(34 + sep * 0.35).toFixed(1)}px)`;
-      mark.style.setProperty('--tension', Math.min(sep / 160, 1).toFixed(3));
+      mark.style.setProperty("--tension", Math.min(sep / 160, 1).toFixed(3));
       for (const g of sheens) {
-        g.setAttribute('cx', S.sx.toFixed(2));
-        g.setAttribute('cy', S.sy.toFixed(2));
+        g.setAttribute("cx", S.sx.toFixed(2));
+        g.setAttribute("cy", S.sy.toFixed(2));
       }
     };
 
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
       S.rx = 8;
       S.ry = -14;
       apply();
@@ -111,7 +147,8 @@ export function LoomMark() {
       S.ry += (S.try - S.ry) * 0.07;
       S.spinV *= 0.955;
       S.spin += S.spinV;
-      if (!drag && Math.abs(S.spinV) < 0.05) S.spin += (Math.round(S.spin / 360) * 360 - S.spin) * 0.06;
+      if (!drag && Math.abs(S.spinV) < 0.05)
+        S.spin += (Math.round(S.spin / 360) * 360 - S.spin) * 0.06;
       if (drag) {
         S.bx += (drag.dx * 0.62 - S.bx) * 0.25;
         S.by += (drag.dy * 0.62 - S.by) * 0.25;
@@ -149,17 +186,18 @@ export function LoomMark() {
         drag.dx = e.clientX - drag.x;
         drag.dy = e.clientY - drag.y;
         drag.moved = drag.moved || Math.hypot(drag.dx, drag.dy) > 6;
-        label.textContent = Math.hypot(drag.dx, drag.dy) > 140 ? 'let go' : 'pulling';
+        label.textContent =
+          Math.hypot(drag.dx, drag.dy) > 140 ? "let go" : "pulling";
       }
       wake();
     };
     const onEnter = () => {
       hover = true;
-      cursor.classList.add('on');
+      cursor.classList.add("on");
     };
     const onLeave = () => {
       hover = false;
-      if (!drag) cursor.classList.remove('on');
+      if (!drag) cursor.classList.remove("on");
     };
     const onDown = (e: PointerEvent) => {
       drag = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, moved: false };
@@ -168,8 +206,8 @@ export function LoomMark() {
       } catch {
         // a synthetic or already released pointer cannot be captured
       }
-      cursor.classList.add('grab');
-      label.textContent = 'pulling';
+      cursor.classList.add("grab");
+      label.textContent = "pulling";
       wake();
     };
     const release = () => {
@@ -180,26 +218,26 @@ export function LoomMark() {
         S.bvy = drag.dy * 0.05;
       }
       drag = null;
-      cursor.classList.remove('grab');
-      label.textContent = 'drag';
-      if (!hover) cursor.classList.remove('on');
+      cursor.classList.remove("grab");
+      label.textContent = "drag";
+      if (!hover) cursor.classList.remove("on");
       wake();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') {
+      if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         S.spinV += 26;
         wake();
       }
     };
 
-    final.addEventListener('pointermove', onMove);
-    mark.addEventListener('pointerenter', onEnter);
-    mark.addEventListener('pointerleave', onLeave);
-    mark.addEventListener('pointerdown', onDown);
-    mark.addEventListener('pointerup', release);
-    mark.addEventListener('pointercancel', release);
-    mark.addEventListener('keydown', onKey);
+    final.addEventListener("pointermove", onMove);
+    mark.addEventListener("pointerenter", onEnter);
+    mark.addEventListener("pointerleave", onLeave);
+    mark.addEventListener("pointerdown", onDown);
+    mark.addEventListener("pointerup", release);
+    mark.addEventListener("pointercancel", release);
+    mark.addEventListener("keydown", onKey);
     const io = new IntersectionObserver((es) => {
       visible = es[0].isIntersecting;
       wake();
@@ -210,13 +248,13 @@ export function LoomMark() {
     return () => {
       cancelAnimationFrame(raf);
       io.disconnect();
-      final.removeEventListener('pointermove', onMove);
-      mark.removeEventListener('pointerenter', onEnter);
-      mark.removeEventListener('pointerleave', onLeave);
-      mark.removeEventListener('pointerdown', onDown);
-      mark.removeEventListener('pointerup', release);
-      mark.removeEventListener('pointercancel', release);
-      mark.removeEventListener('keydown', onKey);
+      final.removeEventListener("pointermove", onMove);
+      mark.removeEventListener("pointerenter", onEnter);
+      mark.removeEventListener("pointerleave", onLeave);
+      mark.removeEventListener("pointerdown", onDown);
+      mark.removeEventListener("pointerup", release);
+      mark.removeEventListener("pointercancel", release);
+      mark.removeEventListener("keydown", onKey);
     };
   }, []);
 

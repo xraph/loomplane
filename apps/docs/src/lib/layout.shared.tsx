@@ -1,6 +1,6 @@
-import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
-import { Wordmark } from '@/components/landing/wordmark';
-import { gitConfig } from './shared';
+import type { BaseLayoutProps } from "fumadocs-ui/layouts/shared";
+import { Wordmark } from "@/components/landing/wordmark";
+import { gitConfig } from "./shared";
 
 export function baseOptions(): BaseLayoutProps {
   return {
@@ -9,9 +9,9 @@ export function baseOptions(): BaseLayoutProps {
     },
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
     links: [
-      { text: 'Platform', url: '/platform' },
-      { text: 'Clouds', url: '/clouds' },
-      { text: 'Documentation', url: '/docs', active: 'nested-url' },
+      { text: "Platform", url: "/platform" },
+      { text: "Clouds", url: "/clouds" },
+      { text: "Documentation", url: "/docs", active: "nested-url" },
     ],
   };
 }

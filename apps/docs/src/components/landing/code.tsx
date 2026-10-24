@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import type { CSSProperties } from "react";
 
 /**
  * A code block from the landing pages. `html` is trusted, first-party markup
@@ -6,7 +6,7 @@ import type { CSSProperties } from 'react';
  * them and terminals can type them in.
  */
 export function Code({ html }: { html: string }) {
-  const lines = html.split('\n');
+  const lines = html.split("\n");
   return (
     <pre>
       {lines.map((line, i) => (
@@ -15,7 +15,7 @@ export function Code({ html }: { html: string }) {
           // biome-ignore lint/suspicious/noArrayIndexKey: static lines
           key={i}
           className="ln"
-          style={{ '--i': i } as CSSProperties}
+          style={{ "--i": i } as CSSProperties}
           // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted first-party markup
           dangerouslySetInnerHTML={{ __html: line }}
         />

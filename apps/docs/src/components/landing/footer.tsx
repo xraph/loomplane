@@ -1,37 +1,37 @@
-import Link from 'next/link';
-import { installGuideHref } from './install-commands';
-import { githubUrl } from './site';
-import { Wordmark } from './wordmark';
+import Link from "next/link";
+import { installGuideHref } from "./install-commands";
+import { githubUrl } from "./site";
+import { Wordmark } from "./wordmark";
 
 const columns = [
   {
-    title: 'Platform',
+    title: "Platform",
     links: [
-      { href: '/platform', text: 'Discovery and plans' },
-      { href: '/clouds', text: 'Clouds' },
-      { href: '/services', text: 'Databases' },
-      { href: '/security', text: 'Security' },
+      { href: "/platform", text: "Discovery and plans" },
+      { href: "/clouds", text: "Clouds" },
+      { href: "/services", text: "Databases" },
+      { href: "/security", text: "Security" },
     ],
   },
   {
-    title: 'Build with',
+    title: "Build with",
     links: [
-      { href: '/agents', text: 'loomctl' },
-      { href: '/agents', text: 'MCP for agents' },
-      { href: '/clouds', text: 'Provider plugins' },
-      { href: '/self-host', text: 'Self-host' },
+      { href: "/agents", text: "loomctl" },
+      { href: "/agents", text: "MCP for agents" },
+      { href: "/clouds", text: "Provider plugins" },
+      { href: "/self-host", text: "Self-host" },
     ],
   },
   {
-    title: 'Docs',
+    title: "Docs",
     links: [
-      { href: '/docs', text: 'Documentation' },
-      { href: installGuideHref, text: 'Quick start' },
+      { href: "/docs", text: "Documentation" },
+      { href: installGuideHref, text: "Quick start" },
     ],
   },
   {
-    title: 'Project',
-    links: [{ href: githubUrl, text: 'GitHub' }],
+    title: "Project",
+    links: [{ href: githubUrl, text: "GitHub" }],
   },
 ];
 
@@ -42,8 +42,8 @@ export function Footer() {
         <div>
           <Wordmark className="foot-mark" />
           <p className="foot-note">
-            A self-hosted deployment platform for the monorepos you already have. Built with Go, React and the Forge
-            ecosystem.
+            A self-hosted deployment platform for the monorepos you already
+            have. Built with Go, React and the Forge ecosystem.
           </p>
         </div>
         {columns.map((c) => (
@@ -52,7 +52,11 @@ export function Footer() {
             <ul>
               {c.links.map((l) => (
                 <li key={l.text}>
-                  {l.href.startsWith('http') ? <a href={l.href}>{l.text}</a> : <Link href={l.href}>{l.text}</Link>}
+                  {l.href.startsWith("http") ? (
+                    <a href={l.href}>{l.text}</a>
+                  ) : (
+                    <Link href={l.href}>{l.text}</Link>
+                  )}
                 </li>
               ))}
             </ul>

@@ -1,16 +1,24 @@
-'use client';
+"use client";
 
-import { useRef, useState } from 'react';
+import { useRef, useState } from "react";
 
 /** Copies `text`, then says so for a moment. Falls back to selecting `target`. */
-export function CopyButton({ text, label, targetId }: { text: string; label: string; targetId: string }) {
-  const [note, setNote] = useState('');
+export function CopyButton({
+  text,
+  label,
+  targetId,
+}: {
+  text: string;
+  label: string;
+  targetId: string;
+}) {
+  const [note, setNote] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const flash = (value: string) => {
     setNote(value);
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => setNote(''), 1600);
+    timer.current = setTimeout(() => setNote(""), 1600);
   };
 
   const select = () => {
@@ -21,7 +29,7 @@ export function CopyButton({ text, label, targetId }: { text: string; label: str
     const sel = window.getSelection();
     sel?.removeAllRanges();
     sel?.addRange(range);
-    flash('Selected');
+    flash("Selected");
   };
 
   return (
@@ -31,7 +39,9 @@ export function CopyButton({ text, label, targetId }: { text: string; label: str
       aria-label={label}
       onClick={() => {
         try {
-          navigator.clipboard.writeText(text).then(() => flash('Copied'), select);
+          navigator.clipboard
+            .writeText(text)
+            .then(() => flash("Copied"), select);
         } catch {
           select();
         }

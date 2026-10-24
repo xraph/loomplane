@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import { usePathname } from 'next/navigation';
-import { useEffect, useRef } from 'react';
-import { silkFragment } from './silk-shader';
+import { usePathname } from "next/navigation";
+import { useEffect, useRef } from "react";
+import { silkFragment } from "./silk-shader";
 
-const VERTEX = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+const VERTEX = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
 
 /** The animated light behind each page's hero. Falls back to a still gradient without WebGL. */
 export function Silk() {
@@ -17,7 +17,11 @@ export function Silk() {
     const cv = canvas.current;
     const st = stage.current;
     if (!cv || !st) return;
-    const gl = cv.getContext('webgl', { antialias: false, premultipliedAlpha: false, alpha: false });
+    const gl = cv.getContext("webgl", {
+      antialias: false,
+      premultipliedAlpha: false,
+      alpha: false,
+    });
     if (!gl) {
       cv.hidden = true;
       return;
@@ -47,17 +51,21 @@ export function Silk() {
     gl.useProgram(prog);
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, 'p');
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 3, -1, -1, 3]),
+      gl.STATIC_DRAW,
+    );
+    const loc = gl.getAttribLocation(prog, "p");
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    const uRes = gl.getUniformLocation(prog, 'res');
-    const uT = gl.getUniformLocation(prog, 't');
-    const uM = gl.getUniformLocation(prog, 'm');
-    const uCs = gl.getUniformLocation(prog, 'cs');
-    if (fallback.current) fallback.current.style.display = 'none';
+    const uRes = gl.getUniformLocation(prog, "res");
+    const uT = gl.getUniformLocation(prog, "t");
+    const uM = gl.getUniformLocation(prog, "m");
+    const uCs = gl.getUniformLocation(prog, "cs");
+    if (fallback.current) fallback.current.style.display = "none";
 
-    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const mouse = [0, 0];
     const target = [0, 0];
     const start = performance.now();
@@ -82,7 +90,8 @@ export function Silk() {
       if (reduce) frame(18000);
     };
     const loop = (now: number) => {
-      if (!document.hidden && window.scrollY < st.offsetHeight) frame(now - start + 9000);
+      if (!document.hidden && window.scrollY < st.offsetHeight)
+        frame(now - start + 9000);
       raf = requestAnimationFrame(loop);
     };
     const onMove = (e: PointerEvent) => {
@@ -93,20 +102,24 @@ export function Silk() {
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(cv);
-    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener("pointermove", onMove, { passive: true });
     if (reduce) frame(18000);
     else raf = requestAnimationFrame(loop);
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener("pointermove", onMove);
       // the context stays alive so a remount (and React's dev double effects) can reuse it
     };
   }, []);
 
   return (
-    <div ref={stage} className={pathname === '/' ? 'stage' : 'stage sub'} aria-hidden="true">
+    <div
+      ref={stage}
+      className={pathname === "/" ? "stage" : "stage sub"}
+      aria-hidden="true"
+    >
       <div ref={fallback} className="stage-fallback" />
       <canvas ref={canvas} id="silk" />
     </div>

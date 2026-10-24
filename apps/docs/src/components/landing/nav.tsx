@@ -1,11 +1,11 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import { installGuideHref } from './install-commands';
-import { githubUrl, links } from './site';
-import { Wordmark } from './wordmark';
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { installGuideHref } from "./install-commands";
+import { githubUrl, links } from "./site";
+import { Wordmark } from "./wordmark";
 
 export function Nav() {
   const pathname = usePathname();
@@ -15,18 +15,18 @@ export function Nav() {
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 4);
     onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   // a new page starts with the menu closed
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs on navigation
   useEffect(() => setOpen(false), [pathname]);
 
-  const current = (href: string) => (pathname === href ? 'page' : undefined);
+  const current = (href: string) => (pathname === href ? "page" : undefined);
 
   return (
-    <header className={scrolled ? 'nav scrolled' : 'nav'}>
+    <header className={scrolled ? "nav scrolled" : "nav"}>
       <div className="wrap">
         <Link className="brand" href="/" aria-label="Loomplane home">
           <Wordmark />
@@ -67,7 +67,7 @@ export function Nav() {
       </div>
       <div className="mobile-menu" id="mobile-menu" hidden={!open}>
         <div className="wrap">
-          <Link href="/" aria-current={current('/')}>
+          <Link href="/" aria-current={current("/")}>
             Home
           </Link>
           {links.map((l) => (
