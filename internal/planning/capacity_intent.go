@@ -127,7 +127,7 @@ func capacityReview(d cloudinfra.CapacityDemand) error {
 func (s *PgStore) approvedCapacityIntent(ctx context.Context, org, plan, service string) (*approvedCapacityIntent, error) {
 	var intent, actor []byte
 	out := &approvedCapacityIntent{}
-	err := s.db.QueryRow(ctx, `SELECT i.body,i.actor,i.plan_revision FROM loomplane_capacity_intents i JOIN loomplane_plans p ON p.org_id=i.org_id AND p.id=i.plan_id AND p.status='approved' AND p.revision=i.plan_revision WHERE i.org_id=$1 AND i.plan_id=$2 AND i.service=$3 AND loomplane_capacity_intent_current(p,i.body) AND EXISTS(SELECT 1 FROM jsonb_array_elements(p.result->'actions') a WHERE a->>'name'=i.service AND a->'service'->'capacity_intent'=i.body AND a->'service'->>'commit_sha'=i.body->>'commit_sha')`, org, plan, service).Scan(&intent, &actor, &out.PlanRevision)
+	err := s.db.QueryRow(ctx, `SELECT i.body,i.actor,i.plan_revision FROM loomplane_capacity_intents i JOIN loomplane_plans p ON p.org_id=i.org_id AND p.id=i.plan_id AND p.status='approved' AND p.revision=i.plan_revision WHERE i.org_id=$1 AND i.plan_id=$2 AND i.service=$3 AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.org_id=p.org_id AND d.plan_id=p.id AND d.status='cancelled') AND loomplane_capacity_intent_current(p,i.body) AND EXISTS(SELECT 1 FROM jsonb_array_elements(p.result->'actions') a WHERE a->>'name'=i.service AND a->'service'->'capacity_intent'=i.body AND a->'service'->>'commit_sha'=i.body->>'commit_sha')`, org, plan, service).Scan(&intent, &actor, &out.PlanRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, capacityReview(cloudinfra.CapacityDemand{OrgID: org, PlanID: plan, Service: service})
 	}
@@ -200,43 +200,54 @@ func (s *Service) ResolveCapacityIntents(ctx context.Context, org, planID string
 	if plan.Status != StatusApproved {
 		return ErrNotReady
 	}
+	var blocked []error
 	for _, a := range plan.Actions {
 		if a.Service == nil || a.Service.CapacityIntent == nil {
 			continue
 		}
-		demand, checkErr := s.ResolveApprovedCapacityDemand(ctx, org, planID, a.Name)
+		checkErr := s.resolveCapacityIntent(ctx, st, plan, a)
 		if checkErr != nil {
-			return checkErr
-		}
-		placed, checkErr := st.ResolvedCapacityPlacements(ctx, org, planID)
-		if checkErr != nil {
-			return checkErr
-		}
-		if _, exists := placed[a.Name]; exists {
-			continue
-		}
-		decision, checkErr := s.capacity.EnsureCapacity(ctx, *demand)
-		if checkErr != nil {
-			return checkErr
-		}
-		if decision == nil {
-			return ErrUnavailable
-		}
-		if decision.Block != nil {
-			return &cloudinfra.CapacityAdmissionError{Block: *decision.Block}
-		}
-		if decision.Placement == nil {
-			return ErrUnavailable
-		}
-		// Authorization is rechecked after any provider work and before admission.
-		if _, checkErr = s.ResolveApprovedCapacityDemand(ctx, org, planID, a.Name); checkErr != nil {
-			return checkErr
-		}
-		if admitErr := st.admitCapacityPlacement(ctx, plan, a, *decision.Placement); admitErr != nil {
-			return admitErr
+			var admission *cloudinfra.CapacityAdmissionError
+			if !errors.As(checkErr, &admission) {
+				return checkErr
+			}
+			blocked = append(blocked, checkErr)
 		}
 	}
-	return nil
+	return errors.Join(blocked...)
+}
+
+func (s *Service) resolveCapacityIntent(ctx context.Context, st *PgStore, plan *Plan, a Action) error {
+	org, planID := plan.OrgID, plan.ID
+	demand, checkErr := s.ResolveApprovedCapacityDemand(ctx, org, planID, a.Name)
+	if checkErr != nil {
+		return checkErr
+	}
+	placed, checkErr := st.ResolvedCapacityPlacements(ctx, org, planID)
+	if checkErr != nil {
+		return checkErr
+	}
+	if _, exists := placed[a.Name]; exists {
+		return nil
+	}
+	decision, checkErr := s.capacity.EnsureCapacity(ctx, *demand)
+	if checkErr != nil {
+		return checkErr
+	}
+	if decision == nil {
+		return ErrUnavailable
+	}
+	if decision.Block != nil {
+		return &cloudinfra.CapacityAdmissionError{Block: *decision.Block}
+	}
+	if decision.Placement == nil {
+		return ErrUnavailable
+	}
+	// Authorization is rechecked after any provider work and before admission.
+	if _, checkErr = s.ResolveApprovedCapacityDemand(ctx, org, planID, a.Name); checkErr != nil {
+		return checkErr
+	}
+	return st.admitCapacityPlacement(ctx, plan, a, *decision.Placement)
 }
 
 // ResolvedCapacityPlacements exposes only persisted, admitted runtime pins.
@@ -275,6 +286,13 @@ func (s *PgStore) admitCapacityPlacement(ctx context.Context, plan *Plan, a Acti
 	defer func() { err = rollback(tx, err) }()
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, plan.OrgID); checkErr != nil {
 		return checkErr
+	}
+	var cancelled bool
+	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_deployments WHERE org_id=$1 AND plan_id=$2 AND status='cancelled')`, plan.OrgID, plan.ID).Scan(&cancelled); checkErr != nil {
+		return checkErr
+	}
+	if cancelled {
+		return capacityReview(d)
 	}
 	var id string
 	if checkErr := tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, plan.OrgID, d.CloudID).Scan(&id); checkErr != nil {

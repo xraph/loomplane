@@ -204,7 +204,8 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
-	routes ReleaseRoutes
+	capacity CapacityResolver
+	routes   ReleaseRoutes
 
 	cloudSyncAuth CloudSyncAuthorizer
 	cloudProfiles cloudprofiles.Resolver
@@ -228,7 +229,8 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
-	Routes ReleaseRoutes
+	Capacity CapacityResolver
+	Routes   ReleaseRoutes
 
 	CloudSyncAuth CloudSyncAuthorizer
 	CloudProfiles cloudprofiles.Resolver
@@ -277,7 +279,7 @@ type ReleaseObserver interface {
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
-		cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
+		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
 		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
@@ -476,6 +478,12 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err != nil {
 		return err
 	}
+	if d.Status == StatusCancelled {
+		return ErrCapacityCancelled
+	}
+	if d.Status == StatusPaused {
+		return ErrCapacityPaused
+	}
 	step := d.Step(actionID)
 	if step == nil {
 		return fmt.Errorf("%w: deployment %s has no step %s", ErrNotFound, deploymentID, actionID)
@@ -561,6 +569,23 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		_ = r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step) //nolint:errcheck // progress is best effort; the step's end is recorded
 	}
 	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress, poolLock); err != nil {
+		if blocks, blockErr := capacityBlocks(err); blockErr == nil && len(blocks) > 0 {
+			st, ok := r.store.(CapacityStore)
+			if !ok {
+				return errors.New("capacity wait store is unavailable")
+			}
+			current, readErr := r.store.GetDeployment(ctx, orgID, d.ID)
+			if readErr != nil {
+				return readErr
+			}
+			if current.CapacityWait != nil {
+				blocks = append(blocks, current.CapacityWait.Blocks...)
+			}
+			if _, waitErr := st.SetCapacityWait(ctx, orgID, d.ID, current.CapacityRevision, blocks, r.now().UTC()); waitErr != nil {
+				return waitErr
+			}
+			return ErrCapacityPaused
+		}
 		finished := r.now().UTC()
 		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))
 		step.Status, step.Message, step.FinishedAt = StepFailed, err.Error(), &finished
@@ -1414,6 +1439,9 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if err != nil {
 		return err
 	}
+	if d.Status == StatusPaused || d.Status == StatusCancelled {
+		return nil
+	}
 	if reason == "" && d.Status != StatusFailed {
 		if cleanupErr := r.finishRoutedRelease(ctx, d); cleanupErr != nil {
 			return cleanupErr
@@ -1439,6 +1467,13 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	// A deployment that already failed stays failed, so a late success
 	// for it records nothing.
 	if reason != "" || d.Status == StatusFailed {
+		return nil
+	}
+	settled, readErr := r.store.GetDeployment(ctx, orgID, d.ID)
+	if readErr != nil {
+		return readErr
+	}
+	if settled.Status != StatusSucceeded {
 		return nil
 	}
 	return r.recordDeployed(ctx, d, now)

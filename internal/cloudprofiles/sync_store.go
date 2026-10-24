@@ -250,7 +250,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			return nil, storeError(err)
 		}
 		var active bool
-		if queryErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_environment_sync_guards WHERE org_id=$1 AND environment_id=$2 AND sync_id<>$3) OR EXISTS(SELECT 1 FROM loomplane_deployments WHERE org_id=$1 AND environment_id=$2 AND status='running') OR (NOT EXISTS(SELECT 1 FROM loomplane_environment_sync_guards WHERE org_id=$1 AND environment_id=$2 AND sync_id=$3) AND EXISTS(SELECT 1 FROM loomplane_plans p WHERE p.org_id=$1 AND p.environment_id=$2 AND p.status='approved' AND coalesce(p.result->>'cloud_sync_id','')='' AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.plan_id=p.id)))`, p.OrgID, env.EnvironmentID, p.Reverts).Scan(&active); queryErr != nil {
+		if queryErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_environment_sync_guards WHERE org_id=$1 AND environment_id=$2 AND sync_id<>$3) OR EXISTS(SELECT 1 FROM loomplane_deployments WHERE org_id=$1 AND environment_id=$2 AND status IN ('running','paused')) OR (NOT EXISTS(SELECT 1 FROM loomplane_environment_sync_guards WHERE org_id=$1 AND environment_id=$2 AND sync_id=$3) AND EXISTS(SELECT 1 FROM loomplane_plans p WHERE p.org_id=$1 AND p.environment_id=$2 AND p.status='approved' AND coalesce(p.result->>'cloud_sync_id','')='' AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.plan_id=p.id)))`, p.OrgID, env.EnvironmentID, p.Reverts).Scan(&active); queryErr != nil {
 			return nil, queryErr
 		}
 		if active {

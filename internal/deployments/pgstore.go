@@ -28,13 +28,13 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 
 const columns = `id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status, sources,
-	error, steps, retries, started_by, started_at, finished_at`
+	error, steps, retries, started_by, started_at, finished_at, capacity_revision, capacity_wait`
 
 func scan(row pgx.Row) (*Deployment, error) {
 	var d Deployment
-	var sources, steps []byte
+	var sources, steps, wait []byte
 	if err := row.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.EnvironmentID, &d.Environment, &d.PlanID, &d.CommitSHA,
-		&d.Status, &sources, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt); err != nil {
+		&d.Status, &sources, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt, &d.CapacityRevision, &wait); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(sources, &d.Sources); err != nil {
@@ -43,6 +43,11 @@ func scan(row pgx.Row) (*Deployment, error) {
 	var err error
 	if d.Steps, err = decodeSteps(steps); err != nil {
 		return nil, fmt.Errorf("decode steps: %w", err)
+	}
+	if len(wait) > 0 {
+		if err := json.Unmarshal(wait, &d.CapacityWait); err != nil {
+			return nil, fmt.Errorf("decode capacity wait: %w", err)
+		}
 	}
 	d.normalize()
 	return &d, nil
@@ -61,7 +66,7 @@ func (s *PgStore) CreateDeployment(ctx context.Context, d *Deployment) (*Deploym
 		return nil, fmt.Errorf("encode sources: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_deployments (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, NULL)
 		ON CONFLICT (plan_id) DO NOTHING`,
 		d.ID, d.OrgID, d.ProjectID, d.EnvironmentID, d.Environment, d.PlanID, d.CommitSHA, d.Status, sources,
 		d.Error, steps, d.Retries, d.StartedBy, d.StartedAt, d.FinishedAt)
@@ -152,12 +157,17 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 		return guardErr
 	}
 	var raw []byte
-	err = tx.QueryRow(ctx, `SELECT steps FROM loomplane_deployments WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&raw)
+	var status string
+	err = tx.QueryRow(ctx, `SELECT steps, status FROM loomplane_deployments WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&raw, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("read steps: %w", err)
+	}
+	// A concurrent pause or cancellation keeps pending steps resumable.
+	if step.Status == StepSkipped && (status == StatusPaused || status == StatusCancelled) {
+		return tx.Commit()
 	}
 	steps, err := decodeSteps(raw)
 	if err != nil {

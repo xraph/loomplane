@@ -210,6 +210,13 @@ func (s *PgStore) attachExpansionDemand(ctx context.Context, e *Expansion, d Cap
 	if scopeErr := lockCapacityCloud(ctx, tx, e.OrgID, e.CloudID); scopeErr != nil {
 		return scopeErr
 	}
+	var cancelled bool
+	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_deployments WHERE org_id=$1 AND plan_id=$2 AND status='cancelled')`, d.OrgID, d.PlanID).Scan(&cancelled); checkErr != nil {
+		return checkErr
+	}
+	if cancelled {
+		return security.ErrForbidden
+	}
 	if leaseErr := expansionLeaseTx(ctx, tx, e, token); leaseErr != nil {
 		return leaseErr
 	}
