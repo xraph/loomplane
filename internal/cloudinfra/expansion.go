@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"sort"
@@ -182,7 +183,7 @@ func (s *Service) newExpansion(ctx context.Context, st *PgStore, policy *Capacit
 	if err != nil {
 		return nil, err
 	}
-	if _, authErr := s.authorize(ctx, principal, policy.CloudID); authErr != nil {
+	if _, authErr := s.authorizeCapacityPrincipal(ctx, principal, policy.CloudID); authErr != nil {
 		return nil, authErr
 	}
 	options, err := s.ServerOptions(ctx, principal, policy.CloudID, pool.ConnectionID)
@@ -290,7 +291,7 @@ func (s *Service) acceptPolicyExpansion(ctx context.Context, st *PgStore, e *Exp
 	if p.ReadOnly || p.OrgID != e.OrgID {
 		return security.ErrForbidden
 	}
-	profile, err := s.authorize(ctx, p, e.CloudID)
+	profile, err := s.authorizeCapacityPrincipal(ctx, p, e.CloudID)
 	if err != nil {
 		return err
 	}
@@ -362,7 +363,7 @@ func (s *Service) blockExpansion(ctx context.Context, st *PgStore, e *Expansion,
 	return st.saveExpansion(ctx, e, token)
 }
 func (s *Service) ApproveExpansion(ctx context.Context, p security.Principal, cloud, id string, expectedRevision int64) (*Expansion, error) {
-	if _, authErr := s.authorize(ctx, p, cloud); authErr != nil {
+	if _, authErr := s.authorizeCapacityPrincipal(ctx, p, cloud); authErr != nil {
 		return nil, authErr
 	}
 	if p.ReadOnly {
@@ -408,6 +409,9 @@ func (s *Service) ApproveExpansion(ctx context.Context, p security.Principal, cl
 		}
 		return nil
 	})
+	if err == nil {
+		s.wakeCapacityCloud(ctx, p.OrgID, cloud, fmt.Sprintf("approval:%s:%d", e.ID, e.Revision))
+	}
 	return e, err
 }
 func (s *Service) DetachCapacityDemand(ctx context.Context, org, plan, service string) error {
@@ -838,7 +842,7 @@ func (s *Service) expansionExecutionAuthority(ctx context.Context, st *PgStore, 
 	if p.OrgID != e.OrgID || p.ReadOnly {
 		return p, security.ErrForbidden
 	}
-	if _, err = s.authorize(ctx, p, e.CloudID); err != nil {
+	if _, err = s.authorizeCapacityPrincipal(ctx, p, e.CloudID); err != nil {
 		return p, err
 	}
 	return p, nil
@@ -936,7 +940,7 @@ func (s *Service) checkpointCreateAttempt(ctx context.Context, o *Operation) err
 		if demandErr := s.validateExpansionDemand(ctx, st, e); demandErr != nil {
 			return demandErr
 		}
-		_, authorityErr := s.authorize(ctx, principal, e.CloudID)
+		_, authorityErr := s.authorizeCapacityPrincipal(ctx, principal, e.CloudID)
 		return authorityErr
 	})
 }

@@ -227,6 +227,7 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 	if err := st.SaveCapacityInventory(ctx, org, cloud, generation, records, usage.Accounts); err != nil {
 		return nil, err
 	}
+	s.wakeCapacityCloud(ctx, org, cloud, "inventory:"+now.Format(time.RFC3339Nano))
 	if ledger, ok := s.Store.(interface {
 		GetCapacityUsage(context.Context, string, string) (*CapacityUsage, error)
 	}); ok {

@@ -127,6 +127,7 @@ type Runtime interface {
 }
 
 type Deps struct {
+	CapacityPrincipal       security.PrincipalVerifier
 	CapacityDemandAuthority CapacityDemandAuthority
 	CapacityDemandWakeup    CapacityDemandWakeup
 	// EnableAutomaticCapacity stays false until integrated qualification.

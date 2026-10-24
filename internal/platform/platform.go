@@ -112,6 +112,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithDisableRoutes(),
 		dispatchext.WithDisableMigrate(),
 	)
+	jobs.WithCapacity(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency), deployments.BindCapacityWorker)
 
 	// Provider plugins, described when the first extension that needs
 	// them registers.

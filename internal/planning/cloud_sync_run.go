@@ -396,6 +396,15 @@ func validateSyncGrants(ctx context.Context, st cloudprofiles.SyncStore, org str
 }
 
 func (s *Service) authorizeStoredCloudSync(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, snapshot *cloudprofiles.Snapshot) error {
+	if p.KeyID != "" {
+		if s.capacityPrincipal == nil {
+			return security.ErrForbidden
+		}
+		if err := s.capacityPrincipal.ValidatePrincipal(ctx, p); err != nil {
+			return err
+		}
+	}
+
 	if sync.TargetID != "" || snapshot.Shared {
 		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}

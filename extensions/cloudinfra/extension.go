@@ -81,7 +81,11 @@ func (e *Extension) Register(app forge.App) error {
 	if endpoint == "" {
 		endpoint = e.cfg.PublicURL
 	}
-	e.svc = cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(e.cfg.Clouds.DigitalOceanEndpoint, e.cfg.Clouds.VercelEndpoint), Workflow: e.workflows, EnrollmentURL: endpoint, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger())})
+	principal, err := forge.InjectType[security.PrincipalVerifier](c)
+	if err != nil {
+		return err
+	}
+	e.svc = cloudinfra.NewService(cloudinfra.Deps{CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(e.cfg.Clouds.DigitalOceanEndpoint, e.cfg.Clouds.VercelEndpoint), Workflow: e.workflows, EnrollmentURL: endpoint, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger())})
 	e.workflows.BindInfrastructure(e.svc)
 	if err = forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide cloud infrastructure: %w", err)
@@ -102,6 +106,9 @@ func (e *Extension) Start(context.Context) error {
 			}
 			if err := e.svc.RecoverInfrastructure(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Recover infrastructure operations", forge.F("error", err.Error()))
+			}
+			if err := e.workflows.RecoverCapacity(ctx); err != nil && ctx.Err() == nil {
+				e.Logger().Warn("recover capacity workflow wakes", forge.F("error", err.Error()))
 			}
 			if err := e.svc.ReconcileExpansions(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Recover capacity expansions", forge.F("error", err.Error()))

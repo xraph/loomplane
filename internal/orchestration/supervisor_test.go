@@ -40,14 +40,15 @@ func TestDurableSupervisorRecoversFromClaimTimeout(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		commit bool
-	}{{"claim rolled back", false}, {"claim committed, reply lost", true}} {
+		build  string
+	}{{"v2 claim rolled back", false, DeploymentBuild}, {"v2 claim committed, reply lost", true, DeploymentBuild}, {"v3 claim rolled back", false, CapacityBuild}, {"v3 claim committed, reply lost", true, CapacityBuild}} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			base := memory.New()
 			store := &timeoutClaims{Store: base, commit: tc.commit}
 			var mu sync.Mutex
 			ran := map[string]int{}
-			options := drt.Options{Namespace: DurableNamespace, Queue: DurableQueue, BuildID: DeploymentBuild, Owner: "supervisor-test",
+			options := drt.Options{Namespace: DurableNamespace, Queue: DurableQueue, BuildID: tc.build, Owner: "supervisor-test",
 				Concurrency: 1, LeaseDuration: 300 * time.Millisecond, PollInterval: 5 * time.Millisecond,
 				Workflows: map[string]drt.WorkflowFunc{"plan": func(w *drt.Workflow, in []byte) ([]byte, error) {
 					return w.Activity("step", "step", "", in).Get()
@@ -68,7 +69,7 @@ func TestDurableSupervisorRecoversFromClaimTimeout(t *testing.T) {
 				key := durable.Key{Namespace: DurableNamespace, WorkflowID: id, RunID: runID}
 				// Starts go through the engine's worker even after it fails.
 				if _, startErr := initial.StartExecution(ctx, durable.StartRequest{Key: key, RequestID: id, WorkflowType: "plan",
-					BuildID: DeploymentBuild, Queue: DurableQueue, Input: []byte(id)}); startErr != nil {
+					BuildID: tc.build, Queue: DurableQueue, Input: []byte(id)}); startErr != nil {
 					t.Fatal(startErr)
 				}
 				return key

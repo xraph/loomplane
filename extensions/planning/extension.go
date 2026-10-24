@@ -317,7 +317,13 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := fapp.Router().Handle(catalogAdminRoute, e.catalogAdmin.Handler()); err != nil {
 		return fmt.Errorf("mount the catalog admin proxy: %w", err)
 	}
+	principal, principalErr := forge.InjectType[security.PrincipalVerifier](c)
+	if principalErr != nil {
+		return principalErr
+	}
+	e.deployments.BindRunStore(orchestration.NewPgRunStore(pg))
 	e.plans = planning.NewService(planning.Deps{
+		Capacity: routeService, CapacityTemplates: routeService, CapacityPrincipal: principal,
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
@@ -327,6 +333,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Dialer:    dialer,
 	})
 
+	routeService.CapacityDemandAuthority = e.plans
 	nativeDatabases := &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), Credentials: clouds, Secrets: resourceSecrets}
 	if forge.HasType[*deployments.NativeSQLTransports](c) {
 		transports, transportErr := forge.InjectType[*deployments.NativeSQLTransports](c)
@@ -368,7 +375,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return nil
 	}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
-		Logs: logStore, Routes: routeService,
+		Logs: logStore, Routes: routeService, Capacity: e.plans,
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.GitHubSources{

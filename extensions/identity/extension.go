@@ -149,6 +149,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	c := fapp.Container()
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
+		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
 		forge.ProvideValue(c, Guard{e.guard()}),

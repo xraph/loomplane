@@ -47,3 +47,28 @@ func TestJobsHealthReportsStoppedDurableWorker(t *testing.T) {
 		t.Fatalf("health: %v", err)
 	}
 }
+
+func TestJobsHealthReportsStoppedCapacityWorker(t *testing.T) {
+	store := timedOutClaims{memory.New()}
+	d := orchestration.NewDeployments()
+	options := d.CapacityOptions("capacity-health", 1)
+	worker, err := drt.NewWorker(store, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := &jobsExtension{Extension: dispatchext.New(), durable: orchestration.NewDurableSupervisor(d.Options("legacy-health", 1), nil), capacity: orchestration.NewDurableSupervisor(options, nil)}
+	if err = jobs.capacity.Start(worker, store, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if e := jobs.capacity.Stop(context.Background()); e != nil {
+			t.Error(e)
+		}
+	}()
+	if err = worker.Run(t.Context()); err == nil {
+		t.Fatal("capacity worker survived failing store")
+	}
+	if err = jobs.Health(t.Context()); err == nil || !strings.Contains(err.Error(), "durable workflow worker stopped") {
+		t.Fatalf("capacity health: %v", err)
+	}
+}

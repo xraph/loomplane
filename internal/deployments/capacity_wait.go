@@ -23,10 +23,10 @@ type CapacityWait struct {
 var ErrCapacityWaitConflict = errors.New("deployment capacity wait changed")
 
 // ErrCapacityPaused stops new workload effects until admission succeeds.
-var ErrCapacityPaused = errors.New("deployment is waiting for capacity")
+var ErrCapacityPaused = capacityFenceError(StatusPaused)
 
 // ErrCapacityCancelled stops a deployment whose wait was cancelled.
-var ErrCapacityCancelled = errors.New("deployment capacity wait was cancelled")
+var ErrCapacityCancelled = capacityFenceError(StatusCancelled)
 
 // CapacityResolver checks every approved intent and persists admitted placements.
 // Joined CapacityAdmissionErrors report independent blockers. Other errors fail.

@@ -295,6 +295,9 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	if err != nil {
 		return "", nil, err
 	}
+	if guardErr := legacyCapacityGuard(ctx, plan); guardErr != nil {
+		return "", nil, guardErr
+	}
 	if plan.Status != planning.StatusApproved || !plan.Executable {
 		return "", nil, nil
 	}
@@ -307,6 +310,9 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 		return "", nil, authErr
 	}
 	for _, action := range plan.Actions {
+		if action.Service != nil && action.Service.CapacityIntent != nil {
+			continue
+		}
 		if validationErr := r.validateCloudPlacement(ctx, plan, action, nil); validationErr != nil {
 			return "", nil, validationErr
 		}
@@ -386,6 +392,20 @@ func (r *Runner) FetchSource(ctx context.Context, orgID, deploymentID string) er
 	if err != nil {
 		return err
 	}
+	if d.Status == StatusPaused {
+		return ErrCapacityPaused
+	}
+	if d.Status == StatusCancelled {
+		return ErrCapacityCancelled
+	}
+	plan, err := r.plans.GetPlan(ctx, orgID, d.PlanID)
+	if err != nil {
+		return err
+	}
+	if guardErr := legacyCapacityGuard(ctx, plan); guardErr != nil {
+		return guardErr
+	}
+
 	sources := d.Sources
 	if len(sources) == 0 {
 		// A deployment started before deployments fetched each repository,
@@ -517,8 +537,12 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err != nil {
 		return err
 	}
+	execution, err := r.executionPlan(ctx, plan)
+	if err != nil {
+		return err
+	}
 	var action planning.Action
-	for _, a := range plan.Actions {
+	for _, a := range execution.Actions {
 		if a.ID == actionID {
 			action = a
 		}

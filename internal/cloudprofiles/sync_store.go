@@ -539,7 +539,7 @@ func (s *PgStore) WithSyncLock(ctx context.Context, id string, run func() error)
 // PendingReleasePlans includes approvals whose original workflow ended while a
 // sync held the environment. Running deployments cover commit/enqueue recovery.
 func (s *PgStore) PendingReleasePlans(ctx context.Context) ([][2]string, error) {
-	rows, err := s.db.Query(ctx, `SELECT p.org_id,p.id FROM loomplane_plans p LEFT JOIN loomplane_deployments d ON d.plan_id=p.id WHERE p.status='approved' AND coalesce(p.result->>'cloud_sync_id','')='' AND (d.id IS NULL OR d.status='running') ORDER BY p.created_at LIMIT 100`)
+	rows, err := s.db.Query(ctx, `SELECT p.org_id,p.id FROM loomplane_plans p LEFT JOIN loomplane_deployments d ON d.plan_id=p.id WHERE p.status='approved' AND coalesce(p.result->>'cloud_sync_id','')='' AND (d.id IS NULL OR d.status IN ('running','paused')) ORDER BY p.created_at LIMIT 100`)
 	if err != nil {
 		return nil, err
 	}

@@ -81,6 +81,7 @@ func (s *Service) SaveCapacityPolicy(ctx context.Context, p security.Principal, 
 	if s.Audit != nil {
 		s.Audit.Record(ctx, projects.AuditEvent{Action: "cloud.capacity_policy.write", Severity: "info", Principal: p, Attributes: map[string]any{"cloud_id": cloudID, "revision": policy.Revision, "enabled": policy.Enabled, "require_expansion_approval": policy.RequireExpansionApproval}})
 	}
+	s.wakeCapacityCloud(ctx, p.OrgID, cloudID, fmt.Sprintf("policy:%d", policy.Revision))
 	return &policy, nil
 }
 
