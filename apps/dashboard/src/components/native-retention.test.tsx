@@ -148,7 +148,7 @@ it("lets readers inspect source deletion history without retrying", async () => 
     screen.queryByRole("button", { name: "Delete native backup" })
   ).not.toBeInTheDocument()
   await userEvent.click(
-    screen.getByRole("button", { name: "Deletion details" })
+    await screen.findByRole("button", { name: "Deletion details" })
   )
   expect(await screen.findByText("admitted")).toBeInTheDocument()
   expect(
