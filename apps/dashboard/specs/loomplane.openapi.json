@@ -5,8 +5,61 @@
     "description": "Loomplane's API: organizations' projects, environments and infrastructure.",
     "version": "0.1.0-dev"
   },
-  "servers": [],
+  "servers": [
+    {
+      "url": "http://localhost:8780",
+      "description": "Development server"
+    },
+    {
+      "url": "http://localhost:8780"
+    }
+  ],
   "paths": {
+    "/_/health": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/_/health/live": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/_/health/ready": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/_/info": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/_/metrics": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
     "/api/v1/activity": {
       "get": {
         "tags": [
@@ -2754,6 +2807,37 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NativeRestore"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-copies/{id}/credentials": {
+      "post": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoveryCopies.credentials",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Freshly checked expiring reader credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeCopyCredentials"
                 }
               }
             }
@@ -7413,6 +7497,42 @@
           }
         }
       }
+    },
+    "/asyncapi": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/asyncapi.json": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/swagger": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -11238,6 +11358,47 @@
             "type": "string"
           },
           "review_token": {
+            "type": "string"
+          }
+        }
+      },
+      "NativeCopyCredentials": {
+        "type": "object",
+        "required": [
+          "copy_id",
+          "provider",
+          "connection_name",
+          "database",
+          "username",
+          "password",
+          "expires_at",
+          "checked_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "connection_name": {
+            "type": "string"
+          },
+          "copy_id": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "password": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "username": {
             "type": "string"
           }
         }

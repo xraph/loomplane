@@ -24,6 +24,7 @@ func (a *App) nativeCopyCommand() cli.Command {
 			cli.WithFlags(append(recoveryFlags(), cli.NewStringFlag("review-file", "", "Saved native-copy review JSON file", ""), cli.NewBoolFlag("acknowledge-charges", "", "Acknowledge charges until confirmed deletion, including failed cleanup", false))...),
 			cli.WithUsage("backups native-copies create --review-file review.json --acknowledge-charges [--wait] [--json]"))),
 		cli.WithSubcommand(cli.NewCommand("show", "Show retained native copy and cleanup status", a.showNativeCopy, cli.WithFlags(recoveryFlags()...), cli.WithUsage("backups native-copies show <copy> [--wait] [--json]"))),
+		cli.WithSubcommand(cli.NewCommand("credentials", "Save freshly checked reader credentials to a private file", a.nativeCopyCredentials, cli.WithFlag(cli.NewStringFlag("out", "", "New owner-only credential JSON file", "")), cli.WithUsage("backups native-copies credentials <copy> --out copy-credentials.json"))),
 		cli.WithSubcommand(cli.NewCommand("cleanup", "Request removal of this temporary copy", a.cleanupNativeCopy,
 			cli.WithFlags(append(recoveryFlags(), cli.NewBoolFlag("yes", "y", "Confirm removal of the temporary copy", false))...), cli.WithUsage("backups native-copies cleanup <copy> --yes [--wait] [--json]"))))
 }

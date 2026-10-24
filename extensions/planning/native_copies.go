@@ -31,7 +31,27 @@ func (e *Extension) nativeCopyRoutes(group forge.Router) error {
 	if err := group.GET("/native-recovery-copies/:id", e.getNativeCopy, forge.WithName("nativeRecoveryCopies.get"), forge.WithResponseSchema(http.StatusOK, "Native copy and cleanup status", recovery.NativeRestore{})); err != nil {
 		return err
 	}
+	if err := group.POST("/native-recovery-copies/:id/credentials", e.nativeCopyCredentials, forge.WithName("nativeRecoveryCopies.credentials"), forge.WithResponseSchema(http.StatusOK, "Freshly checked expiring reader credentials", recovery.NativeCopyCredentials{})); err != nil {
+		return err
+	}
 	return group.DELETE("/native-recovery-copies/:id", e.cleanupNativeCopy, forge.WithName("nativeRecoveryCopies.cleanup"), forge.WithResponseSchema(http.StatusAccepted, "Requested temporary copy cleanup", recovery.NativeRestore{}))
+}
+
+func (e *Extension) nativeCopyCredentials(c forge.Context) error {
+	c.Response().Header().Set("Cache-Control", "no-store, private")
+	c.Response().Header().Set("Pragma", "no-cache")
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	credentials, err := e.nativeBackups.CopyCredentials(c.Request().Context(), p, c.Param("id"))
+	if errors.Is(err, recovery.ErrNativeAccessUnavailable) {
+		return forge.NewHTTPError(http.StatusServiceUnavailable, recovery.ErrNativeAccessUnavailable.Error())
+	}
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, credentials)
 }
 
 func nativeCopyError(err error) error {

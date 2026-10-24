@@ -107,6 +107,7 @@ type NativeService struct {
 	Backend        NativeBackend
 	Copies         NativeCopyWorkStore
 	CopyBackend    NativeCopyBackend
+	AccessBackend  NativeAccessBackend
 	EnqueueCopy    func(context.Context, string, string) error
 	Cleanups       NativeCleanupWorkStore
 	CleanupBackend NativeCleanupBackend

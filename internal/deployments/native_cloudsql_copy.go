@@ -179,6 +179,17 @@ func (n *NativeDatabases) copyPasswords(ctx context.Context, r recovery.NativeRe
 			return nativeCopyPasswords{}, checkErr
 		}
 	}
+	passwords, err := n.readCopyPasswords(ctx, r, s)
+	if err != nil {
+		return nativeCopyPasswords{}, err
+	}
+	return passwords, c.Check(ctx)
+}
+
+func (n *NativeDatabases) readCopyPasswords(ctx context.Context, r recovery.NativeRestore, s *nativeSQLCopyState) (nativeCopyPasswords, error) {
+	if s.CredentialVersion <= 0 {
+		return nativeCopyPasswords{}, recovery.ErrConflict
+	}
 	raw, err := n.Secrets.GetVersion(ctx, nativeCopySecretKey(r), s.CredentialVersion)
 	if err != nil {
 		return nativeCopyPasswords{}, err
@@ -187,7 +198,7 @@ func (n *NativeDatabases) copyPasswords(ctx context.Context, r recovery.NativeRe
 	if json.Unmarshal(raw, &p) != nil || p.Scope != s.Scope || len(p.AdminPassword) < 40 || len(p.ReaderPassword) < 40 || strings.ContainsRune(p.AdminPassword, 0) || strings.ContainsRune(p.ReaderPassword, 0) {
 		return nativeCopyPasswords{}, recovery.ErrConflict
 	}
-	return p, c.Check(ctx)
+	return p, nil
 }
 
 func (s *nativeSQLCopyState) copyGuard(client *gcp.Session, r recovery.NativeRestore, cfg *planning.ResourceConfig, c recovery.NativeWorkerControl) func(context.Context) error {
@@ -307,28 +318,39 @@ func (n *NativeDatabases) RestoreNative(ctx context.Context, p security.Principa
 	if checkErr := guard(ctx); checkErr != nil {
 		return recovery.NativeRestoreResult{}, checkErr
 	}
-	var connector gcp.SQLConnector
-	if n.SQLConnector != nil {
-		connector, err = n.SQLConnector(ctx, client, r.Target.Region, "lp-recovery-"+s.Scope[:32])
-	} else {
-		connector, err = client.PostgresConnector(ctx, r.Target.Region, "lp-recovery-"+s.Scope[:32])
-	}
-	if err != nil {
-		return recovery.NativeRestoreResult{}, err
-	}
-	if connector == nil {
-		return recovery.NativeRestoreResult{}, recovery.ErrInvalid
-	}
-	defer func() { _ = connector.Close() }()
-	_, err = (&nativepg.Verifier{Dial: connector.DialContext}).Verify(ctx, nativepg.Spec{Database: databaseName(r.Source.Name), AdminUser: "postgres", AdminPassword: passwords.AdminPassword, Reader: "lp_recovery_" + s.Scope[:32], ReaderPassword: passwords.ReaderPassword, Intent: s.Scope, ExpiresAt: r.ExpiresAt, MajorVersion: 17}, guard)
-	if err != nil {
-		return recovery.NativeRestoreResult{}, err
+	if checkErr := n.checkNativeSQL(ctx, client, r, s, passwords, guard, false); checkErr != nil {
+		return recovery.NativeRestoreResult{}, checkErr
 	}
 	s.Stage = "ready"
 	if checkErr := s.save(ctx, c.NativeWorkerControl); checkErr != nil {
 		return recovery.NativeRestoreResult{}, checkErr
 	}
 	return recovery.NativeRestoreResult{ExternalID: r.Target.NativeProject + ":" + r.Target.Region + ":lp-recovery-" + s.Scope[:32], PhysicalID: s.PhysicalID, SQLVerified: true}, nil
+}
+
+func (n *NativeDatabases) checkNativeSQL(ctx context.Context, client *gcp.Session, r recovery.NativeRestore, s *nativeSQLCopyState, passwords nativeCopyPasswords, guard func(context.Context) error, existingOnly bool) error {
+	var connector gcp.SQLConnector
+	var err error
+	if n.SQLConnector != nil {
+		connector, err = n.SQLConnector(ctx, client, r.Target.Region, "lp-recovery-"+s.Scope[:32])
+	} else {
+		connector, err = client.PostgresConnector(ctx, r.Target.Region, "lp-recovery-"+s.Scope[:32])
+	}
+	if err != nil {
+		return err
+	}
+	if connector == nil {
+		return recovery.ErrInvalid
+	}
+	defer func() { _ = connector.Close() }()
+	verifier := &nativepg.Verifier{Dial: connector.DialContext}
+	spec := nativepg.Spec{Database: databaseName(r.Source.Name), AdminUser: "postgres", AdminPassword: passwords.AdminPassword, Reader: "lp_recovery_" + s.Scope[:32], ReaderPassword: passwords.ReaderPassword, Intent: s.Scope, ExpiresAt: r.ExpiresAt, MajorVersion: 17}
+	if existingOnly {
+		_, err = verifier.Inspect(ctx, spec, guard)
+	} else {
+		_, err = verifier.Verify(ctx, spec, guard)
+	}
+	return err
 }
 
 // DeleteNative retains the pin and operation through retries. Secrets are

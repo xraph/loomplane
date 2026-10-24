@@ -1126,6 +1126,17 @@ export interface NativeCopyCreateInputBody {
   reviewToken: string;
 }
 
+export interface NativeCopyCredentials {
+  checkedAt: string;
+  connectionName: string;
+  copyId: string;
+  database: string;
+  expiresAt: string;
+  password: string;
+  provider: string;
+  username: string;
+}
+
 export interface NativeCopyReview {
   capacity: NativeCopyCapacity;
   notice: string;

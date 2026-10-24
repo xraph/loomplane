@@ -766,6 +766,13 @@ export const ops = {
     invalidates: ['NativeRestore[]'],
     responseCodec: CODECS['NativeRestore'],
   },
+  'nativeRecoveryCopies.credentials': {
+    method: 'POST',
+    path: '/api/v1/native-recovery-copies/{id}/credentials',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['NativeCopyCredentials'],
+  },
   'nativeRecoverySources.inventory': {
     method: 'GET',
     path: '/api/v1/native-recovery-sources/{id}',

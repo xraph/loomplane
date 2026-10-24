@@ -1,4 +1,6 @@
 import { ClientProvider } from "@forge-go/client-react"
+import { dehydrate } from "@forge-go/client-core"
+import { StrictMode } from "react"
 import {
   act,
   cleanup,
@@ -14,11 +16,17 @@ import { forgeClient } from "@/client/runtime"
 import { NativeRecovery } from "@/components/native-recovery"
 import { ServiceRecovery } from "@/pages/service-catalog"
 
-const permission = vi.hoisted(() => ({ manage: true }))
+const permission = vi.hoisted(() => ({
+  manage: true,
+  secret: true,
+  read: true,
+}))
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
     can: (name: string) =>
-      name !== "service_restore:manage" || permission.manage,
+      (name !== "service_restore:manage" || permission.manage) &&
+      (name !== "secret:manage" || permission.secret) &&
+      (name !== "service_backup:read" || permission.read),
     session: { userId: "owner", orgId: "org" },
   }),
 }))
@@ -27,6 +35,8 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   permission.manage = true
+  permission.secret = true
+  permission.read = true
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   forgeClient.clear()
@@ -41,11 +51,14 @@ function fixture({
   const creates: Record<string, unknown>[] = []
   const deletes: string[] = []
   const reads: string[] = []
+  const credentialSignals: AbortSignal[] = []
   const control = {
     loseCreate: false,
     cleanupFails: true,
     denyHistory: false,
     nextBefore: "",
+    denyCredentials: false,
+    credentialResponse: null as Promise<Response> | null,
   }
   const source = {
     id: "source",
@@ -121,6 +134,27 @@ function fixture({
       const url = new URL(String(input), "http://localhost")
       const method = init?.method ?? "GET"
       reads.push(`${method} ${url.pathname}${url.search}`)
+      if (
+        url.pathname === "/api/v1/native-recovery-copies/copy/credentials" &&
+        method === "POST"
+      ) {
+        if (init?.signal) credentialSignals.push(init.signal)
+        if (init?.signal?.aborted)
+          throw new DOMException("The operation was aborted", "AbortError")
+        if (control.credentialResponse) return control.credentialResponse
+        return control.denyCredentials
+          ? reply({ message: "Reader access could not be checked" }, 503)
+          : reply({
+              copy_id: "copy",
+              provider: "cloud-sql",
+              connection_name: "recovery:europe-west1:copy",
+              database: "orders",
+              username: "lp_recovery_reader",
+              password: "private-native-reader",
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              checked_at: new Date().toISOString(),
+            })
+      }
       if (url.pathname.endsWith("/native-recovery-sources"))
         return reply({
           sources:
@@ -262,7 +296,15 @@ function fixture({
       return reply({ message: `Unexpected ${method} ${url.pathname}` }, 404)
     }
   )
-  return { reviews, creates, deletes, reads, control, seedCopy }
+  return {
+    reviews,
+    creates,
+    deletes,
+    reads,
+    control,
+    seedCopy,
+    credentialSignals,
+  }
 }
 
 function show(project = "project", environment = "prod") {
@@ -292,6 +334,211 @@ async function openReview() {
   )
   return dialog
 }
+
+it.each(["secret", "read"] as const)(
+  "reveals native reader credentials only on request and forgets them on close or %s permission loss",
+  async (revoked) => {
+    const f = fixture()
+    f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+    const view = show()
+    await screen.findByText("SQL verification recorded")
+    expect(f.reads.some((url) => url.endsWith("/credentials"))).toBe(false)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reader credentials" })
+    )
+    let dialog = await screen.findByRole("dialog", {
+      name: "Recovery copy credentials",
+    })
+    expect(
+      within(dialog).queryByLabelText("Reader password")
+    ).not.toBeInTheDocument()
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+    )
+    expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+      "private-native-reader"
+    )
+    expect(
+      JSON.stringify(
+        dehydrate(forgeClient, {
+          principal: forgeClient.owner as string | undefined,
+        })
+      )
+    ).not.toContain("private-native-reader")
+    expect(
+      JSON.stringify(
+        [...forgeClient.store.keys()].map((key) =>
+          forgeClient.store.getRecord(key)
+        )
+      )
+    ).not.toContain("private-native-reader")
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }))
+    expect(screen.queryByLabelText("Reader password")).not.toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reader credentials" })
+    )
+    dialog = await screen.findByRole("dialog", {
+      name: "Recovery copy credentials",
+    })
+    expect(
+      within(dialog).queryByLabelText("Reader password")
+    ).not.toBeInTheDocument()
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+    )
+    await within(dialog).findByLabelText("Reader password")
+    permission[revoked] = false
+    view.rerender(
+      <ClientProvider client={forgeClient}>
+        <NativeRecovery project="project" environment="prod" />
+      </ClientProvider>
+    )
+    expect(screen.queryByLabelText("Reader password")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Reader credentials" })
+    ).not.toBeInTheDocument()
+  }
+)
+
+it.each(["failed", "unverified", "expired"])(
+  "does not offer credentials for a %s native copy",
+  async (status) => {
+    const f = fixture()
+    f.seedCopy({
+      status: status === "failed" ? "failed" : "succeeded",
+      verified_at:
+        status === "unverified" ? undefined : new Date().toISOString(),
+      expires_at:
+        status === "expired" ? "2020-01-01T00:00:00Z" : "2099-01-01T00:00:00Z",
+    })
+    show()
+    await screen.findByRole("list", { name: "Temporary native copies" })
+    expect(
+      screen.queryByRole("button", { name: "Reader credentials" })
+    ).not.toBeInTheDocument()
+  }
+)
+
+it("keeps a failed credential check retryable without showing a password", async () => {
+  const f = fixture()
+  f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+  f.control.denyCredentials = true
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(
+    await within(dialog).findByText(/Reader access could not be checked/)
+  ).toBeInTheDocument()
+  expect(
+    within(dialog).queryByLabelText("Reader password")
+  ).not.toBeInTheDocument()
+  f.control.denyCredentials = false
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+    "private-native-reader"
+  )
+})
+
+it("reveals and retries credentials in StrictMode and cancels on close", async () => {
+  const f = fixture()
+  f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+  render(
+    <StrictMode>
+      <ClientProvider client={forgeClient}>
+        <NativeRecovery project="project" environment="prod" />
+      </ClientProvider>
+    </StrictMode>
+  )
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  let dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+    "private-native-reader"
+  )
+  await userEvent.click(within(dialog).getByRole("button", { name: "Done" }))
+  expect(f.credentialSignals.at(-1)?.aborted).toBe(true)
+  f.control.denyCredentials = true
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reader credentials" })
+  )
+  dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  await within(dialog).findByRole("alert")
+  f.control.denyCredentials = false
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+    "private-native-reader"
+  )
+})
+
+it("discards a pending credential response after backup-read revocation", async () => {
+  const f = fixture()
+  f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+  let resolve!: (response: Response) => void
+  f.control.credentialResponse = new Promise<Response>((done) => {
+    resolve = done
+  })
+  const view = show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  permission.read = false
+  view.rerender(
+    <ClientProvider client={forgeClient}>
+      <NativeRecovery project="project" environment="prod" />
+    </ClientProvider>
+  )
+  expect(
+    screen.queryByRole("dialog", { name: "Recovery copy credentials" })
+  ).not.toBeInTheDocument()
+  await act(async () =>
+    resolve(
+      new Response(
+        JSON.stringify({
+          copy_id: "copy",
+          password: "late-private-reader",
+          expires_at: "2099-01-01T00:00:00Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    )
+  )
+  expect(screen.queryByLabelText("Reader password")).not.toBeInTheDocument()
+  expect(
+    JSON.stringify(
+      [...forgeClient.store.keys()].map((key) =>
+        forgeClient.store.getRecord(key)
+      )
+    )
+  ).not.toContain("late-private-reader")
+})
 
 it("reviews charges and retries the same uncertain admission before tracking cleanup", async () => {
   const f = fixture()
