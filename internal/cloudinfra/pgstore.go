@@ -89,6 +89,13 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 		return err
 	}
 	defer rollback(tx)
+	if err := s.acceptOperationTx(ctx, tx, o); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *PgStore) acceptOperationTx(ctx context.Context, tx driver.Tx, o *Operation) error {
 	if checkErr := lockInfrastructureScope(ctx, tx, o); checkErr != nil {
 		return checkErr
 	}
@@ -125,8 +132,9 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 	if n != 1 {
 		return ErrConflict
 	}
-	return tx.Commit()
+	return nil
 }
+
 func (s *PgStore) SaveOperation(ctx context.Context, o *Operation) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

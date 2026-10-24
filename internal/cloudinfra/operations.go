@@ -253,6 +253,15 @@ func (s *Service) ApplyServerOperation(ctx context.Context, p security.Principal
 	if err != nil {
 		return nil, err
 	}
+	if store, ok := s.Store.(*PgStore); ok {
+		expansion, checkErr := store.expansionForOperation(ctx, o)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if expansion != nil {
+			return nil, security.ErrForbidden
+		}
+	}
 	if o.Review != in.Review {
 		return nil, ErrConflict
 	}
@@ -393,9 +402,13 @@ func (s *Service) RecoverInfrastructure(ctx context.Context) error {
 }
 
 func (s *Service) execute(ctx context.Context, o *Operation) error {
+	expansion, expansionErr := s.expansionEffect(ctx, o)
+	if expansionErr != nil {
+		return expansionErr
+	}
 	// Accepted cleanup keeps its recorded authority and exact resource target.
 	// New capacity still requires the original manager's current permission.
-	if o.Input.Kind != "delete" && o.Input.Kind != "disconnect" {
+	if !expansion && o.Input.Kind != "delete" && o.Input.Kind != "disconnect" {
 		if checkErr := s.Authz.Require(ctx, o.Principal, security.OrganizationCloudManage, o.OrgID); checkErr != nil {
 			return checkErr
 		}
@@ -465,8 +478,7 @@ func (s *Service) createServer(ctx context.Context, o *Operation, v *Server, a p
 				return err
 			}
 			userData = data
-			o.Attempted = true
-			if checkErr := s.checkpoint(ctx, o); checkErr != nil {
+			if checkErr := s.checkpointCreateAttempt(ctx, o); checkErr != nil {
 				return checkErr
 			}
 		}

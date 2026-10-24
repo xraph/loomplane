@@ -92,6 +92,10 @@ func checkCapacityLimit(p *CapacityPolicy, d CapacityDemand, used CapacityResour
 // ReserveInfrastructureCapacity runs before the provider effect in the caller's
 // transaction. The operation pins immutable account identity and reviewed size.
 func (s *PgStore) ReserveInfrastructureCapacity(ctx context.Context, tx driver.Tx, operationID string, d CapacityDemand, delta ResourceVector) (*CapacityBlock, error) {
+	return s.reserveInfrastructureCapacity(ctx, tx, operationID, d, delta, false)
+}
+
+func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.Tx, operationID string, d CapacityDemand, delta ResourceVector, revalidate bool) (*CapacityBlock, error) {
 	if operationID == "" || !nonnegativeCapacity(delta) {
 		return nil, ErrInvalid
 	}
@@ -115,7 +119,8 @@ func (s *PgStore) ReserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	var existing []byte
 	var reservationStatus string
 	err = tx.QueryRow(ctx, `SELECT body,status FROM loomplane_cloud_capacity_reservations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, d.OrgID, d.CloudID, operationID).Scan(&existing, &reservationStatus)
-	if err == nil {
+	switch {
+	case err == nil:
 		if reservationStatus != "reserved" && reservationStatus != "materialized" {
 			return nil, ErrConflict
 		}
@@ -126,12 +131,18 @@ func (s *PgStore) ReserveInfrastructureCapacity(ctx context.Context, tx driver.T
 		if r.Delta != delta || r.PoolID != d.PoolID {
 			return nil, ErrConflict
 		}
-		return nil, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+		if !revalidate {
+			return nil, nil
+		}
+		if o.Attempted || reservationStatus != "reserved" || o.Input.Kind != "create" || o.CapacityTarget == nil || *o.CapacityTarget != r.Target || o.Provider != r.Provider || o.AccountID != r.AccountID || o.ServerID != r.ServerID {
+			return nil, ErrConflict
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
 		return nil, err
+	case revalidate:
+		return nil, ErrConflict
 	}
-	if o.CapacityTarget == nil || !nonnegativeCapacity(*o.CapacityTarget) || o.CapacityTarget.Servers != 1 || o.CapacityTarget.CPUMillis == 0 || o.CapacityTarget.MemoryBytes == 0 || !freshCapacity(o.CapacityCheckedAt, time.Now()) {
+	if o.CapacityTarget == nil || !nonnegativeCapacity(*o.CapacityTarget) || o.CapacityTarget.Servers != 1 || o.CapacityTarget.CPUMillis == 0 || o.CapacityTarget.MemoryBytes == 0 || (!revalidate && !freshCapacity(o.CapacityCheckedAt, time.Now())) {
 		return capacityBlock(p, d, "stale_inventory", "request"), nil
 	}
 	if o.Input.Kind != "create" && o.Input.Kind != "adopt" && o.Input.Kind != "resize" {
@@ -186,6 +197,17 @@ func (s *PgStore) ReserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	reservations, err := capacityReservationsTx(ctx, tx, d.OrgID)
 	if err != nil {
 		return nil, err
+	}
+	// Revalidation compares current usage without counting the same reservation
+	// twice. The durable row remains reserved throughout this transaction.
+	if revalidate {
+		filtered := make([]scopedCapacityReservation, 0, len(reservations))
+		for _, r := range reservations {
+			if r.cloud != d.CloudID || r.reservation.OperationID != operationID {
+				filtered = append(filtered, r)
+			}
+		}
+		reservations = filtered
 	}
 	for _, r := range reservations {
 		if r.cloud == d.CloudID {
@@ -267,6 +289,9 @@ func (s *PgStore) ReserveInfrastructureCapacity(ctx context.Context, tx driver.T
 				return b, nil
 			}
 		}
+	}
+	if revalidate {
+		return nil, nil
 	}
 	r := infrastructureReservation{OperationID: operationID, Provider: o.Provider, AccountID: o.AccountID, ServerID: o.ServerID, PoolID: d.PoolID, Delta: delta, Target: *o.CapacityTarget, CreatedAt: time.Now().UTC()}
 	raw, err := json.Marshal(r)

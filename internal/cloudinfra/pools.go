@@ -62,8 +62,22 @@ func (s *Service) SavePool(ctx context.Context, p security.Principal, cloud, id 
 	if !ok {
 		return nil, ErrInvalid
 	}
-	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 64 || len(in.Members) == 0 || len(in.Members) > 100 {
+	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 64 || len(in.Members) > 100 {
 		return nil, ErrInvalid
+	}
+	if len(in.Members) == 0 {
+		policies, available := s.Store.(CapacityPolicyStore)
+		if !available || id == "" {
+			return nil, ErrInvalid
+		}
+		policy, policyErr := policies.GetCapacityPolicy(ctx, p.OrgID, cloud)
+		if policyErr != nil {
+			return nil, policyErr
+		}
+		_, configured := expansionPool(policy, id)
+		if !policy.Enabled || !configured {
+			return nil, ErrInvalid
+		}
 	}
 	if id == "" {
 		if in.Revision != 0 {

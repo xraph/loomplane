@@ -127,21 +127,25 @@ type Runtime interface {
 }
 
 type Deps struct {
-	Domains              DomainStore
-	Resolver             DomainResolver
-	PoolCleanup          PoolCleanup
-	Store                Store
-	Clouds               Clouds
-	Connections          Credentials
-	RuntimeConnections   connections.Store
-	Secrets              connections.Secrets
-	Authz                connections.Authorizer
-	Adapters             *Adapters
-	Workflow             Workflow
-	Runtime              Runtime
-	Audit                projects.Auditor
-	EnrollmentURL        string
-	AllowLocalEnrollment bool
+	CapacityDemandAuthority CapacityDemandAuthority
+	CapacityDemandWakeup    CapacityDemandWakeup
+	// EnableAutomaticCapacity stays false until integrated qualification.
+	EnableAutomaticCapacity bool
+	Domains                 DomainStore
+	Resolver                DomainResolver
+	PoolCleanup             PoolCleanup
+	Store                   Store
+	Clouds                  Clouds
+	Connections             Credentials
+	RuntimeConnections      connections.Store
+	Secrets                 connections.Secrets
+	Authz                   connections.Authorizer
+	Adapters                *Adapters
+	Workflow                Workflow
+	Runtime                 Runtime
+	Audit                   projects.Auditor
+	EnrollmentURL           string
+	AllowLocalEnrollment    bool
 }
 
 type Service struct {

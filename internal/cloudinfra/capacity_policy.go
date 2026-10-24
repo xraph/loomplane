@@ -74,6 +74,7 @@ func (s *Service) SaveCapacityPolicy(ctx context.Context, p security.Principal, 
 	if err := validateCapacityPolicyChoices(&policy, options); err != nil {
 		return nil, err
 	}
+	policy.authority = &p
 	if err := st.SaveCapacityPolicy(ctx, &policy, in.ExpectedRevision); err != nil {
 		return nil, err
 	}

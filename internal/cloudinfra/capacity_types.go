@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"time"
 
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -15,6 +16,7 @@ type ResourceVector struct {
 }
 
 type CapacityPolicy struct {
+	authority                *security.Principal
 	OrgID                    string                `json:"org_id"`
 	CloudID                  string                `json:"cloud_id"`
 	Revision                 int64                 `json:"revision"`
@@ -88,27 +90,31 @@ type CapacityDecision struct {
 }
 
 type Expansion struct {
-	ID                   string         `json:"id"`
-	OrgID                string         `json:"org_id"`
-	CloudID              string         `json:"cloud_id"`
-	PoolID               string         `json:"pool_id"`
-	OperationID          string         `json:"operation_id"`
-	Status               string         `json:"status"`
-	IntentHash           string         `json:"intent_hash"`
-	PolicyRevision       int64          `json:"policy_revision"`
-	Resources            ResourceVector `json:"resources"`
-	Provider             string         `json:"provider"`
-	AccountID            string         `json:"account_id"`
-	ConnectionID         string         `json:"connection_id"`
-	ConnectionGeneration int64          `json:"connection_generation"`
-	Region               string         `json:"region"`
-	Size                 string         `json:"size"`
-	Architecture         string         `json:"architecture"`
-	Image                string         `json:"image"`
-	ApprovedBy           string         `json:"approved_by"`
-	ApprovedAt           *time.Time     `json:"approved_at,omitempty"`
-	CreatedAt            time.Time      `json:"created_at"`
-	UpdatedAt            time.Time      `json:"updated_at"`
+	Revision             int64               `json:"revision"`
+	Minimum              bool                `json:"minimum"`
+	Template             PoolExpansionPolicy `json:"template"`
+	Block                *CapacityBlock      `json:"block,omitempty"`
+	ID                   string              `json:"id"`
+	OrgID                string              `json:"org_id"`
+	CloudID              string              `json:"cloud_id"`
+	PoolID               string              `json:"pool_id"`
+	OperationID          string              `json:"operation_id"`
+	Status               string              `json:"status"`
+	IntentHash           string              `json:"intent_hash"`
+	PolicyRevision       int64               `json:"policy_revision"`
+	Resources            ResourceVector      `json:"resources"`
+	Provider             string              `json:"provider"`
+	AccountID            string              `json:"account_id"`
+	ConnectionID         string              `json:"connection_id"`
+	ConnectionGeneration int64               `json:"connection_generation"`
+	Region               string              `json:"region"`
+	Size                 string              `json:"size"`
+	Architecture         string              `json:"architecture"`
+	Image                string              `json:"image"`
+	ApprovedBy           string              `json:"approved_by"`
+	ApprovedAt           *time.Time          `json:"approved_at,omitempty"`
+	CreatedAt            time.Time           `json:"created_at"`
+	UpdatedAt            time.Time           `json:"updated_at"`
 }
 
 // CapacityResources preserves unknown facts as null, independently per dimension.
