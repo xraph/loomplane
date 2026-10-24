@@ -1,8 +1,13 @@
 package apikeys
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/xraph/keysmith/store"
 
 	"github.com/xraph/keysmith"
 	"github.com/xraph/keysmith/id"
@@ -42,5 +47,40 @@ func TestValidateSavedPrincipal(t *testing.T) {
 	principal.ReadOnly = true
 	if err = svc.ValidatePrincipal(t.Context(), principal); err == nil {
 		t.Fatal("read-only authority accepted")
+	}
+}
+
+type unavailablePrincipalStore struct {
+	store.Store
+	cause error
+}
+
+func (s unavailablePrincipalStore) Keys() key.Store {
+	return unavailablePrincipalKeys{Store: s.Store.Keys(), cause: s.cause}
+}
+
+type unavailablePrincipalKeys struct {
+	key.Store
+	cause error
+}
+
+func (s unavailablePrincipalKeys) Get(context.Context, id.KeyID) (*key.Key, error) {
+	return nil, s.cause
+}
+
+func TestValidateSavedPrincipalStorageFailure(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		cause := errors.New("backend password=private outage")
+		if missing {
+			cause = store.ErrKeyNotFound
+		}
+		engine, err := keysmith.NewEngine(keysmith.WithStore(unavailablePrincipalStore{Store: memory.New(), cause: cause}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = New(engine, "app", nil, nil).ValidatePrincipal(t.Context(), security.Principal{OrgID: "org", UserID: "user", KeyID: id.NewKeyID().String()})
+		if err == nil || errors.Is(err, ErrRejected) != missing || strings.Contains(err.Error(), "private") {
+			t.Fatalf("storage failure classification missing=%v: %v", missing, err)
+		}
 	}
 }

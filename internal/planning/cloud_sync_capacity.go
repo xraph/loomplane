@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/orchestration"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 func (s *Service) CloudSyncNeedsCapacity(ctx context.Context, org, project, id string) (bool, error) {
@@ -38,34 +41,51 @@ type capacitySyncRunner interface {
 }
 
 // PrepareCapacityCloudSync persists participants before any runtime effect.
-func (s *Service) PrepareCapacityCloudSync(ctx context.Context, org, project, id string) ([]orchestration.CloudSyncDeployment, error) {
+func (s *Service) PrepareCapacityCloudSync(ctx context.Context, org, project, id string) (orchestration.CloudSyncPreparation, error) {
 	st, err := s.syncStore()
 	if err != nil {
-		return nil, err
+		return orchestration.CloudSyncPreparation{}, err
 	}
 	lock, ok := st.(interface {
 		WithSyncLock(context.Context, string, func() error) error
 	})
 	if !ok {
-		return nil, errors.New("cloud sync lock is unavailable")
+		return orchestration.CloudSyncPreparation{}, errors.New("cloud sync lock is unavailable")
 	}
-	var out []orchestration.CloudSyncDeployment
+	var out orchestration.CloudSyncPreparation
 	err = lock.WithSyncLock(ctx, id, func() error {
 		sync, snapshot, e := st.GetSync(ctx, org, project, id)
 		if e != nil {
 			return e
 		}
+		if attempt, bound := orchestration.CloudSyncAttempt(ctx); bound && attempt != sync.Attempt {
+			out.Stopped = true
+			return nil
+		}
 		if sync.Status == cloudprofiles.SyncSucceeded || sync.Status == cloudprofiles.SyncReverted || sync.Status == cloudprofiles.SyncReverting || sync.Status == cloudprofiles.SyncFailed {
+			out.Stopped = true
+			return nil
+		}
+		fail := func(cause error) error {
+			if ctx.Err() != nil || !terminalCapacitySyncError(cause) {
+				return cause
+			}
+			sync.Status = cloudprofiles.SyncFailed
+			sync.Error = cause.Error()
+			if saveErr := st.SaveSync(ctx, sync, snapshot); saveErr != nil {
+				return saveErr
+			}
+			out = orchestration.CloudSyncPreparation{Stopped: true}
 			return nil
 		}
 		if checkErr := s.authorizeStoredCloudSync(ctx, snapshot.Actor, sync, snapshot); checkErr != nil {
-			return checkErr
+			return fail(checkErr)
 		}
 		if checkErr := s.validateSnapshotConnections(ctx, org, snapshot); checkErr != nil {
-			return checkErr
+			return fail(checkErr)
 		}
 		if checkErr := validateSyncGrants(ctx, st, org, snapshot); checkErr != nil {
-			return checkErr
+			return fail(checkErr)
 		}
 		runner, ok := s.cloudSyncRunner.(capacitySyncRunner)
 		if !ok {
@@ -75,7 +95,7 @@ func (s *Service) PrepareCapacityCloudSync(ctx context.Context, org, project, id
 		for _, env := range snapshot.Environments {
 			plan, pe := s.acceptedCloudPlan(ctx, sync, env)
 			if pe != nil {
-				return pe
+				return fail(pe)
 			}
 			plans[env.EnvironmentID] = plan
 		}
@@ -98,12 +118,12 @@ func (s *Service) PrepareCapacityCloudSync(ctx context.Context, org, project, id
 			}
 			dep, steps, se := runner.StartCapacityCloudPlan(ctx, org, plan.ID)
 			if se != nil {
-				return se
+				return fail(se)
 			}
 			env.PlanID = plan.ID
 			env.DeploymentID = dep
 			if dep != "" {
-				out = append(out, orchestration.CloudSyncDeployment{PlanID: plan.ID, DeploymentID: dep, Steps: steps})
+				out.Deployments = append(out.Deployments, orchestration.CloudSyncDeployment{PlanID: plan.ID, DeploymentID: dep, Steps: steps})
 			}
 		}
 		return st.SaveSync(ctx, sync, snapshot)
@@ -117,9 +137,25 @@ func (s *Service) FinishCapacityCloudSync(ctx context.Context, org, project, id 
 	if err != nil {
 		return err
 	}
+	lock, ok := st.(interface {
+		WithSyncLock(context.Context, string, func() error) error
+	})
+	if !ok {
+		return errors.New("cloud sync lock is unavailable")
+	}
+	return lock.WithSyncLock(ctx, id, func() error { return s.finishCapacityCloudSync(ctx, st, org, project, id, heartbeat) })
+}
+func (s *Service) finishCapacityCloudSync(ctx context.Context, st cloudprofiles.SyncStore, org, project, id string, heartbeat func([]byte) error) error {
 	sync, snapshot, err := st.GetSync(ctx, org, project, id)
 	if err != nil {
 		return err
+	}
+	if attempt, bound := orchestration.CloudSyncAttempt(ctx); bound && attempt != sync.Attempt {
+		return nil
+	}
+	switch sync.Status {
+	case cloudprofiles.SyncSucceeded, cloudprofiles.SyncReverted, cloudprofiles.SyncReverting, cloudprofiles.SyncFailed:
+		return nil
 	}
 	runner, ok := s.cloudSyncRunner.(capacitySyncRunner)
 	if !ok {
@@ -139,5 +175,18 @@ func (s *Service) FinishCapacityCloudSync(ctx context.Context, org, project, id 
 			return st.SaveSync(ctx, sync, snapshot)
 		}
 	}
-	return s.ReconcileCloudSync(ctx, org, project, id, heartbeat)
+	return s.reconcileCloudSync(ctx, st, org, project, id, heartbeat)
+}
+
+// Only known authority/review rejections settle the business operation. Store,
+// lock and unexpected adapter errors remain retryable without changing status.
+func terminalCapacitySyncError(err error) bool {
+	for _, terminal := range []error{security.ErrForbidden, security.ErrUnauthenticated, security.ErrNoOrganization, security.ErrOrgMismatch, security.ErrNotMember, apikeys.ErrRejected, cloudprofiles.ErrConflict, cloudprofiles.ErrInvalid, cloudprofiles.ErrNotFound, connections.ErrNotFound, connections.ErrInvalid, ErrNotFound} {
+		if errors.Is(err, terminal) {
+			return true
+		}
+	}
+	var syntax *json.SyntaxError
+	var shape *json.UnmarshalTypeError
+	return errors.As(err, &syntax) || errors.As(err, &shape)
 }

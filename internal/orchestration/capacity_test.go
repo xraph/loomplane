@@ -304,3 +304,74 @@ func TestCapacityWorkflowV2CloudSyncCompatibility(t *testing.T) {
 		}
 	}
 }
+
+func TestCapacityWorkflowLegacyPreparationResult(t *testing.T) {
+	for _, raw := range []string{`[{"plan_id":"plan","deployment_id":"dep","steps":[["step"]]}]`, `{"deployments":[{"plan_id":"plan","deployment_id":"dep","steps":[["step"]]}]}`} {
+		var result CloudSyncPreparation
+		if err := json.Unmarshal([]byte(raw), &result); err != nil || result.Stopped || len(result.Deployments) != 1 || result.Deployments[0].DeploymentID != "dep" {
+			t.Fatalf("stored preparation: %+v %v", result, err)
+		}
+	}
+}
+
+func TestCapacityWorkflowV2InfrastructureCompatibility(t *testing.T) {
+	store := memory.New()
+	d := NewDeployments()
+	probe := &infrastructureProbe{}
+	d.BindInfrastructure(probe)
+	old, err := drt.NewWorker(store, d.Options("old-infra", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(infrastructureInput{OrgID: "org", ID: "operation"})
+	req := durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: "infrastructure:operation:1", RunID: runID}, RequestID: "infrastructure:operation:1", WorkflowType: infrastructureWorkflow, BuildID: DeploymentBuild, Queue: DurableQueue, Input: raw}
+	if _, err = old.StartExecution(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	if worked, e := old.RunOnce(t.Context(), durable.TaskWorkflow); e != nil || !worked {
+		t.Fatalf("schedule infrastructure: %v %v", worked, e)
+	}
+	for _, owner := range []string{"v3-infra", "v3-infra-restarted"} {
+		newer, e := drt.NewWorker(store, d.CapacityOptions(owner, 1))
+		if e != nil {
+			t.Fatal(e)
+		}
+		pumpCapacity(t, newer)
+	}
+	if probe.calls != 0 {
+		t.Fatal("v3 consumed queued v2 infrastructure")
+	}
+	old, err = drt.NewWorker(store, d.Options("old-infra-restarted", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pumpCapacity(t, old)
+	if _, err = old.StartExecution(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	pumpCapacity(t, old)
+	execution, err := store.GetExecution(t.Context(), req.Key)
+	if err != nil || execution.State != durable.StateCompleted || execution.BuildID != DeploymentBuild || probe.calls != 1 {
+		t.Fatalf("infrastructure restart: %+v calls=%d %v", execution, probe.calls, err)
+	}
+}
+
+func TestCapacityWorkflowSyncAttemptIdentity(t *testing.T) {
+	for _, workflow := range []string{"sync.attempt.2", "other.attempt.2", "sync.attempt.0", "sync.attempt.-1", "sync.attempt.invalid", "sync"} {
+		info := drt.ActivityInfo{Key: durable.Key{WorkflowID: workflow}}
+		ctx, err := capacitySyncActivityContext(t.Context(), info, "sync")
+		if workflow != "sync.attempt.2" {
+			if err == nil {
+				t.Fatalf("invalid phase identity accepted: %s", workflow)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempt, bound := CloudSyncAttempt(ctx)
+		if !bound || attempt != 2 || !IsCapacityContext(ctx) {
+			t.Fatalf("phase authority lost: %d %v", attempt, bound)
+		}
+	}
+}

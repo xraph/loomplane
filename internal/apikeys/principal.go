@@ -2,9 +2,11 @@ package apikeys
 
 import (
 	"context"
+	"errors"
 
 	"github.com/xraph/keysmith/id"
 	"github.com/xraph/keysmith/key"
+	"github.com/xraph/keysmith/store"
 
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -20,7 +22,15 @@ func (s *Service) ValidatePrincipal(ctx context.Context, p security.Principal) e
 		return ErrRejected
 	}
 	k, err := s.engine.GetKey(s.tenant(ctx, p.OrgID), kid)
-	if err != nil || k == nil || k.ID.String() != p.KeyID || k.AppID != s.appID || k.TenantID != p.OrgID || k.CreatedBy != p.UserID || k.State != key.StateActive || k.RevokedAt != nil || k.PolicyID != nil || len(k.Scopes) > 0 || k.ExpiresAt == nil || !k.ExpiresAt.After(s.now()) || access(k) != Write {
+	if err != nil {
+		if errors.Is(err, store.ErrKeyNotFound) {
+			return ErrRejected
+		}
+		// Saved authority fails closed, but an outage is not a revoked key.
+		// Keep backend details out of durable activity errors and API responses.
+		return errors.New("saved API key authority is temporarily unavailable")
+	}
+	if k == nil || k.ID.String() != p.KeyID || k.AppID != s.appID || k.TenantID != p.OrgID || k.CreatedBy != p.UserID || k.State != key.StateActive || k.RevokedAt != nil || k.PolicyID != nil || len(k.Scopes) > 0 || k.ExpiresAt == nil || !k.ExpiresAt.After(s.now()) || access(k) != Write {
 		return ErrRejected
 	}
 	return nil

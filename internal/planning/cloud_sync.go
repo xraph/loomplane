@@ -612,12 +612,12 @@ func (s *Service) validateSnapshotConnections(ctx context.Context, org string, s
 			if option.ID == id {
 				found = true
 				if expected != "" && connections.AccountIdentity(option.Cloud, option.Account, option.Details) != expected {
-					return fmt.Errorf("reviewed connection %s changed its account", id)
+					return fmt.Errorf("%w: reviewed connection %s changed its account", cloudprofiles.ErrConflict, id)
 				}
 			}
 		}
 		if !found {
-			return fmt.Errorf("reviewed connection %s is unavailable", id)
+			return fmt.Errorf("%w: reviewed connection %s is unavailable", cloudprofiles.ErrConflict, id)
 		}
 	}
 	for _, env := range snapshot.Environments {
@@ -632,7 +632,7 @@ func (s *Service) validateSnapshotConnections(ctx context.Context, org string, s
 			pin := a.Service.CloudPlacement
 			i := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == pin.ConnectionID })
 			if i < 0 || !options[i].Ready || connections.AccountIdentity(options[i].Cloud, options[i].Account, options[i].Details) != pin.AccountIdentity {
-				return fmt.Errorf("reviewed account for %s is unavailable or changed", a.Name)
+				return fmt.Errorf("%w: reviewed account for %s is unavailable or changed", cloudprofiles.ErrConflict, a.Name)
 			}
 		}
 	}
