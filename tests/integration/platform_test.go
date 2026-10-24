@@ -122,11 +122,12 @@ func (r *running) stop() {
 }
 
 type client struct {
-	t     *testing.T
-	ctx   context.Context
-	base  string
-	token string
-	key   string
+	observeStatus func(int)
+	t             *testing.T
+	ctx           context.Context
+	base          string
+	token         string
+	key           string
 }
 
 func (c *client) context() context.Context {
@@ -160,6 +161,9 @@ func (c *client) do(method, path string, body any, out any) int {
 		c.t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer res.Body.Close()
+	if c.observeStatus != nil {
+		c.observeStatus(res.StatusCode)
+	}
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
 		c.t.Fatal(err)

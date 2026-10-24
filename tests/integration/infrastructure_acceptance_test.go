@@ -147,6 +147,9 @@ func fixtureSSH(t *testing.T, state infrastructureState) (string, map[string]str
 							Origin     string
 							OriginPort uint32
 						}
+						if ssh.Unmarshal(request.ExtraData(), &payload) == nil && fixtureNATSTCP(t, state, request, payload.Host, payload.Port) {
+							continue
+						}
 						if ssh.Unmarshal(request.ExtraData(), &payload) == nil && payload.Host == "127.0.0.1" && payload.Port > 0 && payload.Port <= 65535 {
 							if state.HostLoopback {
 								address = net.JoinHostPort(payload.Host, strconv.FormatUint(uint64(payload.Port), 10))

@@ -61,11 +61,11 @@ func (s *NativeService) CopyCredentials(ctx context.Context, p security.Principa
 	started := time.Now()
 	err = access.WithNativeAccess(ctx, p.OrgID, id, func(ctx context.Context, locked NativeRestore) error {
 		guard := func(ctx context.Context) error { return check(ctx, locked) }
-		if err := guard(ctx); err != nil {
-			return err
+		if checkErr := guard(ctx); checkErr != nil {
+			return checkErr
 		}
-		credentials, err := s.AccessBackend.NativeCredentials(ctx, p, copyNativeRestore(locked), guard)
-		if err != nil {
+		credentials, accessErr := s.AccessBackend.NativeCredentials(ctx, p, copyNativeRestore(locked), guard)
+		if accessErr != nil {
 			return ErrNativeAccessUnavailable
 		}
 		if checkErr := guard(ctx); checkErr != nil {

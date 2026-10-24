@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
+	nativenats "github.com/xraph/loomplane/internal/clouds/nats"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -33,6 +34,9 @@ func databaseService(cfg *planning.ResourceConfig) (*planning.ServiceConfig, err
 }
 
 func databaseEnvironment(kind, name, application, admin string) (env map[string]string, secrets map[string]bool) {
+	if kind == "nats" {
+		return map[string]string{"LOOMPLANE_NATS_ADMIN_PASSWORD": admin, "LOOMPLANE_APP_PASSWORD": application}, map[string]bool{"LOOMPLANE_NATS_ADMIN_PASSWORD": true, "LOOMPLANE_APP_PASSWORD": true}
+	}
 	if nativecache.ValidEngine(kind) {
 		return map[string]string{"LOOMPLANE_CACHE_ADMIN_PASSWORD": admin, "LOOMPLANE_APP_PASSWORD": application}, map[string]bool{"LOOMPLANE_CACHE_ADMIN_PASSWORD": true, "LOOMPLANE_APP_PASSWORD": true}
 	}
@@ -49,6 +53,10 @@ func databaseEnvironment(kind, name, application, admin string) (env map[string]
 func databaseLabels(labels map[string]string, recipe *recipes.Recipe, name string) {
 	labels[owned.LabelStateful] = "true"
 	labels[labelImage] = recipe.Image
+	if recipe.Engine() == "nats" {
+		labels[nativenats.LabelEngine] = "nats"
+		return
+	}
 	if recipe.Cache() {
 		labels[nativecache.LabelEngine] = recipe.Engine()
 		return

@@ -42,7 +42,7 @@ import { cn } from "@/lib/utils"
 type Entry = {
   kind: DatabaseKind
   product?: ProductKey
-  group: "database" | "cache"
+  group: "database" | "cache" | "data"
   runsOn: string
   blurb: string
   features: string[]
@@ -97,6 +97,18 @@ export const catalog: Entry[] = [
     blurb:
       "Open source, Redis-compatible cache with the same persistence and snapshot setup.",
     features: cacheFeatures,
+  },
+  {
+    kind: "nats",
+    group: "data",
+    runsOn: "Docker",
+    blurb:
+      "Persistent messaging on one private server, with native snapshots of messages and durable consumers.",
+    features: [
+      "Retained file store",
+      "Messages and consumers",
+      "Test restores",
+    ],
   },
 ]
 
@@ -181,6 +193,7 @@ export function Services() {
       g.value === "all" ||
       g.value === "database" ||
       g.value === "cache" ||
+      catalog.some((e) => e.group === g.value) ||
       registered.some((e) => e.group === g.value)
   )
   const kindsDenied =
@@ -359,8 +372,7 @@ export function Services() {
                             </span>
                           </span>
                           <span className="text-xs text-muted-foreground">
-                            {e.group === "database" ? "Database" : "Cache"} ·{" "}
-                            {e.runsOn}
+                            {groupLabels[e.group]} · {e.runsOn}
                           </span>
                         </div>
                       </div>

@@ -426,7 +426,7 @@ class Live:
         self.record_exit("run", child.returncode)
         if child.returncode:
             raise RuntimeError(
-                "live acceptance failed; inspect run-progress.json and run-result.json"
+                "live acceptance failed; inspect run-progress.json, run-terminal.json and run-result.json"
             )
 
     def run(self, approval):

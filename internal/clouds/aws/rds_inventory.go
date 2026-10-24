@@ -18,6 +18,7 @@ func readDBSnapshot(in rdstypes.DBSnapshot) *DBSnapshot {
 		point.CreatedAt = in.SnapshotCreateTime.UTC()
 	}
 	point.EncryptionKnown = in.Encrypted != nil
+	point.StorageGB, point.MasterUser = sdk.ToInt32(in.AllocatedStorage), sdk.ToString(in.MasterUsername)
 	return point
 }
 

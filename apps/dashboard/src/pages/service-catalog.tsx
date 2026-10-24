@@ -188,6 +188,7 @@ function targetMode(
 
 // The accounts that can run each engine, for the empty state.
 const runsOnClouds: Record<DatabaseKind, string[]> = {
+  nats: ["server"],
   postgres: ["aws", "gcp", "server", "kubernetes"],
   mysql: ["server"],
   mariadb: ["server"],
