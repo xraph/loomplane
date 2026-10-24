@@ -587,3 +587,64 @@ There is no public issuance route or automatic deployment trigger yet. The local
 Kubernetes test exercises the coordinator with the real journal and SPIRE, using
 fixture-supplied image proofs. Production registry proof retrieval is wired but
 has not been qualified against a deployed application registry.
+
+## Install the SPIFFE CSI driver
+
+For a fresh Linux Kubernetes cluster with SPIRE agents already installed, render
+and review the shared CSI manifest:
+
+```sh
+: "${CLUSTER:?Set CLUSTER to the reviewed context}"
+loomctl federation csi-manifest --namespace spire > csi-install.json
+kubectl --context "$CLUSTER" create -f csi-install.json
+kubectl --context "$CLUSTER" -n spire rollout status daemonset/loomplane-spiffe-csi
+```
+
+Set `CLUSTER` to the context you reviewed. The rendering command is offline and
+needs no Loomplane login. It creates no resources by itself. `kubectl create`
+requires your cluster-admin credentials and refuses to overwrite existing
+resources; if creation stops partway through, inspect the returned resources
+before retrying. Do not remove an existing CSI driver to make the command pass.
+You can keep an existing approved `csi.spiffe.io` installation and qualify it.
+
+The manifest contains a service account without an API token, an ephemeral-only
+`CSIDriver`, and a Linux DaemonSet using digest-pinned SPIFFE CSI and registrar
+images. There are no role bindings. The driver is privileged and mounts the
+kubelet directories so it can provide the Workload API socket to pods without
+putting host mounts in those pods. See the
+[SPIFFE CSI installation model](https://github.com/spiffe/spiffe-csi#how-it-works).
+
+The defaults expect the agent socket directory at `/run/spire/agent-sockets` and
+the kubelet root at `/var/lib/kubelet`. Use `--agent-socket-directory` and
+`--kubelet-root-directory` when your nodes differ. Every selected Linux node must
+have the corresponding SPIRE agent socket and allow the driver's host mounts.
+Both image overrides require a digest. An override still needs qualification.
+
+Application pods mount the socket through an inline volume:
+
+```yaml
+volumes:
+  - name: workload-api
+    csi:
+      driver: csi.spiffe.io
+      readOnly: true
+containers:
+  - name: api
+    volumeMounts:
+      - name: workload-api
+        mountPath: /run/spire/workload
+        readOnly: true
+```
+
+Use the filename configured on your SPIRE agent, for example
+`unix:///run/spire/workload/agent.sock`. This mount gives your process access to
+the Workload API; the authorized application coordinator still has to issue its
+identity. Add the mount through the reviewed deployment operation so the saved
+controller receipt matches the resulting Deployment generation.
+
+The local Kubernetes qualification runner installs this generated manifest and
+checks actual identity delivery, neighboring-pod denial and revocation. A ready
+DaemonSet alone does not establish that these checks pass on another cluster.
+Automatic driver upgrades and application mount injection are not wired yet.
+Keep the driver running until every pod that uses its volumes has terminated;
+Kubernetes needs it to unmount those volumes during pod removal.
