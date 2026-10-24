@@ -36,6 +36,8 @@ export const entities = {
   'NativeRecoveryCopies': { fields: { 'copies': 'NativeRestore' } },
   'NativeRecoverySources': { fields: { 'sources': 'NativeSource' } },
   'NativeRestore': { idField: 'id' },
+  'NativeRetentionPolicy': { idField: 'id' },
+  'NativeRetentionPolicyState': { fields: { 'policy': 'NativeRetentionPolicy' } },
   'NativeRetirement': { idField: 'id' },
   'NativeRetirementPage': { fields: { 'retirements': 'NativeRetirement' } },
   'NativeSource': { idField: 'id' },

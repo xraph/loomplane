@@ -1173,6 +1173,28 @@ export interface NativeRestoreTarget {
   targetRevision?: number;
 }
 
+export interface NativeRetentionPolicy {
+  authorizedBy: string;
+  createdAt: string;
+  createdBy: string;
+  enabled: boolean;
+  id: string;
+  lastError?: string;
+  lastRetirementId?: string;
+  nextAt: string;
+  orgId: string;
+  policy: RetentionInput;
+  projectId: string;
+  revision: number;
+  sourceId: string;
+  updatedAt: string;
+}
+
+export interface NativeRetentionPolicyState {
+  configured: boolean;
+  policy?: NativeRetentionPolicy;
+}
+
 export interface NativeRetirement {
   completedAt?: string;
   createdAt: string;

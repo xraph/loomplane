@@ -37,7 +37,8 @@ function fixture({ complete = true, lose = false, deny = false } = {}) {
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       let body: unknown
-      if (url.includes("retention-preview"))
+      if (url.includes("/retention-policy")) body = { configured: false }
+      else if (url.includes("retention-preview"))
         body = {
           as_of: "2026-10-23T00:00:00Z",
           complete,

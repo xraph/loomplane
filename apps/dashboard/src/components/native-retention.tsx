@@ -13,6 +13,7 @@ import { useRecoveryPolling } from "@/lib/recovery-polling"
 import { formatDate } from "@/lib/format"
 import { useDeletionRequest } from "@/components/backup-retirement/shared"
 import { NativeEmpty } from "@/components/native-recovery-empty"
+import { NativeRetentionPolicyControls } from "@/components/native-retention-policy"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -255,6 +256,23 @@ function NativeRetentionReview({
             </>
           )
         )}
+        <NativeRetentionPolicyControls
+          source={source}
+          project={project}
+          settings={{ olderThanDays: settings.days, keepLast: settings.keep }}
+          enableBlocked={
+            !valid || stale
+              ? "Update the preview before changing automatic native deletion."
+              : preview.status !== "success" || preview.isFetching
+                ? "Load a fresh native preview before enabling deletion."
+                : !preview.data?.complete
+                  ? "A complete native inventory is required."
+                  : !preview.data.verifiedBackupId
+                    ? "Verify a newer native recovery point before enabling deletion."
+                    : null
+          }
+          onDetails={setDetails}
+        />
         <NativeDeletionList source={source} onDetails={setDetails} />
         {details && (
           <NativeDeletionDetails
@@ -463,6 +481,13 @@ function NativeDeletionDetails({
           </div>
           <p className="break-all">
             Witness {job.data.witnessId} · Requested by {job.data.createdBy}
+          </p>
+          <p className="text-muted-foreground">
+            Older than {job.data.policy.olderThanDays} days · keep{" "}
+            {job.data.policy.keepLast}
+            {job.data.policyId
+              ? ` · policy ${job.data.policyId}, revision ${job.data.policyRevision}`
+              : ""}
           </p>
           {job.data.error && (
             <p className="text-destructive">{job.data.error}</p>

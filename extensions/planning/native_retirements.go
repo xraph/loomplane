@@ -10,6 +10,9 @@ import (
 )
 
 func (e *Extension) nativeRetirementRoutes(group forge.Router) error {
+	if err := e.nativeRetentionPolicyRoutes(group); err != nil {
+		return err
+	}
 	if err := group.GET("/native-recovery-sources/:id/retirements", e.listNativeRetirements, forge.WithName("nativeRecoveryRetirements.list"), forge.WithQuerySchema(recovery.NativePageInput{}), forge.WithResponseSchema(http.StatusOK, "Native deletion history for a captured source", recovery.NativeRetirementPage{})); err != nil {
 		return err
 	}

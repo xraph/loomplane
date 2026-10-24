@@ -38,8 +38,12 @@ func TestNativeRDSRecoveryHTTPCLIAndDispatchSurviveRestart(t *testing.T) {
 func TestNativeRDSRetentionHTTPCLIAndDispatchUsesVerifiedWitness(t *testing.T) {
 	runNativeRDSRecoveryHTTP(t, "retention")
 }
+func TestNativeRDSRetentionPolicyHTTPCLIAndDispatch(t *testing.T) {
+	runNativeRDSRecoveryHTTP(t, "policy")
+}
 func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
-	nativeRetention := workflow == "retention"
+	nativeRetention := workflow != "copy"
+	nativePolicy := workflow == "policy"
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Storage.URL = "file://" + t.TempDir()
@@ -369,7 +373,36 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 		input.AcknowledgeDeletion = true
 		readOnly.must(http.StatusForbidden, http.MethodPost, endpoint, input, nil)
 		var retirement recovery.NativeRetirement
-		c.must(http.StatusAccepted, http.MethodPost, endpoint, input, &retirement)
+		if nativePolicy {
+			policyPath := base + "/retention-policy"
+			readOnly.must(http.StatusForbidden, http.MethodPut, policyPath, recovery.RetentionPolicyInput{Policy: input.Policy, Enabled: true}, nil)
+			lc.must("backups", "native-retention", "policy-set", source.ID, "--yes", "--revision", "0", "--older-than-days", "7", "--keep-last", "1", "--json")
+			var policy recovery.NativeRetentionPolicyState
+			until := time.Now().Add(100 * time.Second)
+			for {
+				c.must(http.StatusOK, http.MethodGet, policyPath, nil, &policy)
+				if policy.Policy != nil && policy.Policy.LastRetirementID != "" {
+					break
+				}
+				if time.Now().After(until) {
+					t.Fatal("native policy did not reach the real minute reconciliation", policy)
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			retirement.ID = policy.Policy.LastRetirementID
+			lc.must("backups", "native-retention", "policy-pause", source.ID, "--yes", "--json")
+			c.must(http.StatusOK, http.MethodGet, policyPath, nil, &policy)
+			if policy.Policy == nil || policy.Policy.Enabled || policy.Policy.Revision != 2 {
+				t.Fatal("native policy pause did not persist", policy)
+			}
+			var revisions recovery.RetentionPolicyHistory
+			c.must(http.StatusOK, http.MethodGet, policyPath+"/history?limit=100", nil, &revisions)
+			if len(revisions.Events) != 2 || revisions.Events[0].Enabled || !revisions.Events[1].Enabled {
+				t.Fatal("native policy lost its authorization history", revisions)
+			}
+		} else {
+			c.must(http.StatusAccepted, http.MethodPost, endpoint, input, &retirement)
+		}
 		waitRetirement := func(want string) {
 			t.Helper()
 			until := time.Now().Add(90 * time.Second)
@@ -387,10 +420,14 @@ func runNativeRDSRecoveryHTTP(t *testing.T, workflow string) {
 		waitRetirement("failed")
 		lc.must("backups", "native-retention", "retry", retirement.ID, "--yes", "--wait")
 		waitRetirement("succeeded")
-		var replay recovery.NativeRetirement
-		c.must(http.StatusAccepted, http.MethodPost, endpoint, input, &replay)
-		if replay.ID != retirement.ID || replay.WitnessID != inventory.Points[0].ID {
-			t.Fatal("native deletion replay changed its witness or operation")
+		if !nativePolicy {
+			var replay recovery.NativeRetirement
+			c.must(http.StatusAccepted, http.MethodPost, endpoint, input, &replay)
+			if replay.ID != retirement.ID || replay.WitnessID != inventory.Points[0].ID {
+				t.Fatal("native deletion replay changed its witness or operation")
+			}
+		} else if retirement.WitnessID != inventory.Points[0].ID || retirement.PolicyID == "" || retirement.PolicyRevision != 1 {
+			t.Fatal("native policy deletion lost its captured authority", retirement)
 		}
 		var history recovery.RetirementHistory
 		c.must(http.StatusOK, http.MethodGet, "/api/v1/native-recovery-retirements/"+retirement.ID+"/history?limit=100", nil, &history)

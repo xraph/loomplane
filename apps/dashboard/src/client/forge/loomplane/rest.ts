@@ -2312,6 +2312,67 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly nativeRetentionPolicies = {
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetentionPolicyState> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetentionPolicyState"],
+      };
+
+      return this.request<types.NativeRetentionPolicyState>(config);
+    },
+
+    /**
+     */
+    history: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPolicyHistory> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy/history`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPolicyHistory"],
+      };
+
+      return this.request<types.RetentionPolicyHistory>(config);
+    },
+
+    /**
+     */
+    set: async (id: string, body: types.RetentionPolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetentionPolicy> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RetentionPolicyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetentionPolicy"],
+      };
+
+      return this.request<types.NativeRetentionPolicy>(config);
+    },
+
+  };
+
   public readonly notifications = {
     /**
      * Recent deployment notifications

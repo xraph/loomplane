@@ -253,9 +253,28 @@ Only an organization owner can request deletion. Admission permanently blocks th
 loomctl backups native-retention retry DELETION_ID --yes --wait
 ```
 
-Deletion history remains scoped to the captured source. Read-only access permits previews and status, not deletion or retry. In **Service recovery**, choose the captured cloud history and open **Review native retention** to inspect decisions and deletion history. Automatic native retention policies remain pending. These operations use the provider's native backup storage; Trove export retention remains separate.
+Deletion history remains scoped to the captured source. Read-only access permits previews and status, not deletion or retry. In **Service recovery**, choose the captured cloud history and open **Review native retention** to inspect decisions and deletion history. You can also enable a separate automatic native retention policy as described below. These operations use the provider's native backup storage; Trove export retention remains separate.
 
 Provider deletion tests use controlled AWS and Google endpoints. The RDS API/CLI/Dispatch drill uses a real control-plane database and a private PostgreSQL SQL verifier; it covers a denied native delete, explicit retry and the retained restore barrier. Dashboard workflows have JSDOM checks. Live cloud deletion and desktop/narrow browser rendering remain unverified.
+
+## Automatic native retention
+
+In **Review native retention**, update the age/count preview, then choose **Enable automatic native deletion**. Confirm the displayed rule. The source needs a complete inventory and a SQL-verified witness. Saving a backup schedule does not enable deletion.
+
+The minute reconciliation job selects at most one oldest eligible independent backup per due evaluation. It checks the policy revision, current owner authority and source identity again during admission. An unresolved deletion holds that source. A failed job needs attention before another point can be selected; ordinary policy failures wait an hour before evaluation resumes.
+
+**Pause native retention** stops future selections and preserves the saved rule. You can pause when cloud reads are unavailable. Accepted deletions may still finish. An enabled policy keeps a source-account reference; after pause, each pending deletion keeps its own reference until completion. Pausing does not remove the original backup or clear a deletion barrier.
+
+**Native policy changes** shows committed revisions and authorizing owners. If a save is uncertain or conflicts with another revision, inspect the current policy before retrying. Readers can inspect policies and history. Only organization owners can change them.
+
+```sh
+loomctl backups native-retention policy SOURCE_ID --json
+loomctl backups native-retention policy-set SOURCE_ID --revision 0 --older-than-days 30 --keep-last 7 --yes --json
+loomctl backups native-retention policy-history SOURCE_ID --limit 50 --json
+loomctl backups native-retention policy-pause SOURCE_ID --yes --json
+```
+
+Revision zero creates a policy; updates use its observed revision. The controlled RDS drill exercises real minute reconciliation, API, CLI and Dispatch, including a native denial, pause, retry and SQL witness. It does not qualify live provider permissions, cloud backup bytes or browser layouts.
 
 ## Preview backup retention
 

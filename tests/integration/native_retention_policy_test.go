@@ -118,3 +118,33 @@ func nativePolicyRequestKeyForTest(p *recovery.NativeRetentionPolicy) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("native-retention-v1\x00%s\x00%s\x00%s\x00%d\x00%d", p.OrgID, p.SourceID, p.ID, p.Revision, p.NextAt.UnixMicro())))
 	return "native_retention_" + hex.EncodeToString(sum[:])
 }
+
+func TestNativeRetentionPolicyKeepsAccountUntilPause(t *testing.T) {
+	f, store, request := nativeRetirementFixture(t)
+	policies := any(f.store).(recovery.NativeRetentionPolicyStore)
+	guard := func(context.Context) error { return nil }
+	input := &recovery.NativeRetentionPolicy{ID: "account-policy", OrgID: "org", ProjectID: "project", SourceID: f.source.ID, Policy: request.Policy, AuthorizedBy: "operator", Enabled: true}
+	policy, err := policies.PutNativeRetentionPolicy(t.Context(), input, 0, guard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uses int
+	if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_connection_uses WHERE org_id='org' AND connection_id='account' AND kind='native_retention_policy' AND owner_id=$1`, policy.ID).Scan(&uses); err != nil || uses != 1 {
+		t.Fatal("enabled native policy can lose its source account", uses, err)
+	}
+	request.PolicyID, request.PolicyRevision, request.ExpectedPolicyAt = policy.ID, policy.Revision, policy.NextAt
+	request.RequestID = nativePolicyRequestKeyForTest(policy)
+	if _, err = store.AdmitNativeRetirement(t.Context(), request, guard); err != nil {
+		t.Fatal(err)
+	}
+	input.Enabled = false
+	if _, err = policies.PutNativeRetentionPolicy(t.Context(), input, policy.Revision, guard); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_connection_uses WHERE org_id='org' AND connection_id='account' AND kind='native_retention_policy' AND owner_id=$1`, policy.ID).Scan(&uses); err != nil || uses != 0 {
+		t.Fatal("paused native policy retained its account reservation", uses, err)
+	}
+	if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_connection_uses WHERE org_id='org' AND connection_id='account' AND kind='native_retirement' AND owner_id=$1`, request.ID).Scan(&uses); err != nil || uses != 1 {
+		t.Fatal("pause released the accepted deletion's source account", uses, err)
+	}
+}

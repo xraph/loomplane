@@ -10,7 +10,9 @@ import (
 )
 
 func (a *App) nativeRetentionCommand() cli.Command {
+	policies := a.nativeRetentionPolicyCommands()
 	return cli.NewCommand("native-retention", "Retain tested native backups and delete eligible independent points", nil,
+		cli.WithSubcommand(policies[0]), cli.WithSubcommand(policies[1]), cli.WithSubcommand(policies[2]), cli.WithSubcommand(policies[3]),
 		cli.WithSubcommand(cli.NewCommand("preview", "Preview native retention without deleting backups", a.previewNativeRetention, cli.WithFlags(append([]cli.Flag{jsonFlag}, retentionSettingFlags()...)...))),
 		cli.WithSubcommand(cli.NewCommand("delete", "Permanently delete an eligible native recovery point", a.retireNativePoint, cli.WithUsage("backups native-retention delete <source-id> <point-id> --yes [--older-than-days 30] [--keep-last 7] [--request-id ...] [--wait]"), cli.WithFlags(append(retirementRequestFlags(), retentionSettingFlags()...)...))),
 		cli.WithSubcommand(cli.NewCommand("show", "Read native deletion status", a.showNativeRetirement, cli.WithFlags(recoveryFlags()...))),

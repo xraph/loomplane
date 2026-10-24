@@ -3144,6 +3144,122 @@
         }
       }
     },
+    "/api/v1/native-recovery-sources/{id}/retention-policy": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRetentionPolicies.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured native retention policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRetentionPolicyState"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRetentionPolicies.set",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetentionPolicyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved native retention revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeRetentionPolicy"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-sources/{id}/retention-policy/history": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRetentionPolicies.history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed native policy revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPolicyHistory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/native-recovery-sources/{id}/retention-preview": {
       "get": {
         "tags": [
@@ -11658,6 +11774,85 @@
           },
           "target_revision": {
             "type": "integer"
+          }
+        }
+      },
+      "NativeRetentionPolicy": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "source_id",
+          "revision",
+          "policy",
+          "enabled",
+          "created_by",
+          "authorized_by",
+          "created_at",
+          "updated_at",
+          "next_at"
+        ],
+        "properties": {
+          "authorized_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_retirement_id": {
+            "type": "string"
+          },
+          "next_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RetentionInput"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NativeRetentionPolicyState": {
+        "type": "object",
+        "required": [
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/NativeRetentionPolicy"
           }
         }
       },
