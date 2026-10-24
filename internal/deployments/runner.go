@@ -478,6 +478,10 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		if runErr == nil {
 			return
 		}
+		if signal := capacityEffectSignal(runErr); signal != nil {
+			runErr = signal
+			return
+		}
 		current, readErr := r.store.GetDeployment(context.WithoutCancel(ctx), orgID, deploymentID)
 		if readErr != nil {
 			runErr = errors.Join(runErr, readErr)
@@ -587,6 +591,9 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		_ = r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step) //nolint:errcheck // progress is best effort; the step's end is recorded
 	}
 	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress, poolLock); err != nil {
+		if signal := capacityEffectSignal(err); signal != nil {
+			return signal
+		}
 		current, readErr := r.store.GetDeployment(context.WithoutCancel(ctx), orgID, d.ID)
 		if readErr != nil {
 			return errors.Join(err, readErr)
@@ -623,6 +630,19 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	step.Status, step.FinishedAt = StepSucceeded, &finished
 	step.Message = doneMessage(step)
 	return r.store.UpdateStep(ctx, orgID, d.ID, *step)
+}
+
+// Preserve the boundary's rejection before consulting mutable deployment
+// state. A newer resume remains running; the workflow can reassess and retry
+// this activity without turning the rejected effect into a failed step.
+func capacityEffectSignal(err error) error {
+	if errors.Is(err, cloudinfra.ErrWorkloadCancelled) {
+		return errors.Join(ErrCapacityCancelled, err)
+	}
+	if errors.Is(err, cloudinfra.ErrWorkloadPaused) {
+		return errors.Join(ErrCapacityPaused, err)
+	}
+	return nil
 }
 
 func doneMessage(s *Step) string {

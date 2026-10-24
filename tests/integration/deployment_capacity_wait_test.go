@@ -7,8 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -557,10 +562,10 @@ func TestDeploymentCapacityWaitPauseEffectBoundary(t *testing.T) {
 	if _, err = st.SetCapacityWait(t.Context(), "org", id, 0, []cloudinfra.CapacityBlock{{Reason: "hard_limit"}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err = f.store.MarkWorkloadEffects(t.Context(), *attempt); !errors.Is(err, cloudinfra.ErrConflict) {
+	if err = f.store.MarkWorkloadEffects(t.Context(), *attempt); !errors.Is(err, cloudinfra.ErrConflict) || !errors.Is(err, cloudinfra.ErrWorkloadPaused) {
 		t.Fatalf("paused workload accepted effect: %v", err)
 	}
-	if err = lock.Attempt(t.Context()); !errors.Is(err, cloudinfra.ErrConflict) {
+	if err = lock.Attempt(t.Context()); !errors.Is(err, cloudinfra.ErrConflict) || !errors.Is(err, cloudinfra.ErrWorkloadPaused) {
 		t.Fatalf("paused pool accepted effect: %v", err)
 	}
 	if _, err = st.TransitionCapacityWait(t.Context(), "org", id, 1, deployments.StatusRunning, time.Now()); err != nil {
@@ -673,5 +678,80 @@ func TestDeploymentCapacityWaitPausedActivity(t *testing.T) {
 	d, err = st.GetDeployment(t.Context(), "org", id)
 	if err != nil || executor.calls != 1 || d.Retries != 0 || d.Step("service:api").Status != deployments.StepSucceeded || string(d.Step("done").Checkpoint) != "receipt" {
 		t.Fatalf("resumed activity: %+v calls=%d err=%v", d, executor.calls, err)
+	}
+}
+
+// Grove ends this span after PostgreSQL releases the marker transaction's
+// locks, but before MarkWorkloadEffects returns its rejection to the runner.
+type capacityRollbackGate struct {
+	traceID           trace.TraceID
+	armed             atomic.Bool
+	rejected, release chan struct{}
+}
+
+func (*capacityRollbackGate) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
+func (g *capacityRollbackGate) OnEnd(span sdktrace.ReadOnlySpan) {
+	if span.SpanContext().TraceID() == g.traceID && span.Name() == "ROLLBACK" && g.armed.CompareAndSwap(true, false) {
+		close(g.rejected)
+		<-g.release
+	}
+}
+func (*capacityRollbackGate) Shutdown(context.Context) error   { return nil }
+func (*capacityRollbackGate) ForceFlush(context.Context) error { return nil }
+
+func TestDeploymentCapacityWaitResumeBeforeClassification(t *testing.T) {
+	f := newPoolFixture(t)
+	req := f.request("env", "api")
+	pin, err := f.store.PreviewPlacement(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.plan(t, "resume-race", req, pin)
+	f.accept(t, "resume-race")
+	executor := &poolExecutor{}
+	id, _, err := poolTestRunner(f, executor).Start(t.Context(), "org", "resume-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := deployments.NewPgStore(f.db)
+	if _, err = f.sql.Exec(t.Context(), `UPDATE loomplane_deployments SET steps=steps || '[{"action_id":"done","status":"succeeded","checkpoint":"cmVjZWlwdA=="}]'::jsonb WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	gate := &capacityRollbackGate{rejected: make(chan struct{}), release: make(chan struct{})}
+	previous := otel.GetTracerProvider()
+	tracing := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(gate))
+	otel.SetTracerProvider(tracing)
+	t.Cleanup(func() { otel.SetTracerProvider(previous); _ = tracing.Shutdown(context.Background()) })
+	ctx, span := tracing.Tracer("capacity-resume-race").Start(t.Context(), "held-activity")
+	defer span.End()
+	gate.traceID = span.SpanContext().TraceID()
+	creds := &capacityHeldCredentials{syncAccounts: &syncAccounts{store: connections.NewPgStore(f.db)}, entered: make(chan struct{}), release: make(chan struct{})}
+	runner := deployments.NewRunner(deployments.RunnerDeps{Store: st, Plans: f.plans, CloudProfiles: f.clouds, Credentials: creds, Variables: poolVars{}, Providers: providers.Registry(), Executors: map[string]deployments.Executor{"server": executor}})
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx, "org", id, "service:api", nil, func([]byte) error { return nil }) }()
+	<-creds.entered
+	if _, err = st.SetCapacityWait(t.Context(), "org", id, 0, []cloudinfra.CapacityBlock{{Reason: "hard_limit"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	gate.armed.Store(true)
+	close(creds.release)
+	<-gate.rejected
+	// The rejecting marker has released its org gate, while Run still has not
+	// received the error. Resume must not erase that error's pause reason.
+	if _, err = st.TransitionCapacityWait(t.Context(), "org", id, 1, deployments.StatusRunning, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	close(gate.release)
+	err = <-done
+	d, readErr := st.GetDeployment(t.Context(), "org", id)
+	if !errors.Is(err, deployments.ErrCapacityPaused) || !errors.Is(err, cloudinfra.ErrWorkloadPaused) || !errors.Is(err, cloudinfra.ErrConflict) || readErr != nil || executor.calls != 0 || d.Status != deployments.StatusRunning || d.CapacityRevision != 2 || d.Step("service:api").Status == deployments.StepFailed || string(d.Step("done").Checkpoint) != "receipt" {
+		t.Fatalf("resumed pause rejection: err=%v read=%v calls=%d deployment=%+v", err, readErr, executor.calls, d)
+	}
+	if err = runner.Run(t.Context(), "org", id, "service:api", nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	d, err = st.GetDeployment(t.Context(), "org", id)
+	if err != nil || executor.calls != 1 || d.ID != id || d.Retries != 0 || d.Status != deployments.StatusRunning || d.CapacityRevision != 2 || d.Step("service:api").Status != deployments.StepSucceeded || string(d.Step("done").Checkpoint) != "receipt" {
+		t.Fatalf("next run: %+v calls=%d err=%v", d, executor.calls, err)
 	}
 }

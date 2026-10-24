@@ -7,6 +7,13 @@ import (
 	"github.com/xraph/grove/driver"
 )
 
+// These errors preserve the state observed under the first-effect gate even
+// when a concurrent command changes deployment state before the caller reads it.
+var (
+	ErrWorkloadPaused    = fmt.Errorf("%w: deployment is paused before workload effects", ErrConflict)
+	ErrWorkloadCancelled = fmt.Errorf("%w: deployment is cancelled before workload effects", ErrConflict)
+)
+
 // guardDeploymentEffects runs under the organization gate. Accepted effects
 // can reconcile, but a paused or cancelled deployment cannot accept new work.
 func guardDeploymentEffects(ctx context.Context, tx driver.Tx, org, plan string, accepted bool) error {
@@ -17,8 +24,11 @@ func guardDeploymentEffects(ctx context.Context, tx driver.Tx, org, plan string,
 	if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT status FROM loomplane_deployments WHERE org_id=$1 AND plan_id=$2 AND status IN ('paused','cancelled')),'')`, org, plan).Scan(&status); err != nil {
 		return err
 	}
-	if status != "" {
-		return fmt.Errorf("%w: deployment is %s before workload effects", ErrConflict, status)
+	switch status {
+	case "paused":
+		return ErrWorkloadPaused
+	case "cancelled":
+		return ErrWorkloadCancelled
 	}
 	return nil
 }
