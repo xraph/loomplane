@@ -72,7 +72,7 @@ func TestCloudRun_measuresTheServiceItRan(t *testing.T) {
 	if err != nil || m == nil {
 		t.Fatalf("measure: %v %v", m, err)
 	}
-	if len(filters) != 2 {
+	if len(filters) != 3 {
 		t.Fatalf("asked %d times", len(filters))
 	}
 	for _, f := range filters {

@@ -39,13 +39,27 @@ type monitoringPoint struct {
 	v   float64
 }
 
-// ServiceMetrics reads a Cloud Run service's requests and p95 latency
-// over w from Cloud Monitoring.
+// ServiceMetrics reads a Cloud Run service's requests, 5xx responses and
+// p95 latency over w from Cloud Monitoring, across all its revisions.
 func (s *Session) ServiceMetrics(ctx context.Context, region, service string, w metrics.Window) (*metrics.Measurement, error) {
+	return s.RevisionMetrics(ctx, region, service, "", w)
+}
+
+// RevisionMetrics reads one revision's requests, 5xx responses and p95
+// latency over w. An empty revision reads the whole service.
+func (s *Session) RevisionMetrics(ctx context.Context, region, service, revision string, w metrics.Window) (*metrics.Measurement, error) {
 	base := `resource.type="cloud_run_revision" AND resource.labels.service_name=` + strconv.Quote(service) + ` AND resource.labels.location=` + strconv.Quote(region)
-	counts, err := s.timeSeries(ctx, base+` AND metric.type="run.googleapis.com/request_count"`, w, w.Step, "REDUCE_SUM")
+	if revision != "" {
+		base += ` AND resource.labels.revision_name=` + strconv.Quote(revision)
+	}
+	const requestCount = ` AND metric.type="run.googleapis.com/request_count"`
+	counts, err := s.timeSeries(ctx, base+requestCount, w, w.Step, "REDUCE_SUM")
 	if err != nil {
 		return nil, monitoringError("read requests", err)
+	}
+	failures, err := s.timeSeries(ctx, base+requestCount+` AND metric.labels.response_code_class="5xx"`, w, w.Step, "REDUCE_SUM")
+	if err != nil {
+		return nil, monitoringError("read errors", err)
 	}
 	// A percentile reducer merges the revisions' distributions; averaging
 	// each revision's percentile would not give the service's.
@@ -53,11 +67,16 @@ func (s *Session) ServiceMetrics(ctx context.Context, region, service string, w 
 	if err != nil {
 		return nil, monitoringError("read latency", err)
 	}
-	m := &metrics.Measurement{}
+	m := &metrics.Measurement{ErrorsCounted: true}
 	for _, p := range counts {
 		m.Requests = append(m.Requests, metrics.Point{T: p.end.Add(-w.Step).UTC(), V: p.v})
 	}
-	slices.SortFunc(m.Requests, func(a, b metrics.Point) int { return a.T.Compare(b.T) })
+	for _, p := range failures {
+		m.Errors = append(m.Errors, metrics.Point{T: p.end.Add(-w.Step).UTC(), V: p.v})
+	}
+	byTime := func(a, b metrics.Point) int { return a.T.Compare(b.T) }
+	slices.SortFunc(m.Requests, byTime)
+	slices.SortFunc(m.Errors, byTime)
 	if len(latencies) > 0 {
 		m.Latency, m.Statistic = latencies[0].v, metrics.P95
 	}
