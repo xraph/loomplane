@@ -21,6 +21,8 @@ import {
   isManagedDatabaseProvider,
   managedDatabaseCloud,
   sameManagedDatabaseProfile,
+  sameCloudSQLSourceEndpoint,
+  cloudSQLSourceEndpointValid,
   type ManagedDatabaseReview,
 } from "@/lib/managed-catalog"
 
@@ -57,6 +59,10 @@ export function assertDatabasePlan(
       sameManagedDatabaseProfile(
         action.resource.managed?.profile,
         expectedManaged.profile
+      ) &&
+      sameCloudSQLSourceEndpoint(
+        action.resource.managed?.cloudSqlPsc,
+        expectedManaged.cloudSqlPsc
       )
     : action?.connectionId === target &&
       action.resource?.target === target &&
@@ -145,7 +151,13 @@ export async function deployDatabase(
   const recipe = databaseRecipes[input.kind]
   const provider = input.provider ?? "server"
   const managed = input.managed
-    ? { ...input.managed, profile: { ...input.managed.profile } }
+    ? {
+        ...input.managed,
+        profile: { ...input.managed.profile },
+        ...(input.managed.cloudSqlPsc
+          ? { cloudSqlPsc: { ...input.managed.cloudSqlPsc } }
+          : {}),
+      }
     : undefined
   if (isManagedDatabaseProvider(provider)) {
     if (input.daily)
@@ -162,6 +174,16 @@ export async function deployDatabase(
     )
       throw new Error(
         "Choose a checked account, region and managed PostgreSQL profile."
+      )
+    const psc = managed.profile.access === "cloud-sql-psc-connector"
+    if (
+      psc
+        ? provider !== "cloud-sql" ||
+          !cloudSQLSourceEndpointValid(managed.cloudSqlPsc, managed.region)
+        : managed.cloudSqlPsc !== undefined
+    )
+      throw new Error(
+        "Choose a canonical VPC and regional manual endpoint for the PSC profile."
       )
   }
   if (provider === "kubernetes" && input.kind !== "postgres")
@@ -201,10 +223,14 @@ export async function deployDatabase(
         "The selected cloud account was not saved. Open the project to review its placement."
       )
   }
+  const psc = managed?.cloudSqlPsc
+  const pscYaml = psc
+    ? `    cloud_sql_psc:\n      consumer_project: ${JSON.stringify(psc.consumerProject)}\n      network: ${JSON.stringify(psc.network)}\n      forwarding_rule: ${JSON.stringify(psc.forwardingRule)}\n`
+    : ""
   const manifest = await saveManifest({
     path: { id: project.id },
     body: {
-      yaml: `version: 1\nresources:\n  database:\n    kind: ${input.kind}\n    provider: ${provider}\n    version: "${recipe.version}"\n${isManagedDatabaseProvider(provider) ? `    region: ${JSON.stringify(managed!.region)}\n` : `    target: ${JSON.stringify(input.target)}\n`}`,
+      yaml: `version: 1\nresources:\n  database:\n    kind: ${input.kind}\n    provider: ${provider}\n    version: "${recipe.version}"\n${isManagedDatabaseProvider(provider) ? `    region: ${JSON.stringify(managed!.region)}\n${pscYaml}` : `    target: ${JSON.stringify(input.target)}\n`}`,
     },
   })
   let plan = await createPlan({

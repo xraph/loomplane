@@ -1,4 +1,5 @@
 import type {
+  CloudSQLSourceEndpoint,
   ManagedDatabaseProfile,
   Provider,
 } from "@/client/forge/loomplane/types"
@@ -9,6 +10,56 @@ export type ManagedDatabaseReview = {
   profile: ManagedDatabaseProfile
   accountIdentity: string
   region: string
+  cloudSqlPsc?: CloudSQLSourceEndpoint
+}
+
+export function managedDatabaseAccessLabel(access: string) {
+  if (access === "private-vpc") return "Private VPC"
+  if (access === "cloud-sql-connector") return "Cloud SQL connector"
+  if (access === "cloud-sql-psc-connector")
+    return "Private Service Connect (PSC)"
+  return access
+}
+
+export function sameCloudSQLSourceEndpoint(
+  actual: CloudSQLSourceEndpoint | undefined,
+  expected: CloudSQLSourceEndpoint | undefined
+) {
+  if (!expected) return actual === undefined
+  return (
+    !!actual &&
+    actual.consumerProject === expected.consumerProject &&
+    actual.network === expected.network &&
+    actual.forwardingRule === expected.forwardingRule
+  )
+}
+
+export function cloudSQLSourceEndpointValid(
+  endpoint: CloudSQLSourceEndpoint | undefined,
+  region: string
+) {
+  if (!endpoint) return false
+  const projectPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/
+  const namePattern = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/
+  const network = endpoint.network.split("/")
+  const rule = endpoint.forwardingRule.split("/")
+  return (
+    projectPattern.test(endpoint.consumerProject) &&
+    namePattern.test(region) &&
+    network.length === 5 &&
+    network[0] === "projects" &&
+    network[1] === endpoint.consumerProject &&
+    network[2] === "global" &&
+    network[3] === "networks" &&
+    namePattern.test(network[4]) &&
+    rule.length === 6 &&
+    rule[0] === "projects" &&
+    rule[1] === endpoint.consumerProject &&
+    rule[2] === "regions" &&
+    rule[3] === region &&
+    rule[4] === "forwardingRules" &&
+    namePattern.test(rule[5])
+  )
 }
 
 export function isManagedDatabaseProvider(
@@ -57,26 +108,42 @@ function validManagedProfile(profile: ManagedDatabaseProfile) {
   )
 }
 
-export function managedDatabaseProfile(
+export function managedDatabaseProfiles(
   providers: Provider[],
   target: DatabaseProvider
 ) {
-  if (!isManagedDatabaseProvider(target)) return
+  if (!isManagedDatabaseProvider(target)) return []
   const provider = providers.find(
     (p) =>
       p.name === target &&
       p.cloud === managedDatabaseCloud(target) &&
       p.available
   )
-  return provider?.provisions
-    ?.find((offer) => offer.kind === "postgres")
-    ?.managedProfiles?.find(
-      (profile) =>
-        validManagedProfile(profile) &&
-        profile.provider === target &&
-        profile.kind === "postgres" &&
-        profile.version === "17"
-    )
+  return (
+    provider?.provisions
+      ?.find((offer) => offer.kind === "postgres")
+      ?.managedProfiles?.filter(
+        (profile) =>
+          validManagedProfile(profile) &&
+          profile.provider === target &&
+          profile.kind === "postgres" &&
+          profile.version === "17"
+      ) ?? []
+  )
+}
+
+export function managedDatabaseProfile(
+  providers: Provider[],
+  target: DatabaseProvider,
+  profileId?: string
+) {
+  const profiles = managedDatabaseProfiles(providers, target)
+  return profiles.find((profile) =>
+    profileId
+      ? profile.id === profileId
+      : profile.access ===
+        (target === "cloud-sql" ? "cloud-sql-connector" : "private-vpc")
+  )
 }
 
 export function sameManagedDatabaseProfile(

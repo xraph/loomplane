@@ -80,7 +80,11 @@ import { useDeploymentWrites } from "@/lib/deployment-writes"
 import {
   isManagedDatabaseProvider,
   managedDatabaseProfile,
+  managedDatabaseProfiles,
+  cloudSQLSourceEndpointValid,
+  managedDatabaseAccessLabel,
 } from "@/lib/managed-catalog"
+import { CloudSQLSourceFields } from "@/components/cloudsql-source-fields"
 import { NativeRecovery } from "@/components/native-recovery"
 import { ManagedDatabaseSettings } from "@/components/managed-database-settings"
 
@@ -141,6 +145,14 @@ export function ServiceCatalog({
 function WhatYouGet({ kind }: { kind: DatabaseKind }) {
   const recipe = databaseRecipes[kind]
   const entry = catalog.find((e) => e.kind === kind)
+  const features =
+    kind === "postgres"
+      ? [
+          "Persistent storage",
+          "Backups and recovery copies",
+          "Restricted application role",
+        ]
+      : entry?.features
   return (
     <aside
       aria-label="What you get"
@@ -148,11 +160,13 @@ function WhatYouGet({ kind }: { kind: DatabaseKind }) {
     >
       <h2 className="text-[13px] font-semibold">What you get</h2>
       <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-        {recipe.description}
+        {kind === "postgres"
+          ? "Docker and Kubernetes retain database volumes. RDS and Cloud SQL use provider storage and backups. Review the selected target's settings before deploying."
+          : recipe.description}
       </p>
       {entry && (
         <ul className="grid gap-1.5 text-[12.5px]">
-          {entry.features.map((f) => (
+          {features?.map((f) => (
             <li key={f} className="flex items-center gap-2">
               <CheckIcon className="size-3.5 text-overdye" />
               {f}
@@ -165,9 +179,9 @@ function WhatYouGet({ kind }: { kind: DatabaseKind }) {
         </ul>
       )}
       <p className="border-t pt-3 text-[12px] leading-relaxed text-muted-foreground">
-        Point-in-time recovery isn&apos;t available yet. Once it&apos;s
-        deployed, backups, test restores and recovery copies are on the
-        service&apos;s project page, under Backups.
+        Once deployed, you can find backups and recovery copies on the
+        service&apos;s project page, under Backups. Point-in-time recovery
+        requires an eligible managed source and an available recovery window.
       </p>
     </aside>
   )
@@ -222,6 +236,11 @@ function DatabaseDeployment({
   const [name, setName] = useState<string>(recipe.title)
   const [target, setTarget] = useState("")
   const [regionChoice, setRegionChoice] = useState({ target: "", value: "" })
+  const [profileChoice, setProfileChoice] = useState({ target: "", value: "" })
+  const [endpointChoice, setEndpointChoice] = useState({
+    target: "",
+    value: { consumerProject: "", network: "", forwardingRule: "" },
+  })
   const [daily, setDaily] = useState(true)
   const [pending, setPending] = useState(false)
   const [progress, setProgress] = useState("")
@@ -255,8 +274,22 @@ function DatabaseDeployment({
     : undefined
   const managed = isManagedDatabaseProvider(targetProvider)
   const profile = targetProvider
-    ? managedDatabaseProfile(offers, targetProvider)
+    ? managedDatabaseProfile(
+        offers,
+        targetProvider,
+        profileChoice.target === selected
+          ? profileChoice.value || undefined
+          : undefined
+      )
     : undefined
+  const profiles = targetProvider
+    ? managedDatabaseProfiles(offers, targetProvider)
+    : []
+  const psc = profile?.access === "cloud-sql-psc-connector"
+  const sourceEndpoint =
+    endpointChoice.target === selected
+      ? endpointChoice.value
+      : { consumerProject: "", network: "", forwardingRule: "" }
   const selectedProvider = offers.find((offer) => offer.name === targetProvider)
   const regions = managed
     ? targetProvider === "rds"
@@ -267,8 +300,13 @@ function DatabaseDeployment({
     regionChoice.target === selected && regions.includes(regionChoice.value)
       ? regionChoice.value
       : (regions[0] ?? "")
+  const managedReady =
+    !managed ||
+    (!!profile &&
+      !!region &&
+      (!psc || cloudSQLSourceEndpointValid(sourceEndpoint, region)))
   async function deploy() {
-    if (locked || !targetProvider) return
+    if (locked || !targetProvider || !managedReady) return
     setPending(true)
     setError("")
     try {
@@ -286,6 +324,7 @@ function DatabaseDeployment({
                   profile,
                   accountIdentity: selectedTarget!.accountIdentity!,
                   region,
+                  ...(psc ? { cloudSqlPsc: sourceEndpoint } : {}),
                 }
               : undefined,
         },
@@ -405,6 +444,33 @@ function DatabaseDeployment({
               Connect another account
             </Link>
           </fieldset>
+          {targetProvider === "cloud-sql" && profiles.length > 1 && (
+            <div className="grid gap-1.5 sm:max-w-sm">
+              <Label htmlFor="database-profile">Connection mode</Label>
+              <Select
+                value={profile?.id ?? ""}
+                onValueChange={(value) =>
+                  setProfileChoice({ target: selected, value: value ?? "" })
+                }
+                disabled={locked || !allowed}
+              >
+                <SelectTrigger id="database-profile" className="w-full">
+                  <SelectValue>
+                    {profile
+                      ? managedDatabaseAccessLabel(profile.access)
+                      : "Choose a profile"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {profiles.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {managedDatabaseAccessLabel(option.access)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {managed && profile ? (
             <ManagedDatabaseSettings profile={profile} />
           ) : targetProvider === "kubernetes" ? (
@@ -459,6 +525,15 @@ function DatabaseDeployment({
               </div>
             )}
           </div>
+          {psc && (
+            <CloudSQLSourceFields
+              value={sourceEndpoint}
+              onChange={(value) =>
+                setEndpointChoice({ target: selected, value })
+              }
+              disabled={locked || !allowed}
+            />
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
             {!managed && can("service_backup:manage") ? (
               <label className="flex items-center gap-2 text-[13px]">
@@ -479,11 +554,7 @@ function DatabaseDeployment({
             <Button
               type="submit"
               disabled={
-                locked ||
-                !allowed ||
-                !name.trim() ||
-                !selected ||
-                (managed && !region)
+                locked || !allowed || !name.trim() || !selected || !managedReady
               }
             >
               {pending ? "Deploying…" : `Deploy ${recipe.title}`}

@@ -128,7 +128,7 @@ func TestSQLPITRSourceCreatesOnlyManualPSCIngress(t *testing.T) {
 	}
 }
 
-func TestCloudSQLPSCProfileIsExplicitAndNotAdvertised(t *testing.T) {
+func TestCloudSQLPSCProfileIsExplicitAndPreservesDefault(t *testing.T) {
 	p, err := manageddb.CloudSQLPSCPostgres("17")
 	if err != nil || p.ID != "postgresql-17-cloud-sql-psc" || p.Access != "cloud-sql-psc-connector" {
 		t.Fatal(p, err)
@@ -137,10 +137,9 @@ func TestCloudSQLPSCProfileIsExplicitAndNotAdvertised(t *testing.T) {
 	if err != nil || legacy.Access != "cloud-sql-connector" || strings.Contains(legacy.ID, "psc") {
 		t.Fatal("legacy profile changed", legacy, err)
 	}
-	for _, listed := range manageddb.Profiles("cloud-sql") {
-		if listed.ID == p.ID {
-			t.Fatal("PSC profile advertised before application transport is wired")
-		}
+	listed := manageddb.Profiles("cloud-sql")
+	if len(listed) != 2 || listed[0] != *legacy || listed[1] != *p {
+		t.Fatal("catalog must offer explicit PSC without changing the default", listed)
 	}
 	if _, err = manageddb.CloudSQLPSCPostgres("16"); err == nil {
 		t.Fatal("unsupported engine admitted")
