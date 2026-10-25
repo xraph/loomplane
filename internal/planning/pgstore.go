@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -318,17 +319,10 @@ func (s *PgStore) RecordRelease(ctx context.Context, orgID string, r *DeployedRe
 		}
 	}
 	if len(r.Sources) > 0 {
-		const columns = 7
-		values := make([]string, 0, len(r.Sources))
-		args := make([]any, 0, columns*len(r.Sources))
-		for i, d := range r.Sources {
-			n := i * columns
-			values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)", n+1, n+2, n+3, n+4, n+5, n+6, n+7))
-			args = append(args, r.EnvironmentID, d.SourceID, orgID, d.AnalysisID, d.CommitSHA, r.PlanID, at)
-		}
+		values, args := releaseSourceRows(orgID, r, at)
 		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_sources
 				(environment_id, source_id, org_id, analysis_id, commit_sha, plan_id, deployed_at)
-			VALUES `+strings.Join(values, ", ")+`
+			VALUES `+values+`
 			ON CONFLICT (environment_id, source_id) DO UPDATE SET
 				analysis_id = EXCLUDED.analysis_id, commit_sha = EXCLUDED.commit_sha,
 				plan_id = EXCLUDED.plan_id, deployed_at = EXCLUDED.deployed_at`, args...); err != nil {
@@ -339,6 +333,24 @@ func (s *PgStore) RecordRelease(ctx context.Context, orgID string, r *DeployedRe
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// releaseSourceRows are the VALUES rows and arguments of a release's
+// sources, in source ID order: two releases of one environment then lock
+// the rows they share in the same order, and one waits for the other
+// instead of deadlocking. r.Sources keeps its order.
+func releaseSourceRows(orgID string, r *DeployedRelease, at time.Time) (values string, args []any) {
+	const columns = 7
+	sources := slices.Clone(r.Sources)
+	slices.SortFunc(sources, func(a, b *DeployedSource) int { return strings.Compare(a.SourceID, b.SourceID) })
+	rows := make([]string, 0, len(sources))
+	args = make([]any, 0, columns*len(sources))
+	for i, d := range sources {
+		n := i * columns
+		rows = append(rows, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)", n+1, n+2, n+3, n+4, n+5, n+6, n+7))
+		args = append(args, r.EnvironmentID, d.SourceID, orgID, d.AnalysisID, d.CommitSHA, r.PlanID, at)
+	}
+	return strings.Join(rows, ", "), args
 }
 
 // FinishPlanning implements Store.
