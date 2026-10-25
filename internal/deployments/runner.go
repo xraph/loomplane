@@ -776,32 +776,16 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
-	bindings, err := r.plans.ListBindings(ctx, d.OrgID, d.EnvironmentID)
+	around, err := r.environmentBindings(ctx, d, a.ID)
 	if err != nil {
 		return err
 	}
-	var current *planning.Binding
-	byName := map[string]*planning.Binding{}
-	resources := map[string]*planning.Binding{}
-	for _, b := range bindings {
-		if string(b.Subject)+":"+b.Name == a.ID {
-			current = b
-		}
-		switch b.Subject {
-		case planning.ServiceSubject:
-			byName[b.Name] = b
-		case planning.ResourceSubject:
-			resources[b.Name] = b
-		}
-	}
+	current, resources := around.current, around.resources
 	deleting := a.Op == planning.Delete
 	if deleting && current == nil {
 		return nil
 	}
-	connID := a.ConnectionID
-	if connID == "" {
-		connID = plan.Connections[prov.Cloud]
-	}
+	connID := planConnection(plan, a, prov.Cloud)
 	if deleting && current.ConnectionID != "" {
 		// What's deleted goes through the connection that deployed it,
 		// which needn't be the one the environment deploys with now. Only
@@ -834,62 +818,15 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
 	}
-	if captureErr := r.captureAppliedVariables(ctx, d, &a, byName, resources); captureErr != nil {
+	if captureErr := r.captureAppliedVariables(ctx, d, &a, around.services, resources); captureErr != nil {
 		return captureErr
 	}
 	pinAppliedSource(d, plan, &a)
-	job := &Job{
-		BuildCredentials: r.credentials, Logs: r.logs, Attempt: logAttempt(ctx, d.Retries),
-		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
-		Resume: resume, Checkpoint: heartbeat, Progress: progress,
-		Keep: func(ctx context.Context, field string, value []byte) error {
-			if r.resources == nil {
-				return errors.New("no resource credential store")
-			}
-			return r.resources.Put(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field), value)
-		},
-		Recall: func(ctx context.Context, field string) ([]byte, error) {
-			if r.resources == nil {
-				return nil, ErrNoCredential
-			}
-			return r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field))
-		},
-		Forget: func(ctx context.Context) error {
-			if r.resources == nil {
-				return nil
-			}
-			for _, field := range []string{ResourceURL, passwordField} {
-				if derr := r.resources.Delete(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field)); derr != nil {
-					return derr
-				}
-			}
-			return nil
-		},
-		Source: func(context.Context) (io.ReadCloser, int64, error) {
-			return nil, 0, errors.New("only a service is built from a repository")
-		},
-		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
+	job, err := r.newJob(ctx, d, plan, a, conn, cred, current)
+	if err != nil {
+		return err
 	}
-	// A gateway is built from the source Loomplane generates for its
-	// routes, and the database gateway from the program Loomplane ships,
-	// not from the repository.
-	if a.Service != nil && a.Service.Generated() {
-		var data []byte
-		var id string
-		var gerr error
-		if a.Service.DatabaseGateway != nil {
-			data, id, gerr = dbgateway.Source()
-		} else {
-			data, id, gerr = gateway.Source(a.Service.Gateway)
-		}
-		if gerr != nil {
-			return fmt.Errorf("generate the gateway: %w", gerr)
-		}
-		job.SourceID = id
-		job.Source = func(context.Context) (io.ReadCloser, int64, error) {
-			return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
-		}
-	}
+	job.Resume, job.Checkpoint, job.Progress = resume, heartbeat, progress
 	// Applying and removing what an action replaced save their progress
 	// apart, so a retry hands each its own.
 	rc := readReplaceCheckpoint(resume)
@@ -978,25 +915,8 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			return fmt.Errorf("record what %s replaces: %w", a.Name, uerr)
 		}
 	}
-	if a.Service != nil {
-		if !a.Service.Generated() {
-			job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
-				return r.appliedSource(ctx, d, a)
-			}
-		}
-		if a.Service.DatabaseGateway != nil {
-			job.Env, job.Secrets, err = r.ensureDatabaseGateway(ctx, d, &a)
-		} else {
-			job.Env, job.Secrets, err = r.env(ctx, d, a, byName, resources)
-		}
-		if err != nil {
-			return err
-		}
-		for _, link := range a.Service.Env {
-			if b := resources[link.From]; link.Subject == planning.ResourceSubject && b != nil {
-				job.Attach = append(job.Attach, b)
-			}
-		}
+	if inputErr := r.deployInputs(ctx, job, around); inputErr != nil {
+		return inputErr
 	}
 	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 		return authErr
@@ -1073,6 +993,133 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return rerr
 	}
 	step.Replaced = nil
+	return nil
+}
+
+// environmentBindings are an environment's bindings as an action's job
+// reads them: what runs the action now, if anything, and the services and
+// resources by name.
+type environmentBindings struct {
+	current   *planning.Binding
+	services  map[string]*planning.Binding
+	resources map[string]*planning.Binding
+}
+
+func (r *Runner) environmentBindings(ctx context.Context, d *Deployment, actionID string) (*environmentBindings, error) {
+	bindings, err := r.plans.ListBindings(ctx, d.OrgID, d.EnvironmentID)
+	if err != nil {
+		return nil, err
+	}
+	out := &environmentBindings{services: map[string]*planning.Binding{}, resources: map[string]*planning.Binding{}}
+	for _, b := range bindings {
+		if string(b.Subject)+":"+b.Name == actionID {
+			out.current = b
+		}
+		switch b.Subject {
+		case planning.ServiceSubject:
+			out.services[b.Name] = b
+		case planning.ResourceSubject:
+			out.resources[b.Name] = b
+		}
+	}
+	return out, nil
+}
+
+// planConnection is the connection an action deploys through: the one
+// reviewed for it, or the plan's for its cloud. "" when there's neither.
+func planConnection(plan *planning.Plan, a planning.Action, cloud string) string {
+	if a.ConnectionID != "" {
+		return a.ConnectionID
+	}
+	return plan.Connections[cloud]
+}
+
+// newJob is the job an action's executor gets, before what only deploying
+// a service reads (deployInputs). Its Resume, Checkpoint and Progress are
+// the caller's to set.
+func (r *Runner) newJob(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action,
+	conn *connections.Connection, cred []byte, current *planning.Binding,
+) (*Job, error) {
+	job := &Job{
+		BuildCredentials: r.credentials, Logs: r.logs, Attempt: logAttempt(ctx, d.Retries),
+		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
+		Keep: func(ctx context.Context, field string, value []byte) error {
+			if r.resources == nil {
+				return errors.New("no resource credential store")
+			}
+			return r.resources.Put(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field), value)
+		},
+		Recall: func(ctx context.Context, field string) ([]byte, error) {
+			if r.resources == nil {
+				return nil, ErrNoCredential
+			}
+			return r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field))
+		},
+		Forget: func(ctx context.Context) error {
+			if r.resources == nil {
+				return nil
+			}
+			for _, field := range []string{ResourceURL, passwordField} {
+				if derr := r.resources.Delete(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field)); derr != nil {
+					return derr
+				}
+			}
+			return nil
+		},
+		Source: func(context.Context) (io.ReadCloser, int64, error) {
+			return nil, 0, errors.New("only a service is built from a repository")
+		},
+		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
+	}
+	// A gateway is built from the source Loomplane generates for its
+	// routes, and the database gateway from the program Loomplane ships,
+	// not from the repository.
+	if a.Service != nil && a.Service.Generated() {
+		var data []byte
+		var id string
+		var gerr error
+		if a.Service.DatabaseGateway != nil {
+			data, id, gerr = dbgateway.Source()
+		} else {
+			data, id, gerr = gateway.Source(a.Service.Gateway)
+		}
+		if gerr != nil {
+			return nil, fmt.Errorf("generate the gateway: %w", gerr)
+		}
+		job.SourceID = id
+		job.Source = func(context.Context) (io.ReadCloser, int64, error) {
+			return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+		}
+	}
+	return job, nil
+}
+
+// deployInputs gives a service's job what deploying it reads: its source,
+// its variables, and the resources its provider attaches to it.
+func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environmentBindings) error {
+	d, a := job.Deployment, job.Action
+	if a.Service == nil {
+		return nil
+	}
+	if !a.Service.Generated() {
+		job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
+			return r.appliedSource(ctx, d, a)
+		}
+	}
+	var err error
+	if a.Service.DatabaseGateway != nil {
+		job.Env, job.Secrets, err = r.ensureDatabaseGateway(ctx, d, &job.Action)
+	} else {
+		job.Env, job.Secrets, err = r.env(ctx, d, a, around.services, around.resources)
+	}
+	if err != nil {
+		return err
+	}
+	for _, link := range a.Service.Env {
+		if b := around.resources[link.From]; link.Subject == planning.ResourceSubject && b != nil {
+			job.Attach = append(job.Attach, b)
+		}
+	}
 	return nil
 }
 
@@ -1658,8 +1705,8 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 
 // Finish settles a deployment: failed with reason, or succeeded. Steps
 // still pending after a failure are marked skipped, and steps still
-// ramping failed. A canary still reverting after a failure couldn't be
-// reverted, and one still promoting couldn't be promoted. A success
+// ramping failed. A canary still in flight after a failure settles (see
+// settleCanary). A success
 // records the commit of each repository it moved as what the environment
 // runs; a repository the plan held keeps what it had.
 func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string) error {
@@ -1681,6 +1728,11 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	status := StatusSucceeded
 	if reason != "" {
 		status = StatusFailed
+		// The canary settles first, from its services, so it never reads
+		// steps this marks.
+		if err := r.settleCanary(ctx, d, reason); err != nil {
+			return err
+		}
 		for _, s := range d.Steps {
 			if orchestration.FinalizationKey(ctx) != "" {
 				continue
@@ -1697,9 +1749,6 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 			if err := r.store.UpdateStep(ctx, orgID, d.ID, s); err != nil {
 				return err
 			}
-		}
-		if err := r.settleCanary(ctx, d); err != nil {
-			return err
 		}
 	}
 	now := r.now().UTC()

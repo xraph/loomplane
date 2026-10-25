@@ -107,16 +107,18 @@ func (r *Runner) updateCanary(ctx context.Context, orgID, deploymentID string, c
 // canaryAction is what the ramp needs to act on one canary service: a job
 // built the way run builds the action's, and what run would bind with.
 type canaryAction struct {
-	job       *Job
-	exec      Weighted
-	connID    string
-	resources map[string]*planning.Binding
+	job    *Job
+	exec   Weighted
+	connID string
+	around *environmentBindings
 }
 
-// canaryJob builds the job for one canary service as run would: its
-// connection and credential, the binding it ramps from, and the variables
-// it runs with, since a promote may redeploy with them. It saves no
-// progress and shows none: each ramp call is short and safe to repeat.
+// canaryJob builds the job for one canary service as run does, with the
+// same helpers: its connection and credential, the binding it ramps from,
+// its source, its variables and what it attaches, since a promote may
+// redeploy with them and a revert restores the baseline with them. It
+// saves no progress and shows none: each ramp call is short and safe to
+// repeat.
 func (r *Runner) canaryJob(ctx context.Context, d *Deployment, plan *planning.Plan, svc CanaryService) (*canaryAction, error) {
 	execution, err := r.executionPlan(ctx, plan)
 	if err != nil {
@@ -135,28 +137,11 @@ func (r *Runner) canaryJob(ctx context.Context, d *Deployment, plan *planning.Pl
 	if err != nil {
 		return nil, err
 	}
-	bindings, err := r.plans.ListBindings(ctx, d.OrgID, d.EnvironmentID)
+	around, err := r.environmentBindings(ctx, d, a.ID)
 	if err != nil {
 		return nil, err
 	}
-	var current *planning.Binding
-	byName := map[string]*planning.Binding{}
-	resources := map[string]*planning.Binding{}
-	for _, b := range bindings {
-		if string(b.Subject)+":"+b.Name == a.ID {
-			current = b
-		}
-		switch b.Subject {
-		case planning.ServiceSubject:
-			byName[b.Name] = b
-		case planning.ResourceSubject:
-			resources[b.Name] = b
-		}
-	}
-	connID := a.ConnectionID
-	if connID == "" {
-		connID = plan.Connections[prov.Cloud]
-	}
+	connID := planConnection(plan, a, prov.Cloud)
 	if connID == "" {
 		return nil, fmt.Errorf("the plan names no %s connection", prov.Cloud)
 	}
@@ -164,22 +149,19 @@ func (r *Runner) canaryJob(ctx context.Context, d *Deployment, plan *planning.Pl
 	if err != nil {
 		return nil, err
 	}
-	if captureErr := r.captureAppliedVariables(ctx, d, &a, byName, resources); captureErr != nil {
+	if captureErr := r.captureAppliedVariables(ctx, d, &a, around.services, around.resources); captureErr != nil {
 		return nil, captureErr
 	}
 	pinAppliedSource(d, plan, &a)
-	job := &Job{
-		BuildCredentials: r.credentials, Logs: r.logs, Attempt: logAttempt(ctx, d.Retries),
-		Deployment: d, Plan: plan, Action: a, Connection: conn, Credential: cred, Binding: current,
-		Checkpoint: func([]byte) error { return nil }, Progress: func(string, string) {},
-		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
+	job, err := r.newJob(ctx, d, plan, a, conn, cred, around.current)
+	if err != nil {
+		return nil, err
 	}
-	if a.Service != nil {
-		if job.Env, job.Secrets, err = r.env(ctx, d, a, byName, resources); err != nil {
-			return nil, err
-		}
+	job.Checkpoint, job.Progress = func([]byte) error { return nil }, func(string, string) {}
+	if inputErr := r.deployInputs(ctx, job, around); inputErr != nil {
+		return nil, inputErr
 	}
-	return &canaryAction{job: job, exec: exec, connID: connID, resources: resources}, nil
+	return &canaryAction{job: job, exec: exec, connID: connID, around: around}, nil
 }
 
 // canaryDeployment reads a deployment and its plan.
@@ -193,6 +175,14 @@ func (r *Runner) canaryDeployment(ctx context.Context, orgID, deploymentID strin
 		return nil, nil, err
 	}
 	return d, plan, nil
+}
+
+// promoted reports whether a canary service's step succeeded: its
+// candidate was promoted, in this run or one a retry followed, and it's
+// what runs now.
+func promoted(d *Deployment, svc CanaryService) bool {
+	s := d.Step(svc.ActionID)
+	return s != nil && s.Status == StepSucceeded
 }
 
 // CanaryRamp implements orchestration.CanaryDeployer. A deployment without
@@ -213,7 +203,8 @@ func (r *Runner) CanaryRamp(ctx context.Context, orgID, deploymentID string) (or
 
 // CanaryWeigh implements orchestration.CanaryDeployer. It gives every
 // candidate weight percent of its service's traffic, and returns when the
-// last one took it, which the step's hold counts from.
+// last one took it, which the step's hold counts from. A service an
+// earlier attempt promoted already runs the release, so it's left alone.
 func (r *Runner) CanaryWeigh(ctx context.Context, orgID, deploymentID string, step, weight int) (time.Time, error) {
 	d, plan, err := r.canaryDeployment(ctx, orgID, deploymentID)
 	if err != nil {
@@ -229,6 +220,9 @@ func (r *Runner) CanaryWeigh(ctx context.Context, orgID, deploymentID string, st
 		return time.Time{}, fmt.Errorf("the canary has no step %d at %d%%", step, weight)
 	}
 	for _, svc := range c.Services {
+		if promoted(d, svc) {
+			continue
+		}
 		if s := d.Step(svc.ActionID); s == nil || s.Status != StepRamping || svc.Candidate == "" {
 			return time.Time{}, fmt.Errorf("%s has no candidate up, so its traffic can't move", svc.Name)
 		}
@@ -272,10 +266,10 @@ func (r *Runner) CanaryPromote(ctx context.Context, orgID, deploymentID string) 
 		return err
 	}
 	for _, svc := range d.Canary.Services {
-		step := d.Step(svc.ActionID)
-		if step != nil && step.Status == StepSucceeded {
+		if promoted(d, svc) {
 			continue
 		}
+		step := d.Step(svc.ActionID)
 		if step == nil || step.Status != StepRamping || svc.Candidate == "" {
 			return fmt.Errorf("%s has no candidate up to promote", svc.Name)
 		}
@@ -290,7 +284,9 @@ func (r *Runner) CanaryPromote(ctx context.Context, orgID, deploymentID string) 
 	return err
 }
 
-// promote makes one candidate what runs, binds it, and settles its step.
+// promote makes one candidate what runs, binds it, and settles its step,
+// as run does after Apply: what an earlier move left is removed once it's
+// bound, and only warns when it can't be.
 func (r *Runner) promote(ctx context.Context, d *Deployment, plan *planning.Plan, svc CanaryService, step *Step) error {
 	ca, err := r.canaryJob(ctx, d, plan, svc)
 	if err != nil {
@@ -306,9 +302,13 @@ func (r *Runner) promote(ctx context.Context, d *Deployment, plan *planning.Plan
 		return err
 	}
 	if a.Service != nil {
-		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, a.Service, ca.resources)...)
+		step.Warnings = append(step.Warnings, r.releaseConsumers(ctx, d, a.Name, current, a.Service, ca.around.resources)...)
 	}
 	step.Warnings = append(step.Warnings, r.released(ctx, d, bound, false)...)
+	warn := func(err error) { step.Warnings = append(step.Warnings, err.Error()) }
+	if removeErr := r.removeReplaced(ctx, ca.job, bound, nil, warn, &replaceCheckpoint{Replace: true}, func([]byte) error { return nil }); removeErr != nil {
+		warn(removeErr)
+	}
 	finished := r.now().UTC()
 	if step.StartedAt != nil {
 		r.telemetry.StepFinished(a.Provider, string(a.Op), StepSucceeded, finished.Sub(*step.StartedAt))
@@ -318,12 +318,15 @@ func (r *Runner) promote(ctx context.Context, d *Deployment, plan *planning.Plan
 	return r.store.UpdateStep(ctx, d.OrgID, d.ID, *step)
 }
 
-// CanaryRevert implements orchestration.CanaryDeployer. Each candidate up
-// gives all of its traffic back to its baseline and is removed, and its
-// step fails with reason; a step that never ran is skipped. Bindings never
-// changed, so they still name the baselines. A service that couldn't be
-// reverted keeps its step ramping, and the error names each one, so a
-// retry tries only those again.
+// CanaryRevert implements orchestration.CanaryDeployer. Which services to
+// revert comes from the canary, not from step statuses: each candidate it
+// records as up gives all of its traffic back to its baseline and is
+// removed, then its candidate is cleared, so a retry reverts only what's
+// still up. Its step fails with reason; a step that never ran is skipped.
+// Bindings never changed, so they still name the baselines. The error
+// names each service that couldn't be reverted. A canary already settled
+// isn't reverted again: rolled_back is done, and revert_failed was given
+// up on when its deployment failed.
 func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason string) error {
 	d, plan, err := r.canaryDeployment(ctx, orgID, deploymentID)
 	if err != nil {
@@ -332,7 +335,7 @@ func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason s
 	switch {
 	case d.Canary == nil || d.Canary.Status == CanaryRolledBack:
 		return nil
-	case d.Canary.Status == CanaryPromoting || d.Canary.Status == CanaryPromoted || d.Canary.Status == CanaryPromoteFailed:
+	case d.Canary.Status != CanaryPending && d.Canary.Status != CanaryRamping && d.Canary.Status != CanaryReverting:
 		return fmt.Errorf("the canary is %s, so it can't be reverted", d.Canary.Status)
 	}
 	if _, err = r.updateCanary(ctx, orgID, deploymentID, func(c *Canary) error {
@@ -342,35 +345,48 @@ func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason s
 		return err
 	}
 	var failed []string
+	var storeErrs []error
 	for _, svc := range d.Canary.Services {
 		step := d.Step(svc.ActionID)
-		if step == nil {
+		if step == nil || promoted(d, svc) {
 			continue
+		}
+		if svc.Candidate != "" {
+			if rerr := r.revert(ctx, d, plan, svc); rerr != nil {
+				failed = append(failed, fmt.Sprintf("%s: %v", svc.Name, rerr))
+				continue
+			}
+			if _, cerr := r.updateCanary(ctx, orgID, deploymentID, func(c *Canary) error {
+				if s := c.service(svc.ActionID); s != nil {
+					s.Candidate = ""
+				}
+				return nil
+			}); cerr != nil {
+				storeErrs = append(storeErrs, fmt.Errorf("record that %s was reverted: %w", svc.Name, cerr))
+				continue
+			}
 		}
 		finished := r.now().UTC()
 		switch step.Status {
-		case StepRamping:
-			if svc.Candidate != "" {
-				if rerr := r.revert(ctx, d, plan, svc); rerr != nil {
-					failed = append(failed, fmt.Sprintf("%s: %v", svc.Name, rerr))
-					continue
-				}
-			}
+		case StepPending:
+			step.Status, step.Message = StepSkipped, "Skipped after an earlier step failed"
+		case StepFailed, StepSkipped:
+			continue
+		default:
 			if step.StartedAt != nil {
 				r.telemetry.StepFinished(svc.Provider, step.Op, StepFailed, finished.Sub(*step.StartedAt))
 			}
 			step.Status, step.Message, step.FinishedAt = StepFailed, reason, &finished
-		case StepPending:
-			step.Status, step.Message = StepSkipped, "Skipped after an earlier step failed"
-		default:
-			continue
 		}
-		if updateErr := r.store.UpdateStep(ctx, orgID, d.ID, *step); updateErr != nil {
-			return updateErr
+		if uerr := r.store.UpdateStep(ctx, orgID, d.ID, *step); uerr != nil {
+			storeErrs = append(storeErrs, uerr)
 		}
 	}
 	if len(failed) > 0 {
-		return errors.New(strings.Join(failed, "; "))
+		storeErrs = append([]error{errors.New(strings.Join(failed, "; "))}, storeErrs...)
+	}
+	if len(storeErrs) > 0 {
+		return errors.Join(storeErrs...)
 	}
 	_, err = r.updateCanary(ctx, orgID, deploymentID, func(c *Canary) error {
 		c.Status, c.Weight = CanaryRolledBack, 0
@@ -392,18 +408,33 @@ func (r *Runner) revert(ctx context.Context, d *Deployment, plan *planning.Plan,
 	return ca.exec.Revert(ctx, ca.job, svc.target())
 }
 
-// settleCanary ends a failed deployment's canary: one still reverting
-// couldn't be reverted, and one still promoting couldn't be promoted.
-func (r *Runner) settleCanary(ctx context.Context, d *Deployment) error {
-	if d.Canary == nil || (d.Canary.Status != CanaryReverting && d.Canary.Status != CanaryPromoting) {
+// settleCanary ends the canary of a deployment that failed, from what its
+// services show, so a failed deployment never shows a canary still in
+// flight. One still promoting couldn't be promoted. Otherwise, a candidate
+// still up means traffic may still be split, so the revert failed; with
+// none up, every binding names what runs, and the canary rolled back.
+func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string) error {
+	c := d.Canary
+	if c == nil {
 		return nil
 	}
+	switch c.Status {
+	case CanaryPending, CanaryRamping, CanaryReverting, CanaryPromoting:
+	default:
+		return nil
+	}
+	up := slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return svc.Candidate != "" && !promoted(d, svc) })
 	_, err := r.updateCanary(ctx, d.OrgID, d.ID, func(c *Canary) error {
-		switch c.Status {
-		case CanaryReverting:
-			c.Status = CanaryRevertFailed
-		case CanaryPromoting:
+		switch {
+		case c.Status == CanaryPromoting:
 			c.Status = CanaryPromoteFailed
+		case up:
+			c.Status = CanaryRevertFailed
+		default:
+			c.Status, c.Weight = CanaryRolledBack, 0
+		}
+		if c.Reason == "" {
+			c.Reason = reason
 		}
 		return nil
 	})
