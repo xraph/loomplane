@@ -279,6 +279,13 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
 }
 
+// IsForbidden reports whether err is Google's 403: the account lacks a
+// permission.
+func IsForbidden(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusForbidden
+}
+
 // IsConflict reports whether err is Google's 409, such as creating
 // something that exists.
 func IsConflict(err error) bool {

@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -17,7 +18,7 @@ type History struct {
 	Plans Plans
 	// Providers names each provider's cloud, which is how a plan that
 	// pins no connection for an action names the one it deployed with.
-	// Without it, an image records only the connection its action pins.
+	// ReleasedImages needs it.
 	Providers *provider.Registry
 }
 
@@ -35,7 +36,7 @@ type release struct {
 
 // Releases implements planning.ReleaseHistory.
 func (h *History) Releases(ctx context.Context, orgID, environmentID string, before time.Time, limit int) ([]planning.ReleaseRecord, error) {
-	rs, err := h.releases(ctx, orgID, environmentID, before, limit)
+	rs, err := h.releases(ctx, orgID, environmentID, before, false, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -47,23 +48,23 @@ func (h *History) Releases(ctx context.Context, orgID, environmentID string, bef
 }
 
 // releases reads up to limit of an environment's succeeded deployments
-// that finished before `before`, newest first. A Cloud sync or catalog
-// plan's deployment changes where or what infrastructure runs, not the
-// application, so it isn't a release.
-func (h *History) releases(ctx context.Context, orgID, environmentID string, before time.Time, limit int) ([]release, error) {
+// that finished before bound, or at it too when inclusive, newest first.
+// A Cloud sync or catalog plan's deployment changes where or what
+// infrastructure runs, not the application, so it isn't a release.
+func (h *History) releases(ctx context.Context, orgID, environmentID string, bound time.Time, inclusive bool, limit int) ([]release, error) {
 	if limit <= 0 {
 		return []release{}, nil
 	}
-	var bound *time.Time
-	if !before.IsZero() {
-		bound = &before
+	var at *time.Time
+	if !bound.IsZero() {
+		at = &bound
 	}
 	rows, err := h.Store.db.Query(ctx, `SELECT d.id, d.plan_id, p.kind, d.status, d.started_at, d.finished_at, d.steps
 		FROM loomplane_deployments d JOIN loomplane_plans p ON p.org_id = d.org_id AND p.id = d.plan_id
 		WHERE d.org_id = $1 AND d.environment_id = $2 AND d.status = 'succeeded' AND d.finished_at IS NOT NULL
-			AND ($3::timestamptz IS NULL OR d.finished_at < $3)
+			AND ($3::timestamptz IS NULL OR d.finished_at < $3 OR ($5 AND d.finished_at = $3))
 			AND coalesce(p.result->>'cloud_sync_id', '') = '' AND NOT p.catalog
-		ORDER BY d.finished_at DESC, d.id DESC LIMIT $4`, orgID, environmentID, bound, limit)
+		ORDER BY d.finished_at DESC, d.id DESC LIMIT $4`, orgID, environmentID, at, limit, inclusive)
 	if err != nil {
 		return nil, fmt.Errorf("list releases: %w", err)
 	}
@@ -93,13 +94,12 @@ func (h *History) releases(ctx context.Context, orgID, environmentID string, bef
 // that kept a service as it was has no step for it, so an older one says
 // what it ran. A service a release deleted ran nothing after it.
 func (h *History) ReleasedImages(ctx context.Context, orgID, environmentID string, upTo time.Time) (map[string]planning.ReleasedImage, error) {
-	// Postgres keeps microseconds, so the release that finished at upTo is
-	// the last one before the next microsecond.
-	before := upTo
-	if !before.IsZero() {
-		before = before.Truncate(time.Microsecond).Add(time.Microsecond)
+	if h.Providers == nil {
+		return nil, errors.New("release history has no provider registry to name the connection each image was deployed with")
 	}
-	rs, err := h.releases(ctx, orgID, environmentID, before, releaseScan)
+	// Postgres keeps microseconds, so upTo is rounded the way Postgres
+	// rounds a time it stores.
+	rs, err := h.releases(ctx, orgID, environmentID, upTo.Round(time.Microsecond), true, releaseScan)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func (h *History) ReleasedImages(ctx context.Context, orgID, environmentID strin
 // the action pins, or the plan's for the provider's cloud, as the runner
 // chooses.
 func (h *History) connection(plan *planning.Plan, a *planning.Action) string {
-	if a.ConnectionID != "" || h.Providers == nil {
+	if a.ConnectionID != "" {
 		return a.ConnectionID
 	}
 	prov, err := h.Providers.Get(a.Provider)

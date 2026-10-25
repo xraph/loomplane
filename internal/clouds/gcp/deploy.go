@@ -78,7 +78,7 @@ func (s *Session) EnsureRepository(ctx context.Context, region, repo string) err
 
 // ImageDigest reads the digest a Docker repository's tag points at, for
 // an image the build pushed itself rather than through Cloud Build's
-// images, as pack does.
+// images, as pack does. It's empty when the tag names no version.
 func (s *Session) ImageDigest(ctx context.Context, region, repo, image, tag string) (string, error) {
 	var t struct {
 		Version string `json:"version"`
@@ -89,9 +89,6 @@ func (s *Session) ImageDigest(ctx context.Context, region, repo, image, tag stri
 		return "", err
 	}
 	_, digest, _ := strings.Cut(t.Version, "/versions/")
-	if digest == "" {
-		return "", fmt.Errorf("artifact registry names no version for %s:%s", image, tag)
-	}
 	return digest, nil
 }
 

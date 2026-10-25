@@ -60,6 +60,9 @@ type ecsState struct {
 	BuildID    string `json:"build_id,omitempty"`
 	Image      string `json:"image,omitempty"`
 	LogAttempt string `json:"log_attempt,omitempty"`
+	// Unpinned is the permission the connection lacked to read Image's
+	// digest, when Image is a tag for want of it.
+	Unpinned string `json:"unpinned,omitempty"`
 }
 
 func (e *ECS) session(job *Job, cred []byte) (*aws.Session, error) {
@@ -102,6 +105,9 @@ func (e *ECS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 			return nil, err
 		}
 		save()
+	}
+	if state.Unpinned != "" {
+		job.Warn(unpinnedWarning(job.Action.Name, state.Unpinned))
 	}
 	status = StepDeploying
 	job.Progress(StepDeploying, "Deploying "+state.Image)
@@ -162,6 +168,11 @@ func (e *ECS) build(ctx context.Context, s *aws.Session, job *Job, state *ecsSta
 		return "", buildErr
 	}
 	digest, digestErr := s.ImageDigest(ctx, "loomplane/"+imageName(job), tag)
+	if aws.IsAccessDenied(digestErr) {
+		// The image deploys by tag, as it did before images were pinned.
+		state.Unpinned = "ecr:DescribeImages"
+		return image, nil
+	}
 	if errors.Is(digestErr, aws.ErrNotFound) {
 		return "", errNoDigest
 	}

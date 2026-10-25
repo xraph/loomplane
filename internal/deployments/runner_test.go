@@ -1895,10 +1895,12 @@ func (r revisioned) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	out, err := r.recorder.Apply(ctx, job)
 	if out != nil {
 		out.Image, out.Revision = "i@sha256:"+strings.Repeat("0", 64), "dep_do_9"
+		job.Warn(errors.New(job.Action.Name + " warned while it deployed"))
 	}
 	return out, err
 }
 
+// The step keeps what the executor deployed, and what it warned about.
 func TestRunner_recordsTheRevisionOnTheStep(t *testing.T) {
 	exec := revisioned{&recorder{url: answering(t, http.StatusOK)}}
 	r, store, _ := newRunner(t, webAndAPI(), exec, nil)
@@ -1908,7 +1910,8 @@ func TestRunner_recordsTheRevisionOnTheStep(t *testing.T) {
 	}
 	d, _ := store.GetDeployment(t.Context(), "org_1", id)
 	api := d.Step("service:api")
-	if api == nil || api.Image != "i@sha256:"+strings.Repeat("0", 64) || api.Revision != "dep_do_9" {
+	if api == nil || api.Image != "i@sha256:"+strings.Repeat("0", 64) || api.Revision != "dep_do_9" ||
+		!slices.Contains(api.Warnings, "api warned while it deployed") {
 		t.Fatalf("api step %+v", api)
 	}
 }

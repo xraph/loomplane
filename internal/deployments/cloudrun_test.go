@@ -83,7 +83,11 @@ func (c *createdInstances) Create(_ context.Context, r instance.CreateRequest) (
 type cloudBuildFake struct {
 	mu                      sync.Mutex
 	resultDigest, tagDigest string
-	builds                  []map[string]any
+	// tagStatus answers a tag read with that status instead, and
+	// tagUnversioned with a tag that names no version.
+	tagStatus      int
+	tagUnversioned bool
+	builds         []map[string]any
 }
 
 func (f *cloudBuildFake) serve(t *testing.T) *httptest.Server {
@@ -104,6 +108,15 @@ func (f *cloudBuildFake) serve(t *testing.T) *httptest.Server {
 		case r.Method == http.MethodGet && p == project+"/locations/europe-west1/repositories/loomplane":
 			reply(map[string]any{})
 		case r.Method == http.MethodGet && strings.HasPrefix(p, project+"/locations/europe-west1/repositories/loomplane/packages/"):
+			switch {
+			case f.tagStatus != 0:
+				w.WriteHeader(f.tagStatus)
+				reply(map[string]any{"error": map[string]any{"message": "Permission 'artifactregistry.tags.get' denied"}})
+				return
+			case f.tagUnversioned:
+				reply(map[string]any{"name": strings.TrimPrefix(p, "/v1/")})
+				return
+			}
 			if f.tagDigest == "" {
 				w.WriteHeader(http.StatusNotFound)
 				reply(map[string]any{"error": map[string]any{"message": "tag not found"}})
@@ -192,8 +205,10 @@ func TestDigestMissingFailsTheStep(t *testing.T) {
 		}
 	})
 	t.Run("ecs", func(t *testing.T) {
-		if _, err := ecsBuild(t, ""); err == nil || !strings.Contains(err.Error(), missing) {
-			t.Fatalf("err %v", err)
+		for _, answer := range []string{ecrNotFound, ecrNoImage} {
+			if _, err := ecsBuild(t, answer); err == nil || !strings.Contains(err.Error(), missing) {
+				t.Fatalf("ECR answering %q: %v", answer, err)
+			}
 		}
 	})
 	t.Run("azure", func(t *testing.T) {
@@ -209,4 +224,45 @@ func TestDigestMissingFailsTheStep(t *testing.T) {
 			t.Fatalf("apps %v", f.Apps)
 		}
 	})
+}
+
+// An account that may not read Artifact Registry's tags deploys a
+// buildpack image by tag, as before images were pinned, and the step says
+// why. One that reads the tag and finds no version still fails.
+func TestCloudRun_deploysByTagWhenItMayNotReadTheDigest(t *testing.T) {
+	pack := func() *planning.ServiceConfig {
+		return &planning.ServiceConfig{Ecosystem: "go", Source: "services/api", Port: 8080, Public: true}
+	}
+	srv := (&cloudBuildFake{tagStatus: http.StatusForbidden}).serve(t)
+	instances := &createdInstances{}
+	exec := &CloudRun{Google: gcp.New(srv.URL), Ctrl: CtrlPlane{Providers: cpprovider.NewRegistry(), Instances: instances}}
+	job := cloudRunJob(t, pack(), srv.URL+"/token")
+	var warnings []string
+	job.warn = func(err error) { warnings = append(warnings, err.Error()) }
+	var saved cloudRunState
+	job.Checkpoint = func(data []byte) error { return json.Unmarshal(data, &saved) }
+	out, err := exec.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagged := "europe-west1-docker.pkg.dev/shop/loomplane/api-23456789:" + doApproved[:12]
+	if out.Image != tagged || len(instances.created) != 1 || instances.created[0].Services[0].Image != tagged || saved.Unpinned != "artifactregistry.tags.get" {
+		t.Fatalf("outcome %+v, checkpoint %+v", out, saved)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "artifactregistry.tags.get") || !strings.Contains(warnings[0], "rolling back api builds it again") {
+		t.Fatalf("warnings %q", warnings)
+	}
+
+	// A retry after the build still says why.
+	warnings = nil
+	job.Resume, _ = json.Marshal(saved)
+	if _, err := exec.Apply(t.Context(), job); err != nil || len(warnings) != 1 {
+		t.Fatalf("retry: %v, warnings %q", err, warnings)
+	}
+
+	srv = (&cloudBuildFake{tagUnversioned: true}).serve(t)
+	exec = &CloudRun{Google: gcp.New(srv.URL), Ctrl: CtrlPlane{Providers: cpprovider.NewRegistry(), Instances: &createdInstances{}}}
+	if _, err := exec.Apply(t.Context(), cloudRunJob(t, pack(), srv.URL+"/token")); err == nil || !strings.Contains(err.Error(), "the build reported no image digest") {
+		t.Fatalf("a tag with no version: %v", err)
+	}
 }
