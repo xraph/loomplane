@@ -16,6 +16,7 @@ const now = Date.parse("2026-10-22T12:00:00Z")
 const docker: StackInput = {
   provider: "server",
   postgres: "managed",
+  backupPolicy: { enabled: true, everyHours: 24 },
   redis: "managed",
   restoreVerifiedAt: "2026-10-21T08:00:00Z",
   now,
@@ -40,7 +41,7 @@ test("stack cards on Docker and Kubernetes", () => {
     ["Elasticsearch", "Off"],
   ])
   expect(detail(parts, "postgres")?.detail).toBe(
-    "TimescaleDB, pgvector, PostGIS. Backups available, last restore verified yesterday."
+    "TimescaleDB, pgvector, PostGIS. Backups daily, last restore verified yesterday."
   )
   expect(detail(parts, "redis")?.detail).toBe(
     "Outbox stream and cache. AOF every second."
@@ -84,7 +85,7 @@ test("the stack says what Fabriq doesn't report", () => {
     detail: "Port 8081.",
   })
   expect(detail(parts, "postgres")?.detail).toBe(
-    "TimescaleDB, pgvector, PostGIS. Backups available, no restore verified yet."
+    "TimescaleDB, pgvector, PostGIS. Backups daily, no restore verified yet."
   )
   expect(detail(parts, "falkordb")?.state).toBe("Running")
 })
@@ -139,7 +140,7 @@ test("the stack reads the bindings, the status and the last verified restore", a
   ).toBeVisible()
   expect(
     await screen.findByText(
-      "TimescaleDB, pgvector, PostGIS. Backups available, last restore verified yesterday."
+      "TimescaleDB, pgvector, PostGIS. Backups daily, last restore verified yesterday."
     )
   ).toBeVisible()
   expect(
@@ -177,3 +178,83 @@ test("the stack still shows when Fabriq isn't reachable", async () => {
   expect(screen.getByText("Port 8081.")).toBeVisible()
   expect(screen.getByText("Postgres 16")).toBeVisible()
 })
+
+test("the stack uses the actual policy instead of assuming daily backups", () => {
+  for (const [backupPolicy, expected] of [
+    [undefined, "Backups available"],
+    [{ enabled: false, everyHours: 24 }, "Backups paused"],
+    [{ enabled: true, everyHours: 12 }, "Backups every 12 hours"],
+    [
+      { enabled: true, everyHours: 24, lastError: "permission revoked" },
+      "Backup schedule needs attention",
+    ],
+  ] as const) {
+    expect(
+      detail(stackParts({ ...docker, backupPolicy }), "postgres")?.detail
+    ).toContain(expected)
+  }
+})
+
+test.each(["unavailable", "loading"] as const)(
+  "the stack does not claim daily backups when policy is %s",
+  (backupPolicyStatus) => {
+    expect(
+      detail(stackParts({ ...docker, backupPolicyStatus }), "postgres")?.detail
+    ).not.toContain("Backups daily")
+  }
+)
+
+test.each([
+  [
+    {
+      policies: [
+        {
+          id: "other",
+          environment_id: "other",
+          resource: "fabriq--postgres",
+          every_hours: 24,
+          enabled: true,
+        },
+      ],
+    },
+    "Backups available",
+  ],
+  [
+    {
+      policies: [
+        {
+          id: "other",
+          environment_id: "env_prod",
+          resource: "other",
+          every_hours: 24,
+          enabled: true,
+        },
+      ],
+    },
+    "Backups available",
+  ],
+  [
+    {
+      policies: [
+        {
+          id: "paused",
+          environment_id: "env_prod",
+          resource: "fabriq--postgres",
+          every_hours: 24,
+          enabled: false,
+        },
+      ],
+    },
+    "Backups paused",
+  ],
+  [{ policyError: 403 }, "Backup schedule access denied"],
+  [{ policyError: 503 }, "Backup schedule unavailable"],
+] as const)(
+  "the stack scopes policy state and reports lookup failures: %s",
+  async (fixture, expected) => {
+    serve(fixture)
+    mount(<FabriqStack {...panelProps()} />)
+    expect(await screen.findByText(new RegExp(expected))).toBeVisible()
+    expect(screen.queryByText(/Backups daily/)).not.toBeInTheDocument()
+  }
+)

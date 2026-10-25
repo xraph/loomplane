@@ -226,6 +226,9 @@ export type StackInput = {
   /** Whether Loomplane runs Postgres and Redis, or they are the project's own or external. */
   postgres: "managed" | "linked"
   redis: "managed" | "linked"
+  /** The saved policy, including operator overrides. */
+  backupPolicy?: { enabled: boolean; everyHours: number; lastError?: string }
+  backupPolicyStatus?: "loading" | "unavailable" | "denied"
   /** When the newest test restore of Postgres was verified, if one has been. */
   restoreVerifiedAt?: string
   now: number
@@ -246,9 +249,25 @@ function postgresDetail(input: StackInput): string {
     return `${postgresExtensions} Connected to your engine. See Recovery for its backup options.`
   if (input.provider === "kubernetes")
     return `${postgresExtensions} Backups on Kubernetes aren’t available yet.`
+  const schedule = backupSchedule(input)
   return input.restoreVerifiedAt
-    ? `${postgresExtensions} Backups available, last restore verified ${agoDay(input.restoreVerifiedAt, input.now)}.`
-    : `${postgresExtensions} Backups available, no restore verified yet.`
+    ? `${postgresExtensions} ${schedule}, last restore verified ${agoDay(input.restoreVerifiedAt, input.now)}.`
+    : `${postgresExtensions} ${schedule}, no restore verified yet.`
+}
+
+function backupSchedule(input: StackInput): string {
+  if (input.backupPolicyStatus === "loading") return "Checking backup schedule"
+  if (input.backupPolicyStatus === "denied")
+    return "Backup schedule access denied"
+  if (input.backupPolicyStatus === "unavailable")
+    return "Backup schedule unavailable"
+  const policy = input.backupPolicy
+  if (!policy) return "Backups available"
+  if (!policy.enabled) return "Backups paused"
+  if (policy.lastError) return "Backup schedule needs attention"
+  return policy.everyHours === 24
+    ? "Backups daily"
+    : `Backups every ${policy.everyHours} hours`
 }
 
 /**

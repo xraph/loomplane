@@ -37,6 +37,8 @@ export type Fixture = {
   tenants?: Tenant[]
   keys?: Key[]
   services?: Record<string, unknown>
+  policies?: readonly unknown[]
+  policyError?: number
   backups?: unknown[]
   restores?: unknown[]
   adminUrl?: string
@@ -155,6 +157,23 @@ export function serve(fixture: Fixture = {}) {
             services: fixture.services ?? manifestServices,
           },
         })
+      if (path.endsWith("/projects/p/backup-policies"))
+        return fixture.policyError
+          ? json(
+              { message: "Cannot read backup policies" },
+              fixture.policyError
+            )
+          : json({
+              policies: fixture.policies ?? [
+                {
+                  id: "policy",
+                  environment_id: "env_prod",
+                  resource: "fabriq--postgres",
+                  enabled: true,
+                  every_hours: 24,
+                },
+              ],
+            })
       if (path.endsWith("/projects/p/service-backups"))
         return json({ backups: fixture.backups ?? [] })
       if (path.endsWith("/projects/p/service-restores"))

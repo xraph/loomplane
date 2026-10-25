@@ -102,7 +102,7 @@ const engines: Engine[] = [
     name: "Postgres 16",
     need: "required",
     detail:
-      "With TimescaleDB, pgvector and PostGIS. Backups on Docker; configure a schedule in Recovery.",
+      "With TimescaleDB, pgvector and PostGIS. Daily backups when Loomplane runs it.",
     options: [provision, connect],
     check: "postgres",
     dependency: "postgres",
@@ -477,7 +477,10 @@ export function AddFabriqDialog({
                           </span>
                         </span>
                         <span className="text-xs leading-[1.45] text-muted-foreground">
-                          {engine.detail}
+                          {engine.id === "pg" &&
+                          selected?.connection.cloud === "kubernetes"
+                            ? "With TimescaleDB, pgvector and PostGIS. Backups on Kubernetes aren’t available yet."
+                            : engine.detail}
                         </span>
                       </span>
                       <Segments

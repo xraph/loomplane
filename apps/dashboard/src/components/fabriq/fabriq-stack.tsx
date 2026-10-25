@@ -2,7 +2,9 @@
 // one click set up, each part with where it stands.
 import type { ReactNode } from "react"
 
+import { statusOf } from "@/client/errors"
 import {
+  useBackupPoliciesList,
   useFabriqStatus,
   useServiceBackupsList,
   useServiceRestoresList,
@@ -74,6 +76,7 @@ export function FabriqStack({
   const status = useQuery(useFabriqStatus, {
     path: { projectId, environmentId, resource },
   })
+  const policies = useQuery(useBackupPoliciesList, { path: { id: projectId } })
   const backups = useQuery(useServiceBackupsList, { path: { id: projectId } })
   const restores = useQuery(useServiceRestoresList, { path: { id: projectId } })
 
@@ -111,6 +114,18 @@ export function FabriqStack({
     provider: binding.provider,
     postgres: postgres?.mode === "new" ? "managed" : "linked",
     redis: choices.redis?.mode === "new" ? "managed" : "linked",
+    backupPolicy: policies.data?.policies?.find(
+      (policy) =>
+        policy.environmentId === environmentId &&
+        policy.resource === postgresResource
+    ),
+    backupPolicyStatus: policies.error
+      ? statusOf(policies.error) === 403
+        ? "denied"
+        : "unavailable"
+      : !policies.data
+        ? "loading"
+        : undefined,
     restoreVerifiedAt: lastVerified(
       backups.data?.backups ?? [],
       restores.data?.restores ?? [],

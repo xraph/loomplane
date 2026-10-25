@@ -26,6 +26,7 @@ const timescale = { kind: "timescaledb", provider: "server", target: "conn_1" }
 // serve stubs the API the dialog reads and writes, recording every write.
 function serve(
   options: {
+    cloud?: "server" | "kubernetes"
     resources?: Record<string, unknown>
     check?: () => Response
     edit?: () => Response
@@ -90,10 +91,10 @@ function serve(
             {
               id: "conn_1",
               name: "edge-1",
-              cloud: "server",
+              cloud: options.cloud ?? "server",
               status: "ready",
               account: "edge-1",
-              details: { architecture: "amd64" },
+              details: { architecture: "amd64", namespace: "fabriq-test" },
             },
             {
               id: "conn_down",
@@ -360,7 +361,7 @@ test("Cancel closes without writing", async () => {
   expect(writes).toEqual([])
 })
 
-test("dialog copy includes the documented backup availability departure", async () => {
+test("dialog uses the mock copy for daily backups", async () => {
   serve()
   mount()
   await ready()
@@ -377,7 +378,7 @@ test("dialog copy includes the documented backup availability departure", async 
     "Library only",
     "Your Go app embeds Fabriq. Loomplane runs the engines, migrations and worker.",
     "Postgres 16",
-    "With TimescaleDB, pgvector and PostGIS. Backups on Docker; configure a schedule in Recovery.",
+    "With TimescaleDB, pgvector and PostGIS. Daily backups when Loomplane runs it.",
     "Redis",
     "Carries the outbox stream and live subscriptions.",
     "FalkorDB",
@@ -451,4 +452,18 @@ test("radio choices support arrow keys without submitting the dialog", async () 
   ).toBeChecked()
   expect(await reviewPlan()).toBeEnabled()
   expect(writes).toEqual([])
+})
+
+test("a Kubernetes target does not promise daily backups", async () => {
+  serve({ cloud: "kubernetes" })
+  mount()
+  await ready()
+  expect(
+    screen.getByText(
+      "With TimescaleDB, pgvector and PostGIS. Backups on Kubernetes aren’t available yet."
+    )
+  ).toBeVisible()
+  expect(
+    screen.queryByText(/Daily backups when Loomplane runs it/)
+  ).not.toBeInTheDocument()
 })
