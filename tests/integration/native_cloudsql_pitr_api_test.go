@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +30,7 @@ import (
 
 // The retained source and Google API responses are fixtures. Recovery admission,
 // signed CLI review, Dispatch, Vault and PostgreSQL authentication are real.
-func runCloudSQLPITRHTTP(t *testing.T, f nativePointFixture, sql nativeSQLFixture, binding planning.Binding, resource planning.ResourceConfig, endpoint string, selected time.Time, transport func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error)) {
+func runCloudSQLPITRHTTP(t *testing.T, f nativePointFixture, sql nativeSQLFixture, binding planning.Binding, resource planning.ResourceConfig, endpoint string, selected time.Time, deleted *time.Time, transport func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error)) {
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.Database.URL = f.sql.Config().ConnString()
@@ -86,12 +87,30 @@ func runCloudSQLPITRHTTP(t *testing.T, f nativePointFixture, sql nativeSQLFixtur
 	if err = planning.NewPgStore(f.db).PutBinding(t.Context(), &binding); err != nil {
 		t.Fatal(err)
 	}
+	if deleted != nil {
+		if err = planning.NewPgStore(f.db).DeleteBinding(t.Context(), project.OrgID, binding.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var sources recovery.NativeSourcesPage
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+project.ID+"/native-recovery-sources", nil, &sources)
 	if len(sources.Sources) != 1 {
 		t.Fatal("retained PSC source missing", sources)
 	}
 	source := sources.Sources[0]
+	if deleted != nil {
+		c.must(http.StatusOK, http.MethodPost, "/api/v1/native-recovery-sources/"+source.ID+"/refresh", nil, nil)
+	}
+	checkFinalUse := func(want bool) {
+		t.Helper()
+		if deleted == nil {
+			return
+		}
+		_, entries, readErr := recovery.NewPgStore(f.db).NativeRetentionSnapshot(t.Context(), project.OrgID, source.ID)
+		if readErr != nil || len(entries) != 1 || entries[0].Point.ProviderID != "projects/source-project/backups/final-original" || entries[0].InUse != want {
+			t.Fatal("final backup did not retain its PITR copy dependency", want, entries, readErr)
+		}
+	}
 	var key keyBody
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/api-keys", map[string]string{"name": "PITR CLI", "access": "write"}, &key)
 	lc := loomctl{t: t, url: c.base, key: key.Secret, config: filepath.Join(t.TempDir(), "loomctl.json")}
@@ -110,6 +129,16 @@ func runCloudSQLPITRHTTP(t *testing.T, f nativePointFixture, sql nativeSQLFixtur
 	raw, err := os.ReadFile(reviewFile)
 	if err != nil || json.Unmarshal(raw, &review) != nil || review.RestoreTime == nil || !review.RestoreTime.Equal(selected) || review.Target.CloudSQLNetwork.Network != "projects/worker-project/global/networks/recovery" {
 		t.Fatal("signed review lost exact time or recovery network", err)
+	}
+	if deleted != nil {
+		token, _, _ := strings.Cut(review.ReviewToken, ".")
+		claimRaw, decodeErr := base64.RawURLEncoding.DecodeString(token)
+		var claims struct {
+			Point recovery.NativePoint `json:"point"`
+		}
+		if decodeErr != nil || json.Unmarshal(claimRaw, &claims) != nil || claims.Point.PITR == nil || claims.Point.PITR.SourceDeletedAt == nil || !claims.Point.PITR.SourceDeletedAt.Equal(*deleted) || claims.Point.PITR.SourceBackup != "projects/source-project/backups/final-original" {
+			t.Fatal("signed review lost deleted source witness", decodeErr)
+		}
 	}
 	var copyRecord recovery.NativeRestore
 	if err = json.Unmarshal([]byte(lc.must("backups", "native-copies", "create", "--review-file", reviewFile, "--acknowledge-charges", "--json")), &copyRecord); err != nil {
@@ -131,12 +160,19 @@ func runCloudSQLPITRHTTP(t *testing.T, f nativePointFixture, sql nativeSQLFixtur
 		}
 	}
 	wait("succeeded")
+	checkFinalUse(true)
 	if copyRecord.VerifiedAt == nil || copyRecord.RestoreTime == nil || !copyRecord.RestoreTime.Equal(selected) {
 		t.Fatal("verified copy lost its PITR time")
 	}
 	app.stop()
 	app = startApp()
 	c.base, lc.url = app.srv.URL, app.srv.URL
+	if deleted != nil {
+		retained, readErr := recovery.NewPgStore(f.db).GetNativeRestore(t.Context(), project.OrgID, copyRecord.ID)
+		if readErr != nil || retained.Point.PITR == nil || retained.Point.PITR.SourceDeletedAt == nil || !retained.Point.PITR.SourceDeletedAt.Equal(*deleted) || retained.Point.PITR.SourceBackup != "projects/source-project/backups/final-original" {
+			t.Fatal("restarted copy lost deleted source witness", readErr)
+		}
+	}
 	credentialFile := filepath.Join(t.TempDir(), "credentials.json")
 	output := lc.must("backups", "native-copies", "credentials", copyRecord.ID, "--out", credentialFile)
 	raw, err = os.ReadFile(credentialFile)
@@ -181,6 +217,44 @@ func runCloudSQLPITRHTTP(t *testing.T, f nativePointFixture, sql nativeSQLFixtur
 	denied.must(http.StatusForbidden, http.MethodDelete, copyPath, nil, nil)
 	lc.must("backups", "native-copies", "cleanup", copyRecord.ID, "--yes", "--wait")
 	wait("deleted")
+	checkFinalUse(false)
+	if deleted != nil {
+		// A completed deletion marker must block fresh PITR admission even while
+		// the provider fixture still serves its final-backup metadata. This seeds
+		// history only; retention-policy eligibility is tested separately.
+		var pendingReview recovery.NativeCopyReview
+		reviewPath := "/api/v1/native-recovery-sources/" + source.ID + "/points/" + window.PointID + "/copy-review"
+		input := recovery.NativeCopyReviewInput{RestoreTime: &selected, RequestID: "retired-final-request", CloudID: cloud.ID, TargetID: target.ID, TTLHours: 1}
+		c.must(http.StatusOK, http.MethodPost, reviewPath, input, &pendingReview)
+		store := recovery.NewPgStore(f.db)
+		inventory, readErr := store.ReadNativeInventory(t.Context(), project.OrgID, source.ID, recovery.NativePageInput{})
+		if readErr != nil || len(inventory.Points) != 1 {
+			t.Fatal(readErr)
+		}
+		point, readErr := store.GetNativePoint(t.Context(), project.OrgID, source.ID, window.PointID)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		sourceRaw, _ := json.Marshal(binding)
+		finalRaw, _ := json.Marshal(inventory.Points[0])
+		pointRaw, _ := json.Marshal(point)
+		_, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_native_retirements(id,org_id,project_id,source_id,point_id,witness_id,request_id,created_by,status,policy,source,point,witness) VALUES('retired-final-marker',$1,$2,$3,$4,$5,'retire-final','operator','succeeded','{}',$6,$7,$8)`, project.OrgID, project.ID, source.ID, inventory.Points[0].ID, window.PointID, sourceRaw, finalRaw, pointRaw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocked, readErr := store.NativePointRetired(t.Context(), project.OrgID, source.ID, window.PointID)
+		if readErr != nil || !blocked {
+			t.Fatal("retired final backup did not block PITR selection", readErr)
+		}
+		c.must(http.StatusConflict, http.MethodPost, "/api/v1/native-recovery-copies", recovery.NativeCopyCreateInput{RequestID: input.RequestID, ReviewToken: pendingReview.ReviewToken, AcknowledgeCharges: true}, nil)
+		input.RequestID = "retired-final-review"
+		c.must(http.StatusConflict, http.MethodPost, reviewPath, input, nil)
+		var unavailable recovery.NativePITRWindow
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/native-recovery-sources/"+source.ID+"/pitr-window", nil, &unavailable)
+		if unavailable.Available || unavailable.UnavailableReason == "" {
+			t.Fatal("retired final backup still advertised PITR", unavailable)
+		}
+	}
 	c.must(http.StatusConflict, http.MethodPost, copyPath+"/credentials", nil, nil)
 	secretKey := deployments.ResourceKey(project.OrgID, environment, "native-copy:"+copyRecord.ID, "credentials")
 	var kept bool

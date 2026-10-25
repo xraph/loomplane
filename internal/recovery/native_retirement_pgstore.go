@@ -46,13 +46,13 @@ func readNativeRetention(ctx context.Context, db nativeRetentionReader, org, sou
 		return nil, nil, err
 	}
 	rows, err := db.Query(ctx, `SELECT p.id,p.source_id,p.body,p.present,p.last_seen_at,
- EXISTS(SELECT 1 FROM loomplane_native_restores r WHERE r.org_id=p.org_id AND r.source_id=p.source_id AND r.point_id=p.id AND r.status<>'deleted'),
+ EXISTS(SELECT 1 FROM loomplane_native_restores r WHERE r.org_id=p.org_id AND r.source_id=p.source_id AND (r.point_id=p.id OR r.point->>'kind'='pitr' AND r.point->'pitr'->>'source_backup'=p.provider_id) AND r.status<>'deleted'),
  EXISTS(SELECT 1 FROM loomplane_native_retirements d WHERE d.org_id=p.org_id AND d.source_id=p.source_id AND d.point_id=p.id),
  EXISTS(SELECT 1 FROM loomplane_native_retirements d WHERE d.org_id=p.org_id AND d.source_id=p.source_id AND d.witness_id=p.id AND d.status<>'succeeded'),
  (SELECT max(r.verified_at) FROM loomplane_native_restores r WHERE r.org_id=p.org_id AND r.source_id=p.source_id AND r.point_id=p.id AND r.verified_at IS NOT NULL AND r.status IN ('succeeded','deleted') AND r.physical_id<>'' AND r.external_id<>'' AND r.source->>'physical_id'=$3 AND r.point->>'provider_id'=p.provider_id AND r.point->>'created_at'=p.body->>'created_at')
  FROM loomplane_native_points p WHERE p.org_id=$1 AND p.source_id=$2 AND COALESCE(p.body->>'kind','')<>'pitr' AND (
  p.present OR EXISTS(SELECT 1 FROM loomplane_native_retirements d WHERE d.org_id=p.org_id AND d.source_id=p.source_id AND d.status<>'succeeded' AND (d.point_id=p.id OR d.witness_id=p.id))
- OR EXISTS(SELECT 1 FROM loomplane_native_restores r WHERE r.org_id=p.org_id AND r.source_id=p.source_id AND r.point_id=p.id AND r.status<>'deleted'))
+ OR EXISTS(SELECT 1 FROM loomplane_native_restores r WHERE r.org_id=p.org_id AND r.source_id=p.source_id AND (r.point_id=p.id OR r.point->>'kind'='pitr' AND r.point->'pitr'->>'source_backup'=p.provider_id) AND r.status<>'deleted'))
  ORDER BY p.creation_identity DESC,p.id DESC LIMIT 1001`, org, sourceID, source.PhysicalID)
 	if err != nil {
 		return nil, nil, err

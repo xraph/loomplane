@@ -35,6 +35,10 @@ func TestNativeCloudSQLPITRHTTPCLIAndDispatchRetainsExactTime(t *testing.T) {
 	runCloudSQLPITRCopy(t, "http-cli-dispatch")
 }
 
+func TestNativeCloudSQLDeletedPITRHTTPCLIAndDispatchRetainsExactTime(t *testing.T) {
+	runCloudSQLPITRCopy(t, "http-cli-dispatch-deleted")
+}
+
 func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 	t.Helper()
 	f := nativePointHistoryFixture(t)
@@ -45,6 +49,11 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 	selected := now.Add(-time.Hour).Add(123456789 * time.Nanosecond)
+	var deleted *time.Time
+	if strings.HasSuffix(scenario, "-deleted") {
+		at := now.Add(-30 * time.Second).Add(987654321 * time.Nanosecond)
+		deleted = &at
+	}
 	source := gcp.SQLInstance{Kind: "sql#instance", Name: "source-database", Project: "source-project", Region: "us-central1", ConnectionName: "source-project:us-central1:source-database", CreateTime: now.Add(-24 * time.Hour).Format(time.RFC3339Nano), DatabaseVersion: "POSTGRES_17", State: "RUNNABLE"}
 	disabled := false
 	source.Settings.Version, source.Settings.Edition, source.Settings.Availability = "1", "ENTERPRISE", "ZONAL"
@@ -107,13 +116,32 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 				t.Error(decodeErr)
 			}
 			_ = json.NewEncoder(w).Encode(input)
+		case r.Method == http.MethodGet && (path == "backups" || path == "backups/final-original"):
+			if deleted == nil {
+				t.Error("live source read retained backups")
+				w.WriteHeader(500)
+				return
+			}
+			backup := map[string]any{"kind": "sql#backup", "name": "projects/source-project/backups/final-original", "instance": source.Name, "type": "FINAL", "state": "SUCCESSFUL", "databaseVersion": "POSTGRES_17", "instanceDeletionTime": *deleted, "instanceSettings": source, "backupInterval": map[string]any{"startTime": deleted.Add(-time.Minute), "endTime": *deleted}, "expiryTime": now.Add(24 * time.Hour)}
+			if path == "backups" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"backups": []any{backup}})
+			} else {
+				_ = json.NewEncoder(w).Encode(backup)
+			}
 		case r.Method == http.MethodGet && path == "instances/source-database":
+			if deleted != nil {
+				w.WriteHeader(404)
+				return
+			}
 			observed := source
 			if sourceChanged {
 				observed.Settings.Version = "2"
 			}
 			_ = json.NewEncoder(w).Encode(observed)
 		case r.Method == http.MethodGet && path == "instances/source-database/getLatestRecoveryTime":
+			if deleted != nil && r.URL.Query().Get("sourceInstanceDeletionTime") != deleted.Format(time.RFC3339Nano) {
+				t.Error("deleted log window lost exact deletion time")
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#getLatestRecoveryTime", "earliestRecoveryTime": now.Add(-2 * time.Hour), "latestRecoveryTime": now.Add(-time.Minute)})
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "operations/"):
 			op, ok := operations[strings.TrimPrefix(path, "operations/")]
@@ -126,12 +154,19 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 		case r.Method == http.MethodPost && path == "instances/source-database/clone":
 			var body struct {
 				Context struct {
-					Name string `json:"destinationInstanceName"`
-					Time string `json:"pointInTime"`
+					Name      string `json:"destinationInstanceName"`
+					Time      string `json:"pointInTime"`
+					DeletedAt string `json:"sourceInstanceDeletionTime"`
 				} `json:"cloneContext"`
 			}
 			if decodeErr := json.NewDecoder(r.Body).Decode(&body); decodeErr != nil {
 				t.Error(decodeErr)
+			}
+			if deleted != nil && body.Context.DeletedAt != deleted.Format(time.RFC3339Nano) {
+				t.Error("deleted clone lost exact deletion time")
+			}
+			if deleted == nil && body.Context.DeletedAt != "" {
+				t.Error("live clone gained deletion context")
 			}
 			if body.Context.Time != selected.Format(time.RFC3339Nano) {
 				t.Error("PITR timestamp changed", body.Context.Time)
@@ -203,8 +238,8 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 	backend := &deployments.NativeDatabases{Google: gcp.New(server.URL), Credentials: accounts, Secrets: vault, SQLConnector: func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error) {
 		return nativeFixtureConnector{dial: sql.verifier.Dial}, nil
 	}}
-	if scenario == "http-cli-dispatch" {
-		runCloudSQLPITRHTTP(t, f, sql, binding, cfg, server.URL, selected, backend.SQLConnector)
+	if strings.HasPrefix(scenario, "http-cli-dispatch") {
+		runCloudSQLPITRHTTP(t, f, sql, binding, cfg, server.URL, selected, deleted, backend.SQLConnector)
 		mu.Lock()
 		defer mu.Unlock()
 		for _, operation := range []string{"clone", "network", "admin", "delete"} {
@@ -469,8 +504,8 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 	if err = f.store.FinishNativeCleanup(t.Context(), cleanup, nil); err != nil {
 		t.Fatal(err)
 	}
-	deleted, readErr := f.store.GetNativeRestore(t.Context(), "org", cleanup.ID)
-	if readErr != nil || deleted.Status != "deleted" {
+	removedRecord, readErr := f.store.GetNativeRestore(t.Context(), "org", cleanup.ID)
+	if readErr != nil || removedRecord.Status != "deleted" {
 		t.Fatal("confirmed cleanup did not persist deleted status", readErr)
 	}
 }

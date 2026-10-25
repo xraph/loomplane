@@ -1165,6 +1165,8 @@ export interface NativePITRBounds {
   latest: string;
   protocol: number;
   settingsDigest?: string;
+  sourceBackup?: string;
+  sourceDeletedAt?: string;
 }
 
 export interface NativePITRWindow {

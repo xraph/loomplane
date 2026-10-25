@@ -65,13 +65,17 @@ func (n *NativeDatabases) cloudSQLPITRWindow(ctx context.Context, b *planning.Bi
 	if err != nil {
 		return nil, err
 	}
-	window, err := client.ReadSQLPITRWindow(ctx, region, name, b.PhysicalID, cloudSQLPITRSourceSpec(cfg, name))
+	window, err := client.FindSQLPITRWindow(ctx, region, name, b.PhysicalID, cloudSQLPITRSourceSpec(cfg, name))
 	if errors.Is(err, gcp.ErrSQLPITRUnavailable) {
 		return nil, recovery.ErrNativePITRUnavailable
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &recovery.NativePoint{ProviderID: window.PhysicalID, Name: name, Kind: "pitr", Status: "available", Engine: "postgres", Version: "17", CreatedAt: window.CreatedAt, Encrypted: true,
-		PITR: &recovery.NativePITRBounds{Protocol: 1, Earliest: window.Earliest, Latest: window.Latest, SettingsDigest: window.SettingsDigest}}, nil
+	bounds := &recovery.NativePITRBounds{Protocol: 1, Earliest: window.Earliest, Latest: window.Latest, SettingsDigest: window.SettingsDigest}
+	if window.DeletedSource != nil {
+		deleted := window.DeletedSource.DeletedAt.UTC()
+		bounds.SourceBackup, bounds.SourceDeletedAt = window.DeletedSource.Backup, &deleted
+	}
+	return &recovery.NativePoint{ProviderID: window.PhysicalID, Name: name, Kind: "pitr", Status: "available", Engine: "postgres", Version: "17", CreatedAt: window.CreatedAt, Encrypted: true, PITR: bounds}, nil
 }

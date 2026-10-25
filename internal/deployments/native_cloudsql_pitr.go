@@ -36,6 +36,11 @@ func (s *nativeSQLCopyState) clonePITR(ctx context.Context, client *gcp.Session,
 		return s.save(ctx, c)
 	}
 	source := cloudSQLPITRSourceSpec(cfg, r.Point.Name)
+	if r.Point.PITR.SourceDeletedAt != nil {
+		deleted := gcp.SQLDeletedPITRSource{Backup: r.Point.PITR.SourceBackup, DeletedAt: *r.Point.PITR.SourceDeletedAt}
+		_, err := client.CloneSQLDeletedPointInTime(ctx, source, r.Source.PhysicalID, r.Point.PITR.SettingsDigest, deleted, *r.Point.RestoreTime, target, s.track(ctx, c, c.Check, false))
+		return err
+	}
 	_, err := client.CloneSQLPointInTime(ctx, source, r.Source.PhysicalID, r.Point.PITR.SettingsDigest, *r.Point.RestoreTime, target, s.track(ctx, c, c.Check, false))
 	return err
 }

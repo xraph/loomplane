@@ -77,7 +77,7 @@ func checkNativeCopySelection(r recovery.NativeRestore, current *recovery.Native
 		return recovery.ErrConflict
 	}
 	if selected.Kind == "pitr" {
-		if selected.PITR == nil || current.PITR == nil || current.PITR.Protocol != selected.PITR.Protocol || current.PITR.SettingsDigest != selected.PITR.SettingsDigest {
+		if !selected.PITR.SameSource(current.PITR) {
 			return recovery.ErrConflict
 		}
 		if _, err := current.SelectTime(r.Target.Provider, selected.RestoreTime); err != nil {

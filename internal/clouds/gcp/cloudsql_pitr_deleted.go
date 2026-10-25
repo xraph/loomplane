@@ -20,6 +20,51 @@ type sqlDeletedPITRWitness struct {
 	Created, BackupStart, BackupEnd time.Time
 }
 
+// FindSQLPITRWindow chooses the original live incarnation or one unambiguous
+// retained final backup. An unavailable or denied live source never falls back.
+func (s *Session) FindSQLPITRWindow(ctx context.Context, region, name, physical string, spec SQLInstanceSpec) (*SQLPITRWindow, error) {
+	if err := s.checkSQLBackupSource(region, name, physical); err != nil {
+		return nil, err
+	}
+	if spec.Name != name || spec.Region != region {
+		return nil, ErrSQLPITRUnavailable
+	}
+	in, err := s.GetSQLInstance(ctx, name)
+	if err != nil && !IsNotFound(err) {
+		return nil, err
+	}
+	if err == nil {
+		pin, pinErr := in.Incarnation(s.key.ProjectID, region, name)
+		if pinErr != nil {
+			return nil, pinErr
+		}
+		if pin == physical {
+			return s.ReadSQLPITRWindow(ctx, region, name, physical, spec)
+		}
+	}
+	backups, complete, err := s.ListSQLBackups(ctx, region, name, physical)
+	if err != nil {
+		return nil, err
+	}
+	if !complete {
+		return nil, ErrSQLPITRUnavailable
+	}
+	var reference string
+	for _, backup := range backups {
+		if backup.Type != "FINAL" || backup.State != "SUCCESSFUL" || backup.ExpiresAt != nil && !backup.ExpiresAt.After(time.Now()) {
+			continue
+		}
+		if reference != "" {
+			return nil, ErrSQLPITRUnavailable
+		}
+		reference = backup.Name
+	}
+	if reference == "" {
+		return nil, ErrSQLPITRUnavailable
+	}
+	return s.ReadSQLDeletedPITRWindow(ctx, region, name, physical, reference, spec)
+}
+
 func (s *Session) readSQLDeletedPITRSource(ctx context.Context, region, name, physical, reference string, spec SQLInstanceSpec) (*sqlDeletedPITRWitness, error) {
 	if err := s.checkSQLBackupSource(region, name, physical); err != nil {
 		return nil, err

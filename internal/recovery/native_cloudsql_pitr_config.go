@@ -18,5 +18,8 @@ func nativeCloudSQLPITRCopyConfig(source planning.Binding, point NativePoint, ta
 	if _, err := point.SelectTime("cloud-sql", point.RestoreTime); err != nil {
 		return nil, ErrInvalid
 	}
+	if point.PITR.SourceBackup != "" && !strings.HasPrefix(point.PITR.SourceBackup, "projects/"+instance[0]+"/backups/") {
+		return nil, ErrInvalid
+	}
 	return &cfg, nil
 }

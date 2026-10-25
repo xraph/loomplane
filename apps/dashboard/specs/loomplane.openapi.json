@@ -17128,6 +17128,13 @@
           },
           "settings_digest": {
             "type": "string"
+          },
+          "source_backup": {
+            "type": "string"
+          },
+          "source_deleted_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

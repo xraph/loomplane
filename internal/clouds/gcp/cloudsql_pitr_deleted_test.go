@@ -125,3 +125,86 @@ func TestSQLDeletedPITRWindowUsesOriginalFinalBackup(t *testing.T) {
 		})
 	}
 }
+
+func TestFindSQLPITRWindowKeepsOriginalDeletedIncarnation(t *testing.T) {
+	for _, scenario := range []string{"live", "deleted", "reused-name", "missing-final", "ambiguous-final", "partial-inventory", "unsafe-live", "denied"} {
+		t.Run(scenario, func(t *testing.T) {
+			original, _ := pscPITRInstance(t)
+			pin, err := original.Incarnation("source-project", "us-central1", "source-db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			deleted := time.Now().UTC().Add(-time.Minute)
+			lists := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.Method != http.MethodGet {
+					t.Error("discovery mutated provider")
+					w.WriteHeader(500)
+					return
+				}
+				switch r.URL.Path {
+				case "/v1/projects/source-project/instances/source-db":
+					if scenario == "denied" {
+						w.WriteHeader(403)
+						return
+					}
+					if scenario != "live" && scenario != "unsafe-live" && scenario != "reused-name" {
+						w.WriteHeader(404)
+						return
+					}
+					_, fields := pscPITRInstance(t)
+					if scenario == "reused-name" {
+						fields["createTime"] = deleted.Add(-time.Hour)
+					}
+					if scenario == "unsafe-live" {
+						fields["settings"].(map[string]any)["ipConfiguration"].(map[string]any)["ipv4Enabled"] = true
+					}
+					_ = json.NewEncoder(w).Encode(fields)
+				case "/v1/projects/source-project/backups":
+					lists++
+					if r.URL.Query().Get("filter") != "instance:source-db" {
+						t.Error("inventory escaped source", r.URL)
+					}
+					backups := []any{deletedPITRBackup(t, deleted)}
+					if scenario == "missing-final" {
+						backups = nil
+					}
+					if scenario == "ambiguous-final" {
+						other := deletedPITRBackup(t, deleted)
+						other["name"] = "projects/source-project/backups/other"
+						backups = append(backups, other)
+					}
+					body := map[string]any{"backups": backups}
+					if scenario == "partial-inventory" {
+						body["warnings"] = []any{map[string]string{"code": "INCOMPLETE"}}
+					}
+					_ = json.NewEncoder(w).Encode(body)
+				case "/v1/projects/source-project/backups/final-source":
+					_ = json.NewEncoder(w).Encode(deletedPITRBackup(t, deleted))
+				case "/v1/projects/source-project/instances/source-db/getLatestRecoveryTime":
+					if scenario != "live" && r.URL.Query().Get("sourceInstanceDeletionTime") != deleted.Format(time.RFC3339Nano) {
+						t.Error("selected live logs for deleted source", r.URL)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#getLatestRecoveryTime", "earliestRecoveryTime": deleted.Add(-time.Hour), "latestRecoveryTime": deleted.Add(-time.Second)})
+				default:
+					t.Error("unexpected discovery request", r.URL)
+					w.WriteHeader(500)
+				}
+			}))
+			defer server.Close()
+			s := &Session{c: New(server.URL), key: &Key{ProjectID: "source-project"}, http: server.Client()}
+			window, err := s.FindSQLPITRWindow(t.Context(), "us-central1", "source-db", pin, pscPITRSpec())
+			valid := scenario == "live" || scenario == "deleted" || scenario == "reused-name"
+			if valid != (err == nil && window != nil) {
+				t.Fatal("incorrect discovered source", scenario, window, err)
+			}
+			if valid && (window.DeletedSource != nil) != (scenario != "live") {
+				t.Fatal("discovery changed live/deleted context", window)
+			}
+			if (scenario == "live" || scenario == "unsafe-live" || scenario == "denied") && lists != 0 {
+				t.Fatal("live or denied source fell back to retained backups")
+			}
+		})
+	}
+}

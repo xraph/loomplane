@@ -92,8 +92,11 @@ func TestNativePITRSettingsPublishedContract(t *testing.T) {
 	if bounds.Properties["settings_digest"]["type"] != "string" {
 		t.Fatal("published bounds omit the Cloud SQL settings witness")
 	}
+	if bounds.Properties["source_backup"]["type"] != "string" || bounds.Properties["source_deleted_at"]["format"] != "date-time" {
+		t.Fatalf("published bounds omit deleted-source recovery identity: %#v", bounds.Properties)
+	}
 	for _, required := range bounds.Required {
-		if required == "settings_digest" {
+		if required == "settings_digest" || required == "source_backup" || required == "source_deleted_at" {
 			t.Fatal("published bounds require a Cloud SQL-only witness for existing RDS windows")
 		}
 	}
