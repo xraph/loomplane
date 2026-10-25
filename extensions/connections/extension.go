@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
@@ -18,6 +19,7 @@ import (
 	vaultpg "github.com/xraph/vault/store/postgres"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
@@ -26,6 +28,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -53,7 +56,9 @@ func New(cfg config.Config, plugs *plugins.Set) *Extension {
 }
 
 // Dependencies implements forge.Extension.
-func (e *Extension) Dependencies() []string { return []string{identity.Name} }
+func (e *Extension) Dependencies() []string {
+	return []string{identity.Name, notificationsext.DeliveryName}
+}
 
 // Service is the connection service, once the extension has registered.
 func (e *Extension) Service() *connections.Service { return e.svc }
@@ -120,6 +125,16 @@ func (e *Extension) Register(fapp forge.App) error {
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
+	mail, err := forge.InjectType[*notifications.Service](c)
+	if err != nil {
+		return fmt.Errorf("connections needs the notification delivery extension: %w", err)
+	}
+	// Lapsed only queues outbox rows. The drain loop sends them.
+	e.svc.Lapsed = func(ctx context.Context, conn *connections.Connection) {
+		if err := mail.ConnectionLapsed(ctx, conn.OrgID, conn.ID, conn.Name, conn.Cloud, conn.CreatedBy, time.Now()); err != nil {
+			log.Warn("queue the sign-in lapse notice", forge.F("connection", conn.ID), forge.F("error", err.Error()))
+		}
+	}
 	e.svc.Telemetry = telemetry.New(fapp.Metrics())
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide the connection service: %w", err)

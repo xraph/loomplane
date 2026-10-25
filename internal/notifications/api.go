@@ -130,13 +130,16 @@ func (s *Service) List(ctx context.Context, p security.Principal) (NotificationL
 		if err != nil {
 			return out, err
 		}
-		if !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
-			continue
-		}
-		if err = s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); errors.Is(err, security.ErrForbidden) {
-			continue
-		} else if err != nil {
-			return out, err
+		// A connection notice belongs to the organization, not a project.
+		if n.Metadata["kind"] != kindConnection {
+			if !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
+				continue
+			}
+			if err = s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); errors.Is(err, security.ErrForbidden) {
+				continue
+			} else if err != nil {
+				return out, err
+			}
 		}
 		var emailState string
 		if err := s.pg.QueryRow(ctx, `SELECT email_state FROM loomplane_notification_outbox WHERE id=$1 AND org_id=$2`, n.Metadata["outbox_id"], p.OrgID).Scan(&emailState); err != nil {
@@ -164,11 +167,16 @@ func (s *Service) MarkRead(ctx context.Context, p security.Principal, value stri
 	if err != nil {
 		return ErrNotFound
 	}
-	if n.AppID != s.cfg.Identity.AppID || n.UserID != p.UserID || n.Metadata["org_id"] != p.OrgID || !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
+	if n.AppID != s.cfg.Identity.AppID || n.UserID != p.UserID || n.Metadata["org_id"] != p.OrgID {
 		return ErrNotFound
 	}
-	if err := s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); err != nil {
-		return err
+	if n.Metadata["kind"] != kindConnection {
+		if !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
+			return ErrNotFound
+		}
+		if err := s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); err != nil {
+			return err
+		}
 	}
 	return s.mailStore.MarkRead(ctx, parsed)
 }
