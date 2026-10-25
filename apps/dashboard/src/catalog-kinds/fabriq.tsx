@@ -1,10 +1,9 @@
 // Fabriq, added to a project in one click: the module brings its own add
 // dialog, and its service page adds the Tenants and keys tab and the button
 // that opens the admin console.
-import { LayersIcon } from "lucide-react"
-
 import { useConnectionsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
+import { FabriqIcon } from "@/components/fabriq/fabriq-icon"
 import { FabriqEngines } from "@/components/fabriq/fabriq-engines"
 import { FabriqRecovery } from "@/components/fabriq/fabriq-recovery"
 import { FabriqSettings } from "@/components/fabriq/fabriq-settings"
@@ -50,11 +49,7 @@ export default defineCatalogKind({
   serviceLayout: "compact",
   defaultPanel: "keys",
   group: "data",
-  icon: ({ className }) => (
-    <LayersIcon
-      className={`${className ?? ""} text-[#2F5C78] dark:text-sky-300`}
-    />
-  ),
+  icon: FabriqIcon,
   blurb:
     "One click sets up the whole stack. Swap any engine for one you already run.",
   features: ["Hosted server or library", "Admin console", "Postgres recovery"],

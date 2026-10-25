@@ -39,7 +39,7 @@ const tabsListVariants = cva(
         variant: "line",
         density: "compact",
         className:
-          "flex-wrap gap-x-[18px] gap-y-0 [&>[data-slot=tabs-trigger]]:-mb-px [&>[data-slot=tabs-trigger]]:border-0 [&>[data-slot=tabs-trigger]]:px-0 [&>[data-slot=tabs-trigger]]:after:bottom-0",
+          "flex-wrap gap-x-[18px] gap-y-0 border-border-tab [&>[data-slot=tabs-trigger]]:-mb-px [&>[data-slot=tabs-trigger]]:border-0 [&>[data-slot=tabs-trigger]]:px-0 [&>[data-slot=tabs-trigger]]:after:bottom-0 [&>[data-slot=tabs-trigger]:not([data-active])]:text-muted-foreground",
       },
     ],
     defaultVariants: {

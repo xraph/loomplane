@@ -26,11 +26,18 @@ import {
 import { useNow } from "@/lib/use-runs"
 import { cn } from "@/lib/utils"
 
-const tones: Record<StackState, Tone> = {
+const tones: Record<StackState, Tone | "completed"> = {
   Running: "live",
-  Completed: "quiet",
+  Completed: "completed",
   Off: "quiet",
   "Not running": "waiting",
+}
+
+const pillTones = {
+  ...toneClass,
+  completed: { tint: "bg-secondary", ink: "text-label" },
+  quiet: { tint: "bg-secondary", ink: "text-muted-foreground" },
+  waiting: { tint: "bg-notice-warning", ink: "text-status-waiting-ink" },
 }
 
 /** StatePill is a part's state in its tone: green running, grey done or off. */
@@ -39,16 +46,16 @@ export function StatePill({
   title,
   children,
 }: {
-  tone: Tone
+  tone: Tone | "completed"
   title?: string
   children: ReactNode
 }) {
-  const t = toneClass[tone]
+  const t = pillTones[tone]
   return (
     <span
       title={title}
       className={cn(
-        "inline-flex h-[19px] shrink-0 items-center rounded-full px-[7px] text-[11.5px] font-medium whitespace-nowrap",
+        "inline-flex shrink-0 items-center rounded-full px-[7px] py-px text-[11.5px] leading-[normal] font-medium whitespace-nowrap",
         t.tint,
         t.ink
       )}
@@ -157,8 +164,10 @@ export function FabriqStack({
           <div
             key={part.id}
             className={cn(
-              "grid content-start gap-1 rounded-[12px] border px-3 py-2.5",
-              part.state === "Off" ? "border-dashed bg-subtle" : "bg-card"
+              "grid content-start gap-1 rounded-[12px] border border-border-panel px-3 py-2.5",
+              part.state === "Off"
+                ? "border-dashed bg-surface-muted"
+                : "bg-card"
             )}
           >
             <span className="flex items-center justify-between gap-1.5">

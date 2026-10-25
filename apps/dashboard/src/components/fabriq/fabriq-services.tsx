@@ -116,7 +116,7 @@ export function FabriqServices({
             <Button
               type="button"
               size="sm"
-              className="h-8 px-3 text-[12.5px] has-data-[icon=inline-start]:pl-3"
+              className="h-8 border-0 px-3 text-[12.5px] shadow-none hover:bg-primary hover:brightness-[1.12] has-data-[icon=inline-start]:pl-3"
               aria-expanded={linking}
               onClick={() => setLinking(!linking)}
             >
@@ -161,14 +161,14 @@ export function FabriqServices({
           )}
         </FabriqEmpty>
       ) : (
-        <div className="overflow-hidden rounded-xl border">
+        <div className="overflow-hidden rounded-[14px] border border-border-panel">
           <Table
             columns="minmax(0, 0.9fr) minmax(0, 1.1fr) 120px 150px 170px"
             scrollLabel="Service keys"
             className="min-w-[760px]"
           >
             <TableHeader>
-              <TableRow className="bg-subtle hover:bg-subtle">
+              <TableRow className="bg-surface-muted hover:bg-surface-muted">
                 <Head>Service</Head>
                 <Head>Key</Head>
                 <Head>Tenant</Head>
@@ -195,7 +195,7 @@ export function FabriqServices({
                   <TableCell className="font-mono text-[12.5px]">
                     {key.tenant}
                   </TableCell>
-                  <TableCell className="text-[12.5px]">
+                  <TableCell className="text-[12.5px] text-label">
                     {lastUsed(key, now)}
                   </TableCell>
                   <TableCell>
@@ -207,7 +207,7 @@ export function FabriqServices({
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="h-7 rounded-lg text-xs"
+                              className="h-7 rounded-lg border-input text-xs hover:bg-accent"
                               disabled={busy === key.service}
                               onClick={() => void rotateKey(key.service)}
                             >
@@ -218,7 +218,7 @@ export function FabriqServices({
                             type="button"
                             variant="outline"
                             size="sm"
-                            className="h-7 rounded-lg border-failed/30 text-xs text-destructive"
+                            className="h-7 rounded-lg border-border-destructive text-xs text-destructive hover:bg-accent"
                             disabled={busy === key.service}
                             onClick={() => setRevoking(key.service)}
                           >
@@ -364,7 +364,7 @@ function LinkService({
   return (
     <form
       onSubmit={(event) => void submit(event)}
-      className="flex flex-wrap items-end gap-2.5 rounded-[12px] border bg-subtle px-3.5 py-3"
+      className="flex flex-wrap items-end gap-2.5 rounded-[12px] border border-border-panel bg-surface-muted px-3.5 py-3"
     >
       <Pick
         label="Service"
@@ -387,7 +387,7 @@ function LinkService({
       </span>
       <Button
         type="submit"
-        className="rounded-[9px] px-[13px] text-[12.5px]"
+        className="rounded-[9px] border-0 px-[13px] text-[12.5px] shadow-none hover:bg-primary hover:brightness-[1.12]"
         disabled={!chosenService || !chosenTenant || edit.isPending}
       >
         Link service
@@ -419,7 +419,7 @@ function Pick({
   const id = useId()
   return (
     <div className="grid flex-[1_1_180px] gap-[5px]">
-      <span id={id} className="text-[12.5px] font-medium">
+      <span id={id} className="text-[12.5px] font-medium text-label">
         {label}
       </span>
       <Select

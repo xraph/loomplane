@@ -31,7 +31,7 @@ function Table({
         className={cn(
           "w-full caption-bottom text-[13px]",
           columns &&
-            "block [&_td]:min-w-0 [&_td]:p-0 [&_td]:[overflow-wrap:anywhere] [&_td]:whitespace-normal [&_th]:h-auto [&_th]:p-0 [&_thead_tr]:py-[9px] [&_tr]:grid [&_tr]:grid-cols-(--table-columns) [&_tr]:items-center [&_tr]:gap-3 [&_tr]:px-4 [&_tr]:py-2.5 [&>tbody]:block [&>thead]:block",
+            "block [&_tbody_tr:hover]:bg-surface-muted [&_td]:min-w-0 [&_td]:p-0 [&_td]:[overflow-wrap:anywhere] [&_td]:whitespace-normal [&_th]:h-auto [&_th]:p-0 [&_thead_tr]:py-[9px] [&_tr]:grid [&_tr]:grid-cols-(--table-columns) [&_tr]:items-center [&_tr]:gap-3 [&_tr]:border-border-divider [&_tr]:px-4 [&_tr]:py-2.5 [&>tbody]:block [&>thead]:block",
           className
         )}
         style={{ "--table-columns": columns, ...style } as React.CSSProperties}

@@ -4,7 +4,6 @@
 // the environment, and the plan opens for review like any other.
 import { Radio } from "@base-ui/react/radio"
 import { RadioGroup } from "@base-ui/react/radio-group"
-import { LayersIcon } from "lucide-react"
 import { useId, useState, type FormEvent, type ReactNode } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -18,6 +17,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { CheckResult } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { FabriqIcon } from "./fabriq-icon"
 import { QueryError } from "@/components/query-error"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -338,15 +338,15 @@ export function AddFabriqDialog({
     <Dialog open onOpenChange={(open) => !open && !pending && onClose()}>
       <DialogContent
         showCloseButton={false}
-        className="top-4 flex max-h-[calc(100dvh-2rem)] -translate-y-0 flex-col gap-0 overflow-hidden rounded-[16px] p-0 shadow-[0_24px_60px_rgba(26,22,20,0.24)] ring-foreground/[0.06] sm:top-9 sm:max-h-[calc(100dvh-72px)] sm:max-w-[640px]"
+        className="top-4 flex max-h-[calc(100dvh-2rem)] -translate-y-0 flex-col gap-0 overflow-hidden rounded-[16px] p-0 leading-[normal] shadow-[0_24px_60px_rgba(26,22,20,0.24)] ring-foreground/[0.06] sm:top-9 sm:max-h-[calc(100dvh-72px)] sm:max-w-[640px]"
       >
         <form
           onSubmit={(event) => void submit(event)}
           className="flex min-h-0 flex-1 flex-col"
         >
           <div className="flex items-center gap-3 px-5 pt-[18px] pb-1.5">
-            <span className="flex size-10 flex-none items-center justify-center rounded-[11px] bg-background text-brand-ink ring-1 ring-border">
-              <LayersIcon className="size-5" aria-hidden />
+            <span className="flex size-10 flex-none items-center justify-center rounded-[11px] bg-background ring-1 ring-border-panel ring-inset">
+              <FabriqIcon className="size-5" aria-hidden />
             </span>
             <div className="grid min-w-0 gap-0.5">
               <DialogTitle className="text-[17px] leading-[normal] font-semibold tracking-[-0.015em]">
@@ -445,8 +445,8 @@ export function AddFabriqDialog({
                     className={cn(
                       "grid content-start gap-1 rounded-[11px] border px-3 py-2.5 text-left transition-shadow disabled:opacity-60",
                       on
-                        ? "border-brand-line bg-brand-soft ring-[3px] ring-brand/15"
-                        : "border-border bg-card hover:border-foreground/25"
+                        ? "border-brand-line bg-brand-soft ring-[3px] ring-brand-ring"
+                        : "border-input bg-card hover:border-foreground/25"
                     )}
                   >
                     <span className="text-[13.5px] font-semibold">
@@ -461,12 +461,17 @@ export function AddFabriqDialog({
             </RadioGroup>
 
             <div className="grid gap-1.5">
-              <span className="text-[12.5px] font-medium">Engines</span>
-              <div className="overflow-hidden rounded-[12px] border">
+              <span className="text-[12.5px] font-medium text-label">
+                Engines
+              </span>
+              <div className="overflow-hidden rounded-[12px] border border-border-panel">
                 {engines.map((engine, index) => (
                   <div
                     key={engine.id}
-                    className={cn("px-3.5 py-[11px]", index > 0 && "border-t")}
+                    className={cn(
+                      "px-3.5 py-[11px]",
+                      index > 0 && "border-t border-border-divider"
+                    )}
                   >
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <span className="grid min-w-[220px] flex-[1_1_220px] gap-0.5">
@@ -512,8 +517,8 @@ export function AddFabriqDialog({
               </div>
             </div>
 
-            <div className="grid gap-1 rounded-[10px] bg-muted px-3 py-2.5">
-              <span className="text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+            <div className="grid gap-1 rounded-[10px] bg-surface-summary px-3 py-2.5">
+              <span className="text-[11.5px] font-medium tracking-[0.04em] text-caption uppercase">
                 This creates
               </span>
               <span className="text-[13px] leading-[1.55]">
@@ -533,7 +538,7 @@ export function AddFabriqDialog({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t bg-subtle px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border-divider bg-surface-muted px-5 py-3">
             <span className="text-xs text-muted-foreground">
               Nothing is created until you approve the plan.
             </span>
@@ -541,13 +546,17 @@ export function AddFabriqDialog({
               <Button
                 type="button"
                 variant="outline"
-                className="h-9 px-3.5"
+                className="h-9 border-input px-3.5 hover:bg-accent"
                 disabled={pending}
                 onClick={onClose}
               >
                 Cancel
               </Button>
-              <Button type="submit" className="h-9 px-3.5" disabled={blocked}>
+              <Button
+                type="submit"
+                className="h-9 border-0 px-3.5 shadow-none hover:bg-primary hover:brightness-[1.12]"
+                disabled={blocked}
+              >
                 {pending && <Spinner data-icon="inline-start" />}
                 Review plan
               </Button>
@@ -579,7 +588,7 @@ function Pick({
 }) {
   return (
     <div className="grid min-w-0 gap-[5px]">
-      <span id={id} className="text-[12.5px] font-medium">
+      <span id={id} className="text-[12.5px] font-medium text-label">
         {label}
       </span>
       <Select
@@ -626,7 +635,7 @@ function Segments({
       onValueChange={onChange}
       disabled={disabled}
       aria-label={label}
-      className="flex max-w-full gap-0.5 overflow-x-auto rounded-[10px] bg-muted p-[3px]"
+      className="flex max-w-full gap-0.5 overflow-x-auto rounded-[10px] bg-secondary p-[3px]"
     >
       {options.map((option) => {
         const on = option.value === value
@@ -639,7 +648,7 @@ function Segments({
             className={cn(
               "h-7 shrink-0 rounded-lg px-2.5 text-xs font-medium whitespace-nowrap disabled:opacity-60",
               on
-                ? "bg-background text-foreground shadow-xs"
+                ? "bg-background text-foreground shadow-[0_1px_2px_rgb(26_22_20/0.08)]"
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
@@ -743,7 +752,7 @@ function Connecting({
             <Button
               type="button"
               variant="outline"
-              className="h-[34px]"
+              className="h-[34px] rounded-[9px] border-input text-[12.5px] hover:bg-accent"
               disabled={disabled || checking || !state.dsn}
               onClick={onCheck}
             >
@@ -757,8 +766,8 @@ function Connecting({
               className={cn(
                 "grid gap-1 rounded-[9px] px-2.5 py-2 text-[12.5px] leading-normal",
                 message.tone === "ok"
-                  ? "bg-overdye-tint text-overdye-ink"
-                  : "bg-weld-tint text-weld-ink"
+                  ? "bg-overdye-tint text-notice-success-ink"
+                  : "bg-notice-warning text-notice-warning-ink"
               )}
             >
               <span>{message.text}</span>

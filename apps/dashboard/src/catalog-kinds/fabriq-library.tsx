@@ -1,4 +1,4 @@
-import { LayersIcon } from "lucide-react"
+import { FabriqIcon } from "@/components/fabriq/fabriq-icon"
 import { FabriqLibraryPanel } from "@/components/fabriq/fabriq-library-panel"
 import { FabriqEngines } from "@/components/fabriq/fabriq-engines"
 import { FabriqRecovery } from "@/components/fabriq/fabriq-recovery"
@@ -9,7 +9,7 @@ export default defineCatalogKind({
   kind: "fabriq-library",
   title: "Fabriq library",
   group: "data",
-  icon: LayersIcon,
+  icon: FabriqIcon,
   hidden: true,
   blurb:
     "Engines, migrations and the stock Fabriq worker for a Go app that embeds Fabriq.",

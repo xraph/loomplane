@@ -89,7 +89,7 @@ export function FabriqTenants({
               type="button"
               variant="outline"
               size="sm"
-              className="h-8 px-3 text-[12.5px] has-data-[icon=inline-start]:pl-3"
+              className="h-8 border-input px-3 text-[12.5px] hover:bg-accent has-data-[icon=inline-start]:pl-3"
               aria-expanded={adding}
               onClick={() => setAdding(!adding)}
             >
@@ -105,9 +105,9 @@ export function FabriqTenants({
       {adding && (
         <form
           onSubmit={(event) => void submit(event)}
-          className="flex flex-wrap items-end gap-2.5 rounded-[12px] border bg-subtle px-3.5 py-3"
+          className="flex flex-wrap items-end gap-2.5 rounded-[12px] border border-border-panel bg-surface-muted px-3.5 py-3"
         >
-          <label className="grid flex-[1_1_200px] gap-[5px] text-[12.5px] font-medium">
+          <label className="grid flex-[1_1_200px] gap-[5px] text-[12.5px] font-medium text-label">
             Tenant ID
             <Input
               value={id}
@@ -125,7 +125,7 @@ export function FabriqTenants({
           </span>
           <Button
             type="submit"
-            className="rounded-[9px] px-[13px] text-[12.5px]"
+            className="rounded-[9px] border-0 px-[13px] text-[12.5px] shadow-none hover:bg-primary hover:brightness-[1.12]"
             disabled={!validTenantId(id) || create.isPending}
           >
             Create tenant
@@ -161,14 +161,14 @@ export function FabriqTenants({
           )}
         </FabriqEmpty>
       ) : (
-        <div className="overflow-hidden rounded-xl border">
+        <div className="overflow-hidden rounded-[14px] border border-border-panel">
           <Table
             columns="minmax(0, 1fr) 170px 140px 130px"
             scrollLabel="Tenant rows"
             className="min-w-[640px]"
           >
             <TableHeader>
-              <TableRow className="bg-subtle hover:bg-subtle">
+              <TableRow className="bg-surface-muted hover:bg-surface-muted">
                 <Head>Tenant</Head>
                 <Head>Created</Head>
                 <Head>Default for</Head>
@@ -181,10 +181,10 @@ export function FabriqTenants({
                   <TableCell className="font-mono font-medium">
                     {tenant.id}
                   </TableCell>
-                  <TableCell className="text-[12.5px]">
+                  <TableCell className="text-[12.5px] text-label">
                     {createdLabel(tenant.createdAt, now)}
                   </TableCell>
-                  <TableCell className="text-[12.5px]">
+                  <TableCell className="text-[12.5px] text-label">
                     {defaultFor(tenant.id)}
                   </TableCell>
                   <TableCell className="text-right">
@@ -215,7 +215,7 @@ export function Head({
   return (
     <TableHead
       className={cn(
-        "h-9 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase",
+        "h-9 text-[11.5px] font-medium tracking-[0.04em] text-caption uppercase",
         className
       )}
     >

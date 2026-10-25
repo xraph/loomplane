@@ -21,6 +21,20 @@
  * text and a tint for backgrounds. Warp is what hasn't started.
  */
 @theme inline {
+  --color-border-panel: var(--border-panel);
+  --color-border-divider: var(--border-divider);
+  --color-border-tab: var(--border-tab);
+  --color-border-destructive: var(--border-destructive);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-summary: var(--surface-summary);
+  --color-label: var(--label);
+  --color-caption: var(--caption);
+  --color-notice-warning: var(--notice-warning);
+  --color-notice-warning-ink: var(--notice-warning-ink);
+  --color-notice-success-ink: var(--notice-success-ink);
+  --color-status-waiting-ink: var(--status-waiting-ink);
+  --color-brand-ring: var(--brand-ring);
+
   --font-heading: var(--font-sans);
   --font-sans: "Geist Variable", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
@@ -87,6 +101,19 @@
 }
 
 :root {
+  --border-panel: #ece8e4;
+  --border-divider: #f1eeeb;
+  --border-tab: #efece9;
+  --border-destructive: #ebd5cf;
+  --surface-muted: #fcfbfa;
+  --surface-summary: #f7f6f5;
+  --label: #4a433e;
+  --caption: #6b635d;
+  --notice-warning: #fbf1dd;
+  --notice-warning-ink: #5c3e00;
+  --notice-success-ink: #23533a;
+  --status-waiting-ink: #7a5200;
+
   --background: oklch(1 0 0);
   --foreground: oklch(0.204 0.008 48.3);
   --card: oklch(1 0 0);
@@ -137,6 +164,19 @@
 }
 
 .dark {
+  --border-panel: var(--border);
+  --border-divider: var(--border);
+  --border-tab: var(--border);
+  --border-destructive: var(--destructive);
+  --surface-muted: var(--subtle);
+  --surface-summary: var(--muted);
+  --label: var(--foreground);
+  --caption: var(--muted-foreground);
+  --notice-warning: var(--weld-tint);
+  --notice-warning-ink: var(--weld-ink);
+  --notice-success-ink: var(--overdye-ink);
+  --status-waiting-ink: var(--weld-ink);
+
   /* Near-black and neutral, like a terminal: the page and sidebar share
      one black, cards sit a step above it, and greys carry no warm hue. */
   --background: oklch(0.12 0 0);
@@ -187,6 +227,7 @@
  */
 :root,
 [data-accent="graphite"] {
+  --brand-ring: rgb(26 22 20 / 10%);
   --brand: oklch(0.209 0.01 52.9);
   --brand-foreground: oklch(1 0 0);
   --brand-ink: oklch(0.327 0.013 57.8);
@@ -199,6 +240,7 @@
 }
 
 [data-accent="ocean"] {
+  --brand-ring: rgb(79 134 168 / 16%);
   --brand: oklch(0.455 0.068 238);
   --brand-foreground: oklch(1 0 0);
   --brand-ink: oklch(0.455 0.068 238);
@@ -211,6 +253,7 @@
 }
 
 [data-accent="plum"] {
+  --brand-ring: rgb(150 100 170 / 16%);
   --brand: oklch(0.445 0.106 317.1);
   --brand-foreground: oklch(1 0 0);
   --brand-ink: oklch(0.445 0.106 317.1);
@@ -227,6 +270,7 @@
 .dark,
 .dark[data-accent="graphite"],
 [data-accent="graphite"] .dark {
+  --brand-ring: color-mix(in oklch, var(--brand) 18%, transparent);
   --brand: oklch(0.939 0.005 67.8);
   --brand-foreground: oklch(0.14 0 0);
   --brand-ink: oklch(0.92 0 0);
@@ -237,6 +281,7 @@
 
 .dark[data-accent="ocean"],
 [data-accent="ocean"] .dark {
+  --brand-ring: color-mix(in oklch, var(--brand) 18%, transparent);
   --brand: oklch(0.734 0.07 237.6);
   --brand-foreground: oklch(0.2 0.02 238);
   --brand-ink: oklch(0.78 0.065 237.6);
@@ -247,6 +292,7 @@
 
 .dark[data-accent="plum"],
 [data-accent="plum"] .dark {
+  --brand-ring: color-mix(in oklch, var(--brand) 18%, transparent);
   --brand: oklch(0.767 0.085 316.3);
   --brand-foreground: oklch(0.2 0.03 317);
   --brand-ink: oklch(0.8 0.08 316.3);

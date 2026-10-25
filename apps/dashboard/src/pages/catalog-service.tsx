@@ -95,7 +95,7 @@ export function CatalogService({
           { label: resource },
         ]}
       />
-      <Page className="has-[[data-catalog-layout=compact]]:max-w-[1180px] has-[[data-catalog-layout=compact]]:gap-4 has-[[data-catalog-layout=compact]]:px-7 has-[[data-catalog-layout=compact]]:pt-[22px] has-[[data-catalog-layout=compact]]:pb-8 has-[[data-catalog-layout=compact]]:[&>a]:-mb-1.5">
+      <Page className="has-[[data-catalog-layout=compact]]:max-w-[1180px] has-[[data-catalog-layout=compact]]:gap-4 has-[[data-catalog-layout=compact]]:px-7 has-[[data-catalog-layout=compact]]:pt-[22px] has-[[data-catalog-layout=compact]]:pb-8 has-[[data-catalog-layout=compact]]:leading-[normal] has-[[data-catalog-layout=compact]]:[&>a]:-mb-1.5">
         <Link
           to="/projects/$id"
           params={{ id: projectId }}
@@ -318,7 +318,9 @@ function Header({
           fallback={kindIcon(module)}
           label={title}
           size="xl"
-          className={inline ? "rounded-[12px] ring-inset" : undefined}
+          className={
+            inline ? "rounded-[12px] ring-border-panel ring-inset" : undefined
+          }
         />
         <div
           className={
@@ -381,7 +383,11 @@ function Header({
         )}
         <StatusPill
           tone={state.drift ? "waiting" : "live"}
-          className={inline ? "h-auto px-[9px] py-0.5" : undefined}
+          className={
+            inline
+              ? "h-auto px-[9px] py-0.5 leading-[normal] [&>span]:bg-current"
+              : undefined
+          }
         >
           {state.drift ? state.label : (module?.deployedLabel ?? state.label)}
         </StatusPill>
