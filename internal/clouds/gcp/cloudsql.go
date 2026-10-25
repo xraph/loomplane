@@ -17,15 +17,22 @@ import (
 
 // SQLInstance is the part of a Cloud SQL instance Loomplane reads.
 type SQLInstance struct {
-	Kind            string `json:"kind"`
-	Name            string `json:"name"`
-	Project         string `json:"project"`
-	Region          string `json:"region"`
-	CreateTime      string `json:"createTime"`
-	ConnectionName  string `json:"connectionName"`
-	DatabaseVersion string `json:"databaseVersion"`
-	State           string `json:"state"`
+	Kind            string            `json:"kind"`
+	Name            string            `json:"name"`
+	Project         string            `json:"project"`
+	Region          string            `json:"region"`
+	CreateTime      string            `json:"createTime"`
+	ConnectionName  string            `json:"connectionName"`
+	DatabaseVersion string            `json:"databaseVersion"`
+	State           string            `json:"state"`
+	MasterInstance  string            `json:"masterInstanceName"`
+	IPAddresses     []json.RawMessage `json:"ipAddresses"`
 	Settings        struct {
+		Version              string              `json:"settingsVersion"`
+		Edition              string              `json:"edition"`
+		Availability         string              `json:"availabilityType"`
+		DataAPIAccess        string              `json:"dataApiAccess"`
+		Backup               *SQLBackupSettings  `json:"backupConfiguration"`
 		UserLabels           map[string]string   `json:"userLabels"`
 		Tier                 string              `json:"tier"`
 		DataDiskSizeGB       int64               `json:"dataDiskSizeGb,string"`
@@ -41,9 +48,25 @@ type SQLIPConfiguration struct {
 	IPv4Enabled        *bool             `json:"ipv4Enabled"`
 	AuthorizedNetworks []json.RawMessage `json:"authorizedNetworks"`
 	PrivateNetwork     string            `json:"privateNetwork"`
-	PSC                *struct {
-		Enabled bool `json:"pscEnabled"`
-	} `json:"pscConfig"`
+	PrivateGooglePath  bool              `json:"enablePrivatePathForGoogleCloudServices"`
+	PSC                *SQLPSCSettings   `json:"pscConfig"`
+}
+
+// SQLPSCSettings includes inherited ingress automation and outbound access.
+// A PSC-enabled instance alone does not establish clone isolation.
+type SQLPSCSettings struct {
+	Enabled           bool              `json:"pscEnabled"`
+	AllowedProjects   []string          `json:"allowedConsumerProjects"`
+	NetworkAttachment string            `json:"networkAttachmentUri"`
+	AutoConnections   []json.RawMessage `json:"pscAutoConnections"`
+	AutoPolicy        bool              `json:"pscAutoConnectionPolicyEnabled"`
+}
+
+// SQLBackupSettings records the effective standard log recovery configuration.
+type SQLBackupSettings struct {
+	Enabled      bool  `json:"enabled"`
+	PITREnabled  bool  `json:"pointInTimeRecoveryEnabled"`
+	RecoveryDays int32 `json:"transactionLogRetentionDays"`
 }
 
 // SQLInstanceSpec is what Loomplane creates an instance from.
