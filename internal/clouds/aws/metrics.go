@@ -50,7 +50,7 @@ type costReader interface {
 	GetCostAndUsage(context.Context, *costexplorer.GetCostAndUsageInput, ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error)
 }
 
-// ServiceMetrics reads an ECS service's requests and p95 latency over w
+// ServiceMetrics reads an ECS service's requests, p95 latency and 5xx counts over w
 // from CloudWatch, through the target group it runs behind.
 func (s *Session) ServiceMetrics(ctx context.Context, cluster, service string, w metrics.Window) (*metrics.Measurement, error) {
 	return serviceMetrics(ctx, ecs.NewFromConfig(s.cfg), elb.NewFromConfig(s.cfg), cloudwatch.NewFromConfig(s.cfg), cluster, service, w)
@@ -75,6 +75,17 @@ func serviceMetrics(ctx context.Context, services serviceDescriber, groups targe
 	if targetGroup == "" {
 		return nil, metrics.Unavailablef(noTraffic)
 	}
+	return targetGroupMetrics(ctx, groups, cw, targetGroup, w)
+}
+
+// TargetGroupMetrics reads one ALB target group's requests, p95 latency and
+// 5xx counts over w. A canary reads its candidate's group this way.
+func (s *Session) TargetGroupMetrics(ctx context.Context, targetGroupARN string, w metrics.Window) (*metrics.Measurement, error) {
+	return targetGroupMetrics(ctx, elb.NewFromConfig(s.cfg), cloudwatch.NewFromConfig(s.cfg), targetGroupARN, w)
+}
+
+func targetGroupMetrics(ctx context.Context, groups targetGroupDescriber, cw metricReader,
+	targetGroup string, w metrics.Window) (*metrics.Measurement, error) {
 	tgs, err := groups.DescribeTargetGroups(ctx, &elb.DescribeTargetGroupsInput{TargetGroupArns: []string{targetGroup}})
 	if err != nil {
 		return nil, fmt.Errorf("read target group %s: %w", targetGroup, err)
@@ -98,9 +109,10 @@ func serviceMetrics(ctx context.Context, services serviceDescriber, groups targe
 		MetricDataQueries: []cwtypes.MetricDataQuery{
 			query("requests", "RequestCount", "Sum", w.Step),
 			query("latency", "TargetResponseTime", "p95", w.End.Sub(w.Start)),
+			query("errors", "HTTPCode_Target_5XX_Count", "Sum", w.Step),
 		},
 	}
-	m := &metrics.Measurement{}
+	m := &metrics.Measurement{ErrorsCounted: true}
 	for {
 		out, err := cw.GetMetricData(ctx, in)
 		if err != nil {
@@ -115,6 +127,12 @@ func serviceMetrics(ctx context.Context, services serviceDescriber, groups targe
 				for i, t := range r.Timestamps {
 					if i < len(r.Values) {
 						m.Requests = append(m.Requests, metrics.Point{T: t.UTC(), V: r.Values[i]})
+					}
+				}
+			case "errors":
+				for i, t := range r.Timestamps {
+					if i < len(r.Values) {
+						m.Errors = append(m.Errors, metrics.Point{T: t.UTC(), V: r.Values[i]})
 					}
 				}
 			case "latency":
