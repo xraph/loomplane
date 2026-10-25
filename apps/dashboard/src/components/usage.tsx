@@ -5,9 +5,9 @@
 import { useState } from "react"
 
 import { useUsageSpend, useUsageTraffic } from "@/client/forge/loomplane/hooks"
-import type { SpendReport, UsageSource } from "@/client/forge/loomplane/types"
+import type { UsageSource } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
-import { DotAreaChart, GlowBarChart } from "@/components/dots"
+import { DotAreaChart } from "@/components/dots"
 import { Figure, Panel, PanelHead } from "@/components/panel"
 import { QueryError } from "@/components/query-error"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -32,14 +32,6 @@ function signed(pct: number) {
   return `${pct > 0 ? "+" : ""}${pct}%`
 }
 
-function dayLabel(t: string) {
-  return new Date(t).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  })
-}
-
 /** joined writes a list the way a sentence does: a, b and c. */
 function joined(items: string[]): string {
   if (items.length < 2) return items.join("")
@@ -49,8 +41,8 @@ function joined(items: string[]): string {
 /**
  * UsageNotes says which connections aren't reporting and what to do,
  * each reason once. Clouds with no API for it get one quiet line, since
- * there's nothing to do. A card shows `limit` reasons and points at the
- * rest: on Infrastructure for spend, or in place.
+ * there's nothing to do. A card shows `limit` reasons, and the rest
+ * when asked.
  */
 export function UsageNotes({
   sources,
@@ -98,22 +90,13 @@ export function UsageNotes({
       {hidden > 0 && (
         <li className="text-muted-foreground">
           And{" "}
-          {what === "spend" ? (
-            <Link
-              to="/infrastructure"
-              className="font-medium text-foreground hover:underline"
-            >
-              {hidden} more
-            </Link>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setOpen(true)}
-              className="font-medium text-foreground hover:underline"
-            >
-              {hidden} more
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="font-medium text-foreground hover:underline"
+          >
+            {hidden} more
+          </button>
         </li>
       )}
       {unsupported.length > 0 && (
@@ -126,76 +109,109 @@ export function UsageNotes({
   )
 }
 
-/** SpendCard is this month's spend across accounts, by currency. */
-export function SpendCard({ className }: { className?: string }) {
-  const q = useQuery(useUsageSpend)
-  const r = q.data
-  const month = r
-    ? new Date(r.month).toLocaleDateString(undefined, {
-        month: "long",
-        timeZone: "UTC",
-      })
-    : undefined
-  return (
-    <Panel aria-label="Cloud spend" className={cn("gap-4", className)}>
-      <PanelHead title="Cloud spend" aside={month && `${month} so far`} />
-      {q.status === "error" ? (
-        <QueryError
-          error={q.error}
-          fallback="Spend couldn't be loaded."
-          retry={q.refetch}
-        />
-      ) : !r ? (
-        <Skeleton className="h-44 w-full" />
-      ) : (
-        <SpendBody report={r} />
-      )}
-    </Panel>
-  )
+/** fixable is a source someone can do something about. */
+const fixable = (s: UsageSource) =>
+  s.status === "unavailable" || s.status === "failed"
+
+/** quiet says why a row has no number, in two words. */
+function quiet(sources: UsageSource[], empty: string): string {
+  if (sources.length === 0) return empty
+  return sources.some(fixable) ? "Needs a fix" : "Not reported"
 }
 
-function SpendBody({ report }: { report: SpendReport }) {
-  if (report.sources.length === 0)
-    return (
-      <>
-        <Figure
-          value="None yet"
-          note="Connect a cloud account and what it costs shows up here."
-        />
-        <Link to="/integrations" className={cn(linkClass, "mt-auto")}>
-          Connect a cloud
-        </Link>
-      </>
-    )
-  const { lead, rest } = headline(report.totals)
-  const reporting = report.sources.filter(
-    (s) => s.status === "reporting"
-  ).length
-  const of = `${reporting} of ${report.sources.length} ${report.sources.length === 1 ? "account" : "accounts"}`
+/**
+ * UsageSummary is the overview's one card for spend, latency and traffic:
+ * a number for each when the clouds report it, two words when they
+ * don't, and one link to the rest.
+ */
+export function UsageSummary({ className }: { className?: string }) {
+  const spend = useQuery(useUsageSpend)
+  const traffic = useQuery(useUsageTraffic, { query: { range: "7d" } })
+  const s = spend.data
+  const t = traffic.data
+  const failed =
+    spend.status === "error"
+      ? spend
+      : traffic.status === "error"
+        ? traffic
+        : undefined
+  const connected = (s?.sources.length ?? 0) + (t?.sources.length ?? 0) > 0
+  const lead = s ? headline(s.totals).lead : undefined
+  const slowest = t?.services.find((x) => x.latency > 0)
+  const empty = (row: string) => (connected ? row : "Not connected")
+  const rows: [string, string | undefined, string][] = [
+    [
+      "Cloud spend",
+      lead && money(lead.total, lead.currency),
+      quiet(s?.sources ?? [], empty("Not reported")),
+    ],
+    [
+      "p95 latency",
+      slowest &&
+        `${Math.round(slowest.latency)} ms${slowest.statistic === "average" ? " avg" : ""}`,
+      quiet(t?.sources ?? [], empty("No services yet")),
+    ],
+    [
+      "Traffic",
+      t && t.services.length > 0
+        ? `${compact.format(t.total)} this week`
+        : undefined,
+      quiet(t?.sources ?? [], empty("No services yet")),
+    ],
+  ]
+  const live = rows.some(([, value]) => value)
+  const missing = [...(s?.sources ?? []), ...(t?.sources ?? [])].some(fixable)
   return (
-    <>
-      <Figure
-        value={lead ? money(lead.total, lead.currency) : "None yet"}
-        note={[
-          lead ? of : "No connected account reports spend yet",
-          ...rest.map((a) => money(a.total, a.currency)),
-        ].join(" · ")}
-      />
-      {lead && lead.days.some((d) => d.v > 0) && (
-        <GlowBarChart
-          data={lead.days.map((d) => ({ label: dayLabel(d.t), value: d.v }))}
-          label="Spent"
-          format={(v) => money(v, lead.currency)}
-          ticks="ends"
+    <Panel
+      dashed={!live}
+      aria-label="Spend, latency and traffic"
+      className={cn("gap-3", className)}
+    >
+      <PanelHead title="Spend, latency and traffic" />
+      {failed ? (
+        <QueryError
+          error={failed.error}
+          fallback="Spend and traffic couldn't be loaded."
+          retry={failed.refetch}
         />
+      ) : !s || !t ? (
+        <Skeleton className="h-28 w-full" />
+      ) : (
+        <>
+          <p className="text-[12.5px] leading-normal text-muted-foreground">
+            {live
+              ? "Read from each cloud's own billing and monitoring: this month's spend, and the last 7 days of traffic."
+              : "These show up once Loomplane reads billing and metrics from your cloud accounts."}
+          </p>
+          <dl className="grid gap-1.5 text-[12.5px]">
+            {rows.map(([label, value, why]) => (
+              <div
+                key={label}
+                className="flex items-center justify-between gap-3"
+              >
+                <dt>{label}</dt>
+                <dd
+                  className={cn(
+                    value ? "font-mono tabular-nums" : "text-muted-foreground"
+                  )}
+                >
+                  {value ?? why}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {connected ? (
+            <Link to="/infrastructure" className={cn(linkClass, "mt-auto")}>
+              {missing ? "See what's missing" : "See details"}
+            </Link>
+          ) : (
+            <Link to="/integrations" className={cn(linkClass, "mt-auto")}>
+              Connect a cloud
+            </Link>
+          )}
+        </>
       )}
-      {lead && lead.undated > 0 && (
-        <p className="text-[12.5px] text-muted-foreground">
-          {money(lead.undated, lead.currency)} isn&apos;t broken down by day
-        </p>
-      )}
-      <UsageNotes sources={report.sources} what="spend" limit={2} />
-    </>
+    </Panel>
   )
 }
 

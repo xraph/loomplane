@@ -71,7 +71,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { SpendAccounts } from "@/components/usage"
+import { LatencyCard, SpendAccounts, TrafficCard } from "@/components/usage"
 import { cloudLabel } from "@/lib/clouds"
 import { relative } from "@/lib/format"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
@@ -186,21 +186,31 @@ export function Infrastructure() {
 
         <PersistentStorage environmentNames={envNames} />
 
-        <Card id="spend" className="scroll-mt-16">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <WalletIcon className="size-4 text-muted-foreground" />
-              Spend this month
-            </CardTitle>
-            <CardDescription>
-              What each connected account has cost this month, read from the
-              cloud&apos;s own billing.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <SpendAccounts />
-          </CardContent>
-        </Card>
+        <section id="spend" className="grid scroll-mt-16 gap-3">
+          <SectionHeading
+            title="Spend and traffic"
+            description="Read from each connected cloud's own billing and monitoring"
+          />
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
+            <TrafficCard />
+            <LatencyCard />
+          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <WalletIcon className="size-4 text-muted-foreground" />
+                Spend this month
+              </CardTitle>
+              <CardDescription>
+                What each connected account has cost this month, read from the
+                cloud&apos;s own billing.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SpendAccounts />
+            </CardContent>
+          </Card>
+        </section>
 
         {infra.data && (
           <section className="grid gap-3">

@@ -8,8 +8,8 @@ import {
   AccountSpend,
   LatencyCard,
   SpendAccounts,
-  SpendCard,
   TrafficCard,
+  UsageSummary,
 } from "@/components/usage"
 
 vi.mock("@/lib/router", () => ({
@@ -148,10 +148,12 @@ const traffic = (range: string, total: number) => ({
 })
 
 let asked: string[] = []
+let trafficOverride: Record<string, unknown> = {}
 
 beforeEach(() => {
   asked = []
   spend = fullSpend()
+  trafficOverride = {}
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -167,7 +169,10 @@ beforeEach(() => {
     if (url.pathname === "/api/v1/usage/spend") body = spend
     if (url.pathname === "/api/v1/usage/traffic") {
       const range = url.searchParams.get("range") ?? "7d"
-      body = traffic(range, range === "24h" ? 50 : 1200)
+      body = {
+        ...traffic(range, range === "24h" ? 50 : 1200),
+        ...trafficOverride,
+      }
     }
     return new Response(JSON.stringify(body), {
       status: 200,
@@ -184,29 +189,18 @@ afterEach(() => {
 const wrap = (ui: React.ReactNode) =>
   render(<ClientProvider client={forgeClient}>{ui}</ClientProvider>)
 
-it("leads spend with the largest currency, keeps the rest apart, and says why an account is missing", async () => {
-  wrap(<SpendCard />)
-  const card = await screen.findByRole("region", { name: "Cloud spend" })
-  expect(await within(card).findByText("$35.00")).toBeInTheDocument()
-  expect(within(card).getByText(/€7\.00/)).toBeInTheDocument()
+it("lists each account's spend in its own currency, and says why one is missing", async () => {
+  wrap(<SpendAccounts />)
+  expect(await screen.findByText("$30.00")).toBeInTheDocument()
+  expect(screen.getByText("€7.00")).toBeInTheDocument()
   expect(
-    within(card).getByText("Add the billing export's table to this connection.")
+    screen.getByText("Add the billing export's table to this connection.")
   ).toBeInTheDocument()
-  expect(within(card).getByRole("link", { name: "Shop" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "Shop" })).toHaveAttribute(
     "href",
     "/clouds/accounts/gcp"
   )
-  expect(within(card).getByText("The cloud didn't answer.")).toBeInTheDocument()
-})
-
-it("asks for a cloud when nothing is connected", async () => {
-  spend = { month: spend.month, totals: [], accounts: [], sources: [] }
-  wrap(<SpendCard />)
-  const card = await screen.findByRole("region", { name: "Cloud spend" })
-  expect(await within(card).findByText("None yet")).toBeInTheDocument()
-  expect(
-    within(card).getByRole("link", { name: "Connect a cloud" })
-  ).toHaveAttribute("href", "/integrations")
+  expect(screen.getByText("The cloud didn't answer.")).toBeInTheDocument()
 })
 
 it("ranks services by latency and never calls an average a p95", async () => {
@@ -260,44 +254,6 @@ it("breaks spend down by account, largest first", async () => {
   ).toHaveAttribute("href", "/clouds/accounts/aws")
 })
 
-it("says how much of the month has no daily breakdown", async () => {
-  spend = {
-    month: spend.month,
-    totals: [
-      {
-        currency: "USD",
-        total: 184.62,
-        days: [{ t: day(1), v: 0 }],
-        undated: 184.62,
-      },
-    ],
-    accounts: [
-      {
-        connection_id: "do",
-        cloud: "digitalocean",
-        name: "Team",
-        currency: "USD",
-        total: 184.62,
-        days: [],
-      },
-    ],
-    sources: [
-      {
-        connection_id: "do",
-        cloud: "digitalocean",
-        name: "Team",
-        status: "reporting",
-      },
-    ],
-  }
-  wrap(<SpendCard />)
-  const card = await screen.findByRole("region", { name: "Cloud spend" })
-  expect(await within(card).findByText("$185")).toBeInTheDocument()
-  expect(
-    within(card).getByText("$185 isn't broken down by day")
-  ).toBeInTheDocument()
-})
-
 const source = (
   connection_id: string,
   cloud: string,
@@ -319,9 +275,9 @@ it("says a shared reason once and folds clouds with no API into one line", async
       source("Test", "vercel", "unsupported", "Vercel has no API."),
     ],
   }
-  wrap(<SpendCard />)
-  const card = await screen.findByRole("region", { name: "Cloud spend" })
-  const notes = await within(card).findAllByRole("listitem")
+  wrap(<SpendAccounts />)
+  const card = await screen.findByRole("list", { name: "Not reporting" })
+  const notes = within(card).getAllByRole("listitem")
   expect(notes).toHaveLength(2)
   expect(
     within(notes[0]!).getByRole("link", { name: "Digital Ocean" })
@@ -335,22 +291,80 @@ it("says a shared reason once and folds clouds with no API into one line", async
   )
 })
 
-it("shows two things to fix on the overview and points at the rest", async () => {
+it("shows two things to fix on a card and the rest when asked", async () => {
+  trafficOverride = {
+    sources: ["a", "b", "c", "d"].map((id) => ({
+      ...source(id, "gcp", "unavailable", `Fix ${id}.`),
+      services: [id],
+    })),
+  }
+  wrap(<LatencyCard />)
+  const card = await screen.findByRole("region", { name: "Slowest services" })
+  expect(await within(card).findByText("Fix a.")).toBeInTheDocument()
+  expect(within(card).getByText("Fix b.")).toBeInTheDocument()
+  expect(within(card).queryByText("Fix c.")).not.toBeInTheDocument()
+  await userEvent.click(within(card).getByRole("button", { name: "2 more" }))
+  expect(within(card).getByText("Fix c.")).toBeInTheDocument()
+})
+
+const row = (card: HTMLElement, label: string) =>
+  within(card).getByText(label).closest("div")!
+
+it("sums up spend, latency and traffic in one card, the way it always looked", async () => {
+  wrap(<UsageSummary />)
+  const card = await screen.findByRole("region", {
+    name: "Spend, latency and traffic",
+  })
+  await within(card).findByText("$35.00")
+  expect(row(card, "Cloud spend")).toHaveTextContent("$35.00")
+  expect(row(card, "p95 latency")).toHaveTextContent("240 ms")
+  expect(row(card, "Traffic")).toHaveTextContent("1.2K this week")
+  // Two connections can't report: point at the details, don't list them.
+  expect(
+    within(card).getByRole("link", { name: "See what's missing" })
+  ).toHaveAttribute("href", "/infrastructure")
+  expect(within(card).queryByText(/billing export/)).not.toBeInTheDocument()
+})
+
+it("says not connected and asks for a cloud when nothing is", async () => {
+  spend = { month: spend.month, totals: [], accounts: [], sources: [] }
+  trafficOverride = { services: [], sources: [], total: 0 }
+  wrap(<UsageSummary />)
+  const card = await screen.findByRole("region", {
+    name: "Spend, latency and traffic",
+  })
+  await within(card).findAllByText("Not connected")
+  expect(within(card).getAllByText("Not connected")).toHaveLength(3)
+  expect(
+    within(card).getByRole("link", { name: "Connect a cloud" })
+  ).toHaveAttribute("href", "/integrations")
+})
+
+it("tells a fix apart from a cloud that can't report at all", async () => {
   spend = {
     month: spend.month,
     totals: [],
     accounts: [],
-    sources: ["a", "b", "c", "d"].map((id) =>
-      source(id, "gcp", "unavailable", `Fix ${id}.`)
-    ),
+    sources: [
+      source("do", "digitalocean", "unavailable", "Make it as an owner."),
+    ],
   }
-  wrap(<SpendCard />)
-  const card = await screen.findByRole("region", { name: "Cloud spend" })
-  expect(await within(card).findByText("Fix a.")).toBeInTheDocument()
-  expect(within(card).getByText("Fix b.")).toBeInTheDocument()
-  expect(within(card).queryByText("Fix c.")).not.toBeInTheDocument()
-  expect(within(card).getByRole("link", { name: "2 more" })).toHaveAttribute(
-    "href",
-    "/infrastructure"
-  )
+  trafficOverride = {
+    services: [],
+    total: 0,
+    sources: [
+      {
+        ...source("site", "vercel", "unsupported", "No API."),
+        services: ["web"],
+      },
+    ],
+  }
+  wrap(<UsageSummary />)
+  const card = await screen.findByRole("region", {
+    name: "Spend, latency and traffic",
+  })
+  await within(card).findByText("Needs a fix")
+  expect(row(card, "Cloud spend")).toHaveTextContent("Needs a fix")
+  expect(row(card, "Traffic")).toHaveTextContent("Not reported")
+  expect(row(card, "p95 latency")).toHaveTextContent("Not reported")
 })
