@@ -109,7 +109,7 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 			return err
 		}
 		sum := sha256.Sum256(canonical)
-		_, err = s.relay.SendReliable(ctx, acceptance.Request{Producer: "loomplane", InstallationID: s.cfg.Identity.AppID, SourceKey: item.id, SourceFingerprint: hex.EncodeToString(sum[:]), AppID: s.cfg.Identity.AppID, OrgID: item.org, TenantID: item.org, Type: connectionSignInNeeded, Data: canonical})
+		_, err = s.relay.SendReliable(ctx, acceptance.Request{Producer: "loomplane", InstallationID: s.cfg.Identity.AppID, SourceKey: lapseSourceKey(item), SourceFingerprint: hex.EncodeToString(sum[:]), AppID: s.cfg.Identity.AppID, OrgID: item.org, TenantID: item.org, Type: connectionSignInNeeded, Data: canonical})
 		if err != nil {
 			return err
 		}
@@ -160,6 +160,13 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 	}
 	_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='sent' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 	return err
+}
+
+// lapseSourceKey names the lapse, not the recipient. Every recipient's row
+// carries the same payload, so Relay treats rows after the first as replays and
+// subscribers get one event per lapse.
+func lapseSourceKey(item *outboxItem) string {
+	return strings.TrimSuffix(item.id, "/"+item.user)
 }
 
 // memberAddress returns the address of a user who is still a member of the

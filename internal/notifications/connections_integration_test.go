@@ -96,6 +96,11 @@ func TestConnectionLapseNotifiesItsMakerAndAdmins(t *testing.T) {
 			t.Fatalf("%s notice: %+v", user, n)
 		}
 	}
+	// Three recipients, but one lapse: subscribers get one event.
+	var receipts int
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM relay_acceptances`).Scan(&receipts); err != nil || receipts != 1 {
+		t.Fatalf("webhook receipts for one lapse: %d %v", receipts, err)
+	}
 	var inboxTypes int
 	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM herald_inbox WHERE type='connection.sign_in_needed'`).Scan(&inboxTypes); err != nil || inboxTypes != 3 {
 		t.Fatalf("inbox notifications of the lapse type: %d %v", inboxTypes, err)
