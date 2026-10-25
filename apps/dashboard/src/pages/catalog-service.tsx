@@ -321,7 +321,7 @@ function Header({
           {environment}
         </span>
         <StatusPill tone={state.drift ? "waiting" : "live"}>
-          {state.label}
+          {state.drift ? state.label : (module?.deployedLabel ?? state.label)}
         </StatusPill>
         {Actions && (
           <div className="flex flex-wrap items-center gap-2 sm:ml-2">

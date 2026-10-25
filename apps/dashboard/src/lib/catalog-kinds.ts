@@ -99,6 +99,8 @@ export type CatalogKindModule = {
   blurb: string
   features: string[]
   panels: CatalogPanel[]
+  /** The normal deployed state. Drift warnings always take precedence. */
+  deployedLabel?: string
   /** Buttons at the right of the service page's header. */
   actions?: ComponentType<CatalogPanelProps>
   /** Drawn in place of a product logo when the kind has none. */

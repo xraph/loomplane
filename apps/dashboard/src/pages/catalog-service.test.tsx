@@ -455,3 +455,38 @@ test("icon is used when there is no product logo", async () => {
   expect(within(logoed).queryByTestId("logoed-icon")).not.toBeInTheDocument()
   expect(within(logoed).getByTitle("Logoed")).toBeInTheDocument()
 })
+
+defineCatalogKind({
+  kind: "running-state",
+  title: "Running state",
+  group: "data",
+  blurb: "A service with a running-state label.",
+  features: [],
+  panels: [],
+  deployedLabel: "Running",
+})
+
+test("a module's deployed label preserves drift warnings", async () => {
+  for (const [drift, label] of [
+    ["", "Running"],
+    ["missing", "Deleted outside Loomplane"],
+    ["changed", "Changed outside Loomplane"],
+  ]) {
+    serve({
+      bindings: {
+        production: [
+          {
+            ...binding("fabriq", { kind: "running-state", provider: "server" }),
+            drift,
+          },
+        ],
+      },
+    })
+    open("fabriq", "env_prod")
+    expect(
+      within(await screen.findByRole("banner")).getByText(label)
+    ).toBeInTheDocument()
+    cleanup()
+    forgeClient.clear()
+  }
+})
