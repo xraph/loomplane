@@ -390,6 +390,9 @@ type Result struct {
 	// Connections are the cloud connections the plan deploys with, by
 	// cloud.
 	Connections map[string]string `json:"connections"`
+	// Release is how the plan's services go live, nil when the
+	// environment declares no release block.
+	Release *Release `json:"release,omitempty"`
 }
 
 // PlanSource pins one repository of a plan to the analysis it was planned
@@ -459,6 +462,9 @@ type Plan struct {
 	// Connections are the cloud connections the plan deploys with, by
 	// cloud, settled when it was planned.
 	Connections map[string]string `json:"connections"`
+	// Release is how the plan's services go live, pinned when it was
+	// planned: nil when the environment declares no release block.
+	Release *Release `json:"release,omitempty"`
 	// Error says why planning failed, when it did.
 	Error     string     `json:"error"`
 	CreatedBy string     `json:"created_by"`
@@ -478,6 +484,16 @@ func (p *Plan) setResult(r *Result) {
 	p.CloudSyncID = r.CloudSyncID
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
 	p.Summary, p.Executable, p.Connections = r.Summary, r.Executable, r.Connections
+	p.Release = r.Release
+}
+
+// result is what planning decided for the plan, as the store keeps it.
+func (p *Plan) result() Result {
+	return Result{
+		CloudSyncID: p.CloudSyncID,
+		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
+		Connections: p.Connections, Release: p.Release,
+	}
 }
 
 func (p *Plan) normalize() {

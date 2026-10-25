@@ -176,7 +176,9 @@ func Compute(in Input) *Result {
 	p.impact()
 	p.planDeletes()
 	p.stillReplaced()
-	return p.finish()
+	r := p.finish()
+	planRelease(in, r)
+	return r
 }
 
 type planner struct {

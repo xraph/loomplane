@@ -242,11 +242,7 @@ func (s *PgStore) RecordDeployed(ctx context.Context, orgID string, d *DeployedS
 
 // FinishPlanning implements Store.
 func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
-	result, err := json.Marshal(Result{
-		CloudSyncID: p.CloudSyncID,
-		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
-		Connections: p.Connections,
-	})
+	result, err := json.Marshal(p.result())
 	if err != nil {
 		return false, fmt.Errorf("encode plan: %w", err)
 	}
@@ -258,6 +254,26 @@ func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
 		return false, fmt.Errorf("store plan: %w", err)
 	}
 	return affected(tag)
+}
+
+// RampingCanary returns the deployment whose canary still holds the
+// environment, or "" when none does. A plan made meanwhile is blocked, so
+// two deployments never move one service's traffic at once. The canary is
+// stored on the deployment row; the statuses are deployments'
+// canaryActive.
+func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string) (string, error) {
+	var id string
+	err := s.db.QueryRow(ctx, `SELECT id FROM loomplane_deployments
+		WHERE org_id = $1 AND environment_id = $2 AND status = 'running'
+			AND canary->>'status' IN ('pending', 'ramping', 'promoting', 'reverting')
+		ORDER BY started_at DESC, id DESC LIMIT 1`, orgID, environmentID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("find ramping canary: %w", err)
+	}
+	return id, nil
 }
 
 // FailPlanning implements Store.

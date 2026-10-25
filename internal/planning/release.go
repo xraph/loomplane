@@ -1,0 +1,184 @@
+package planning
+
+import (
+	"context"
+	"slices"
+	"time"
+
+	"github.com/xraph/loomplane/internal/releasehealth"
+	"github.com/xraph/loomplane/pkg/manifest"
+	"github.com/xraph/loomplane/pkg/provider"
+)
+
+// Release is how a plan's services go live: the environment's release
+// block with its defaults filled in, and which services ramp. It's pinned
+// when the plan is made, so it's part of the revision you approve. A
+// release with a canary is still one decision.
+type Release struct {
+	Strategy    string                   `json:"strategy"`
+	Steps       []int                    `json:"steps,omitempty"`
+	HoldSeconds int64                    `json:"hold_seconds,omitempty"`
+	Thresholds  releasehealth.Thresholds `json:"thresholds"`
+	// Canary are the action IDs that ramp. Every other service action deploys all at once.
+	Canary []string `json:"canary,omitempty"`
+}
+
+// Hold is how long a canary watches each step. It's zero without a release.
+func (r *Release) Hold() time.Duration {
+	if r == nil {
+		return 0
+	}
+	return time.Duration(r.HoldSeconds) * time.Second
+}
+
+// Ramps reports whether the action ramps as a canary. Nothing ramps
+// without a release.
+func (r *Release) Ramps(actionID string) bool {
+	return r != nil && slices.Contains(r.Canary, actionID)
+}
+
+// Thresholds are what the plan's release is judged against: its own, or
+// the defaults when the environment declares no release block.
+func (p *Plan) Thresholds() releasehealth.Thresholds {
+	if p.Release == nil {
+		return releasehealth.DefaultThresholds()
+	}
+	return p.Release.Thresholds
+}
+
+// Finding codes for releases.
+const (
+	// codeCanaryUnavailable is a service that deploys all at once in an
+	// environment whose releases are canaries.
+	codeCanaryUnavailable = "canary-unavailable"
+	// codeBlueGreenUnavailable is a service with no route release to
+	// switch over in an environment whose releases are blue/green.
+	codeBlueGreenUnavailable = "blue-green-unavailable"
+	// codeCanaryInProgress blocks a plan while a canary ramps in its
+	// environment.
+	codeCanaryInProgress = "canary-in-progress"
+)
+
+// planRelease pins the environment's release on r, and says which service
+// can't take part in it. It does nothing when the environment declares no
+// release block, so those results are what they were before releases.
+func planRelease(in Input, r *Result) {
+	if in.Manifest == nil {
+		return
+	}
+	resolved, ok := in.Manifest.ReleaseFor(in.Environment)
+	if !ok {
+		return
+	}
+	release := &Release{
+		Strategy: resolved.Strategy, Steps: resolved.Steps, HoldSeconds: int64(resolved.Hold / time.Second),
+		Thresholds: releasehealth.Thresholds{
+			ErrorRate: resolved.ErrorRate, ErrorRateDelta: resolved.ErrorRateDelta,
+			P95LatencyRatio: resolved.P95LatencyRatio, MinRequests: float64(resolved.MinRequests),
+		},
+	}
+	r.Release = release
+	for _, a := range r.Actions {
+		// A kept or deleted service deploys nothing.
+		if a.Subject != ServiceSubject || (a.Op != Create && a.Op != Update && a.Op != Replace) {
+			continue
+		}
+		switch resolved.Strategy {
+		case manifest.StrategyCanary:
+			reason := noCanary(in, r, a)
+			if reason == "" {
+				release.Canary = append(release.Canary, a.ID)
+				continue
+			}
+			r.Warnings = append(r.Warnings, Finding{
+				Code: codeCanaryUnavailable, Subject: ServiceSubject, Name: a.Name,
+				Message: a.Name + " can't run a canary: " + reason + ". It deploys all at once.",
+			})
+		case manifest.StrategyBlueGreen:
+			if len(a.Routes) == 0 {
+				r.Warnings = append(r.Warnings, Finding{
+					Code: codeBlueGreenUnavailable, Subject: ServiceSubject, Name: a.Name,
+					Message: a.Name + " has no route release to switch over, so it can't release blue/green. It deploys all at once.",
+				})
+			}
+		}
+	}
+}
+
+// noCanary says why a service action can't ramp as a canary, or "" when
+// it can: an update of an HTTP service on a target whose traffic weighting
+// Loomplane drives, outside a Cloud sync, Cloud placement and route
+// releases.
+func noCanary(in Input, r *Result, a Action) string {
+	cfg := a.Service
+	switch {
+	case r.CloudSyncID != "":
+		return "a Cloud sync moves services as they are"
+	case a.Op == Create:
+		return "it's new, so there's nothing to compare it with"
+	case a.Op == Replace:
+		return "it's moving"
+	case !releasehealth.SupportFor(a.Provider).Canary:
+		return providerTitle(in, a.Provider) + " has no traffic weighting Loomplane can drive"
+	case cfg == nil:
+		return "the plan has no configuration for it"
+	case cfg.Workload == provider.Worker:
+		return "it's a worker, so it takes no HTTP traffic"
+	case len(a.Routes) > 0:
+		return "its domain routes switch over by DNS"
+	case cfg.CloudPlacement != nil:
+		return "it runs on a Cloud target"
+	}
+	switch a.Provider {
+	case "ecs-fargate":
+		if cfg.Port == 0 {
+			return "it takes no HTTP traffic"
+		}
+		if !cfg.Public && !cfg.Internal {
+			return "it isn't behind a load balancer"
+		}
+	case "azure-container-apps":
+		if cfg.Port == 0 && cfg.Workload != provider.StaticSite {
+			return "it takes no HTTP traffic"
+		}
+	}
+	return ""
+}
+
+// providerTitle names a provider for people, or by its name when the
+// registry doesn't know it.
+func providerTitle(in Input, name string) string {
+	if in.Providers != nil {
+		if p, err := in.Providers.Get(name); err == nil && p.Title != "" {
+			return p.Title
+		}
+	}
+	return name
+}
+
+// canaryReader is a store that can tell whether a canary still holds an
+// environment. PgStore can; a store that can't never blocks a plan for it.
+type canaryReader interface {
+	RampingCanary(ctx context.Context, orgID, environmentID string) (deploymentID string, err error)
+}
+
+var _ canaryReader = (*PgStore)(nil)
+
+// rampingCanary blocks result while a canary ramps in the plan's
+// environment, when the store can tell.
+func (s *Service) rampingCanary(ctx context.Context, plan *Plan, result *Result) error {
+	reader, ok := s.store.(canaryReader)
+	if !ok {
+		return nil
+	}
+	deployment, err := reader.RampingCanary(ctx, plan.OrgID, plan.EnvironmentID)
+	if err != nil || deployment == "" {
+		return err
+	}
+	result.Problems = append(result.Problems, Finding{
+		Code:    codeCanaryInProgress,
+		Message: "A canary release is ramping in " + plan.Environment + " (deployment " + deployment + "). Plan again once it finishes.",
+	})
+	result.Executable = false
+	return nil
+}
