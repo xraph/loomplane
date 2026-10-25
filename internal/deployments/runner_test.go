@@ -28,6 +28,31 @@ type memStore struct {
 	d              map[string]*Deployment
 	capacityEvents []CapacityTransition
 	capacityAcks   map[string]bool
+	verdicts       map[string]CanaryVerdict
+}
+
+var _ CanaryStore = (*memStore)(nil)
+
+// copyDeployment is d without anything it shares with the stored one.
+func copyDeployment(d *Deployment) *Deployment {
+	c := *d
+	c.Steps = slices.Clone(d.Steps)
+	c.Sources = slices.Clone(d.Sources)
+	c.Canary = copyCanary(d.Canary)
+	return &c
+}
+
+func copyCanary(c *Canary) *Canary {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Steps = slices.Clone(c.Steps)
+	out.Services = slices.Clone(c.Services)
+	for i := range out.Services {
+		out.Services[i].Refs = maps.Clone(c.Services[i].Refs)
+	}
+	return &out
 }
 
 func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployment, error) {
@@ -35,16 +60,11 @@ func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployme
 	defer m.mu.Unlock()
 	for _, x := range m.d {
 		if x.PlanID == d.PlanID {
-			c := *x
-			return &c, nil
+			return copyDeployment(x), nil
 		}
 	}
-	c := *d
-	c.Steps = slices.Clone(d.Steps)
-	c.Sources = slices.Clone(d.Sources)
-	m.d[d.ID] = &c
-	out := c
-	return &out, nil
+	m.d[d.ID] = copyDeployment(d)
+	return copyDeployment(d), nil
 }
 
 func (m *memStore) GetDeployment(_ context.Context, _, id string) (*Deployment, error) {
@@ -54,10 +74,7 @@ func (m *memStore) GetDeployment(_ context.Context, _, id string) (*Deployment, 
 	if !ok {
 		return nil, ErrNotFound
 	}
-	c := *d
-	c.Steps = slices.Clone(d.Steps)
-	c.Sources = slices.Clone(d.Sources)
-	return &c, nil
+	return copyDeployment(d), nil
 }
 
 func (m *memStore) ForPlan(_ context.Context, _, planID string) (*Deployment, error) {
@@ -65,8 +82,7 @@ func (m *memStore) ForPlan(_ context.Context, _, planID string) (*Deployment, er
 	defer m.mu.Unlock()
 	for _, d := range m.d {
 		if d.PlanID == planID {
-			c := *d
-			return &c, nil
+			return copyDeployment(d), nil
 		}
 	}
 	return nil, ErrNotFound
@@ -115,12 +131,109 @@ func (m *memStore) Reopen(_ context.Context, _, id string) (bool, error) {
 	}
 	d.Status, d.Error, d.FinishedAt = StatusRunning, "", nil
 	for i := range d.Steps {
-		if d.Steps[i].Status == StepFailed || d.Steps[i].Status == StepSkipped {
+		if retried(d.Steps[i].Status) {
 			d.Steps[i].Status = StepPending
 		}
 	}
+	if d.Canary != nil {
+		d.Canary.reopen()
+	}
 	d.Retries++
 	return true, nil
+}
+
+func (m *memStore) SetCanary(_ context.Context, _, id string, c *Canary) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.d[id]
+	if !ok {
+		return ErrNotFound
+	}
+	d.Canary = copyCanary(c)
+	return nil
+}
+
+func (m *memStore) RecordVerdict(_ context.Context, v *CanaryVerdict) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.verdicts == nil {
+		m.verdicts = map[string]CanaryVerdict{}
+	}
+	if _, ok := m.verdicts[v.ID]; !ok {
+		m.verdicts[v.ID] = *v
+	}
+	return nil
+}
+
+func (m *memStore) Verdicts(_ context.Context, org, id string) ([]CanaryVerdict, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []CanaryVerdict{}
+	for _, v := range m.verdicts {
+		if v.OrgID == org && v.DeploymentID == id {
+			out = append(out, v)
+		}
+	}
+	slices.SortFunc(out, func(a, b CanaryVerdict) int {
+		if a.Step != b.Step {
+			return a.Step - b.Step
+		}
+		if a.Attempt != b.Attempt {
+			return a.Attempt - b.Attempt
+		}
+		return strings.Compare(a.ActionID, b.ActionID)
+	})
+	return out, nil
+}
+
+func (m *memStore) RecentCanaries(_ context.Context, org, project, environment string, limit int) ([]*Deployment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Deployment{}
+	for _, d := range m.d {
+		if d.OrgID == org && d.ProjectID == project && d.EnvironmentID == environment && d.Canary != nil {
+			out = append(out, copyDeployment(d))
+		}
+	}
+	slices.SortFunc(out, func(a, b *Deployment) int {
+		if c := b.StartedAt.Compare(a.StartedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(b.ID, a.ID)
+	})
+	return out[:min(limit, len(out))], nil
+}
+
+// holdsCanary is a running deployment whose canary still holds its
+// environment.
+func holdsCanary(d *Deployment) bool {
+	return d.Status == StatusRunning && d.Canary != nil && slices.Contains(canaryActive, d.Canary.Status)
+}
+
+func (m *memStore) RampingCanary(_ context.Context, org, environment string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var found *Deployment
+	for _, d := range m.d {
+		if d.OrgID == org && d.EnvironmentID == environment && holdsCanary(d) && (found == nil || d.StartedAt.After(found.StartedAt)) {
+			found = d
+		}
+	}
+	if found == nil {
+		return "", nil
+	}
+	return found.ID, nil
+}
+
+func (m *memStore) CanaryBinding(_ context.Context, org, binding string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, d := range m.d {
+		if d.OrgID == org && holdsCanary(d) && slices.ContainsFunc(d.Canary.Services, func(s CanaryService) bool { return s.BindingID == binding }) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type fakePlans struct {
