@@ -1,8 +1,8 @@
 // The overview: what's waiting on you and what went out last, how often and
 // how fast the organization ships, what it costs, how its services are
-// doing, and where it runs. Spend, latency and traffic share one card,
-// read from each connected cloud's own billing and monitoring; the
-// Infrastructure page has the details.
+// doing, and where it runs. Spend, latency and traffic come from each
+// connected cloud's own billing and monitoring: one card sums them up,
+// and the traffic and slowest services cards beneath it show the detail.
 import { useAuth } from "@authsome/ui-react"
 import { CheckIcon, PlusIcon, ShieldCheckIcon } from "lucide-react"
 import { type ReactNode, useCallback, useMemo } from "react"
@@ -22,7 +22,7 @@ import { QueryError } from "@/components/query-error"
 import { ChangeChips, StatusPill, Thread } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { SiteHeader } from "@/components/site-header"
-import { UsageSummary } from "@/components/usage"
+import { LatencyCard, TrafficCard, UsageSummary } from "@/components/usage"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -142,6 +142,11 @@ export function Overview() {
           <DeploysCard />
           <PlanToLive />
           <UsageSummary className="md:col-span-2 lg:col-span-1" />
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
+          <TrafficCard />
+          <LatencyCard />
         </div>
 
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
