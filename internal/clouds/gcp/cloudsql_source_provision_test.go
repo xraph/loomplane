@@ -11,7 +11,7 @@ import (
 )
 
 func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
-	for _, scenario := range []string{"dns-create", "dns-lost-zone", "dns-lost-change", "dns-source-replaced", "dns-endpoint-replaced", "create", "lost-address-response", "lost-rule-response", "checkpoint-refused", "revoked-after-intent", "outside-private-subnet", "lost-address-missing-operation", "lost-address-duplicate-operation", "checkpoint-after-operation", "pending", "foreign-address", "source-replaced", "subnet-replaced", "address-replaced-before-rule", "operation-replaced", "endpoint-replaced", "denied"} {
+	for _, scenario := range []string{"legacy-checkpoint", "dns-create", "dns-lost-zone", "dns-lost-change", "dns-source-replaced", "dns-endpoint-replaced", "create", "lost-address-response", "lost-rule-response", "checkpoint-refused", "revoked-after-intent", "outside-private-subnet", "lost-address-missing-operation", "lost-address-duplicate-operation", "checkpoint-after-operation", "pending", "foreign-address", "source-replaced", "subnet-replaced", "address-replaced-before-rule", "operation-replaced", "endpoint-replaced", "denied"} {
 		t.Run(scenario, func(t *testing.T) {
 			in, fields := pscPITRInstance(t)
 			physical, err := in.Incarnation("source-project", "us-central1", "source-db")
@@ -223,10 +223,15 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || got == nil || got.Address != "10.20.0.8" || got.ForwardingRuleID != "789" || writes["addresses"] != 1 || writes["forwardingRules"] != 1 {
+			if err != nil || got == nil || got.Address != "10.20.0.8" || got.ForwardingRuleID != "789" || got.ServiceAttachment != attachment || writes["addresses"] != 1 || writes["forwardingRules"] != 1 {
 				t.Fatal("owned endpoint not provisioned", got, err, writes)
 			}
 			state = saved
+			if scenario == "legacy-checkpoint" {
+				state.Version = 1
+				state.SourceProject = ""
+				state.SourcePhysicalID = ""
+			}
 			if scenario == "endpoint-replaced" {
 				objects[rulePath]["id"] = "999"
 			}

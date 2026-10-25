@@ -41,18 +41,20 @@ type PSCComputeState struct {
 
 // SQLPSCProvisionState is persisted before each owned network mutation.
 type SQLPSCProvisionState struct {
-	Version        int                   `json:"version"`
-	Scope          string                `json:"scope"`
-	Subnet         SQLApplicationNetwork `json:"subnet"`
-	Address        PSCComputeState       `json:"address"`
-	ForwardingRule PSCComputeState       `json:"forwarding_rule"`
-	DNS            SQLPSCSourceDNSState  `json:"dns,omitempty"`
+	SourceProject    string                `json:"source_project"`
+	SourcePhysicalID string                `json:"source_physical_id"`
+	Version          int                   `json:"version"`
+	Scope            string                `json:"scope"`
+	Subnet           SQLApplicationNetwork `json:"subnet"`
+	Address          PSCComputeState       `json:"address"`
+	ForwardingRule   PSCComputeState       `json:"forwarding_rule"`
+	DNS              SQLPSCSourceDNSState  `json:"dns,omitempty"`
 }
 
 // SQLPSCProvisionedEndpoint identifies owned network resources. DNS and SQL
 // verification are separate gates before publishing a source credential.
 type SQLPSCProvisionedEndpoint struct {
-	AddressID, ForwardingRuleID, Address, DNSName string
+	AddressID, ForwardingRuleID, Address, DNSName, ServiceAttachment string
 }
 
 var errPSCProvision = errors.New("cloud sql PSC endpoint provisioning does not match its saved source and route")
@@ -137,12 +139,29 @@ func (s *Session) EnsureSQLPSCSourceForwardingRule(ctx context.Context, spec SQL
 		return nil
 	}
 	if state == (SQLPSCProvisionState{}) {
-		if err := persist(SQLPSCProvisionState{Version: 1, Scope: scope, Subnet: *subnet}); err != nil {
+		if err := persist(SQLPSCProvisionState{Version: 2, Scope: scope, SourceProject: s.key.ProjectID, SourcePhysicalID: spec.PhysicalID, Subnet: *subnet}); err != nil {
 			return nil, err
 		}
-	} else if state.Version != 1 || state.Scope != scope || state.Subnet != *subnet {
-		return nil, errPSCProvision
+	} else {
+		if (state.Version != 1 && state.Version != 2) || state.Scope != scope || state.Subnet != *subnet {
+			return nil, errPSCProvision
+		}
+		if state.Version == 1 {
+			if state.SourceProject != "" || state.SourcePhysicalID != "" {
+				return nil, errPSCProvision
+			}
+			next := state
+			next.Version = 2
+			next.SourceProject = s.key.ProjectID
+			next.SourcePhysicalID = spec.PhysicalID
+			if err := persist(next); err != nil {
+				return nil, err
+			}
+		} else if state.SourceProject != s.key.ProjectID || state.SourcePhysicalID != spec.PhysicalID {
+			return nil, errPSCProvision
+		}
 	}
+
 	guard := func(ctx context.Context) error {
 		if err := check(ctx); err != nil {
 			return err
@@ -238,7 +257,7 @@ func (s *Session) EnsureSQLPSCSourceForwardingRule(ctx context.Context, spec SQL
 			return nil, err
 		}
 		if !pending {
-			return &SQLPSCProvisionedEndpoint{AddressID: address.ID, ForwardingRuleID: rule.ID, Address: address.Address, DNSName: source.DNSName}, nil
+			return &SQLPSCProvisionedEndpoint{AddressID: address.ID, ForwardingRuleID: rule.ID, Address: address.Address, DNSName: source.DNSName, ServiceAttachment: attachment}, nil
 		}
 		if err := s.wait(ctx); err != nil {
 			return nil, err
@@ -313,7 +332,11 @@ type pscComputeOperation struct {
 }
 
 func (op pscComputeOperation) matches(prefix, path, request string, state PSCComputeState) bool {
-	return op.Kind == "compute#operation" && positiveComputeID(op.ID) && validSQLPathID(op.Name) && op.RequestID == request && op.Type == "insert" && computeResource(op.Target) == path && computeResource(op.Region) == prefix && slices.Contains([]string{"PENDING", "RUNNING", "DONE"}, op.Status) && (state.Operation == "" || state.Operation == op.Name && state.OperationID == op.ID) && (state.ResourceID == "" || state.ResourceID == op.TargetID) && (op.TargetID == "" && op.Status != "DONE" || positiveComputeID(op.TargetID))
+	return op.matchesMutation(prefix, path, request, "insert", state)
+}
+
+func (op pscComputeOperation) matchesMutation(prefix, path, request, verb string, state PSCComputeState) bool {
+	return op.Kind == "compute#operation" && positiveComputeID(op.ID) && validSQLPathID(op.Name) && op.RequestID == request && op.Type == verb && computeResource(op.Target) == path && computeResource(op.Region) == prefix && slices.Contains([]string{"PENDING", "RUNNING", "DONE"}, op.Status) && (state.Operation == "" || state.Operation == op.Name && state.OperationID == op.ID) && (state.ResourceID == "" || state.ResourceID == op.TargetID) && (op.TargetID == "" && op.Status != "DONE" || positiveComputeID(op.TargetID))
 }
 
 func (s *Session) ensurePSCCompute(ctx context.Context, prefix, path, scope string, state PSCComputeState, body map[string]any, verify func(string) error, save func(PSCComputeState) error, check func(context.Context) error) error {
@@ -404,6 +427,10 @@ func (s *Session) ensurePSCCompute(ctx context.Context, prefix, path, scope stri
 }
 
 func (s *Session) discoverPSCCompute(ctx context.Context, prefix, path, request string, check func(context.Context) error) (pscComputeOperation, error) {
+	return s.discoverPSCComputeMutation(ctx, prefix, path, request, "insert", PSCComputeState{}, check)
+}
+
+func (s *Session) discoverPSCComputeMutation(ctx context.Context, prefix, path, request, verb string, state PSCComputeState, check func(context.Context) error) (pscComputeOperation, error) {
 	var found pscComputeOperation
 	page := ""
 	seen := map[string]bool{}
@@ -426,7 +453,7 @@ func (s *Session) discoverPSCCompute(ctx context.Context, prefix, path, request 
 			if op.RequestID != request {
 				continue
 			}
-			if found.Name != "" || !op.matches(prefix, path, request, PSCComputeState{}) {
+			if found.Name != "" || !op.matchesMutation(prefix, path, request, verb, state) {
 				return found, errPSCProvision
 			}
 			found = op
@@ -441,7 +468,7 @@ func (s *Session) discoverPSCCompute(ctx context.Context, prefix, path, request 
 		page = result.Next
 	}
 	if found.Name == "" {
-		return found, errors.New("cloud sql PSC creation is uncertain; its original Compute operation is unavailable")
+		return found, errors.New("cloud sql PSC mutation is uncertain; its original Compute operation is unavailable")
 	}
 	return found, nil
 }

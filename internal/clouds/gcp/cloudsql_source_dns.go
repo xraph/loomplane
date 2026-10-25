@@ -63,15 +63,19 @@ type pscDNSChange struct {
 	ID        string         `json:"id,omitempty"`
 	Kind      string         `json:"kind,omitempty"`
 	Status    string         `json:"status,omitempty"`
-	Additions []pscDNSRecord `json:"additions"`
+	Additions []pscDNSRecord `json:"additions,omitempty"`
 	Deletions []pscDNSRecord `json:"deletions,omitempty"`
 }
 
 func (c pscDNSChange) matches(want []pscDNSRecord, id string) bool {
-	if c.Kind != "dns#change" || !validSQLPathID(c.ID) || id != "" && c.ID != id || !slices.Contains([]string{"pending", "done"}, c.Status) || len(c.Deletions) != 0 || len(c.Additions) != len(want) {
+	return c.matchesMutation(want, nil, id)
+}
+
+func (c pscDNSChange) matchesMutation(additions, deletions []pscDNSRecord, id string) bool {
+	if c.Kind != "dns#change" || !validSQLPathID(c.ID) || id != "" && c.ID != id || !slices.Contains([]string{"pending", "done"}, c.Status) || len(c.Deletions) != len(deletions) || len(c.Additions) != len(additions) {
 		return false
 	}
-	return pscRecordsMatch(c.Additions, want)
+	return pscRecordsMatch(c.Additions, additions) && pscRecordsMatch(c.Deletions, deletions)
 }
 
 func pscRecordsMatch(found, want []pscDNSRecord) bool {
@@ -319,6 +323,10 @@ func (s *Session) verifyPSCRecords(ctx context.Context, zoneURL, name string, wa
 }
 
 func (s *Session) discoverPSCChange(ctx context.Context, zoneURL string, want []pscDNSRecord, check func() error) (pscDNSChange, error) {
+	return s.discoverPSCChangeMatching(ctx, zoneURL, func(change pscDNSChange) bool { return change.matches(want, "") }, check)
+}
+
+func (s *Session) discoverPSCChangeMatching(ctx context.Context, zoneURL string, matches func(pscDNSChange) bool, check func() error) (pscDNSChange, error) {
 	var found pscDNSChange
 	err := s.walkPSCRecordPages(ctx, zoneURL+"/changes", check, func(raw json.RawMessage) error {
 		var result struct {
@@ -328,7 +336,7 @@ func (s *Session) discoverPSCChange(ctx context.Context, zoneURL string, want []
 			return err
 		}
 		for _, change := range result.Changes {
-			if !change.matches(want, "") {
+			if !matches(change) {
 				continue
 			}
 			if found.ID != "" {
