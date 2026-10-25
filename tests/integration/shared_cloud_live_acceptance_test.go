@@ -762,6 +762,16 @@ func liveRun(t *testing.T, path string, l *liveLedger, p *liveProviders, progres
 
 func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p *liveProviders, cloud cloudprofiles.Profile, pools []cloudinfra.Pool, hosts []combinedHost, keys [][]byte, runtimeIDs, projects []string, namespaces []cloudinfra.Zone, observer *livePatchObserver, record, bound func(), progress *liveProgress) {
 	t.Helper()
+	scopes, capture := liveLifecycleDiagnostics(t, progress, c, projects)
+	defer capture()
+	scopeFor := func(project string) *liveLifecycleScope {
+		for index := range scopes {
+			if scopes[index].Project == project {
+				return &scopes[index]
+			}
+		}
+		panic("unaccepted lifecycle project")
+	}
 	targets := make([]cloudprofiles.Target, 0, len(projects))
 	bindings := make([]planning.Binding, 0, len(projects))
 	progress.step(t, "routes")
@@ -771,6 +781,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 	hostIndices := []int{0, 0, 1}
 	binding := func(project string) planning.Binding {
 		t.Helper()
+		progress.step(t, "binding_read")
 		var listing struct{ Bindings []planning.Binding }
 		c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+project+"/bindings?environment=production", nil, &listing)
 		for _, item := range listing.Bindings {
@@ -778,6 +789,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 				return item
 			}
 		}
+		progress.failure(t, "binding_missing")
 		t.Fatal("web binding missing")
 		return planning.Binding{}
 	}
@@ -786,15 +798,21 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		bound()
 		base := "/api/v1/projects/" + project
 		c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": combinedManifest(target, health)}, nil)
+		progress.step(t, "plan_create")
 		var plan planBody
 		c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+		scopeFor(project).Plan = plan.ID
+		progress.step(t, "plan_wait")
 		waitPlanned(t, c, &plan)
 		if !plan.Executable {
+			progress.failure(t, "plan_not_executable")
 			t.Fatal("live manifest plan is not executable")
 		}
 		l.Evidence["plan-"+project] = plan.ID
 		record()
+		progress.step(t, "plan_approve")
 		c.must(http.StatusOK, http.MethodPost, "/api/v1/plans/"+plan.ID+"/approve", map[string]string{"revision": plan.Revision}, nil)
+		progress.step(t, "deployment_wait")
 		for until := time.Now().Add(5 * time.Minute); ; time.Sleep(time.Second) {
 			bound()
 			var deployment deploymentBody
@@ -803,6 +821,14 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 				return
 			}
 			if deployment.Status == "failed" || deployment.Status == "canceled" || time.Now().After(until) {
+				code := "deployment_deadline"
+				if deployment.Status == "failed" {
+					code = "deployment_failed"
+				}
+				if deployment.Status == "canceled" {
+					code = "deployment_canceled"
+				}
+				progress.failure(t, code)
 				t.Fatal("live deployment did not succeed")
 			}
 		}
@@ -811,14 +837,17 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		t.Helper()
 		route := routes[index]
 		if err := combinedHTTPS(t.Context(), route.Input.Hostname, hosts[host].Address, marker, route.Binding.ContainerID); err != nil {
+			progress.failure(t, "https_failed")
 			t.Fatal(err)
 		}
 	}
 	verifyPublic := func(index, host int, marker string) {
 		t.Helper()
+		progress.step(t, "public_https")
 		name := routes[index].Input.Hostname
 		addresses, err := net.DefaultResolver.LookupHost(t.Context(), name)
 		if err != nil || len(addresses) != 1 || addresses[0] != hosts[host].Address {
+			progress.failure(t, "dns_backend_mismatch")
 			t.Fatal("public DNS does not resolve to intended backend")
 		}
 		verify(index, host, marker)
@@ -834,12 +863,14 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 				environment = item.ID
 			}
 		}
+		scopeFor(project).Environment = environment
 		var target cloudprofiles.Target
 		c.must(http.StatusCreated, http.MethodPost, base+"/clouds/"+cloud.ID+"/targets", cloudprofiles.CreateTargetInput{Name: fmt.Sprintf("app%d", index), Provider: "server", Runtime: "server", PoolID: pools[hostIndices[index]].ID}, &target)
 		targets = append(targets, target)
 		var preview cloudprofiles.Preview
 		c.must(http.StatusOK, http.MethodPost, base+"/environments/"+environment+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
 		if result := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "assign-"+project).ID); result.Status != cloudprofiles.SyncSucceeded {
+			progress.failure(t, "assignment_failed")
 			t.Fatal("live assignment failed")
 		}
 		marker := l.RunID + "-" + project + "-release-one"
@@ -849,14 +880,18 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		variables = append(variables, variable.ID)
 		deploy(project, target.Name, "/")
 		bindings = append(bindings, binding(project))
+		progress.step(t, "route_preview")
 		var operation cloudinfra.RouteOperation
 		c.must(http.StatusOK, http.MethodPost, base+"/domain-routes/preview", cloudinfra.RouteInput{ZoneID: namespaces[index].ID, CloudID: cloud.ID, EnvironmentID: environment, Service: "web", Hostname: fmt.Sprintf("%s-app%d.%s", l.RunID, index, liveZone), Port: 80}, &operation)
+		scopeFor(project).Route = operation.ID
 		l.Records = append(l.Records, liveDNSIntent{Desired: operation.DesiredRecord})
 		record()
 		bound()
 		l.Records[index].Attempted = true
 		record()
+		progress.step(t, "route_apply")
 		c.must(http.StatusAccepted, http.MethodPost, base+"/route-operations/"+operation.ID+"/apply", cloudinfra.ApplyInput{Review: operation.Review}, &operation)
+		progress.step(t, "route_wait")
 		for until := time.Now().Add(liveDNSPropagationWait); ; time.Sleep(2 * time.Second) {
 			bound()
 			c.must(http.StatusOK, http.MethodGet, base+"/route-operations/"+operation.ID, nil, &operation)
@@ -870,10 +905,16 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 			if operation.Status == "waiting" {
 				status := c.do(http.MethodPost, base+"/route-operations/"+operation.ID+"/retry", nil, nil)
 				if status != http.StatusAccepted && status != http.StatusConflict {
+					progress.failure(t, "route_retry_failed")
 					t.Fatal("live route retry failed")
 				}
 			}
 			if operation.Status == "failed" || time.Now().After(until) {
+				code := "route_deadline"
+				if operation.Status == "failed" {
+					code = "route_failed"
+				}
+				progress.failure(t, code)
 				t.Fatal("public route did not become ready")
 			}
 		}
@@ -882,7 +923,8 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		record()
 		verifyPublic(index, hostIndices[index], marker)
 	}
-	progress.step(t, "migration")
+	scopes[0].Phase = "migration"
+	progress.step(t, "migration_preview")
 	l.Evidence["three_project_public_https"] = "passed"
 	record()
 	first := projects[0]
@@ -894,11 +936,13 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		if environment.Summary.Create+environment.Summary.Update+environment.Summary.Replace+environment.Summary.Delete+environment.Summary.Adopt > 0 {
 			changed++
 			if environment.ProjectID != first || !reflect.DeepEqual(environment.Services, []string{"web"}) {
+				progress.failure(t, "migration_scope_mismatch")
 				t.Fatal("migration affects unrelated service")
 			}
 		}
 	}
 	if changed != 1 {
+		progress.failure(t, "migration_scope_mismatch")
 		t.Fatal("unexpected migration participants")
 	}
 	// Persist both exact values before the product can PATCH DNS. Cleanup may
@@ -913,6 +957,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 	}
 	oldRecord, err := liveResolveRecord(l.Zone, l.Records[0], beforeDNS)
 	if err != nil || oldRecord == nil || oldRecord.Value != hosts[0].Address {
+		progress.failure(t, "migration_dns_mismatch")
 		t.Fatal("source DNS receipt drift")
 	}
 	observer.mutex.Lock()
@@ -933,7 +978,10 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		}, time.Duration(oldRecord.TTL)*time.Second)
 	}()
 	defer func() { cancelObserver(); <-sourceDone }()
+	progress.step(t, "migration_apply")
 	migration := applyCloudAPI(t, c, base, &preview, "live-current-release")
+	scopeFor(first).Sync = migration.ID
+	progress.step(t, "migration_wait")
 	l.Evidence["migration"] = migration.ID
 	record()
 	for until := time.Now().Add(10 * time.Minute); ; time.Sleep(time.Second) {
@@ -947,6 +995,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		}
 		current, resolveErr := liveResolveRecord(l.Zone, l.Records[0], inventory)
 		if resolveErr != nil || current == nil {
+			progress.failure(t, "migration_dns_mismatch")
 			t.Fatal("migration DNS receipt unresolved")
 		}
 		l.Records[0].Receipt = current
@@ -954,23 +1003,32 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		if migration.Status == cloudprofiles.SyncSucceeded {
 			at, captureErr := observer.completion()
 			if captureErr != nil || at.IsZero() || time.Now().Before(at.Add(time.Duration(oldRecord.TTL)*time.Second)) {
+				progress.failure(t, "migration_retention_failed")
 				t.Fatal("migration bypassed independent provider completion plus TTL bound")
 			}
 			if current.Value != hosts[1].Address {
+				progress.failure(t, "migration_dns_mismatch")
 				t.Fatal("migration DNS does not point to destination")
 			}
 			break
 		}
 		if migration.Status == cloudprofiles.SyncFailed || time.Now().After(until) {
+			code := "migration_deadline"
+			if migration.Status == cloudprofiles.SyncFailed {
+				code = "migration_failed"
+			}
+			progress.failure(t, code)
 			t.Fatal("live migration did not succeed")
 		}
 	}
 	<-sourceDone
 	if observeErr != nil {
+		progress.failure(t, "migration_retention_failed")
 		t.Fatal(observeErr)
 	}
 	at, captureErr := observer.completion()
 	if captureErr != nil || len(observations) < 2 || observations[len(observations)-1].At.Before(at.Add(time.Duration(oldRecord.TTL)*time.Second-time.Second)) {
+		progress.failure(t, "migration_retention_failed")
 		t.Fatal("source retention observation incomplete")
 	}
 	l.Evidence["source_retention_provider_completed_at"] = at
@@ -979,22 +1037,27 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 
 	migrated := binding(first)
 	if migrated.ExternalID == bindings[0].ExternalID || migrated.ConnectionID != runtimeIDs[1] {
+		progress.failure(t, "release_binding_mismatch")
 		t.Fatal("current release did not move to exact destination")
 	}
 	var before, after planning.ServiceConfig
 	if json.Unmarshal(bindings[0].Config, &before) != nil || json.Unmarshal(migrated.Config, &after) != nil {
+		progress.failure(t, "migration_inputs_changed")
 		t.Fatal("decode applied release")
 	}
 	if before.Source != after.Source || before.CommitSHA != after.CommitSHA || !reflect.DeepEqual(before.AppliedInputs, after.AppliedInputs) || !reflect.DeepEqual(before.BuildTarget, after.BuildTarget) {
+		progress.failure(t, "migration_inputs_changed")
 		t.Fatal("migration changed applied release inputs")
 	}
 	var currentRoutes struct{ Routes []cloudinfra.Route }
 	c.must(http.StatusOK, http.MethodGet, base+"/domain-routes", nil, &currentRoutes)
 	if len(currentRoutes.Routes) != 1 || currentRoutes.Routes[0].Binding.InstanceID != migrated.ExternalID {
+		progress.failure(t, "release_route_mismatch")
 		t.Fatal("migrated route identity mismatch")
 	}
 	routes[0] = currentRoutes.Routes[0]
 	verifyPublic(0, 1, markers[0])
+	scopes[0].Phase = "future_release"
 	progress.step(t, "future_release")
 	l.Evidence["current_release_migration"] = "passed"
 	l.Evidence["migrated_binding"] = migrated
@@ -1004,10 +1067,12 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 	deploy(first, targets[0].Name, "/api")
 	future := binding(first)
 	if future.ConnectionID != runtimeIDs[1] || future.ExternalID == migrated.ExternalID {
+		progress.failure(t, "release_binding_mismatch")
 		t.Fatal("future release destination mismatch")
 	}
 	c.must(http.StatusOK, http.MethodGet, base+"/domain-routes", nil, &currentRoutes)
 	if len(currentRoutes.Routes) != 1 || currentRoutes.Routes[0].Input.Hostname != routes[0].Input.Hostname || currentRoutes.Routes[0].Binding.InstanceID != future.ExternalID {
+		progress.failure(t, "release_route_mismatch")
 		t.Fatal("future release route mismatch")
 	}
 	routes[0] = currentRoutes.Routes[0]
