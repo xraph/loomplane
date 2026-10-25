@@ -156,6 +156,7 @@ func Compute(in Input) *Result {
 	p.planServices()
 	p.planGateways()
 	p.checkTargetPlacements()
+	p.checkCloudSQLApplications()
 	p.readdress()
 	for p.routedReplacements() {
 		p.readdress()
@@ -1485,8 +1486,6 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 		cfg.CloudSQLNetwork = &network
 		if prov.Name != "cloud-run" || !network.Valid(cfg.Region) {
 			p.problem(Finding{Code: "cloud-sql-network-invalid", Subject: ServiceSubject, Name: name, Path: base + ".cloud_sql_network", Message: "Choose a canonical VPC and subnet in this Cloud Run service's region."})
-		} else {
-			p.problem(Finding{Code: "cloud-sql-psc-transport-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".cloud_sql_network", Message: "PSC application route verification and credential delivery are not available yet."})
 		}
 	}
 	if set.Public != nil {
@@ -1661,10 +1660,6 @@ func (p *planner) link(name string, a *Action) {
 					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
-			}
-			if dep.Resource != nil && dep.Resource.Managed != nil && dep.Resource.Managed.CloudSQLPSC != (provider.CloudSQLSourceEndpoint{}) {
-				p.problem(Finding{Code: "cloud-sql-psc-transport-unavailable", Subject: ServiceSubject, Name: name, Path: base, Message: "Application transport for this PSC database is not available yet. Deploy the source separately."})
-				continue
 			}
 			if composed[i] {
 				p.linkComposition(a, need, outputs[i], options, count)

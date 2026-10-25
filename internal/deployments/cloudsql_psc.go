@@ -2,38 +2,16 @@ package deployments
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/nativepg"
-	"github.com/xraph/loomplane/internal/planning"
-	"github.com/xraph/loomplane/pkg/provider"
 )
 
 type cloudSQLPSCCredentialError struct{ cause error }
 
 func (cloudSQLPSCCredentialError) Error() string   { return "Cloud SQL source credential update failed" }
 func (e cloudSQLPSCCredentialError) Unwrap() error { return e.cause }
-
-func checkCloudRunSQLTransport(bindings []*planning.Binding) error {
-	for _, binding := range bindings {
-		if binding.Provider != "cloud-sql" {
-			continue
-		}
-		var cfg planning.ResourceConfig
-		if len(binding.Config) == 0 {
-			continue // Legacy bindings predate saved resource configuration.
-		}
-		if err := json.Unmarshal(binding.Config, &cfg); err != nil {
-			return errors.New("cloud sql attachment configuration cannot be read")
-		}
-		if cfg.Managed != nil && (cfg.Managed.CloudSQLPSC != (provider.CloudSQLSourceEndpoint{}) || cfg.Managed.Profile.Access == "cloud-sql-psc-connector") {
-			return errors.New("cloud sql PSC application transport is not available yet")
-		}
-	}
-	return nil
-}
 
 func (c *CloudSQL) verifyPSCSource(ctx context.Context, client *gcp.Session, job *Job, state *cloudSQLState, spec gcp.SQLInstanceSpec, expected *gcp.SQLSourceEndpoint, database, password string) error {
 	guard := state.guarded(client, job.Binding == nil).Check
