@@ -1602,8 +1602,14 @@ func (p *planner) link(name string, a *Action) {
 	for i, need := range needs {
 		if r, ok := m.Resources[need]; ok {
 			if kind, ok := p.kinds().Kind(r.Kind); ok {
-				outputs[i], takes[i], composed[i] = kind.Outputs, kind.ConsumerOptions, true
-				for _, o := range kind.Outputs {
+				outputs[i], takes[i], composed[i] = slices.Clone(kind.Outputs), kind.ConsumerOptions, true
+				if dep := p.resources[need]; dep != nil && dep.Resource != nil && dep.Resource.Composition != nil {
+					choices := dep.Resource.Composition.Dependencies
+					outputs[i] = slices.DeleteFunc(outputs[i], func(o recipes.Output) bool {
+						return o.Requires != "" && choices[o.Requires].Mode == DependencyOff
+					})
+				}
+				for _, o := range outputs[i] {
 					count[o.EnvKey]++
 				}
 				continue

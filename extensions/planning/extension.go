@@ -59,6 +59,7 @@ import (
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
+	"github.com/xraph/loomplane/internal/fabriqloom"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
@@ -97,6 +98,7 @@ type Extension struct {
 	cloudProfiles       *cloudprofiles.Service
 	endpoints           *catalogconnect.Service
 	catalogAdmin        *catalogproxy.Service
+	fabriq              *fabriqloom.Service
 	endpointChecks      *catalogconnect.Checker
 	endpointDialer      endpointDialer
 	checkLimit          *checkLimiter // nil is checksPerMinute (see checks)
@@ -280,9 +282,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	// catalogHooks are what composed catalog kinds do beyond their
 	// recipes, by kind. A kind registers its own here.
 	catalogHooks := map[string]deployments.CatalogHooks{}
+	catalogHooks["elasticsearch"] = fabriqloom.SearchHooks{}
 	// observers hear of each service binding a deployment writes or
 	// deletes. A kind that tracks its consumers registers its own here.
-	observers := []deployments.ReleaseObserver{}
+	observers := make([]deployments.ReleaseObserver, 0, 1)
 	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
 	// A cluster's endpoint checks dial from Loomplane's own network, so
 	// they never reach what Loomplane itself depends on.
@@ -302,6 +305,13 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, catalogAccess); err != nil {
 		return err
 	}
+	// A hosted Fabriq issues each service that needs it a key of its own,
+	// and revokes the key a release replaced once that release is written.
+	fabriqDeps := fabriqloom.HookDeps{Keys: fabriqloom.NewPgStore(pg), Secrets: resourceSecrets, Access: catalogAccess,
+		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) }}
+	catalogHooks["fabriq"] = fabriqloom.NewHooks(fabriqDeps)
+	observers = append(observers, fabriqloom.NewObserver(fabriqDeps))
+	e.setupFabriq(&fabriqloom.Service{Access: catalogAccess, Keys: fabriqDeps.Keys, Secrets: resourceSecrets, RebuildStore: fabriqloom.NewPgRebuildStore(pg), Manifests: e.manifests, Warn: fabriqDeps.Warn})
 	// A kind's admin UI opens through Loomplane's sandboxed proxy, which
 	// reaches the component over the same private channel. The proxy is
 	// mounted outside the identity guard: a session's token, in its path,
@@ -438,6 +448,9 @@ func (e *Extension) Start(ctx context.Context) error {
 		}
 	}
 	if err := e.scheduleBackupReconciliation(ctx); err != nil {
+		return err
+	}
+	if err := e.scheduleFabriqRebuilds(ctx); err != nil {
 		return err
 	}
 	if err := e.startCloudRecovery(ctx, 30*time.Second); err != nil {

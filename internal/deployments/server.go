@@ -586,6 +586,11 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	}
 	if cfg.Component != nil {
 		componentSpec(&sp, labels, cfg.Component)
+		if cfg.Provider == "server" {
+			for i := range sp.Volumes {
+				sp.Volumes[i].SizeMB = 0
+			}
+		}
 	}
 	labels[labelImage] = image
 	if image == "" && cfg.BuildTarget != nil {

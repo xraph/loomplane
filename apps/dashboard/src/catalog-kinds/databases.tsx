@@ -8,7 +8,7 @@ import {
 import { protectionOf } from "@/lib/service-recovery"
 import { ServiceRecovery } from "@/pages/service-catalog"
 
-const recovery: CatalogPanel = {
+export const recovery: CatalogPanel = {
   id: "recovery",
   title: "Recovery",
   // Only where Loomplane backs the engine up on its target: not Redis or

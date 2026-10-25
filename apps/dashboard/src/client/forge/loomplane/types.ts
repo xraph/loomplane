@@ -517,6 +517,17 @@ export interface ConnectionsCreateInputBody {
   settings?: Record<string, any>;
 }
 
+export interface ConsumerKey {
+  createdAt?: string;
+  lastUsedAt?: string;
+  lastUsedKnown: boolean;
+  prefix?: string;
+  revokedAt?: string;
+  service: string;
+  state: string;
+  tenant: string;
+}
+
 export interface ConsumerOption {
   name: string;
   pattern?: string;
@@ -846,6 +857,10 @@ export interface Evidence {
   line?: number;
   path: string;
   source?: string;
+}
+
+export interface FabriqKeyList {
+  keys: ConsumerKey[];
 }
 
 export interface Federation {
@@ -1734,6 +1749,26 @@ export interface RealtimeSend {
   projectIds?: string[];
 }
 
+export interface Rebuild {
+  createdAt: string;
+  createdBy: string;
+  finishedAt?: string;
+  id: string;
+  output: string;
+  projection: string;
+  retryable: boolean;
+  status: string;
+}
+
+export interface RebuildInputBody {
+  projection: string;
+  requestId: string;
+}
+
+export interface RebuildList {
+  rebuilds: Rebuild[];
+}
+
 export interface Recipe {
   architecture: string;
   backupFormat: string;
@@ -2386,6 +2421,17 @@ export interface StartAnalysisInputBody {
   sources?: string[];
 }
 
+export interface Status {
+  entityTypes: number;
+  keysReportUse: boolean;
+  kind: string;
+  migrations: number;
+  migrationsKnown: boolean;
+  reachable: boolean;
+  reason?: string;
+  version: string;
+}
+
 export interface Step {
   actionId: string;
   finishedAt?: string;
@@ -2472,6 +2518,20 @@ export interface Target {
   runtime: string;
   tags: string[];
   updatedAt: string;
+}
+
+export interface Tenant {
+  createdAt: string;
+  id: string;
+  label: string;
+}
+
+export interface TenantInputBody {
+  tenantId: string;
+}
+
+export interface TenantList {
+  tenants: Tenant[];
 }
 
 export interface TrafficReport {
