@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -114,13 +116,16 @@ type Client struct {
 	endpoint string
 	base     *http.Client
 	// poll is how often a long-running operation is checked.
-	poll time.Duration
+	poll     time.Duration
+	resolver interface {
+		LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
+	}
 }
 
 // New returns a Client. An empty endpoint means Google's own hosts; any
 // other is a test's fake, which answers at once, so it's polled often.
 func New(endpoint string) *Client {
-	c := &Client{endpoint: strings.TrimRight(endpoint, "/"), base: &http.Client{Timeout: requestTimeout}, poll: 5 * time.Second}
+	c := &Client{endpoint: strings.TrimRight(endpoint, "/"), base: &http.Client{Timeout: requestTimeout}, poll: 5 * time.Second, resolver: net.DefaultResolver}
 	if c.endpoint != "" {
 		c.poll = 100 * time.Millisecond
 	}

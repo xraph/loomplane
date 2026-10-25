@@ -45,6 +45,17 @@ func Postgres(target, version string) (*provider.ManagedDatabaseProfile, error) 
 	return &p, nil
 }
 
+// CloudSQLPSCPostgres is the opt-in profile for sources isolated at clone time.
+// Profiles does not advertise it until application endpoint provisioning is wired.
+func CloudSQLPSCPostgres(version string) (*provider.ManagedDatabaseProfile, error) {
+	p, err := Postgres("cloud-sql", version)
+	if err != nil {
+		return nil, err
+	}
+	p.ID, p.Access = "postgresql-17-cloud-sql-psc", "cloud-sql-psc-connector"
+	return p, nil
+}
+
 // Profiles lists only managed profiles the standalone catalog can request.
 func Profiles(target string) []provider.ManagedDatabaseProfile {
 	p, err := Postgres(target, "17")

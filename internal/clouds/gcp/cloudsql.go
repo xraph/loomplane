@@ -17,17 +17,19 @@ import (
 
 // SQLInstance is the part of a Cloud SQL instance Loomplane reads.
 type SQLInstance struct {
-	Kind            string            `json:"kind"`
-	Name            string            `json:"name"`
-	Project         string            `json:"project"`
-	Region          string            `json:"region"`
-	CreateTime      string            `json:"createTime"`
-	ConnectionName  string            `json:"connectionName"`
-	DatabaseVersion string            `json:"databaseVersion"`
-	State           string            `json:"state"`
-	MasterInstance  string            `json:"masterInstanceName"`
-	IPAddresses     []json.RawMessage `json:"ipAddresses"`
-	Settings        struct {
+	Kind                 string            `json:"kind"`
+	Name                 string            `json:"name"`
+	Project              string            `json:"project"`
+	Region               string            `json:"region"`
+	CreateTime           string            `json:"createTime"`
+	ConnectionName       string            `json:"connectionName"`
+	DatabaseVersion      string            `json:"databaseVersion"`
+	State                string            `json:"state"`
+	MasterInstance       string            `json:"masterInstanceName"`
+	PSCServiceAttachment string            `json:"pscServiceAttachmentLink"`
+	DNSName              string            `json:"dnsName"`
+	IPAddresses          []json.RawMessage `json:"ipAddresses"`
+	Settings             struct {
 		Version              string              `json:"settingsVersion"`
 		DeletionProtection   bool                `json:"deletionProtectionEnabled"`
 		Edition              string              `json:"edition"`
@@ -86,6 +88,8 @@ type SQLInstanceSpec struct {
 	Intent string
 	// Inspect validates and durably captures each observed incarnation.
 	Inspect func(*SQLInstance) error
+	// Set only by EnsureSQLPITRSource after checking the isolated source contract.
+	pscConsumerProject string
 }
 
 // SQLStorageSettings are the native disk and recovery settings requested at creation.
@@ -268,6 +272,10 @@ func (s *Session) EnsureSQLInstance(ctx context.Context, spec SQLInstanceSpec, t
 				"enabled": true, "pointInTimeRecoveryEnabled": true, "transactionLogRetentionDays": disk.RecoveryDays,
 				"backupRetentionSettings": map[string]any{"retentionUnit": "COUNT", "retainedBackups": disk.RetainedBackups},
 			}
+		}
+		if spec.pscConsumerProject != "" {
+			settings["connectorEnforcement"], settings["dataApiAccess"] = "REQUIRED", "DISALLOW_DATA_API"
+			settings["ipConfiguration"] = sqlPSCIPConfiguration(spec.pscConsumerProject)
 		}
 		err = s.mutateSQL(ctx, spec.Name, "Creating the database instance", track, func(op *sqlOperation) (bool, error) {
 			createErr := s.do(ctx, http.MethodPost, s.sqlPath("/instances"), map[string]any{

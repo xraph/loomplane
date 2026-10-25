@@ -45,6 +45,13 @@ type sqlPSCEndpoint struct {
 	Policy          string `json:"serviceConnectionPolicy"`
 }
 
+// sqlPSCIPConfiguration starts with manual ingress and no outbound paths.
+// Recovery copies add only their reviewed auto-connection and DNS request.
+func sqlPSCIPConfiguration(consumerProject string) *SQLIPConfiguration {
+	disabled := false
+	return &SQLIPConfiguration{IPv4Enabled: &disabled, AuthorizedNetworks: []json.RawMessage{}, PSC: &SQLPSCSettings{Enabled: true, AllowedProjects: []string{consumerProject}, AutoConnections: []json.RawMessage{}}}
+}
+
 // CheckPITRCopyNetwork returns readiness only for the reviewed consumer network.
 // Missing or pending endpoint/DNS status never authorizes a SQL connection.
 func (in *SQLInstance) CheckPITRCopyNetwork(spec SQLInstanceSpec, route manageddb.CloudSQLRecoveryNetwork) (bool, error) {
@@ -157,18 +164,21 @@ func (s *Session) PrepareSQLPITRCopy(ctx context.Context, spec SQLInstanceSpec, 
 		if err != nil {
 			return false, err
 		}
-		if _, err := in.PITRIsolation(spec); err != nil {
+		if _, isolationErr := in.PITRIsolation(spec); isolationErr != nil {
+			return false, isolationErr
+		}
+		connection, err := json.Marshal(map[string]string{"consumerProject": route.ConsumerProject, "consumerNetwork": route.Network})
+		if err != nil {
 			return false, err
 		}
+		network := sqlPSCIPConfiguration(route.ConsumerProject)
+		network.PSC.AutoDNS, network.PSC.AutoConnections = true, []json.RawMessage{connection}
 		settings := map[string]any{
 			"settingsVersion":           in.Settings.Version,
 			"deletionProtectionEnabled": false,
 			"userLabels":                map[string]string{"managed-by": "loomplane", SQLIntentLabel: spec.Intent},
 			"backupConfiguration":       map[string]bool{"enabled": false, "pointInTimeRecoveryEnabled": false},
-			"ipConfiguration": map[string]any{
-				"ipv4Enabled": false, "authorizedNetworks": []any{}, "privateNetwork": "", "enablePrivatePathForGoogleCloudServices": false,
-				"pscConfig": map[string]any{"pscEnabled": true, "allowedConsumerProjects": []string{route.ConsumerProject}, "networkAttachmentUri": "", "pscAutoConnectionPolicyEnabled": false, "pscAutoDnsEnabled": true, "pscWriteEndpointDnsEnabled": false, "pscAutoConnections": []any{map[string]string{"consumerProject": route.ConsumerProject, "consumerNetwork": route.Network}}},
-			},
+			"ipConfiguration":           network,
 		}
 		if err := callerGuard(ctx); err != nil {
 			return false, err
