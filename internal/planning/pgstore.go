@@ -93,9 +93,8 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 	if err != nil {
 		return nil, err
 	}
-	kind := p.Kind
-	if kind == "" {
-		kind = KindRelease
+	if p.Kind == "" {
+		p.Kind = KindRelease
 	}
 	var rollbackSpec []byte
 	if p.Rollback != nil {
@@ -107,7 +106,7 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 		manifest_id, manifest_revision, created_by, created_at, catalog, kind, from_environment, from_environment_id, rollback)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
-		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, kind, p.From, p.FromEnvironmentID, rollbackSpec)
+		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, p.Kind, p.From, p.FromEnvironmentID, rollbackSpec)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return nil, ErrConflict

@@ -595,6 +595,9 @@ func (p *Plan) setResult(r *Result) {
 }
 
 func (p *Plan) normalize() {
+	if p.Kind == "" {
+		p.Kind = KindRelease
+	}
 	p.CreatedAt = p.CreatedAt.UTC()
 	for _, t := range []**time.Time{&p.PlannedAt, &p.ExpiresAt, &p.DecidedAt} {
 		if *t != nil {
