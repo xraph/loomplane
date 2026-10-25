@@ -805,6 +805,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	}
 	if resolutionErr == nil && poolRelocation(bindings, placements) {
 		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements, routes)
+		planRelease(Input{Environment: plan.Environment, Manifest: resolved, Providers: s.providers}, result)
 	}
 	if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings); routeErr != nil {
 		result.Problems = append(result.Problems, Finding{Code: "route-capacity", Message: routeErr.Error()})
@@ -826,6 +827,9 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	}
 	if reuse {
 		s.applyArtifacts(plan, result, released, plan.From)
+	}
+	if rampErr := s.rampingCanary(ctx, plan, result); rampErr != nil {
+		return nil, "", rampErr
 	}
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,

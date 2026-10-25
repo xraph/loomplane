@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/providers"
@@ -477,5 +478,124 @@ func TestPublicPathsRefuseTheSystemPrincipal(t *testing.T) {
 				t.Fatalf("%s as the automation: %v, want ErrForbidden", name, err)
 			}
 		})
+	}
+}
+
+// polyglotAnalyses reads examples/polyglot's graph for every analysis.
+type polyglotAnalyses struct {
+	Analyses
+	graph *graph.Graph
+}
+
+func (a polyglotAnalyses) Graph(context.Context, string, string) (*graph.Graph, error) {
+	return a.graph, nil
+}
+
+// rampingStore is an environment where a canary may be ramping. It holds
+// one plan and records how it was finished and settled.
+type rampingStore struct {
+	approvalStore
+	ramping  string
+	err      error
+	asked    []string
+	finished *Plan
+}
+
+func (s *rampingStore) RampingCanary(_ context.Context, orgID, environmentID string) (string, error) {
+	s.asked = append(s.asked, orgID+"/"+environmentID)
+	return s.ramping, s.err
+}
+
+func (s *rampingStore) FinishPlanning(_ context.Context, p *Plan) (bool, error) {
+	cp := *p
+	s.finished = &cp
+	return true, nil
+}
+
+// releaseService plans acme, with a release block for production, from
+// examples/polyglot.
+func releaseService(t *testing.T, store Store, release string) (*Service, *Plan) {
+	t.Helper()
+	doc := acme + "environments:\n  production:\n    release:\n" + release
+	service := NewService(Deps{
+		Store: store, Analyses: polyglotAnalyses{graph: polyglot(t)},
+		Manifests: catalogManifest{revision: &manifests.Revision{Manifest: parse(t, doc)}}, Providers: providers.Registry(),
+	})
+	plan := &Plan{ID: "plan_1", OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production",
+		Sources: []PlanSource{{Alias: "app", AnalysisID: "analysis", CommitSHA: "abc", InScope: true}}}
+	return service, plan
+}
+
+// The release is part of what's reviewed: a longer hold is another
+// revision, so approving one never approves the other.
+func TestCanaryIsPartOfTheRevision(t *testing.T) {
+	revisions := map[int64]string{}
+	for _, hold := range []string{"10m", "15m"} {
+		service, plan := releaseService(t, catalogStore{}, "      strategy: canary\n      hold: "+hold+"\n")
+		result, revision, err := service.compute(t.Context(), plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Release == nil || result.Release.Strategy != "canary" {
+			t.Fatalf("hold %s: release %+v", hold, result.Release)
+		}
+		revisions[result.Release.HoldSeconds] = revision
+	}
+	if len(revisions) != 2 || revisions[600] == "" || revisions[900] == "" || revisions[600] == revisions[900] {
+		t.Fatalf("revisions by hold: %v", revisions)
+	}
+}
+
+// While a canary ramps in an environment, a new plan for it is blocked, and
+// an older ready plan approved now settles stale: two deployments never
+// fight over one service's traffic.
+func TestPlanIsBlockedWhileACanaryRamps(t *testing.T) {
+	store := &rampingStore{}
+	service, plan := releaseService(t, store, "      strategy: canary\n")
+	before, revision, err := service.compute(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasCode(before.Problems, "canary-in-progress") {
+		t.Fatalf("blocked with nothing ramping: %+v", before.Problems)
+	}
+	ready := *plan
+	ready.Status, ready.Revision = StatusReady, revision
+	store.plan = &ready
+
+	store.ramping = "dep_1"
+	blocked, _, err := service.compute(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := findCode(blocked.Problems, "canary-in-progress")
+	if f == nil || blocked.Executable {
+		t.Fatalf("executable %v, problems %+v", blocked.Executable, blocked.Problems)
+	}
+	if f.Message != "A canary release is ramping in production (deployment dep_1). Plan again once it finishes." {
+		t.Fatalf("message: %q", f.Message)
+	}
+	if store.asked[len(store.asked)-1] != "org/env" {
+		t.Fatalf("asked about %v", store.asked)
+	}
+
+	status, err := service.ApplyDecision(t.Context(), "org", "plan_1", orchestration.Decision{Approve: true, Revision: revision, By: "usr_1"})
+	if err != nil || status != StatusStale || store.settled != StatusStale {
+		t.Fatalf("approve during the ramp: %q, %v, settled %q", status, err, store.settled)
+	}
+
+	planning := *plan
+	planning.Status = StatusPlanning
+	store.plan = &planning
+	status, err = service.Plan(t.Context(), "org", "plan_1")
+	if err != nil || status != StatusBlocked || store.finished == nil || store.finished.Executable || !hasCode(store.finished.Problems, "canary-in-progress") {
+		t.Fatalf("plan during the ramp: %q, %v, finished %+v", status, err, store.finished)
+	}
+
+	// Planning can't tell whether a canary ramps, so it retries rather than
+	// plan past one.
+	store.err = errors.New("database unavailable")
+	if _, _, err = service.compute(t.Context(), plan); !errors.Is(err, store.err) {
+		t.Fatalf("compute with the store down: %v", err)
 	}
 }

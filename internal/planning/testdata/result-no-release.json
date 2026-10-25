@@ -1,0 +1,298 @@
+{
+  "actions": [
+    {
+      "id": "resource:cache",
+      "op": "keep",
+      "subject": "resource",
+      "name": "cache",
+      "provider": "memorystore",
+      "region": "us-central1",
+      "engine": "loomplane",
+      "creates": "Memorystore for Redis instance",
+      "resource": {
+        "provider": "memorystore",
+        "region": "us-central1",
+        "kind": "redis"
+      },
+      "reason": "Unchanged.",
+      "step": 1
+    },
+    {
+      "id": "resource:db",
+      "op": "keep",
+      "subject": "resource",
+      "name": "db",
+      "provider": "cloud-sql",
+      "region": "us-central1",
+      "engine": "loomplane",
+      "creates": "Cloud SQL for PostgreSQL instance",
+      "resource": {
+        "provider": "cloud-sql",
+        "region": "us-central1",
+        "kind": "postgres",
+        "version": "17"
+      },
+      "reason": "Unchanged.",
+      "step": 1
+    },
+    {
+      "id": "service:api",
+      "op": "update",
+      "subject": "service",
+      "name": "api",
+      "provider": "cloud-run",
+      "region": "us-central1",
+      "engine": "ctrlplane",
+      "creates": "Cloud Run service",
+      "service": {
+        "provider": "cloud-run",
+        "region": "us-central1",
+        "workload": "http-service",
+        "execution": "container",
+        "service": "svc:go:services/api",
+        "source": "services/api",
+        "ecosystem": "go",
+        "framework": "net/http",
+        "image": "services/api/Dockerfile",
+        "port": 8080,
+        "scale": {
+          "min": 1,
+          "max": 5
+        },
+        "public": true,
+        "env": [
+          {
+            "key": "DATABASE_URL",
+            "from": "db",
+            "subject": "resource"
+          }
+        ]
+      },
+      "changes": [
+        {
+          "field": "scale",
+          "from": "{\"max\":3,\"min\":1}",
+          "to": "{\"max\":5,\"min\":1}"
+        }
+      ],
+      "reason": "api's configuration changed.",
+      "depends_on": [
+        "resource:db"
+      ],
+      "step": 2
+    },
+    {
+      "id": "service:worker",
+      "op": "keep",
+      "subject": "service",
+      "name": "worker",
+      "provider": "ecs-fargate",
+      "region": "us-east-1",
+      "engine": "ctrlplane",
+      "creates": "ECS service on Fargate",
+      "service": {
+        "provider": "ecs-fargate",
+        "region": "us-east-1",
+        "workload": "worker",
+        "execution": "container",
+        "service": "svc:go:services/worker/cmd/worker",
+        "source": "services/worker/cmd/worker",
+        "ecosystem": "go",
+        "public": false
+      },
+      "reason": "Unchanged.",
+      "step": 2
+    },
+    {
+      "id": "service:gateway",
+      "op": "keep",
+      "subject": "service",
+      "name": "gateway",
+      "provider": "cloud-run",
+      "region": "us-central1",
+      "engine": "ctrlplane",
+      "creates": "Cloud Run service",
+      "service": {
+        "provider": "cloud-run",
+        "region": "us-central1",
+        "workload": "http-service",
+        "execution": "container",
+        "service": "svc:node:apps/gateway",
+        "source": "apps/gateway",
+        "ecosystem": "node",
+        "framework": "fastify",
+        "build": "tsc",
+        "start": "node dist/server.js",
+        "port": 8080,
+        "public": true,
+        "env": [
+          {
+            "key": "API_URL",
+            "from": "api",
+            "subject": "service"
+          },
+          {
+            "key": "REDIS_URL",
+            "from": "cache",
+            "subject": "resource"
+          }
+        ]
+      },
+      "reason": "Unchanged.",
+      "depends_on": [
+        "resource:cache",
+        "service:api"
+      ],
+      "step": 3
+    },
+    {
+      "id": "service:web",
+      "op": "keep",
+      "subject": "service",
+      "name": "web",
+      "provider": "vercel",
+      "engine": "loomplane",
+      "creates": "Vercel project",
+      "service": {
+        "provider": "vercel",
+        "workload": "web-app",
+        "execution": "serverless",
+        "service": "svc:node:apps/web",
+        "source": "apps/web",
+        "ecosystem": "node",
+        "framework": "next",
+        "build": "next build",
+        "start": "next start",
+        "public": true,
+        "env": [
+          {
+            "key": "API_URL",
+            "from": "api",
+            "subject": "service"
+          }
+        ]
+      },
+      "reason": "Unchanged.",
+      "depends_on": [
+        "service:api"
+      ],
+      "step": 3
+    }
+  ],
+  "problems": [],
+  "warnings": [
+    {
+      "code": "port-assumed",
+      "subject": "service",
+      "name": "gateway",
+      "path": "services.gateway.port",
+      "message": "Nothing says which port gateway listens on, so the plan assumes 8080. Set services.gateway.port if it's another."
+    },
+    {
+      "code": "unlinked-resource",
+      "subject": "service",
+      "name": "web",
+      "path": "services.web.needs",
+      "message": "web seems to use postgres, but doesn't need db, so it won't get its address.",
+      "evidence": [
+        {
+          "path": "apps/web/prisma/schema.prisma",
+          "line": 6,
+          "detail": "provider = \"postgresql\""
+        },
+        {
+          "path": "crates/ingest/Cargo.toml",
+          "line": 9,
+          "detail": "sqlx = { workspace = true }"
+        },
+        {
+          "path": "docker-compose.yml",
+          "line": 3,
+          "detail": "image: postgres:17-alpine"
+        },
+        {
+          "path": "libs/go/store/store.go",
+          "line": 6,
+          "detail": "import \"github.com/jackc/pgx/v5/pgxpool\""
+        }
+      ]
+    },
+    {
+      "code": "unlinked-resource",
+      "subject": "service",
+      "name": "worker",
+      "path": "services.worker.needs",
+      "message": "worker seems to use redis, but doesn't need cache, so it won't get its address.",
+      "evidence": [
+        {
+          "path": "apps/gateway/package.json",
+          "line": 10,
+          "detail": "\"ioredis\": \"^5.4.0\""
+        },
+        {
+          "path": "docker-compose.yml",
+          "line": 7,
+          "detail": "image: redis:7"
+        },
+        {
+          "path": "services/worker/cmd/worker/main.go",
+          "line": 6,
+          "detail": "import \"github.com/redis/go-redis/v9\""
+        }
+      ]
+    },
+    {
+      "code": "service-left-out",
+      "subject": "service",
+      "name": "docs",
+      "path": "services",
+      "message": "Analysis found docs (static-site at apps/docs), but the manifest doesn't deploy it.",
+      "evidence": [
+        {
+          "path": "apps/docs/package.json",
+          "line": 2,
+          "detail": "\"name\": \"@acme/docs\","
+        }
+      ]
+    },
+    {
+      "code": "service-left-out",
+      "subject": "service",
+      "name": "backfill",
+      "path": "services",
+      "message": "Analysis found backfill (worker at crates/ingest/src/bin/backfill.rs), but the manifest doesn't deploy it.",
+      "evidence": [
+        {
+          "path": "crates/ingest/src/bin/backfill.rs",
+          "detail": "src/bin/backfill.rs"
+        }
+      ]
+    },
+    {
+      "code": "service-left-out",
+      "subject": "service",
+      "name": "ingest",
+      "path": "services",
+      "message": "Analysis found ingest (http-service at crates/ingest/src/main.rs), but the manifest doesn't deploy it.",
+      "evidence": [
+        {
+          "path": "crates/ingest/src/main.rs",
+          "detail": "src/main.rs"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "create": 0,
+    "update": 1,
+    "replace": 0,
+    "delete": 0,
+    "keep": 5
+  },
+  "executable": true,
+  "connections": {
+    "aws": "conn_aws",
+    "gcp": "conn_gcp",
+    "vercel": "conn_vercel"
+  }
+}
