@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"encoding/json"
+	"errors"
 	"maps"
 	"slices"
 	"testing"
@@ -41,14 +42,16 @@ func TestCanaryJSONShape(t *testing.T) {
 
 func TestMemStoreRecordVerdictIsIdempotent(t *testing.T) {
 	ctx := t.Context()
-	m := &memStore{d: map[string]*Deployment{"dep": {ID: "dep", OrgID: "org", Status: StatusRunning}}}
+	m := &memStore{d: map[string]*Deployment{"dep": {ID: "dep", OrgID: "org", ProjectID: "proj", Status: StatusRunning}}}
 	verdict := func(action string, step, attempt int, reason string) *CanaryVerdict {
-		return &CanaryVerdict{ID: VerdictID("dep", action, step, attempt), OrgID: "org", DeploymentID: "dep", ActionID: action,
+		return &CanaryVerdict{OrgID: "org", ProjectID: "forged", DeploymentID: "dep", ActionID: action,
 			Step: step, Attempt: attempt, Verdict: releasehealth.Pass, Reason: reason}
 	}
+	retried := verdict("service:web", 1, 0, "retried")
+	retried.ID = "another-id"
 	for _, v := range []*CanaryVerdict{
 		verdict("service:web", 1, 0, "first"),
-		verdict("service:web", 1, 0, "retried"),
+		retried,
 		verdict("service:api", 1, 0, "api"),
 		verdict("service:api", 0, 1, "held"),
 		verdict("service:api", 0, 0, "start"),
@@ -68,6 +71,19 @@ func TestMemStoreRecordVerdictIsIdempotent(t *testing.T) {
 	want := []string{"dep/service:api/0/0 start", "dep/service:api/0/1 held", "dep/service:api/1/0 api", "dep/service:web/1/0 first"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("verdicts %v, want %v", ids, want)
+	}
+	for _, v := range got {
+		if v.ProjectID != "proj" {
+			t.Fatalf("verdict %s scoped to project %q", v.ID, v.ProjectID)
+		}
+	}
+	foreign := verdict("service:api", 2, 0, "foreign")
+	foreign.OrgID = "other"
+	if err := m.RecordVerdict(ctx, foreign); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a verdict for another org's deployment: %v", err)
+	}
+	if got, _ = m.Verdicts(ctx, "other", "dep"); len(got) != 0 {
+		t.Fatalf("another org's verdicts: %v", got)
 	}
 }
 

@@ -29,6 +29,9 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	// Central migrations are not transactional, so the up statements repeat.
 	exec(t, conn, canaryReleasesUp...)
 	exec(t, conn, canaryReleasesUp...)
+	if got := strs(t, conn, `SELECT conname::text FROM pg_constraint WHERE conrelid='loomplane_deployment_workflow_runs'::regclass AND contype='c'`); len(got) != 1 || got[0] != "loomplane_deployment_workflow_runs_build" {
+		t.Fatalf("build checks after up: %v", got)
+	}
 
 	// The deployment row only anchors the verdicts' foreign key, so skip its
 	// own references and triggers.
@@ -75,6 +78,10 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	}
 	if got := strs(t, conn, `SELECT column_name::text FROM information_schema.columns WHERE table_name='loomplane_deployments' AND column_name='canary'`); len(got) != 0 {
 		t.Fatalf("down left the column: %v", got)
+	}
+	// The two-build check is back under the name Postgres first gave it.
+	if got := strs(t, conn, `SELECT conname::text FROM pg_constraint WHERE conrelid='loomplane_deployment_workflow_runs'::regclass AND contype='c'`); len(got) != 1 || got[0] != "loomplane_deployment_workflow_runs_request_check" {
+		t.Fatalf("build checks after down: %v", got)
 	}
 	exec(t, conn, run("wf_v3", "deployment-v3"))
 	if _, err = conn.Exec(ctx, run("wf_v4_again", "deployment-v4")); err == nil {

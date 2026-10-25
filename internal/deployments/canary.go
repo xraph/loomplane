@@ -123,7 +123,9 @@ type CanaryRun struct {
 type CanaryStore interface {
 	// SetCanary writes the deployment's canary.
 	SetCanary(ctx context.Context, orgID, deploymentID string, c *Canary) error
-	// RecordVerdict stores v, or does nothing when its ID is stored.
+	// RecordVerdict stores v under VerdictID, or does nothing when that
+	// verdict is stored. It sets v.ID, and v.ProjectID from the deployment,
+	// and returns ErrNotFound when the deployment isn't in v.OrgID.
 	RecordVerdict(ctx context.Context, v *CanaryVerdict) error
 	// Verdicts returns a deployment's verdicts by step, attempt and action.
 	Verdicts(ctx context.Context, orgID, deploymentID string) ([]CanaryVerdict, error)

@@ -34,15 +34,23 @@ func (s *PgStore) SetCanary(ctx context.Context, orgID, deploymentID string, c *
 	if err != nil {
 		return fmt.Errorf("set canary: %w", err)
 	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set canary: rows affected: %w", err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
 
-// RecordVerdict implements CanaryStore. A verdict's ID is deterministic, so
-// a retried judgement finds its row and leaves it as it is.
+// RecordVerdict implements CanaryStore. It sets v.ID from the deployment,
+// action, step and attempt, so a retried judgement finds its row and leaves
+// it as it is. The project, and so the realtime event's scope, is the
+// deployment's: a deployment outside v.OrgID records nothing and returns
+// ErrNotFound.
 func (s *PgStore) RecordVerdict(ctx context.Context, v *CanaryVerdict) error {
+	v.ID = VerdictID(v.DeploymentID, v.ActionID, v.Step, v.Attempt)
 	baseline, err := json.Marshal(v.Baseline)
 	if err != nil {
 		return fmt.Errorf("encode baseline health: %w", err)
@@ -55,13 +63,21 @@ func (s *PgStore) RecordVerdict(ctx context.Context, v *CanaryVerdict) error {
 	if err != nil {
 		return fmt.Errorf("encode thresholds: %w", err)
 	}
-	if _, err = s.db.Exec(ctx, `INSERT INTO loomplane_canary_verdicts (`+verdictColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-		ON CONFLICT (id) DO NOTHING`,
-		v.ID, v.OrgID, v.ProjectID, v.DeploymentID, v.ActionID, v.Service, v.Step, v.Attempt, v.Weight, string(v.Verdict),
-		v.Reason, baseline, candidate, thresholds, v.WindowStart, v.WindowEnd, v.DecidedAt); err != nil {
+	var project string
+	err = s.db.QueryRow(ctx, `WITH d AS (SELECT org_id, project_id, id FROM loomplane_deployments WHERE org_id = $2 AND id = $3),
+		ins AS (INSERT INTO loomplane_canary_verdicts (`+verdictColumns+`)
+			SELECT $1, d.org_id, d.project_id, d.id, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16 FROM d
+			ON CONFLICT (id) DO NOTHING)
+		SELECT project_id FROM d`,
+		v.ID, v.OrgID, v.DeploymentID, v.ActionID, v.Service, v.Step, v.Attempt, v.Weight, string(v.Verdict),
+		v.Reason, baseline, candidate, thresholds, v.WindowStart, v.WindowEnd, v.DecidedAt).Scan(&project)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
 		return fmt.Errorf("record verdict: %w", err)
 	}
+	v.ProjectID = project
 	return nil
 }
 
